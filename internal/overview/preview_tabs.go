@@ -8,6 +8,7 @@ import (
 	"github.com/marcus/sidecar/internal/features"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/panereposition"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/termpanes"
@@ -240,6 +241,7 @@ func (m *Model) renderOutputTerminalLeaf(leafID int, kind panelayout.Kind, width
 	// carried backgrounds reach, so a pane cannot render differently depending
 	// on which surface is showing it.
 	terminalCfg := m.TerminalConfig()
+	header := panereposition.ReserveHeader(width, kind == panelayout.Shell)
 	return termpreview.RenderBuffer(termpreview.RenderBufferInput{
 		Width: width, Height: height, Chips: chips, Hints: hints,
 		DefaultBackground: m.terminalDefaultBackground,
@@ -248,11 +250,13 @@ func (m *Model) renderOutputTerminalLeaf(leafID int, kind panelayout.Kind, width
 		Follow: input.Follow, Selection: &leaf.Selection, TabWidth: tty.DefaultTabWidth,
 		Message: message, Decorate: m.previewTerminalDecorator(leaf),
 		Backgrounds: terminalCfg.Backgrounds, BackgroundSpanMax: terminalCfg.BackgroundSpanMax,
-		BarStyle: ui.ScrollbarStyle{Thumb: ui.HandleStateFrom(false, state.termBar.active)},
-		Analyzer: leaf.RowAnalyzer,
+		BarStyle:      ui.ScrollbarStyle{Thumb: ui.HandleStateFrom(false, state.termBar.active)},
+		Analyzer:      leaf.RowAnalyzer,
+		LayoutButton:  header.LayoutW > 0,
+		LayoutHovered: m.hoverPreviewLayout == leafID,
 		// A split terminal is closable exactly like any other non-primary leaf,
 		// the same header × the project surface draws on its split.
-		CloseButton:  kind == panelayout.Shell,
+		CloseButton:  header.CloseW > 0,
 		CloseHovered: kind == panelayout.Shell && m.previewCloseHover && m.hoverPreviewClose == panelayout.Shell,
 	})
 }

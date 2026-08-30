@@ -72,6 +72,10 @@ func (m *Model) activeModalWheelAtBoundary(msg tea.MouseWheelMsg) bool {
 	case ModalIssuePreview:
 		return m.issuePreviewWheelAtBoundary(msg)
 
+	case ModalPaneReposition:
+		h, controller := m.activePaneLayoutController()
+		return h != nil && controller != nil && controller.Modal().WheelAtBoundary(msg, h.mouse)
+
 	case ModalPaneSwitcher:
 		return m.paneSwitcherWheelAtBoundary(msg)
 	}

@@ -6,9 +6,9 @@ import (
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/panereposition"
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
-	"github.com/marcus/sidecar/internal/ui"
 )
 
 const (
@@ -196,7 +196,7 @@ func (m *Model) renderPreviewIssue(issue *previewIssue, box termpreview.Box) str
 		view.SetSize(box.W, contentHeight)
 		view.SetFocused(focused)
 	}
-	header := m.composePreviewHeader(issueview.LayoutTabStrip(issue.tabs, ui.ReserveHeaderClose(box.W).TabsWidth, focused).HoverClose(m.tabCloseHoverIn(panelayout.Issue)).Row, box.W, panelayout.Issue)
+	header := m.composePreviewHeader(issueview.LayoutTabStrip(issue.tabs, panereposition.ReserveHeader(box.W, true).TabsWidth, focused).HoverClose(m.tabCloseHoverIn(panelayout.Issue)).Row, box.W, panelayout.Issue)
 	if contentHeight <= 0 {
 		return header
 	}
@@ -224,7 +224,7 @@ func (m *Model) registerPreviewIssueTabRegions(issueBox termpreview.Box) {
 		return
 	}
 	focused := m.PreviewFocused() && m.preview.issue.focused
-	strip := issueview.LayoutTabStrip(m.preview.issue.tabs, ui.ReserveHeaderClose(issueBox.W).TabsWidth, focused)
+	strip := issueview.LayoutTabStrip(m.preview.issue.tabs, panereposition.ReserveHeader(issueBox.W, true).TabsWidth, focused)
 	strip.RegisterHits(func(col, width, index int, close bool) {
 		m.workspacesMouse.HitMap.AddRect(
 			previewIssueTabKind,

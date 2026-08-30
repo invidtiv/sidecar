@@ -6,6 +6,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/features"
 )
 
 const sequenceTimeout = 500 * time.Millisecond
@@ -23,6 +24,14 @@ type Binding struct {
 	Key     string // e.g., "tab", "ctrl+s", "g g"
 	Command string // Command ID
 	Context string // "global", plugin ID, etc.
+	// Feature names the optional runtime gate for this binding. Keeping the gate
+	// on the binding makes dispatch, footer/help discovery, and live config
+	// changes agree about whether the key exists.
+	Feature string
+}
+
+func bindingAvailable(binding Binding) bool {
+	return binding.Feature == "" || features.IsEnabled(binding.Feature)
 }
 
 // Registry manages key bindings and command dispatch.
@@ -164,7 +173,7 @@ func (r *Registry) findCommand(key, activeContext string) tea.Cmd {
 // Returns the command result and whether a binding was found.
 func (r *Registry) findInContext(key, context string) (tea.Cmd, bool) {
 	for _, b := range r.bindings[context] {
-		if b.Key == key {
+		if bindingAvailable(b) && b.Key == key {
 			if cmd, ok := r.commands[b.Command]; ok && cmd.Handler != nil {
 				return cmd.Handler(), true
 			}
@@ -185,7 +194,7 @@ func (r *Registry) isSequenceStart(key, activeContext string) bool {
 
 	for _, ctx := range contexts {
 		for _, b := range r.bindings[ctx] {
-			if strings.HasPrefix(b.Key, prefix) {
+			if bindingAvailable(b) && strings.HasPrefix(b.Key, prefix) {
 				return true
 			}
 		}
@@ -221,7 +230,14 @@ func (r *Registry) GetCommand(id string) (Command, bool) {
 func (r *Registry) BindingsForContext(context string) []Binding {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.bindings[context]
+	bindings := r.bindings[context]
+	out := make([]Binding, 0, len(bindings))
+	for _, binding := range bindings {
+		if bindingAvailable(binding) {
+			out = append(out, binding)
+		}
+	}
+	return out
 }
 
 // CommandForContextKey returns the command a key is bound to in exactly this
@@ -232,7 +248,7 @@ func (r *Registry) CommandForContextKey(context, key string) (string, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	for _, b := range r.bindings[context] {
-		if b.Key == key {
+		if bindingAvailable(b) && b.Key == key {
 			return b.Command, true
 		}
 	}

@@ -136,6 +136,9 @@ type Deck struct {
 	hidden map[panelayout.Kind]*pane
 
 	nextTabID uint64
+	// reservedMaxID keeps IDs seen only in a host-composed tree (currently live
+	// Shell leaves/splits) out of subsequent passive allocations.
+	reservedMaxID int
 }
 
 // New constructs a primary-only deck without doing I/O.
@@ -246,6 +249,125 @@ func (d *Deck) Tree() *panelayout.Node {
 		return nil
 	}
 	return panelayout.Clone(d.root)
+}
+
+// AdoptLayout makes the deck's owned tree follow a host-composed layout while
+// retaining every existing leaf pointer and all viewer/tab state keyed by its
+// ID. Hosts may compose live Shell leaves around this passive deck; those
+// foreign leaves are collapsed before validation. Adoption is all-or-nothing:
+// the candidate must contain each currently visible deck leaf exactly once,
+// with the same kind, and no new owned leaf may appear.
+func (d *Deck) adoptLayoutCandidate(candidate *panelayout.Node) (*panelayout.Node, int, bool) {
+	if d == nil || d.root == nil || candidate == nil {
+		return nil, 0, false
+	}
+	owned := make(map[int]*panelayout.Node)
+	var collectOwned func(*panelayout.Node) bool
+	collectOwned = func(node *panelayout.Node) bool {
+		if node == nil {
+			return false
+		}
+		if node.Split != nil {
+			return collectOwned(node.Split.A) && collectOwned(node.Split.B)
+		}
+		if _, duplicate := owned[node.ID]; duplicate {
+			return false
+		}
+		owned[node.ID] = node
+		return true
+	}
+	if !collectOwned(d.root) {
+		return nil, 0, false
+	}
+
+	candidateMaxID := panelayout.MaxID(candidate)
+	projected := panelayout.Clone(candidate)
+	for {
+		var foreign *panelayout.Node
+		var findForeign func(*panelayout.Node)
+		findForeign = func(node *panelayout.Node) {
+			if node == nil || foreign != nil {
+				return
+			}
+			if node.Split != nil {
+				findForeign(node.Split.A)
+				findForeign(node.Split.B)
+				return
+			}
+			if _, ok := owned[node.ID]; !ok {
+				foreign = node
+			}
+		}
+		findForeign(projected)
+		if foreign == nil {
+			break
+		}
+		if foreign.Kind != panelayout.Shell {
+			return nil, 0, false
+		}
+		if panelayout.LeafCount(projected) < 2 {
+			return nil, 0, false
+		}
+		projected, _ = panelayout.Close(projected, foreign.ID)
+	}
+
+	seen := make(map[int]bool)
+	valid := true
+	var validate func(*panelayout.Node)
+	validate = func(node *panelayout.Node) {
+		if node == nil || !valid {
+			valid = false
+			return
+		}
+		if node.Split != nil {
+			validate(node.Split.A)
+			validate(node.Split.B)
+			return
+		}
+		existing, ok := owned[node.ID]
+		if !ok || seen[node.ID] || existing.Kind != node.Kind {
+			valid = false
+			return
+		}
+		seen[node.ID] = true
+	}
+	validate(projected)
+	if !valid || len(seen) != len(owned) {
+		return nil, 0, false
+	}
+
+	var adopt func(*panelayout.Node) *panelayout.Node
+	adopt = func(node *panelayout.Node) *panelayout.Node {
+		if node.Split == nil {
+			return owned[node.ID]
+		}
+		return &panelayout.Node{
+			ID: node.ID,
+			Split: &panelayout.Split{
+				Axis: node.Split.Axis, Ratio: node.Split.Ratio,
+				A: adopt(node.Split.A), B: adopt(node.Split.B),
+			},
+		}
+	}
+	return adopt(projected), candidateMaxID, true
+}
+
+// CanAdoptLayout validates a host-composed candidate without changing the
+// deck. Modal hosts use it before touching their live tree, so adopting the
+// passive projection cannot become a late partial-commit failure.
+func (d *Deck) CanAdoptLayout(candidate *panelayout.Node) bool {
+	_, _, ok := d.adoptLayoutCandidate(candidate)
+	return ok
+}
+
+func (d *Deck) AdoptLayout(candidate *panelayout.Node) bool {
+	root, candidateMaxID, ok := d.adoptLayoutCandidate(candidate)
+	if !ok {
+		return false
+	}
+	d.root = root
+	d.reservedMaxID = max(d.reservedMaxID, candidateMaxID)
+	return true
 }
 
 // FocusedLeaf returns the leaf that owns outer keyboard focus.
@@ -361,7 +483,11 @@ func (d *Deck) Open(ctx SurfaceContext, ref contentlink.Ref, placement Placement
 		return d.openTab(p, normalized, identity, false)
 	}
 
-	newLeaf := &panelayout.Node{Kind: kind}
+	newLeafID := 0
+	if d.reservedMaxID > panelayout.MaxID(d.root) {
+		newLeafID = d.reservedMaxID + 1
+	}
+	newLeaf := &panelayout.Node{ID: newLeafID, Kind: kind}
 	trial := panelayout.Clone(d.root)
 	trial, leafID := panelayout.ApplyPlan(trial, plan, newLeaf)
 	if leafID <= 0 {
@@ -377,7 +503,7 @@ func (d *Deck) Open(ctx SurfaceContext, ref contentlink.Ref, placement Placement
 	} else {
 		p = &pane{kind: kind}
 	}
-	d.root, leafID = panelayout.ApplyPlan(d.root, plan, &panelayout.Node{Kind: kind})
+	d.root, leafID = panelayout.ApplyPlan(d.root, plan, &panelayout.Node{ID: newLeafID, Kind: kind})
 	if leafID <= 0 {
 		return Outcome{Status: StatusRefused, Refusal: RefusalPlacement, Ref: normalized, Kind: kind}
 	}

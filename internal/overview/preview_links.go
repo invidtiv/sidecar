@@ -14,6 +14,7 @@ import (
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/panereposition"
 	"github.com/marcus/sidecar/internal/panesearch"
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/targetactivation"
@@ -531,7 +532,8 @@ func (m *Model) layoutPreviewPanes(peer termpreview.Box) (panelayout.Layout, boo
 	if m.preview.paneRoot == nil {
 		m.resetActivePreviewPanes()
 	}
-	return panelayout.LayoutTree(m.preview.paneRoot, peer, previewPaneFloors(), m.preview.paneFocus)
+	zoom := m.paneZoom.Leaf(m.paneLayoutScope(), m.preview.paneRoot)
+	return panelayout.LayoutTreeWithZoom(m.preview.paneRoot, peer, previewPaneFloors(), m.preview.paneFocus, zoom)
 }
 
 // previewPaneBox is a kind's INNER box: what its content draws in, what tmux and
@@ -576,7 +578,7 @@ func (m *Model) registerPreviewDocTabRegions(docBox termpreview.Box) {
 	if m.preview.doc == nil {
 		return
 	}
-	strip := docview.LayoutTabStrip(m.preview.doc.tabs, ui.ReserveHeaderClose(docBox.W).TabsWidth, m.PreviewFocused() && m.preview.doc.focused)
+	strip := docview.LayoutTabStrip(m.preview.doc.tabs, panereposition.ReserveHeader(docBox.W, true).TabsWidth, m.PreviewFocused() && m.preview.doc.focused)
 	strip.RegisterHits(func(col, width, index int, close bool) {
 		m.workspacesMouse.HitMap.AddRect(previewDocTabKind, docBox.X+col, docBox.Y, width, 1, previewDocTabHit{Index: index, Close: close})
 	})
@@ -734,7 +736,7 @@ func (m *Model) renderPreviewDoc(doc *previewDoc, box termpreview.Box) string {
 	if view != nil {
 		view.SetSize(box.W, contentHeight)
 	}
-	tabsWidth := ui.ReserveHeaderClose(box.W).TabsWidth
+	tabsWidth := panereposition.ReserveHeader(box.W, true).TabsWidth
 	focused := m.PreviewFocused() && doc.focused
 	strip := docview.LayoutTabStrip(doc.tabs, tabsWidth, focused)
 	if doc.mode != nil {
@@ -763,11 +765,18 @@ func (m *Model) renderPreviewDoc(doc *previewDoc, box termpreview.Box) string {
 }
 
 func (m *Model) composePreviewHeader(tabsRow string, width int, kind panelayout.Kind) string {
-	return ui.ComposeHeaderClose(tabsRow, width, m.previewCloseHover && m.hoverPreviewClose == kind)
+	leaf := panelayout.FirstOfKind(m.preview.paneRoot, kind)
+	leafID := 0
+	if leaf != nil {
+		leafID = leaf.ID
+	}
+	return panereposition.ComposeHeader(tabsRow, width, kind != panelayout.Terminal,
+		leafID != 0 && m.hoverPreviewLayout == leafID,
+		m.previewCloseHover && m.hoverPreviewClose == kind)
 }
 
 func (m *Model) registerPreviewCloseRegionFor(leafID int, kind panelayout.Kind, box termpreview.Box) {
-	reserve := ui.ReserveHeaderClose(box.W)
+	reserve := panereposition.ReserveHeader(box.W, true)
 	if reserve.CloseW < 1 {
 		return
 	}

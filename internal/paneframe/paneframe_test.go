@@ -395,6 +395,9 @@ func (s *recordingSink) Tabs(node *panelayout.Node, _ Box) {
 func (s *recordingSink) Title(node *panelayout.Node, _ Box) {
 	s.calls = append(s.calls, fmt.Sprintf("title:%d", node.ID))
 }
+func (s *recordingSink) Layout(node *panelayout.Node, _ Box) {
+	s.calls = append(s.calls, fmt.Sprintf("layout:%d", node.ID))
+}
 func (s *recordingSink) Close(node *panelayout.Node, _ Box) {
 	s.calls = append(s.calls, fmt.Sprintf("close:%d", node.ID))
 }
@@ -419,6 +422,7 @@ func TestRegisterRegionsOrdersTargetsSoTheTopOneWins(t *testing.T) {
 		"leaf:1", "leaf:2",
 		"divider:3",
 		"tabs:1", "tabs:2",
+		"layout:1", "layout:2",
 		"close:1", "close:2",
 		"body:1", "body:2",
 	}
@@ -432,12 +436,13 @@ func TestRegisterRegionsOrdersTargetsSoTheTopOneWins(t *testing.T) {
 // tab target two columns left of the tab a user can see.
 func TestRegisterRegionsUsesOuterForLeavesAndInnerForHeaders(t *testing.T) {
 	outer := Box{X: 4, Y: 2, W: 30, H: 10}
-	var leafBox, tabBox, closeBox, bodyBox Box
+	var leafBox, tabBox, layoutBox, closeBox, bodyBox Box
 	sink := boxSink{
-		leaf:  func(b Box) { leafBox = b },
-		tabs:  func(b Box) { tabBox = b },
-		close: func(b Box) { closeBox = b },
-		body:  func(b Box) { bodyBox = b },
+		leaf:   func(b Box) { leafBox = b },
+		tabs:   func(b Box) { tabBox = b },
+		layout: func(b Box) { layoutBox = b },
+		close:  func(b Box) { closeBox = b },
+		body:   func(b Box) { bodyBox = b },
 	}
 	RegisterRegions(sink, &fakeHost{chrome: map[int]Chrome{}}, panelayout.Layout{
 		Leaves: []panelayout.Placement{{Node: &panelayout.Node{ID: 1}, Box: outer}},
@@ -446,7 +451,7 @@ func TestRegisterRegionsUsesOuterForLeavesAndInnerForHeaders(t *testing.T) {
 		t.Fatalf("leaf region = %+v, want OUTER %+v", leafBox, outer)
 	}
 	inner := Inset(outer)
-	for name, got := range map[string]Box{"tabs": tabBox, "close": closeBox, "body": bodyBox} {
+	for name, got := range map[string]Box{"tabs": tabBox, "layout": layoutBox, "close": closeBox, "body": bodyBox} {
 		if got != inner {
 			t.Fatalf("%s region = %+v, want INNER %+v", name, got, inner)
 		}
@@ -455,17 +460,18 @@ func TestRegisterRegionsUsesOuterForLeavesAndInnerForHeaders(t *testing.T) {
 
 func TestRegisterRegionsUsesWholeBoxForBorderlessLeaf(t *testing.T) {
 	outer := Box{X: 4, Y: 2, W: 30, H: 10}
-	var leafBox, tabBox, closeBox, bodyBox Box
+	var leafBox, tabBox, layoutBox, closeBox, bodyBox Box
 	sink := boxSink{
-		leaf:  func(b Box) { leafBox = b },
-		tabs:  func(b Box) { tabBox = b },
-		close: func(b Box) { closeBox = b },
-		body:  func(b Box) { bodyBox = b },
+		leaf:   func(b Box) { leafBox = b },
+		tabs:   func(b Box) { tabBox = b },
+		layout: func(b Box) { layoutBox = b },
+		close:  func(b Box) { closeBox = b },
+		body:   func(b Box) { bodyBox = b },
 	}
 	node := &panelayout.Node{ID: 1, Kind: panelayout.Primary}
 	host := &fakeHost{chrome: map[int]Chrome{1: ChromeNone}}
 	RegisterRegions(sink, host, panelayout.Layout{Leaves: []panelayout.Placement{{Node: node, Box: outer}}})
-	for name, got := range map[string]Box{"leaf": leafBox, "tabs": tabBox, "close": closeBox, "body": bodyBox} {
+	for name, got := range map[string]Box{"leaf": leafBox, "tabs": tabBox, "layout": layoutBox, "close": closeBox, "body": bodyBox} {
 		if got != outer {
 			t.Fatalf("%s region = %+v, want borderless placement %+v", name, got, outer)
 		}
@@ -473,16 +479,17 @@ func TestRegisterRegionsUsesWholeBoxForBorderlessLeaf(t *testing.T) {
 }
 
 type boxSink struct {
-	leaf, tabs, close, body func(Box)
+	leaf, tabs, layout, close, body func(Box)
 }
 
 func (s boxSink) Title(*panelayout.Node, Box) {}
 
-func (s boxSink) Leaf(_ *panelayout.Node, b Box)  { s.leaf(b) }
-func (s boxSink) Divider(int, Box)                {}
-func (s boxSink) Tabs(_ *panelayout.Node, b Box)  { s.tabs(b) }
-func (s boxSink) Close(_ *panelayout.Node, b Box) { s.close(b) }
-func (s boxSink) Body(_ *panelayout.Node, b Box)  { s.body(b) }
+func (s boxSink) Leaf(_ *panelayout.Node, b Box)   { s.leaf(b) }
+func (s boxSink) Divider(int, Box)                 {}
+func (s boxSink) Tabs(_ *panelayout.Node, b Box)   { s.tabs(b) }
+func (s boxSink) Layout(_ *panelayout.Node, b Box) { s.layout(b) }
+func (s boxSink) Close(_ *panelayout.Node, b Box)  { s.close(b) }
+func (s boxSink) Body(_ *panelayout.Node, b Box)   { s.body(b) }
 
 // everyKindTree places one leaf of every kind the pane tree knows, so a kind
 // added later fails these tests until it is added here too.

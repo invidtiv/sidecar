@@ -26,6 +26,7 @@ import (
 	"github.com/marcus/sidecar/internal/noteview"
 	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/panereposition"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/resourceview"
@@ -44,6 +45,7 @@ const (
 	appDeckDividerRegion = "app-content-divider"
 	appDeckTabRegion     = "app-content-tab"
 	appDeckCloseRegion   = "app-content-close"
+	appDeckLayoutRegion  = "app-content-layout"
 )
 
 type appContentResolvedMsg struct {
@@ -63,6 +65,9 @@ type appContentDeck struct {
 	key, workdir, stateRoot, pluginID string
 	global                            bool
 	deck                              *contentpanes.Deck
+	root                              *panelayout.Node
+	layoutModal                       *panereposition.Controller
+	zoom                              panereposition.Zoom
 	plugin                            plugin.Plugin
 	layout                            panelayout.Layout
 	laidOut                           bool
@@ -77,6 +82,7 @@ type appContentDeck struct {
 	links            []appContentLinkHit
 	tabHits          []appDeckTabHit
 	hoverTabClose    tabs.CloseHover
+	hoverLayout      int
 	generation       uint64
 	press            *appContentLinkHit
 	pressX, pressY   int
@@ -247,7 +253,9 @@ func (m *Model) renderContentDeck(h *appContentDeck, width, height int) string {
 	h.tabHits = nil
 	h.mouse.Clear()
 	h.canvas = paneframe.Box{W: width, H: height}
-	layout, ok := panelayout.LayoutTree(h.deck.Tree(), h.canvas, appDeckFloors(), h.deck.FocusedLeaf())
+	h.syncLayoutProjection()
+	zoom := h.zoom.Leaf(h.layoutScope(), h.root)
+	layout, ok := panelayout.LayoutTreeWithZoom(h.root, h.canvas, appDeckFloors(), h.deck.FocusedLeaf(), zoom)
 	h.layout, h.laidOut = layout, ok
 	if !ok {
 		return ui.FitBlock(h.plugin.View(width, height), width, height)
@@ -465,7 +473,7 @@ func (h *appContentDeck) tabHeader(leafID, width int, origin mouse.Rect, focused
 		}
 		labels = append(labels, tabs.Label{Text: label})
 	}
-	reserve := ui.ReserveHeaderClose(width)
+	reserve := panereposition.ReserveHeader(width, true)
 	strip := tabs.LayoutStrip(labels, active, reserve.TabsWidth, focused, nil)
 	strip.RegisterHits(func(col, width, index int, close bool) {
 		h.tabHits = append(h.tabHits, appDeckTabHit{
@@ -473,7 +481,7 @@ func (h *appContentDeck) tabHeader(leafID, width int, origin mouse.Rect, focused
 			rect: mouse.Rect{X: origin.X + col, Y: origin.Y, W: width, H: 1},
 		})
 	})
-	return ui.ComposeHeaderClose(strip.HoverClose(h.hoverTabClose.IndexFor(leafID)).Row, width, false)
+	return panereposition.ComposeHeader(strip.HoverClose(h.hoverTabClose.IndexFor(leafID)).Row, width, true, h.hoverLayout == leafID, false)
 }
 
 // setTabCloseHover lights the × of the deck tab the pointer is inside. Only
@@ -551,6 +559,19 @@ func (r appDeckRegions) Tabs(n *panelayout.Node, b paneframe.Box) {
 // keeps the cells.
 func (r appDeckRegions) Title(*panelayout.Node, paneframe.Box) {}
 
+// Layout is wired by the reposition-modal host adapter. The shared frame owns
+// its exact precedence between title and close.
+func (r appDeckRegions) Layout(n *panelayout.Node, b paneframe.Box) {
+	if n == nil || n.Split != nil || n.Kind == panelayout.Primary {
+		return
+	}
+	reserve := panereposition.ReserveHeader(b.W, true)
+	if reserve.LayoutW < 1 {
+		return
+	}
+	r.h.mouse.HitMap.AddRect(appDeckLayoutRegion, b.X+reserve.LayoutCol, b.Y, reserve.LayoutW, 1, n.ID)
+}
+
 func (r appDeckRegions) Close(n *panelayout.Node, b paneframe.Box) {
 	if n.Kind == panelayout.Primary || b.W <= 0 {
 		return
@@ -559,7 +580,7 @@ func (r appDeckRegions) Close(n *panelayout.Node, b paneframe.Box) {
 	// the hit rect must be the same reserved geometry. Registering only the
 	// last column left the glyph itself dead: clicks had to land one cell to
 	// its right to close.
-	reserve := ui.ReserveHeaderClose(b.W)
+	reserve := panereposition.ReserveHeader(b.W, true)
 	if reserve.CloseW < 1 {
 		return
 	}
@@ -930,6 +951,14 @@ func (m *Model) appContentMouse(msg tea.MouseMsg) (tea.Cmd, bool) {
 	if h == nil || !h.laidOut {
 		return nil, false
 	}
+	if click, ok := msg.(tea.MouseClickMsg); ok && click.Button == tea.MouseLeft {
+		if region := h.mouse.HitMap.Test(click.X, click.Y); region != nil && region.ID == appDeckLayoutRegion {
+			if leafID, ok := region.Data.(int); ok {
+				return m.openAppPaneLayoutModal(h, leafID), true
+			}
+			return nil, true
+		}
+	}
 	if h.info != nil {
 		if h.info.HandleMouse(msg, h.mouse) {
 			h.info, h.infoLeaf = nil, 0
@@ -947,6 +976,20 @@ func (m *Model) appContentMouse(msg tea.MouseMsg) (tea.Cmd, bool) {
 	wasDragging := h.mouse.IsDragging()
 	dragSourceBefore := h.mouse.DragRegion()
 	action := h.mouse.HandleMouse(msg)
+	if action.Type == mouse.ActionHover {
+		h.hoverLayout = 0
+		if action.Region != nil && action.Region.ID == appDeckLayoutRegion {
+			if leafID, ok := action.Region.Data.(int); ok {
+				h.hoverLayout = leafID
+			}
+		}
+	}
+	if action.Type == mouse.ActionClick && action.Region != nil && action.Region.ID == appDeckLayoutRegion {
+		if leafID, ok := action.Region.Data.(int); ok {
+			return m.openAppPaneLayoutModal(h, leafID), true
+		}
+		return nil, true
+	}
 	if action.Type == mouse.ActionClick && action.Region != nil && action.Region.ID == appDeckDividerRegion {
 		if splitID, ok := action.Region.Data.(int); ok {
 			if split := panelayout.Find(h.deck.Tree(), splitID); split != nil && split.Split != nil {

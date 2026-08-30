@@ -1,6 +1,6 @@
 # Pane Repositioning — move mode, the layout button, and `sidecar layout move`
 
-**Status:** agreed, not started. **Tracking:** `td-2ec104`.
+**Status:** in progress — M0–M2 complete, verified, and independently reviewed; M3–M5 remain. **Tracking:** `td-2ec104`.
 
 One sentence: **a pane you have opened should be movable — by keyboard from where you are standing, by mouse from a button in its own header — and by an agent through the same planner.**
 

@@ -182,7 +182,8 @@ func (p *Plugin) terminalLeafBox() (Box, bool) {
 	// A box too small for the tree is the layout's own answer — the focused leaf
 	// alone in the whole box — so a terminal that is not the zoomed leaf has no
 	// box here, exactly as it has no pixels in the split renderer.
-	layout, ok := LayoutPaneTree(p.paneRoot, peer, paneTreeFloors(), p.paneFocus)
+	zoom := p.paneZoom.Leaf(p.paneLayoutModalScope(), p.paneRoot)
+	layout, ok := LayoutPaneTreeWithZoom(p.paneRoot, peer, paneTreeFloors(), p.paneFocus, zoom)
 	if !ok {
 		return Box{}, false
 	}
@@ -200,7 +201,8 @@ func (p *Plugin) leafGeometryFor(leafID int) (leafGeom, bool) {
 	if !ok || p.paneRoot == nil {
 		return leafGeom{}, false
 	}
-	layout, laid := LayoutPaneTree(p.paneRoot, peer, paneTreeFloors(), p.paneFocus)
+	zoom := p.paneZoom.Leaf(p.paneLayoutModalScope(), p.paneRoot)
+	layout, laid := LayoutPaneTreeWithZoom(p.paneRoot, peer, paneTreeFloors(), p.paneFocus, zoom)
 	if !laid {
 		return leafGeom{}, false
 	}

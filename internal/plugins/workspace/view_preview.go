@@ -7,6 +7,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/features"
+	"github.com/marcus/sidecar/internal/panereposition"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
@@ -265,16 +266,14 @@ func (p *Plugin) renderCapturedTerminalWithClose(chips, actions []string, hint s
 	if projected := p.projectedTerminalBuffer(termPanel); projected != nil {
 		buffer = projected
 	}
-	// The button is reserved out of the header row alone: the viewport under it
-	// is tmux geometry and must keep every column it was sized for.
-	headerWidth := width
-	reserve := ui.HeaderClose{CloseCol: -1}
-	if closeLeafID != 0 {
-		reserve = ui.ReserveHeaderClose(width)
-		if reserve.CloseW > 0 {
-			headerWidth = reserve.TabsWidth
-		}
+	// The controls are reserved out of the header row alone: the viewport under
+	// them is tmux geometry and must keep every column it was sized for.
+	headerLeafID := closeLeafID
+	if headerLeafID == 0 {
+		headerLeafID = terminalLeafID(p.paneRoot)
 	}
+	reserve := panereposition.ReserveHeader(width, closeLeafID != 0)
+	headerWidth := reserve.TabsWidth
 	interactive := p.interactiveDescribes(termPanel)
 	// While interactive the exit key leads the hints and is what the row must
 	// keep; the chips give way for it instead of the other way round.
@@ -284,10 +283,8 @@ func (p *Plugin) renderCapturedTerminalWithClose(chips, actions []string, hint s
 	}
 	renderHeader := func(hint string) string {
 		row := p.terminalHeaderWithActions(chips, actions, hint, headerWidth, hintFloor)
-		if reserve.CloseW > 0 {
-			row = ui.ComposeHeaderClose(row, width, p.hoverPaneClose == closeLeafID)
-		}
-		return row
+		return panereposition.ComposeHeader(row, width, closeLeafID != 0,
+			p.hoverPaneLayout == headerLeafID, p.hoverPaneClose == closeLeafID)
 	}
 
 	// The attach flash lives in the right region rather than on a row of its

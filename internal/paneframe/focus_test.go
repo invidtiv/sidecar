@@ -10,14 +10,14 @@ func TestLeafChromeIsIdleWhileFocusIsHeldOutsideThePanes(t *testing.T) {
 
 	SetFocusHeldOutsidePanes(false)
 	idle := WrapLeaf("body", outer, ChromeIdle)
-	for _, chrome := range []Chrome{ChromeActive, ChromeInteractive, ChromeFlash} {
+	for _, chrome := range []Chrome{ChromeActive, ChromeInteractive, ChromeFlash, ChromeMoving} {
 		if WrapLeaf("body", outer, chrome) == idle {
 			t.Fatalf("chrome %v is indistinguishable from idle; the test proves nothing", chrome)
 		}
 	}
 
 	SetFocusHeldOutsidePanes(true)
-	for _, chrome := range []Chrome{ChromeIdle, ChromeActive, ChromeInteractive, ChromeFlash} {
+	for _, chrome := range []Chrome{ChromeIdle, ChromeActive, ChromeInteractive, ChromeFlash, ChromeMoving} {
 		if got := EffectiveChrome(chrome); got != ChromeIdle {
 			t.Fatalf("EffectiveChrome(%v) = %v, want ChromeIdle", chrome, got)
 		}
@@ -29,5 +29,15 @@ func TestLeafChromeIsIdleWhileFocusIsHeldOutsideThePanes(t *testing.T) {
 	SetFocusHeldOutsidePanes(false)
 	if got := EffectiveChrome(ChromeActive); got != ChromeActive {
 		t.Fatalf("EffectiveChrome(ChromeActive) = %v after focus returned, want ChromeActive", got)
+	}
+}
+
+func TestMovingChromeIsDistinctFromOtherFocusedStates(t *testing.T) {
+	outer := Box{W: 24, H: 6}
+	moving := WrapLeaf("body", outer, ChromeMoving)
+	for _, chrome := range []Chrome{ChromeIdle, ChromeActive, ChromeInteractive, ChromeFlash} {
+		if moving == WrapLeaf("body", outer, chrome) {
+			t.Fatalf("moving chrome is indistinguishable from %v", chrome)
+		}
 	}
 }

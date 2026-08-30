@@ -44,6 +44,9 @@ func (p *Plugin) paneSwitcherKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 }
 
 func (p *Plugin) handleKeyPress(msg tea.KeyPressMsg) tea.Cmd {
+	if p.paneLayoutModal != nil {
+		return p.handlePaneLayoutModalKey(msg)
+	}
 	switch p.viewMode {
 	case ViewModeList, ViewModeKanban:
 		return p.handleListKeys(msg)
@@ -414,6 +417,12 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 	}
 	// Clear any deletion warnings on key interaction
 	p.deleteWarnings = nil
+	// Pane-move is a transient keyboard owner. Search/editor/input surfaces were
+	// answered above or are rejected by paneMoveCanStart; once entered, every
+	// key is swallowed until the mode exits.
+	if handled, cmd := p.handlePaneMoveKey(msg); handled {
+		return cmd
+	}
 	// Tab walks every window on screen — sidebar, tree leaves, terminal panel —
 	// through the one ring, so no visible window is a dead end and none is
 	// unreachable. A terminal in interactive mode never gets here: that mode

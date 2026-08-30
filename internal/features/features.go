@@ -103,6 +103,15 @@ var (
 		Description: "Open passive content panes beside eligible project plugins",
 	}
 
+	// PaneMove enables the transient keyboard mode for repositioning panes.
+	// It stays off until the complete keyboard, modal, and agent journeys have
+	// been proven together.
+	PaneMove = Feature{
+		Name:        "pane_move",
+		Default:     false,
+		Description: "Reposition panes with a keyboard move mode",
+	}
+
 	// WorkspaceDocPanesDisabledDiff is the toast/no-op copy when Diff is
 	// requested while the pane tree is off.
 	WorkspaceDocPanesDisabledDiff = "Document panes are disabled; Diff needs the workspace pane tree"
@@ -151,6 +160,7 @@ var allFeatures = []Feature{
 	ConversationsPlugin,
 	WorkspaceDocPanes,
 	PluginContentPanes,
+	PaneMove,
 	WorkspaceTerminalPanel,
 	CrossProjectOverview,
 	TerminalResourceProviders,

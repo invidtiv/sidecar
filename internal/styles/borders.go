@@ -131,7 +131,6 @@ func RenderGradientBorderWithBg(content string, width, height int, gradient Grad
 	return result.String()
 }
 
-
 // renderGradientBorderTop renders the top border line with gradient colors.
 func renderGradientBorderTop(width, height int, g Gradient) string {
 	var sb strings.Builder
@@ -324,6 +323,14 @@ func GetInteractiveGradient() Gradient {
 	// This creates an energetic gradient indicating active input mode
 	colors := []string{theme.Colors.Warning, theme.Colors.Success}
 	return NewGradient(colors, DefaultGradientAngle)
+}
+
+// GetMovingGradient returns the distinct border used while a pane is being
+// repositioned. Info plus accent reads as structural/navigation state without
+// borrowing the warning/success language of interactive input.
+func GetMovingGradient() Gradient {
+	theme := GetCurrentTheme()
+	return NewGradient([]string{theme.Colors.Info, theme.Colors.Accent}, DefaultGradientAngle)
 }
 
 // RenderPanel renders content in a panel with gradient borders.

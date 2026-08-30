@@ -99,21 +99,33 @@ func TestFlagsPagePrefersCuratedCopy(t *testing.T) {
 	}
 }
 
-// The list must stay shorter than an ordinary terminal. The detail pane
-// truncates instead of scrolling and the row cursor still walks onto rows that
-// were cut, so a page that outgrows the pane loses rows with no indication —
-// and this list grows every time a feature is registered.
+func TestPaneMoveUsesHumanFacingCopy(t *testing.T) {
+	item := previewFor(features.PaneMove)
+	if item.label != "Move panes" || strings.Contains(item.label, "pane_move") {
+		t.Fatalf("pane_move label = %q, want human-facing copy", item.label)
+	}
+	if !strings.Contains(item.help, "header control") {
+		t.Fatalf("pane_move help does not describe both entry points: %q", item.help)
+	}
+	m := flagsFixture(t, nil)
+	if view := ansi.Strip(m.View(120, 31)); strings.Contains(view, features.PaneMove.Name) {
+		t.Fatalf("Feature Flags exposed raw pane_move identifier:\n%s", view)
+	}
+}
+
+// The registry may outgrow an ordinary terminal, but every row must remain
+// reachable: moving the detail cursor scrolls its complete label and help text
+// into the pane instead of letting the generic height clamp hide it.
 func TestFlagsPageFitsAnOrdinaryTerminal(t *testing.T) {
-	// At 120 columns and 31 rows every flag shows its name and its whole
-	// description on one line. The numbers are asserted rather than described
-	// so that adding a flag, or letting a description grow past the row width,
-	// fails here instead of silently pushing the last row under the fold.
 	for _, size := range []struct{ w, h int }{{120, 31}, {160, 31}, {160, 45}} {
 		m := flagsFixture(t, nil)
-		view := ansi.Strip(m.View(size.w, size.h))
-		for _, item := range previews() {
+		m.View(size.w, size.h)
+		m.detailFocus = true
+		for i, item := range flagPagePreviews() {
+			m.rowCursor = i
+			view := ansi.Strip(m.View(size.w, size.h))
 			if !strings.Contains(view, item.label) {
-				t.Fatalf("%dx%d cut the %q row off the page:\n%s", size.w, size.h, item.label, view)
+				t.Fatalf("%dx%d did not scroll the %q row into view:\n%s", size.w, size.h, item.label, view)
 			}
 			// Every flag explains itself, whether or not the cursor is on it:
 			// half these names do not say what they turn on. A description that
@@ -122,6 +134,15 @@ func TestFlagsPageFitsAnOrdinaryTerminal(t *testing.T) {
 			if !strings.Contains(view, item.help) {
 				t.Fatalf("%dx%d wrapped %q's description %q — shorten it:\n%s",
 					size.w, size.h, item.label, item.help, view)
+			}
+			if i == len(flagPagePreviews())-1 && size.h == 31 {
+				if m.flagsScroll == 0 {
+					t.Fatalf("%dx%d reached the last flag without scrolling", size.w, size.h)
+				}
+				region := regionFor(t, m, regionFlag+item.flag)
+				if region.Rect.Y < 1 || region.Rect.Y >= size.h-1 {
+					t.Fatalf("scrolled %q region is off-screen: %+v", item.label, region.Rect)
+				}
 			}
 		}
 	}
@@ -132,10 +153,13 @@ func TestFlagsPageFitsAnOrdinaryTerminal(t *testing.T) {
 // that were cut.
 func TestFlagsPageKeepsEveryRowOnANarrowPane(t *testing.T) {
 	m := flagsFixture(t, nil)
-	view := ansi.Strip(m.View(100, 36))
-	for _, item := range previews() {
+	m.View(100, 36)
+	m.detailFocus = true
+	for i, item := range flagPagePreviews() {
+		m.rowCursor = i
+		view := ansi.Strip(m.View(100, 36))
 		if !strings.Contains(view, item.label) {
-			t.Fatalf("100x36 cut the %q row off the page:\n%s", item.label, view)
+			t.Fatalf("100x36 did not scroll the %q row into view:\n%s", item.label, view)
 		}
 	}
 }

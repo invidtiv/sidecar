@@ -2,6 +2,7 @@ package overview
 
 import (
 	"github.com/marcus/sidecar/internal/docview"
+	"github.com/marcus/sidecar/internal/panereposition"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
@@ -31,6 +32,9 @@ const (
 // WorkspaceFocusContext. Bindings live in the keymap; names and priorities
 // live here so a focused issue or document cannot advertise the list's keys.
 func (m *Model) Commands() []plugin.Command {
+	if m.paneMoveActive() {
+		return panereposition.Commands()
+	}
 	switch m.WorkspaceFocusContext() {
 	case ctxGlobalWorkspacesFilter:
 		return []plugin.Command{
@@ -84,7 +88,7 @@ func (m *Model) Commands() []plugin.Command {
 			{ID: "yank-contents", Name: "Yank", Description: "Copy file contents", Context: ctxGlobalWorkspacesDoc, Priority: 11},
 			{ID: "yank-path", Name: "Path", Description: "Copy the relative path", Context: ctxGlobalWorkspacesDoc, Priority: 12},
 		}
-		return cmds
+		return m.withPaneMoveCommand(cmds, ctxGlobalWorkspacesDoc)
 	case ctxGlobalWorkspacesDiff:
 		cmds := []plugin.Command{
 			{ID: "close", Name: "Close", Description: "Hide the diff pane", Context: ctxGlobalWorkspacesDiff, Priority: 1},
@@ -98,7 +102,7 @@ func (m *Model) Commands() []plugin.Command {
 		if m.preview.diff != nil && m.preview.diff.view() != nil {
 			cmds = append(cmds, m.preview.diff.view().Commands(ctxGlobalWorkspacesDiff)...)
 		}
-		return cmds
+		return m.withPaneMoveCommand(cmds, ctxGlobalWorkspacesDiff)
 	case ctxGlobalWorkspacesResource:
 		// The vocabulary is resourceview's, not this surface's: both hosts
 		// register exactly this list, so a Resource pane cannot advertise one
@@ -114,9 +118,9 @@ func (m *Model) Commands() []plugin.Command {
 				Context: ctxGlobalWorkspacesResource, Priority: i + 2,
 			})
 		}
-		return cmds
+		return m.withPaneMoveCommand(cmds, ctxGlobalWorkspacesResource)
 	case ctxGlobalWorkspacesIssue:
-		return []plugin.Command{
+		return m.withPaneMoveCommand([]plugin.Command{
 			{ID: "open-item", Name: "Open", Description: "Open selected parent or subtask", Context: ctxGlobalWorkspacesIssue, Priority: 1},
 			{ID: "open-in-td", Name: "TD", Description: "Open the selected issue in td", Context: ctxGlobalWorkspacesIssue, Priority: 2},
 			{ID: "close-tab", Name: "Tab×", Description: "Close the active issue tab", Context: ctxGlobalWorkspacesIssue, Priority: 3},
@@ -125,16 +129,16 @@ func (m *Model) Commands() []plugin.Command {
 			{ID: "yank-issue", Name: "Yank", Description: "Copy issue as markdown", Context: ctxGlobalWorkspacesIssue, Priority: 6},
 			{ID: "yank-issue-key", Name: "YankID", Description: "Copy issue ID", Context: ctxGlobalWorkspacesIssue, Priority: 7},
 			{ID: "close", Name: "Close", Description: "Close the issue pane", Context: ctxGlobalWorkspacesIssue, Priority: 8},
-		}
+		}, ctxGlobalWorkspacesIssue)
 	case ctxGlobalWorkspacesNote:
-		return []plugin.Command{
+		return m.withPaneMoveCommand([]plugin.Command{
 			{ID: "close-tab", Name: "Tab×", Description: "Close the active note tab", Context: ctxGlobalWorkspacesNote, Priority: 1},
 			{ID: "prev-tab", Name: "Tab←", Description: "Previous note tab", Context: ctxGlobalWorkspacesNote, Priority: 2},
 			{ID: "next-tab", Name: "Tab→", Description: "Next note tab", Context: ctxGlobalWorkspacesNote, Priority: 3},
 			{ID: "yank-note", Name: "Yank", Description: "Copy note as markdown", Context: ctxGlobalWorkspacesNote, Priority: 4},
 			{ID: "yank-note-key", Name: "YankID", Description: "Copy note ID", Context: ctxGlobalWorkspacesNote, Priority: 5},
 			{ID: "close", Name: "Close", Description: "Close the note pane", Context: ctxGlobalWorkspacesNote, Priority: 6},
-		}
+		}, ctxGlobalWorkspacesNote)
 	default:
 		cmds := []plugin.Command{
 			{ID: "new-worktree", Name: "New", Description: "Create a worktree in a configured project", Context: ctxGlobalWorkspaces, Priority: 1},
@@ -174,8 +178,18 @@ func (m *Model) Commands() []plugin.Command {
 				Context: ctxGlobalWorkspaces, Priority: 9,
 			})
 		}
+		return m.withPaneMoveCommand(cmds, ctxGlobalWorkspaces)
+	}
+}
+
+func (m *Model) withPaneMoveCommand(cmds []plugin.Command, context string) []plugin.Command {
+	if !m.paneMoveCanStart() {
 		return cmds
 	}
+	return append(cmds, plugin.Command{
+		ID: panereposition.CommandMove, Name: "Move", Description: "Move this pane",
+		Context: context, Priority: 90,
+	})
 }
 
 // resourceCommandDescription is the sentence for a shared Resource command.

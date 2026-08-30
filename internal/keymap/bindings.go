@@ -462,6 +462,37 @@ func DefaultBindings() []Binding {
 		{Key: "up", Command: "navigate-picker", Context: "pane-switcher"},
 		{Key: "down", Command: "navigate-picker", Context: "pane-switcher"},
 
+		// Pane repositioning is available only from a pane leaf in the two
+		// Workspaces projections. Plugin browse, input, search, editor, and live
+		// terminal contexts are intentionally absent. Plugin content decks share
+		// some workspace-* context names, but do not implement the mode until M3.
+		{Key: "M", Command: "move-pane", Context: "workspace-preview", Feature: "pane_move"},
+		{Key: "M", Command: "move-pane", Context: "workspace-doc", Feature: "pane_move"},
+		{Key: "M", Command: "move-pane", Context: "workspace-issue", Feature: "pane_move"},
+		{Key: "M", Command: "move-pane", Context: "workspace-note", Feature: "pane_move"},
+		{Key: "M", Command: "move-pane", Context: "workspace-diff", Feature: "pane_move"},
+		{Key: "M", Command: "move-pane", Context: "workspace-resource", Feature: "pane_move"},
+		{Key: "M", Command: "move-pane", Context: "global-workspaces", Feature: "pane_move"},
+		{Key: "M", Command: "move-pane", Context: "global-workspaces-doc", Feature: "pane_move"},
+		{Key: "M", Command: "move-pane", Context: "global-workspaces-issue", Feature: "pane_move"},
+		{Key: "M", Command: "move-pane", Context: "global-workspaces-note", Feature: "pane_move"},
+		{Key: "M", Command: "move-pane", Context: "global-workspaces-diff", Feature: "pane_move"},
+		{Key: "M", Command: "move-pane", Context: "global-workspaces-resource", Feature: "pane_move"},
+
+		// While the transient mode is live it owns every directional key and all
+		// three explicit ways out. The surfaces swallow every other key too.
+		{Key: "h", Command: "move-pane-left", Context: "pane-move"},
+		{Key: "left", Command: "move-pane-left", Context: "pane-move"},
+		{Key: "j", Command: "move-pane-down", Context: "pane-move"},
+		{Key: "down", Command: "move-pane-down", Context: "pane-move"},
+		{Key: "k", Command: "move-pane-up", Context: "pane-move"},
+		{Key: "up", Command: "move-pane-up", Context: "pane-move"},
+		{Key: "l", Command: "move-pane-right", Context: "pane-move"},
+		{Key: "right", Command: "move-pane-right", Context: "pane-move"},
+		{Key: "M", Command: "move-pane-done", Context: "pane-move"},
+		{Key: "enter", Command: "move-pane-done", Context: "pane-move"},
+		{Key: "esc", Command: "move-pane-done", Context: "pane-move"},
+
 		// Focused project Workspaces Diff leaf. q hides; not a root context.
 		{Key: "n", Command: "open-pane", Context: "workspace-diff"},
 		{Key: "q", Command: "close", Context: "workspace-diff"},

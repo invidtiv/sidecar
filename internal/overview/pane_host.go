@@ -5,6 +5,7 @@ import (
 
 	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/panereposition"
 	"github.com/marcus/sidecar/internal/terminalperf"
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/ui"
@@ -96,6 +97,9 @@ func (m *Model) queuePreviewCmd(cmd tea.Cmd) {
 // neighbours. Content bytes are not dimmed.
 func (h paneHost) Chrome(node *panelayout.Node) paneframe.Chrome {
 	m := h.m
+	if node != nil && m.paneMoveActive() && m.preview.paneMove.LeafID() == node.ID {
+		return paneframe.ChromeMoving
+	}
 	if node == nil || !m.previewOwnsChrome() || m.preview.paneFocus != node.ID {
 		return paneframe.ChromeIdle
 	}
@@ -185,6 +189,24 @@ func (r paneRegions) Title(node *panelayout.Node, hit paneframe.Box) {
 		return
 	}
 	r.m.workspacesMouse.HitMap.AddRect(previewPaneTitleKind, hit.X, hit.Y, hit.W, hit.H, previewPaneTitleHit(node.ID))
+}
+
+// Layout is the leaf's reposition control. Its rectangle is derived from the
+// same shared reserve the renderer uses, and the frame fixes its precedence
+// between title and close.
+func (r paneRegions) Layout(node *panelayout.Node, inner paneframe.Box) {
+	if node == nil || node.Split != nil {
+		return
+	}
+	reserve := panereposition.ReserveHeader(inner.W, node.Kind != panelayout.Terminal)
+	if reserve.LayoutW < 1 {
+		return
+	}
+	r.m.workspacesMouse.HitMap.AddRect(
+		previewPaneLayoutKind,
+		inner.X+reserve.LayoutCol, inner.Y, reserve.LayoutW, 1,
+		previewPaneLayoutHit(node.ID),
+	)
 }
 
 // Close is the leaf's header X. A leaf whose content is gone registers nothing,
