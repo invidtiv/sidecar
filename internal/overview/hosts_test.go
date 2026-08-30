@@ -277,6 +277,12 @@ func TestRemoteWorkspacesAreNeverActedOn(t *testing.T) {
 	if reason := deleteRefusal(remote); !strings.Contains(reason, "mac-mini") {
 		t.Errorf("deleteRefusal did not refuse a remote worktree: %q", reason)
 	}
+	// mergeRefusal likewise: it is what the footer consults, so with the
+	// remote clause inside it Merge is hidden on a remote row up front rather
+	// than offered and then taken back by the navigation guard.
+	if reason := mergeRefusal(remote); !strings.Contains(reason, "mac-mini") {
+		t.Errorf("mergeRefusal did not refuse a remote worktree: %q", reason)
+	}
 }
 
 // TestNavigationRefusesARemoteWorkspace covers the route every activation

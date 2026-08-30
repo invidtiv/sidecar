@@ -355,7 +355,12 @@ type Model struct {
 	hoverHandleRegion string
 	hoverHandleSplit  int
 
-	renameOpen           bool
+	renameOpen bool
+	// renameBusy marks a rename whose persist is in flight. Input is swallowed
+	// while it is set — the remote round trip takes long enough for a second
+	// Enter, which raced two renames on the host with the loser's reply
+	// silently dropped.
+	renameBusy           bool
 	renameWorkspace      workspaceinventory.Workspace
 	renameInput          textinput.Model
 	renameError          string
@@ -655,17 +660,15 @@ func (m *Model) RequestNavigationAction(workspace workspaceinventory.Workspace, 
 }
 
 // refuseRemoteAction reports a refusal as an ordinary validation failure, so
-// every surface that already renders a failed navigation renders this too. It
-// says which machine the row is on, because "not supported" without a reason
-// reads as a bug.
+// every surface that already renders a failed navigation renders this too. The
+// sentence is remoteActionRefusal's, not a second wording of the same rule.
 func (m *Model) refuseRemoteAction(workspace workspaceinventory.Workspace, verb string) tea.Cmd {
 	m.requestID++
 	msg := ValidationMsg{
 		Workspace:  workspace,
 		Generation: m.generation,
 		RequestID:  m.requestID,
-		Err: fmt.Errorf("%s lives on %s; Sidecar can watch a remote workspace but cannot %s one yet",
-			workspace.Name, workspace.HostID, verb),
+		Err:        fmt.Errorf("%s", remoteActionRefusal(workspace, verb)),
 	}
 	return func() tea.Msg { return msg }
 }

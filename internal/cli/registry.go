@@ -335,10 +335,16 @@ func RootCommand() *Command {
 			"failure (an existing branch, an occupied path, an unsafe hook) still surfaces\n" +
 			"as exit 5. --run and --no-launch describe a launch --plan never performs, so\n" +
 			"they are refused with it; --agent and --skip-permissions are kept, since they\n" +
-			"come back as plan fields.",
+			"come back as plan fields.\n\n" +
+			"--expect-source-oid OID pins a previously confirmed plan: if the base ref no\n" +
+			"longer resolves to OID when this command runs, it is refused with exit 5 and a\n" +
+			"message naming both commits. A caller that showed a --plan result in a\n" +
+			"confirmation passes the plan's sourceOid back here, and gets the same\n" +
+			"source-moved guard the TUI's confirmation gets from executing its stored plan.",
 		Flags: []Flag{
 			{Name: "--base", Arg: "REF", Summary: "Base ref (default HEAD)"},
 			{Name: "--plan", Summary: "Resolve and print the plan without creating anything", Bool: true},
+			{Name: "--expect-source-oid", Arg: "OID", Summary: "Refuse (exit 5) if the base ref no longer resolves to this commit"},
 			{Name: "--agent", Arg: "TYPE", Summary: "Launch this agent in the new worktree session"},
 			{Name: "--skip-permissions", Summary: "Pass the agent's auto-approve flag", Bool: true},
 			{Name: "--run", Arg: "COMMAND", Summary: "Execute COMMAND in the new worktree session"},
@@ -354,7 +360,7 @@ func RootCommand() *Command {
 			{Code: 0, Summary: "created (missing ack is non-fatal), or plan resolved with --plan"},
 			{Code: 1, Summary: "git, setup, or tmux failure"},
 			{Code: 2, Summary: "usage error (an unknown flag, a refused flag combination)"},
-			{Code: 5, Summary: "a value was rejected: the plan (branch exists, path occupied, unknown base ref, unsafe hook), or an unknown --project / --shell"},
+			{Code: 5, Summary: "a value was rejected: the plan (branch exists, path occupied, unknown base ref, unsafe hook), an unknown --project / --shell, or the source moved past --expect-source-oid"},
 		},
 		Examples: []Example{
 			{Command: "sidecar create worktree fix-auth --base main --agent claude"},

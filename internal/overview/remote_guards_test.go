@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/marcus/sidecar/internal/hosts"
+	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 	"github.com/marcus/sidecar/internal/workspaceops"
@@ -194,6 +195,136 @@ func TestDropRemoteReplyLeavesAnUnrelatedFormAlone(t *testing.T) {
 	}
 	if m2.createBusy {
 		t.Error("the form that asked is still busy")
+	}
+}
+
+// TestDisabledHostRefusesMutationsUpFront. A disabled host keeps its last-known
+// rows and projects on screen on purpose, and it sits in exactly the state
+// hostReplyStale reads as stale: registered, with no incarnation. Dispatching a
+// mutation to it therefore failed on ssh and then reported the misleading "was
+// removed or retargeted while that was running". The refusal has to happen
+// before anything is sent, with the real reason.
+func TestDisabledHostRefusesMutationsUpFront(t *testing.T) {
+	m, stub := remoteCreateModel(t)
+	localSeamGuard(t)
+	m.hostRegistered = map[string]bool{"mac-mini": true}
+	m.hostIncarnations = map[string]uint64{}
+	m.hostHealth["mac-mini"] = hosts.Health{State: hosts.StateDisabled}
+
+	// Create shell.
+	run(t, m, m.OpenCreateShell(remoteProjectKey()))
+	if cmd := m.submitCreateShell(); cmd != nil {
+		t.Fatal("a create was dispatched to a disabled host")
+	}
+	if !strings.Contains(m.createError, "mac-mini") || !strings.Contains(m.createError, "disabled or not connected") {
+		t.Errorf("create error %q does not say the host is disabled", m.createError)
+	}
+
+	// Plan worktree.
+	run(t, m, m.OpenCreateWorktree(remoteProjectKey()))
+	if cmd := m.planCreateWorktree(); cmd != nil {
+		t.Fatal("a plan was dispatched to a disabled host")
+	}
+	if !strings.Contains(m.createError, "disabled or not connected") {
+		t.Errorf("plan error %q does not say the host is disabled", m.createError)
+	}
+
+	// Execute a previously confirmed plan.
+	m.createPlan = &workspaceops.WorktreePlan{Branch: "f", Path: "/home/me/api-f", SourceOID: "abc"}
+	m.createTargetHost = "mac-mini"
+	m.createBusy = true
+	if cmd := m.executeCreateWorktree(); cmd != nil {
+		t.Fatal("a confirmed create was dispatched to a disabled host")
+	}
+	if m.createBusy {
+		t.Error("the confirmation is still spinning on a disabled host")
+	}
+	if !strings.Contains(m.createError, "disabled or not connected") {
+		t.Errorf("execute error %q does not say the host is disabled", m.createError)
+	}
+
+	// Rename.
+	m.closeCreateShell()
+	if !m.workspaces.SelectID(remoteShellRowID()) {
+		t.Fatal("could not select the remote row")
+	}
+	cmd := m.OpenRenameShell()
+	if m.RenameShellOpen() {
+		t.Fatal("the rename modal opened for a disabled host's row")
+	}
+	if cmd == nil {
+		t.Fatal("the refusal was silent")
+	}
+	post, refused := cmd().(notify.PostMsg)
+	if !refused || !strings.Contains(post.Notification.Title, "disabled or not connected") {
+		t.Fatalf("rename refusal = %+v", post.Notification)
+	}
+
+	if len(stub.calls) != 0 {
+		t.Fatalf("a disabled host was invoked: %v", stub.calls)
+	}
+
+	// And a connected host — registered, with an incarnation — is not refused.
+	m.hostIncarnations = map[string]uint64{"mac-mini": 3}
+	run(t, m, m.OpenCreateShell(remoteProjectKey()))
+	if cmd := m.submitCreateShell(); cmd == nil {
+		t.Fatalf("a connected host was refused: %q", m.createError)
+	}
+}
+
+// TestVanishedHostIsNamedOnPlanAndSubmit. The user did choose a project; what
+// vanished is the machine it lived on. "Choose a project" blamed the choice.
+func TestVanishedHostIsNamedOnPlanAndSubmit(t *testing.T) {
+	m, _ := remoteCreateModel(t)
+	run(t, m, m.OpenCreateWorktree(remoteProjectKey()))
+	m.hostProjects = map[string][]Project{}
+	if cmd := m.planCreateWorktree(); cmd != nil {
+		t.Fatal("a plan with no resolvable target still dispatched work")
+	}
+	if !strings.Contains(m.createError, "mac-mini") {
+		t.Errorf("plan error %q does not name the machine that went away", m.createError)
+	}
+
+	m2, _ := remoteCreateModel(t)
+	run(t, m2, m2.OpenCreateShell(remoteProjectKey()))
+	m2.hostProjects = map[string][]Project{}
+	if cmd := m2.submitCreateShell(); cmd != nil {
+		t.Fatal("a create with no resolvable target still dispatched work")
+	}
+	if !strings.Contains(m2.createError, "mac-mini") {
+		t.Errorf("create error %q does not name the machine that went away", m2.createError)
+	}
+}
+
+// TestDropRemoteReplyKeepsAnotherHostsPendingSelection. The pending selection
+// names the machine it is waiting on; a stale reply from host B must not wipe
+// the selection for a shell just created on host A — or locally.
+func TestDropRemoteReplyKeepsAnotherHostsPendingSelection(t *testing.T) {
+	m, _ := remoteCreateModel(t)
+	m.pendingCreatedHost = "studio"
+	m.pendingCreatedTmux = "api-2"
+	m.dropRemoteCreateReply("mac-mini")
+	if m.pendingCreatedHost != "studio" || m.pendingCreatedTmux != "api-2" {
+		t.Fatalf("another host's pending selection was wiped: %q on %q",
+			m.pendingCreatedTmux, m.pendingCreatedHost)
+	}
+
+	m.pendingCreatedHost = ""
+	m.pendingCreatedTmux = ""
+	m.pendingCreatedPath = "/tmp/sidecar-local"
+	m.dropRemoteCreateReply("mac-mini")
+	if m.pendingCreatedPath != "/tmp/sidecar-local" {
+		t.Fatal("a local pending selection was wiped by a remote host's stale reply")
+	}
+
+	// The host the reply actually came from still loses its pending selection.
+	m.pendingCreatedHost = "mac-mini"
+	m.pendingCreatedTmux = "api-9"
+	m.pendingCreatedPath = ""
+	m.dropRemoteCreateReply("mac-mini")
+	if m.pendingCreatedHost != "" || m.pendingCreatedTmux != "" {
+		t.Fatalf("the addressed host's pending selection survived: %q on %q",
+			m.pendingCreatedTmux, m.pendingCreatedHost)
 	}
 }
 

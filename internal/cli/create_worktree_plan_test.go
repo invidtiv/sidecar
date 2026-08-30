@@ -174,6 +174,103 @@ func TestCreateWorktreePlanRefusesLaunchFlags(t *testing.T) {
 	}
 }
 
+// TestCreateWorktreeExpectSourceOIDPinsThePlan is the remote confirmation's
+// guard. The local modal executes its stored plan, and ExecuteWorktree refuses
+// when the source ref no longer resolves to the confirmed OID; a remote
+// confirmation re-runs this command from raw arguments, so --expect-source-oid
+// is how the same "the source moved" refusal reaches the host — an agent
+// pushing to main between plan and Create is this feature's normal operating
+// condition, not an edge case.
+func TestCreateWorktreeExpectSourceOIDPinsThePlan(t *testing.T) {
+	_, stateDir := setupIsolatedCLI(t)
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(cfgPath, []byte(`{}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	repo := filepath.Join(t.TempDir(), "repo")
+	initGitRepo(t, repo)
+	if resolved, err := filepath.EvalSymlinks(repo); err == nil {
+		repo = resolved
+	}
+	t.Chdir(repo)
+	writeProjectMeta(t, stateDir, "demo", repo)
+
+	// The plan the confirmation showed, with the OID it was confirmed at.
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"-config", cfgPath, "create", "worktree", "--plan", "--json", "pinned"}, &out, &errOut)
+	if !handled || code != 0 {
+		t.Fatalf("--plan = handled %v code %d stderr %q", handled, code, errOut.String())
+	}
+	var plan workspaceops.WorktreePlan
+	if err := json.Unmarshal(out.Bytes(), &plan); err != nil {
+		t.Fatalf("stdout is not one JSON plan: %q: %v", out.String(), err)
+	}
+	confirmed := plan.SourceOID
+	if len(confirmed) != 40 {
+		t.Fatalf("plan SourceOID = %q", confirmed)
+	}
+
+	// The source moves on the host between plan and confirm.
+	if err := os.WriteFile(filepath.Join(repo, "moved.txt"), []byte("moved\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-qm", "moved")
+	moved := gitLines(t, repo, "rev-parse", "HEAD")[0]
+
+	beforeParent := treeSnapshot(t, filepath.Dir(repo))
+	beforeBranches := gitLines(t, repo, "branch", "--format=%(refname:short)")
+	beforeWorktrees := gitLines(t, repo, "worktree", "list", "--porcelain")
+
+	out.Reset()
+	errOut.Reset()
+	handled, code = Run([]string{"-config", cfgPath, "create", "worktree", "--no-launch", "--json", "--wait", "0", "--expect-source-oid", confirmed, "pinned"}, &out, &errOut)
+	if !handled || code != exitInputRejected {
+		t.Fatalf("moved source = handled %v code %d stderr %q, want %d", handled, code, errOut.String(), exitInputRejected)
+	}
+	for _, want := range []string{confirmed, moved, "moved since the plan was confirmed"} {
+		if !strings.Contains(errOut.String(), want) {
+			t.Errorf("stderr %q is missing %q", errOut.String(), want)
+		}
+	}
+	if got := treeSnapshot(t, filepath.Dir(repo)); !equalStrings(got, beforeParent) {
+		t.Fatalf("the refusal changed the checkout's parent:\nbefore %v\nafter  %v", beforeParent, got)
+	}
+	if got := gitLines(t, repo, "branch", "--format=%(refname:short)"); !equalStrings(got, beforeBranches) {
+		t.Fatalf("the refusal created a branch: %v", got)
+	}
+	if got := gitLines(t, repo, "worktree", "list", "--porcelain"); !equalStrings(got, beforeWorktrees) {
+		t.Fatalf("the refusal added a worktree: %v", got)
+	}
+
+	// With the current OID the create proceeds, at exactly that commit.
+	out.Reset()
+	errOut.Reset()
+	handled, code = Run([]string{"-config", cfgPath, "create", "worktree", "--no-launch", "--json", "--wait", "0", "--expect-source-oid", moved, "pinned"}, &out, &errOut)
+	if !handled || code != 0 {
+		t.Fatalf("matching OID = handled %v code %d stderr %q", handled, code, errOut.String())
+	}
+	var result createWorktreeResult
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("json: %v (%q)", err, out.String())
+	}
+	if result.Path == "" {
+		t.Fatalf("result = %+v", result)
+	}
+	if head := gitLines(t, result.Path, "rev-parse", "HEAD")[0]; head != moved {
+		t.Fatalf("worktree HEAD = %s, want the pinned %s", head, moved)
+	}
+}
+
+func TestCreateWorktreeExpectSourceOIDRequiresAValue(t *testing.T) {
+	setupIsolatedCLI(t)
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"create", "worktree", "--expect-source-oid", "", "x"}, &out, &errOut)
+	if !handled || code != 2 || !strings.Contains(errOut.String(), "--expect-source-oid requires a commit OID") {
+		t.Fatalf("Run = handled %v code %d stderr %q", handled, code, errOut.String())
+	}
+}
+
 func gitLines(t *testing.T, dir string, args ...string) []string {
 	t.Helper()
 	cmd := exec.Command("git", args...)

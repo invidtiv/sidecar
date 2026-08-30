@@ -363,6 +363,18 @@ func TestSetBranchesPrefillsCurrentWithoutClobberingTypedValue(t *testing.T) {
 	if f.BaseBranch() != "feat" {
 		t.Fatalf("typed value gone should reset to current = %q, want feat", f.BaseBranch())
 	}
+
+	// An empty list clears everything — list and prefill. This is how a form
+	// whose project switched to a remote target sheds the LOCAL repository's
+	// branches: keeping either would offer a base another machine resolves
+	// against a different history.
+	f.SetBranches(nil, "")
+	if f.BaseBranch() != "" {
+		t.Fatalf("clearing the list kept base = %q", f.BaseBranch())
+	}
+	if len(f.branches) != 0 {
+		t.Fatalf("clearing the list kept branches = %v", f.branches)
+	}
 }
 
 func TestComboDoesNotOverwriteFocusedFilterOnRebuild(t *testing.T) {

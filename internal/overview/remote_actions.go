@@ -169,6 +169,44 @@ func (m *Model) hostReplyStale(hostID string, incarnation uint64) bool {
 	return false
 }
 
+// remoteHostUnavailable reports why a mutation cannot even be dispatched to a
+// host: it is registered in configuration but has no live client — disabled, or
+// not connected. Its rows and projects can legitimately still be on screen
+// (last-known state outlives the connection on purpose), so the mutation
+// surfaces must ask this before sending, or the ssh call fails and its reply is
+// then read as stale by hostReplyStale — which reports the misleading "was
+// removed or retargeted", because registered-without-incarnation is exactly the
+// state a disabled host sits in.
+//
+// The fences are the same two hostReplyStale reads, deliberately: there must be
+// exactly one answer to "can this host be asked anything right now?".
+func (m *Model) remoteHostUnavailable(hostID string) string {
+	if hostID == "" {
+		return ""
+	}
+	if m.hostRegistered == nil || !m.hostRegistered[hostID] {
+		return ""
+	}
+	if m.hostIncarnations != nil {
+		if _, ok := m.hostIncarnations[hostID]; ok {
+			return ""
+		}
+	}
+	return hostID + " is disabled or not connected, so nothing can be changed there"
+}
+
+// createFormHostID is the host the create form's current project key names, or
+// "" for a local key. It answers even when the project itself no longer
+// resolves — which is exactly when a create error needs to say which machine
+// went away.
+func (m *Model) createFormHostID() string {
+	if m.createForm == nil {
+		return ""
+	}
+	hostID, _, _ := hosts.SplitScopedKey(m.createForm.ProjectKey())
+	return hostID
+}
+
 // remoteReplyDropped is what a surface says when it throws an answer away
 // because the host it came from is gone. Saying nothing would leave a modal
 // spinning on a machine that no longer exists.
@@ -233,10 +271,15 @@ func remoteActionError(err error) string {
 // configuration no longer points at; the modal is un-stuck rather than left
 // spinning because a user who removed a host should not be left waiting on it.
 func (m *Model) dropRemoteCreateReply(hostID string) tea.Cmd {
-	// The pending selection is always cleared: it named a row on a machine this
-	// configuration no longer points at, and leaving it set makes the next
-	// creation search the wrong snapshot.
-	m.clearPendingCreated()
+	// The pending selection is cleared only when it was queued for the host this
+	// reply came from: it named a row on a machine this configuration no longer
+	// points at, and leaving it set makes the next creation search the wrong
+	// snapshot. A stale reply from one host must not wipe the selection for a
+	// shell just created on another (or locally) — that selection is still
+	// waiting on a perfectly healthy snapshot.
+	if m.pendingCreatedHost == hostID {
+		m.clearPendingCreated()
+	}
 	// The form is only touched when it is still the form that asked. A user who
 	// removed the host and immediately started a LOCAL create has an open
 	// create modal that has nothing to do with this answer, and writing "mac-mini
@@ -394,10 +437,15 @@ func remoteShellSendArgs(projectRef, session, command string) []string {
 }
 
 // remoteWorktreeArgs is `sidecar create worktree`, in its planning form when
-// plan is set. The two calls take the same arguments on purpose: the plan the
-// confirmation showed and the worktree that gets created are resolved from one
-// argument list, so they cannot describe different things.
-func remoteWorktreeArgs(projectRef, name, base, agent string, skipPerms, plan bool) []string {
+// plan is set. The two calls take the same base arguments on purpose, and the
+// execute call additionally pins expectOID — the SourceOID of the plan the
+// confirmation showed. Re-running from raw arguments alone is not enough: the
+// host re-resolves the ref at execute time, and a ref that moved between plan
+// and Create (an agent pushing to main is this feature's normal operating
+// condition) would silently produce a worktree at the new head, where the
+// identical local sequence refuses. With the pin, the host refuses with exit 5
+// and the confirmation shows why.
+func remoteWorktreeArgs(projectRef, name, base, agent, expectOID string, skipPerms, plan bool) []string {
 	args := []string{"create", "worktree", "--project", projectRef}
 	if base != "" {
 		args = append(args, "--base", base)
@@ -407,6 +455,9 @@ func remoteWorktreeArgs(projectRef, name, base, agent string, skipPerms, plan bo
 	}
 	if skipPerms {
 		args = append(args, "--skip-permissions")
+	}
+	if expectOID != "" {
+		args = append(args, "--expect-source-oid", expectOID)
 	}
 	if plan {
 		args = append(args, "--plan")
@@ -487,7 +538,7 @@ func (m *Model) planRemoteWorktree(target createTarget, name, base, agent string
 	hostID, project := target.HostID, target.Project
 	incarnation := m.hostIncarnationFor(hostID)
 	parent := m.hostContext()
-	args := remoteWorktreeArgs(remoteProjectRef(project), name, base, agent, skipPerms, true)
+	args := remoteWorktreeArgs(remoteProjectRef(project), name, base, agent, "", skipPerms, true)
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(parent, remoteQuickTimeout)
 		defer cancel()
@@ -503,17 +554,19 @@ func (m *Model) planRemoteWorktree(target createTarget, name, base, agent string
 }
 
 // executeRemoteWorktree creates the worktree the confirmation described.
+// expectOID is the confirmed plan's SourceOID; the host refuses rather than
+// build from a ref that has moved since the confirmation was shown.
 //
 // The host runs its whole documented sequence — execute, journal, identity,
 // configured setup, launch — because that sequence is `sidecar create worktree`
 // and re-deriving it from here would be a second implementation of the ordering
 // the CLI already proves.
-func (m *Model) executeRemoteWorktree(target createTarget, name, base, agent string, skipPerms bool) tea.Cmd {
+func (m *Model) executeRemoteWorktree(target createTarget, name, base, agent, expectOID string, skipPerms bool) tea.Cmd {
 	registry := m.hostRegistry
 	hostID, project := target.HostID, target.Project
 	incarnation := m.hostIncarnationFor(hostID)
 	parent := m.hostContext()
-	args := remoteWorktreeArgs(remoteProjectRef(project), name, base, agent, skipPerms, false)
+	args := remoteWorktreeArgs(remoteProjectRef(project), name, base, agent, expectOID, skipPerms, false)
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(parent, remoteWorktreeExecTimeout)
 		defer cancel()

@@ -432,6 +432,13 @@ func (m *Model) applyDeleteAction(action string) tea.Cmd {
 }
 
 func mergeRefusal(workspace workspaceinventory.Workspace) string {
+	// The remote clause first, through the shared gate, so the footer stops
+	// offering Merge on a row the navigation guard would then refuse — every
+	// other unavailable action on a remote row is hidden up front, not offered
+	// and taken back.
+	if reason := remoteActionRefusal(workspace, "merge"); reason != "" {
+		return reason
+	}
 	if workspace.Kind != workspaceinventory.KindWorktree {
 		return "merge requires a worktree"
 	}

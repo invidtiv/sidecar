@@ -20,6 +20,7 @@ func runCreateWorktree(env Env, args []string) int {
 	base := ""
 	agent := ""
 	runCmd := ""
+	expectOID := ""
 	skipPerms := false
 	noLaunch := false
 	planOnly := false
@@ -61,6 +62,14 @@ func runCreateWorktree(env Env, args []string) int {
 				return 2
 			}
 			agent = val
+			i = next
+		case arg == "--expect-source-oid" || strings.HasPrefix(arg, "--expect-source-oid="):
+			val, next, ok := takeFlagArg(arg, args, i, "--expect-source-oid")
+			if !ok || val == "" {
+				cliErrf(env.Stderr, "--expect-source-oid requires a commit OID\n\n%s", help)
+				return 2
+			}
+			expectOID = val
 			i = next
 		case arg == "--run" || strings.HasPrefix(arg, "--run="):
 			val, next, ok := takeFlagArg(arg, args, i, "--run")
@@ -149,6 +158,20 @@ func runCreateWorktree(env Env, args []string) int {
 	}
 	plan.AgentType = agent
 	plan.SkipPerms = skipPerms
+
+	// --expect-source-oid pins the plan a confirming caller already showed.
+	// The local modal gets this guard from executing its stored plan —
+	// ExecuteWorktree re-verifies that the source ref still resolves to the
+	// confirmed OID — but a remote confirmation re-runs this command from raw
+	// arguments, so without the pin a ref that moved between plan and Create
+	// (an agent pushing to main is this feature's normal operating condition)
+	// would silently produce a worktree at the new head. Refused with exit 5:
+	// the command parsed, and a value in it was rejected.
+	if expectOID != "" && plan.SourceOID != expectOID {
+		cliErrf(env.Stderr, "%s has moved since the plan was confirmed: it now resolves to %s, not the expected %s\n",
+			plan.SourceRef, plan.SourceOID, expectOID)
+		return exitInputRejected
+	}
 
 	// Everything above this line reads: ResolveWorktreePlan validates names,
 	// source identity, destination containment, and configured setup without

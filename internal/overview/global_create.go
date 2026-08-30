@@ -362,7 +362,14 @@ func (m *Model) loadCreateBranches() tea.Cmd {
 		// host's path, which on a similarly laid out second machine answers
 		// with the wrong repository's branches. The host resolves its own
 		// default base ref when no --base is passed; that is the honest answer
-		// until a verb exists to ask it for the list.
+		// until a verb exists to ask it for the list. And the list a LOCAL
+		// project loaded earlier must not survive the switch: its branches and
+		// its prefilled base describe this machine's repository, and leaving
+		// them in the form offers a --base the host resolves against a
+		// different history.
+		if m.createForm != nil {
+			m.createForm.SetBranches(nil, "")
+		}
 		return nil
 	}
 	project := target.Project
@@ -653,7 +660,13 @@ func (m *Model) applyCreateAction(action string) tea.Cmd {
 func (m *Model) planCreateWorktree() tea.Cmd {
 	target, ok := m.selectedCreateTarget()
 	if !ok {
-		m.setCreateError("Choose a project")
+		// The user did choose a project; what vanished is the host it lived on.
+		// "Choose a project" would blame the choice for a machine going away.
+		m.setCreateError(missingCreateTarget(m.createFormHostID()))
+		return nil
+	}
+	if reason := m.remoteHostUnavailable(target.HostID); reason != "" {
+		m.setCreateError(reason)
 		return nil
 	}
 	if m.createForm == nil {
@@ -718,6 +731,16 @@ func (m *Model) executeCreateWorktree() tea.Cmd {
 		m.setCreateError(missingCreateTarget(m.createTargetHost))
 		return nil
 	}
+	if reason := m.remoteHostUnavailable(target.HostID); reason != "" {
+		// Registered but disabled or not connected: dispatching would fail on
+		// ssh and come back through hostReplyStale as the misleading "was
+		// removed or retargeted". Refuse up front with the real reason.
+		m.createBusy = false
+		m.createModal = nil
+		m.createPlan = nil
+		m.setCreateError(reason)
+		return nil
+	}
 	project := target.Project
 	plan := m.createPlan
 	m.createBusy = true
@@ -728,7 +751,9 @@ func (m *Model) executeCreateWorktree() tea.Cmd {
 		// The host runs its whole create sequence — execute, journal, identity,
 		// configured setup, launch — because that sequence is
 		// `sidecar create worktree`. It re-resolves the plan from the same
-		// arguments the confirmation was built from.
+		// arguments the confirmation was built from, pinned to the confirmed
+		// plan's SourceOID so a ref that moved on the host in the meantime is
+		// refused there, exactly as the local ExecuteWorktree refuses here.
 		if m.createForm == nil {
 			m.createBusy = false
 			m.createPlan = nil
@@ -737,7 +762,7 @@ func (m *Model) executeCreateWorktree() tea.Cmd {
 		}
 		return m.executeRemoteWorktree(target,
 			strings.TrimSpace(m.createForm.Name()), m.createForm.BaseBranch(),
-			m.createForm.Agent(), m.createForm.SkipPerms())
+			m.createForm.Agent(), plan.SourceOID, m.createForm.SkipPerms())
 	}
 	return func() tea.Msg {
 		record, err := executeGlobalWorktree(context.Background(), projectKey(project), plan)
@@ -853,7 +878,12 @@ func (m *Model) deleteCreatedWorktree() tea.Cmd {
 func (m *Model) submitCreateShell() tea.Cmd {
 	target, ok := m.selectedCreateTarget()
 	if !ok {
-		m.setCreateError("Choose a project")
+		// See planCreateWorktree: the project was chosen; its host went away.
+		m.setCreateError(missingCreateTarget(m.createFormHostID()))
+		return nil
+	}
+	if reason := m.remoteHostUnavailable(target.HostID); reason != "" {
+		m.setCreateError(reason)
 		return nil
 	}
 	project := target.Project

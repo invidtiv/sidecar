@@ -339,9 +339,13 @@ func TestRemoteWorktreePlansThenCreates(t *testing.T) {
 	if created.Err != nil {
 		t.Fatalf("execute failed: %v", created.Err)
 	}
-	wantExec := []string{"create", "worktree", "--project", "/home/me/api", "--agent", "claude", "--json", "--", "feature"}
+	// The execute carries the confirmed plan's SourceOID. Without the pin the
+	// host re-resolves the ref from scratch, and a ref that moved between the
+	// confirmation and the Create press builds silently at the new head —
+	// where the identical local sequence refuses.
+	wantExec := []string{"create", "worktree", "--project", "/home/me/api", "--agent", "claude", "--expect-source-oid", "abcdef1234", "--json", "--", "feature"}
 	if got := stub.argv(t, 1); !equalArgs(got, wantExec) {
-		t.Fatalf("execute argv = %v, want %v (no --plan)", got, wantExec)
+		t.Fatalf("execute argv = %v, want %v (no --plan, pinned source)", got, wantExec)
 	}
 
 	if cmd := m.Update(created); cmd != nil {
@@ -380,13 +384,19 @@ func TestRemoteWorktreePassesTheChosenAgentToTheHost(t *testing.T) {
 // TestRemoteWorktreeArgsCarryEveryChoice pins the argument list itself, which is
 // the contract between this surface and the host's CLI.
 func TestRemoteWorktreeArgsCarryEveryChoice(t *testing.T) {
-	got := remoteWorktreeArgs("/home/me/api", "feature", "main", "claude", true, false)
+	got := remoteWorktreeArgs("/home/me/api", "feature", "main", "claude", "", true, false)
 	want := []string{"create", "worktree", "--project", "/home/me/api", "--base", "main", "--agent", "claude", "--skip-permissions", "--json", "--", "feature"}
 	if !equalArgs(got, want) {
 		t.Fatalf("argv = %v, want %v", got, want)
 	}
-	if plan := remoteWorktreeArgs("/home/me/api", "feature", "", "", false, true); !equalArgs(plan, []string{"create", "worktree", "--project", "/home/me/api", "--plan", "--json", "--", "feature"}) {
+	if plan := remoteWorktreeArgs("/home/me/api", "feature", "", "", "", false, true); !equalArgs(plan, []string{"create", "worktree", "--project", "/home/me/api", "--plan", "--json", "--", "feature"}) {
 		t.Fatalf("plan argv = %v", plan)
+	}
+	// The confirmed plan's SourceOID travels with the execute, so the host can
+	// refuse a ref that moved after the confirmation was shown.
+	pinned := remoteWorktreeArgs("/home/me/api", "feature", "", "", "0123456789abcdef", false, false)
+	if !equalArgs(pinned, []string{"create", "worktree", "--project", "/home/me/api", "--expect-source-oid", "0123456789abcdef", "--json", "--", "feature"}) {
+		t.Fatalf("pinned argv = %v", pinned)
 	}
 }
 
@@ -464,6 +474,78 @@ func TestRemoteRenameTargetsTheSessionOnItsHost(t *testing.T) {
 	}
 	if got := m.catalog[remoteShellRowID()].Name; got != "Reviewer" {
 		t.Errorf("the row still reads %q", got)
+	}
+}
+
+// TestRemoteRenameSwallowsInputWhileInFlight. The ssh round trip is long enough
+// for a second Enter, which dispatched a second rename that raced the first on
+// the host — the loser's reply was silently dropped.
+func TestRemoteRenameSwallowsInputWhileInFlight(t *testing.T) {
+	m, stub := remoteCreateModel(t)
+	localSeamGuard(t)
+	stub.results = []any{map[string]any{"shell": "api-claude", "name": "Reviewer"}}
+	m.workspaces.SelectID(remoteShellRowID())
+	m.OpenRenameShell()
+	if !m.RenameShellOpen() {
+		t.Fatal("the rename modal did not open")
+	}
+	m.renameInput.SetValue("Reviewer")
+
+	_, cmd := m.handleRenameShellKey(createKey("enter"))
+	if cmd == nil {
+		t.Fatalf("the first Enter dispatched nothing; error=%q", m.renameError)
+	}
+	if !m.renameBusy {
+		t.Fatal("the modal does not show that it is waiting")
+	}
+	if _, second := m.handleRenameShellKey(createKey("enter")); second != nil {
+		t.Fatal("a second Enter while the rename was in flight dispatched again")
+	}
+
+	done := cmd().(renameShellDoneMsg)
+	if len(stub.calls) != 1 {
+		t.Fatalf("invocations = %v, want exactly one rename", stub.calls)
+	}
+	m.Update(done)
+	if m.RenameShellOpen() {
+		t.Error("the modal stayed open after the reply")
+	}
+	if m.renameBusy {
+		t.Error("the busy guard survived the reply")
+	}
+
+	// A failed rename clears the guard too, or the modal that stays open for a
+	// retry could never be submitted again.
+	m2, _ := remoteCreateModel(t)
+	m2.workspaces.SelectID(remoteShellRowID())
+	m2.OpenRenameShell()
+	m2.renameBusy = true
+	m2.Update(renameShellDoneMsg{ID: remoteShellRowID(), Err: errors.New("boom")})
+	if !m2.RenameShellOpen() {
+		t.Fatal("a failed rename closed the modal, losing the reason")
+	}
+	if m2.renameBusy {
+		t.Error("a failed rename left the modal swallowing input forever")
+	}
+}
+
+// TestSwitchingToARemoteProjectClearsLocalBranches. The branch list and the
+// prefilled base a LOCAL project loaded describe this machine's repository;
+// carrying them across a switch to a host's project offers a --base the host
+// resolves against a different history.
+func TestSwitchingToARemoteProjectClearsLocalBranches(t *testing.T) {
+	m, _ := remoteCreateModel(t)
+	run(t, m, m.OpenCreateWorktree("sidecar"))
+	assertCreateProject(t, m, "sidecar")
+	m.applyCreateBranches(globalCreateBranchesMsg{ProjectKey: "sidecar", Branches: []string{"main", "dev"}, Current: "main"})
+	if got := m.createForm.BaseBranch(); got != "main" {
+		t.Fatalf("base = %q, want the local prefill before the switch", got)
+	}
+
+	localSeamGuard(t)
+	selectCreateProject(t, m, remoteProjectKey())
+	if got := m.createForm.BaseBranch(); got != "" {
+		t.Fatalf("base %q survived the switch to a remote project", got)
 	}
 }
 

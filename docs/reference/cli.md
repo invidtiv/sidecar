@@ -104,6 +104,12 @@ as exit 5. --run and --no-launch describe a launch --plan never performs, so
 they are refused with it; --agent and --skip-permissions are kept, since they
 come back as plan fields.
 
+--expect-source-oid OID pins a previously confirmed plan: if the base ref no
+longer resolves to OID when this command runs, it is refused with exit 5 and a
+message naming both commits. A caller that showed a --plan result in a
+confirmation passes the plan's sourceOid back here, and gets the same
+source-moved guard the TUI's confirmation gets from executing its stored plan.
+
 ```
 Usage: sidecar create worktree [options] <name>
 ```
@@ -112,6 +118,7 @@ Usage: sidecar create worktree [options] <name>
 
 - `--base REF`: Base ref (default HEAD)
 - `--plan`: Resolve and print the plan without creating anything
+- `--expect-source-oid OID`: Refuse (exit 5) if the base ref no longer resolves to this commit
 - `--agent TYPE`: Launch this agent in the new worktree session
 - `--skip-permissions`: Pass the agent's auto-approve flag
 - `--run COMMAND`: Execute COMMAND in the new worktree session
@@ -127,7 +134,7 @@ Usage: sidecar create worktree [options] <name>
 - `0`: created (missing ack is non-fatal), or plan resolved with --plan
 - `1`: git, setup, or tmux failure
 - `2`: usage error (an unknown flag, a refused flag combination)
-- `5`: a value was rejected: the plan (branch exists, path occupied, unknown base ref, unsafe hook), or an unknown --project / --shell
+- `5`: a value was rejected: the plan (branch exists, path occupied, unknown base ref, unsafe hook), an unknown --project / --shell, or the source moved past --expect-source-oid
 
 **Examples:**
 
