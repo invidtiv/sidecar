@@ -20,6 +20,18 @@ type DismissMsg struct {
 	ID string
 }
 
+// DismissTransitionMsg dismisses whatever record currently represents one
+// logical transition, named by its dedupe key rather than by record ID.
+//
+// A forwarded remote wait can outlive the process that announced it: the
+// serve process that reconnects or restarts never saw the original event and
+// cannot name its ID, but both sides can always derive the dedupe key from the
+// origin and the class. Dismissing by identity rather than by ID is what lets
+// the answer reach the record anyway.
+type DismissTransitionMsg struct {
+	DedupeKey string
+}
+
 // PostedMsg is broadcast after a notification has been stored, carrying the
 // completed record so a toast host can start its countdown from the same
 // timestamps the store holds.

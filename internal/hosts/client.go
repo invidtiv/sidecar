@@ -106,6 +106,12 @@ type Update struct {
 	Incarnation uint64
 	Health      Health
 	Snapshot    *hostproto.Snapshot
+	// Notify carries the typed notification events this update brought, in
+	// arrival order. They are data, not state: nothing here is folded into the
+	// snapshot, and nothing in the snapshot can produce one. A consumer that
+	// wants them adapts them into its own notification model; the ssh side of
+	// this feature ends at this field.
+	Notify []hostproto.NotifyEvent
 }
 
 // Conn is one open connection to a host's serve process.
@@ -165,6 +171,11 @@ type Client struct {
 	// other goroutines. See publish and closeUpdates.
 	publishMu     sync.RWMutex
 	updatesClosed bool
+
+	// notifyMu guards pendingNotify, which is written by the reader loop and
+	// drained by whichever publish call gets through.
+	notifyMu      sync.Mutex
+	pendingNotify []hostproto.NotifyEvent
 
 	// controlDir is where this host's ssh ControlMaster socket lives, shared
 	// by the serve stream and every pane channel. ownsControlDir marks one
@@ -431,6 +442,14 @@ func (c *Client) session(ctx context.Context) (State, string) {
 			if sessionCtx.Err() != nil {
 				return StateOnline, ""
 			}
+			// A message that parsed but violates the contract is checked before
+			// the clean-disconnect shortcut below. Reporting it as an ordinary
+			// end of stream would hide a host that is sending payloads this
+			// viewer refuses, and the user would see only a connection that
+			// reconnects forever.
+			if errors.Is(err, hostproto.ErrInvalid) {
+				return StateNotProtocol, err.Error()
+			}
 			if sawData {
 				// Data arrived and then the stream ended. Report it as a
 				// clean session so the caller resets its backoff.
@@ -454,6 +473,9 @@ func (c *Client) session(ctx context.Context) (State, string) {
 		case hostproto.KindEvent:
 			sawData = true
 			c.applyEvent(msg.Event)
+		case hostproto.KindNotify:
+			sawData = true
+			c.applyNotify(msg.Notify)
 		case hostproto.KindError:
 			if msg.Error != nil && msg.Error.Fatal {
 				return stateForErrorCode(msg.Error.Code), msg.Error.Message
@@ -575,6 +597,61 @@ func (c *Client) applyEvent(event *hostproto.Event) {
 	c.publish(Update{HostID: c.host.ID, Health: health, Snapshot: &updated})
 }
 
+// applyNotify queues one forwarded notification and publishes it with the
+// host's current state.
+//
+// It touches neither the snapshot nor the health. A notification is a thing
+// that happened, not a fact about the host: folding it into retained state
+// would make it something a later reader could rediscover, which is exactly
+// the replay the protocol is shaped to prevent.
+func (c *Client) applyNotify(event *hostproto.NotifyEvent) {
+	if event == nil {
+		return
+	}
+	c.notifyMu.Lock()
+	c.pendingNotify = append(c.pendingNotify, *event)
+	c.notifyMu.Unlock()
+
+	c.mu.Lock()
+	c.lastData = c.now()
+	health := c.health
+	snapshot := c.snapshot
+	c.mu.Unlock()
+	c.publish(Update{HostID: c.host.ID, Health: health, Snapshot: snapshot})
+}
+
+// maxPendingNotify bounds the queue of forwarded events awaiting a consumer. A
+// host that produced more than this while nothing read the channel has a
+// problem the viewer cannot fix by growing its heap; the oldest go first,
+// because the newest attention is the one worth having.
+const maxPendingNotify = 64
+
+// takePendingNotify drains the queue for one outgoing update.
+func (c *Client) takePendingNotify() []hostproto.NotifyEvent {
+	c.notifyMu.Lock()
+	defer c.notifyMu.Unlock()
+	if len(c.pendingNotify) == 0 {
+		return nil
+	}
+	events := c.pendingNotify
+	c.pendingNotify = nil
+	return events
+}
+
+// returnPendingNotify puts events back when the lossy channel dropped the
+// update carrying them, so they ride the next one that gets through.
+func (c *Client) returnPendingNotify(events []hostproto.NotifyEvent) {
+	if len(events) == 0 {
+		return
+	}
+	c.notifyMu.Lock()
+	defer c.notifyMu.Unlock()
+	c.pendingNotify = append(events, c.pendingNotify...)
+	if extra := len(c.pendingNotify) - maxPendingNotify; extra > 0 {
+		c.pendingNotify = c.pendingNotify[extra:]
+	}
+}
+
 func removeItem(project hostproto.Project, id string) hostproto.Project {
 	items := make([]hostproto.Item, 0, len(project.Items))
 	for _, item := range project.Items {
@@ -644,7 +721,20 @@ func (c *Client) MarkStaleIfQuiet() bool {
 // publish sends an update without ever blocking the reader loop. A consumer
 // that is behind will read the newest state next time; blocking here would
 // stall the stream and turn a slow renderer into a stale host.
+//
+// Dropping a superseded health or snapshot costs nothing — the next one is
+// better. Dropping a notification loses the alert entirely, so forwarded
+// events are attached here and put back if this update did not get through.
 func (c *Client) publish(update Update) {
+	update.Notify = append(c.takePendingNotify(), update.Notify...)
+	if !c.publishUpdate(update) {
+		c.returnPendingNotify(update.Notify)
+	}
+}
+
+// publishUpdate performs the non-blocking send and reports whether a consumer
+// will see it.
+func (c *Client) publishUpdate(update Update) bool {
 	// The done check is not an optimisation. Run closes c.updates on the way
 	// out, and MarkStaleIfQuiet/Sync publish from other goroutines, so without
 	// it a stale tick landing during shutdown is a send on a closed channel —
@@ -654,17 +744,19 @@ func (c *Client) publish(update Update) {
 	// once Run has returned, so the send below cannot overlap the close.
 	select {
 	case <-c.done:
-		return
+		return false
 	default:
 	}
 	c.publishMu.RLock()
 	defer c.publishMu.RUnlock()
 	if c.updatesClosed {
-		return
+		return false
 	}
 	select {
 	case c.updates <- update:
+		return true
 	default:
+		return false
 	}
 }
 

@@ -54,6 +54,7 @@ import (
 	"github.com/marcus/sidecar/internal/buildinfo"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/hostproto"
+	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/shellliveness"
 	"github.com/marcus/sidecar/internal/tmuxserver"
 	"github.com/marcus/sidecar/internal/tty"
@@ -146,6 +147,12 @@ type Options struct {
 	// SnapshotPreviewBytes bounds the total preview payload in one snapshot.
 	SnapshotPreviewBytes int
 	MaxCaptures          int
+
+	// NotifyDebounce is how long a lane must hold before it counts as a real
+	// transition worth forwarding. Zero uses notify.DefaultLaneDebounce, which
+	// is the same window the local surfaces settle on, so a remote agent and a
+	// local one have to hold a state for equally long to be worth saying.
+	NotifyDebounce time.Duration
 
 	// Cycles bounds how many collection cycles run before Serve returns. Zero
 	// means run until the context is cancelled. A measurement harness sets it
@@ -257,6 +264,7 @@ func Serve(ctx context.Context, opts Options) error {
 	}.WithDefaults()
 
 	liveness := shellliveness.NewTracker()
+	notifier := newNotifier(opts.NotifyDebounce)
 	encoder := hostproto.NewEncoder(opts.Out)
 	encoder.SetClock(opts.Now)
 
@@ -311,6 +319,10 @@ func Serve(ctx context.Context, opts Options) error {
 		refresh := collector.ForRefresh(opts.MaxCaptures, claims)
 
 		previewBudget := opts.SnapshotPreviewBytes
+		// The observation set handed to the tracker has to be complete every
+		// cycle: a workspace missing from it is how the tracker learns a shell
+		// is gone and withdraws its waiting event.
+		observations := make([]notify.LaneObservation, 0, len(opts.Projects))
 		snapshot := hostproto.Snapshot{
 			Generation:        generation,
 			ObservedAt:        now,
@@ -328,6 +340,7 @@ func Serve(ctx context.Context, opts Options) error {
 					liveness.Observe(workspace.TmuxName)
 				}
 			}
+			observations = append(observations, laneObservations(result)...)
 			snapshot.Projects = append(snapshot.Projects, projectMessage(result, opts.HostID, previews, &previewBudget))
 		}
 		refresh.CommitTrackers()
@@ -380,6 +393,16 @@ func Serve(ctx context.Context, opts Options) error {
 		}
 		previous = current
 		previousIncarnation = snapshot.ServerIncarnation
+
+		// Notifications go out after this cycle's rows, so a viewer always has
+		// the workspace an event is about before it is told something happened
+		// there.
+		for _, event := range notifier.observe(observations, now) {
+			payload := event
+			if err := encoder.Encode(hostproto.Message{Kind: hostproto.KindNotify, Notify: &payload}); err != nil {
+				return err
+			}
+		}
 
 		if opts.OnCycle != nil {
 			opts.OnCycle(generation, opts.Now().Sub(cycleStart), refresh.Metrics().Captures)

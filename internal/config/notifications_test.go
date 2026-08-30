@@ -40,6 +40,68 @@ func TestNotificationsSectionIsReadFromTheConfigFile(t *testing.T) {
 
 func boolPtr(v bool) *bool { return &v }
 
+func TestSSHNotificationDeliveryDefaultsOff(t *testing.T) {
+	cfg := Default()
+	if cfg.Notifications.SSH.ManagedHosts {
+		t.Fatal("managed-host delivery must default off so an upgrade never moves remote text onto the local desktop")
+	}
+	if cfg.Notifications.SSH.Terminal != TerminalNotifierOff {
+		t.Fatalf("terminal transport = %q, want off", cfg.Notifications.SSH.Terminal)
+	}
+}
+
+func TestSSHNotificationSectionIsReadAndValidated(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{
+	  "notifications": {"ssh": {"managedHosts": true, "terminal": "kitty"}}
+	}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Notifications.SSH.ManagedHosts {
+		t.Fatal("managedHosts was not read from the file")
+	}
+	if cfg.Notifications.SSH.Terminal != TerminalNotifierKitty {
+		t.Fatalf("terminal = %q, want kitty", cfg.Notifications.SSH.Terminal)
+	}
+
+	for _, name := range []TerminalNotifier{
+		TerminalNotifierOff, TerminalNotifierAuto, TerminalNotifierGhostty,
+		TerminalNotifierITerm2, TerminalNotifierWezTerm, TerminalNotifierKitty,
+	} {
+		valid := Default().Notifications
+		valid.SSH.Terminal = name
+		if err := ValidateNotifications(valid, path); err != nil {
+			t.Fatalf("terminal %q must be accepted: %v", name, err)
+		}
+	}
+	invalid := Default().Notifications
+	invalid.SSH.Terminal = "bell"
+	if err := ValidateNotifications(invalid, path); err == nil {
+		t.Fatal("an unsupported terminal must be refused rather than falling back to a generic escape")
+	}
+}
+
+func TestAbsentSSHKeysLeaveTheDefaultsInForce(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"notifications": {"ssh": {}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Notifications.SSH.ManagedHosts {
+		t.Fatal("an empty ssh section must not enable managed-host delivery")
+	}
+	if cfg.Notifications.SSH.Terminal != TerminalNotifierOff {
+		t.Fatalf("terminal = %q, want the default off", cfg.Notifications.SSH.Terminal)
+	}
+}
+
 func TestSaveNotificationsPreservesUnknownRootsAndSources(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	SetTestConfigPath(path)

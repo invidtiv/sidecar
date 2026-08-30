@@ -245,8 +245,16 @@ func (r *Registry) controlDirLocked(id string) string {
 
 func (r *Registry) forward(client *Client, incarnation uint64) {
 	defer r.forwarders.Done()
+	// Forwarded notifications survive a dropped update the same way they do one
+	// hop earlier, and for the same reason: a superseded snapshot is worth
+	// losing, an alert is not. One goroutine per client owns this slice.
+	var pending []hostproto.NotifyEvent
 	for update := range client.Updates() {
 		update.Incarnation = incarnation
+		if len(pending) > 0 {
+			update.Notify = append(pending, update.Notify...)
+			pending = nil
+		}
 		r.forwardMu.RLock()
 		if !r.updatesClosed {
 			select {
@@ -255,10 +263,18 @@ func (r *Registry) forward(client *Client, incarnation uint64) {
 				// Dropped rather than blocked: the newest state is what
 				// matters, and a stalled forward would freeze that host's
 				// reader loop.
+				pending = boundPendingNotify(update.Notify)
 			}
 		}
 		r.forwardMu.RUnlock()
 	}
+}
+
+func boundPendingNotify(events []hostproto.NotifyEvent) []hostproto.NotifyEvent {
+	if extra := len(events) - maxPendingNotify; extra > 0 {
+		return events[extra:]
+	}
+	return events
 }
 
 // Incarnation returns the concrete running client identity for id.

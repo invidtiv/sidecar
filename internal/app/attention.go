@@ -45,7 +45,10 @@ func (m Model) currentAttention() attentionSnapshot {
 }
 
 func attentionOriginTransport(origin plugin.AttentionOrigin) uirequest.Origin {
-	return uirequest.Origin{TmuxSession: origin.TmuxSession, ProjectKey: origin.ProjectKey, WorkDir: origin.WorkDir}
+	return uirequest.Origin{
+		TmuxSession: origin.TmuxSession, ProjectKey: origin.ProjectKey,
+		WorkDir: origin.WorkDir, HostID: origin.HostID,
+	}
 }
 
 func (m *Model) publishAttentionIfChanged() tea.Cmd {

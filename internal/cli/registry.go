@@ -516,9 +516,9 @@ func RootCommand() *Command {
 func notifyCommand() *Command {
 	configSetCmd := &Command{
 		Name:    "set",
-		Summary: "Set notification delivery, quiet hours, and custom sounds",
+		Summary: "Set notification delivery, quiet hours, custom sounds, and SSH delivery",
+		Long:    "Set one or more global notification settings. Modes are off, background, or always. Quiet hours are off or a local wall-clock range such as 22:00-08:00. Custom sound paths may be absolute, start with ~, or be relative to config.json; an empty --*-path= restores the built-in cue. SSH delivery has two independent switches, both off by default: --ssh-managed-hosts lets this machine deliver notifications forwarded by a registered remote host, and --ssh-terminal picks the outer terminal to notify through when Sidecar itself runs inside an SSH session. The complete prospective configuration is validated before write, preserves unrelated rules, and applies to running Sidecar instances without restart.",
 		Usage:   "sidecar notify config set [options]",
-		Long:    "Set one or more global notification settings. Modes are off, background, or always. Quiet hours are off or a local wall-clock range such as 22:00-08:00. Custom sound paths may be absolute, start with ~, or be relative to config.json; an empty --*-path= restores the built-in cue. The complete prospective configuration is validated before write, preserves unrelated rules, and applies to running Sidecar instances without restart.",
 		Flags: []Flag{
 			{Name: "--native", Arg: "MODE", Summary: "Set system notifications: off, background, or always"},
 			{Name: "--sound", Arg: "MODE", Summary: "Set sounds: off, background, or always"},
@@ -526,6 +526,8 @@ func notifyCommand() *Command {
 			{Name: "--attention-path", Arg: "PATH", Summary: "Set the attention cue file; empty restores built-in"},
 			{Name: "--done-path", Arg: "PATH", Summary: "Set the done cue file; empty restores built-in"},
 			{Name: "--failure-path", Arg: "PATH", Summary: "Set the failure cue file; empty restores built-in"},
+			{Name: "--ssh-managed-hosts", Arg: "on|off", Summary: "Deliver notifications forwarded by registered remote hosts"},
+			{Name: "--ssh-terminal", Arg: "TERMINAL", Summary: "Set off, auto, ghostty, iterm2, wezterm, or kitty"},
 			{Name: "--json", Summary: "Write the resulting notification configuration as JSON", Bool: true},
 			{Name: "--help", Short: "-h", Summary: "Show this help", Bool: true},
 		},
@@ -534,8 +536,10 @@ func notifyCommand() *Command {
 			{Command: "sidecar notify config set --native background --sound background"},
 			{Command: "sidecar notify config set --quiet-hours 22:00-08:00 --json"},
 			{Command: "sidecar notify config set --attention-path ~/Sounds/attention.wav"},
+			{Command: "sidecar notify config set --ssh-managed-hosts on --json"},
+			{Command: "sidecar notify config set --ssh-terminal ghostty"},
 		},
-		Agent:   AgentDoc{Invocation: "sidecar notify config set [--native MODE] [--sound MODE] [--quiet-hours RANGE] --json", Summary: "Change external notification settings without restarting Sidecar"},
+		Agent:   AgentDoc{Invocation: "sidecar notify config set [--native MODE] [--sound MODE] [--quiet-hours RANGE] [--ssh-managed-hosts on|off] [--ssh-terminal TERMINAL] --json", Summary: "Change external notification settings without restarting Sidecar"},
 		Mutates: true,
 		Run:     runNotifyConfigSet,
 	}

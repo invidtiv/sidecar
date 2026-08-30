@@ -67,8 +67,10 @@ func runNotifyConfigSet(env Env, args []string) int {
 	jsonOutput := false
 	var nativeMode, soundMode, quietHours string
 	var attentionPath, donePath, failurePath string
+	var sshManagedHosts, sshTerminal string
 	setNative, setSound, setQuiet := false, false, false
 	setAttentionPath, setDonePath, setFailurePath := false, false, false
+	setSSHManagedHosts, setSSHTerminal := false, false
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		value := func(flag string) (string, bool) {
@@ -129,12 +131,27 @@ func runNotifyConfigSet(env Env, args []string) int {
 				return 2
 			}
 			failurePath, setFailurePath = v, true
+		case arg == "--ssh-managed-hosts" || strings.HasPrefix(arg, "--ssh-managed-hosts="):
+			v, ok := value("--ssh-managed-hosts")
+			if !ok {
+				cliErrf(env.Stderr, "--ssh-managed-hosts requires on or off\n\n%s", help)
+				return 2
+			}
+			sshManagedHosts, setSSHManagedHosts = v, true
+		case arg == "--ssh-terminal" || strings.HasPrefix(arg, "--ssh-terminal="):
+			v, ok := value("--ssh-terminal")
+			if !ok {
+				cliErrf(env.Stderr, "--ssh-terminal requires off, auto, ghostty, iterm2, wezterm, or kitty\n\n%s", help)
+				return 2
+			}
+			sshTerminal, setSSHTerminal = v, true
 		default:
 			cliErrf(env.Stderr, "unknown notify config set option %q\n\n%s", arg, help)
 			return 2
 		}
 	}
-	if !setNative && !setSound && !setQuiet && !setAttentionPath && !setDonePath && !setFailurePath {
+	if !setNative && !setSound && !setQuiet && !setAttentionPath && !setDonePath && !setFailurePath &&
+		!setSSHManagedHosts && !setSSHTerminal {
 		cliErrf(env.Stderr, "notify config set requires at least one setting\n\n%s", help)
 		return 2
 	}
@@ -170,6 +187,17 @@ func runNotifyConfigSet(env Env, args []string) int {
 	if setFailurePath {
 		prospective.Notifications.Sound.FailurePath = strings.TrimSpace(failurePath)
 	}
+	managedHosts, err := parseOnOff("ssh-managed-hosts", sshManagedHosts, setSSHManagedHosts)
+	if err != nil {
+		cliErrln(env.Stderr, err)
+		return 2
+	}
+	if setSSHManagedHosts {
+		prospective.Notifications.SSH.ManagedHosts = managedHosts
+	}
+	if setSSHTerminal {
+		prospective.Notifications.SSH.Terminal = config.TerminalNotifier(strings.TrimSpace(sshTerminal))
+	}
 	if err := config.ValidateNotifications(prospective.Notifications, config.ConfigPath()); err != nil {
 		cliErrln(env.Stderr, err)
 		return 2
@@ -192,6 +220,12 @@ func runNotifyConfigSet(env Env, args []string) int {
 		}
 		if setFailurePath {
 			cfg.Sound.FailurePath = prospective.Notifications.Sound.FailurePath
+		}
+		if setSSHManagedHosts {
+			cfg.SSH.ManagedHosts = managedHosts
+		}
+		if setSSHTerminal {
+			cfg.SSH.Terminal = prospective.Notifications.SSH.Terminal
 		}
 	})
 	if err != nil {
@@ -409,6 +443,8 @@ func writeNotificationConfig(env Env, cfg config.NotificationsConfig, jsonOutput
 	} else {
 		_, _ = fmt.Fprintln(env.Stdout, "Quiet hours: off")
 	}
+	_, _ = fmt.Fprintf(env.Stdout, "SSH delivery:\n  Managed hosts: %s\n  Terminal: %s\n",
+		onOffText(view.SSH.ManagedHosts), view.SSH.Terminal)
 	_, _ = fmt.Fprintln(env.Stdout, "Sound choices:")
 	_, _ = fmt.Fprintln(env.Stdout, "  Attention: "+soundPathText(cfg.Sound.AttentionPath))
 	_, _ = fmt.Fprintln(env.Stdout, "  Done: "+soundPathText(cfg.Sound.DonePath))
@@ -455,6 +491,7 @@ type notificationConfigResult struct {
 	Native     config.NativeNotificationsConfig  `json:"native"`
 	Sound      config.SoundNotificationsConfig   `json:"sound"`
 	QuietHours config.QuietHoursConfig           `json:"quietHours"`
+	SSH        config.SSHNotificationsConfig     `json:"ssh"`
 	Sources    map[string]notificationSourceView `json:"sources"`
 }
 
@@ -494,7 +531,13 @@ func notificationConfigView(cfg config.NotificationsConfig) notificationConfigRe
 		}
 		sources[id] = view
 	}
-	return notificationConfigResult{Native: cfg.Native, Sound: cfg.Sound, QuietHours: cfg.QuietHours, Sources: sources}
+	// SSH reports the stored vocabulary rather than a resolved one: unlike a
+	// mode, an unrecognized terminal name cannot be saved and an unresolvable
+	// `auto` is a capability fact for status, not a configuration fact.
+	if cfg.SSH.Terminal == "" {
+		cfg.SSH.Terminal = config.TerminalNotifierOff
+	}
+	return notificationConfigResult{Native: cfg.Native, Sound: cfg.Sound, QuietHours: cfg.QuietHours, SSH: cfg.SSH, Sources: sources}
 }
 
 // loadAndApplyNotificationConfig gives every fresh notify command the same
@@ -535,7 +578,8 @@ func runNotifyStatus(env Env, args []string) int {
 			return 2
 		}
 	}
-	if _, err := loadAndApplyNotificationConfig(); err != nil {
+	cfg, err := loadAndApplyNotificationConfig()
+	if err != nil {
 		cliErrln(env.Stderr, err)
 		return 1
 	}
@@ -550,8 +594,12 @@ func runNotifyStatus(env Env, args []string) int {
 		}
 		status = provider.Status(ctx)
 	}
+	ssh := cfg.Notifications.SSH
+	if ssh.Terminal == "" {
+		ssh.Terminal = config.TerminalNotifierOff
+	}
 	if jsonOutput {
-		if err := json.NewEncoder(env.Stdout).Encode(status); err != nil {
+		if err := json.NewEncoder(env.Stdout).Encode(notifyStatusResult{Status: status, SSH: ssh}); err != nil {
 			cliErrln(env.Stderr, err)
 			return 1
 		}
@@ -564,7 +612,19 @@ func runNotifyStatus(env Env, args []string) int {
 	} else {
 		_, _ = fmt.Fprintln(env.Stdout, "Context: local")
 	}
+	// Both SSH settings are reported as the configuration facts they are. A
+	// CLI process holds no host streams of its own, so claiming a live
+	// managed-host connection state here would be an invention; the running
+	// app's Delivery status route is where connection state belongs.
+	_, _ = fmt.Fprintf(env.Stdout, "SSH managed hosts: %s\nSSH terminal: %s\n", onOffText(ssh.ManagedHosts), ssh.Terminal)
 	return 0
+}
+
+// notifyStatusResult embeds Status so every existing JSON key keeps its place
+// and the SSH settings arrive alongside rather than inside the probe results.
+type notifyStatusResult struct {
+	notifydelivery.Status
+	SSH config.SSHNotificationsConfig `json:"ssh"`
 }
 
 func formatCapability(label string, capability notifydelivery.Capability) string {

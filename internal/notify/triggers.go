@@ -34,6 +34,20 @@ type LaneTracker struct {
 	states   map[string]*laneState
 }
 
+// Knows reports whether the tracker already holds state for a workspace.
+//
+// It exists for a caller that has to tell a first sighting from a subsequent
+// one, because the two mean different things: the first is a baseline the
+// tracker will never announce, so anything already in progress at that moment
+// belongs to whoever was watching before.
+func (t *LaneTracker) Knows(key string) bool {
+	if t.states == nil {
+		return false
+	}
+	_, ok := t.states[key]
+	return ok
+}
+
 // DefaultLaneDebounce is the window a lane must hold before it posts. Long
 // enough to swallow the flicker as an agent's prompt renders, short enough that
 // "your agent is waiting" still arrives while the user is looking.
@@ -233,6 +247,14 @@ func laneNotification(o LaneObservation, now time.Time, source SourceID, sev Sev
 func TransitionOwnedByProject(n Notification, projectRoot string) bool {
 	meta := n.Transition
 	if meta == nil || meta.LaneKey == "" {
+		return false
+	}
+	// A record forwarded from a remote host belongs to no local project, even
+	// when that host has a checkout at the same path. Adopting one would seed a
+	// local lane tracker with a key no local observation can produce, and the
+	// next complete sweep would withdraw the remote agent's wait while it was
+	// still waiting.
+	if n.Origin.HostID != "" {
 		return false
 	}
 	projectRoot = lexicalProjectRoot(projectRoot)

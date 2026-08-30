@@ -19,7 +19,12 @@ func TestTwoServiceSteelThreadDeliversOnceAndRetainsCentreRecords(t *testing.T) 
 	ledgerPath := filepath.Join(stateDir, LedgerFileName)
 	native := &fakeNative{capability: Capability{Available: true, Provider: "fake-native"}}
 	sound := &fakeSound{capability: Capability{Available: true, Provider: "fake-sound"}}
-	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	// The clock has to be near the wall clock, not a fixed date in the past.
+	// OpenPath releases expired leases using time.Now, so a claim stamped in
+	// 2026-08-29 looked long expired to the second service's ledger the moment
+	// it opened — and it won a claim the first process was still holding. That
+	// made this test fail roughly one run in three.
+	now := time.Now().UTC()
 	cfg := config.DefaultNotificationsConfig()
 	cfg.Native.Mode, cfg.Sound.Mode = config.DeliveryBackground, config.DeliveryBackground
 	policy := notify.ResolveConfig(cfg)

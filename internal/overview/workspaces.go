@@ -1689,15 +1689,35 @@ func (m *Model) AttentionOrigin() (plugin.AttentionOrigin, bool) {
 	if !ok || !m.preview.visible {
 		return plugin.AttentionOrigin{}, false
 	}
-	projectKey := strings.TrimSpace(workspace.ProjectKey)
-	if projectKey != "" {
-		projectKey = filepath.Base(filepath.Clean(projectKey))
-	}
+	return attentionOriginFor(workspace), true
+}
+
+// attentionOriginFor is the one projection of a row — local or remote — onto
+// the app's visible-origin identity. The forwarded-notification adapter builds
+// the same identity from the wire, so "the user is looking at that workspace"
+// is decided by one rule rather than by two that agree today.
+func attentionOriginFor(workspace workspaceinventory.Workspace) plugin.AttentionOrigin {
 	return plugin.AttentionOrigin{
 		TmuxSession: workspace.TmuxName,
-		ProjectKey:  projectKey,
+		ProjectKey:  attentionProjectKey(workspace.ProjectKey),
 		WorkDir:     workspace.Path,
-	}, true
+		HostID:      workspace.HostID,
+	}
+}
+
+// attentionProjectKey reduces a project key to its last path element.
+//
+// A host-scoped key loses its host prefix here along with everything else
+// before the final element. That is fine, and deliberately not what separates
+// one machine's workspace from another's: notify.Origin.HostID does that, and
+// is compared first. What matters here is only that both sides of a comparison
+// reduce the same key the same way.
+func attentionProjectKey(key string) string {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return ""
+	}
+	return filepath.Base(filepath.Clean(key))
 }
 
 // WorkspacesSummary is the header-right text for the tab.
