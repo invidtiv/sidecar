@@ -229,13 +229,42 @@ func PlanOpenAt(root *Node, kind Kind, contentID int, cell Cell) (OpenPlan, stri
 	} else if FirstOfKind(root, kind) != nil {
 		return OpenPlan{}, "that kind already has a pane on screen; an explicit cell cannot retarget it"
 	}
+	return planPlacement(root, MoveDestination{Cell: cell})
+}
+
+// planPlacement is the structural half of explicit placement. It deliberately
+// knows nothing about pane kinds, retargeting, or the live-leaf cap: opens apply
+// those policies before reaching it, while moves have already extracted the
+// leaf they are about to reinsert.
+func planPlacement(root *Node, destination MoveDestination) (OpenPlan, string) {
 	grid := GridOf(root)
 	if grid == nil {
 		return OpenPlan{}, "the current layout does not resolve to grid columns, so no cell can be addressed"
 	}
+	if destination.OuterEdge != NoOuterColumnEdge {
+		if destination.Cell != (Cell{}) || (destination.OuterEdge != BeforeFirstColumn && destination.OuterEdge != AfterLastColumn) {
+			return OpenPlan{}, "the move destination is invalid"
+		}
+		if grid.ColumnsAtCap() {
+			return OpenPlan{}, GridColumnCapMessage
+		}
+		return OpenPlan{
+			Split:    root.ID,
+			Axis:     Columns,
+			NewFirst: destination.OuterEdge == BeforeFirstColumn,
+		}, ""
+	}
+	cell := destination.Cell
+	if cell.Col < 1 || cell.Row < 1 || cell.Col > MaxGridColumns || cell.Row > MaxGridRows {
+		return OpenPlan{}, fmt.Sprintf("cell %d.%d is outside the %dx%d layout grid",
+			cell.Col, cell.Row, MaxGridColumns, MaxGridRows)
+	}
 	switch {
 	case cell.Col > grid.ColumnCount():
 		if cell.Col == grid.ColumnCount()+1 && cell.Row == 1 {
+			if grid.ColumnsAtCap() {
+				return OpenPlan{}, GridColumnCapMessage
+			}
 			return OpenPlan{Split: root.ID, Axis: Columns}, ""
 		}
 		return OpenPlan{}, fmt.Sprintf("column %d is out of range; the layout has %d", cell.Col, grid.ColumnCount())
