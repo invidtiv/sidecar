@@ -7,6 +7,7 @@ import (
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/panereposition"
 	"github.com/marcus/sidecar/internal/termpanes"
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
@@ -243,60 +244,6 @@ func (m *Model) pruneDeletedTerminalRows() {
 	}
 }
 
-// previewShellGraft records where a Shell leaf sat before a deck projection
-// replaced the tree: its leaf ID, the split it lived in, and the sibling the
-// split was made against.
-type previewShellGraft struct {
-	leafID     int
-	anchorID   int
-	axis       panelayout.Axis
-	ratio      int
-	shellFirst bool
-}
-
-func capturePreviewShellGrafts(root *panelayout.Node) []previewShellGraft {
-	var grafts []previewShellGraft
-	var walk func(*panelayout.Node)
-	walk = func(n *panelayout.Node) {
-		if n == nil || n.Split == nil {
-			return
-		}
-		a, b := n.Split.A, n.Split.B
-		if a != nil && b != nil && a.Split == nil && a.Kind == panelayout.Shell {
-			grafts = append(grafts, previewShellGraft{leafID: a.ID, anchorID: b.ID, axis: n.Split.Axis, ratio: n.Split.Ratio, shellFirst: true})
-		}
-		if a != nil && b != nil && b.Split == nil && b.Kind == panelayout.Shell {
-			grafts = append(grafts, previewShellGraft{leafID: b.ID, anchorID: a.ID, axis: n.Split.Axis, ratio: n.Split.Ratio, shellFirst: false})
-		}
-		walk(a)
-		walk(b)
-	}
-	walk(root)
-	return grafts
-}
-
-// splicePreviewNode replaces the node with anchorID inside root with
-// build(node). The root itself is the caller's case.
-func splicePreviewNode(root *panelayout.Node, anchorID int, build func(*panelayout.Node) *panelayout.Node) bool {
-	if root == nil || root.Split == nil {
-		return false
-	}
-	for _, side := range []**panelayout.Node{&root.Split.A, &root.Split.B} {
-		child := *side
-		if child == nil {
-			continue
-		}
-		if child.ID == anchorID {
-			*side = build(child)
-			return true
-		}
-		if splicePreviewNode(child, anchorID, build) {
-			return true
-		}
-	}
-	return false
-}
-
 // graftPreviewShellLeaves restores this row's live terminal splits onto a tree
 // the content deck produced. The deck's tree is the passive content panes' —
 // it has never heard of a Shell leaf — so adopting it verbatim would silently
@@ -311,12 +258,13 @@ func (m *Model) graftPreviewShellLeaves(old, fresh *panelayout.Node) (*panelayou
 	}
 	focusShell := 0
 	wasFocused := m.preview.paneFocus
-	for _, graft := range capturePreviewShellGrafts(old) {
-		leaf := m.preview.terminalPanes.Leaf(graft.leafID)
+	for _, graft := range panereposition.CaptureLeafGrafts(old, panelayout.Shell) {
+		oldShellID := graft.LeafID
+		leaf := m.preview.terminalPanes.Leaf(graft.LeafID)
 		if leaf == nil || leaf.Target.Source != "shell" {
 			continue
 		}
-		shellID := graft.leafID
+		shellID := graft.LeafID
 		// The deck allocates IDs against its own tree, so a new passive leaf
 		// can take the shell's number; the shell moves, its state moves with it.
 		if panelayout.Find(fresh, shellID) != nil {
@@ -324,21 +272,10 @@ func (m *Model) graftPreviewShellLeaves(old, fresh *panelayout.Node) (*panelayou
 			m.preview.terminalPanes.Rekey(shellID, next)
 			shellID = next
 		}
-		splitID := max(panelayout.MaxID(fresh), shellID) + 1
 		node := &panelayout.Node{ID: shellID, Kind: panelayout.Shell}
-		build := func(anchor *panelayout.Node) *panelayout.Node {
-			a, b := anchor, node
-			if graft.shellFirst {
-				a, b = node, anchor
-			}
-			return &panelayout.Node{ID: splitID, Split: &panelayout.Split{Axis: graft.axis, Ratio: graft.ratio, A: a, B: b}}
-		}
-		if fresh.ID == graft.anchorID {
-			fresh = build(fresh)
-		} else if !splicePreviewNode(fresh, graft.anchorID, build) {
-			fresh = build(fresh)
-		}
-		if wasFocused == graft.leafID {
+		graft.LeafID = shellID
+		fresh = panereposition.ApplyLeafGraft(fresh, graft, node)
+		if wasFocused == oldShellID {
 			focusShell = shellID
 		}
 	}

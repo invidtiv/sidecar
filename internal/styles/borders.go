@@ -131,7 +131,6 @@ func RenderGradientBorderWithBg(content string, width, height int, gradient Grad
 	return result.String()
 }
 
-
 // renderGradientBorderTop renders the top border line with gradient colors.
 func renderGradientBorderTop(width, height int, g Gradient) string {
 	var sb strings.Builder

@@ -13,6 +13,7 @@ import (
 	"github.com/marcus/sidecar/internal/noteview"
 	"github.com/marcus/sidecar/internal/panecodec"
 	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/panereposition"
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/workspacediff"
@@ -397,6 +398,20 @@ func restoreTree(n *contentpanes.NodeState, deck *contentpanes.Deck, nextID *int
 		}
 	}
 	seen[kind] = true
+	// Passive leaf IDs are owned by Deck. Restore must use those exact IDs,
+	// rather than independently counting through the full host tree where a
+	// collapsed Shell shifts every later leaf. Host-only Shell and internal
+	// nodes allocate above Deck's complete ID space (nextID is initialized to
+	// Deck.Tree's MaxID), so neither can alias a passive leaf on first reproject.
+	if deck != nil && kind != PaneShell {
+		deckKind := kind
+		if kind == PaneTerminal {
+			deckKind = panelayout.Primary
+		}
+		if id := deck.Leaf(deckKind); id > 0 {
+			return &PaneNode{ID: id, Kind: kind, ContentID: id}
+		}
+	}
 	*nextID++
 	return &PaneNode{ID: *nextID, Kind: kind, ContentID: *nextID}
 }
@@ -586,8 +601,21 @@ func (p *Plugin) syncWorkspaceDeckProjection(root, surface string) {
 	// shell leaf. Its shape is recorded before the projection lands and the leaf
 	// is put back after, so a projection cannot quietly close the panel or move
 	// its divider back to the default.
+	oldTree := p.paneRoot
+	shell := p.shellLeaf()
+	shellGrafts := panereposition.CaptureLeafGrafts(oldTree, panelayout.Shell)
 	p.rememberShellSplit()
-	p.paneRoot = reconcileWorkspaceDeckTree(p.paneRoot, deck.Tree())
+	p.paneRoot = reconcileWorkspaceDeckTree(oldTree, deck.Tree())
+	if shell != nil && p.terminalPanes != nil {
+		if state := p.terminalPanes.Leaf(shell.ID); state != nil && state.Requested {
+			for _, graft := range shellGrafts {
+				if graft.LeafID == shell.ID {
+					p.paneRoot = panereposition.ApplyLeafGraft(p.paneRoot, graft, shell)
+					break
+				}
+			}
+		}
+	}
 	p.syncShellLeaf()
 	// setFocusTarget is the sole writer of the ring. A live-refresh broadcast
 	// must not walk it to whatever leaf last opened a tab — that is how
@@ -691,7 +719,12 @@ func reconcileWorkspaceDeckTree(current, fresh *panelayout.Node) *panelayout.Nod
 		if n == nil {
 			return
 		}
-		byID[n.ID] = n
+		// Shell is host-owned and must retain its exact node object for the
+		// graft replay. A passive leaf that happens to reuse its numeric ID must
+		// never repurpose that live object during reconciliation.
+		if n.Split != nil || n.Kind != panelayout.Shell {
+			byID[n.ID] = n
+		}
 		if n.Split != nil {
 			index(n.Split.A)
 			index(n.Split.B)

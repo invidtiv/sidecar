@@ -71,12 +71,14 @@ type RenderBufferInput struct {
 	// rendering contract but does not reuse analysis across calls.
 	Analyzer *RowAnalyzer
 
-	// CloseButton reserves the shared header × on the right of the header row,
-	// drawn hovered when CloseHovered. The button is reserved out of the header
-	// row alone — the viewport under it is tmux geometry and keeps every column
-	// it was sized for, the same rule the project surface reserves by.
-	CloseButton  bool
-	CloseHovered bool
+	// LayoutButton and CloseButton reserve the shared header controls on the
+	// right of the header row. The controls are reserved out of the header row
+	// alone — the viewport under them is tmux geometry and keeps every column it
+	// was sized for, the same rule the project surface reserves by.
+	LayoutButton  bool
+	LayoutHovered bool
+	CloseButton   bool
+	CloseHovered  bool
 }
 
 // RenderHeader draws the one row above an embedded terminal — identity chips
@@ -94,11 +96,20 @@ func RenderHeader(in RenderBufferInput) string {
 	if truncate == nil {
 		truncate = TruncateANSI
 	}
+	controls := make([]ui.HeaderControl, 0, 2)
+	rendered := make([]string, 0, 2)
+	if in.LayoutButton {
+		controls = append(controls, ui.HeaderControl{Width: ui.LayoutButtonWidth()})
+		rendered = append(rendered, ui.RenderLayoutButton(in.LayoutHovered))
+	}
 	if in.CloseButton {
-		if reserve := ui.ReserveHeaderClose(in.Width); reserve.CloseW > 0 {
-			row := fill(HeaderRow(in.Chips, in.Hints, reserve.TabsWidth, 0, truncate), reserve.TabsWidth, truncate)
-			return ui.ComposeHeaderClose(row, in.Width, in.CloseHovered)
-		}
+		controls = append(controls, ui.HeaderControl{Width: ui.CloseButtonWidth()})
+		rendered = append(rendered, ui.RenderCloseButton(in.CloseHovered))
+	}
+	if len(controls) > 0 {
+		reserve := ui.ReserveHeaderControls(in.Width, controls...)
+		row := fill(HeaderRow(in.Chips, in.Hints, reserve.TabsWidth, 0, truncate), reserve.TabsWidth, truncate)
+		return ui.ComposeHeaderControls(row, in.Width, rendered...)
 	}
 	return fill(HeaderRow(in.Chips, in.Hints, in.Width, 0, truncate), in.Width, truncate)
 }

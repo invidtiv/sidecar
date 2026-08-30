@@ -29,6 +29,55 @@ func TestRenderCloseButtonUsesSharedButtonStyles(t *testing.T) {
 	}
 }
 
+func TestLayoutButtonGlyphIsOneColumnAndHoverDoesNotReflow(t *testing.T) {
+	rest := RenderLayoutButton(false)
+	hover := RenderLayoutButton(true)
+	if ansi.StringWidth(LayoutButtonLabel) != 1 {
+		t.Fatalf("layout glyph width = %d, want 1", ansi.StringWidth(LayoutButtonLabel))
+	}
+	if lipgloss.Width(rest) != lipgloss.Width(hover) || lipgloss.Width(rest) != LayoutButtonWidth() {
+		t.Fatalf("layout button widths rest=%d hover=%d reported=%d", lipgloss.Width(rest), lipgloss.Width(hover), LayoutButtonWidth())
+	}
+	if !strings.Contains(ansi.Strip(rest), LayoutButtonLabel) || !strings.Contains(ansi.Strip(hover), LayoutButtonLabel) {
+		t.Fatalf("layout button dropped its label: rest=%q hover=%q", ansi.Strip(rest), ansi.Strip(hover))
+	}
+}
+
+func TestReserveHeaderControlsDropsLayoutBeforeClose(t *testing.T) {
+	layoutW, closeW := LayoutButtonWidth(), CloseButtonWidth()
+	controls := []HeaderControl{{Width: layoutW}, {Width: closeW}}
+
+	wide := ReserveHeaderControls(layoutW+closeW+8, controls...)
+	if wide.TabsWidth != 8 || wide.Controls[0].Width != layoutW || wide.Controls[1].Width != closeW {
+		t.Fatalf("wide reserve = %+v", wide)
+	}
+	narrow := ReserveHeaderControls(layoutW+closeW-1, controls...)
+	if narrow.Controls[0].Width != 0 || narrow.Controls[1].Width != closeW {
+		t.Fatalf("layout did not drop before close: %+v", narrow)
+	}
+	tiny := ReserveHeaderControls(closeW-1, controls...)
+	if tiny.Controls[0].Width != 0 || tiny.Controls[1].Width != 0 || tiny.TabsWidth != closeW-1 {
+		t.Fatalf("tiny reserve kept a clipped control: %+v", tiny)
+	}
+}
+
+func TestComposeHeaderControlsPinsSurvivorsRight(t *testing.T) {
+	width := LayoutButtonWidth() + CloseButtonWidth() - 1
+	reserve := ReserveHeaderControls(width,
+		HeaderControl{Width: LayoutButtonWidth()},
+		HeaderControl{Width: CloseButtonWidth()},
+	)
+	row := ComposeHeaderControls(strings.Repeat("t", reserve.TabsWidth), width,
+		RenderLayoutButton(false), RenderCloseButton(false))
+	plain := ansi.Strip(row)
+	if strings.Contains(plain, LayoutButtonLabel) || !strings.Contains(plain, CloseButtonLabel) {
+		t.Fatalf("narrow composition = %q, want close only", plain)
+	}
+	if lipgloss.Width(row) != width {
+		t.Fatalf("composed width = %d, want %d", lipgloss.Width(row), width)
+	}
+}
+
 func TestReserveHeaderCloseKeepsTheButtonWhole(t *testing.T) {
 	btnW := CloseButtonWidth()
 	if got := ReserveHeaderClose(0); got.CloseW != 0 || got.TabsWidth != 0 {

@@ -477,8 +477,9 @@ func TestPreviewSetsControlModeOnEveryActivation(t *testing.T) {
 // mode it was put into. Everything else is inert: this test is about the
 // decision, not about a tmux.
 type modeRecordingTerminal struct {
-	calls  *[]string
-	active bool
+	calls    *[]string
+	active   bool
+	released int
 }
 
 type activatingRemoteTerminal struct {
@@ -506,7 +507,7 @@ func (t *modeRecordingTerminal) SetDimensions(int, int) tea.Cmd      { return ni
 func (t *modeRecordingTerminal) PaneSize() (int, int)                { return 80, 24 }
 func (t *modeRecordingTerminal) CursorState() (int, int, bool)       { return 0, 0, false }
 func (t *modeRecordingTerminal) SetHooks(tty.Hooks)                  {}
-func (t *modeRecordingTerminal) ReleaseInput()                       {}
+func (t *modeRecordingTerminal) ReleaseInput()                       { t.released++ }
 func (t *modeRecordingTerminal) Exit()                               {}
 func (t *modeRecordingTerminal) Update(tea.Msg) tea.Cmd              { return nil }
 func (t *modeRecordingTerminal) SendUnknownSequence(tea.Msg) tea.Cmd { return nil }

@@ -104,6 +104,9 @@ func (p *Plugin) View(width, height int) string {
 			view = p.overlayViewFlyout(view, width, height)
 		}
 	}
+	if p.paneLayoutModal != nil {
+		view = ui.OverlayModal(view, p.paneLayoutModal.Render(width, height, p.mouseHandler), width, height)
+	}
 	p.wheelViewCache = view
 	p.wheelViewCacheW = width
 	p.wheelViewCacheH = height

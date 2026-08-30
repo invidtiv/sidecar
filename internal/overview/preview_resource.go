@@ -6,10 +6,10 @@ import (
 	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/panereposition"
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/termpreview"
-	"github.com/marcus/sidecar/internal/ui"
 )
 
 const (
@@ -304,7 +304,7 @@ func (m *Model) renderPreviewResource(res *previewResource, box termpreview.Box)
 	focused := m.PreviewFocused() && res.focused
 	res.tabs.SetSize(box.W, contentHeight)
 	header := m.composePreviewHeader(
-		resourceview.LayoutTabStrip(res.tabs, ui.ReserveHeaderClose(box.W).TabsWidth, focused).HoverClose(m.tabCloseHoverIn(panelayout.Resource)).Row,
+		resourceview.LayoutTabStrip(res.tabs, panereposition.ReserveHeader(box.W, true).TabsWidth, focused).HoverClose(m.tabCloseHoverIn(panelayout.Resource)).Row,
 		box.W, panelayout.Resource)
 	if contentHeight <= 0 {
 		return header
@@ -332,7 +332,7 @@ func (m *Model) registerPreviewResourceTabRegions(box termpreview.Box) {
 	focused := m.PreviewFocused() && res.focused
 	// The strip is laid out by the same call that drew it, so a click cannot
 	// land on a tab that overflow pushed out of the header.
-	strip := resourceview.LayoutTabStrip(res.tabs, ui.ReserveHeaderClose(box.W).TabsWidth, focused)
+	strip := resourceview.LayoutTabStrip(res.tabs, panereposition.ReserveHeader(box.W, true).TabsWidth, focused)
 	strip.RegisterHits(func(col, width, index int, close bool) {
 		m.workspacesMouse.HitMap.AddRect(
 			previewResourceTabKind,

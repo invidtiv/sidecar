@@ -5,6 +5,7 @@ import (
 
 	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/panereposition"
 	"github.com/marcus/sidecar/internal/ui"
 )
 
@@ -105,6 +106,20 @@ func (r paneRegions) Title(node *panelayout.Node, hit paneframe.Box) {
 		return
 	}
 	r.p.mouseHandler.HitMap.AddRect(regionPaneTitle, hit.X, hit.Y, hit.W, hit.H, node.ID)
+}
+
+// Layout is wired by the reposition-modal host adapter. Keeping the rung on
+// the shared sink now lets the frame own its precedence while M2 adds the
+// concrete region and hover state beside the close control.
+func (r paneRegions) Layout(node *panelayout.Node, inner paneframe.Box) {
+	if node == nil || node.Split != nil {
+		return
+	}
+	reserve := panereposition.ReserveHeader(inner.W, node.Kind != PaneTerminal)
+	if reserve.LayoutW < 1 {
+		return
+	}
+	r.p.mouseHandler.HitMap.AddRect(regionPaneLayout, inner.X+reserve.LayoutCol, inner.Y, reserve.LayoutW, 1, node.ID)
 }
 
 func (r paneRegions) Close(node *panelayout.Node, inner paneframe.Box) {

@@ -2147,6 +2147,12 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 
 	case tea.PasteMsg:
+		// The reposition modal owns the keyboard outright. Bracketed paste is a
+		// separate Bubble Tea message, so it must be stopped here as well as keys
+		// or it can still reach a previously focused filter behind the overlay.
+		if p.paneLayoutModal != nil {
+			break
+		}
 		// v2: bracketed paste arrives as a dedicated message. A focused list
 		// filter is a text input and takes the paste first; otherwise it goes
 		// to tmux when in interactive mode.

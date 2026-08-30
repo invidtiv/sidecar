@@ -122,6 +122,65 @@ func TestDeckPlacementAndHomogeneousTabs(t *testing.T) {
 	}
 }
 
+func TestDeckAdoptLayoutKeepsOwnedLeavesAndCollapsesForeignShells(t *testing.T) {
+	ctx := testContext(t.TempDir())
+	d := New(ctx, Config{})
+	doc := d.Open(ctx, fileRef("README.md"), testPlacement())
+	if !doc.CreatedLeaf {
+		t.Fatalf("document open = %#v", doc)
+	}
+	primary := panelayout.FirstOfKind(d.root, panelayout.Primary)
+	document := panelayout.FirstOfKind(d.root, panelayout.Document)
+	if primary == nil || document == nil {
+		t.Fatalf("deck tree = %#v", d.root)
+	}
+
+	// The host moved the document before Primary and has a live Shell grafted
+	// beside it. The shell is not deck-owned and must disappear from d.root.
+	candidate := &panelayout.Node{ID: 20, Split: &panelayout.Split{Axis: panelayout.Columns, Ratio: 65,
+		A: &panelayout.Node{ID: document.ID, Kind: document.Kind},
+		B: &panelayout.Node{ID: 21, Split: &panelayout.Split{Axis: panelayout.Rows, Ratio: 40,
+			A: &panelayout.Node{ID: primary.ID, Kind: primary.Kind},
+			B: &panelayout.Node{ID: 99, Kind: panelayout.Shell},
+		}},
+	}}
+	if !d.AdoptLayout(candidate) {
+		t.Fatal("valid host-composed layout was refused")
+	}
+	if panelayout.FirstOfKind(d.root, panelayout.Shell) != nil || panelayout.LeafCount(d.root) != 2 {
+		t.Fatalf("foreign shell survived adoption: %#v", d.root)
+	}
+	if panelayout.Find(d.root, primary.ID) != primary || panelayout.Find(d.root, document.ID) != document {
+		t.Fatal("adoption replaced an owned leaf pointer")
+	}
+	grid := panelayout.GridOf(d.root)
+	if grid == nil || grid.Cell(1, 1) != document || grid.Cell(2, 1) != primary {
+		t.Fatalf("adopted grid = %#v", grid)
+	}
+	if got, _ := d.Tabs(document.ID); len(got) == 0 {
+		t.Fatal("adoption lost the document viewer tabs")
+	}
+
+	before := d.root
+	if d.AdoptLayout(&panelayout.Node{ID: primary.ID, Kind: panelayout.Primary}) {
+		t.Fatal("candidate missing an owned leaf was accepted")
+	}
+	if d.root != before {
+		t.Fatal("refused adoption changed the live root")
+	}
+
+	reservedBefore := d.reservedMaxID
+	foreignPassive := &panelayout.Node{ID: 101, Split: &panelayout.Split{Axis: panelayout.Rows, Ratio: 50,
+		A: panelayout.Clone(d.root), B: &panelayout.Node{ID: 100, Kind: panelayout.Issue},
+	}}
+	if d.AdoptLayout(foreignPassive) {
+		t.Fatal("foreign non-Shell leaf was silently collapsed")
+	}
+	if d.root != before || d.reservedMaxID != reservedBefore {
+		t.Fatal("foreign non-Shell refusal mutated deck state")
+	}
+}
+
 // A planned placement IS the placement: Open applies the caller's plan
 // verbatim — including inserts a fresh PlanOpen would never choose — while
 // still fit-testing the trial and refusing stale retargets.

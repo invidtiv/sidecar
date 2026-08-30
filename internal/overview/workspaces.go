@@ -14,6 +14,7 @@ import (
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/panereposition"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
@@ -365,6 +366,9 @@ func (m *Model) WorkspacesView(width, height int) string {
 	if m.viewFlyoutOpen {
 		view = m.overlayViewFlyout(view, width, height)
 	}
+	if m.paneLayoutModal != nil {
+		view = ui.OverlayModal(view, m.paneLayoutModal.Render(width, height, m.workspacesMouse), width, height)
+	}
 	m.workspacesViewCache = view
 	m.workspacesViewCacheW = width
 	m.workspacesViewCacheH = height
@@ -543,12 +547,14 @@ const (
 	workspacesSidebarRegion = "global-workspaces-sidebar"
 	workspacesDividerRegion = "global-workspaces-divider"
 	previewPaneDividerKind  = "global-preview-pane-divider"
+	previewPaneLayoutKind   = "global-preview-pane-layout"
 	// previewPaneTitleKind is a pane header's name, which is a press target so
 	// a pane with no row in this list can still be renamed.
 	previewPaneTitleKind = "global-preview-pane-title"
 )
 
 type previewPaneDividerHit int
+type previewPaneLayoutHit int
 
 // previewPaneTitleHit names the leaf whose header title was pressed.
 type previewPaneTitleHit int
@@ -608,12 +614,16 @@ func (m *Model) dividerHandleState(region string, splitID int) ui.HandleState {
 
 func (m *Model) setPreviewCloseHover(action mouse.MouseAction) {
 	m.hoverTabClose = tabs.CloseHover{}
+	m.hoverPreviewLayout = 0
 	if action.Region == nil {
 		m.previewCloseHover = false
 		m.hoverPreviewClose = 0
 		return
 	}
 	m.setTabCloseHover(action.Region.Data)
+	if hit, ok := action.Region.Data.(previewPaneLayoutHit); ok {
+		m.hoverPreviewLayout = int(hit)
+	}
 	hit, ok := action.Region.Data.(previewPaneCloseHit)
 	m.previewCloseHover = ok
 	if ok {
@@ -728,8 +738,18 @@ func (m *Model) WorkspacesFilterActive() bool {
 	return m.workspaces.Filter().Active()
 }
 
-// WorkspacesPaste appends pasted text to a focused filter.
+// WorkspacesPaneLayoutModalOpen reports that the pane-layout overlay owns all
+// input, including bracketed paste messages routed separately from keys.
+func (m *Model) WorkspacesPaneLayoutModalOpen() bool {
+	return m != nil && m.paneLayoutModal != nil
+}
+
+// WorkspacesPaste appends pasted text to a focused filter. An open pane-layout
+// modal absorbs the paste before the previously focused surface can see it.
 func (m *Model) WorkspacesPaste(text string) bool {
+	if m.WorkspacesPaneLayoutModalOpen() {
+		return true
+	}
 	if !m.WorkspacesFilterFocused() {
 		return false
 	}
@@ -749,6 +769,9 @@ func (m *Model) WorkspacesPreviewCmd() tea.Cmd { return m.previewSync() }
 // printable characters mid-query.
 func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	key := msg.String()
+	if m.paneLayoutModal != nil {
+		return true, m.handlePaneLayoutModalKey(msg)
+	}
 	if m.previewSplitCloseLeaf != 0 {
 		return m.handlePreviewSplitCloseKey(msg)
 	}
@@ -805,6 +828,12 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 			m.navigateWorkspaces(key)
 		}
 		return true, m.previewSync()
+	}
+	// M is available from either Workspaces window: the focused preview leaf or
+	// the selected list row's Primary terminal. Input and overlays were answered
+	// above, so they retain the printable key.
+	if handled, cmd := m.handlePaneMoveKey(msg); handled {
+		return true, cmd
 	}
 	if key == "\\" {
 		return true, m.toggleWorkspaceSidebar()
@@ -905,6 +934,9 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 // only, and the keyboard stays on the list until the user types or focuses a
 // content leaf.
 func (m *Model) WorkspaceFocusContext() string {
+	if m.paneLayoutModal != nil {
+		return panereposition.ModalContext
+	}
 	if m.PreviewInteractive() {
 		return "global-workspaces-terminal"
 	}
@@ -1054,6 +1086,9 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 	mouseMsg, ok := msg.(tea.MouseMsg)
 	if !ok {
 		return nil
+	}
+	if m.paneLayoutModal != nil {
+		return m.handlePaneLayoutModalMouse(mouseMsg)
 	}
 	if m.previewSplitCloseLeaf != 0 {
 		return m.handlePreviewSplitCloseMouse(mouseMsg)
@@ -1308,6 +1343,9 @@ func (m *Model) pressInSecondaryLeaf(action mouse.MouseAction) bool {
 // mutating visible state. It is called before Bubble Tea Update/View so an
 // inertial tail at a real boundary can be discarded cheaply.
 func (m *Model) WorkspacesWheelAtBoundary(msg tea.MouseWheelMsg) bool {
+	if m != nil && m.paneLayoutModal != nil && m.workspacesMouse != nil {
+		return m.paneLayoutModal.Modal().WheelAtBoundary(msg, m.workspacesMouse)
+	}
 	if m != nil && m.createOpen {
 		return m.createWheelAtBoundary(msg)
 	}
@@ -1412,6 +1450,12 @@ func regionKind(region *mouse.Region) (string, bool) {
 // workspacesRegionMouse routes a mouse event to the region it landed on, after
 // the gesture-level decisions above have been made.
 func (m *Model) workspacesRegionMouse(action mouse.MouseAction) tea.Cmd {
+	if hit, ok := action.Region.Data.(previewPaneLayoutHit); ok {
+		if action.Type == mouse.ActionClick || action.Type == mouse.ActionDoubleClick {
+			return m.openPaneLayoutModal(int(hit))
+		}
+		return nil
+	}
 	// The preview owns its own wheel: scrolling over terminal output moves that
 	// output, not the list underneath it.
 	if hit, ok := action.Region.Data.(previewPaneCloseHit); ok {
