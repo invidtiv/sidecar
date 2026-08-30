@@ -2,6 +2,24 @@
 
 All notable changes to sidecar are documented here.
 
+## [Unreleased]
+
+### Features
+
+- **Three shell verbs stopped being things only the TUI could do.** `sidecar shell rename --target <session>` renames a shell you are not sitting in — until now rename resolved "which shell am I" from the ambient tmux environment, so there was no way to rename any other one. `sidecar shell send --target <session> --run/--type <command>` sends a command into an existing shell, matching the `--run`/`--type` split `create shell` already had. And `sidecar create worktree --plan` resolves a worktree plan and prints it as JSON without creating anything, so a caller can show branch, path, source OID and whether a setup hook will run before committing to it. Sidecar owns `shells.json`, so a capability reachable only through the TUI was a gap for every agent, not only for remote hosts. `shell send` guards its own boundary: the underlying send-keys has no protection beyond a blank-command check, so the verb refuses a session that is not a live record or a registered worktree session for the resolved project, and refuses one recorded on a different tmux server rather than typing into whatever answers that name on this one. (td-677dde)
+
+- **A configured project can be used before it has ever been opened.** `--project` resolved only through project state directories that already existed on disk, so a project listed in `config.projects.list` but never opened returned `unknown project`. It now falls back to the configured list and registers the project the same way first-open does. (td-677dde)
+
+### Bug Fixes
+
+- **Validation errors no longer exit with the code that means "you passed a bad flag."** `create worktree`, `create shell --name` and `shell rename --target` returned exit 2 both for an unusable command line and for a perfectly well-formed one whose *value* was rejected — a branch that already exists, a display name already in use. A caller cannot tell those apart, and the remote-host viewer read the second as version skew and told the user to upgrade Sidecar. Input rejection is now exit 5; exit 2 keeps meaning a usage error. Documented in each command's exit-code table. (td-677dde)
+
+- **A display name or worktree name starting with `-` works.** `shellstate.NormalizeName` accepts a leading dash, so `-wip` was a legal name that the argument parser then read as an unknown option. `shell rename --target`, `shell send` and `create worktree` now stop flag parsing at `--`. (td-677dde)
+
+### Remote hosts (behind `features.SidecarRemoteHosts`, default off)
+
+- **Phase C: a remote host can be changed, not only watched.** Creating a shell, creating a worktree through its confirmation, seeding an agent, and renaming either kind now work on a remote row from the Sessions browser. Mutations run as one-shot `sidecar <verb> --json` invocations over the ssh connection that already carries the observation stream, so the serve protocol stays one-directional and read-only by construction. Rows arrive through the host's next snapshot rather than being invented locally. Delete, merge and navigation still refuse — their implementations resolve paths against the local filesystem. That was also a live bug in `O` (open in Git), which had no guard at all and sent a remote path into a local worktree switch; on a machine with the same checkout layout that succeeds against the wrong repository. (td-677dde)
+
 ## [v1.10.0] - 2026-08-28
 
 ### Features
