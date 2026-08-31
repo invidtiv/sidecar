@@ -117,6 +117,25 @@ func hostname() string {
 	return name
 }
 
+// PaneIdentity reports the live host, tmux server incarnation, and first pane
+// of a managed session, in exactly the form the report command records them.
+//
+// It exists for `sidecar agent explain --shell TARGET`, which asks about a pane
+// it is not running in and therefore cannot derive identity from its own
+// environment. Everything here is observed now, from live tmux — nothing is
+// read out of a stored record, because a stored claim checked against itself is
+// not a check.
+//
+// A pane that cannot be resolved yields an identity with an empty PaneID, which
+// every caller reads as "no lifecycle evidence applies".
+func PaneIdentity(session string) agentlifecycle.Identity {
+	return agentlifecycle.Identity{
+		Host:              hostname(),
+		ServerIncarnation: liveServerIncarnation(),
+		PaneID:            tmuxPaneForSession(session),
+	}
+}
+
 // Evidence implements [agentresolve.Source].
 func (s *StoreSource) Evidence(ref agentresolve.PaneRef) (agentresolve.Evidence, bool) {
 	if s == nil {

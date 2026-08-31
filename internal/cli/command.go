@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 
+	"github.com/marcus/sidecar/internal/agentintegration"
 	"github.com/marcus/sidecar/internal/notifydelivery"
 )
 
@@ -15,6 +16,14 @@ type Env struct {
 	Ctx                  context.Context
 	NotificationDelivery notifydelivery.Coordinator
 	FeatureOverrides     map[string]bool
+
+	// IntegrationService overrides the agent-integration application service.
+	//
+	// It exists so the integration command tests describe a machine instead of
+	// having one: without it every test of `agent integration` would inspect,
+	// and the mutating ones would rewrite, the developer's real
+	// ~/.config/opencode.
+	IntegrationService *agentintegration.Service
 }
 
 // Flag defines a command line flag.

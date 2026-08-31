@@ -75,6 +75,23 @@ type PaneRef struct {
 	PaneID string
 	// Session is the tmux session name, which every caller knows.
 	Session string
+
+	// Identity is what the caller already knows about the pane's machine, tmux
+	// server, and provider, used only to fill in the explanation when no
+	// lifecycle evidence applies.
+	//
+	// It exists because that path previously reported an identity consisting of
+	// a pane id and nothing else, so `agent explain` on a pane with no
+	// integration printed an empty server field — which reads as "Sidecar could
+	// not determine the server" rather than "there was no report to check one
+	// against". A caller that has already paid for the answer can supply it; a
+	// polling caller leaves it zero and gets exactly the previous behavior.
+	//
+	// It is never consulted when a source does supply evidence: arbitration
+	// builds the live identity from what the source observed, and letting a
+	// caller inject one there would make every identity check compare a value
+	// with itself.
+	Identity agentlifecycle.Identity
 }
 
 // Empty reports whether the reference names nothing usable.
@@ -121,7 +138,7 @@ func Resolve(ob agentactivity.Observation, ref PaneRef, src Source, now time.Tim
 				FallbackReason: agentlifecycle.ReasonNoIntegration,
 				ScreenState:    screen.State,
 				ScreenEvidence: screen.Evidence,
-				Identity:       agentlifecycle.Identity{PaneID: ref.PaneID},
+				Identity:       noEvidenceIdentity(ref),
 			},
 		}
 	}
@@ -145,6 +162,17 @@ func Resolve(ob agentactivity.Observation, ref PaneRef, src Source, now time.Tim
 // Detect call they replaced rather than growing a decision-unpacking dance.
 func Result(ob agentactivity.Observation, ref PaneRef, src Source, now time.Time) agentactivity.Result {
 	return Resolve(ob, ref, src, now).Result
+}
+
+// noEvidenceIdentity is the identity reported when nothing but the screen had
+// an opinion. The pane id in the reference wins over one in the supplied
+// identity, because the reference is what was actually resolved.
+func noEvidenceIdentity(ref PaneRef) agentlifecycle.Identity {
+	id := ref.Identity
+	if ref.PaneID != "" {
+		id.PaneID = ref.PaneID
+	}
+	return id
 }
 
 func lookup(ref PaneRef, src Source) (Evidence, bool) {

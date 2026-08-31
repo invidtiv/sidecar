@@ -147,10 +147,12 @@ func TestLifecycleHooksCannotSelectAnotherPane(t *testing.T) {
 	}
 }
 
-// TestExplainIsReadOnlyAndDeclinesOtherShells covers the two things that make
-// explain safe to run anywhere: it never writes, and it refuses plainly rather
-// than answering about the wrong pane.
-func TestExplainIsReadOnlyAndDeclinesOtherShells(t *testing.T) {
+// TestExplainIsReadOnlyAndResolvesOtherShellsByName covers the three things
+// that make explain safe to run anywhere: it never writes, it answers about
+// another managed shell by resolving it through the shell inventory, and it
+// refuses plainly when the name is not one Sidecar owns rather than answering
+// about the wrong pane.
+func TestExplainIsReadOnlyAndResolvesOtherShellsByName(t *testing.T) {
 	t.Setenv(shellstate.ManagedEnv, "")
 
 	code, out, _ := runLifecycleCLI(t, "agent", "explain", "--json")
@@ -168,11 +170,13 @@ func TestExplainIsReadOnlyAndDeclinesOtherShells(t *testing.T) {
 		t.Fatal("reported managed outside a managed shell")
 	}
 
+	// An unregistered name is refused by naming what Sidecar actually owns,
+	// rather than by describing a pane it guessed at.
 	code, _, errOut := runLifecycleCLI(t, "agent", "explain", "--shell", "other")
 	if code != exitInputRejected {
 		t.Fatalf("exit %d, want %d", code, exitInputRejected)
 	}
-	if !strings.Contains(errOut, "not implemented yet") {
+	if !strings.Contains(errOut, "no registered Sidecar shell named") || !strings.Contains(errOut, "shell list") {
 		t.Fatalf("stderr = %q", errOut)
 	}
 

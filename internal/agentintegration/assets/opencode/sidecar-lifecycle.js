@@ -1,3 +1,10 @@
+// sidecar-integration: id=sidecar.opencode.plugin schema=1 version=1
+//
+// The line above is what makes this file Sidecar's. The installer identifies an
+// asset it may replace or remove by that marker and by nothing else -- not by
+// its name, and not by where it sits. A file called sidecar-lifecycle.js
+// without the marker is somebody else's, and Sidecar refuses to touch it.
+//
 // Sidecar lifecycle integration for OpenCode.
 //
 // Translates OpenCode's own plugin events into `sidecar agent report`

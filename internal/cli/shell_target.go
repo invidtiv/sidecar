@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/marcus/sidecar/internal/managedtarget"
@@ -75,11 +76,86 @@ func resolveShellTargetMode(env Env, target, shellFlag, projectFlag, help string
 // findShellTarget is the shared non-rendering resolver. The shell commands
 // wrap it with their established human errors; agent commands wrap the same
 // result in their stable JSON error envelope.
+//
+// A caller that resolves more than one value under the same flags should build
+// a [shellTargetLookup] and go through it instead, so the candidate scan
+// happens once.
 func findShellTarget(env Env, target, shellFlag, projectFlag string, globalExplicit bool, namespace string) (shellTarget, int, error) {
+	var lookup shellTargetLookup
+	return lookup.resolve(env, target, shellFlag, projectFlag, globalExplicit, namespace)
+}
+
+// shellTargetLookup memoizes the expensive half of resolving a shell target.
+//
+// Building the candidate list loads every registered project's manifest and
+// runs `git worktree list` once per project. Matching a *value* against that
+// list is a string comparison. Those are different costs, and a command that
+// asks two questions under the same flags — as `agent prompt` does, once to
+// decide whether a lone positional is a target and once to resolve the target
+// it will actually write to — should pay the first only once.
+//
+// The zero value is ready, and a lookup is scoped to one command invocation:
+// nothing here is a process-lifetime cache, because shells appear and disappear
+// while Sidecar runs and a stale candidate list would resolve to a session that
+// is gone.
+type shellTargetLookup struct {
+	scans map[string]*shellTargetScan
+}
+
+type shellTargetScan struct {
+	projects   []registeredProject
+	candidates []managedtarget.Target
+	code       int
+	err        error
+}
+
+// resolve answers one target value, reusing the scan for these flags.
+func (l *shellTargetLookup) resolve(env Env, target, shellFlag, projectFlag string, globalExplicit bool, namespace string) (shellTarget, int, error) {
 	target = strings.TrimSpace(target)
 	if target == "" {
 		return shellTarget{}, 2, fmt.Errorf("target is required")
 	}
+	scan := l.scan(env, shellFlag, projectFlag, globalExplicit)
+	if scan.err != nil {
+		return shellTarget{}, scan.code, scan.err
+	}
+
+	byProject := make(map[string]registeredProject, len(scan.projects))
+	for _, proj := range scan.projects {
+		byProject[proj.Key] = proj
+	}
+	resolved, err := managedtarget.Resolve(scan.candidates, managedtarget.Query{Host: "local", Namespace: namespace, Value: target})
+	if err != nil {
+		if typed, ok := err.(*managedtarget.Error); ok && typed.Kind == managedtarget.NotFound {
+			return shellTarget{}, shellTargetUnregistered, err
+		}
+		return shellTarget{}, 1, err
+	}
+	proj := byProject[resolved.Project]
+	return shellTarget{Kind: resolved.Kind, Session: resolved.Session, DisplayName: resolved.Name, Namespace: resolved.Namespace, WorkDir: resolved.WorkDir, WorktreeRoot: resolved.WorktreeRoot, Project: proj, ManifestPath: resolved.ManifestPath}, 0, nil
+}
+
+// find is resolve with the namespace this process's own shell belongs to,
+// which is what every agent command wants.
+func (l *shellTargetLookup) find(env Env, target, shellFlag, projectFlag string, globalExplicit bool) (shellTarget, int, error) {
+	return l.resolve(env, target, shellFlag, projectFlag, globalExplicit, tmuxenv.Namespace())
+}
+
+// scan builds, or reuses, the candidate list for one set of flags.
+func (l *shellTargetLookup) scan(env Env, shellFlag, projectFlag string, globalExplicit bool) *shellTargetScan {
+	key := shellFlag + "\x00" + projectFlag + "\x00" + strconv.FormatBool(globalExplicit)
+	if s, ok := l.scans[key]; ok {
+		return s
+	}
+	s := buildShellTargetScan(env, shellFlag, projectFlag, globalExplicit)
+	if l.scans == nil {
+		l.scans = map[string]*shellTargetScan{}
+	}
+	l.scans[key] = s
+	return s
+}
+
+func buildShellTargetScan(env Env, shellFlag, projectFlag string, globalExplicit bool) *shellTargetScan {
 	ctx := env.Ctx
 	if ctx == nil {
 		ctx = context.Background()
@@ -90,33 +166,20 @@ func findShellTarget(env Env, target, shellFlag, projectFlag string, globalExpli
 			projects = []registeredProject{proj}
 		}
 	} else if shellFlag != "" || projectFlag != "" {
-		return shellTarget{}, createDestExitCode(err), err
+		return &shellTargetScan{code: createDestExitCode(err), err: err}
 	}
 	if len(projects) == 0 {
 		var err error
 		projects, err = loadRegisteredProjects(env.StateDir)
 		if err != nil {
-			return shellTarget{}, 1, err
+			return &shellTargetScan{code: 1, err: err}
 		}
-	}
-
-	byProject := make(map[string]registeredProject, len(projects))
-	for _, proj := range projects {
-		byProject[proj.Key] = proj
 	}
 	candidates, err := managedTargetCandidates(env, projects)
 	if err != nil {
-		return shellTarget{}, 1, err
+		return &shellTargetScan{code: 1, err: err}
 	}
-	resolved, err := managedtarget.Resolve(candidates, managedtarget.Query{Host: "local", Namespace: namespace, Value: target})
-	if err != nil {
-		if typed, ok := err.(*managedtarget.Error); ok && typed.Kind == managedtarget.NotFound {
-			return shellTarget{}, shellTargetUnregistered, err
-		}
-		return shellTarget{}, 1, err
-	}
-	proj := byProject[resolved.Project]
-	return shellTarget{Kind: resolved.Kind, Session: resolved.Session, DisplayName: resolved.Name, Namespace: resolved.Namespace, WorkDir: resolved.WorkDir, WorktreeRoot: resolved.WorktreeRoot, Project: proj, ManifestPath: resolved.ManifestPath}, 0, nil
+	return &shellTargetScan{projects: projects, candidates: candidates}
 }
 
 func managedTargetCandidates(env Env, projects []registeredProject) ([]managedtarget.Target, error) {
