@@ -25,7 +25,16 @@ func (r *scriptedRunner) Run(_ context.Context, args ...string) ([]byte, error) 
 	return []byte(out), nil
 }
 func metadata(pane string) string {
-	return strings.Join([]string{pane, "999999", "0", "0", "zsh", "title", "71"}, "\x1f") + "\n"
+	return strings.Join([]string{pane, "999999", "0", "0", "zsh", "title", "71"}, "|") + "\n"
+}
+
+func TestSplitPaneMetadataAcceptsQuotedSeparatorsAndBackslashes(t *testing.T) {
+	want := []string{"%1", "999999", "0", "0", "zsh", `a|b c\d`, "71"}
+	encoded := `\%1|999999|0|0|zsh|a\|b\ c\\d|71`
+	got := splitPaneMetadata(encoded)
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("splitPaneMetadata(%q) = %#v, want %#v", encoded, got, want)
+	}
 }
 
 // recordingRunner keeps every tmux invocation so a test can assert on the

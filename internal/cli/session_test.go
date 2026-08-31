@@ -13,6 +13,16 @@ import (
 	"github.com/marcus/sidecar/internal/shellstate"
 )
 
+func makeSessionProviderAvailable(t *testing.T, name string) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
 // seedRestoreManifest writes a project whose shells were confirmed live in a
 // tmux server that is not the one running now, which is the state a cold
 // restore starts from.
@@ -171,6 +181,7 @@ func TestSessionRestoreDryRunCreatesNothing(t *testing.T) {
 // code rather than a quiet downgrade to shells-only.
 func TestSessionRestoreRefusesAnUnconfirmedResume(t *testing.T) {
 	_, stateDir := setupIsolatedCLI(t)
+	makeSessionProviderAvailable(t, "codex")
 	seedRestoreManifest(t, stateDir,
 		withBoundAgent(restorableShell("sidecar-sh-harness-1"), "codex", "sess-abc"))
 
@@ -188,6 +199,7 @@ func TestSessionRestoreRefusesAnUnconfirmedResume(t *testing.T) {
 // left clean.
 func TestSessionRestoreJSONRefusalIsStructured(t *testing.T) {
 	_, stateDir := setupIsolatedCLI(t)
+	makeSessionProviderAvailable(t, "codex")
 	seedRestoreManifest(t, stateDir,
 		withBoundAgent(restorableShell("sidecar-sh-harness-1"), "codex", "sess-abc"))
 
