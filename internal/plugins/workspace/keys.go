@@ -646,7 +646,17 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			return cmd
 		}
 	case "n":
-		return p.openCreateModal()
+		// `n` is the sidebar's key, and the guard is the same one `o` carries
+		// below. A focused preview leaf is drawn as owning the keyboard, and a
+		// terminal leaf in browse mode reports "workspace-preview" — a context
+		// that binds no `n`, so the key falls all the way down the app ladder to
+		// here. Without this, every exitInteractiveMode() that leaves focus on
+		// the terminal (a tab switch, a selection change, the reposition modal,
+		// a session death) turns the user's next `n` into the create modal on
+		// top of the shell they were typing into.
+		if p.activePane != PanePreview {
+			return p.openCreateModal()
+		}
 	case "o":
 		// The pane switcher, reachable from the preview without moving focus
 		// to the sidebar: same grown create modal, kind list focused. The
