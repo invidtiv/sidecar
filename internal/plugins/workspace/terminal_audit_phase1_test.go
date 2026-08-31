@@ -318,7 +318,7 @@ func TestBatchCaptureUsesArgvOnlyNonceDelimitedCommands(t *testing.T) {
 func TestBatchCaptureIncludesActivityMetadataInSameTmuxInvocation(t *testing.T) {
 	args := buildBatchCaptureArgs([]string{"sidecar-ws-one"}, "nonce", true)
 	joined := strings.Join(args, " ")
-	if !strings.Contains(joined, "#{pane_current_command}") || !strings.Contains(joined, "#{pane_title}") {
+	if !strings.Contains(joined, "pane_current_command") || !strings.Contains(joined, "pane_title") {
 		t.Fatalf("activity metadata missing from batch argv: %q", joined)
 	}
 	if got := strings.Count(joined, "capture-pane"); got != 1 {

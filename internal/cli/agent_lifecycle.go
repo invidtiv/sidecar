@@ -18,6 +18,7 @@ import (
 	"github.com/marcus/sidecar/internal/agentresolve"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/tmuxenv"
+	"github.com/marcus/sidecar/internal/tmuxformat"
 	"github.com/marcus/sidecar/internal/tty"
 )
 
@@ -703,13 +704,13 @@ func capturePaneForExplainOn(namespace, paneID string) (screen, paneTitle, comma
 	if err != nil {
 		screen = ""
 	}
-	args := []string{"display-message", "-p", "-t", paneID, "#{pane_title}\x1f#{pane_current_command}"}
+	args := []string{"display-message", "-p", "-t", paneID, tmuxformat.Fields("pane_title", "pane_current_command")}
 	if namespace != "" {
 		args = append([]string{"-S", namespace}, args...)
 	}
 	out, err := exec.Command("tmux", args...).Output()
 	if err == nil {
-		fields := strings.Split(strings.TrimRight(string(out), "\n"), "\x1f")
+		fields := tmuxformat.Split(strings.TrimRight(string(out), "\n"))
 		if len(fields) == 2 {
 			paneTitle, command = fields[0], fields[1]
 		}

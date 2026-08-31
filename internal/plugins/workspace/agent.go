@@ -26,6 +26,7 @@ import (
 	"github.com/marcus/sidecar/internal/agentresolve"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/projectdir"
+	"github.com/marcus/sidecar/internal/tmuxformat"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 	"github.com/marcus/sidecar/internal/workspaceops"
@@ -1365,11 +1366,11 @@ func batchCaptureMarker(nonce string, index int) string {
 	return fmt.Sprintf("===SIDECAR_CAPTURE:%s:%d===", nonce, index)
 }
 
-const captureMetadataSeparator = "\x1f"
+const captureMetadataSeparator = tmuxformat.Separator
 
 func batchCaptureMetadataMarker(nonce string, index int) string {
 	return batchCaptureMarker(nonce, index) + captureMetadataSeparator +
-		"#{pane_pid}" + captureMetadataSeparator + "#{pane_current_command}" + captureMetadataSeparator + "#{pane_title}"
+		tmuxformat.Fields("pane_pid", "pane_current_command", "pane_title")
 }
 
 func buildBatchCaptureArgs(sessions []string, nonce string, joinWrapped bool) []string {
@@ -1421,7 +1422,7 @@ func splitCaptureEnvelope(output string) (string, capturedPaneMetadata) {
 	if !found {
 		return output, capturedPaneMetadata{}
 	}
-	parts := strings.SplitN(header, captureMetadataSeparator, 4)
+	parts := tmuxformat.Split(header)
 	if len(parts) != 4 {
 		return output, capturedPaneMetadata{}
 	}

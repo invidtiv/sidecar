@@ -36,6 +36,7 @@ import (
 	"github.com/marcus/sidecar/internal/agentlifecycle"
 	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/tmuxenv"
+	"github.com/marcus/sidecar/internal/tmuxformat"
 	"github.com/marcus/sidecar/internal/tmuxserver"
 )
 
@@ -213,14 +214,14 @@ type paneInfo struct {
 	serverPID int
 }
 
-const paneFormat = "#{pane_id}\x1f#{session_name}\x1f#{pane_pid}\x1f#{pid}"
+var paneFormat = tmuxformat.Fields("pane_id", "session_name", "pane_pid", "pid")
 
 func inspectPane(pane string) (paneInfo, error) {
 	out, err := exec.Command("tmux", "display-message", "-p", "-t", pane, paneFormat).Output()
 	if err != nil {
 		return paneInfo{}, fmt.Errorf("tmux could not describe pane %s: %w", pane, err)
 	}
-	fields := strings.Split(strings.TrimRight(string(out), "\n"), "\x1f")
+	fields := tmuxformat.Split(strings.TrimRight(string(out), "\n"))
 	if len(fields) < 4 {
 		return paneInfo{}, fmt.Errorf("tmux returned %d fields for pane %s", len(fields), pane)
 	}

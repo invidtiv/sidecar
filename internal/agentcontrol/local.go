@@ -12,6 +12,7 @@ import (
 	"github.com/marcus/sidecar/internal/agentactivity"
 	"github.com/marcus/sidecar/internal/agentcatalog"
 	"github.com/marcus/sidecar/internal/tmuxenv"
+	"github.com/marcus/sidecar/internal/tmuxformat"
 	"github.com/marcus/sidecar/internal/tmuxserver"
 	"github.com/marcus/sidecar/internal/tty"
 )
@@ -158,34 +159,7 @@ func (t *LocalTerminal) Signal(ctx context.Context, snap Snapshot) (<-chan Signa
 	return signals, stop, nil
 }
 
-const paneFormat = "#{q:pane_id}|#{q:pane_pid}|#{q:pane_dead}|#{q:pane_in_mode}|#{q:pane_current_command}|#{q:pane_title}|#{q:pid}"
-
-// tmux versions disagree about C0 bytes in -F output: 3.3 replaces them with
-// underscores, 3.4 renders octal escapes, and 3.6 passes them through. Use a
-// printable separator and tmux's q modifier, then split and unescape the
-// shell-quoted fields ourselves. q backslash-escapes the separator (and any
-// backslash) inside a value, so a pane title cannot change the field count.
-func splitPaneMetadata(line string) []string {
-	fields := []string{""}
-	escaped := false
-	for _, r := range line {
-		switch {
-		case escaped:
-			fields[len(fields)-1] += string(r)
-			escaped = false
-		case r == '\\':
-			escaped = true
-		case r == '|':
-			fields = append(fields, "")
-		default:
-			fields[len(fields)-1] += string(r)
-		}
-	}
-	if escaped {
-		fields[len(fields)-1] += `\`
-	}
-	return fields
-}
+var paneFormat = tmuxformat.Fields("pane_id", "pane_pid", "pane_dead", "pane_in_mode", "pane_current_command", "pane_title", "pid")
 
 func (t *LocalTerminal) Inspect(ctx context.Context, target Target) (Snapshot, error) {
 	if t == nil {
@@ -206,7 +180,7 @@ func (t *LocalTerminal) Inspect(ctx context.Context, target Target) (Snapshot, e
 	if len(lines) != 1 {
 		return Snapshot{Target: target, PaneCount: len(lines)}, nil
 	}
-	parts := splitPaneMetadata(lines[0])
+	parts := tmuxformat.Split(lines[0])
 	if len(parts) != 7 {
 		return Snapshot{}, fmt.Errorf("unexpected tmux pane metadata")
 	}
