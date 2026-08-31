@@ -105,9 +105,16 @@ func TestProjectPreviewCacheInvalidatesSizeAndTheme(t *testing.T) {
 		t.Fatalf("resize counters = %+v, want fresh compose", snapshot)
 	}
 
-	original := styles.GetCurrentThemeName()
+	originalTheme := styles.GetCurrentTheme()
+	originalThemeName := styles.GetCurrentThemeName()
 	styles.ApplyTheme("dracula")
-	t.Cleanup(func() { styles.ApplyTheme(original) })
+	t.Cleanup(func() {
+		// Restore both halves of theme state. The registered name preserves the
+		// caller's selection, while the exact value preserves any active palette
+		// overrides that are not present in the registry entry.
+		styles.ApplyTheme(originalThemeName)
+		styles.ApplyThemeColors(originalTheme)
+	})
 	_ = fixture.p.View(221, 58)
 	if snapshot := counters.Snapshot(); snapshot.ProjectPreviewComposes != 2 || snapshot.ProjectPreviewCacheHits != 0 {
 		t.Fatalf("theme counters = %+v, want second fresh compose", snapshot)
