@@ -1,0 +1,102 @@
+package agentintegration
+
+import "testing"
+
+// The golden checksum guard.
+//
+// An asset's version is not decoration. Authority is granted to a *source at a
+// version*: the capability registry records which version was qualified against
+// recorded traces, `agent explain` demotes a report whose source version is not
+// that one, and `integration status` decides current-versus-outdated by
+// comparing the installed bytes with the bundled asset's. Changing what an asset
+// does without changing its version therefore hands a version's earned authority
+// to bytes nobody qualified, and leaves every already-installed copy reading as
+// `current` while it is a different program.
+//
+// Until now that rule lived only in a doc comment above each version constant,
+// which is to say it lived in whether the next person read it. This is the same
+// rule as a test: nothing about a bundled asset's bytes can change without this
+// file changing too, and updating this file is the step where the reader is told
+// what else the change obliges them to do.
+//
+// The table is keyed by provider and asset name rather than by index, so an
+// adapter that grows a second asset — as Codex did, when hooks.json alone stopped
+// describing what it installs — fails here by name instead of shifting a row.
+
+// assetGolden is one bundled asset's pinned identity.
+type assetGolden struct {
+	provider string
+	name     string
+	version  string
+	checksum string
+}
+
+// assetGoldens is the recorded bytes of every asset this build ships.
+//
+// Updating an entry here is the last step of a version bump, never the first.
+// See the failure message below for the order.
+var assetGoldens = []assetGolden{
+	{provider: OpenCodeProvider, name: "sidecar-lifecycle.js", version: "1", checksum: "2eed6ae1609e7ef8a6ebc66cd0a942b9176feb7706f49814b7c81f3246b204ab"},
+	{provider: CodexProvider, name: "hooks.json", version: "1", checksum: "bed1991b2721f08148a2089600ae09d6328b244317355ea66e16c4b4a8de26d0"},
+	{provider: CodexProvider, name: "config.toml", version: "1", checksum: "380d955d0141f00dd10fe9d3e769c7d5e31fec036e356a0583e0f4b91d64615f"},
+	{provider: ClaudeProvider, name: "settings.json", version: "1", checksum: "0d2ca7075dff1faab0645c82e8fd5a04f5982e4be27667b9afa19e2ab05e6f3d"},
+}
+
+// bumpInstructions is the whole point of the guard: a failure here has to tell
+// the reader what to do, because the wrong response — editing the checksum until
+// the test is green — is also the easiest one.
+const bumpInstructions = `
+An asset's bytes changed. Before updating the golden below, do this in order:
+
+  1. Bump the asset's version constant (OpenCodeAssetVersion, CodexAssetVersion,
+     or ClaudeAssetVersion) if it has not already moved. An installed copy is
+     recognised as outdated by its version, so without this every existing
+     install keeps reporting itself current while running different code.
+  2. Update the matching AssetVersion in internal/agentlifecycle/capabilities.json,
+     or every report the new asset sends resolves at screen fallback for
+     claiming a version the registry has never heard of.
+  3. Requalify: run the node harnesses over the recorded traces
+     (go test ./internal/agentintegration/ with node on PATH), and re-record
+     evidence if the change affects which events map to which lane.
+  4. Only then update the entry in assetGoldens to the new version and checksum.`
+
+func TestEveryBundledAssetMatchesItsRecordedGolden(t *testing.T) {
+	want := map[string]assetGolden{}
+	for _, g := range assetGoldens {
+		key := g.provider + "/" + g.name
+		if _, dup := want[key]; dup {
+			t.Fatalf("assetGoldens records %s twice", key)
+		}
+		want[key] = g
+	}
+
+	shipped := map[string]bool{}
+	for _, adapter := range DefaultAdapters() {
+		for _, asset := range adapter.Assets() {
+			key := adapter.Provider() + "/" + asset.Name
+			shipped[key] = true
+
+			g, ok := want[key]
+			if !ok {
+				t.Errorf("%s ships an asset with no recorded golden.\n"+
+					"Add one: {provider: %q, name: %q, version: %q, checksum: %q}",
+					key, adapter.Provider(), asset.Name, asset.Version, asset.Checksum())
+				continue
+			}
+			if asset.Version != g.version {
+				t.Errorf("%s is at version %q, the golden records %q.%s",
+					key, asset.Version, g.version, bumpInstructions)
+			}
+			if got := asset.Checksum(); got != g.checksum {
+				t.Errorf("%s content checksum is %s, the golden records %s.%s",
+					key, got, g.checksum, bumpInstructions)
+			}
+		}
+	}
+
+	for key := range want {
+		if !shipped[key] {
+			t.Errorf("assetGoldens records %s but no adapter ships it; remove the entry, or the guard is watching a file that no longer exists", key)
+		}
+	}
+}

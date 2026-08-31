@@ -14,6 +14,32 @@ import (
 	"github.com/marcus/sidecar/internal/agentlifecycle"
 )
 
+// requireNode resolves node, or says out loud what is going unchecked.
+//
+// Three tests in this file are the only ones that run the shipped JavaScript
+// itself, and each of them pins a defect that reached a live provider precisely
+// because no Go test could see it: the missing `ended` latch, a non-function
+// export silently disqualifying the whole module, and reports delivered out of
+// order. A bare t.Skip when node is absent turned all three into a green run
+// that had checked none of it.
+//
+// So the skip names what is not being checked, and CI sets SIDECAR_REQUIRE_NODE=1
+// to turn it into a failure — a CI image losing node must break the build rather
+// than quietly stop testing the asset.
+func requireNode(t *testing.T, what string) string {
+	t.Helper()
+	node, err := exec.LookPath("node")
+	if err == nil {
+		return node
+	}
+	if os.Getenv("SIDECAR_REQUIRE_NODE") == "1" {
+		t.Fatalf("SIDECAR_REQUIRE_NODE=1 but node is not on PATH (%v); %s is not being checked", err, what)
+	}
+	t.Skipf("NOT CHECKED: node is not installed, so %s is not being verified. "+
+		"Install node, or set SIDECAR_REQUIRE_NODE=1 to make this a failure instead of a skip.", what)
+	return ""
+}
+
 // replayTrace drives a checked-in sanitized trace through the handler and
 // returns the lane and terminal actions it produced.
 //
@@ -244,10 +270,7 @@ func TestATerminalOutcomeLatches(t *testing.T) {
 // traces, and requires the identical ordered argv list -- sequence numbers
 // included, because ordering is exactly what broke.
 func TestBundledAssetBehavesLikeTheHandler(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is not installed; cannot verify the shipped asset's behavior")
-	}
+	node := requireNode(t, "the shipped asset's lane mapping against the recorded traces")
 
 	traces := []string{
 		"tool-turn-with-permission.tsv",
@@ -410,10 +433,7 @@ func TestCapabilityIsRegisteredForTheBundledSource(t *testing.T) {
 // exported it, every test here passed, and the plugin reported nothing at all
 // against a real provider.
 func TestTheAssetExportsOnlyPluginFactories(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is not installed; cannot inspect the asset's export surface")
-	}
+	node := requireNode(t, "the asset's export surface, which OpenCode silently rejects the whole module for")
 	cmd := exec.Command(node, "exports-harness.mjs")
 	cmd.Dir = filepath.Join("assets", "opencode")
 	var stderr bytes.Buffer
@@ -481,10 +501,7 @@ func TestReportArgsCarryTheAssetVersion(t *testing.T) {
 // opposite order to the one they were started in, so serialized and concurrent
 // produce different recorded orders and the assertion cannot pass by luck.
 func TestTheAssetSerializesReportsUnderInvertedExitOrder(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is not installed; cannot drive the shipped asset")
-	}
+	node := requireNode(t, "that the shipped asset serializes its reports rather than losing the terminal one")
 	dir := t.TempDir()
 	stub := filepath.Join(dir, "sidecar-stub")
 	orderLog := filepath.Join(dir, "order.log")

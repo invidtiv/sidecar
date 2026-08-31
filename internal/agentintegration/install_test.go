@@ -182,15 +182,27 @@ func TestADryRunAndTheRealRunDescribeTheSameOperations(t *testing.T) {
 	for _, act := range []Action{ActionInstall, ActionUpdate, ActionRepair, ActionUninstall} {
 		t.Run(string(act), func(t *testing.T) {
 			svc, _, paths := fixture(t)
-			// Put the tree in a state where every verb has work to do.
-			mustApply(t, svc, ActionInstall)
-			if act != ActionInstall && act != ActionUninstall {
-				writeOldAsset(t, paths.Owned)
+			// Put the tree in a state where this verb has work to do. install
+			// needs a clean tree — pre-installing made its preview and its
+			// mutation two empty op lists, which compared equal for the one
+			// reason that proves nothing. uninstall needs something installed,
+			// and update and repair need it to be out of date as well.
+			if act != ActionInstall {
+				mustApply(t, svc, ActionInstall)
+				if act != ActionUninstall {
+					writeOldAsset(t, paths.Owned)
+				}
 			}
 
 			preview, err := svc.Plan(OpenCodeProvider, act)
 			if err != nil {
 				t.Fatalf("dry run: %v", err)
+			}
+			// The comparison below is only worth making if there is something to
+			// compare. Without this, any future change that turned a subtest
+			// into a no-op would leave it silently passing.
+			if len(preview.Ops) == 0 {
+				t.Fatalf("%s previewed no operations, so this subtest compares two empty plans", act)
 			}
 			applied, err := svc.Apply(OpenCodeProvider, act)
 			if err != nil {
@@ -300,6 +312,52 @@ func TestUninstallRemovesThePluginDirectoryOnlyWhenSidecarEmptiedIt(t *testing.T
 	}
 }
 
+func TestUninstallSucceedsWhenSomethingLandsInTheDirectoryBetweenPlanAndApply(t *testing.T) {
+	// OpRmdir is planned from a plan-time reading of the directory's contents.
+	// If anything appears in it before the plan runs, os.Remove returns
+	// ENOTEMPTY — and failing there would report exit 1, "the change was
+	// attempted and failed part-way", for an uninstall that had already
+	// correctly removed the asset, the duplicate, and the backup. The tidy-up is
+	// conditional by construction, so losing that race is a no-op.
+	//
+	// Applying a plan built before the intruder arrived is the exact shape of
+	// the window, rather than an approximation of it.
+	svc, _, paths := fixture(t)
+	mustApply(t, svc, ActionInstall)
+
+	plan, err := svc.Plan(OpenCodeProvider, ActionUninstall)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawRmdir bool
+	for _, op := range plan.Ops {
+		if op.Kind == OpRmdir && op.Path == paths.OwnedDir {
+			sawRmdir = true
+		}
+	}
+	if !sawRmdir {
+		t.Fatal("the uninstall plan does not remove the directory it emptied, so this test proves nothing")
+	}
+
+	intruder := filepath.Join(paths.OwnedDir, "arrived-late.js")
+	if err := os.WriteFile(intruder, []byte("mine\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Apply(plan); err != nil {
+		t.Fatalf("uninstall reported failure after removing everything it owned: %v", err)
+	}
+	if _, err := os.Stat(paths.Owned); !os.IsNotExist(err) {
+		t.Fatalf("the asset survived the uninstall: %v", err)
+	}
+	if b, err := os.ReadFile(intruder); err != nil || string(b) != "mine\n" {
+		t.Fatalf("the file that arrived late was disturbed: %v %q", err, string(b))
+	}
+	if _, err := os.Stat(paths.OwnedDir); err != nil {
+		t.Fatalf("a directory that was no longer empty was removed anyway: %v", err)
+	}
+}
+
 func keysOf(m map[string]string) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
@@ -395,12 +453,22 @@ func TestAFileSidecarDoesNotOwnIsNeverAdoptedOverwrittenOrDeleted(t *testing.T) 
 	// simply not installed. Installing is what would create the double-load, so
 	// install is the verb that refuses; update and repair refuse earlier for
 	// the ordinary reason that there is nothing installed to act on.
+	//
+	// The third case is the combination that let a real defect through: a
+	// stranger's file in the unowned directory *while* Sidecar's own asset is
+	// installed. The status used to call that "installed in both", which claimed
+	// ownership of a file it will not touch and then offered a Repair the
+	// planner refuses.
 	cases := []struct {
-		where  string
-		status agentlifecycle.IntegrationStatus
-		want   map[Action]RefusalCode
+		name      string
+		where     string
+		installed bool
+		status    agentlifecycle.IntegrationStatus
+		message   string
+		want      map[Action]RefusalCode
 	}{
 		{
+			name:   "owned",
 			where:  "owned",
 			status: agentlifecycle.StatusNeedsRepair,
 			want: map[Action]RefusalCode{
@@ -411,6 +479,7 @@ func TestAFileSidecarDoesNotOwnIsNeverAdoptedOverwrittenOrDeleted(t *testing.T) 
 			},
 		},
 		{
+			name:   "conflict",
 			where:  "conflict",
 			status: agentlifecycle.StatusNotInstalled,
 			want: map[Action]RefusalCode{
@@ -422,11 +491,32 @@ func TestAFileSidecarDoesNotOwnIsNeverAdoptedOverwrittenOrDeleted(t *testing.T) 
 				ActionUninstall: "",
 			},
 		},
+		{
+			name:      "conflict-alongside-a-real-install",
+			where:     "conflict",
+			installed: true,
+			status:    agentlifecycle.StatusNeedsRepair,
+			// The status must say the file is not Sidecar's rather than claim
+			// Sidecar installed it in both places.
+			message: "not Sidecar's",
+			want: map[Action]RefusalCode{
+				ActionInstall: RefuseNeedsRepair,
+				ActionUpdate:  RefuseNeedsRepair,
+				// repair cannot help: the duplicate is not Sidecar's to remove.
+				ActionRepair: RefuseForeignFile,
+				// uninstall removes Sidecar's own asset and leaves the
+				// stranger's file exactly where it is.
+				ActionUninstall: "",
+			},
+		},
 	}
 
 	for _, tc := range cases {
-		t.Run(tc.where, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			svc, _, paths := fixture(t)
+			if tc.installed {
+				mustApply(t, svc, ActionInstall)
+			}
 			target, dir := paths.Owned, paths.OwnedDir
 			if tc.where == "conflict" {
 				target, dir = paths.Conflict, paths.ConflictDir
@@ -441,6 +531,12 @@ func TestAFileSidecarDoesNotOwnIsNeverAdoptedOverwrittenOrDeleted(t *testing.T) 
 			st := mustStatus(t, svc)
 			if st.Status != tc.status {
 				t.Fatalf("status %s, want %s (%s)", st.Status, tc.status, st.Message)
+			}
+			if tc.message != "" && !strings.Contains(st.Message, tc.message) {
+				t.Fatalf("the status does not say %q: %q", tc.message, st.Message)
+			}
+			if strings.Contains(st.Message, "installed in both") {
+				t.Fatalf("the status claims Sidecar installed a file it does not own: %q", st.Message)
 			}
 			if !strings.Contains(st.Message, target) {
 				t.Fatalf("the status does not name the file it refuses to touch: %q", st.Message)

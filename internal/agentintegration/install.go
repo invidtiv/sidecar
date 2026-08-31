@@ -676,6 +676,19 @@ func unsupportedStatus(env Env, capability agentlifecycle.Capability) Status {
 // completed operations in place, which is why a replacement is ordered
 // backup-then-write and why the write itself is a rename over the existing file
 // rather than a truncate: there is no moment at which the asset is half a file.
+//
+// The remaining time-of-check-to-time-of-use window is named rather than closed,
+// and it is narrower than "safety is decided at plan time" makes it sound. A
+// plan is built and applied inside one process, microseconds apart, with no user
+// interaction in between; the only paths involved are files under the user's own
+// configuration directory; and every destructive operation was gated on
+// ownership proved from the file's own bytes at plan time. Re-proving that here
+// would not make the window disappear, only move it — a file that stopped being
+// Sidecar's between the two checks is a file something else is rewriting at this
+// exact moment, and no ordering of checks inside this loop can win that race.
+// What is worth having instead is that a lost race fails safe, which is why
+// [OpRemove] tolerates an already-absent path and [OpRmdir] tolerates a
+// directory that is no longer empty.
 func Apply(p Plan) error {
 	for _, op := range p.Ops {
 		if err := applyOp(op); err != nil {
@@ -704,9 +717,22 @@ func applyOp(op Op) error {
 		return nil
 	case OpRmdir:
 		// Remove, not RemoveAll. This is only planned for a directory observed
-		// to be empty, and if something appeared in it since, failing to remove
-		// it is exactly the right outcome.
-		if err := os.Remove(op.Path); err != nil && !os.IsNotExist(err) {
+		// to hold nothing but Sidecar's own files, so it can never take
+		// somebody else's plugin with it.
+		//
+		// It is also the one operation that is conditional by construction, and
+		// a lost race on it is not a failure. "The directory is empty" is
+		// evaluated while the plan is built; if anything landed in it between
+		// then and here, the correct outcome is to leave the directory alone —
+		// not to fail an uninstall that has already correctly removed the asset,
+		// the duplicate, and the backup, and report exit 1 for a tidy-up that
+		// was never the point. POSIX names that ENOTEMPTY; some systems surface
+		// the same condition as EEXIST, so both are treated as the no-op they
+		// are.
+		if err := os.Remove(op.Path); err != nil &&
+			!os.IsNotExist(err) &&
+			!errors.Is(err, syscall.ENOTEMPTY) &&
+			!errors.Is(err, syscall.EEXIST) {
 			return err
 		}
 		return nil
