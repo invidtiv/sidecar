@@ -2,12 +2,12 @@ package overview
 
 import (
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/contentlink"
+	"github.com/marcus/sidecar/internal/contentpanes"
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/inlineedit"
 	"github.com/marcus/sidecar/internal/markdown"
@@ -239,17 +239,22 @@ func (m *Model) openPreviewDocTarget(target uirequest.Target) tea.Cmd {
 	if !ok {
 		return nil
 	}
-	root := workspace.Path
-	display, abs, ok := terminallink.ResolveFile(root, target.Value)
+	// A remote Path that exists locally must not be opened on this machine.
+	if workspace.Remote() {
+		return nil
+	}
+	ctx, ok := m.previewDeckContext()
 	if !ok {
 		return nil
 	}
-	file, err := openPreviewFile(root, display, abs)
-	if err != nil {
+	ref, err := contentpanes.ResolveDocument(m.previewDeckConfig(ctx).Source, ctx.Source, contentlink.Pending{
+		Kind: contentlink.KindFile, Raw: target.Value,
+	})
+	if err != nil || ref.Value == "" {
 		return nil
 	}
-	_ = file.Close()
-	return m.openPreviewContent(contentlink.Ref{Kind: contentlink.KindFile, Value: display, Line: target.Line}, "Document")
+	ref.Line = target.Line
+	return m.openPreviewContent(ref, "Document")
 }
 
 func (m *Model) selectPreviewDocTab(idx, line int, file *os.File) tea.Cmd {
@@ -338,13 +343,6 @@ func (m *Model) closePreviewDocTabAt(index int) tea.Cmd {
 	}
 	m.preview.deck.CloseTab(m.preview.deck.Leaf(panelayout.Document), index)
 	return m.finishPreviewDeckClose()
-}
-
-func openPreviewFile(root, display, abs string) (*os.File, error) {
-	if display != "" && !filepath.IsAbs(filepath.FromSlash(display)) {
-		return terminallink.OpenRegular(filepath.Join(root, filepath.FromSlash(display)))
-	}
-	return terminallink.OpenRegular(abs)
 }
 
 func wrapPreviewDocLoad(cmd tea.Cmd, workspaceID string) tea.Cmd {

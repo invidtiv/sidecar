@@ -405,6 +405,9 @@ func (p *Plugin) noteRefreshOwed() bool {
 // selecting it brings it into the watch set, which is what makes [livepanes]
 // re-read it.
 func (p *Plugin) docWatchTargets() []livewatch.Target {
+	if p.contentDeck != nil && p.contentDeck.Context().Source.Remote() {
+		return nil
+	}
 	visible := p.visibleContentLeaves()
 	var targets []livewatch.Target
 	seen := make(map[string]bool)

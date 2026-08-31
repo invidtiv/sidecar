@@ -378,9 +378,7 @@ func (m *Model) restoreSpecPreviewLayout(layout *state.PaneLayoutJSON) tea.Cmd {
 		return nil
 	}
 	m.preview.contentEpoch++
-	ctx := contentpanes.SurfaceContext{
-		Root: ws.Path, DiffRoot: previewDiffPath(ws), Surface: ws.ID, Epoch: m.preview.contentEpoch,
-	}
+	ctx := m.localPreviewSurfaceContext(ws)
 	st, live := panecodec.Decode(layout, panecodec.Options{AcceptTab: m.acceptRestoredPreviewTab(ws.Path)})
 	if previewLiveKindCount(live, panecodec.KindTerminal) != 1 {
 		m.resetActivePreviewPanes()

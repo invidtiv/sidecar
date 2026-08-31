@@ -30,7 +30,23 @@ type LoadedMsg struct {
 	// an in-place re-read that preserves scroll and is discarded when the file
 	// came back unchanged. See live.go.
 	Refresh bool
+	// NotModified completes an in-flight refresh without replacing content.
+	NotModified bool
+	// Revision is the last adopted source revision, for a later conditional read.
+	Revision string
 }
+
+// NotModified is returned by an injected loader when a refresh found no change.
+type NotModified struct {
+	Path     string
+	Epoch    uint64
+	Revision string
+}
+
+// PreviewLoader produces a preview load command. IfRevision is the last adopted
+// source revision and may be empty. The command should return
+// filepreview.PreviewLoadedMsg, NotModified, or LoadedMsg.
+type PreviewLoader func(root, path string, epoch uint64, ifRevision string) tea.Cmd
 
 // GetEpoch allows callers to apply the normal plugin epoch checks if desired.
 func (m LoadedMsg) GetEpoch() uint64 { return m.Epoch }
@@ -62,6 +78,9 @@ type Model struct {
 	// and holds the fingerprint that keeps an unchanged re-read off the screen.
 	// See live.go.
 	live livewatch.Refresher
+
+	loader   PreviewLoader
+	revision string
 
 	renderWidth   int
 	renderStyle   string
@@ -115,11 +134,32 @@ func New(renderer *markdown.Renderer) *Model {
 	return &Model{renderer: renderer, rendered: true, renderWidth: -1, visualRevision: 1}
 }
 
+// SetLoader replaces the default filepreview loader. Nil restores it.
+func (m *Model) SetLoader(loader PreviewLoader) {
+	if m == nil {
+		return
+	}
+	m.loader = loader
+}
+
+func (m *Model) previewLoad(root, path string, epoch uint64, ifRevision string) tea.Cmd {
+	if m != nil && m.loader != nil {
+		return m.loader(root, path, epoch, ifRevision)
+	}
+	return filepreview.LoadPreview(root, path, epoch)
+}
+
 // Load retargets the model and returns a command that wraps the existing file
 // browser loader. Only the docview-owned LoadedMsg is broadcast.
 func (m *Model) Load(modelID int, rootDir, relPath string, line int, epoch uint64) tea.Cmd {
 	m.root = rootDir
-	return m.load(modelID, relPath, line, epoch, filepreview.LoadPreview(rootDir, relPath, epoch))
+	return m.load(modelID, relPath, line, epoch, m.previewLoad(rootDir, relPath, epoch, ""))
+}
+
+// LoadFrom is Load with an injected command instead of filepreview.LoadPreview.
+func (m *Model) LoadFrom(modelID int, rootDir, relPath string, line int, epoch uint64, load tea.Cmd) tea.Cmd {
+	m.root = rootDir
+	return m.load(modelID, relPath, line, epoch, load)
 }
 
 // LoadFile retargets the model from an already-open file. The returned command
@@ -138,6 +178,7 @@ func (m *Model) load(modelID int, relPath string, line int, epoch uint64, load t
 	m.loading = true
 	m.rendered = line <= 0
 	m.result = filepreview.PreviewResult{}
+	m.revision = ""
 	// A retarget invalidates the refresh gate: a re-read owed for the previous
 	// document must not fire against this one.
 	m.live.Reset()
@@ -145,17 +186,52 @@ func (m *Model) load(modelID int, relPath string, line int, epoch uint64, load t
 
 	generation := m.requestGeneration
 	return func() tea.Msg {
-		msg, ok := load().(filepreview.PreviewLoadedMsg)
-		if !ok {
-			return LoadedMsg{
-				ModelID: modelID, RequestGeneration: generation, Epoch: epoch, Path: relPath,
-				Result: filepreview.PreviewResult{Error: fmt.Errorf("unexpected preview load result")},
-			}
+		return adoptPreviewMsg(load, LoadedMsg{
+			ModelID: modelID, RequestGeneration: generation, Epoch: epoch, Path: relPath,
+		})
+	}
+}
+
+func adoptPreviewMsg(load tea.Cmd, base LoadedMsg) LoadedMsg {
+	if load == nil {
+		base.Result = filepreview.PreviewResult{Error: fmt.Errorf("unexpected preview load result")}
+		return base
+	}
+	switch msg := load().(type) {
+	case filepreview.PreviewLoadedMsg:
+		base.Epoch = msg.Epoch
+		if msg.Path != "" {
+			base.Path = msg.Path
 		}
-		return LoadedMsg{
-			ModelID: modelID, RequestGeneration: generation, Epoch: msg.Epoch,
-			Path: msg.Path, Result: msg.Result,
+		base.Result = msg.Result
+		return base
+	case NotModified:
+		base.Refresh = true
+		base.NotModified = true
+		base.Revision = msg.Revision
+		if msg.Path != "" {
+			base.Path = msg.Path
 		}
+		if msg.Epoch != 0 {
+			base.Epoch = msg.Epoch
+		}
+		return base
+	case LoadedMsg:
+		msg.ModelID = base.ModelID
+		msg.RequestGeneration = base.RequestGeneration
+		if msg.Epoch == 0 {
+			msg.Epoch = base.Epoch
+		}
+		if msg.Path == "" {
+			msg.Path = base.Path
+		}
+		if base.Refresh {
+			msg.Refresh = true
+		}
+		return msg
+	default:
+		base.Result = filepreview.PreviewResult{Error: fmt.Errorf("unexpected preview load result")}
+		return base
 	}
 }
 
@@ -167,6 +243,15 @@ func (m *Model) SetResult(msg LoadedMsg) bool {
 		msg.Epoch != m.epoch ||
 		msg.Path != m.path {
 		return false
+	}
+	if msg.Revision != "" {
+		m.revision = msg.Revision
+	}
+	if msg.NotModified {
+		if !msg.Refresh {
+			return false
+		}
+		return m.applyRefresh(msg)
 	}
 	if msg.Refresh {
 		return m.applyRefresh(msg)

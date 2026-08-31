@@ -18,7 +18,8 @@ import (
 )
 
 // SurfaceContext is the stable identity and resolution context for one deck.
-// BaseRef is used only by working-tree Diff viewers.
+// BaseRef is used only by working-tree Diff viewers. Source is the
+// host-qualified workspace that later slices load from; empty HostID is local.
 type SurfaceContext struct {
 	Root        string
 	DiffRoot    string
@@ -26,6 +27,7 @@ type SurfaceContext struct {
 	DiffSurface string
 	BaseRef     string
 	Epoch       uint64
+	Source      SourceContext
 }
 
 // Placement is the geometry against which a new split is trialled. Boxes are
@@ -629,7 +631,8 @@ func (d *Deck) openTab(p *pane, ref contentlink.Ref, identity string, freshLeaf 
 }
 
 func sameContext(a, b SurfaceContext) bool {
-	return a.Root == b.Root && a.DiffRoot == b.DiffRoot && a.Surface == b.Surface && a.DiffSurface == b.DiffSurface && a.BaseRef == b.BaseRef && a.Epoch == b.Epoch
+	return a.Root == b.Root && a.DiffRoot == b.DiffRoot && a.Surface == b.Surface && a.DiffSurface == b.DiffSurface && a.BaseRef == b.BaseRef && a.Epoch == b.Epoch &&
+		a.Source.HostID == b.Source.HostID && a.Source.HostIncarnation == b.Source.HostIncarnation && a.Source.WorkspaceID == b.Source.WorkspaceID
 }
 
 func (d *Deck) start(t *tab, cmd tea.Cmd) tea.Cmd {

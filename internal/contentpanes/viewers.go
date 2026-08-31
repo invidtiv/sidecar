@@ -24,6 +24,9 @@ import (
 type Config struct {
 	Renderer         *markdown.Renderer
 	ResourceResolver resourceview.Resolver
+	// Source loads Document identity and bytes. Nil uses today's local
+	// filepreview path so tests constructing Config{} keep working.
+	Source Source
 	// ConfigureViewer attaches host presentation behavior (for example issue
 	// navigation handlers or Diff paint state). It must remain free of I/O.
 	ConfigureViewer func(kind panelayout.Kind, model any)
@@ -44,7 +47,7 @@ func newViewer(cfg Config, kind panelayout.Kind) viewer {
 	var v viewer
 	switch kind {
 	case panelayout.Document:
-		v = &documentViewer{view: docview.New(cfg.Renderer)}
+		v = &documentViewer{view: docview.New(cfg.Renderer), source: cfg.documentSource()}
 	case panelayout.Issue:
 		v = &issueViewer{view: issueview.New(cfg.Renderer)}
 	case panelayout.Note:
@@ -125,9 +128,29 @@ func normalizeRef(ctx SurfaceContext, ref contentlink.Ref) (contentlink.Ref, pan
 	}
 }
 
-type documentViewer struct{ view *docview.Model }
+type documentViewer struct {
+	view   *docview.Model
+	source Source
+}
 
 func (v *documentViewer) model() any { return v.view }
+
+func (v *documentViewer) bindLoader(ctx SurfaceContext, ref contentlink.Ref) {
+	if v.view == nil {
+		return
+	}
+	if v.source == nil {
+		v.view.SetLoader(nil)
+		return
+	}
+	src := v.source
+	v.view.SetLoader(func(_, path string, epoch uint64, ifRevision string) tea.Cmd {
+		req := ref
+		req.Value = path
+		return documentLoadCmd(src, ctx, req, ifRevision, epoch)
+	})
+}
+
 func (v *documentViewer) load(ctx SurfaceContext, ref contentlink.Ref, id int) tea.Cmd {
 	root := ctx.Root
 	// A resolved file reference may deliberately name a regular file outside
@@ -138,6 +161,7 @@ func (v *documentViewer) load(ctx SurfaceContext, ref contentlink.Ref, id int) t
 	if filepath.IsAbs(filepath.FromSlash(ref.Value)) {
 		root = ""
 	}
+	v.bindLoader(ctx, ref)
 	// Arm already applied persisted render/wrap. Load resets them; put the
 	// armed values back so restore does not turn a raw tab into rendered.
 	armed := v.view.Title() != "" && v.view.NeedsLoad()
@@ -154,23 +178,27 @@ func (v *documentViewer) load(ctx SurfaceContext, ref contentlink.Ref, id int) t
 	return cmd
 }
 func (v *documentViewer) loadFile(ctx SurfaceContext, ref contentlink.Ref, id int, file *os.File) tea.Cmd {
+	v.bindLoader(ctx, ref)
 	cmd := v.view.LoadFile(id, file, ref.Value, ref.Line, ctx.Epoch)
 	v.view.SetRendered(terminallink.Markdown(ref.Value) && ref.Line == 0)
 	return cmd
 }
 func (v *documentViewer) reload(ctx SurfaceContext, ref contentlink.Ref, id int) tea.Cmd {
+	v.bindLoader(ctx, ref)
 	if v.view.NeedsLoad() {
 		return v.load(ctx, ref, id)
 	}
 	return v.view.Reload()
 }
 func (v *documentViewer) arm(ctx SurfaceContext, ref contentlink.Ref, id int, state TabState) {
+	v.bindLoader(ctx, ref)
 	v.view.Arm(id, ref.Value, ctx.Epoch)
 	v.view.SetRendered(state.Rendered)
 	v.view.SetWrap(state.Wrap)
 	v.view.SetPendingScroll(state.Scroll)
 }
 func (v *documentViewer) focus(ctx SurfaceContext, ref contentlink.Ref, id int) tea.Cmd {
+	v.bindLoader(ctx, ref)
 	if v.view.NeedsLoad() {
 		return v.load(ctx, ref, id)
 	}

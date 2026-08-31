@@ -10,10 +10,23 @@ const stateVersion = 1
 // State is the reference-only persistence boundary for a Deck. It contains no
 // loaded document, issue, diff, provider response, error, or rendered bytes.
 type State struct {
-	Version   int         `json:"version"`
-	Root      *NodeState  `json:"root,omitempty"`
-	FocusKind string      `json:"focusKind,omitempty"`
-	Hidden    []PaneState `json:"hidden,omitempty"`
+	Version   int          `json:"version"`
+	Source    *SourceState `json:"source,omitempty"`
+	Root      *NodeState   `json:"root,omitempty"`
+	FocusKind string       `json:"focusKind,omitempty"`
+	Hidden    []PaneState  `json:"hidden,omitempty"`
+}
+
+// SourceState is the durable half of SourceContext. HostIncarnation, loaded
+// bodies, and rendered rows are never serialized.
+type SourceState struct {
+	HostID        string `json:"hostId,omitempty"`
+	ProjectKey    string `json:"projectKey,omitempty"`
+	ProjectRoot   string `json:"projectRoot,omitempty"`
+	WorkspaceID   string `json:"workspaceId,omitempty"`
+	WorkspaceKind string `json:"workspaceKind,omitempty"`
+	WorkspaceKey  string `json:"workspaceKey,omitempty"`
+	Root          string `json:"root,omitempty"`
 }
 
 // NodeState is a pane tree. Leaf Pane is omitted for the primary surface.
@@ -49,12 +62,28 @@ type TabState struct {
 	OwnerRoot string `json:"ownerRoot,omitempty"`
 }
 
+func persistSource(src SourceContext) *SourceState {
+	out := SourceState{
+		HostID:        src.HostID,
+		ProjectKey:    src.ProjectKey,
+		ProjectRoot:   src.ProjectRoot,
+		WorkspaceID:   src.WorkspaceID,
+		WorkspaceKind: string(src.WorkspaceKind),
+		WorkspaceKey:  src.WorkspaceKey,
+		Root:          src.Root,
+	}
+	if out == (SourceState{}) {
+		return nil
+	}
+	return &out
+}
+
 // Encode projects the deck to references and view state only.
 func (d *Deck) Encode() State {
 	if d == nil {
 		return State{Version: stateVersion}
 	}
-	state := State{Version: stateVersion, Root: d.encodeNode(d.root)}
+	state := State{Version: stateVersion, Source: persistSource(d.ctx.Source), Root: d.encodeNode(d.root)}
 	if leaf := panelayout.Find(d.root, d.focus); leaf != nil && leaf.Split == nil {
 		state.FocusKind = kindName(leaf.Kind)
 	}

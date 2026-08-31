@@ -278,7 +278,7 @@ func TestAppContentDeckResolvedAbsoluteDocumentKeepsCanonicalPath(t *testing.T) 
 	if !ok {
 		t.Fatal("resolution request was not accepted")
 	}
-	resolved := resolveAppContentLink(h.key, request)().(appContentResolvedMsg)
+	resolved := resolveAppContentLink(h.key, h.deck.ContentSource(), h.deck.Context().Source, request)().(appContentResolvedMsg)
 	want, err := filepath.EvalSymlinks(absPath)
 	if err != nil {
 		t.Fatal(err)

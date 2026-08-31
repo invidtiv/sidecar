@@ -6,9 +6,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/marcus/sidecar/internal/contentlink"
+	"github.com/marcus/sidecar/internal/contentpanes"
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/mouse"
-	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
@@ -49,8 +49,17 @@ func (p *Plugin) prepareDocFrame(doc *docPane) {
 		Decorate:          true,
 		Links:             !doc.editing() && doc.mode == nil,
 	})
+	src := contentpanes.SourceContext{Root: doc.root}
+	var source contentpanes.Source = contentpanes.LocalSource{}
+	if p.contentDeck != nil {
+		ctx := p.contentDeck.Context()
+		if ctx.Source.Root != "" || ctx.Source.WorkspaceID != "" {
+			src = ctx.Source
+		}
+		source = p.contentDeck.ContentSource()
+	}
 	docview.BeginResolutions(index, doc.root, frame, func(request contentlink.ResolutionRequest) {
-		p.paneSizeCmds = append(p.paneSizeCmds, resolveDocContentLink(request))
+		p.paneSizeCmds = append(p.paneSizeCmds, resolveDocContentLink(source, src, request))
 	})
 }
 
@@ -72,13 +81,16 @@ func (p *Plugin) preparedDocBody(doc *docPane, originX, originY int) string {
 	return frame.Output()
 }
 
-func resolveDocContentLink(request contentlink.ResolutionRequest) tea.Cmd {
+func resolveDocContentLink(source contentpanes.Source, src contentpanes.SourceContext, request contentlink.ResolutionRequest) tea.Cmd {
 	return func() tea.Msg {
 		result := contentlink.ResolutionResult{Request: request}
 		switch request.Candidate.Kind {
 		case contentlink.KindFile:
-			rel, _, ok := terminallink.ResolveFile(request.Root, request.Candidate.Raw)
-			result.Ref, result.Found = contentlink.Ref{Kind: contentlink.KindFile, Value: rel}, ok
+			if src.Root == "" {
+				src.Root = request.Root
+			}
+			ref, err := contentpanes.ResolveDocument(source, src, request.Candidate)
+			result.Ref, result.Found = ref, err == nil && ref.Value != ""
 		case contentlink.KindDiff:
 			target, ok := workspacediff.ParseSpec(request.Candidate.Raw)
 			if !ok {

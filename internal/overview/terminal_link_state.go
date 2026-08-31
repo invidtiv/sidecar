@@ -5,6 +5,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/contentlink"
+	"github.com/marcus/sidecar/internal/contentpanes"
 	"github.com/marcus/sidecar/internal/targetactivation"
 	"github.com/marcus/sidecar/internal/termpreview"
 )
@@ -123,12 +124,22 @@ func (m *Model) applyPreviewLinkRevalidated(msg previewLinkRevalidatedMsg) tea.C
 		return nil
 	}
 	if plan.Kind == targetactivation.PlanOpenFile {
-		file, err := openPreviewFile(current.Root, plan.Path, plan.Path)
-		if err != nil {
+		workspace, ok := m.SelectedWorkspace()
+		if !ok || workspace.Remote() {
 			return nil
 		}
-		_ = file.Close()
-		cmd := m.openPreviewContent(contentlink.Ref{Kind: contentlink.KindFile, Value: plan.Path, Line: plan.Line}, "Document")
+		ctx, ok := m.previewDeckContext()
+		if !ok {
+			return nil
+		}
+		ref, err := contentpanes.ResolveDocument(m.previewDeckConfig(ctx).Source, ctx.Source, contentlink.Pending{
+			Kind: contentlink.KindFile, Raw: plan.Path,
+		})
+		if err != nil || ref.Value == "" {
+			return nil
+		}
+		ref.Line = plan.Line
+		cmd := m.openPreviewContent(ref, "Document")
 		if cmd != nil {
 			m.clearPreviewSelection()
 		}

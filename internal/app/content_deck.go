@@ -125,6 +125,13 @@ type appContentDeck struct {
 
 func appDeckKey(workdir, pluginID string) string { return workdir + "\x00" + pluginID }
 
+func (m *Model) appDeckSurfaceContext(workdir, pluginID string, epoch uint64) contentpanes.SurfaceContext {
+	return contentpanes.SurfaceContext{
+		Root: workdir, DiffRoot: workdir, Surface: pluginID, Epoch: epoch,
+		Source: contentpanes.SourceContext{ProjectRoot: m.ui.ProjectRoot, Root: workdir},
+	}
+}
+
 const globalTasksDeckRoot = "@global-tasks"
 
 func (m *Model) contentDeckEligible(p plugin.Plugin) bool {
@@ -146,9 +153,9 @@ func (m *Model) activeContentDeck() *appContentDeck {
 	}
 	key := appDeckKey(stateRoot, p.ID())
 	h := m.contentDecks[key]
-	ctx := contentpanes.SurfaceContext{Root: m.ui.WorkDir, DiffRoot: m.ui.WorkDir, Surface: p.ID(), Epoch: m.registry.Context().Epoch}
+	ctx := m.appDeckSurfaceContext(m.ui.WorkDir, p.ID(), m.registry.Context().Epoch)
 	if h == nil {
-		cfg := contentpanes.Config{ConfigureViewer: configureAppDeckViewer}
+		cfg := contentpanes.Config{ConfigureViewer: configureAppDeckViewer, Source: contentpanes.LocalSource{}}
 		if manager := ResourceProviderManager(); manager != nil {
 			cfg.ResourceResolver = resourceResolver(manager)
 		}
@@ -302,6 +309,9 @@ func (h *appContentDeck) newLiveSet() *livepanes.Set {
 		Kind:   "docs",
 		Config: livewatch.Config{},
 		Targets: func() []livewatch.Target {
+			if h.deck != nil && h.deck.Context().Source.Remote() {
+				return nil
+			}
 			view := h.visibleDocument()
 			if view == nil {
 				return nil
@@ -705,16 +715,28 @@ func (h *appContentDeck) queueContentLinkResolve(root string, candidate contentl
 
 func (h *appContentDeck) queueContentLinkRequest(request contentlink.ResolutionRequest) {
 	h.pending[appContentResolutionKey{Root: request.Root, Candidate: request.Candidate}] = true
-	h.queued = append(h.queued, resolveAppContentLink(h.key, request))
+	src := contentpanes.SourceContext{Root: request.Root}
+	var source contentpanes.Source = contentpanes.LocalSource{}
+	if h.deck != nil {
+		ctx := h.deck.Context()
+		if ctx.Source.Root != "" {
+			src = ctx.Source
+		}
+		source = h.deck.ContentSource()
+	}
+	h.queued = append(h.queued, resolveAppContentLink(h.key, source, src, request))
 }
 
-func resolveAppContentLink(key string, request contentlink.ResolutionRequest) tea.Cmd {
+func resolveAppContentLink(key string, source contentpanes.Source, src contentpanes.SourceContext, request contentlink.ResolutionRequest) tea.Cmd {
 	return func() tea.Msg {
 		result := contentlink.ResolutionResult{Request: request}
 		switch request.Candidate.Kind {
 		case contentlink.KindFile:
-			rel, _, ok := terminallink.ResolveFile(request.Root, request.Candidate.Raw)
-			result.Ref, result.Found = contentlink.Ref{Kind: contentlink.KindFile, Value: rel}, ok
+			if src.Root == "" {
+				src.Root = request.Root
+			}
+			ref, err := contentpanes.ResolveDocument(source, src, request.Candidate)
+			result.Ref, result.Found = ref, err == nil && ref.Value != ""
 		case contentlink.KindDiff:
 			target, ok := workspacediff.ParseSpec(request.Candidate.Raw)
 			if !ok {
@@ -763,7 +785,7 @@ func (m *Model) openAppContentOutcome(h *appContentDeck, ref contentlink.Ref, sp
 	for _, leaf := range h.layout.Leaves {
 		boxes[leaf.Node.ID] = leaf.Box
 	}
-	out := h.deck.Open(contentpanes.SurfaceContext{Root: h.workdir, DiffRoot: h.workdir, Surface: h.pluginID, Epoch: m.registry.Context().Epoch}, ref,
+	out := h.deck.Open(m.appDeckSurfaceContext(h.workdir, h.pluginID, m.registry.Context().Epoch), ref,
 		contentpanes.Placement{Box: h.canvas, Boxes: boxes, Floors: appDeckFloors(), Split: split, Plan: plan})
 	if out.Accepted() {
 		h.syncInnerFocus()
@@ -844,11 +866,20 @@ func (h *appContentDeck) contentRefForTarget(target uirequest.Target) (ref conte
 		// (resolveAppContentLink) and as the Workspaces hosts do — the Document
 		// leaf wants the workspace-relative display path, and re-resolving here
 		// is what admits an absolute or ~-rooted path the CLI accepted.
-		display, _, resolved := terminallink.ResolveFile(h.workdir, target.Value)
-		if !resolved {
+		src := contentpanes.SourceContext{Root: h.workdir}
+		source := contentpanes.Source(contentpanes.LocalSource{})
+		if h.deck != nil {
+			if h.deck.Context().Source.Root != "" {
+				src = h.deck.Context().Source
+			}
+			source = h.deck.ContentSource()
+		}
+		ref, err := contentpanes.ResolveDocument(source, src, contentlink.Pending{Kind: contentlink.KindFile, Raw: target.Value})
+		if err != nil || ref.Value == "" {
 			return contentlink.Ref{}, fmt.Sprintf("file %q is not readable from %s", target.Value, h.workdir), false
 		}
-		return contentlink.Ref{Kind: contentlink.KindFile, Value: display, Line: target.Line}, "", true
+		ref.Line = target.Line
+		return ref, "", true
 	case uirequest.TargetKindIssue:
 		return contentlink.Ref{Kind: contentlink.KindIssue, Value: target.Value}, "", true
 	case uirequest.TargetKindNote:

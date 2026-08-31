@@ -105,7 +105,14 @@ func (m *Model) persistSessionsLayout() {
 			// tree: a later restore would resolve it locally.
 			return
 		}
+		src := sourceContextFromWorkspace(ws, 0)
 		layout.Root = ws.Path
+		layout.HostID = src.HostID
+		layout.ProjectKey = src.ProjectKey
+		layout.ProjectRoot = src.ProjectRoot
+		layout.WorkspaceID = src.WorkspaceID
+		layout.WorkspaceKind = string(src.WorkspaceKind)
+		layout.WorkspaceKey = src.WorkspaceKey
 	}
 	layout.Surface = id
 	layout.Open = true
@@ -285,9 +292,7 @@ func (m *Model) warmPreviewFromLayout(workspaceID string, layout *state.PaneLayo
 		return nil
 	}
 	m.preview.contentEpoch++
-	ctx := contentpanes.SurfaceContext{
-		Root: ws.Path, DiffRoot: previewDiffPath(ws), Surface: ws.ID, Epoch: m.preview.contentEpoch,
-	}
+	ctx := m.localPreviewSurfaceContext(ws)
 	st, live := panecodec.Decode(layout, panecodec.Options{AcceptTab: m.acceptRestoredPreviewTab(ws.Path)})
 	if previewLiveKindCount(live, panecodec.KindTerminal) != 1 {
 		m.resetActivePreviewPanes()

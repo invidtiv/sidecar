@@ -7,6 +7,7 @@ import (
 	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/contentpanes"
 	"github.com/marcus/sidecar/internal/docview"
+	"github.com/marcus/sidecar/internal/hosts"
 	"github.com/marcus/sidecar/internal/issueview"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/noteview"
@@ -14,6 +15,7 @@ import (
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/workspacediff"
+	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
 func (m *Model) previewDeckContext() (contentpanes.SurfaceContext, bool) {
@@ -30,13 +32,41 @@ func (m *Model) previewDeckContext() (contentpanes.SurfaceContext, bool) {
 	if !ok || workspace.ID == "" || workspace.Path == "" {
 		return contentpanes.SurfaceContext{}, false
 	}
+	return m.localPreviewSurfaceContext(workspace), true
+}
+
+func (m *Model) localPreviewSurfaceContext(workspace workspaceinventory.Workspace) contentpanes.SurfaceContext {
 	return contentpanes.SurfaceContext{
 		Root: workspace.Path, DiffRoot: previewDiffPath(workspace), Surface: workspace.ID, Epoch: m.preview.contentEpoch,
-	}, true
+		Source: sourceContextFromWorkspace(workspace, m.hostIncarnationFor(workspace.HostID)),
+	}
+}
+
+func sourceContextFromWorkspace(ws workspaceinventory.Workspace, incarnation uint64) contentpanes.SourceContext {
+	src := contentpanes.SourceContext{
+		HostID:          ws.HostID,
+		HostIncarnation: incarnation,
+		ProjectKey:      ws.ProjectKey,
+		ProjectRoot:     ws.ProjectRoot,
+		WorkspaceID:     ws.ID,
+		WorkspaceKind:   ws.Kind,
+		WorkspaceKey:    ws.Key,
+		Root:            ws.Path,
+	}
+	if ws.HostID != "" {
+		if _, rest, ok := hosts.SplitScopedKey(ws.ID); ok {
+			src.WorkspaceID = rest
+		}
+		if _, rest, ok := hosts.SplitScopedKey(ws.ProjectKey); ok {
+			src.ProjectKey = rest
+		}
+	}
+	return src
 }
 
 func (m *Model) previewDeckConfig(ctx contentpanes.SurfaceContext) contentpanes.Config {
 	return contentpanes.Config{
+		Source:           contentpanes.LocalSource{},
 		ResourceResolver: m.previewResourceResolver(ctx.Surface, ctx.Epoch),
 		ConfigureViewer: func(kind panelayout.Kind, model any) {
 			switch view := model.(type) {

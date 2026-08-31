@@ -293,6 +293,9 @@ func (m *Model) refreshPreviewIssues() []tea.Cmd {
 // screen, and selecting it brings it into the watch set, which is what makes
 // [livepanes] re-read it.
 func (m *Model) previewDocTargets() []livewatch.Target {
+	if m.preview.deck != nil && m.preview.deck.Context().Source.Remote() {
+		return nil
+	}
 	doc := m.preview.doc
 	if doc == nil || !m.previewPaneVisible(panelayout.Document) {
 		return nil
