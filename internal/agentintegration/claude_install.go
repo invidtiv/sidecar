@@ -88,20 +88,24 @@ type ClaudeAdapter struct{}
 func (ClaudeAdapter) Provider() string { return ClaudeProvider }
 func (ClaudeAdapter) Source() string   { return ClaudeSource }
 
-// Asset returns the bundled integration identity.
+// Assets returns the one entry asset this integration installs.
 //
-// There is no standalone file here: Content is the canonical group as it is
-// merged into settings.json, carried so surfaces can show exactly what an
-// install adds.
-func (ClaudeAdapter) Asset() Asset {
-	return Asset{
+// It is OwnsEntry: ~/.claude/settings.json belongs to the user, Sidecar owns
+// one hook entry inside it, and Content is the canonical file Sidecar would
+// create in an empty tree -- a description of the entry, shown so a surface can
+// name exactly what an install adds, never bytes written over a user's file.
+func (ClaudeAdapter) Assets() []Asset {
+	return []Asset{{
 		Name:          "settings.json",
 		Source:        ClaudeSource,
 		SchemaVersion: ClaudeAssetSchema,
 		Version:       ClaudeAssetVersion,
+		Ownership:     OwnsEntry,
 		Content:       string(renderJSONFile([]jsonMember{{key: "hooks", val: marshalJSONObject([]jsonMember{{key: "SessionStart", val: marshalJSONArray([]json.RawMessage{claudeCanonicalGroup()})}})}})),
-	}
+	}}
 }
+
+func (a ClaudeAdapter) settingsAsset() Asset { return a.Assets()[0] }
 
 type claudePaths struct {
 	Dir      string
@@ -150,7 +154,7 @@ func (a ClaudeAdapter) inspect(env Env) claudeState {
 		paths:    p,
 		spec:     claudeEntrySpec(),
 		dir:      inspectDir(env, p.Dir),
-		settings: inspectFile(env, p.Settings, a.Asset()),
+		settings: inspectFile(env, p.Settings, a.settingsAsset()),
 		backup:   FileState{Path: p.Backup, Exists: fileExists(p.Backup)},
 	}
 	if path, ok := env.lookPath(ClaudeProvider); ok {
@@ -159,11 +163,7 @@ func (a ClaudeAdapter) inspect(env Env) claudeState {
 	}
 	s.raw, s.scan = scanEntryFile(s.settings, s.spec)
 	if len(s.scan.owned) > 0 {
-		// Ownership at file level means "this file contains Sidecar's entry" —
-		// the honest projection of entry ownership onto the FileState surfaces
-		// render.
-		s.settings.Owned = true
-		s.settings.Version = s.scan.owned[len(s.scan.owned)-1].version
+		ownEntry(&s.settings, s.scan.owned[len(s.scan.owned)-1].version)
 	}
 	s.assetStatus, s.message, s.installed = entryAssetStatus(s.dir, s.settings, s.scan, s.spec, "settings.json")
 
@@ -322,7 +322,7 @@ func (a ClaudeAdapter) planConverge(s claudeState, p Plan, act Action) (Plan, er
 	content := renderJSONFile(top)
 
 	p.Ops = entryFileOps(nil, s.env, s.dir, s.settings, s.backup, content,
-		"write the Sidecar session-identity hook entry, preserving every other setting")
+		"write the Sidecar session-identity hook entry, preserving every other setting", ClaudeAssetVersion)
 	if len(p.Ops) == 0 {
 		p.Unchanged = true
 		return p, nil
@@ -406,7 +406,7 @@ func refuseUnsafeEntryFile(dir, file FileState, scan hookTreeScan) error {
 // copy of a pre-existing file, and write atomically. It returns nothing when
 // the content already matches byte for byte, which is how idempotency stays
 // visible.
-func entryFileOps(ops []Op, env Env, dir, file, backup FileState, content []byte, note string) []Op {
+func entryFileOps(ops []Op, env Env, dir, file, backup FileState, content []byte, note, version string) []Op {
 	if !dir.Exists {
 		mode := fs.FileMode(0o700)
 		ops = append(ops, Op{
@@ -452,7 +452,7 @@ func entryFileOps(ops []Op, env Env, dir, file, backup FileState, content []byte
 		content:  content,
 		Note:     note,
 		Before:   file,
-		After:    FileState{Path: file.Path, Exists: true, Kind: "file", Owned: true, Checksum: checksum(content), Mode: renderMode(mode), Size: int64(len(content))},
+		After:    FileState{Path: file.Path, Exists: true, Kind: "file", Owned: true, Ownership: OwnsEntry, Version: version, Checksum: checksum(content), Mode: renderMode(mode), Size: int64(len(content))},
 	})
 	return ops
 }

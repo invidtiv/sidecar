@@ -90,7 +90,7 @@ func mustParseAny(t *testing.T, s string) any {
 }
 
 func TestClaudeBundledEntryMatchesTheRegistry(t *testing.T) {
-	asset := (ClaudeAdapter{}).Asset()
+	asset := (ClaudeAdapter{}).settingsAsset()
 	capability, known := agentlifecycle.CapabilityForSource(asset.Source)
 	if !known {
 		t.Fatalf("no capability entry for %s", asset.Source)

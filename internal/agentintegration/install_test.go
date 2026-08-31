@@ -109,7 +109,7 @@ func snapshot(t *testing.T, root string) map[string]string {
 }
 
 func TestTheBundledAssetCarriesTheMarkerTheInstallerLooksFor(t *testing.T) {
-	asset := (OpenCodeAdapter{}).Asset()
+	asset := (OpenCodeAdapter{}).asset()
 	if !strings.Contains(asset.Content, Marker(asset)) {
 		t.Fatalf("the bundled asset does not contain %q", Marker(asset))
 	}
@@ -151,7 +151,7 @@ func TestInstallIntoACleanTreeIsExplicitAndIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the asset was not installed: %v", err)
 	}
-	if string(b) != (OpenCodeAdapter{}).Asset().Content {
+	if string(b) != (OpenCodeAdapter{}).asset().Content {
 		t.Fatal("the installed bytes are not the bundled asset")
 	}
 
@@ -318,7 +318,7 @@ func TestACopyInBothPluginDirectoriesIsNeedsRepairAndRepairRemovesTheDuplicate(t
 	if err := os.MkdirAll(paths.ConflictDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(paths.Conflict, []byte((OpenCodeAdapter{}).Asset().Content), 0o644); err != nil {
+	if err := os.WriteFile(paths.Conflict, []byte((OpenCodeAdapter{}).asset().Content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -362,7 +362,7 @@ func TestAnAssetInstalledOnlyInTheDirectorySidecarDoesNotOwnIsRepaired(t *testin
 	if err := os.MkdirAll(paths.ConflictDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(paths.Conflict, []byte((OpenCodeAdapter{}).Asset().Content), 0o644); err != nil {
+	if err := os.WriteFile(paths.Conflict, []byte((OpenCodeAdapter{}).asset().Content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	st := mustStatus(t, svc)
@@ -536,7 +536,7 @@ func TestStatusComesFromTheInstalledBytesNotFromAClaimedVersion(t *testing.T) {
 	svc, _, paths := fixture(t)
 	mustApply(t, svc, ActionInstall)
 
-	tampered := (OpenCodeAdapter{}).Asset().Content + "\n// a line someone added\n"
+	tampered := (OpenCodeAdapter{}).asset().Content + "\n// a line someone added\n"
 	if err := os.WriteFile(paths.Owned, []byte(tampered), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -678,7 +678,7 @@ func TestOfferedActionsAreExactlyTheOnesThatWouldNotRefuse(t *testing.T) {
 		case "outdated":
 			writeOldAsset(t, paths.Owned)
 		case "damaged":
-			if err := os.WriteFile(paths.Owned, []byte((OpenCodeAdapter{}).Asset().Content+"\n// edited\n"), 0o644); err != nil {
+			if err := os.WriteFile(paths.Owned, []byte((OpenCodeAdapter{}).asset().Content+"\n// edited\n"), 0o644); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -783,7 +783,7 @@ func TestAMarkerFromADifferentIntegrationIsNotOwnership(t *testing.T) {
 	if err := os.WriteFile(paths.Owned, []byte(foreign), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	st := inspectFile(env, paths.Owned, (OpenCodeAdapter{}).Asset())
+	st := inspectFile(env, paths.Owned, (OpenCodeAdapter{}).asset())
 	if st.Owned {
 		t.Fatal("an asset belonging to another integration was claimed as ours")
 	}

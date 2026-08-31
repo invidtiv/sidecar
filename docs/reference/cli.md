@@ -129,7 +129,7 @@ sidecar agent get reviewer --json
 
 Inspect and manage agent lifecycle integrations
 
-An integration is a small Sidecar-owned file installed beside a supported agent, which reports that agent's own lifecycle events so Sidecar does not have to infer them from its screen.
+An integration is a small addition to a supported agent's own user-level configuration -- a Sidecar-owned file, or one entry in a file the user owns -- which reports that agent's own lifecycle events so Sidecar does not have to infer them from its screen.
 
 Installation is always explicit, always previewable, and always reversible. Sidecar shows the exact user-level paths it would change before changing them, writes atomically, keeps a recoverable backup of anything it replaces, and removes only what it installed.
 
@@ -145,13 +145,13 @@ Usage: sidecar agent integration <command>
 
 Install a provider's Sidecar lifecycle integration
 
-Writes the bundled integration asset into the provider's user-level configuration directory. Nothing is installed into a repository, and no existing user configuration is rewritten from a template.
+Writes the bundled integration into the provider's user-level configuration: a Sidecar-owned file for a provider that loads whole files from a directory, or one added entry for a provider whose hooks live in a configuration file the user owns. Nothing is installed into a repository, and an existing user configuration is edited in place rather than rewritten from a template.
 
 Installing when the current version is already installed is a no-op. Installing over an older or a damaged installation is refused, naming update or repair instead: the verb should mean what the user believes the situation to be.
 
 The exact ordered file operations are printed, each with the state of its path before and after and whether Sidecar owns it. --dry-run prints that same plan and changes nothing.
 
-Sidecar only ever writes, replaces, or removes a file carrying its own integration marker. A file that merely has the name Sidecar would have chosen is refused and left exactly as it is.
+Sidecar only ever writes, replaces, or removes something it can prove is its own. Where the integration is a whole Sidecar-owned file, that proof is the integration marker its bytes carry. Where the integration is one entry inside a configuration file the user owns, it is that entry's own content, and every other byte of the file is preserved. Either way, something that merely has the name or shape Sidecar would have chosen is refused and left exactly as it is.
 
 An installed integration reports lifecycle facts only: lanes, a terminal outcome, a bounded reason code, a sequence, and an opaque session digest. It never sends prompt text, response text, tool arguments or results, file paths, environment values, or credentials, and it cannot notify, play a sound, or choose delivery policy.
 
@@ -222,7 +222,7 @@ It cannot repair a file Sidecar does not own, and says so rather than deleting i
 
 The exact ordered file operations are printed, each with the state of its path before and after and whether Sidecar owns it. --dry-run prints that same plan and changes nothing.
 
-Sidecar only ever writes, replaces, or removes a file carrying its own integration marker. A file that merely has the name Sidecar would have chosen is refused and left exactly as it is.
+Sidecar only ever writes, replaces, or removes something it can prove is its own. Where the integration is a whole Sidecar-owned file, that proof is the integration marker its bytes carry. Where the integration is one entry inside a configuration file the user owns, it is that entry's own content, and every other byte of the file is preserved. Either way, something that merely has the name or shape Sidecar would have chosen is refused and left exactly as it is.
 
 An installed integration reports lifecycle facts only: lanes, a terminal outcome, a bounded reason code, a sequence, and an opaque session digest. It never sends prompt text, response text, tool arguments or results, file paths, environment values, or credentials, and it cannot notify, play a sound, or choose delivery policy.
 
@@ -295,7 +295,7 @@ Uninstalling when nothing is installed is a no-op, so a cleanup script can run u
 
 The exact ordered file operations are printed, each with the state of its path before and after and whether Sidecar owns it. --dry-run prints that same plan and changes nothing.
 
-Sidecar only ever writes, replaces, or removes a file carrying its own integration marker. A file that merely has the name Sidecar would have chosen is refused and left exactly as it is.
+Sidecar only ever writes, replaces, or removes something it can prove is its own. Where the integration is a whole Sidecar-owned file, that proof is the integration marker its bytes carry. Where the integration is one entry inside a configuration file the user owns, it is that entry's own content, and every other byte of the file is preserved. Either way, something that merely has the name or shape Sidecar would have chosen is refused and left exactly as it is.
 
 An installed integration reports lifecycle facts only: lanes, a terminal outcome, a bounded reason code, a sequence, and an opaque session digest. It never sends prompt text, response text, tool arguments or results, file paths, environment values, or credentials, and it cannot notify, play a sound, or choose delivery policy.
 
@@ -332,7 +332,7 @@ Refused when nothing is installed, and when the installation is damaged rather t
 
 The exact ordered file operations are printed, each with the state of its path before and after and whether Sidecar owns it. --dry-run prints that same plan and changes nothing.
 
-Sidecar only ever writes, replaces, or removes a file carrying its own integration marker. A file that merely has the name Sidecar would have chosen is refused and left exactly as it is.
+Sidecar only ever writes, replaces, or removes something it can prove is its own. Where the integration is a whole Sidecar-owned file, that proof is the integration marker its bytes carry. Where the integration is one entry inside a configuration file the user owns, it is that entry's own content, and every other byte of the file is preserved. Either way, something that merely has the name or shape Sidecar would have chosen is refused and left exactly as it is.
 
 An installed integration reports lifecycle facts only: lanes, a terminal outcome, a bounded reason code, a sequence, and an opaque session digest. It never sends prompt text, response text, tool arguments or results, file paths, environment values, or credentials, and it cannot notify, play a sound, or choose delivery policy.
 

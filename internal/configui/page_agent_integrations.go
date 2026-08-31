@@ -11,7 +11,7 @@ import (
 
 // Configuration → Agents → Integrations.
 //
-// An integration is a small Sidecar-owned file installed beside a supported
+// An integration is a small addition to a supported agent's own configuration
 // agent, which reports that agent's own lifecycle events so Sidecar does not
 // have to read them off its screen.
 //
@@ -342,7 +342,7 @@ func (m *Model) buildAgentIntegrations(b *paneBuilder) {
 		m.queueIntegrationProbe()
 	}
 
-	b.lead("A small Sidecar-owned file installed beside an agent, so Sidecar learns what that agent is doing from its own lifecycle events instead of its screen.")
+	b.lead("A small addition to an agent's own configuration, so Sidecar learns what that agent is doing from its own lifecycle events instead of its screen.")
 	b.blank()
 
 	if state.checking && !state.checked {

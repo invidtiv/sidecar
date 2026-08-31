@@ -64,7 +64,7 @@ func TestCodexTrustedHashReproducesALiveTrustRecord(t *testing.T) {
 }
 
 func TestCodexBundledEntryMatchesTheRegistry(t *testing.T) {
-	asset := (CodexAdapter{}).Asset()
+	asset := (CodexAdapter{}).hooksAsset()
 	capability, known := agentlifecycle.CapabilityForSource(asset.Source)
 	if !known {
 		t.Fatalf("no capability entry for %s", asset.Source)

@@ -42,15 +42,20 @@ func (OpenCodeAdapter) Source() string   { return OpenCodeSource }
 
 // Asset returns the bundled plugin with the identity a marker check compares
 // against.
-func (OpenCodeAdapter) Asset() Asset {
-	return Asset{
+func (OpenCodeAdapter) Assets() []Asset {
+	return []Asset{{
 		Name:          OpenCodeAssetName,
 		Source:        OpenCodeSource,
 		SchemaVersion: OpenCodeAssetSchema,
 		Version:       OpenCodeAssetVersion,
+		Ownership:     OwnsFile,
 		Content:       openCodeAsset,
-	}
+	}}
 }
+
+// asset is the single file this integration drops. OpenCode loads whole plugin
+// files from a directory it scans, so there is exactly one and it is Sidecar's.
+func (a OpenCodeAdapter) asset() Asset { return a.Assets()[0] }
 
 // openCodePaths are the exact user-level paths this adapter inspects.
 type openCodePaths struct {
@@ -116,7 +121,7 @@ type openCodeState struct {
 }
 
 func (a OpenCodeAdapter) inspect(env Env) openCodeState {
-	asset := a.Asset()
+	asset := a.asset()
 	p := openCodePathsFor(env)
 	s := openCodeState{
 		env:      env,
