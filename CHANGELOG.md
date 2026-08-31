@@ -18,6 +18,8 @@ All notable changes to sidecar are documented here.
 
 ### Bug Fixes
 
+- **Rendered Markdown in Files can be selected and copied as rendered text.** Drag selection now works in both the primary Files preview and file panes opened beside it, including rows whose layout differs from the Markdown source. Copying sends ANSI-free visible text to the native and terminal clipboards, while link clicks, drag-over-link selection, scrollbars, raw previews, and collapsed-tree previews keep their existing behavior. (td-a2b617)
+
 - **Release verification no longer intermittently loses its private tmux server between agent-control integration tests.** The suite now keeps one inert session alive for the package lifetime, so one test cleaning up its last working session cannot race the next test's server startup. The package still uses its own socket and tears down only that isolated server.
 
 - **The remote-host reconnect test now observes a stable recovered connection instead of a transient state.** Its successful fake stream stays open like the real host protocol, so loaded CI cannot miss the online state between an immediate end-of-stream and the following reconnect.

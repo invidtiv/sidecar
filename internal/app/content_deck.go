@@ -1042,7 +1042,21 @@ func (m *Model) appContentMouse(msg tea.MouseMsg) (tea.Cmd, bool) {
 			hit, activate := *h.press, !h.dragged && h.press.Rect.Contains(mi.X, mi.Y)
 			h.press = nil
 			if activate {
-				return m.openAppContent(h.workdir, h.pluginID, hit.Ref), true
+				// A document link and its text occupy the same cells. The body
+				// selector was armed on press so dragging can select the label;
+				// settle that no-drag gesture before activating the link or it
+				// would answer the next unrelated motion as a stale drag.
+				var settle tea.Cmd
+				focused := panelayout.Find(h.deck.Tree(), h.deck.FocusedLeaf())
+				if focused != nil && focused.Kind == panelayout.Primary {
+					// Primary rendered surfaces, including Files, also see the
+					// press before the host recognizes their link. They must see
+					// the matching release before activation for the same reason.
+					settle = m.updateAppContentPrimaryMouse(h, msg)
+				} else if action.DragStartID == appDeckDocGestureRegion {
+					settle, _ = h.continueAppContentGesture(action)
+				}
+				return tea.Batch(settle, m.openAppContent(h.workdir, h.pluginID, hit.Ref)), true
 			}
 		}
 	}
@@ -1057,15 +1071,19 @@ func (m *Model) appContentMouse(msg tea.MouseMsg) (tea.Cmd, bool) {
 	}
 	leaf := panelayout.Find(h.deck.Tree(), h.deck.FocusedLeaf())
 	if leaf == nil || leaf.Kind == panelayout.Primary {
-		adjusted := offsetMouse(msg, -h.primaryInner.X, -h.primaryInner.Y)
-		newPlugin, cmd := h.plugin.Update(adjusted)
-		h.plugin = newPlugin
-		m.adoptAppContentPlugin(h)
-		return cmd, true
+		return m.updateAppContentPrimaryMouse(h, msg), true
 	}
 	cmd := h.handlePassiveMouse(msg, leaf)
 	m.persistAppContentDeck(h)
 	return cmd, true
+}
+
+func (m *Model) updateAppContentPrimaryMouse(h *appContentDeck, msg tea.MouseMsg) tea.Cmd {
+	adjusted := offsetMouse(msg, -h.primaryInner.X, -h.primaryInner.Y)
+	newPlugin, cmd := h.plugin.Update(adjusted)
+	h.plugin = newPlugin
+	m.adoptAppContentPlugin(h)
+	return cmd
 }
 
 func offsetMouse(msg tea.MouseMsg, dx, dy int) tea.MouseMsg {

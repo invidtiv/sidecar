@@ -103,7 +103,7 @@ func TestPreviewClickGeometryFollowsGutter(t *testing.T) {
 
 	// The same screen X lands one column earlier in the wide file, because its
 	// text starts one cell further right.
-	x := 1 + 6 + 3 // border + wide gutter + three characters in
+	x := wide.previewTextRect().X + 3
 	if got, want := wide.previewColAtScreenX(x, 0), 3; got != want {
 		t.Errorf("wide col at x=%d is %d, want %d", x, got, want)
 	}

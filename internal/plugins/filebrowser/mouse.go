@@ -913,20 +913,17 @@ func (p *Plugin) handlePreviewSelectionDrag(action mouse.MouseAction) (*Plugin, 
 // previewColAtScreenX maps a screen X coordinate to a visual column within
 // the preview content for the given line index.
 func (p *Plugin) previewColAtScreenX(x, lineIdx int) int {
-	// Calculate the X offset where preview content starts:
-	// tree pane width + divider(1) + preview border(1) + the gutter's width,
-	// which grows with the file's line count.
-	previewContentX := p.previewContentStartX(p.previewGutter().Width())
-	relX := x - previewContentX
+	// Hit testing reads the same text rectangle content-link scanning exports,
+	// including the panel's border, padding and mode-dependent gutter.
+	relX := x - p.previewTextRect().X
 	if relX < 0 {
 		relX = 0
 	}
 
-	// Get the raw line and expand tabs
-	if lineIdx < 0 || lineIdx >= len(p.previewLines) {
+	if lineIdx < 0 || lineIdx >= len(p.previewDisplayLines()) {
 		return 0
 	}
-	expanded := ui.ExpandTabs(p.previewLines[lineIdx], 8)
+	expanded := ui.ExpandTabs(p.previewSelectionLine(lineIdx), 8)
 	return ui.VisualColAtRelativeX(expanded, relX)
 }
 

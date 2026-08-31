@@ -2,6 +2,7 @@ package filebrowser
 
 import (
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/mouse"
@@ -215,4 +216,33 @@ func (p *Plugin) previewSourceRowCapacity() int {
 func (p *Plugin) previewDisplayLines() []string {
 	lines, _ := p.previewRenderLines()
 	return lines
+}
+
+// previewSelectionLine is the plain-text form of one row the preview is
+// currently drawing. Rendered Markdown deliberately returns a Glamour visual
+// row rather than the Markdown source: selection copies what the user saw.
+// Mouse motion reads one row at a time so dragging over a large file is O(1).
+func (p *Plugin) previewSelectionLine(index int) string {
+	display := p.previewDisplayLines()
+	if index < 0 || index >= len(display) {
+		return ""
+	}
+	return ansi.Strip(display[index])
+}
+
+// previewSelectionLines returns only the selected half-open row range in plain
+// text. Copy therefore pays for the rows it sends to the clipboard, not every
+// row in a large preview.
+func (p *Plugin) previewSelectionLines(start, end int) []string {
+	display := p.previewDisplayLines()
+	start = max(start, 0)
+	end = min(end, len(display))
+	if start >= end {
+		return nil
+	}
+	plain := make([]string, end-start)
+	for i, line := range display[start:end] {
+		plain[i] = ansi.Strip(line)
+	}
+	return plain
 }

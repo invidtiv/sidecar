@@ -132,19 +132,28 @@ func (h *appContentDeck) routeAppContentGesture(action mouse.MouseAction, wasDra
 	return nil, false
 }
 
-// pressAppContentGesture answers a button going down on one of the bar regions
-// the last render registered. Each kind keeps its own seam: a document's press
-// goes to HandleSelectionMouse (which answers the bar before its selection
-// engine), an issue card's to HandleClick, a note's to the state-free mapping.
+// pressAppContentGesture answers a button going down on a hosted pane body or
+// one of the bar regions the last render registered. Each kind keeps its own
+// seam: a document's press goes to HandleSelectionMouse (which answers its bar
+// before its selection engine), an issue card's bar goes to HandleClick, and a
+// note's bar uses the state-free mapping.
 func (h *appContentDeck) pressAppContentGesture(action mouse.MouseAction) (tea.Cmd, bool) {
 	if action.Region == nil {
 		return nil, false
 	}
-	hit, ok := action.Region.Data.(appDeckScrollbarHit)
-	if !ok {
+	leafID := 0
+	switch action.Region.ID {
+	case appDeckLeafRegion:
+		leafID, _ = action.Region.Data.(int)
+	case ui.RegionScrollbarThumb, ui.RegionScrollbarTrack:
+		if hit, ok := action.Region.Data.(appDeckScrollbarHit); ok {
+			leafID = hit.LeafID
+		}
+	}
+	if leafID == 0 {
 		return nil, false
 	}
-	switch v := h.deck.Viewer(hit.LeafID).(type) {
+	switch v := h.deck.Viewer(leafID).(type) {
 	case *docview.Model:
 		result := v.HandleSelectionMouse(action)
 		if !result.Handled {
@@ -152,36 +161,42 @@ func (h *appContentDeck) pressAppContentGesture(action mouse.MouseAction) (tea.C
 			// between frames): nothing was armed, so claim nothing.
 			return nil, false
 		}
-		h.mouse.StartDrag(action.X, action.Y, appDeckDocGestureRegion, hit.LeafID)
-		h.docGestureLeaf = hit.LeafID
+		h.mouse.StartDrag(action.X, action.Y, appDeckDocGestureRegion, leafID)
+		h.docGestureLeaf = leafID
 		return appDeckSelectionCopyCmd(v, result), true
 	case *issueview.Model:
+		if action.Region.ID == appDeckLeafRegion {
+			return nil, false
+		}
 		if action.Type != mouse.ActionClick {
 			// A rapid second press re-arms the bar exactly like the first one
 			// did, without reaching the nav rows (a plain click here is the
 			// sole navigation; replaying it can open the child and then its
 			// newly rendered parent at once).
-			lx, ly := h.appContentCardLocal(hit.LeafID, action.X, action.Y)
+			lx, ly := h.appContentCardLocal(leafID, action.X, action.Y)
 			if v.PressScrollbar(lx, ly) {
-				h.issueScrollLeaf = hit.LeafID
+				h.issueScrollLeaf = leafID
 				h.issueScrollTrackY = action.Y - ly
-				h.mouse.StartDrag(action.X, action.Y, appDeckIssueScrollbarRegion, hit.LeafID)
+				h.mouse.StartDrag(action.X, action.Y, appDeckIssueScrollbarRegion, leafID)
 			}
 			return nil, true
 		}
-		lx, ly := h.appContentCardLocal(hit.LeafID, action.X, action.Y)
+		lx, ly := h.appContentCardLocal(leafID, action.X, action.Y)
 		kind, cmd := v.HandleClick(lx, ly)
 		if kind == issueview.HitScrollbar {
 			// The card armed a scrollbar gesture (and did any track-click jump
 			// itself). Start the shared handler's drag so motions come back to
 			// ScrollbarDrag and the release anywhere settles it.
-			h.issueScrollLeaf = hit.LeafID
+			h.issueScrollLeaf = leafID
 			h.issueScrollTrackY = action.Y - ly
-			h.mouse.StartDrag(action.X, action.Y, appDeckIssueScrollbarRegion, hit.LeafID)
+			h.mouse.StartDrag(action.X, action.Y, appDeckIssueScrollbarRegion, leafID)
 		}
 		return cmd, true
 	case *noteview.Model:
-		return h.pressNoteScrollbar(hit.LeafID, action), true
+		if action.Region.ID == appDeckLeafRegion {
+			return nil, false
+		}
+		return h.pressNoteScrollbar(leafID, action), true
 	default:
 		return nil, false
 	}

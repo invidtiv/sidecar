@@ -291,6 +291,7 @@ func (p *Plugin) renderNormalPanes() string {
 			tabX := 2 // left border + padding
 			p.registerPreviewTabHits(tabX, tabY)
 		}
+		p.registerPreviewSelectionRegions()
 		// Scrollbar column last: above the pane region it overlaps.
 		p.registerScrollbarRegions()
 
@@ -382,20 +383,11 @@ func (p *Plugin) renderNormalPanes() string {
 		}
 	}
 
-	// Register individual preview lines for text selection (LAST for highest priority)
-	if p.previewFile != "" && !p.isBinary && len(p.previewLines) > 0 {
-		previewContentStartY := paneY + 3 // border(1) + header(2 lines)
-		contentStart := p.previewScroll
-		contentEnd := contentStart + innerHeight
-		if contentEnd > len(p.previewLines) {
-			contentEnd = len(p.previewLines)
-		}
-		for i := contentStart; i < contentEnd; i++ {
-			lineY := previewContentStartY + (i - contentStart)
-			// Region covers content area within preview pane
-			p.mouseHandler.HitMap.AddRect(regionPreviewLine, previewX+1, lineY, p.previewWidth-2, 1, i)
-		}
-	}
+	// Register exactly the visual rows the preview drew. Rendered Markdown can
+	// have a different row count from its source, and wrapped rows can occupy
+	// several screen lines; previewTextRect is already the geometry authority
+	// for content-link scanning, so selection uses the same answer.
+	p.registerPreviewSelectionRegions()
 
 	// Register preview tabs (first content row)
 	if len(p.tabHits) > 0 {
@@ -410,6 +402,16 @@ func (p *Plugin) renderNormalPanes() string {
 	p.registerScrollbarRegions()
 
 	return lipgloss.JoinVertical(lipgloss.Top, parts...)
+}
+
+func (p *Plugin) registerPreviewSelectionRegions() {
+	if p.previewFile == "" || p.isBinary || p.isImage || p.previewError != nil || len(p.previewDisplayLines()) == 0 {
+		return
+	}
+	rect := p.previewTextRect()
+	for row := 0; row < rect.H; row++ {
+		p.mouseHandler.HitMap.AddRect(regionPreviewLine, rect.X, rect.Y+row, rect.W, 1, row)
+	}
 }
 
 // renderContentSearchBar renders the content search input bar for preview pane.
@@ -973,7 +975,7 @@ func (p *Plugin) renderPreviewPane(visibleHeight int) string {
 
 		// Check if this line is selected for text selection highlighting
 		startCol, endCol := p.selection.GetLineSelectionCols(i)
-		if startCol >= 0 && showLineNumbers {
+		if startCol >= 0 {
 			// Get syntax-highlighted content and inject character-level selection background
 			var lineContent string
 			if i < len(lines) {
@@ -1002,8 +1004,12 @@ func (p *Plugin) renderPreviewPane(visibleHeight int) string {
 					segStart := offset
 					segEnd := offset + segWidth - 1
 
-					// Apply selection only if this wrapped segment overlaps.
-					if selStart <= segEnd && selEnd >= segStart && segWidth > 0 {
+					// Apply selection only if this wrapped segment overlaps. A
+					// selected empty row still paints one cell so a multi-paragraph
+					// selection reads as one continuous block.
+					if segWidth == 0 && selStart == 0 {
+						wl = ui.InjectCharacterRangeBackground(" ", 0, 0)
+					} else if selStart <= segEnd && selEnd >= segStart && segWidth > 0 {
 						localStart := selStart - segStart
 						if localStart < 0 {
 							localStart = 0
@@ -1015,9 +1021,14 @@ func (p *Plugin) renderPreviewPane(visibleHeight int) string {
 						wl = ui.InjectCharacterRangeBackground(wl, localStart, localEnd)
 					}
 
-					// Line number with selection background (first wrapped line only)
+					// Raw source keeps its historical selected gutter. Rendered
+					// Markdown has no gutter, so only the selected text is written.
 					if wi == 0 {
-						contentSB.WriteString(ui.InjectSelectionBackground(gutter.Number(i + 1)))
+						lineNumber := gutter.Number(i + 1)
+						if showLineNumbers {
+							lineNumber = ui.InjectSelectionBackground(lineNumber)
+						}
+						contentSB.WriteString(lineNumber)
 					} else {
 						contentSB.WriteString(gutter.Blank())
 					}
@@ -1034,10 +1045,17 @@ func (p *Plugin) renderPreviewPane(visibleHeight int) string {
 				}
 			} else {
 				lineContent = ui.ExpandTabs(lineContent, 8)
-				lineContent = ui.InjectCharacterRangeBackground(lineContent, startCol, endCol)
+				if ansi.StringWidth(lineContent) == 0 {
+					lineContent = ui.InjectCharacterRangeBackground(" ", 0, 0)
+				} else {
+					lineContent = ui.InjectCharacterRangeBackground(lineContent, startCol, endCol)
+				}
 				// Truncate using lipgloss (handles ANSI codes properly)
 				lineNumStr := gutter.Number(i + 1)
-				contentSB.WriteString(ui.InjectSelectionBackground(lineNumStr))
+				if showLineNumbers {
+					lineNumStr = ui.InjectSelectionBackground(lineNumStr)
+				}
+				contentSB.WriteString(lineNumStr)
 				lineContent = lipgloss.NewStyle().MaxWidth(maxLineWidth).Render(lineContent)
 				contentSB.WriteString(lineContent)
 
@@ -1143,43 +1161,29 @@ func (p *Plugin) wrapPreviewLine(line string, width int) []string {
 }
 
 func (p *Plugin) previewSelectionAtXY(x, y int) (int, int, bool) {
-	lines, showLineNumbers := p.previewRenderLines()
-	if !showLineNumbers || len(lines) == 0 {
-		return 0, 0, false
-	}
-	if len(p.previewLines) == 0 {
+	lines := p.previewDisplayLines()
+	rect := p.previewTextRect()
+	if len(lines) == 0 || rect.W <= 0 || rect.H <= 0 {
 		return 0, 0, false
 	}
 
-	// Geometry comes from the shared helpers, never a second copy of the
-	// formula: the duplicate here went stale when the bars grew to two rows and
-	// silently anchored preview clicks and drag-selections one line off.
-	previewContentStartY := p.inputBarHeight() + 3 // border + header
-	row := y - previewContentStartY
+	row := y - rect.Y
 	if row < 0 {
 		return 0, 0, false
 	}
-
-	// Inner content height (excluding borders)
-	innerHeight := p.paneHeight() - 2
-	if innerHeight < 1 {
-		innerHeight = 1
-	}
-	if row >= innerHeight {
-		row = innerHeight - 1
+	// Motions keep extending when the pointer leaves the bottom edge; a press
+	// below the body never reaches this function because no line region exists
+	// there. Clamp to the last row that was actually drawn, not the last source
+	// row, so padding cannot select content.
+	if row >= rect.H {
+		row = rect.H - 1
 	}
 
-	lineNumWidth, maxLineWidth := p.previewTextWidths()
+	_, maxLineWidth := p.previewTextWidths()
 
 	if !p.previewWrapEnabled {
 		lineIdx := p.previewScroll + row
-		if lineIdx < 0 {
-			lineIdx = 0
-		}
-		if lineIdx >= len(p.previewLines) {
-			lineIdx = len(p.previewLines) - 1
-		}
-		if lineIdx < 0 {
+		if lineIdx < 0 || lineIdx >= len(lines) {
 			return 0, 0, false
 		}
 		col := p.previewColAtScreenX(x, lineIdx)
@@ -1189,7 +1193,7 @@ func (p *Plugin) previewSelectionAtXY(x, y int) (int, int, bool) {
 	remainingRow := row
 	lineIdx := p.previewScroll
 	for lineIdx < len(lines) {
-		lineContent := lines[lineIdx]
+		lineContent := p.previewSelectionLine(lineIdx)
 		segments := p.wrapPreviewLine(lineContent, maxLineWidth)
 		if len(segments) == 0 {
 			segments = []string{""}
@@ -1201,16 +1205,12 @@ func (p *Plugin) previewSelectionAtXY(x, y int) (int, int, bool) {
 				segStart += ansi.StringWidth(segments[i])
 			}
 
-			relX := x - p.previewContentStartX(lineNumWidth)
+			relX := x - rect.X
 			if relX < 0 {
 				relX = 0
 			}
 
-			rawLine := lineContent
-			if lineIdx < len(p.previewLines) {
-				rawLine = p.previewLines[lineIdx]
-			}
-			expanded := ui.ExpandTabs(rawLine, 8)
+			expanded := ui.ExpandTabs(lineContent, 8)
 			segmentText := ui.VisualSubstring(expanded, segStart, -1)
 			colInSeg := ui.VisualColAtRelativeX(segmentText, relX)
 			col := segStart + colInSeg
@@ -1228,19 +1228,7 @@ func (p *Plugin) previewSelectionAtXY(x, y int) (int, int, bool) {
 		lineIdx++
 	}
 
-	lastLine := len(p.previewLines) - 1
-	if lastLine < 0 {
-		return 0, 0, false
-	}
-	col := p.previewColAtScreenX(x, lastLine)
-	return lastLine, col, true
-}
-
-func (p *Plugin) previewContentStartX(lineNumWidth int) int {
-	if p.treeVisible {
-		return p.treeWidth + dividerWidth + 1 + lineNumWidth
-	}
-	return 1 + lineNumWidth
+	return 0, 0, false
 }
 
 // previewGutter is the line-number gutter the preview is currently rendered

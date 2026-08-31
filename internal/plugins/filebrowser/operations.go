@@ -15,6 +15,7 @@ import (
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/textselect"
 	"github.com/marcus/sidecar/internal/tty"
 )
 
@@ -926,21 +927,21 @@ func (p *Plugin) copySelectedTextToClipboard() tea.Cmd {
 	if startLine < 0 {
 		startLine = 0
 	}
-	if endLine >= len(p.previewLines) {
-		endLine = len(p.previewLines) - 1
+	display := p.previewDisplayLines()
+	if endLine >= len(display) {
+		endLine = len(display) - 1
 	}
 	if endLine < startLine {
 		return nil
 	}
 
-	lines := p.previewLines[startLine : endLine+1]
-	result := p.selection.SelectedText(lines, startLine, 8)
+	result := p.selection.SelectedText(p.previewSelectionLines(startLine, endLine+1), startLine, 8)
 	if len(result) == 0 {
 		return nil
 	}
 
 	lineCount := endLine - startLine + 1
-	return clip.Copy(strings.Join(result, "\n"), func(r clip.Result) tea.Msg {
+	return clip.Copy(textselect.SelectionText(result), func(r clip.Result) tea.Msg {
 		return msg.FlashMsg{Text: r.Message(fmt.Sprintf("Copied %d line(s)", lineCount))}
 	})
 }

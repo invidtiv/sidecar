@@ -1005,6 +1005,56 @@ func TestAppContentDeckDocumentSelectionKeysPrecedePaneEscape(t *testing.T) {
 	}
 }
 
+func TestAppContentDeckRenderedMarkdownBodySelectsAndCopiesWhatWasDrawn(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("# Rendered heading\n\nRendered body\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := &deckHostTestPlugin{id: "file-browser", focus: "preview", frame: "primary"}
+	m := openAppDeckDocument(t, appDeckTestModel(t, root, p), root, p.id, "README.md")
+	m.renderContent(180, 40)
+	h := m.currentContentDeck()
+	docID := h.deck.Leaf(panelayout.Document)
+	view := h.deck.Viewer(docID).(*docview.Model)
+	if !view.Rendered() {
+		t.Fatal("document fixture is raw; this test must exercise rendered Markdown")
+	}
+	rect := view.ContentLinkRect()
+	if rect.H < 2 {
+		t.Fatalf("rendered document rect = %+v, want at least two rows", rect)
+	}
+
+	m.appContentMouse(tea.MouseClickMsg(tea.Mouse{X: rect.X, Y: rect.Y, Button: tea.MouseLeft}))
+	if got := h.mouse.DragRegion(); got != appDeckDocGestureRegion {
+		t.Fatalf("body press started drag %q, want %s", got, appDeckDocGestureRegion)
+	}
+	m.appContentMouse(tea.MouseMotionMsg(tea.Mouse{X: rect.X + 20, Y: rect.Y + 1, Button: tea.MouseLeft}))
+	m.appContentMouse(tea.MouseReleaseMsg(tea.Mouse{X: rect.X + 20, Y: rect.Y + 1, Button: tea.MouseLeft}))
+	if !view.HasSelection() {
+		t.Fatal("drag through the Files document pane created no selection")
+	}
+	if h.docGestureLeaf != 0 || h.mouse.IsDragging() {
+		t.Fatal("document selection release left a live host gesture")
+	}
+	if frame := m.renderContent(180, 40); !strings.Contains(frame, ui.GetSelectionBgANSI()) {
+		t.Fatal("Files document pane selection has no visible highlight")
+	}
+
+	selected := textselect.SelectionText(view.SelectionText())
+	if !strings.Contains(selected, "Rendered heading") || strings.Contains(selected, "# Rendered heading") {
+		t.Fatalf("selected text = %q, want the rendered heading without Markdown source markers", selected)
+	}
+	clip.ResetRecent()
+	t.Cleanup(clip.ResetRecent)
+	cmd, handled := m.handleAppContentKey(tea.KeyPressMsg{Code: 'c', Mod: tea.ModAlt})
+	if !handled || cmd == nil {
+		t.Fatal("copy chord did not reach the focused rendered document selection")
+	}
+	if copied, ok := clip.LastCopied(); !ok || copied != selected {
+		t.Fatalf("clipboard = %q, %v; want selected rendered text %q", copied, ok, selected)
+	}
+}
+
 func TestAppContentDeckShutdownReleasesActiveSearch(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("needle\n"), 0o600); err != nil {
@@ -1130,6 +1180,9 @@ func TestAppContentDeckRefusalSwitchIsolationAndLinkRelease(t *testing.T) {
 	m.appContentMouse(release)
 	if h1.deck.Leaf(panelayout.Issue) == 0 {
 		t.Fatal("left release on current-generation link opened no Issue leaf")
+	}
+	if _, ok := p1.seen[len(p1.seen)-1].(tea.MouseReleaseMsg); !ok {
+		t.Fatalf("primary link release was not settled through its plugin: last input %T", p1.seen[len(p1.seen)-1])
 	}
 	m.renderContent(200, 40)
 	before := h1.deck.Encode()
@@ -1850,6 +1903,7 @@ func TestAppContentDeckActivatesFromDocumentLeafIntoSameDeck(t *testing.T) {
 	m := openAppDeckDocument(t, appDeckTestModel(t, root, p), root, "file-browser", "notes.md")
 	m.renderContent(200, 40)
 	h := m.currentContentDeck()
+	doc := h.deck.Viewer(h.deck.Leaf(panelayout.Document)).(*docview.Model)
 
 	var hit appContentLinkHit
 	for _, link := range h.links {
@@ -1868,11 +1922,17 @@ func TestAppContentDeckActivatesFromDocumentLeafIntoSameDeck(t *testing.T) {
 	if h.deck.Leaf(panelayout.Issue) != 0 {
 		t.Fatal("dragging across a document-leaf link activated it")
 	}
+	if !doc.HasSelection() {
+		t.Fatal("dragging across a document-leaf link did not select its rendered text")
+	}
 
 	m.appContentMouse(tea.MouseClickMsg(tea.Mouse{X: hit.Rect.X, Y: hit.Rect.Y, Button: tea.MouseLeft}))
 	m.appContentMouse(tea.MouseReleaseMsg(tea.Mouse{X: hit.Rect.X, Y: hit.Rect.Y, Button: tea.MouseLeft}))
 	if h.deck.Leaf(panelayout.Issue) == 0 {
 		t.Fatal("clicking a document-leaf link opened no Issue leaf in this deck")
+	}
+	if h.docGestureLeaf != 0 || h.mouse.IsDragging() {
+		t.Fatal("activating a document link left the body selection gesture armed")
 	}
 	if m.currentContentDeck() != h {
 		t.Fatal("activation from a document leaf left the deck it was drawn in")
