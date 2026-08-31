@@ -138,7 +138,17 @@ func agentCommand() *Command {
 		Run:     runAgentSendKeys,
 	}
 
-	return &Command{Name: "agent", Summary: "Inspect, start, and coordinate agents in Sidecar-managed shells", Usage: "sidecar agent <command>", Long: "Provider-aware control over shells Sidecar owns. The feature is discoverable while disabled; enable agent_control to run it.\n\nThe safe sequence is: create the layout separately with sidecar create shell, start the provider with agent start, prompt and wait, read before you send keys, and never close a target you did not create.", Sub: []*Command{get, list, prompt, read, sendKeys, start, wait}, Run: runAgentRoot}
+	// The lifecycle reporting surface. These are deliberately not gated behind
+	// agent_control: that flag governs *driving* an agent, while these only
+	// record what a provider says about itself, and a pane whose integration is
+	// installed should keep reporting whether or not the operator has opted in
+	// to agent control.
+	lcReport, lcEnd, lcRelease, lcExplain := lifecycleCommands()
+
+	// Sub is rendered in slice order by both RenderHelp and the generated CLI
+	// doc, so it is kept alphabetical and TestCLIDocDrift enforces the result.
+	sub := []*Command{lcEnd, lcExplain, get, list, prompt, read, lcRelease, lcReport, sendKeys, start, wait}
+	return &Command{Name: "agent", Summary: "Inspect, start, and coordinate agents in Sidecar-managed shells", Usage: "sidecar agent <command>", Long: "Provider-aware control over shells Sidecar owns. The feature is discoverable while disabled; enable agent_control to run it.\n\nThe safe sequence is: create the layout separately with sidecar create shell, start the provider with agent start, prompt and wait, read before you send keys, and never close a target you did not create.\n\nThe report, end, release, and explain commands are a separate surface: they record and inspect the lifecycle events a provider's own integration reports, and they are not gated behind agent_control.", Sub: sub, Run: runAgentRoot}
 }
 
 func agentExitCodes() []ExitCode {

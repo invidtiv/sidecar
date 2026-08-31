@@ -2,6 +2,7 @@ package workspaceops
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/tmuxenv"
+	"github.com/marcus/sidecar/internal/tmuxserver"
 	"github.com/marcus/sidecar/internal/tty"
 )
 
@@ -261,13 +263,26 @@ func NewSessionWithIdentity(args []string, sessionName, displayName string) erro
 	return nil
 }
 
-// ShellEnvArgs is the new-session flag pair that publishes a shell's identity
+// ShellEnvArgs is the new-session flag set that publishes a shell's identity
 // into its own environment, so a pane can name itself without asking Sidecar.
+//
+// It also publishes the managed-shell contract documented on
+// [shellstate.ManagedEnv], which is what tells a provider hook it is allowed to
+// report lifecycle state and which server incarnation to namespace it under.
+//
+// This function and [SetShellEnv] are a pair and must stay in step: the -e form
+// needs tmux 3.2, and SetShellEnv is the fallback for older tmux and for the
+// recreate paths. Anything added to one and not the other silently vanishes on
+// exactly the machines least likely to be tested on.
 func ShellEnvArgs(sessionName, displayName string) []string {
-	return []string{
+	args := []string{
 		"-e", shellstate.SessionEnv + "=" + sessionName,
 		"-e", shellstate.NameEnv + "=" + displayName,
 	}
+	for k, v := range managedShellEnv() {
+		args = append(args, "-e", k+"="+v)
+	}
+	return args
 }
 
 // SetShellEnv publishes the display name to the tmux session environment.
@@ -279,4 +294,59 @@ func SetShellEnv(sessionName, displayName string) {
 	}
 	_ = tty.SetSessionEnv(sessionName, shellstate.SessionEnv, sessionName)
 	_ = tty.SetSessionEnv(sessionName, shellstate.NameEnv, displayName)
+	for k, v := range managedShellEnv() {
+		_ = tty.SetSessionEnv(sessionName, k, v)
+	}
+}
+
+// managedShellEnv builds the environment contract from the creating process's
+// own view of the world.
+//
+// Every value is derived here, by Sidecar, and never accepted from provider
+// input. A key whose value cannot be determined is omitted rather than set to
+// something invented: a hook that finds an incomplete contract falls back to
+// screen detection, which is correct, whereas a hook that trusts a guessed
+// server or host would write records that can never be matched to a live pane.
+//
+// Ordering is not guaranteed because the result is a map, which is fine for
+// `-e` flags and for set-environment, but means callers must not depend on
+// argument order.
+func managedShellEnv() map[string]string {
+	env := map[string]string{
+		shellstate.ManagedEnv: "1",
+	}
+	if ns := tmuxenv.Namespace(); ns != "" {
+		env[shellstate.NamespaceEnv] = ns
+	}
+	if host, err := os.Hostname(); err == nil && host != "" {
+		env[shellstate.HostEnv] = host
+	}
+	if pid := ServerPID(); pid > 0 {
+		env[shellstate.ServerEnv] = strconv.Itoa(pid)
+	}
+	// os.Executable resolves the running binary rather than searching PATH, so
+	// a hook invokes the same Sidecar that created its shell even when another
+	// one wins PATH — which, given this repo ships managed installs alongside a
+	// Homebrew one, is the common case rather than the exotic one.
+	if exe, err := os.Executable(); err == nil && exe != "" {
+		if resolved, err := filepath.EvalSymlinks(exe); err == nil && resolved != "" {
+			exe = resolved
+		}
+		env[shellstate.BinEnv] = exe
+	}
+	return env
+}
+
+// ServerPID returns the PID of the tmux server on the current socket, or 0 when
+// there is none or it cannot be read.
+func ServerPID() int {
+	out, err := exec.Command("tmux", "display-message", "-p", "#{pid}").Output()
+	if err != nil {
+		return 0
+	}
+	pid, ok := tmuxserver.ParsePID(strings.TrimSpace(string(out)))
+	if !ok {
+		return 0
+	}
+	return pid
 }

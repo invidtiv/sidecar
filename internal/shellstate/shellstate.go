@@ -28,6 +28,53 @@ const (
 	SessionEnv = "SIDECAR_SHELL"
 )
 
+// The managed-shell environment contract.
+//
+// These are published alongside NameEnv and SessionEnv when Sidecar creates a
+// shell, and they are what lets a provider hook running inside that shell know
+// it may report lifecycle state, and for which pane. A hook that finds
+// ManagedEnv unset exits successfully and silently: outside a Sidecar shell
+// there is nothing to report to and nothing to complain about.
+//
+// Two rules shape this list. Nothing here is a writable path — the report
+// command resolves Sidecar's state directory itself, so provider input can
+// never redirect where lifecycle records are written. And nothing here is
+// trusted on its own: the report command re-derives the live pane and server
+// from tmux and refuses a report whose claimed context does not match.
+const (
+	// ManagedEnv is the boolean cue, set to "1". It is the single check a hook
+	// makes before doing anything at all.
+	ManagedEnv = "SIDECAR_MANAGED_SHELL"
+
+	// ServerEnv carries the tmux server's PID, which is how lifecycle records
+	// are namespaced by server incarnation.
+	//
+	// The PID rather than tmuxserver.Incarnation.String() is deliberate, and
+	// the difference is not cosmetic: that string embeds the socket ctime,
+	// which tmux bumps every time the attached-client set changes. Namespacing
+	// stored records by it would silently orphan every report the moment a user
+	// attached or detached a client, returning a healthy pane to screen
+	// fallback for no visible reason. The PID is stable for the server's
+	// lifetime and new after a restart, which is exactly the property the
+	// namespace needs, and it is what agentcontrol already compares.
+	ServerEnv = "SIDECAR_TMUX_SERVER"
+
+	// HostEnv carries the host that owns the pane. Reports never cross hosts; a
+	// registered remote resolves its own state locally.
+	HostEnv = "SIDECAR_HOST"
+
+	// BinEnv carries the absolute path of the Sidecar binary that created the
+	// shell, for provider hook formats that need a command to invoke. It exists
+	// so an asset never has to guess a path or search PATH, and so nothing has
+	// to shell-compose one.
+	BinEnv = "SIDECAR_BIN"
+
+	// NamespaceEnv carries the tmux socket path that identifies this host-local
+	// namespace. It is an identifier for diagnostics and matching, never a
+	// location anything is written to.
+	NamespaceEnv = "SIDECAR_NAMESPACE"
+)
+
 // NamingInstruction is the canonical guidance for keeping a shell's display
 // name useful. It lives here, next to the rules it describes, so every
 // delivery channel — AGENTS.md, a harness system-prompt append, help text —

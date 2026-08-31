@@ -1,0 +1,204 @@
+package cli
+
+import (
+	"bytes"
+	"encoding/json"
+	"strings"
+	"testing"
+
+	"github.com/marcus/sidecar/internal/shellstate"
+)
+
+func runLifecycleCLI(t *testing.T, args ...string) (int, string, string) {
+	t.Helper()
+	var out, errOut bytes.Buffer
+	handled, code := Run(args, &out, &errOut)
+	if !handled {
+		t.Fatalf("Run(%v) was not handled", args)
+	}
+	return code, out.String(), errOut.String()
+}
+
+// TestLifecycleHooksNoOpOutsideAManagedShell is the fail-open rule, which is
+// the single most important property of these three commands.
+//
+// A provider hook fires on every lifecycle event whether or not the user is
+// running inside Sidecar. If reporting outside a managed shell were an error,
+// every OpenCode user with the plugin installed would see Sidecar's complaints
+// in their own terminal, and a non-zero exit could change what the provider
+// does. So the answer is: exit 0, say nothing, record nothing.
+func TestLifecycleHooksNoOpOutsideAManagedShell(t *testing.T) {
+	// Explicitly unset rather than assumed: the test binary may be running
+	// inside a real Sidecar shell.
+	t.Setenv(shellstate.ManagedEnv, "")
+
+	for _, args := range [][]string{
+		{"agent", "report", "--state", "working", "--source", "s", "--provider", "opencode", "--seq", "1"},
+		{"agent", "end", "--outcome", "completed", "--source", "s", "--provider", "opencode", "--seq", "2"},
+		{"agent", "release", "--source", "s", "--provider", "opencode", "--seq", "3"},
+	} {
+		t.Run(args[1], func(t *testing.T) {
+			code, out, errOut := runLifecycleCLI(t, args...)
+			if code != 0 {
+				t.Fatalf("exit %d, want 0 (stderr: %s)", code, errOut)
+			}
+			if out != "" {
+				t.Fatalf("wrote to stdout in human mode: %q", out)
+			}
+			if errOut != "" {
+				t.Fatalf("wrote to stderr: %q", errOut)
+			}
+		})
+	}
+}
+
+// TestLifecycleHookJSONNoOpIsStillStructured checks that --json callers get a
+// parseable answer for the no-op, because an integration's own diagnostics
+// need to distinguish "not applicable" from "failed".
+func TestLifecycleHookJSONNoOpIsStillStructured(t *testing.T) {
+	t.Setenv(shellstate.ManagedEnv, "")
+
+	code, out, errOut := runLifecycleCLI(t,
+		"agent", "report", "--state", "idle", "--source", "s", "--provider", "opencode", "--seq", "1", "--json")
+	if code != 0 {
+		t.Fatalf("exit %d (stderr: %s)", code, errOut)
+	}
+	if errOut != "" {
+		t.Fatalf("stderr not empty with --json: %q", errOut)
+	}
+	var res struct {
+		SchemaVersion int    `json:"schemaVersion"`
+		Accepted      bool   `json:"accepted"`
+		Managed       bool   `json:"managed"`
+		Note          string `json:"note"`
+	}
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("stdout is not one JSON document: %q (%v)", out, err)
+	}
+	if res.Managed || res.Accepted {
+		t.Fatalf("no-op reported as managed/accepted: %+v", res)
+	}
+	if res.Note == "" {
+		t.Fatal("no-op carried no explanation")
+	}
+}
+
+// TestLifecycleUsageErrorsComeBeforeAnythingElse pins the ordering the agent
+// family already uses: a mistyped command line is a usage error, never
+// something that looks like a lifecycle refusal the integration caused.
+func TestLifecycleUsageErrorsComeBeforeAnythingElse(t *testing.T) {
+	t.Setenv(shellstate.ManagedEnv, "")
+
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"report without a state", []string{"agent", "report", "--source", "s", "--provider", "p", "--seq", "1"}, "--state is required"},
+		{"report with a bad state", []string{"agent", "report", "--state", "thinking", "--source", "s", "--provider", "p", "--seq", "1"}, "must be working, blocked, or idle"},
+		{"report without a source", []string{"agent", "report", "--state", "idle", "--provider", "p", "--seq", "1"}, "--source is required"},
+		{"report without a provider", []string{"agent", "report", "--state", "idle", "--source", "s", "--seq", "1"}, "--provider is required"},
+		{"report without a sequence", []string{"agent", "report", "--state", "idle", "--source", "s", "--provider", "p"}, "--seq is required"},
+		{"a non-numeric sequence", []string{"agent", "report", "--state", "idle", "--source", "s", "--provider", "p", "--seq", "x"}, "--seq must be"},
+		{"end without an outcome", []string{"agent", "end", "--source", "s", "--provider", "p", "--seq", "1"}, "--outcome is required"},
+		{"end with a bad outcome", []string{"agent", "end", "--outcome", "exploded", "--source", "s", "--provider", "p", "--seq", "1"}, "--outcome must be"},
+		{"a reason outside the allowlist", []string{"agent", "report", "--state", "idle", "--source", "s", "--provider", "p", "--seq", "1", "--reason", "vibes"}, "not in the frozen allowlist"},
+		{"an unknown flag", []string{"agent", "report", "--state", "idle", "--source", "s", "--provider", "p", "--seq", "1", "--nope"}, "unknown flag"},
+		{"a state on end", []string{"agent", "end", "--outcome", "completed", "--state", "idle", "--source", "s", "--provider", "p", "--seq", "1"}, "belongs to sidecar agent report"},
+		{"an outcome on report", []string{"agent", "report", "--state", "idle", "--outcome", "completed", "--source", "s", "--provider", "p", "--seq", "1"}, "belongs to sidecar agent end"},
+		{"a state on release", []string{"agent", "release", "--state", "idle", "--source", "s", "--provider", "p", "--seq", "1"}, "asserts neither a state nor an outcome"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			code, out, errOut := runLifecycleCLI(t, tc.args...)
+			if code != 2 {
+				t.Fatalf("exit %d, want 2 (usage)", code)
+			}
+			if out != "" {
+				t.Fatalf("usage error wrote to stdout: %q", out)
+			}
+			if !strings.Contains(errOut, tc.want) {
+				t.Fatalf("stderr %q does not mention %q", errOut, tc.want)
+			}
+		})
+	}
+}
+
+// TestLifecycleHooksCannotSelectAnotherPane is the security property stated as
+// a test: there is no flag through which provider input could choose a
+// different host, server, pane, or run. If someone adds one, this fails.
+func TestLifecycleHooksCannotSelectAnotherPane(t *testing.T) {
+	t.Setenv(shellstate.ManagedEnv, "")
+
+	forbidden := []string{"--pane", "--host", "--server", "--run", "--run-id", "--process-generation", "--pane-id"}
+	for _, name := range []string{"report", "end", "release"} {
+		cmd := RootCommand().FindSubcommand("agent").FindSubcommand(name)
+		if cmd == nil {
+			t.Fatalf("agent %s is not registered", name)
+		}
+		for _, f := range cmd.Flags {
+			for _, bad := range forbidden {
+				if f.Name == bad {
+					t.Fatalf("agent %s accepts %s; identity must never be selectable through input", name, bad)
+				}
+			}
+		}
+	}
+}
+
+// TestExplainIsReadOnlyAndDeclinesOtherShells covers the two things that make
+// explain safe to run anywhere: it never writes, and it refuses plainly rather
+// than answering about the wrong pane.
+func TestExplainIsReadOnlyAndDeclinesOtherShells(t *testing.T) {
+	t.Setenv(shellstate.ManagedEnv, "")
+
+	code, out, _ := runLifecycleCLI(t, "agent", "explain", "--json")
+	if code != 0 {
+		t.Fatalf("exit %d, want 0", code)
+	}
+	var res struct {
+		Managed bool   `json:"managed"`
+		Note    string `json:"note"`
+	}
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("stdout is not one JSON document: %q", out)
+	}
+	if res.Managed {
+		t.Fatal("reported managed outside a managed shell")
+	}
+
+	code, _, errOut := runLifecycleCLI(t, "agent", "explain", "--shell", "other")
+	if code != exitInputRejected {
+		t.Fatalf("exit %d, want %d", code, exitInputRejected)
+	}
+	if !strings.Contains(errOut, "not implemented yet") {
+		t.Fatalf("stderr = %q", errOut)
+	}
+
+	code, _, errOut = runLifecycleCLI(t, "agent", "explain", "--current", "--shell", "other")
+	if code != 2 {
+		t.Fatalf("exit %d, want 2 for two conflicting targets (stderr: %s)", code, errOut)
+	}
+}
+
+// TestLifecycleCommandsAreRegisteredAlphabetically guards the slice order the
+// generated CLI doc and RenderHelp both render in, so a new subcommand cannot
+// quietly reorder the reference.
+func TestLifecycleCommandsAreRegisteredAlphabetically(t *testing.T) {
+	agent := RootCommand().FindSubcommand("agent")
+	var names []string
+	for _, c := range agent.Sub {
+		names = append(names, c.Name)
+	}
+	for i := 1; i < len(names); i++ {
+		if names[i-1] > names[i] {
+			t.Fatalf("agent subcommands are not alphabetical: %v", names)
+		}
+	}
+	for _, want := range []string{"report", "end", "release", "explain"} {
+		if agent.FindSubcommand(want) == nil {
+			t.Fatalf("agent %s is not registered", want)
+		}
+	}
+}
