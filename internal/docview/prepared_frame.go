@@ -1,11 +1,15 @@
 package docview
 
 import (
+	"encoding/binary"
+	"reflect"
 	"sort"
 	"strings"
 
+	"github.com/cespare/xxhash/v2"
 	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/terminalperf"
 )
 
@@ -19,8 +23,11 @@ type PrepareOptions struct {
 	MatcherGeneration  uint64
 	AllowedKinds       contentlink.KindSet
 	InternalNamespaces map[string]contentlink.URIOptions
-	Decorate           bool
-	Links              bool
+	// NamespaceGeneration must advance when a validator's behavior changes
+	// without changing its function identity (for example, a mutable closure).
+	NamespaceGeneration uint64
+	Decorate            bool
+	Links               bool
 }
 
 // PreparedFrame is an immutable visible document frame. Its hit rectangles are
@@ -35,17 +42,19 @@ type preparedFrameData struct {
 }
 
 type preparedFrameKey struct {
-	visualRevision     uint64
-	width, height      int
-	styleKey           string
-	root               string
-	resolution         uint64
-	matcherGeneration  uint64
-	matchers           string
-	allowedKinds       uint64
-	internalNamespaces string
-	decorate           bool
-	links              bool
+	visualRevision      uint64
+	width, height       int
+	styleKey            string
+	presentationStyle   uint64
+	root                string
+	resolution          uint64
+	matcherGeneration   uint64
+	matchers            string
+	allowedKinds        uint64
+	internalNamespaces  uint64
+	namespaceGeneration uint64
+	decorate            bool
+	links               bool
 }
 
 // Output returns the already-rendered and, when enabled, decorated body.
@@ -168,18 +177,20 @@ func (m *Model) PrepareFrame(opts PrepareOptions) PreparedFrame {
 
 func (m *Model) currentPreparedFrameKey(opts PrepareOptions) preparedFrameKey {
 	return preparedFrameKey{
-		visualRevision:     m.visualRevision,
-		width:              m.width,
-		height:             m.height,
-		styleKey:           m.renderer.StyleKey(),
-		root:               opts.Root,
-		resolution:         opts.Resolution.Generation(),
-		matcherGeneration:  opts.MatcherGeneration,
-		matchers:           matcherKey(opts.MatcherGeneration, opts.Matchers),
-		allowedKinds:       kindSetKey(opts.AllowedKinds),
-		internalNamespaces: namespaceKey(opts.InternalNamespaces),
-		decorate:           opts.Decorate,
-		links:              opts.Links,
+		visualRevision:      m.visualRevision,
+		width:               m.width,
+		height:              m.height,
+		styleKey:            m.renderer.StyleKey(),
+		presentationStyle:   docPresentationStyleKey(),
+		root:                opts.Root,
+		resolution:          opts.Resolution.Generation(),
+		matcherGeneration:   opts.MatcherGeneration,
+		matchers:            matcherKey(opts.MatcherGeneration, opts.Matchers),
+		allowedKinds:        kindSetKey(opts.AllowedKinds),
+		internalNamespaces:  namespaceKey(opts.InternalNamespaces),
+		namespaceGeneration: opts.NamespaceGeneration,
+		decorate:            opts.Decorate,
+		links:               opts.Links,
 	}
 }
 
@@ -206,13 +217,67 @@ func kindSetKey(kinds contentlink.KindSet) uint64 {
 	return key
 }
 
-func namespaceKey(namespaces map[string]contentlink.URIOptions) string {
-	values := make([]string, 0, len(namespaces))
-	for name := range namespaces {
-		values = append(values, name)
+func namespaceKey(namespaces map[string]contentlink.URIOptions) uint64 {
+	if len(namespaces) == 0 {
+		return 0
 	}
-	sort.Strings(values)
-	return strings.Join(values, "\x00")
+	names := make([]string, 0, len(namespaces))
+	for name := range namespaces {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	h := xxhash.New()
+	var pointerBytes [8]byte
+	for _, name := range names {
+		_, _ = h.WriteString(name)
+		_, _ = h.WriteString("\x00")
+		opts := namespaces[name]
+		keys := make([]string, 0, len(opts.AllowedQuery))
+		for key := range opts.AllowedQuery {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			_, _ = h.WriteString(key)
+			_, _ = h.WriteString("\x01")
+		}
+		if opts.ValidateID != nil {
+			binary.LittleEndian.PutUint64(pointerBytes[:], uint64(reflect.ValueOf(opts.ValidateID).Pointer()))
+			_, _ = h.Write(pointerBytes[:])
+		}
+		_, _ = h.WriteString("\x02")
+	}
+	return h.Sum64()
+}
+
+// docPresentationStyleKey covers colors docview paints after the Markdown
+// renderer has produced its rows. Those colors deliberately do not all belong
+// to markdown.ThemeSnapshot.StyleKey.
+func docPresentationStyleKey() uint64 {
+	c := styles.GetCurrentTheme().Colors
+	selection := c.SelectionBg
+	if selection == "" {
+		selection = c.BgTertiary
+	}
+	track, thumb := c.ScrollbarTrack, c.ScrollbarThumb
+	if track == "" {
+		track = c.TextSubtle
+	}
+	if thumb == "" {
+		thumb = c.TextMuted
+	}
+	h := xxhash.New()
+	for _, value := range []string{
+		selection,
+		c.Warning, c.OnWarning,
+		c.Primary, c.OnPrimary,
+		c.TextPrimary,
+		track, thumb,
+	} {
+		_, _ = h.WriteString(value)
+		_, _ = h.WriteString("\x00")
+	}
+	return h.Sum64()
 }
 
 func resourceMatchersKey(matchers []contentlink.ResourceMatcher) string {

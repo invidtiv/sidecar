@@ -2,11 +2,13 @@ package docview
 
 import (
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/markdown"
+	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/terminalperf"
 )
 
@@ -137,4 +139,137 @@ func TestPreparedFrameResolutionIsRootAwareAndNegativeExpiryRequeues(t *testing.
 	if len(expired) != 1 || expired[0].Token == one[0].Token {
 		t.Fatalf("expired negative request = %+v, want one fresh token", expired)
 	}
+}
+
+func TestPreparedFrameInvalidatesSelectionOnlyPaletteChangeOnce(t *testing.T) {
+	useDocviewTestTheme(t)
+	m := newSelectableModel(t, 50, 3, "alpha beta")
+	m.HandleSelectionMouse(selectPress(m.contentX(0), selectionOriginY))
+	m.HandleSelectionMouse(selectDrag(m.contentX(5), selectionOriginY))
+	opts := PrepareOptions{Links: false}
+	before := m.PrepareFrame(opts)
+	markdownKey := m.renderer.StyleKey()
+
+	applyDocviewTestTheme(t, func(c *styles.ColorPalette) { c.SelectionBg = differentTestColor(c.SelectionBg, "#5b214e") })
+	if got := m.renderer.StyleKey(); got != markdownKey {
+		t.Fatalf("selection-only change moved Markdown key: %q -> %q", markdownKey, got)
+	}
+	after := m.PrepareFrame(opts)
+	if after.data == before.data || after.Output() == before.Output() {
+		t.Fatal("selection-only palette change reused the old frame/color")
+	}
+	if again := m.PrepareFrame(opts); again.data != after.data {
+		t.Fatal("selection-only palette change rebuilt more than once")
+	}
+}
+
+func TestPreparedFrameInvalidatesSearchOnlyPaletteChangeOnce(t *testing.T) {
+	useDocviewTestTheme(t)
+	m := newSearchModel(t, 50, 4, "alpha alpha")
+	typeSearch(m, "alpha")
+	pressSearch(m, "enter")
+	opts := PrepareOptions{Links: false}
+	before := m.PrepareFrame(opts)
+	markdownKey := m.renderer.StyleKey()
+
+	applyDocviewTestTheme(t, func(c *styles.ColorPalette) {
+		c.Warning = differentTestColor(c.Warning, "#2a9d8f")
+		c.OnWarning = differentTestColor(c.OnWarning, "#101010")
+	})
+	if got := m.renderer.StyleKey(); got != markdownKey {
+		t.Fatalf("search-only change moved Markdown key: %q -> %q", markdownKey, got)
+	}
+	after := m.PrepareFrame(opts)
+	if after.data == before.data || after.Output() == before.Output() {
+		t.Fatal("search-only palette change reused the old frame/color")
+	}
+	if again := m.PrepareFrame(opts); again.data != after.data {
+		t.Fatal("search-only palette change rebuilt more than once")
+	}
+}
+
+func TestPreparedFrameInvalidatesScrollbarOnlyPaletteChangeOnce(t *testing.T) {
+	useDocviewTestTheme(t)
+	m := newSelectableModel(t, 50, 3, "one", "two", "three", "four", "five", "six")
+	opts := PrepareOptions{Links: false}
+	before := m.PrepareFrame(opts)
+	markdownKey := m.renderer.StyleKey()
+
+	applyDocviewTestTheme(t, func(c *styles.ColorPalette) {
+		c.ScrollbarTrack = differentTestColor(c.ScrollbarTrack, "#8b3a3a")
+		c.ScrollbarThumb = differentTestColor(c.ScrollbarThumb, "#3a8b62")
+	})
+	if got := m.renderer.StyleKey(); got != markdownKey {
+		t.Fatalf("scrollbar-only change moved Markdown key: %q -> %q", markdownKey, got)
+	}
+	after := m.PrepareFrame(opts)
+	if after.data == before.data || after.Output() == before.Output() {
+		t.Fatal("scrollbar-only palette change reused the old frame/color")
+	}
+	if again := m.PrepareFrame(opts); again.data != after.data {
+		t.Fatal("scrollbar-only palette change rebuilt more than once")
+	}
+}
+
+func TestPreparedFrameInvalidatesInternalNamespaceSemanticsOnce(t *testing.T) {
+	m := newSelectableModel(t, 70, 3, "open sidecar://note/nt-1?view=full")
+	opts := PrepareOptions{
+		AllowedKinds: contentlink.NewKindSet(contentlink.KindInternal),
+		InternalNamespaces: map[string]contentlink.URIOptions{
+			"note": {},
+		},
+		Decorate: true,
+		Links:    true,
+	}
+	rejected := m.PrepareFrame(opts)
+	if len(rejected.data.hits) != 0 {
+		t.Fatalf("disallowed query produced hits: %+v", rejected.data.hits)
+	}
+
+	opts.InternalNamespaces["note"] = contentlink.URIOptions{AllowedQuery: map[string]struct{}{"view": {}}}
+	allowed := m.PrepareFrame(opts)
+	if allowed.data == rejected.data || len(allowed.data.hits) != 1 || !strings.Contains(allowed.Output(), "\x1b[4m") {
+		t.Fatalf("allowlist change did not rebuild an activatable frame: %+v", allowed.data.hits)
+	}
+	if again := m.PrepareFrame(opts); again.data != allowed.data {
+		t.Fatal("allowlist change rebuilt more than once")
+	}
+
+	opts.InternalNamespaces["note"] = contentlink.URIOptions{
+		AllowedQuery: map[string]struct{}{"view": {}},
+		ValidateID:   func(string) bool { return false },
+	}
+	opts.NamespaceGeneration++
+	validatorRejected := m.PrepareFrame(opts)
+	if validatorRejected.data == allowed.data || len(validatorRejected.data.hits) != 0 {
+		t.Fatalf("validator generation did not reject the cached link: %+v", validatorRejected.data.hits)
+	}
+	if again := m.PrepareFrame(opts); again.data != validatorRejected.data {
+		t.Fatal("validator generation rebuilt more than once")
+	}
+}
+
+func applyDocviewTestTheme(t *testing.T, mutate func(*styles.ColorPalette)) {
+	t.Helper()
+	original := styles.GetCurrentTheme()
+	t.Cleanup(func() { styles.ApplyThemeColors(original) })
+	changed := original
+	mutate(&changed.Colors)
+	styles.ApplyThemeColors(changed)
+}
+
+func useDocviewTestTheme(t *testing.T) {
+	t.Helper()
+	// Dracula has distinct Primary and Warning fills, which keeps the existing
+	// current-vs-other search-highlight contract observable after this test.
+	base := styles.GetTheme("dracula")
+	styles.ApplyThemeColors(base)
+	t.Cleanup(func() { styles.ApplyThemeColors(base) })
+}
+
+func differentTestColor(current, candidate string) string {
+	if strings.EqualFold(current, candidate) {
+		return "#7d4e9f"
+	}
+	return candidate
 }
