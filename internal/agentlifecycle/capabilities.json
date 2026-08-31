@@ -3,7 +3,7 @@
     "schemaVersion": 1,
     "provider": "opencode",
     "source": "sidecar.opencode.plugin",
-    "assetVersion": "0",
+    "assetVersion": "1",
     "tier": "full",
     "evidence": "real-trace",
     "minProviderVersion": "1.18.0",
@@ -23,7 +23,9 @@
       "Subagent activity has no dedicated event. Child sessions are identifiable only by info.parentID on session events.",
       "The blocked lane is transition-shaped, not state-shaped: session.status only ever carried busy or idle, and blocking is visible solely as the permission.asked/permission.replied pair. A dropped permission.asked therefore does not self-correct the way a dropped busy/idle does.",
       "tool.execute.after did not fire on 1.18.23 even though tool.execute.before did, so tool completion cannot be relied on as an event. The cancellation traces used a tool-free prompt and did not re-test this on 1.18.25.",
-      "Both ~/.config/opencode/plugin/ and ~/.config/opencode/plugins/ are loaded, and an asset present in both fires every event twice. The installer must own exactly one path and repair must detect the other."
+      "Both ~/.config/opencode/plugin/ and ~/.config/opencode/plugins/ are loaded, and an asset present in both fires every event twice. The installer must own exactly one path and repair must detect the other.",
+      "Every export of a plugin module must be a plugin factory. One non-function export and the module is imported and then never called, silently and with no error. Measured on 1.18.25 with four probe plugins. This is invisible to offline tests: the plugin installs cleanly, its unit tests pass, and it reports nothing at all.",
+      "There is no event ordering guarantee across separate report processes. Reports must be serialized by the integration, because the lifecycle store enforces a strictly increasing sequence per run and correctly rejects an out-of-order arrival."
     ],
     "orderingGuaranteed": false,
     "sourceDoc": "https://opencode.ai/docs/plugins/",

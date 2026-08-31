@@ -236,27 +236,49 @@ const maxAncestry = 24
 
 // providerGeneration identifies the provider process this hook belongs to.
 //
-// The provider is the ancestor whose own parent is the pane's root process:
-// walking up from the hook, the last process before the pane's shell is the
-// thing the user actually started. That is the granularity a "generation" needs
-// — relaunching the agent in the same pane must produce a new one, while the
-// pane and its shell stay the same.
+// A generation must be stable for the life of one agent run and must change
+// when the agent is relaunched in the same pane. Getting that wrong is not a
+// cosmetic error: the run id is derived from it, so a generation that changes
+// per hook invocation makes every single report its own "run", and run-scoped
+// sequencing, freshness, and authority all stop meaning anything.
 //
-// When the walk cannot find the pane's shell (an unusual process tree, a hook
-// that daemonised, ps unavailable) the pane's own root process is used instead.
-// That is weaker — it will not rotate on an agent relaunch — but it is stable
-// and truthful, and the resolver's other identity checks still apply.
+// Two process shapes occur in practice and they need different answers:
+//
+//   - tmux runs a shell and the user starts the agent inside it. The pane's
+//     root process is the shell, and the provider is the ancestor directly
+//     below it.
+//   - tmux runs the agent as the pane's command, which is what a Sidecar-managed
+//     agent shell does. The pane's root process IS the provider, and there is
+//     nothing below it but the hook itself.
+//
+// So: walk up from the hook to the pane root, and take the last ancestor before
+// it — unless that ancestor is the hook process, in which case the pane root is
+// the provider. An earlier version always took the last ancestor, which in the
+// second shape returned the hook's own pid and gave every report a different
+// generation. That reached a live provider before it was caught.
+//
+// When the walk cannot reach the pane root at all (an unusual tree, a hook that
+// daemonised, ps unavailable) the pane's root process is used. That is weaker —
+// it will not rotate on a relaunch — but it is stable and truthful, and the
+// resolver's other identity checks still apply.
 func providerGeneration(panePID int) (string, error) {
 	if panePID <= 0 {
 		return "", errors.New("pane has no root process")
 	}
-	pid := os.Getpid()
+	self := os.Getpid()
+	pid := self
 	for i := 0; i < maxAncestry; i++ {
 		parent, err := parentPID(pid)
 		if err != nil {
 			break
 		}
 		if parent == panePID {
+			if pid == self {
+				// The hook is a direct child of the pane's root process, so the
+				// provider is that root process rather than this short-lived
+				// reporting command.
+				return generationString(panePID), nil
+			}
 			return generationString(pid), nil
 		}
 		if parent <= 1 {

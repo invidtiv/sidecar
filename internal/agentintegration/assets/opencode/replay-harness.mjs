@@ -17,7 +17,11 @@
 // exercises the same code rather than a copy of it.
 
 import { readFileSync } from "node:fs"
-import { buildArgs, mapEvent, newState } from "./sidecar-lifecycle.js"
+import { SidecarLifecycle } from "./sidecar-lifecycle.js"
+
+// The mapping hangs off the function because OpenCode rejects any module with
+// a non-function export. See the export-surface note in the asset.
+const { buildArgs, mapEvent, newState } = SidecarLifecycle.internals
 
 const tracePath = process.argv[2]
 if (!tracePath) {

@@ -393,3 +393,71 @@ func TestCapabilityIsRegisteredForTheBundledSource(t *testing.T) {
 		t.Fatalf("opencode exercises %q (%s), want full", tier, reason)
 	}
 }
+
+// TestTheAssetExportsOnlyPluginFactories guards the failure mode the live exit
+// gate found, and which no Go test could have.
+//
+// OpenCode's plugin loader requires EVERY export of a plugin module to be a
+// plugin factory. One non-function export and the module is imported and then
+// never called -- silently, with no error anywhere. Measured against 1.18.25
+// with four probe plugins: a lone function export loads; a function plus a
+// string export does not; a function plus an object export does not; a function
+// carrying its helpers as properties loads.
+//
+// That is why the asset's pure mapping hangs off SidecarLifecycle rather than
+// being exported beside it. The first attempt at making the mapping testable
+// exported it, every test here passed, and the plugin reported nothing at all
+// against a real provider.
+func TestTheAssetExportsOnlyPluginFactories(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is not installed; cannot inspect the asset's export surface")
+	}
+	cmd := exec.Command(node, "exports-harness.mjs")
+	cmd.Dir = filepath.Join("assets", "opencode")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("inspecting the asset's exports: %v\n%s", err, stderr.String())
+	}
+	var surface struct {
+		Names        []string `json:"names"`
+		NonFunctions []string `json:"nonFunctions"`
+	}
+	if err := json.Unmarshal(out, &surface); err != nil {
+		t.Fatalf("harness output is not JSON: %q", out)
+	}
+	if len(surface.NonFunctions) != 0 {
+		t.Fatalf("non-function exports %v; OpenCode skips the whole module without an error, "+
+			"so the plugin would install cleanly and never report", surface.NonFunctions)
+	}
+	if len(surface.Names) != 1 || surface.Names[0] != "SidecarLifecycle" {
+		t.Fatalf("exports = %v, want exactly [SidecarLifecycle]", surface.Names)
+	}
+}
+
+// TestReportArgsCarryTheAssetVersion pins that authority stays scoped to a
+// source *at a version*. Without it every stored record claims an unknown
+// version and an outdated asset can never be detected.
+func TestReportArgsCarryTheAssetVersion(t *testing.T) {
+	args := ReportArgs(OpenCodeAction{
+		Kind:   agentlifecycle.KindState,
+		State:  agentactivity.StateWorking,
+		Reason: agentlifecycle.ReasonTurnStart,
+	}, 1, "s1")
+
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "--source-version "+OpenCodeAssetVersion) {
+		t.Fatalf("argv does not carry the asset version: %v", args)
+	}
+
+	cap, ok := agentlifecycle.CapabilityForSource(OpenCodeSource)
+	if !ok {
+		t.Fatal("no capability registered")
+	}
+	if cap.AssetVersion != OpenCodeAssetVersion {
+		t.Fatalf("registry asset version %q != bundled %q; every report would look outdated",
+			cap.AssetVersion, OpenCodeAssetVersion)
+	}
+}

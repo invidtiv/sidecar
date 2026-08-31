@@ -66,17 +66,21 @@
 
 import { spawn } from "node:child_process"
 
-export const SOURCE = "sidecar.opencode.plugin"
-export const PROVIDER = "opencode"
-export const ABORTED_ERROR = "MessageAbortedError"
+const SOURCE = "sidecar.opencode.plugin"
+const PROVIDER = "opencode"
+const ABORTED_ERROR = "MessageAbortedError"
+
+// VERSION is the bundled asset version, carried on every report because
+// authority is granted to a source at a version, never to a source forever.
+const VERSION = "1"
 
 // REPORT_TIMEOUT_MS bounds one report subprocess. A hung `sidecar agent report`
 // -- a wedged lock, a stalled filesystem -- must not stall the queue behind it
 // for the rest of the session, so it is killed and the queue moves on.
-export const REPORT_TIMEOUT_MS = 5000
+const REPORT_TIMEOUT_MS = 5000
 
 // newState returns the mapping's initial state.
-export function newState() {
+function newState() {
   return { lane: "", blocked: false, ended: false, session: "" }
 }
 
@@ -85,7 +89,7 @@ export function newState() {
 // It mutates `st` and returns zero or more actions, each
 // {kind, state?, outcome?, reason}. It performs no I/O and knows nothing about
 // subprocesses, which is what makes it directly comparable with the Go handler.
-export function mapEvent(st, ev) {
+function mapEvent(st, ev) {
   const type = ev.type
   const lane = (state, reason) => {
     // Suppress an exact repeat of the lane already reported. OpenCode emits
@@ -170,8 +174,14 @@ export function mapEvent(st, ev) {
 // Direct argv, never a shell string: nothing from OpenCode is interpolated into
 // a command line, and every value is either a bounded enum or an identifier
 // Sidecar re-validates on the way in.
-export function buildArgs(action, seq, sessionID) {
-  const args = ["agent", action.kind, "--source", SOURCE, "--provider", PROVIDER, "--seq", String(seq)]
+function buildArgs(action, seq, sessionID) {
+  const args = [
+    "agent", action.kind,
+    "--source", SOURCE,
+    "--source-version", VERSION,
+    "--provider", PROVIDER,
+    "--seq", String(seq),
+  ]
   if (sessionID) args.push("--session-id", sessionID)
   if (action.kind === "report") args.push("--state", action.state)
   if (action.kind === "end") args.push("--outcome", action.outcome)
@@ -182,7 +192,7 @@ export function buildArgs(action, seq, sessionID) {
 // normalizeEvent flattens an OpenCode bus event into the shape mapEvent reads.
 // Only discriminators and identifiers are extracted; no message content is ever
 // touched.
-export function normalizeEvent(event) {
+function normalizeEvent(event) {
   const props = (event && event.properties) || {}
   const status = props.status || (props.info && props.info.status)
   const error = props.error || (props.info && props.info.error)
@@ -194,7 +204,7 @@ export function normalizeEvent(event) {
   }
 }
 
-export const SidecarLifecycle = async () => {
+const SidecarLifecycle = async () => {
   const bin = process.env.SIDECAR_BIN
   if (process.env.SIDECAR_MANAGED_SHELL !== "1" || !bin) return {}
 
@@ -260,3 +270,30 @@ export const SidecarLifecycle = async () => {
     },
   }
 }
+
+// EXPORT SURFACE -- measured, not assumed.
+//
+// OpenCode's plugin loader requires EVERY export of a plugin module to be a
+// plugin factory. A single non-function export disqualifies the whole module,
+// silently: it is imported, and then never called. This was measured against
+// 1.18.25 with four probe plugins -- a lone function export loads, a function
+// plus a string export does not, a function plus an object export does not, and
+// a function carrying its helpers as properties loads.
+//
+// That is why the pure mapping hangs off the function rather than being
+// exported beside it, and why nothing here is `export const`. The failure mode
+// is the worst kind: every test passes, the plugin installs cleanly, and it
+// reports nothing at all in production.
+SidecarLifecycle.internals = {
+  newState,
+  mapEvent,
+  buildArgs,
+  normalizeEvent,
+  SOURCE,
+  PROVIDER,
+  VERSION,
+  ABORTED_ERROR,
+  REPORT_TIMEOUT_MS,
+}
+
+export { SidecarLifecycle }

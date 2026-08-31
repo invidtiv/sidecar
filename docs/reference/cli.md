@@ -35,6 +35,7 @@ Usage: sidecar agent end --outcome completed|cancelled|failed|unknown --source S
 
 - `--outcome OUTCOME`: completed, cancelled, failed, or unknown (required)
 - `--source SOURCE`: Integration source identifier (required)
+- `--source-version VERSION`: Installed integration asset version
 - `--provider PROVIDER`: Catalog agent kind (required)
 - `--seq N`: Strictly increasing sequence within this run (required)
 - `--session-id ID`: Provider session identifier; only a salted digest is retained
@@ -262,6 +263,7 @@ Usage: sidecar agent release --source SOURCE --provider PROVIDER --seq N [--sess
 **Options:**
 
 - `--source SOURCE`: Integration source identifier (required)
+- `--source-version VERSION`: Installed integration asset version
 - `--provider PROVIDER`: Catalog agent kind (required)
 - `--seq N`: Strictly increasing sequence within this run (required)
 - `--session-id ID`: Provider session identifier; only a salted digest is retained
@@ -302,6 +304,7 @@ Usage: sidecar agent report --state working|blocked|idle --source SOURCE --provi
 
 - `--state LANE`: working, blocked, or idle (required)
 - `--source SOURCE`: Integration source identifier (required)
+- `--source-version VERSION`: Installed integration asset version
 - `--provider PROVIDER`: Catalog agent kind (required)
 - `--seq N`: Strictly increasing sequence within this run (required)
 - `--session-id ID`: Provider session identifier; only a salted digest is retained

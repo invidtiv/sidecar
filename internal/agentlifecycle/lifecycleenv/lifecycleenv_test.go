@@ -74,21 +74,47 @@ func TestResolveIsANoOpOutsideAManagedShell(t *testing.T) {
 	})
 }
 
-// TestProviderGenerationWalksToThePaneRoot covers the ordinary case: the
-// generation is the last process before the pane's shell, so relaunching an
-// agent in the same pane produces a new one while the pane and shell stay the
-// same.
-func TestProviderGenerationWalksToThePaneRoot(t *testing.T) {
-	// This process's parent stands in for the pane's root process, which makes
-	// this process the "provider" one level below it.
-	gen, err := providerGeneration(os.Getppid())
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := "pid=" + strconv.Itoa(os.Getpid())
-	if !strings.HasPrefix(gen, want) {
-		t.Fatalf("generation = %q, want it to identify this process (%s)", gen, want)
-	}
+// TestProviderGenerationIdentifiesTheProviderNotTheHook covers the two process
+// shapes that occur in practice, and the bug that reached a live provider.
+//
+// A generation must be stable across the many short-lived hook invocations of
+// one run. The run id is derived from it, so a generation that changes per
+// invocation makes every report its own run and run-scoped sequencing,
+// freshness, and authority all stop meaning anything.
+func TestProviderGenerationIdentifiesTheProviderNotTheHook(t *testing.T) {
+	t.Run("hook is a direct child of the pane root", func(t *testing.T) {
+		// This is what a Sidecar-managed agent shell looks like: tmux runs the
+		// agent as the pane command, so the agent IS the pane's root process
+		// and the hook hangs directly off it. The provider must be the pane
+		// root, never this reporting process -- taking the last ancestor here
+		// returns the hook's own pid and gives every report a new generation.
+		gen, err := providerGeneration(os.Getppid())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.HasPrefix(gen, "pid="+strconv.Itoa(os.Getpid())+",") || gen == "pid="+strconv.Itoa(os.Getpid()) {
+			t.Fatalf("generation %q identifies the hook process itself", gen)
+		}
+		if !strings.HasPrefix(gen, "pid="+strconv.Itoa(os.Getppid())) {
+			t.Fatalf("generation = %q, want the pane root (%d)", gen, os.Getppid())
+		}
+	})
+
+	t.Run("generation is stable across invocations", func(t *testing.T) {
+		// The property that actually matters: two hook invocations in the same
+		// run must agree, or the run id rotates under them.
+		first, err := providerGeneration(os.Getppid())
+		if err != nil {
+			t.Fatal(err)
+		}
+		second, err := providerGeneration(os.Getppid())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if first != second {
+			t.Fatalf("generation is not stable: %q then %q", first, second)
+		}
+	})
 }
 
 // TestProviderGenerationFallsBackToThePaneRoot covers an unusual process tree,

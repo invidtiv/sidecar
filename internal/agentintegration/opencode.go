@@ -243,6 +243,7 @@ func ReportArgs(action OpenCodeAction, seq uint64, sessionID string) []string {
 	args := []string{
 		"agent", verb,
 		"--source", OpenCodeSource,
+		"--source-version", OpenCodeAssetVersion,
 		"--provider", OpenCodeProvider,
 		"--seq", strconv.FormatUint(seq, 10),
 	}

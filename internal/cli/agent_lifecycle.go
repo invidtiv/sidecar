@@ -41,15 +41,16 @@ import (
 type lifecycleFlags struct {
 	json bool
 
-	state    string
-	outcome  string
-	source   string
-	provider string
-	seq      uint64
-	seqSet   bool
-	session  string
-	reason   string
-	detail   string
+	state         string
+	outcome       string
+	source        string
+	sourceVersion string
+	provider      string
+	seq           uint64
+	seqSet        bool
+	session       string
+	reason        string
+	detail        string
 
 	current bool
 	shell   string
@@ -67,6 +68,7 @@ func agentLifecycleExitCodes() []ExitCode {
 func lifecycleCommands() (report, end, release, explain *Command) {
 	common := []Flag{
 		{Name: "--source", Arg: "SOURCE", Summary: "Integration source identifier (required)"},
+		{Name: "--source-version", Arg: "VERSION", Summary: "Installed integration asset version"},
 		{Name: "--provider", Arg: "PROVIDER", Summary: "Catalog agent kind (required)"},
 		{Name: "--seq", Arg: "N", Summary: "Strictly increasing sequence within this run (required)"},
 		{Name: "--session-id", Arg: "ID", Summary: "Provider session identifier; only a salted digest is retained"},
@@ -183,6 +185,15 @@ func parseLifecycleFlags(env Env, args []string, help string, kind agentlifecycl
 				return f, usage("--outcome requires a value")
 			}
 			f.outcome, i = v, n
+		case strings.HasPrefix(arg, "--source-version"):
+			// Matched before --source: they share a prefix, and the more
+			// specific flag has to win or --source-version would parse as
+			// --source with a stray value.
+			v, n, ok := takeFlagArg(arg, args, i, "--source-version")
+			if !ok {
+				return f, usage("--source-version requires a value")
+			}
+			f.sourceVersion, i = v, n
 		case strings.HasPrefix(arg, "--source"):
 			v, n, ok := takeFlagArg(arg, args, i, "--source")
 			if !ok {
@@ -368,6 +379,7 @@ func runLifecycleWrite(env Env, args []string, name string, kind agentlifecycle.
 		Kind:          kind,
 		Identity:      ctx.IdentityFor(f.provider, f.session),
 		Source:        f.source,
+		SourceVersion: f.sourceVersion,
 		Sequence:      f.seq,
 		ObservedAt:    time.Now(),
 		Reason:        agentlifecycle.ReasonCode(f.reason),
