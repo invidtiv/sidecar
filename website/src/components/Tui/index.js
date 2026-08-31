@@ -185,29 +185,24 @@ export function TuiPane({
       className={clsx(styles.pane, focused && styles.paneFocused)}
       style={{flexGrow: grow, flexBasis: basis}}>
       <div className={styles.paneInner}>
-        <div className={styles.paneHeader}>
-          {title !== undefined ? (
-            <>
-              <span className={styles.paneTitle}>{title}</span>
-              {titleDim ? (
-                <span className={styles.paneTitleDim}>{titleDim}</span>
-              ) : null}
-              {chips ? (
-                <span className={styles.paneChips}>
-                  {chips.map((c) => (
-                    <span key={c} className={styles.chip}>
-                      {c}
-                    </span>
-                  ))}
-                </span>
-              ) : null}
-            </>
-          ) : (
-            <span className={styles.paneTitleDim}>&nbsp;</span>
-          )}
-        </div>
+        {title !== undefined ? (
+          <div className={styles.paneHeader}>
+            <span className={styles.paneTitle}>{title}</span>
+            {titleDim ? (
+              <span className={styles.paneTitleDim}>{titleDim}</span>
+            ) : null}
+            {chips ? (
+              <span className={styles.paneChips}>
+                {chips.map((c) => (
+                  <span key={c} className={styles.chip}>
+                    {c}
+                  </span>
+                ))}
+              </span>
+            ) : null}
+          </div>
+        ) : null}
         <div className={styles.paneBody}>{children}</div>
-        <div className={styles.paneBottomBorder} aria-hidden="true" />
       </div>
     </div>
   );

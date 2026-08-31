@@ -178,7 +178,6 @@ export function SessionsScreen() {
         focused={false}
         grow={0}
         basis={`${leftWidth}%`}>
-        <Row>&nbsp;</Row>
         {SESSION_GROUPS.map((group) => (
           <React.Fragment key={group.project}>
             <Row>

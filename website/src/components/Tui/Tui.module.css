@@ -71,10 +71,10 @@
   align-items: stretch;
   height: calc(var(--row) * 1em);
   background: var(--tui-bar);
-  border-bottom: 1px solid var(--tui-border-a);
   flex: none;
   white-space: nowrap;
   overflow: hidden;
+  padding: 0 4px;
 }
 
 .brand {
@@ -175,10 +175,11 @@
   flex: 1;
   min-height: 0;
   background: var(--tui-bg);
+  padding: 6px 8px;
+  gap: 6px;
 }
 
-/* A terminal draws its border as a row of box-drawing glyphs; the top and
-   bottom borders take full character line space in the grid. */
+/* A terminal draws its border around the whole pane card. */
 .pane {
   position: relative;
   flex: 1;
@@ -187,6 +188,8 @@
   flex-direction: column;
   background: var(--tui-bg);
   border: 1px solid var(--tui-border-a);
+  border-radius: 6px;
+  overflow: hidden;
   --pane-edge-a: var(--tui-border-a);
   --pane-edge-b: var(--tui-border-b);
 }
@@ -204,9 +207,10 @@
   flex-direction: column;
   background: var(--tui-bg);
   overflow: hidden;
+  padding: 4px 0;
 }
 
-/* Top border row of the pane in the terminal grid — takes 1 full character row */
+/* Top line of the pane in the terminal — pane title and chips */
 .paneHeader {
   display: flex;
   align-items: center;
@@ -215,12 +219,7 @@
   padding: 0 1ch;
   flex: none;
   white-space: nowrap;
-  border-bottom: 1px solid var(--tui-border-a);
-  background: var(--tui-bg);
-}
-
-.paneFocused .paneHeader {
-  border-bottom-color: var(--tui-border-active-a);
+  background: transparent;
 }
 
 .paneTitle {
@@ -250,18 +249,6 @@
   min-height: 0;
   padding: 0 1ch;
   overflow: hidden;
-}
-
-/* Bottom border row of the pane in the terminal grid */
-.paneBottomBorder {
-  height: calc(var(--row) * 0.5em);
-  flex: none;
-  border-top: 1px solid var(--tui-border-a);
-  background: var(--tui-bg);
-}
-
-.paneFocused .paneBottomBorder {
-  border-top-color: var(--tui-border-active-a);
 }
 
 /* The vertical drag handle Sidecar puts between sibling panes. */
@@ -355,7 +342,6 @@
   height: calc(var(--row) * 1em);
   padding: 0 1ch;
   background: var(--tui-bar);
-  border-top: 1px solid var(--tui-border-a);
   color: var(--tui-muted);
   flex: none;
   white-space: nowrap;
