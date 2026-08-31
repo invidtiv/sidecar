@@ -2,6 +2,7 @@ package lifecycleenv
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"strconv"
@@ -84,6 +85,50 @@ func LiveProviderGeneration(panePID int) (string, error) {
 		}
 	}
 	return generationString(best), nil
+}
+
+// ReportingProviderGeneration is the generation of the provider this process is
+// actually running under, with no fallback.
+//
+// [Context.ProcessGeneration] deliberately falls back to the pane's root process
+// when it cannot walk from the hook to the pane, because for lifecycle lanes a
+// weaker-but-truthful answer beats no answer. For a session binding that
+// fallback is a hole, and a specific one: when a provider exits, a hook it left
+// behind is reparented away from the pane, so its walk breaks and falls back to
+// the pane root — while [LiveProviderGeneration], finding no children, returns
+// the pane root too. Two fallbacks agreeing is not evidence, and the late report
+// the fence exists to reject would be accepted.
+//
+// So this refuses instead. A reporter that cannot prove which provider it
+// belongs to does not get to claim the pane's conversation.
+func ReportingProviderGeneration(panePID int) (string, error) {
+	if panePID <= 0 {
+		return "", errors.New("pane has no root process")
+	}
+	self := os.Getpid()
+	pid := self
+	for i := 0; i < maxAncestry; i++ {
+		parent, err := parentPID(pid)
+		if err != nil {
+			return "", fmt.Errorf("could not walk this process's ancestry: %w", err)
+		}
+		if parent == panePID {
+			if pid == self {
+				// A direct child of the pane's root process is the pane's shell
+				// running the command itself, not a provider reporting from
+				// inside a conversation.
+				return generationString(panePID), nil
+			}
+			return generationString(pid), nil
+		}
+		if parent <= 1 {
+			// Reparented to init: whatever spawned this is gone, so this is a
+			// leftover from a provider that has already exited.
+			return "", errors.New("this process is not running under the pane's provider; its parent has exited")
+		}
+		pid = parent
+	}
+	return "", errors.New("this process's ancestry does not reach the pane within a bounded walk")
 }
 
 // childrenOf lists the pids whose parent is ppid.

@@ -384,7 +384,9 @@ capture_hook_show() {
 # rather than inheriting the caller's session.
 cli() {
     [ $# -gt 0 ] || { echo "usage: $0 cli SUBCOMMAND [ARG...]" >&2; return 2; }
-    ( cd "$LAUNCH_REPO" && unset TMUX && exec "${SIDECAR_BIN:-sidecar}" "$1" -config "$CONFIG" "${@:2}" )
+    # -config is a global flag, read before command dispatch, so it precedes the
+    # subcommand rather than following it.
+    ( cd "$LAUNCH_REPO" && unset TMUX && exec "${SIDECAR_BIN:-sidecar}" -config "$CONFIG" "$@" )
 }
 
 paths() {

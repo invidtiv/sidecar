@@ -307,6 +307,18 @@ func runAgentReportSession(env Env, args []string) int {
 			fmt.Errorf("could not determine which process occupies the pane: %w", err))
 	}
 
+	// The reporter's own generation is derived strictly, with no fallback to the
+	// pane's root process. ctx.ProcessGeneration would fall back, and a report
+	// left behind by an exited provider falls back to exactly the value
+	// LiveProviderGeneration returns when the pane is empty — so the fence would
+	// compare two fallbacks, find them equal, and accept the late report it
+	// exists to reject.
+	reporting, err := lifecycleenv.ReportingProviderGeneration(ctx.PanePID)
+	if err != nil {
+		return emitReportSessionError(env, f.json, "stale_generation",
+			fmt.Errorf("%w: %v", agentsession.ErrStaleGeneration, err))
+	}
+
 	update := shellstate.SessionUpdate{
 		Kind: kind,
 		Live: live,
@@ -314,14 +326,14 @@ func runAgentReportSession(env Env, args []string) int {
 	}
 	if f.clear {
 		update.Clear = true
-		update.Ref = agentsession.Ref{Generation: ctx.ProcessGeneration, Source: source}
+		update.Ref = agentsession.Ref{Generation: reporting, Source: source}
 	} else {
 		ref, err := agentsession.Validate(agentsession.Report{
 			Kind:       kind,
 			RefKind:    refKind,
 			Value:      value,
 			Source:     source,
-			Generation: ctx.ProcessGeneration,
+			Generation: reporting,
 		}, agentsession.OSRoots(), time.Now)
 		if err != nil {
 			return emitReportSessionError(env, f.json, reportSessionCode(err), err)
