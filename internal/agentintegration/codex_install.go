@@ -8,8 +8,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/pelletier/go-toml/v2"
 
 	"github.com/marcus/sidecar/internal/agentlifecycle"
 )
@@ -31,9 +35,33 @@ import (
 // config.toml is a user-owned TOML file full of comments and unrelated
 // configuration, so it is edited line-surgically — never re-serialized — and
 // any spelling of the two regions Sidecar must touch that the editor does not
-// understand is refused rather than guessed at. Every composed result is
-// re-scanned before it is allowed into a plan, so a rewrite that would not
-// verify never reaches disk.
+// understand is refused rather than guessed at.
+//
+// # Why there is a TOML parser here as well as a line scanner
+//
+// A line scanner is the only way to keep a user's comments, ordering and
+// formatting, and it is a terrible way to decide what a file means. So the two
+// jobs are split, and a real TOML parser is used as a read-only oracle at both
+// ends of every edit — never to serialize anything, because a round trip
+// through a parsed document is precisely what would destroy the formatting the
+// line writer exists to preserve.
+//
+//  1. Before planning, the whole file is parsed. A file that is not valid TOML
+//     is refused outright: Sidecar does not edit what it cannot fully
+//     understand, and a line scanner's opinion of an invalid file is worthless.
+//     This also removes a whole class of ambiguity from the scanner below — a
+//     duplicate table, a key defined twice, a header split over two lines are
+//     all already impossible by the time the scanner runs.
+//  2. After composing, the result is parsed again and semantically diffed
+//     against the pre-image. Every key/value path the user owned must still be
+//     there with the same value, nothing outside Sidecar's region may appear,
+//     and Sidecar's own entry must be present (converge) or gone (uninstall).
+//     The diff runs at plan time, so a rewrite that would not verify produces a
+//     refusal with nothing in the op list rather than a partial change on disk.
+//
+// The line scanner is still held to its own contract — it refuses spellings it
+// cannot read rather than skipping them — so the oracle is a second line of
+// defence rather than the only one.
 //
 // # The trust hash
 //
@@ -543,10 +571,273 @@ func sessionStartGroupCount(top []jsonMember) (int, error) {
 	return len(groups), nil
 }
 
+// --- the TOML oracle: parsing, never serializing ---
+
+// codexTOMLDoc parses TOML into a plain map.
+//
+// The parser is used for reading only. Nothing it produces is ever written
+// back: config.toml is a user-owned file whose comments, key order and
+// formatting must survive, and a round trip through a parsed document is
+// exactly what would destroy them. Composition stays the line writer's job;
+// this is only ever asked what a file means.
+func codexTOMLDoc(b []byte) (map[string]any, error) {
+	doc := map[string]any{}
+	if len(bytes.TrimSpace(b)) == 0 {
+		return doc, nil
+	}
+	if err := toml.Unmarshal(b, &doc); err != nil {
+		return nil, err
+	}
+	if doc == nil {
+		doc = map[string]any{}
+	}
+	return doc, nil
+}
+
+// tomlErrBrief renders a parser error as one short line fit for a refusal.
+func tomlErrBrief(err error) string {
+	s := strings.TrimSpace(err.Error())
+	s = strings.Join(strings.Fields(strings.ReplaceAll(s, "\n", " ")), " ")
+	if len(s) > 160 {
+		s = s[:157] + "..."
+	}
+	return s
+}
+
+// tomlEmptyTable marks a table that exists but holds nothing. A header like
+// `[hooks.state]` with no keys under it is a fact about the file that a flat
+// map of leaf values would otherwise lose, and losing it would let a rewrite
+// delete a user's empty table unnoticed.
+type tomlEmptyTable struct{}
+
+// isBareTOMLKey reports whether a key can be written unquoted.
+func isBareTOMLKey(k string) bool {
+	if k == "" {
+		return false
+	}
+	for i := 0; i < len(k); i++ {
+		if !isBareKeyByte(k[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func isBareKeyByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-'
+}
+
+// tomlKeySegment renders one key segment the way TOML itself would: bare when
+// it can be, quoted otherwise. That is what makes a dotted path unambiguous —
+// a key literally named `a.b` renders as `"a.b"` and can never be confused
+// with the nested pair `a`.`b`.
+func tomlKeySegment(k string) string {
+	if isBareTOMLKey(k) {
+		return k
+	}
+	return strconv.Quote(k)
+}
+
+// tomlPathOf joins key segments into one canonical dotted path.
+func tomlPathOf(segs ...string) string {
+	parts := make([]string, len(segs))
+	for i, s := range segs {
+		parts[i] = tomlKeySegment(s)
+	}
+	return strings.Join(parts, ".")
+}
+
+// tomlFlattenDoc reduces a parsed document to one entry per leaf value, keyed
+// by its canonical dotted path. Comparing two of these is what "the user's
+// settings are untouched" means precisely enough to test.
+func tomlFlattenDoc(doc map[string]any) map[string]any {
+	out := map[string]any{}
+	for k, v := range doc {
+		tomlFlatten(v, tomlKeySegment(k), out)
+	}
+	return out
+}
+
+func tomlFlatten(v any, path string, out map[string]any) {
+	if m, ok := v.(map[string]any); ok {
+		if len(m) == 0 {
+			out[path] = tomlEmptyTable{}
+			return
+		}
+		for k, child := range m {
+			tomlFlatten(child, path+"."+tomlKeySegment(k), out)
+		}
+		return
+	}
+	out[path] = v
+}
+
+func sortedPaths(m map[string]any) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// codexOwnsPath answers whether a leaf path is inside the region Sidecar is
+// allowed to change: the features.hooks flag, and everything under each trust
+// table it owns. The three container tables those live in are exempt only when
+// they are empty, because creating or removing a trust table necessarily
+// creates or empties its parents.
+func codexOwnsPath(ownedKeys []string) func(string, any) bool {
+	flag := tomlPathOf("features", "hooks")
+	containers := map[string]bool{
+		tomlPathOf("features"):       true,
+		tomlPathOf("hooks"):          true,
+		tomlPathOf("hooks", "state"): true,
+	}
+	prefixes := make([]string, 0, len(ownedKeys))
+	for _, k := range ownedKeys {
+		if k == "" {
+			continue
+		}
+		prefixes = append(prefixes, tomlPathOf("hooks", "state", k))
+	}
+	return func(path string, val any) bool {
+		if path == flag {
+			return true
+		}
+		for _, p := range prefixes {
+			if path == p || strings.HasPrefix(path, p+".") {
+				return true
+			}
+		}
+		if _, empty := val.(tomlEmptyTable); empty && containers[path] {
+			return true
+		}
+		return false
+	}
+}
+
+// codexTrustPathPresent reports whether anything under one trust table's key is
+// still present in a flattened document.
+func codexTrustPathPresent(flat map[string]any, key string) bool {
+	p := tomlPathOf("hooks", "state", key)
+	for _, have := range sortedPaths(flat) {
+		if have == p || strings.HasPrefix(have, p+".") {
+			return true
+		}
+	}
+	return false
+}
+
+// codexOracleDiff proves that a composed image differs from the pre-image only
+// inside the region Sidecar owns: nothing the user wrote was dropped, changed,
+// or joined by something new.
+func codexOracleDiff(pre, post []byte, ownedKeys []string) error {
+	preDoc, err := codexTOMLDoc(pre)
+	if err != nil {
+		return fmt.Errorf("the file it started from is not valid TOML: %s", tomlErrBrief(err))
+	}
+	postDoc, err := codexTOMLDoc(post)
+	if err != nil {
+		return fmt.Errorf("the composed file is not valid TOML: %s", tomlErrBrief(err))
+	}
+	preFlat, postFlat := tomlFlattenDoc(preDoc), tomlFlattenDoc(postDoc)
+	owns := codexOwnsPath(ownedKeys)
+	for _, p := range sortedPaths(preFlat) {
+		if owns(p, preFlat[p]) {
+			continue
+		}
+		got, ok := postFlat[p]
+		if !ok {
+			return fmt.Errorf("it would drop %s, which Sidecar does not own", p)
+		}
+		if !reflect.DeepEqual(preFlat[p], got) {
+			return fmt.Errorf("it would change the value of %s, which Sidecar does not own", p)
+		}
+	}
+	for _, p := range sortedPaths(postFlat) {
+		if owns(p, postFlat[p]) {
+			continue
+		}
+		if _, ok := preFlat[p]; !ok {
+			return fmt.Errorf("it would add %s, which is outside the region Sidecar owns", p)
+		}
+	}
+	return nil
+}
+
+// codexOracleConverged checks the install/update/repair intent on top of the
+// diff: the feature flag on, exactly Sidecar's trust record recorded, and no
+// stale record of Sidecar's own left behind.
+func codexOracleConverged(pre, post []byte, ownedKeys []string, wantKey, wantHash string) error {
+	if err := codexOracleDiff(pre, post, ownedKeys); err != nil {
+		return err
+	}
+	doc, err := codexTOMLDoc(post)
+	if err != nil {
+		return fmt.Errorf("the composed file is not valid TOML: %s", tomlErrBrief(err))
+	}
+	flat := tomlFlattenDoc(doc)
+	if v, ok := flat[tomlPathOf("features", "hooks")]; !ok || v != true {
+		return fmt.Errorf("features.hooks would not be true")
+	}
+	if v, ok := flat[tomlPathOf("hooks", "state", wantKey, "trusted_hash")]; !ok || v != any(wantHash) {
+		return fmt.Errorf("the Sidecar trusted_hash would not be recorded at %s", tomlPathOf("hooks", "state", wantKey))
+	}
+	for _, k := range ownedKeys {
+		if k == wantKey {
+			continue
+		}
+		if codexTrustPathPresent(flat, k) {
+			return fmt.Errorf("a stale Sidecar trust record %s would survive", tomlPathOf("hooks", "state", k))
+		}
+	}
+	return nil
+}
+
+// codexOracleRemoved checks the uninstall intent on top of the diff: every
+// trust record of Sidecar's gone, and features.hooks exactly as it was found —
+// other hooks may depend on it, and turning it off is not an uninstall's
+// business.
+func codexOracleRemoved(pre, post []byte, ownedKeys []string) error {
+	if err := codexOracleDiff(pre, post, ownedKeys); err != nil {
+		return err
+	}
+	preDoc, err := codexTOMLDoc(pre)
+	if err != nil {
+		return fmt.Errorf("the file it started from is not valid TOML: %s", tomlErrBrief(err))
+	}
+	postDoc, err := codexTOMLDoc(post)
+	if err != nil {
+		return fmt.Errorf("the composed file is not valid TOML: %s", tomlErrBrief(err))
+	}
+	preFlat, postFlat := tomlFlattenDoc(preDoc), tomlFlattenDoc(postDoc)
+	flag := tomlPathOf("features", "hooks")
+	if !reflect.DeepEqual(preFlat[flag], postFlat[flag]) {
+		return fmt.Errorf("it would change features.hooks, which uninstall must leave alone")
+	}
+	for _, k := range ownedKeys {
+		if codexTrustPathPresent(postFlat, k) {
+			return fmt.Errorf("the Sidecar trust record %s would survive", tomlPathOf("hooks", "state", k))
+		}
+	}
+	return nil
+}
+
 // --- the line-surgical config.toml editor ---
 
 // tomlStateTable is one [hooks.state."<key>"] table: its unquoted key, its
 // trusted_hash value, and the exact line span it occupies.
+//
+// The span rule: start is the header line, end is the LAST line that belongs to
+// the table — its header, or its last key line, or the last line of a value
+// that ran over several lines. Blank lines and comments that trail the table
+// belong to the FILE, not to the table, and are never part of the span. That
+// asymmetry is deliberate. A comment between two keys inside the table is that
+// table's; a comment parked after the last key is the user's note about what
+// comes next, or about nothing at all, and Sidecar always appends its own table
+// at the end of the file — so a span that ran to the next header or to EOF
+// would delete whatever the user parked at the end of their config on
+// uninstall. Interior trivia is dropped with the table; trailing trivia is kept.
 type tomlStateTable struct {
 	key   string
 	hash  string
@@ -558,7 +849,10 @@ type tomlStateTable struct {
 // regions Sidecar edits and deliberately ignorant of everything else.
 type codexConfigScan struct {
 	exists bool
-	lines  []string
+	// raw is the file as read, kept so a composed image can be semantically
+	// diffed against what it started from.
+	raw   []byte
+	lines []string
 	// features is the [features] header line, -1 when absent.
 	features int
 	// hooksFlag is the parsed features.hooks value, nil when the key is absent.
@@ -581,6 +875,16 @@ func scanCodexConfig(exists bool, b []byte) codexConfigScan {
 	if !exists {
 		return s
 	}
+	s.raw = append([]byte(nil), b...)
+
+	// The oracle runs first. Sidecar will not edit a file it cannot fully
+	// understand, and everything below is a line scanner whose reading of an
+	// invalid file would be a guess.
+	if _, err := codexTOMLDoc(b); err != nil {
+		s.parseErr = "the file is not valid TOML: " + tomlErrBrief(err)
+		return s
+	}
+
 	content := string(b)
 	if strings.Contains(content, `"""`) || strings.Contains(content, "'''") {
 		// A multi-line string could contain text that looks exactly like a
@@ -590,57 +894,111 @@ func scanCodexConfig(exists bool, b []byte) codexConfigScan {
 		return s
 	}
 	s.lines = strings.Split(content, "\n")
-	table := ""
+
+	var tableSegs []string
 	open := -1
-	closeOpen := func(end int) {
+	// lastContent is the last line seen that belongs to the current table; see
+	// the span rule on tomlStateTable.
+	lastContent := -1
+	// depth is the inline bracket/brace nesting carried across lines, so an
+	// element of a multi-line array is never mistaken for a table header.
+	depth := 0
+
+	closeOpen := func() {
 		if open >= 0 {
+			end := lastContent
+			if end < s.state[open].start {
+				end = s.state[open].start
+			}
 			s.state[open].end = end
 			open = -1
 		}
 	}
+
 	for i, rawLine := range s.lines {
+		if depth > 0 {
+			// A continuation of a value that opened on an earlier line. It is
+			// never a header and never a key, whatever it looks like.
+			d, ok := tomlValueDepth(rawLine, depth)
+			if !ok {
+				s.parseErr = fmt.Sprintf("line %d continues a value this editor cannot follow", i+1)
+				return s
+			}
+			depth = d
+			lastContent = i
+			continue
+		}
+
 		line := strings.TrimSpace(rawLine)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
+
 		if strings.HasPrefix(line, "[") {
-			closeOpen(i)
-			name, array, ok := tomlHeaderName(line)
+			closeOpen()
+			segs, array, ok := tomlHeaderPath(line)
 			if !ok {
 				s.parseErr = fmt.Sprintf("line %d is a table header this editor cannot parse", i+1)
 				return s
 			}
 			if array {
-				if name == "features" || name == "hooks" || strings.HasPrefix(name, "hooks.") {
+				if segs[0] == "features" || segs[0] == "hooks" {
 					s.parseErr = "features or hooks are configured as arrays of tables, which this editor does not edit"
 					return s
 				}
-				table = "\x00array:" + name
+				// The segments are recorded so the keys below read as being
+				// inside a table rather than at the document root; an array of
+				// tables named features or hooks was already refused above, so
+				// nothing Sidecar edits can be reached from here.
+				tableSegs = segs
+				lastContent = i
 				continue
 			}
-			table = name
+			tableSegs = segs
 			switch {
-			case name == "features":
+			case len(segs) == 1 && segs[0] == "features":
 				s.features = i
-			case strings.HasPrefix(name, "hooks.state."):
-				key, ok := tomlQuotedKey(strings.TrimPrefix(name, "hooks.state."))
-				if !ok {
-					s.parseErr = fmt.Sprintf("line %d names a hooks.state table in a form this editor cannot parse", i+1)
-					return s
-				}
-				s.state = append(s.state, tomlStateTable{key: key, start: i, end: len(s.lines)})
+			case len(segs) >= 2 && segs[0] == "features" && segs[1] == "hooks":
+				// features.hooks is a table here, not the boolean flag. Writing
+				// the flag would be writing a duplicate key.
+				s.parseErr = "the hooks feature flag is configured in a form this editor does not edit"
+				return s
+			case len(segs) == 3 && segs[0] == "hooks" && segs[1] == "state":
+				s.state = append(s.state, tomlStateTable{key: segs[2], start: i, end: i})
 				open = len(s.state) - 1
+			case len(segs) > 3 && segs[0] == "hooks" && segs[1] == "state":
+				s.parseErr = fmt.Sprintf("line %d nests a table below a hook trust record, which this editor does not edit", i+1)
+				return s
 			}
+			lastContent = i
 			continue
 		}
-		key, val, cut := strings.Cut(line, "=")
-		if !cut {
-			continue
+
+		segs, rest, ok := tomlKeySegments(line)
+		if ok {
+			rest = strings.TrimLeft(rest, " \t")
+			ok = strings.HasPrefix(rest, "=")
 		}
-		key = strings.TrimSpace(key)
-		val = strings.TrimSpace(val)
+		if !ok {
+			// A line the scanner cannot normalise. It refuses rather than
+			// skipping: an unread line in the regions Sidecar edits is exactly
+			// how a duplicate [features] table gets appended to a file that
+			// already had one.
+			s.parseErr = fmt.Sprintf("line %d is written in a form this editor cannot read", i+1)
+			return s
+		}
+		val := strings.TrimSpace(rest[1:])
+		d, dok := tomlValueDepth(val, 0)
+		if !dok {
+			s.parseErr = fmt.Sprintf("line %d has a value this editor cannot follow", i+1)
+			return s
+		}
+		depth = d
+		lastContent = i
+
+		inFeatures := len(tableSegs) == 1 && tableSegs[0] == "features"
 		switch {
-		case table == "features" && key == "hooks":
+		case inFeatures && len(segs) == 1 && segs[0] == "hooks":
 			switch tomlBareValue(val) {
 			case "true":
 				v := true
@@ -652,74 +1010,155 @@ func scanCodexConfig(exists bool, b []byte) codexConfigScan {
 				s.parseErr = "features.hooks has a value this editor does not understand"
 				return s
 			}
-		case table == "" && (key == "features" || strings.HasPrefix(key, "features.")):
+		case inFeatures && segs[0] == "hooks":
 			s.parseErr = "the hooks feature flag is configured in a form this editor does not edit"
 			return s
-		case table == "" && (key == "hooks" || strings.HasPrefix(key, "hooks.")):
+		case len(tableSegs) == 0 && segs[0] == "features":
+			s.parseErr = "the hooks feature flag is configured in a form this editor does not edit"
+			return s
+		case len(tableSegs) == 0 && segs[0] == "hooks":
 			s.parseErr = "hook trust state is configured in a form this editor does not edit"
 			return s
-		case table == "hooks" && (key == "state" || strings.HasPrefix(key, "state.")):
+		case len(tableSegs) == 1 && tableSegs[0] == "hooks" && segs[0] == "state":
 			s.parseErr = "hook trust state is configured in a form this editor does not edit"
 			return s
-		case table == "hooks.state":
+		case len(tableSegs) == 2 && tableSegs[0] == "hooks" && tableSegs[1] == "state":
 			s.parseErr = "hook trust state is configured in a form this editor does not edit"
 			return s
-		case open >= 0 && key == "trusted_hash":
+		case open >= 0 && len(segs) == 1 && segs[0] == "trusted_hash":
 			s.state[open].hash = tomlQuotedValue(val)
 		}
 	}
-	closeOpen(len(s.lines))
+	if depth > 0 {
+		s.parseErr = "the file ends inside a value this editor cannot follow"
+		return s
+	}
+	closeOpen()
 	return s
 }
 
-// tomlHeaderName parses a `[name]` or `[[name]]` line, tolerating a trailing
-// comment.
-func tomlHeaderName(line string) (name string, array bool, ok bool) {
-	array = strings.HasPrefix(line, "[[")
-	body := strings.TrimPrefix(line, "[")
+// tomlHeaderPath parses a `[name]` or `[[name]]` line into its normalised key
+// segments, tolerating a trailing comment. Quoted segments are unquoted and
+// whitespace around the dots is dropped, so `[ hooks . state . "k" ]` and
+// `[hooks.state."k"]` read as the same three segments and `["features"]` reads
+// as `features`.
+func tomlHeaderPath(line string) (segs []string, array bool, ok bool) {
+	rest := line
+	switch {
+	case strings.HasPrefix(rest, "[["):
+		array, rest = true, rest[2:]
+	case strings.HasPrefix(rest, "["):
+		rest = rest[1:]
+	default:
+		return nil, false, false
+	}
+	segs, rest, ok = tomlKeySegments(rest)
+	if !ok {
+		return nil, false, false
+	}
+	closer := "]"
 	if array {
-		body = strings.TrimPrefix(body, "[")
+		closer = "]]"
 	}
-	closing := strings.LastIndex(body, "]")
-	if closing < 0 {
-		return "", false, false
+	rest = strings.TrimLeft(rest, " \t")
+	if !strings.HasPrefix(rest, closer) {
+		return nil, false, false
 	}
-	rest := body[closing+1:]
-	inner := body[:closing]
-	if array {
-		if !strings.HasSuffix(inner, "]") {
-			return "", false, false
-		}
-		inner = strings.TrimSuffix(inner, "]")
-	}
-	rest = strings.TrimSpace(rest)
+	rest = strings.TrimSpace(rest[len(closer):])
 	if rest != "" && !strings.HasPrefix(rest, "#") {
-		return "", false, false
+		return nil, false, false
 	}
-	inner = strings.TrimSpace(inner)
-	if inner == "" || strings.ContainsAny(inner, "[]") {
-		return "", false, false
-	}
-	return inner, array, true
+	return segs, array, true
 }
 
-// tomlQuotedKey unquotes a basic or literal TOML string key with no escapes.
-func tomlQuotedKey(s string) (string, bool) {
-	if len(s) < 2 {
-		return "", false
+// tomlKeySegments reads a dotted TOML key off the front of s and returns its
+// normalised segments plus whatever follows. A quoted segment is unquoted; a
+// quoted segment carrying an escape is refused, because guessing at what it
+// spells is exactly the class of guess this editor does not make.
+func tomlKeySegments(s string) (segs []string, rest string, ok bool) {
+	for {
+		s = strings.TrimLeft(s, " \t")
+		if s == "" {
+			return nil, "", false
+		}
+		var seg string
+		switch s[0] {
+		case '"', '\'':
+			quote := s[0]
+			end := strings.IndexByte(s[1:], quote)
+			if end < 0 {
+				return nil, "", false
+			}
+			seg = s[1 : 1+end]
+			if strings.ContainsRune(seg, '\\') {
+				return nil, "", false
+			}
+			s = s[2+end:]
+		default:
+			i := 0
+			for i < len(s) && isBareKeyByte(s[i]) {
+				i++
+			}
+			if i == 0 {
+				return nil, "", false
+			}
+			seg, s = s[:i], s[i:]
+		}
+		segs = append(segs, seg)
+		s = strings.TrimLeft(s, " \t")
+		if strings.HasPrefix(s, ".") {
+			s = s[1:]
+			continue
+		}
+		return segs, s, true
 	}
-	quote := s[0]
-	if quote != '"' && quote != '\'' {
-		return "", false
+}
+
+// tomlValueDepth walks a value fragment and returns the bracket and brace
+// nesting depth after it, ignoring anything inside a string or a comment. It is
+// what stops `  [20, 30]` — one element of a multi-line array — from being read
+// as a table header. It reports false for a fragment it cannot walk.
+func tomlValueDepth(s string, depth int) (int, bool) {
+	for i := 0; i < len(s); {
+		switch s[i] {
+		case '#':
+			return depth, true
+		case '\'':
+			end := strings.IndexByte(s[i+1:], '\'')
+			if end < 0 {
+				return 0, false
+			}
+			i += end + 2
+		case '"':
+			j := i + 1
+			for j < len(s) {
+				if s[j] == '\\' {
+					j += 2
+					continue
+				}
+				if s[j] == '"' {
+					break
+				}
+				j++
+			}
+			if j >= len(s) {
+				return 0, false
+			}
+			i = j + 1
+		case '[', '{':
+			depth++
+			i++
+		case ']', '}':
+			depth--
+			if depth < 0 {
+				return 0, false
+			}
+			i++
+		default:
+			i++
+		}
 	}
-	if s[len(s)-1] != quote {
-		return "", false
-	}
-	inner := s[1 : len(s)-1]
-	if strings.ContainsRune(inner, rune(quote)) || strings.ContainsRune(inner, '\\') {
-		return "", false
-	}
-	return inner, true
+	return depth, true
 }
 
 // tomlBareValue strips a trailing comment from an unquoted value.
@@ -752,6 +1191,27 @@ func tomlQuotedValue(val string) string {
 	return inner
 }
 
+// codexTableKeys lists the keys of the given trust tables, plus extras, with no
+// repeats.
+func codexTableKeys(tables []tomlStateTable, extra ...string) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(k string) {
+		if k == "" || seen[k] {
+			return
+		}
+		seen[k] = true
+		out = append(out, k)
+	}
+	for _, t := range tables {
+		add(t.key)
+	}
+	for _, k := range extra {
+		add(k)
+	}
+	return out
+}
+
 // codexConfigConverge composes the config.toml content that enables the
 // feature flag and records exactly one trust table for wantKey/wantHash,
 // dropping Sidecar's stale trust tables and changing nothing else. It returns
@@ -760,15 +1220,19 @@ func codexConfigConverge(scan codexConfigScan, wantKey, wantHash string) ([]byte
 	if scan.parseErr != "" {
 		return nil, fmt.Errorf("%s", scan.parseErr)
 	}
+	if wantKey == "" || wantHash == "" {
+		return nil, fmt.Errorf("the hook's trust key could not be determined")
+	}
 	converged := scan.hooksEnabled()
 	owned := codexOwnedTables(scan, wantKey)
 	if converged && len(owned) == 1 && owned[0].key == wantKey && owned[0].hash == wantHash {
 		return nil, nil
 	}
+	ownedKeys := codexTableKeys(owned, wantKey)
 
 	if !scan.exists || len(scan.lines) == 0 {
 		content := "[features]\nhooks = true\n\n" + codexStateBlock(wantKey, wantHash)
-		return codexVerify([]byte(content), wantKey, wantHash)
+		return codexVerifyConverged(scan.raw, []byte(content), ownedKeys, wantKey, wantHash)
 	}
 
 	drop := lineDropSet(scan, owned)
@@ -791,10 +1255,16 @@ func codexConfigConverge(scan codexConfigScan, wantKey, wantHash string) ([]byte
 		kept = kept[:len(kept)-1]
 	}
 	if scan.features == -1 && scan.hooksFlag == nil {
-		kept = append(kept, "", "[features]", "hooks = true")
+		if len(kept) > 0 {
+			kept = append(kept, "")
+		}
+		kept = append(kept, "[features]", "hooks = true")
 	}
-	kept = append(kept, "", strings.TrimSuffix(codexStateBlock(wantKey, wantHash), "\n"))
-	return codexVerify([]byte(strings.Join(kept, "\n")+"\n"), wantKey, wantHash)
+	if len(kept) > 0 {
+		kept = append(kept, "")
+	}
+	kept = append(kept, strings.TrimSuffix(codexStateBlock(wantKey, wantHash), "\n"))
+	return codexVerifyConverged(scan.raw, []byte(strings.Join(kept, "\n")+"\n"), ownedKeys, wantKey, wantHash)
 }
 
 // codexConfigWithoutOwnedTables composes the uninstall content: Sidecar's
@@ -819,19 +1289,16 @@ func codexConfigWithoutOwnedTables(scan codexConfigScan, wantKey string) ([]byte
 	if !strings.HasSuffix(content, "\n") {
 		content += "\n"
 	}
-	rescanned := scanCodexConfig(true, []byte(content))
-	if rescanned.parseErr != "" || len(codexOwnedTables(rescanned, wantKey)) != 0 {
-		return nil, fmt.Errorf("the composed file did not verify; refusing to write it")
-	}
-	return []byte(content), nil
+	return codexVerifyRemoved(scan.raw, []byte(content), codexTableKeys(owned), wantKey)
 }
 
 // lineDropSet marks the line spans of the given tables, plus one immediately
-// preceding blank line each, for removal.
+// preceding blank line each, for removal. The span is inclusive of its end line
+// and ends before any trailing blank or comment lines — see tomlStateTable.
 func lineDropSet(scan codexConfigScan, tables []tomlStateTable) map[int]bool {
 	drop := map[int]bool{}
 	for _, t := range tables {
-		for i := t.start; i < t.end && i < len(scan.lines); i++ {
+		for i := t.start; i <= t.end && i < len(scan.lines); i++ {
 			drop[i] = true
 		}
 		if t.start > 0 && strings.TrimSpace(scan.lines[t.start-1]) == "" {
@@ -845,10 +1312,12 @@ func codexStateBlock(key, hash string) string {
 	return "[hooks.state." + `"` + key + `"` + "]\ntrusted_hash = \"" + hash + "\"\n"
 }
 
-// codexVerify re-scans composed content and proves it says exactly what the
-// plan intends before the bytes are allowed anywhere near disk. A line editor
-// earns trust by checking its own work, not by being clever.
-func codexVerify(content []byte, wantKey, wantHash string) ([]byte, error) {
+// codexVerifyConverged proves a composed install/update/repair image before it
+// is allowed into a plan: the line scanner reads back exactly what was
+// intended, and the TOML oracle confirms that nothing outside Sidecar's region
+// moved. A line editor earns trust by checking its own work against a parser
+// that does not share its blind spots, not by being clever.
+func codexVerifyConverged(pre, content []byte, ownedKeys []string, wantKey, wantHash string) ([]byte, error) {
 	scan := scanCodexConfig(true, content)
 	if scan.parseErr != "" {
 		return nil, fmt.Errorf("the composed file did not verify (%s); refusing to write it", scan.parseErr)
@@ -859,6 +1328,24 @@ func codexVerify(content []byte, wantKey, wantHash string) ([]byte, error) {
 	owned := codexOwnedTables(scan, wantKey)
 	if len(owned) != 1 || owned[0].key != wantKey || owned[0].hash != wantHash {
 		return nil, fmt.Errorf("the composed file did not record exactly one trust table; refusing to write it")
+	}
+	if err := codexOracleConverged(pre, content, ownedKeys, wantKey, wantHash); err != nil {
+		return nil, fmt.Errorf("the composed file did not verify against the original (%v); refusing to write it", err)
+	}
+	return content, nil
+}
+
+// codexVerifyRemoved is the same gate for an uninstall image.
+func codexVerifyRemoved(pre, content []byte, ownedKeys []string, wantKey string) ([]byte, error) {
+	scan := scanCodexConfig(true, content)
+	if scan.parseErr != "" {
+		return nil, fmt.Errorf("the composed file did not verify (%s); refusing to write it", scan.parseErr)
+	}
+	if len(codexOwnedTables(scan, wantKey)) != 0 {
+		return nil, fmt.Errorf("the composed file did not verify; refusing to write it")
+	}
+	if err := codexOracleRemoved(pre, content, ownedKeys); err != nil {
+		return nil, fmt.Errorf("the composed file did not verify against the original (%v); refusing to write it", err)
 	}
 	return content, nil
 }

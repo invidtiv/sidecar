@@ -20,6 +20,7 @@ require (
 	github.com/marcus/td v0.65.0
 	github.com/mattn/go-runewidth v0.0.23
 	github.com/mattn/go-sqlite3 v1.14.33
+	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/rivo/uniseg v0.4.7
 	github.com/yuin/goldmark v1.7.8
 	golang.org/x/sys v0.45.0

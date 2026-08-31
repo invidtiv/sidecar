@@ -537,11 +537,20 @@ func TestTheAssetSerializesReportsUnderInvertedExitOrder(t *testing.T) {
 	// Promise.race picks the queue, so an uncleared timer leaves its own await
 	// looking fast — measured 1098ms with the defect reintroduced — while the
 	// process lingers for the full budget behind the live event loop. Measured
-	// end to end: 1.26s clean, 5.03s with the clearTimeout removed. The stub's
-	// own sleeps total about 1050ms, so a four second bound separates the two
-	// without depending on how fast this machine is.
-	if processElapsed >= 4*time.Second {
-		t.Fatalf("the harness process lived %v (dispose itself reported %dms); the reports take about 1050ms, so the bounding timer is holding the process open after the queue drained",
-			processElapsed.Round(time.Millisecond), result.ElapsedMS)
+	// end to end: 1.26s clean, 5.03s with the clearTimeout removed.
+	//
+	// What is measured is the TAIL -- how long the process outlived dispose's
+	// own return -- rather than absolute wall clock. An absolute bound cannot
+	// separate the two under load: a loaded clean run was observed at 4.04s
+	// against a 4s bound while the defect sits at ~5.03s, so the two converge
+	// exactly when the machine is busy. The tail does not converge, because
+	// load inflates the reports on both sides equally while the defect adds a
+	// fixed REPORT_TIMEOUT_MS on top of whatever the reports cost: clean leaves
+	// a tail near zero, the defect leaves one near the full five second budget.
+	tail := processElapsed - time.Duration(result.ElapsedMS)*time.Millisecond
+	if tail >= 2*time.Second {
+		t.Fatalf("the harness process outlived dispose by %v (process %v, dispose reported %dms); "+
+			"the bounding timer is holding the process open after the queue drained",
+			tail.Round(time.Millisecond), processElapsed.Round(time.Millisecond), result.ElapsedMS)
 	}
 }
