@@ -83,8 +83,29 @@ func TestCapabilityMatrixIsWellFormed(t *testing.T) {
 					t.Fatalf("unknown transition %q", tr)
 				}
 			}
-			if c.Source == "" || c.SourceDoc == "" || c.SourceVersionNote == "" {
-				t.Fatal("every entry must cite its source, doc, and the version its evidence came from")
+			// Every entry, whatever it is, has to say where its claim came from
+			// and against what version.
+			if c.SourceDoc == "" || c.SourceVersionNote == "" {
+				t.Fatal("every entry must cite its doc and the version its evidence came from")
+			}
+			// A source identifier names a shipped integration, so it is required
+			// of an entry that claims a tier and meaningless for one that does
+			// not. The registry also holds evaluation records: providers that
+			// were investigated and deliberately left on screen fallback, listed
+			// rather than omitted so "evaluated, not built" is distinguishable
+			// from "never looked at". Demanding a source identifier from those
+			// would mean inventing a name for an integration that does not
+			// exist, and CapabilityForSource already refuses an empty source, so
+			// no lookup can reach one by accident.
+			switch c.Tier {
+			case TierScreenFallback:
+				if c.Source != "" && c.AssetVersion == "" {
+					t.Fatal("an entry naming a source but no asset version is neither an integration nor an evaluation record")
+				}
+			default:
+				if c.Source == "" {
+					t.Fatalf("tier %q claims authority but names no source to grant it to", c.Tier)
+				}
 			}
 			// An entry with gaps must say what they are, and an entry with no
 			// gaps had better be one that was actually traced.

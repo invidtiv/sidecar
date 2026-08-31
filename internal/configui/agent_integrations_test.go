@@ -210,7 +210,7 @@ func TestTheRouteShowsEveryProviderAndItsHonestState(t *testing.T) {
 			t.Fatalf("the route does not mention %q:\n%s", want, view)
 		}
 	}
-	if !strings.Contains(view, "0 of 4 installed") {
+	if !strings.Contains(view, "0 of 3 installed") {
 		t.Fatalf("the summary is wrong:\n%s", view)
 	}
 }
@@ -338,7 +338,7 @@ func TestInstallingIsConfirmedByNamingTheFilesAndThenActuallyInstalls(t *testing
 	// The route re-reads rather than assuming, so what it shows is what is on
 	// disk.
 	view = ansi.Strip(m.View(160, 45))
-	if !strings.Contains(view, "current") || !strings.Contains(view, "1 of 4 installed") {
+	if !strings.Contains(view, "current") || !strings.Contains(view, "1 of 3 installed") {
 		t.Fatalf("the route did not refresh after the mutation:\n%s", view)
 	}
 }

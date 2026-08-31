@@ -82,7 +82,8 @@
       "Stop means stopped generating, not ready for input, so turn completion cannot be taken from it without reconciliation against screen state.",
       "Both halves of Herdr's stated reason for removing its own full-lifecycle Claude hook set, missed permission results and escape interrupts, are independently reproduced here on the current release. That rollback is now explained rather than merely recorded.",
       "Hook configuration merges additively across five layers (enterprise, project, local, user, plugin), so Sidecar can own exactly its one entry in ~/.claude/settings.json and can never own the effective hook set; another layer can add, but not remove, hooks beside it.",
-      "The integration manages ~/.claude/settings.json only; a CLAUDE_CONFIG_DIR override relocates the provider's configuration where the installer does not look."
+      "The integration manages ~/.claude/settings.json only; a CLAUDE_CONFIG_DIR override relocates the provider's configuration where the installer does not look.",
+      "grok reads hooks from ~/.claude/settings.json by design -- its shipped documentation carries a 'Claude Code Compatibility' section for exactly that -- so Sidecar's installed Claude entry also fires inside grok sessions. Because --kind is a flag rather than something checked against the pane's actual occupant, a grok session can be bound as kind=claude carrying grok's session identifier. Tracked as td-11040b."
     ],
     "orderingGuaranteed": false,
     "sourceDoc": "https://code.claude.com/docs/en/hooks",
@@ -105,13 +106,114 @@
       "process_exit"
     ],
     "knownGaps": [
-      "No Sidecar trace was captured.",
-      "The blocked lane has no portable official source. The one working production integration obtains it from a pi.events bus message named for that consumer rather than from a documented lifecycle event, and ui_prompt_start covers only extension-driven prompts.",
-      "No subagent events are enumerated, and there is no cancellation event.",
-      "The extension API publishes no version or stability guarantee."
+      "No Sidecar trace was captured. This entry is read from the released TypeScript definitions shipped in the installed package (dist/core/extensions/types.d.ts), which is stronger than vendor prose but is not an observed trace.",
+      "Blocking and unblocking do not exist, and this is a deliberate product decision rather than a missing event: Pi ships no permission system, so there is nothing to be blocked on. An extension can open its own ctx.ui dialog, but that is invisible to every other extension, so no portable blocked signal exists at all. This caps Pi at advisory however it is traced.",
+      "An earlier docs-only version of this entry cited a `ui_prompt_start` event as partial cover for blocking. No such event exists anywhere in the 0.84.3 package. The blocked lane is NO, not PARTIAL.",
+      "There is no cancellation event. Cancellation is inferable, exactly the way OpenCode's was before it was traced: the final assistant message carries a StopReason that includes \"aborted\", and agent_settled is emitted from a finally block so it arrives however the turn ended. That shares its shape with \"error\", so an adapter reading only the event would get the lane right and the outcome wrong.",
+      "Turn completion must be taken from agent_settled rather than agent_end: agent_end can be followed by an automatic retry or a compaction, so it means 'this attempt stopped' rather than 'the turn is over'.",
+      "Process exit is session_shutdown, which fires on quit, reload, new, resume and fork; an adapter must read the reason, because three of those five are not an exit at all.",
+      "No subagent events. Extension-spawned agents are separate processes.",
+      "The extension API publishes no version or stability guarantee, and the changelog records breaking changes that have already shipped."
     ],
     "orderingGuaranteed": false,
     "sourceDoc": "https://pi.dev/docs/latest/extensions",
-    "sourceVersionNote": "pi 0.84.3 installed locally but not traced. Event list is vendor documentation prose only; upstream type definitions were not read."
+    "sourceVersionNote": "pi 0.84.3 installed locally but not traced. The event inventory is read from the released type definitions in the installed package rather than from documentation prose, and the extension loading contract (--extension/-e, repeatable; --no-extensions; discovery from ~/.pi/agent/extensions/) is documented. No stability guarantee is published."
+  },
+  {
+    "schemaVersion": 1,
+    "provider": "grok",
+    "source": "",
+    "assetVersion": "",
+    "tier": "screen-fallback",
+    "evidence": "none",
+    "minProviderVersion": "",
+    "testedProviderRange": "",
+    "covered": [],
+    "knownGaps": [
+      "No Sidecar integration is built, so nothing is claimed and screen detection remains the sole authority.",
+      "Not traced. Every statement here is read from the shipped binary's embedded documentation, so it selects a candidate rather than earning a tier.",
+      "grok also reads ~/.claude/settings.json and ~/.cursor/hooks.json by default, so hooks installed for those providers execute inside grok sessions. Any grok integration must expect cross-provider firing in both directions, and payload field naming differs."
+    ],
+    "orderingGuaranteed": false,
+    "sourceDoc": "https://docs.x.ai/docs/grok-cli",
+    "sourceVersionNote": "grok 1.0.13. The strongest hook contract in the catalog and the only one with a dedicated cancellation event: StopCancelled carries reasons including user_interrupt, permission_rejected and permission_cancelled, alongside PermissionDenied, Notification{permission_prompt,idle_prompt}, SessionStart/SessionEnd and GROK_SESSION_ID. Verified in the shipped binary's embedded documentation, which documents StopCancelled where the vendor website does not. A full-tier candidate once traced."
+  },
+  {
+    "schemaVersion": 1,
+    "provider": "cursor",
+    "source": "",
+    "assetVersion": "",
+    "tier": "screen-fallback",
+    "evidence": "none",
+    "minProviderVersion": "",
+    "testedProviderRange": "",
+    "covered": [],
+    "knownGaps": [
+      "No Sidecar integration is built, so nothing is claimed and screen detection remains the sole authority.",
+      "Not traced. Read from the shipped bundle rather than observed.",
+      "There are user reports of events being omitted on particular versions, so tracing is mandatory rather than a formality before any tier is claimed."
+    ],
+    "orderingGuaranteed": false,
+    "sourceDoc": "https://cursor.com/docs/agent/hooks",
+    "sourceVersionNote": "cursor-agent 2026.08.25. A full event registry is present in the shipped bundle: beforeSubmitPrompt, tool events, stop carrying status \"aborted\", postToolUseFailure.is_interrupt, subagentStart/Stop and sessionStart/End, configured through ~/.cursor/hooks.json. A full-tier candidate once traced."
+  },
+  {
+    "schemaVersion": 1,
+    "provider": "copilot",
+    "source": "",
+    "assetVersion": "",
+    "tier": "screen-fallback",
+    "evidence": "none",
+    "minProviderVersion": "",
+    "testedProviderRange": "",
+    "covered": [],
+    "knownGaps": [
+      "No Sidecar integration is built, so nothing is claimed and screen detection remains the sole authority.",
+      "Not installed on any machine Sidecar has surveyed, so nothing here is verified even against a shipped artifact -- this is the weakest evidence in the registry.",
+      "Interrupt appears to be reported at session granularity rather than per turn, which would not distinguish a cancelled turn from a closed session."
+    ],
+    "orderingGuaranteed": false,
+    "sourceDoc": "https://docs.github.com/en/copilot",
+    "sourceVersionNote": "Not installed locally. A hooks feature reached general availability in 2026 offering permissionRequest, sessionEnd carrying an abort reason, and a sessionId on every event, including HTTP hooks. A full-tier candidate on paper only."
+  },
+  {
+    "schemaVersion": 1,
+    "provider": "amp",
+    "source": "",
+    "assetVersion": "",
+    "tier": "screen-fallback",
+    "evidence": "none",
+    "minProviderVersion": "",
+    "testedProviderRange": "",
+    "covered": [],
+    "knownGaps": [
+      "No Sidecar integration is built, so nothing is claimed and screen detection remains the sole authority.",
+      "Not installed locally and not traced.",
+      "No permission or blocking event, and no reliable process-exit signal, so the blocked lane and process exit would both stay with screen and process detection.",
+      "No stability guarantee is published for the plugin interface."
+    ],
+    "orderingGuaranteed": false,
+    "sourceDoc": "https://ampcode.com/manual",
+    "sourceVersionNote": "Not installed locally. Observability is via a TypeScript plugin process rather than shell hooks: session.start, agent.start, tool.call, tool.result carrying a cancelled flag, and agent.end. An advisory candidate at best."
+  },
+  {
+    "schemaVersion": 1,
+    "provider": "antigravity",
+    "source": "",
+    "assetVersion": "",
+    "tier": "screen-fallback",
+    "evidence": "none",
+    "minProviderVersion": "",
+    "testedProviderRange": "",
+    "covered": [],
+    "knownGaps": [
+      "No Sidecar integration is built, so nothing is claimed and screen detection remains the sole authority.",
+      "Not traced; read from documentation embedded in the shipped binary.",
+      "No session start or end event, no blocking event and no cancellation event, so neither the blocked lane nor process exit could be authored from hooks.",
+      "The hooks configuration path has already moved between releases, so any integration would need a version-aware installer."
+    ],
+    "orderingGuaranteed": false,
+    "sourceDoc": "https://antigravity.google/docs",
+    "sourceVersionNote": "agy 1.1.22. The thinnest hook surface in the catalog: exactly five events -- PreToolUse, PostToolUse, PreInvocation, PostInvocation and Stop -- carrying a conversationId. An advisory candidate at best."
   }
 ]

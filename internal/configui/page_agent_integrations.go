@@ -392,15 +392,32 @@ func (m *Model) buildAgentIntegrations(b *paneBuilder) {
 	b.note("Every fact and action here is also `sidecar agent integration`, with --dry-run and --json.")
 }
 
+// summariseIntegrations counts installations against the agents that can
+// actually have one.
+//
+// The denominator is deliberately not the row count. The list also carries
+// evaluation records -- agents Sidecar has surveyed and deliberately not built
+// an integration for, shown so that "evaluated, not built" is distinguishable
+// from "never looked at". Counting those in the denominator would report
+// "0 of 9 installed" on a machine where four of the nine can never be anything
+// else, which reads as nine things being broken rather than four being
+// available.
 func summariseIntegrations(list []agentintegration.Status) string {
-	installed := 0
+	installed, available := 0, 0
 	for _, st := range list {
+		if st.Status == agentlifecycle.StatusUnsupported {
+			continue
+		}
+		available++
 		switch st.Status {
 		case agentlifecycle.StatusCurrent, agentlifecycle.StatusOutdated, agentlifecycle.StatusNeedsRepair:
 			installed++
 		}
 	}
-	return fmt.Sprintf("%d of %d installed", installed, len(list))
+	if unsupported := len(list) - available; unsupported > 0 {
+		return fmt.Sprintf("%d of %d installed · %d unsupported", installed, available, unsupported)
+	}
+	return fmt.Sprintf("%d of %d installed", installed, available)
 }
 
 // syncIntegrationCursor keeps the route's own selection and the pane's row

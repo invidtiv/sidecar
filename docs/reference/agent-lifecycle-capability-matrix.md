@@ -30,7 +30,7 @@ This is enforced rather than documented. `Capability.TierFor` polices every tier
 | OpenCode | 1.18.23, 1.18.25 | real-trace | `full` | lifecycle authority | none blocking; see gaps below |
 | Codex | 0.151.0 | real-trace | `session-identity` | session only | shipped hook is SessionStart only. The provider's own contract is traced and would support `full`. |
 | Claude Code | 2.1.220 | real-trace | `session-identity` | session only | shipped hook is SessionStart only. The provider's ceiling is `advisory`: no cancellation event exists. |
-| Pi | 0.84.3 | docs-only | `session-identity` | lifecycle authority | no portable blocked signal |
+| Pi | 0.84.3 | docs-only | `session-identity` | lifecycle authority | blocking is structurally impossible; ceiling is `advisory` |
 
 Two columns are doing different jobs here and it is worth being explicit about which. **Tier now** is what the *shipped Sidecar asset* earns, and for Codex and Claude that is `session-identity` because each ships one `SessionStart` entry and nothing more. **Blocking gap** describes the *provider's* ceiling — the best any Sidecar adapter could honestly claim if one were written today. Codex's ceiling is `full` and Claude's is `advisory`, and neither is reached yet because neither asset asks for it.
 
@@ -44,8 +44,8 @@ Two columns are doing different jobs here and it is worth being explicit about w
 | --- | --- | --- | --- | --- |
 | work start | YES (traced) | YES (traced) | YES (traced) | YES |
 | tool use | YES (traced) | YES (traced) | YES (traced) | YES |
-| blocked on request | YES (traced) | YES (traced) | YES (traced) | PARTIAL |
-| unblocked | YES (traced) | YES (traced) | PARTIAL (traced) | PARTIAL |
+| blocked on request | YES (traced) | YES (traced) | YES (traced) | NO |
+| unblocked | YES (traced) | YES (traced) | PARTIAL (traced) | NO |
 | turn complete | YES (traced) | YES (traced) | PARTIAL (traced) | YES |
 | cancellation | YES (traced) | YES (traced) | NO (confirmed) | PARTIAL |
 | session identity | YES (traced) | YES (traced) | YES (traced) | YES |
@@ -188,11 +188,35 @@ Herdr shipped a full-lifecycle Claude hook set and then removed it, keeping only
 
 ## Pi
 
-**Source:** <https://pi.dev/docs/latest/extensions>. **Not traced.** Upstream type definitions were not read, so this entry is one notch less certain than Codex.
+**Source:** the released TypeScript definitions in the installed package (`dist/core/extensions/types.d.ts`), read rather than inferred from prose. **Not traced.**
 
-Pi has the cleanest agent-flow abstraction of the four. `agent_start` and `agent_settled` are exactly the right pair, and `session_shutdown` closes the session cleanly.
+Pi has the cleanest agent-flow abstraction of the four. `before_agent_start`/`agent_start`/`agent_end`/`agent_settled`, `turn_start`/`turn_end`, the `tool_execution_*` family, and `session_start`/`session_shutdown` are all typed events with a documented loading contract (`--extension`/`-e`, repeatable; `--no-extensions`; discovery from `~/.pi/agent/extensions/`). Session identity is solid: `ctx.sessionManager.getSessionId()`.
 
-The blocked lane is the problem. The one working production integration obtains it from a `pi.events` bus message named after that consumer rather than from a documented lifecycle event, and nothing in the shipped asset emits that message. Sidecar cannot build on a channel named for another tool, and `ui_prompt_start` covers only extension-driven prompts. Until a portable blocked signal is identified, Pi is a `session-identity` source.
+**Correction to the Phase A entry.** That entry cited `ui_prompt_start` as partial cover for blocking. **No such event exists anywhere in the 0.84.3 package.** The blocked lane is `NO`, not `PARTIAL`, and the correction matters more than a table cell: it is the difference between a gap that tracing might close and one that cannot be closed at all.
+
+**Blocking is structurally impossible, not merely absent.** Pi deliberately ships no permission system, so there is nothing to be blocked on. An extension may open its own `ctx.ui` dialog, but that is invisible to every other extension, so no portable blocked signal exists for Sidecar to consume. **Pi's ceiling is therefore `advisory`**, and no amount of tracing will raise it.
+
+Three further limits are worth recording because each is a trap for an adapter written from the event names alone. Turn completion must come from `agent_settled` rather than `agent_end`, because `agent_end` can be followed by an automatic retry or a compaction — it means "this attempt stopped", not "the turn is over". Process exit is `session_shutdown`, which fires for `quit`, `reload`, `new`, `resume` and `fork`, so three of its five reasons are not an exit at all and an adapter must read the reason. And cancellation has no event: it is inferable from a `StopReason` of `"aborted"` on the final assistant message, with `agent_settled` emitted from a `finally` so it arrives however the turn ended — which is exactly the shape OpenCode's cancellation had before it was traced, sharing its shape with `"error"`.
+
+Pi remains a `session-identity` entry until real traces exist.
+
+## Catalog agents evaluated but not built
+
+These are recorded rather than omitted so that "evaluated, and deliberately not built" is distinguishable from "never looked at". All are `screen-fallback` with `evidence: none`: **none is trace-backed**, so each selects a candidate rather than earning a tier, and `TierFor` would refuse them anything else regardless.
+
+| Agent | Seen | Hook surface | Ceiling on paper | Why it is not built |
+| --- | --- | --- | --- | --- |
+| grok | 1.0.13 | strongest in the catalog | `full` | Untraced. The only provider anywhere with a dedicated cancellation event: `StopCancelled` carrying `user_interrupt`, `permission_rejected` and `permission_cancelled`, alongside `PermissionDenied` and `Notification{permission_prompt, idle_prompt}`. |
+| cursor | 2026.08.25 | full registry in the shipped bundle | `full` | Untraced, and there are user reports of events being omitted on particular versions, so tracing is mandatory rather than a formality. |
+| copilot | not installed | GA hooks incl. `permissionRequest` | `full` | Not installed on any surveyed machine, so nothing is verified even against a shipped artifact — the weakest evidence here. Interrupt also appears to be session-granular rather than per turn. |
+| amp | not installed | TypeScript plugin process | `advisory` | Not installed and not traced. No permission event and no reliable process-exit signal, so two lanes would stay with screen detection anyway. |
+| antigravity | 1.1.22 | five events | `advisory` | Untraced. No session start/end, no blocking, no cancellation, and the hooks configuration path has already moved between releases. |
+
+Two findings from this sweep are worth more than the table.
+
+**No provider except OpenCode emits an approval-*resolved* event.** Codex, Claude Code, grok, cursor and antigravity all announce that permission is being requested and none announces the reply as its own event. Resolution has to be inferred from whatever happens next, and what happens next differs per provider — `PostToolUse` for Codex on approval, `Interrupt` on denial, and nothing at all for Claude Code on either. This is the single most consistent gap across the catalog, and it is the reason the `unblocked` transition is the one that separates the tiers in practice.
+
+**grok reads `~/.claude/settings.json` by design.** Its shipped documentation carries a "Claude Code Compatibility" section for exactly this. Sidecar's installed Claude hook entry therefore also fires inside grok sessions, and because `--kind` is a flag rather than something checked against the pane's actual occupant, a grok session can be bound as `kind=claude` carrying grok's session identifier — after which a cold restore would offer to resume it with the wrong CLI. Tracked as `td-11040b`.
 
 ## What Phase B should do first
 

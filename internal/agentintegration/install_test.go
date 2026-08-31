@@ -836,10 +836,22 @@ func TestProvidersWithNoBundledAssetAreReportedHonestlyRatherThanHidden(t *testi
 	if !sawOpenCode || !sawUnsupported {
 		t.Fatalf("list did not cover both cases: opencode=%v unsupported=%v", sawOpenCode, sawUnsupported)
 	}
-	// Sorted, so two runs of `integration list` never differ.
-	for i := 1; i < len(list); i++ {
-		if list[i-1].Provider > list[i].Provider {
-			t.Fatalf("list is not sorted: %s before %s", list[i-1].Provider, list[i].Provider)
+	// Deterministically ordered, so two runs of `integration list` never
+	// differ: agents that can have an integration first, then the evaluation
+	// records, alphabetically within each group.
+	//
+	// The grouping is load-bearing rather than decorative. There are more
+	// evaluation records than integrations, so plain alphabetical order put
+	// every actionable row below a screenful of agents the user cannot install.
+	seenUnsupported := false
+	for i, st := range list {
+		unsupported := st.Status == agentlifecycle.StatusUnsupported
+		if seenUnsupported && !unsupported {
+			t.Fatalf("%s is installable but sorted below an unsupported agent", st.Provider)
+		}
+		seenUnsupported = seenUnsupported || unsupported
+		if i > 0 && list[i-1].Status == st.Status && list[i-1].Provider > st.Provider {
+			t.Fatalf("list is not sorted within its group: %s before %s", list[i-1].Provider, st.Provider)
 		}
 	}
 }

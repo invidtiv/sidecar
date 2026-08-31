@@ -555,7 +555,24 @@ func (s Service) List() []Status {
 		seen[a.Provider()] = true
 		out = append(out, s.withLastReport(a.Inspect(s.Env)))
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Provider < out[j].Provider })
+	// Agents you can do something about come first, alphabetically, then the
+	// evaluation records -- providers Sidecar has surveyed and deliberately not
+	// built an integration for, listed so that "evaluated, not built" is
+	// distinguishable from "never looked at".
+	//
+	// Ordering is part of the answer rather than a cosmetic preference. There
+	// are twice as many evaluation records as integrations, and plain
+	// alphabetical order buried every actionable row beneath them: at 60x24 the
+	// list opened on five agents the user cannot install, and the ones they
+	// could were off the page.
+	sort.Slice(out, func(i, j int) bool {
+		li := out[i].Status == agentlifecycle.StatusUnsupported
+		lj := out[j].Status == agentlifecycle.StatusUnsupported
+		if li != lj {
+			return lj
+		}
+		return out[i].Provider < out[j].Provider
+	})
 	return out
 }
 
