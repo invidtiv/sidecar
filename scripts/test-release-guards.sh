@@ -202,10 +202,22 @@ EOF
 
 - test release
 EOF
+  # A real changelog has years of history below the current section. The
+  # release front-end must stop reading once it has proved the top section is
+  # non-empty; copying all of this into a Bash variable used to turn the
+  # whitespace check quadratic and peg a core for minutes.
+  for i in $(seq 1 4000); do
+    printf '%s\n' "- historical release note $i" >>CHANGELOG.md
+  done
+  started=$SECONDS
   output=$(BUMP=minor ./scripts/release.sh --dry-run 2>&1) || {
     echo "release.sh rejected a clean BUMP-driven dry run: $output" >&2
     exit 1
   }
+  if ((SECONDS - started > 10)); then
+    echo "release.sh scanned the historical changelog too slowly" >&2
+    exit 1
+  fi
   [[ $output == *"release plan: v1.1.0"* ]] || {
     echo "release.sh did not derive v1.1.0 from BUMP=minor: $output" >&2
     exit 1

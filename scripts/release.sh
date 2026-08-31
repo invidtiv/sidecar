@@ -31,10 +31,15 @@ top_heading=$(grep -m1 '^## \[' CHANGELOG.md) ||
   die "CHANGELOG.md has no '## [' heading"
 
 # The section body between the top heading and the next one must have content:
-# releasing an empty changelog entry is always a mistake.
-section_body=$(awk '/^## \[/{n++; next} n==1' CHANGELOG.md)
-[[ -n ${section_body//[[:space:]]/} ]] ||
-  die "the top CHANGELOG.md section is empty — write the changelog first"
+# releasing an empty changelog entry is always a mistake. Stop at the first
+# content line (or the next heading) instead of copying the complete changelog
+# into a Bash variable: whitespace substitution over a long release history is
+# quadratic in Bash and made the dry run consume a core for minutes.
+awk '
+  /^## \[/ { headings++; if (headings == 2) exit; next }
+  headings == 1 && /[^[:space:]]/ { found = 1; exit }
+  END { exit !found }
+' CHANGELOG.md || die "the top CHANGELOG.md section is empty — write the changelog first"
 
 release_version=${RELEASE_VERSION:-}
 needs_stamp=false
