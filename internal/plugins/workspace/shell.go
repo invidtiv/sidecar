@@ -18,6 +18,7 @@ import (
 	"github.com/marcus/sidecar/internal/agentactivity"
 	"github.com/marcus/sidecar/internal/agentcatalog"
 	"github.com/marcus/sidecar/internal/agentcontrol"
+	"github.com/marcus/sidecar/internal/agentresolve"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/shellliveness"
 	"github.com/marcus/sidecar/internal/shellstate"
@@ -1070,7 +1071,11 @@ func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.
 		activity := agentactivity.Result{}
 		if supportsAgentActivity(observedAgentType) {
 			observation.Agent = string(observedAgentType)
-			activity = agentactivity.Detect(observation)
+			// The same single resolver the worktree path and workspaceinventory
+			// call. A managed shell is where a provider integration is most
+			// likely to be installed, but the decision about which evidence
+			// wins is not made here.
+			activity = agentresolve.Result(observation, agentresolve.PaneRef{Session: tmuxName}, lifecycleSource(), capturedAt)
 		}
 
 		return ShellOutputMsg{

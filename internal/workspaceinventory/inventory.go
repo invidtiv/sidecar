@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/marcus/sidecar/internal/agentactivity"
+	"github.com/marcus/sidecar/internal/agentresolve"
 	"github.com/marcus/sidecar/internal/agentstatus"
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/tmuxenv"
@@ -259,6 +260,12 @@ type Collector struct {
 	trackerBase        *trackerStore
 	beforeTrackerApply func()
 	hostPaneID         string
+
+	// lifecycle supplies provider lifecycle reports to the shared resolver.
+	// Nil is the ordinary state today and means pure screen detection, which is
+	// byte-for-byte the behavior this collector had before the resolver was
+	// extracted.
+	lifecycle agentresolve.Source
 }
 
 // RefreshMetrics contains privacy-safe operation and concurrency counters for
@@ -648,7 +655,12 @@ func (c Collector) observeContext(ctx context.Context, workspace *Workspace, mat
 				c.beforeTrackerApply()
 			}
 			tracker := c.trackers.values[workspace.ID]
-			tracker.Apply(agentactivity.Detect(ob), now)
+			// The same resolver the two project polling paths call, applied
+			// before this surface's own tracker exactly as they do. This is the
+			// site the M6 plan warns about changing alone: doing so would give
+			// the global Sessions view deterministic state while the project
+			// Workspace and its notifications stayed screen-only.
+			tracker.Apply(agentresolve.Result(ob, agentresolve.PaneRef{PaneID: pane.ID, Session: workspace.TmuxName}, c.lifecycle, now), now)
 			c.trackers.values[workspace.ID] = tracker
 			c.trackers.mu.Unlock()
 			input.Activity = tracker
