@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"sync"
 	"time"
+
+	"github.com/marcus/sidecar/internal/procgroup"
 )
 
 // RunSpec is one invocation of a provider executable. It is deliberately a
@@ -74,7 +76,7 @@ func (ExecRunner) Run(ctx context.Context, spec RunSpec) (RunResult, error) {
 	cmd := exec.Command(spec.Argv[0], spec.Argv[1:]...)
 	cmd.Dir = spec.Dir
 	cmd.Env = spec.Env
-	setProcessGroup(cmd)
+	procgroup.Set(cmd)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -103,7 +105,7 @@ func (ExecRunner) Run(ctx context.Context, spec RunSpec) (RunResult, error) {
 		case <-ctx.Done():
 			killOnce.Do(func() {
 				close(killed)
-				killProcessGroup(cmd)
+				procgroup.Kill(cmd)
 			})
 		case <-done:
 		}

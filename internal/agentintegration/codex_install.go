@@ -585,7 +585,7 @@ func (a CodexAdapter) planConverge(s codexState, p Plan, act Action) (Plan, erro
 		wantKey = codexStateKey(s.paths.Hooks, group, 0)
 		wantHash = codexTrustHashes()[len(codexTrustHashes())-1]
 		p.Ops = entryFileOps(p.Ops, s.env, s.dir, s.hooks, s.hooksBackup, renderJSONFile(top),
-			"write the Sidecar session-identity hook entry, preserving every other hook", CodexAssetVersion)
+			"write the Sidecar session-identity hook entry, preserving every other hook", ownedEntry(CodexAssetVersion))
 	}
 
 	content, err := codexConfigConverge(s.configScan, wantKey, wantHash)
@@ -603,7 +603,7 @@ func (a CodexAdapter) planConverge(s codexState, p Plan, act Action) (Plan, erro
 			dirPlanned = FileState{Path: s.paths.Dir, Exists: true}
 		}
 		p.Ops = entryFileOps(p.Ops, s.env, dirPlanned, s.config, s.configBackup, content,
-			note, CodexAssetVersion)
+			note, ownedEntry(CodexAssetVersion))
 	}
 
 	if len(p.Ops) == 0 {
@@ -654,8 +654,10 @@ func (a CodexAdapter) planUninstall(s codexState, p Plan) (Plan, error) {
 		if err != nil {
 			return Plan{}, refuse(RefuseUnreadable, s.paths.Config, "%s: %v", s.paths.Config, err)
 		}
+		// userEntry, not ownedEntry: this op takes Sidecar's trust records out,
+		// so what it leaves behind is the user's own config.toml.
 		p.Ops = entryFileOps(p.Ops, s.env, s.dir, s.config, s.configBackup, content,
-			"remove Sidecar's hook trust records, preserving every other line including features.hooks", "")
+			"remove Sidecar's hook trust records, preserving every other line including features.hooks", userEntry())
 	}
 
 	if len(p.Ops) == 0 {

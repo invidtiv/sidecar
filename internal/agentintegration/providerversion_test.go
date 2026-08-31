@@ -3,8 +3,11 @@ package agentintegration
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/marcus/sidecar/internal/resource"
 )
 
 // TestAProviderThatNeverAnswersDoesNotHangTheSurface is a regression test with a
@@ -59,5 +62,44 @@ func TestAProviderThatAnswersIsStillRead(t *testing.T) {
 
 	if got := detectProviderVersion("answers-fast"); got != "answers-fast 9.9.9" {
 		t.Fatalf("version = %q, want the first line only", got)
+	}
+}
+
+// TestAHostileVersionStringCannotReachTheTUI closes the last gap in this probe.
+//
+// The value is the stdout of a third-party binary on the user's PATH, and it is
+// rendered directly into a status table. Bounding the wait was only half the
+// job: an unbounded, unsanitized string could carry ANSI, an OSC hyperlink, or a
+// kilobyte of text into a cell, which is exactly what resource.SanitizeLine and
+// MaxProviderVersionChars already exist to prevent everywhere else a provider
+// string is rendered.
+func TestAHostileVersionStringCannotReachTheTUI(t *testing.T) {
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "hostile-version")
+	// Escapes, an OSC 8 hyperlink, a control character, and far more text than
+	// any real version string.
+	script := "#!/bin/sh\n" +
+		`printf '\033[31mred\033[0m \033]8;;https://example.com\033\\link\033]8;;\033\\ \a` +
+		strings.Repeat("A", 300) + `\n'` + "\n"
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	got := detectProviderVersion("hostile-version")
+	if got == "" {
+		t.Skip("the fixture shell did not produce output; nothing to assert about")
+	}
+	if len([]rune(got)) > resource.MaxProviderVersionChars {
+		t.Fatalf("version is %d runes, over the %d cap: %q",
+			len([]rune(got)), resource.MaxProviderVersionChars, got)
+	}
+	if strings.ContainsRune(got, 0x1b) || strings.ContainsRune(got, 0x07) {
+		t.Fatalf("an escape sequence survived into the rendered version: %q", got)
+	}
+	for _, r := range got {
+		if r < 0x20 || r == 0x7f {
+			t.Fatalf("a control character survived into the rendered version: %q", got)
+		}
 	}
 }

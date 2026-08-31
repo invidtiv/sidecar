@@ -378,6 +378,23 @@ func runLifecycleWrite(env Env, args []string, name string, kind agentlifecycle.
 		})
 	}
 
+	// --provider is the one identity field that comes from a flag rather than
+	// from Sidecar's own derivation, so it is the one that can be wrong. A hook
+	// entry lives in a settings file, and a provider that reads another
+	// provider's settings file for compatibility will run it and pass along
+	// whatever --provider that file was written with. Checked against the pane's
+	// actual occupant, this becomes a claim Sidecar verified rather than one it
+	// copied into an arbitration input.
+	//
+	// It maps to ErrInvalidContext because that is exactly what this is: the
+	// claimed context does not match the live one. No shipped lifecycle adapter
+	// can reach this today — only OpenCode ships one, and it is not cross-read by
+	// anything — so this is a gate placed ahead of the Claude adapter that
+	// td-b87b39 holds, not a fix for a live mis-binding.
+	if err := lifecycleenv.VerifyReportedKind(ctx.PanePID, f.provider); err != nil {
+		return emitLifecycleError(env, f.json, agentlifecycle.ErrInvalidContext, err)
+	}
+
 	rec := agentlifecycle.Report{
 		SchemaVersion: agentlifecycle.SchemaVersion,
 		ID:            reportID(),

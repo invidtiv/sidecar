@@ -1,2 +1,10 @@
 # ms	event	session	turn	tool	fields
 0	UserPromptSubmit	session-1	-	-	cwd,hook_event_name,permission_mode,prompt,prompt_id,session_id,transcript_path
+# capture-window: 18s
+# The trace ends here because nothing else arrived, not because capture stopped.
+# An Esc interrupt of a live turn ("Interrupted - What should Claude do instead?"
+# on screen) emitted no Interrupt, no Stop, and no other event; the hook listener
+# stayed attached for 18s. Settings registering Interrupt and PermissionRequest
+# were accepted by claude 2.1.220 without complaint and never fired. An absence is
+# only as strong as the window it was observed over, so the window is recorded
+# with it.

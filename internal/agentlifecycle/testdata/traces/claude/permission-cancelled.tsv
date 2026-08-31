@@ -3,3 +3,8 @@
 2036	PreToolUse	session-1	-	Bash	cwd,effort,hook_event_name,permission_mode,prompt_id,session_id,tool_input,tool_name,tool_use_id,transcript_path
 2063	PermissionRequest	session-1	-	Bash	cwd,effort,hook_event_name,permission_mode,permission_suggestions,prompt_id,session_id,tool_input,tool_name,transcript_path
 8067	Notification	session-1	-	-	cwd,hook_event_name,message,notification_type,prompt_id,session_id,transcript_path
+# capture-window: 18s
+# The trace ends here because nothing else arrived, not because capture stopped.
+# Escape-cancelling the permission prompt produced no further event; the hook
+# listener stayed attached for 18s after the answer. An absence is only as strong
+# as the window it was observed over, so the window is recorded with it.

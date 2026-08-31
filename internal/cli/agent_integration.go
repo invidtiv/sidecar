@@ -385,15 +385,8 @@ func describeFileState(f agentintegration.FileState) string {
 		b.WriteString("  absent")
 	case f.Owned:
 		b.WriteString("  " + describeOwned(f))
-	case f.Kind == "dir":
-		// A directory is not something ownership is claimed over: Sidecar
-		// creates it when it is missing and removes it only when removing its
-		// own files leaves it empty. Saying "not Sidecar's" here reused the
-		// phrase reserved for a foreign file at Sidecar's own path, which is a
-		// refusal, and made a perfectly ordinary directory read as damage.
-		b.WriteString("  directory")
 	default:
-		b.WriteString("  " + f.Kind + ", not Sidecar's")
+		b.WriteString("  " + describeUnowned(f))
 	}
 	if f.Mode != "" && f.Exists {
 		b.WriteString(" " + f.Mode)
@@ -494,12 +487,45 @@ func describeOwnership(f agentintegration.FileState) string {
 	switch {
 	case !f.Exists:
 		return "absent"
-	case f.Kind == "dir":
-		return "directory " + f.Mode
 	case f.Owned:
 		return describeOwned(f) + " " + f.Mode
 	default:
-		return "not Sidecar's (" + f.Kind + ") " + f.Mode
+		return describeUnowned(f) + " " + f.Mode
+	}
+}
+
+// describeUnowned names a path Sidecar did not write, without reusing the
+// sentence that means a refusal.
+//
+// "not Sidecar's" belongs to exactly one situation: a foreign file sitting at a
+// path Sidecar claims whole, which is a conflict a mutation declines rather than
+// touches. Three ordinary situations were being described in those same words
+// and so read as damage. A user's own settings.json before install is not a
+// conflict — it is the file the integration is designed to add an entry to, and
+// Sidecar's absence from it is the normal starting state. A symlinked
+// configuration directory is not a conflict either; dotfile repositories do it
+// constantly, and inspectDir already resolved it and found a directory. And a
+// FileState with no kind at all — which is what a not-yet-written backup path
+// is — was rendering as a bare ", not Sidecar's" with a dangling comma, the same
+// dangling-token class the ownership work set out to remove.
+func describeUnowned(f agentintegration.FileState) string {
+	switch {
+	case f.Kind == "dir":
+		// Sidecar creates this when it is missing and removes it only when
+		// removing its own files leaves it empty. Ownership is never claimed
+		// over it either way.
+		return "directory"
+	case f.Kind == "symlink" && f.Unsafe == "":
+		// A symlink that inspection accepted resolved to a directory. One that
+		// did not is unsafe, keeps the refusal phrasing below, and carries an
+		// UnsafeDetail the caller appends.
+		return "directory (symlink)"
+	case f.Ownership == agentintegration.OwnsEntry:
+		return "the user's file, without Sidecar's entry"
+	case f.Kind == "":
+		return "present"
+	default:
+		return f.Kind + ", not Sidecar's"
 	}
 }
 

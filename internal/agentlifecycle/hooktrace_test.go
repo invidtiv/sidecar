@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Phase D traced Codex and Claude Code, which are hook-shaped rather than
@@ -153,9 +154,21 @@ func TestCodexCancellationIsFirstClass(t *testing.T) {
 // TestClaudeCancellationEmitsNothingAtAll is the contract gap, asserted.
 //
 // This is the single fact that caps Claude Code below full lifecycle authority,
-// and it is a fact about what is ABSENT -- which is exactly the kind of claim
-// that rots silently. A future Claude release that starts emitting something
-// here should break this test, because that is the signal to requalify.
+// and it is a fact about what is ABSENT.
+//
+// Be precise about what this test can and cannot do, because an earlier
+// description of it claimed more. It reads a static checked-in fixture, so it
+// CANNOT fail on the day Claude starts emitting a cancellation event -- there is
+// no live provider in this test to change its behavior. It fails only after a
+// human has re-traced Claude and edited the fixture, and that human already
+// knows what they found.
+//
+// What it does do is protect the record: the absence cannot be edited away
+// silently, and a re-trace that contradicts it has to be a deliberate, reviewed
+// change to a file under version control. That is a fixture-integrity guard, not
+// a tripwire on the provider. Noticing that the gap has closed is the
+// requalification procedure's job, on the cadence the capability matrix states,
+// and nothing in CI will do it for you.
 func TestClaudeCancellationEmitsNothingAtAll(t *testing.T) {
 	rows := readHookTrace(t, "claude", "interrupted-turn.tsv")
 	assertEvents(t, eventsOf(rows), "UserPromptSubmit")
@@ -165,6 +178,38 @@ func TestClaudeCancellationEmitsNothingAtAll(t *testing.T) {
 	// producing nothing.
 	cancelled := eventsOf(readHookTrace(t, "claude", "permission-cancelled.tsv"))
 	assertEvents(t, cancelled, "UserPromptSubmit", "PreToolUse", "PermissionRequest", "Notification")
+
+	// Both claims rest on a capture window, and a window that lives only in a td
+	// log is one a future requalifier cannot weigh: they would have no way to
+	// tell whether nothing fired over one second or over eighteen. Requiring it
+	// in the fixture keeps the evidence attached to the claim.
+	for _, name := range []string{"interrupted-turn.tsv", "permission-cancelled.tsv"} {
+		if window := captureWindow(t, "claude", name); window == "" {
+			t.Fatalf("%s makes an absence claim without recording how long it watched", name)
+		}
+	}
+}
+
+// captureWindow reads the `# capture-window:` row a trace carries when its
+// value is an absence. Traces that only record what did happen do not need one.
+func captureWindow(t *testing.T, provider, name string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("testdata", "traces", provider, name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const marker = "# capture-window:"
+	for _, line := range strings.Split(string(data), "\n") {
+		if !strings.HasPrefix(line, marker) {
+			continue
+		}
+		window := strings.TrimSpace(strings.TrimPrefix(line, marker))
+		if _, err := time.ParseDuration(window); err != nil {
+			t.Fatalf("%s/%s records an unparseable capture window %q: %v", provider, name, window, err)
+		}
+		return window
+	}
+	return ""
 }
 
 // TestClaudeSkipsPostToolUseAfterAPermissionPrompt pins the second Claude

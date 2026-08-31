@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -243,6 +244,7 @@ func TestReportSessionErrorCodesMapToTheRefusalTheyDescribe(t *testing.T) {
 		want string
 	}{
 		{agentsession.ErrStaleGeneration, "stale_generation"},
+		{agentsession.ErrKindMismatch, "kind_mismatch"},
 		{agentsession.ErrUntrustedSource, "untrusted_source"},
 		{agentsession.ErrOutsideStoreRoot, "outside_store_root"},
 		{agentsession.ErrUnsupportedKind, "unsupported_kind"},
@@ -274,10 +276,44 @@ func TestOnlyStoreFailuresExitOne(t *testing.T) {
 	if code := emitReportSessionError(env, true, "store_failed", errors.New("boom")); code != 1 {
 		t.Fatalf("a store failure exited %d, wanted 1", code)
 	}
-	for _, code := range []string{"stale_generation", "invalid_reference", "untrusted_source", "outside_store_root"} {
+	for _, code := range []string{"stale_generation", "kind_mismatch", "invalid_reference", "untrusted_source", "outside_store_root"} {
 		if got := emitReportSessionError(env, true, code, errors.New("x")); got != exitInputRejected {
 			t.Fatalf("%s exited %d, wanted %d", code, got, exitInputRejected)
 		}
+	}
+}
+
+// TestAKindMismatchRefusalStaysFailOpenForTheProvider is the hook-safety half of
+// td-11040b.
+//
+// Refusing the wrong provider is only correct if the refusal cannot damage the
+// session the hook is running inside. The convention every reporting surface
+// here follows is that a refusal is diagnostic: it exits with a rejection code
+// so an integration test can see it, writes its explanation to stderr, and
+// leaves stdout clean so nothing is interpreted as hook output. Claude Code in
+// particular treats exit 2 as "block the tool call" and every other non-zero
+// code as a non-blocking error, so the one exit code this must never use is 2 —
+// a mis-attributed report would otherwise interrupt the user's grok session
+// instead of quietly declining to record it.
+func TestAKindMismatchRefusalStaysFailOpenForTheProvider(t *testing.T) {
+	var out, errOut strings.Builder
+	env := Env{Stdout: &out, Stderr: &errOut}
+
+	err := fmt.Errorf("%w: this pane is running grok, but the report claims claude",
+		agentsession.ErrKindMismatch)
+	code := emitReportSessionError(env, false, reportSessionCode(err), err)
+
+	if code == 2 {
+		t.Fatal("a kind mismatch exited 2, which Claude Code reads as 'block this tool call'")
+	}
+	if code != exitInputRejected {
+		t.Fatalf("a kind mismatch exited %d, wanted %d", code, exitInputRejected)
+	}
+	if out.String() != "" {
+		t.Fatalf("a refusal wrote to stdout, where a provider may read it as hook output: %q", out.String())
+	}
+	if !strings.Contains(errOut.String(), "grok") || !strings.Contains(errOut.String(), "claude") {
+		t.Fatalf("the refusal did not name both providers on stderr: %q", errOut.String())
 	}
 }
 

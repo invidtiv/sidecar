@@ -17,6 +17,32 @@ files here.
 The prose companion, including the per-provider gap analysis and the
 steel-thread decision, is `docs/reference/agent-lifecycle-capability-matrix.md`.
 
+### Traces whose value is an absence
+
+Some traces are checked in to record that a provider emitted **nothing** — the
+two Claude cancellation captures are the current examples, and that absence is
+the single fact capping Claude below full lifecycle authority.
+
+An absence is only as strong as the window it was watched over. "Nothing fired"
+over one second and over eighteen are very different claims, and a reader cannot
+tell them apart from a trace that simply stops. So a trace making an absence
+claim must carry a trailing comment row naming its window:
+
+```
+# capture-window: 18s
+```
+
+`hooktrace_test.go` requires it for those traces and rejects a value
+`time.ParseDuration` cannot read, so the evidence stays attached to the claim
+rather than living in a session log nobody will find. Traces that only record
+what did happen need no such row.
+
+Note what these traces do **not** do. A test reading a static fixture cannot
+notice that a provider's behavior changed; it fails only once a human has
+re-traced and edited the file. They are fixture-integrity guards. Discovering
+that a gap has closed is the requalification procedure's job, on its stated
+cadence.
+
 ## Trace provenance
 
 Captured 2026-08-30 on darwin/arm64.
