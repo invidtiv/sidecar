@@ -1186,7 +1186,9 @@ func (p *Plugin) createShellWithResume(resumeArgv []string) tea.Cmd {
 
 // createShellWithPrefilledCommand creates a new shell and types a command line
 // at its prompt without running it. Callers holding structured arguments render
-// them with agentcatalog.ShellCommand first; the free-form entry point is for
+// them through one of the catalog's two renderers first -- DisplayCommand where
+// a human also reads the line, ShellCommand where nothing but a shell will --
+// and never by concatenating them; the free-form entry point is for
 // text that is already a shell line (a Configuration repair command).
 func (p *Plugin) createShellWithPrefilledCommand(command string) tea.Cmd {
 	// Store pending command to inject after shell creation

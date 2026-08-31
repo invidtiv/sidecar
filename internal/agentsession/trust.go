@@ -137,9 +137,20 @@ func (r Roots) WithinRoots(kind, path string) error {
 	if len(roots) == 0 {
 		return fmt.Errorf("%w: no approved store root is recorded for provider %q", ErrOutsideStoreRoot, kind)
 	}
-	clean := filepath.Clean(path)
+	// Resolve symlinks on BOTH sides before comparing. A lexical prefix test is
+	// not containment: a symlink planted inside an approved root passes it while
+	// pointing anywhere on the filesystem, and the target is what actually gets
+	// opened. Resolving the root too means a store that is itself a symlink --
+	// a dotfiles setup, a relocated home -- still matches its own contents.
+	//
+	// A path that does not exist yet cannot be resolved, and that is not a
+	// refusal: EvalSymlinks fails on a missing leaf, so fall back to the
+	// lexical form for the part that does not exist. What must never happen is
+	// accepting a path whose RESOLVED form escapes, which is why resolution is
+	// preferred wherever it succeeds.
+	clean := resolvePath(path)
 	for _, root := range roots {
-		root = filepath.Clean(root)
+		root = resolvePath(root)
 		if clean == root {
 			continue // the root itself is a directory, not a transcript
 		}
@@ -200,4 +211,33 @@ func Validate(rep Report, roots Roots, now func() time.Time) (Ref, error) {
 		Generation: rep.Generation,
 		ReportedAt: at,
 	}, nil
+}
+
+// resolvePath returns path with symlinks resolved as far as the filesystem
+// allows, and cleaned otherwise.
+//
+// EvalSymlinks refuses a path whose leaf does not exist, which is ordinary here:
+// a provider may report a transcript Sidecar has not seen yet. So the deepest
+// existing ancestor is resolved and the remainder appended. That still closes
+// the escape this exists to stop, because the escape has to go THROUGH a
+// component that exists.
+func resolvePath(path string) string {
+	clean := filepath.Clean(path)
+	if resolved, err := filepath.EvalSymlinks(clean); err == nil {
+		return resolved
+	}
+	// Walk up to the deepest ancestor that resolves, then re-append the rest.
+	rest := ""
+	dir := clean
+	for {
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return clean
+		}
+		rest = filepath.Join(filepath.Base(dir), rest)
+		dir = parent
+		if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+			return filepath.Join(resolved, rest)
+		}
+	}
 }

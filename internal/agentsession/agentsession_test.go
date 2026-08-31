@@ -2,6 +2,7 @@ package agentsession
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -37,6 +38,9 @@ func TestValidateIDBoundsAndShape(t *testing.T) {
 		{"a quote", "abc'def", ErrInvalidRef},
 		{"a dollar sign", "abc$def", ErrInvalidRef},
 		{"a leading dot", ".abc", ErrInvalidRef},
+		{"a leading dash would be read as a flag", "-abc", ErrInvalidRef},
+		{"a leading double dash", "--resume", ErrInvalidRef},
+		{"a dash inside is fine", "abc-def", nil},
 		{"invalid UTF-8", "abc\xffdef", ErrInvalidRef},
 	}
 	for _, tc := range cases {
@@ -399,5 +403,89 @@ func TestOfficialSourcesAreTheOnesAdaptersShip(t *testing.T) {
 	}
 	if Official("") || Official("sidecar.codex.hooks.evil") {
 		t.Fatal("Official() trusted a source it should not")
+	}
+}
+
+// TestASymlinkInsideAnApprovedRootCannotEscape is the containment rule the
+// package comment claims. A lexical prefix test is not containment: a symlink
+// planted inside an approved root passes it while pointing anywhere, and the
+// target is what actually gets opened.
+func TestASymlinkInsideAnApprovedRootCannotEscape(t *testing.T) {
+	home := t.TempDir()
+	roots := testRoots(home)
+
+	store := filepath.Join(home, ".codex", "sessions")
+	if err := os.MkdirAll(store, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(home, "elsewhere")
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	secret := filepath.Join(outside, "secret.jsonl")
+	if err := os.WriteFile(secret, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// A real transcript inside the store still passes.
+	real := filepath.Join(store, "rollout-real.jsonl")
+	if err := os.WriteFile(real, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := roots.WithinRoots("codex", real); err != nil {
+		t.Fatalf("a real transcript inside the store was refused: %v", err)
+	}
+
+	// A symlink INSIDE the approved root pointing outside it must not.
+	escape := filepath.Join(store, "escape.jsonl")
+	if err := os.Symlink(secret, escape); err != nil {
+		t.Skipf("cannot create symlinks here: %v", err)
+	}
+	if err := roots.WithinRoots("codex", escape); !errors.Is(err, ErrOutsideStoreRoot) {
+		t.Fatalf("a symlink inside the root escaped containment: %v", err)
+	}
+
+	// A symlinked DIRECTORY inside the root is the same escape one level up.
+	linkDir := filepath.Join(store, "linked")
+	if err := os.Symlink(outside, linkDir); err != nil {
+		t.Skipf("cannot create symlinks here: %v", err)
+	}
+	if err := roots.WithinRoots("codex", filepath.Join(linkDir, "secret.jsonl")); !errors.Is(err, ErrOutsideStoreRoot) {
+		t.Fatal("a path through a symlinked directory escaped containment")
+	}
+}
+
+// TestAStoreRootThatIsItselfASymlinkStillMatches keeps the fix from being too
+// strict: a relocated home or a dotfiles setup makes the root itself a link,
+// and its own contents must still be inside it.
+func TestAStoreRootThatIsItselfASymlinkStillMatches(t *testing.T) {
+	base := t.TempDir()
+	realHome := filepath.Join(base, "real")
+	if err := os.MkdirAll(filepath.Join(realHome, ".codex", "sessions"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	linkHome := filepath.Join(base, "home")
+	if err := os.Symlink(realHome, linkHome); err != nil {
+		t.Skipf("cannot create symlinks here: %v", err)
+	}
+	transcript := filepath.Join(realHome, ".codex", "sessions", "a.jsonl")
+	if err := os.WriteFile(transcript, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	roots := testRoots(linkHome)
+	if err := roots.WithinRoots("codex", transcript); err != nil {
+		t.Fatalf("a transcript in a symlinked store root was refused: %v", err)
+	}
+}
+
+// TestAResumeIsNeverBuiltFromAFlagLikeValue covers the builder boundary
+// independently of the validator, because a Ref can be constructed directly.
+func TestAResumeIsNeverBuiltFromAFlagLikeValue(t *testing.T) {
+	hostile := Ref{
+		Kind: RefID, Value: "--dangerously-bypass-approvals-and-sandbox",
+		Source: "sidecar.codex.hooks", Reported: true,
+	}
+	if _, err := PlanResume("codex", hostile); err == nil {
+		t.Fatal("a resume was built from a value the provider would read as a flag")
 	}
 }

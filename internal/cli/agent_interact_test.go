@@ -218,7 +218,7 @@ func TestAgentReadPassesTheSourceThroughAndPrintsTheText(t *testing.T) {
 	}
 }
 
-func TestAgentReadTranscriptIsUnavailableUntilM3(t *testing.T) {
+func TestAgentReadTranscriptIsUnavailableWithoutAnExactBinding(t *testing.T) {
 	idle := agentFixture(t, "startup_idle.txt")
 	targetProject(t)
 	terminal := &cliAgentTerminal{launched: true, screen: idle}

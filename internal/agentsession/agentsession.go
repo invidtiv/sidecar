@@ -170,6 +170,15 @@ func ValidateID(value string) error {
 	if strings.HasPrefix(value, ".") {
 		return fmt.Errorf("%w: the identifier starts with a dot", ErrInvalidRef)
 	}
+	// A leading dash would make the identifier a FLAG to the provider CLI the
+	// moment a resume is built from it. Nothing quotes its way out of that:
+	// the value is a correct, separate argv entry and the provider still reads
+	// it as an option. No real provider names a session this way, so refusing
+	// costs nothing and closes an argument-injection path into a command
+	// Sidecar runs unattended at restore time.
+	if strings.HasPrefix(value, "-") {
+		return fmt.Errorf("%w: the identifier starts with a dash, which a provider would read as a flag", ErrInvalidRef)
+	}
 	return nil
 }
 

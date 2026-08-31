@@ -8,7 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/marcus/sidecar/internal/agentsession"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/shellstate"
+	"github.com/marcus/sidecar/internal/tmuxenv"
 )
 
 func TestShellManifest_LoadMissing(t *testing.T) {
@@ -698,5 +701,76 @@ func TestManifestRevisionTracksWrites(t *testing.T) {
 	}
 	if m.Revision() != after {
 		t.Fatal("Revision() moved on a no-op write")
+	}
+}
+
+// TestRevivingAShellKeepsItsSessionBinding is the regression test for a
+// blocking defect: shells.json has a second serializer, and it replaced records
+// wholesale.
+//
+// shellToDefinition builds a ShellDefinition from the plugin's in-memory
+// ShellSession, which models the v2 fields and nothing else. UpdateShell then
+// stored that over the record it had just read. Before schema v3 that was
+// lossless; with v3 it destroyed the exact session binding -- and it did so on
+// the shell-revival path, which is the cold-restore moment the binding exists
+// to serve. The failure was silent and no test covered it.
+func TestRevivingAShellKeepsItsSessionBinding(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "shells.json")
+	m := &ShellManifest{Version: manifestVersion, path: path}
+
+	const name = "sidecar-sh-proj-1"
+	// The namespace has to be the live one, because that is what
+	// shellToDefinition stamps on the record the revival path writes.
+	ns := tmuxenv.Namespace()
+	if err := m.AddShell(ShellDefinition{
+		TmuxName: name, DisplayName: "reviewer", Namespace: ns, WorkDir: "/repo",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// An official integration reports the conversation, through the writer that
+	// owns the schema.
+	id := shellstate.Identity{TmuxName: name, Namespace: ns}
+	const gen = "pid=4242,start=T"
+	if _, err := shellstate.BindSessionAtPath(path, id, shellstate.SessionUpdate{
+		Kind: "codex",
+		Live: gen,
+		Ref: agentsession.Ref{
+			Kind: agentsession.RefID, Value: "conv-abc",
+			Source: "sidecar.codex.hooks", Reported: true, Generation: gen,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The pane goes away and the shell is later revived under the same tmux
+	// name. This is exactly what update.go does on the ShellCreatedMsg
+	// existingIdx >= 0 branch: build a fresh definition from the in-memory
+	// session and hand it to UpdateShell.
+	revived := &ShellSession{
+		TmuxName: name, Name: "reviewer", WorkDir: "/repo",
+		ChosenAgent: AgentType("codex"),
+	}
+	fresh := shellToDefinition(revived)
+	if fresh.Agent != nil {
+		t.Fatal("shellToDefinition began modelling Agent; update this test to match")
+	}
+	if err := m.UpdateShell(fresh); err != nil {
+		t.Fatal(err)
+	}
+
+	ref, kind, ok, err := shellstate.SessionRefAtPath(path, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("reviving the shell destroyed its session binding")
+	}
+	if ref.Value != "conv-abc" || ref.Kind != agentsession.RefID || !ref.Reported {
+		t.Fatalf("the binding survived but changed: %+v", ref)
+	}
+	if kind != "codex" {
+		t.Fatalf("provider kind = %q", kind)
 	}
 }

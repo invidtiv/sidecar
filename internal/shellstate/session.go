@@ -224,3 +224,28 @@ func SessionRefAtPath(path string, id Identity) (agentsession.Ref, string, bool,
 	}
 	return agentsession.Ref{}, "", false, &Error{Kind: KindNotFound, Msg: "no managed shell named " + id.TmuxName + " is recorded in this project"}
 }
+
+// CarryForward returns next with every field it does not model taken from prior.
+//
+// It exists because shells.json has a second serializer. The workspace plugin
+// builds a Definition from its own in-memory ShellSession, which models the v2
+// fields and nothing else, and then replaces the stored record wholesale. Before
+// v3 that was lossless, because the two structs described the same thing. With
+// v3 it silently destroyed the session binding -- and it did so on the shell
+// revival path, which is exactly the cold-restore moment the binding exists to
+// serve.
+//
+// The honest fix is one serializer. Until the two locking implementations can be
+// unified, this keeps the rule in the package that owns the schema rather than
+// in the caller that keeps forgetting it: a writer that does not model a field
+// must carry it, not drop it. A field added to Definition in a later schema
+// version needs a line here, and the test that pins this is the reminder.
+func CarryForward(prior, next Definition) Definition {
+	if next.Agent == nil {
+		next.Agent = prior.Agent
+	}
+	if next.Restore == nil {
+		next.Restore = prior.Restore
+	}
+	return next
+}

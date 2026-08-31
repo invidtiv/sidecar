@@ -198,6 +198,20 @@ func (f Family) ResumeArgv(kind, value string, extra []string) ([]string, error)
 	if strings.TrimSpace(value) == "" {
 		return nil, fmt.Errorf("session reference value is empty")
 	}
+	// A value starting with a dash is refused here as well as by the session
+	// validator, because this is the boundary that builds the command.
+	//
+	// A "--" terminator is deliberately NOT used instead. It only works where
+	// the value is positional; for the families whose resume passes it to a
+	// flag ("claude --resume <id>", "opencode --continue -s <id>") inserting
+	// "--" changes what the flag receives, and for the positional families it
+	// would be syntax no test here has ever run. Refusing the value is
+	// provider-agnostic and provably closes the same hole: quoting cannot help,
+	// since the value is already a correct separate argv entry and the provider
+	// would still read it as an option.
+	if strings.HasPrefix(value, "-") {
+		return nil, fmt.Errorf("session reference %q starts with a dash, which %s would read as a flag", value, f.ID)
+	}
 	argv := []string{f.Command}
 	argv = append(argv, f.ResumeArgs...)
 	argv = append(argv, value)

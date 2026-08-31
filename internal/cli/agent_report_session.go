@@ -37,7 +37,7 @@ func agentReportSessionExitCodes() []ExitCode {
 		{Code: 0, Summary: "recorded, or a no-op outside a Sidecar-managed shell"},
 		{Code: 1, Summary: "the binding could not be written"},
 		{Code: 2, Summary: "usage error"},
-		{Code: 5, Summary: "invalid reference, untrusted source, or a stale provider generation"},
+		{Code: 5, Summary: "invalid reference, untrusted source, unusable hook payload, unverifiable shell context, or a stale provider generation"},
 	}
 }
 

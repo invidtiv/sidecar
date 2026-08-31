@@ -3,8 +3,12 @@ package cli
 import (
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/marcus/sidecar/internal/agentcontrol"
 
 	"github.com/marcus/sidecar/internal/agentsession"
 	"github.com/marcus/sidecar/internal/shellstate"
@@ -184,6 +188,9 @@ func TestHookPayloadReaderIsBoundedAndStrict(t *testing.T) {
 			{"not JSON", "session_id=x", "not valid JSON"},
 			{"a JSON array", "[1,2,3]", "not valid JSON"},
 			{"over the cap", `{"session_id":"` + strings.Repeat("a", maxHookStdinBytes) + `"}`, "cap"},
+			// The boundary itself: exactly one byte over must be refused, and
+			// exactly at the cap must be accepted (asserted separately below).
+			{"one byte over the cap", strings.Repeat("x", maxHookStdinBytes+1), "cap"},
 		}
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
@@ -195,6 +202,28 @@ func TestHookPayloadReaderIsBoundedAndStrict(t *testing.T) {
 					t.Fatalf("err = %v, wanted it to mention %q", err, tc.want)
 				}
 			})
+		}
+	})
+
+	t.Run("exactly at the cap is accepted", func(t *testing.T) {
+		// A bound that refuses at its own limit is a bound nobody can describe.
+		// Pad a valid document to exactly maxHookStdinBytes.
+		const head = `{"session_id":"x","hook_event_name":"`
+		const tail = `"}`
+		pad := maxHookStdinBytes - len(head) - len(tail)
+		if pad < 0 {
+			t.Skip("cap is smaller than the fixture")
+		}
+		body := head + strings.Repeat("E", pad) + tail
+		if len(body) != maxHookStdinBytes {
+			t.Fatalf("fixture is %d bytes, wanted exactly %d", len(body), maxHookStdinBytes)
+		}
+		p, err := readHookPayload(strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("a payload exactly at the cap was refused: %v", err)
+		}
+		if p.SessionID != "x" {
+			t.Fatalf("payload = %+v", p)
 		}
 	})
 
@@ -276,5 +305,110 @@ func TestTheJSONResultNeverCarriesTheConversationValue(t *testing.T) {
 		if !strings.Contains(string(blob), want) {
 			t.Fatalf("the result lost %s: %s", want, blob)
 		}
+	}
+}
+
+// TestRedactionPinsWhoMaySeeAConversationValue covers the security property this
+// milestone advertises most loudly and which had no test at all.
+//
+// Kind and Reported are capability and presence and are always safe to publish.
+// The value names the conversation and is withheld unless the caller is that
+// shell or asked for it by name, because list output lands in logs and CI
+// artifacts and a conversation identifier written there cannot be unwritten.
+func TestRedactionPinsWhoMaySeeAConversationValue(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "shells.json")
+	const (
+		session = "sidecar-sh-proj-1"
+		ns      = "/tmp/sock"
+		value   = "conv-secret-0123456789"
+		gen     = "pid=1,start=T"
+	)
+	if err := shellstate.AddAtPath(path, shellstate.Definition{
+		TmuxName: session, DisplayName: "reviewer", Namespace: ns, WorkDir: "/repo",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := shellstate.BindSessionAtPath(path, shellstate.Identity{TmuxName: session, Namespace: ns},
+		shellstate.SessionUpdate{Kind: "codex", Live: gen, Ref: agentsession.Ref{
+			Kind: agentsession.RefID, Value: value,
+			Source: "sidecar.codex.hooks", Reported: true, Generation: gen,
+		}}); err != nil {
+		t.Fatal(err)
+	}
+
+	decorated := func(includeValue bool) *agentcontrol.SessionRef {
+		a := agentcontrol.Agent{}
+		newSessionRefCache().decorate(&a, path, session, ns, includeValue)
+		return a.Agent.SessionRef
+	}
+
+	t.Run("redacted still reports capability and presence", func(t *testing.T) {
+		ref := decorated(false)
+		if ref == nil {
+			t.Fatal("a bound shell reported no sessionRef at all")
+		}
+		if ref.Kind != "id" || !ref.Reported {
+			t.Fatalf("capability was lost in redaction: %+v", ref)
+		}
+		if ref.Value != "" {
+			t.Fatalf("the redacted projection carried the value: %q", ref.Value)
+		}
+		blob, err := json.Marshal(ref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(blob), value) {
+			t.Fatalf("the value reached JSON: %s", blob)
+		}
+	})
+
+	t.Run("the explicit opt-in reveals it", func(t *testing.T) {
+		ref := decorated(true)
+		if ref == nil || ref.Value != value {
+			t.Fatalf("--include-session-ref did not reveal the value: %+v", ref)
+		}
+	})
+
+	t.Run("an unbound shell has no sessionRef key at all", func(t *testing.T) {
+		// "not bound" and "bound but redacted" must stay distinguishable.
+		if err := shellstate.AddAtPath(path, shellstate.Definition{
+			TmuxName: "sidecar-sh-proj-2", DisplayName: "plain", Namespace: ns,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		a := agentcontrol.Agent{}
+		newSessionRefCache().decorate(&a, path, "sidecar-sh-proj-2", ns, true)
+		if a.Agent.SessionRef != nil {
+			t.Fatalf("an unbound shell reported %+v", a.Agent.SessionRef)
+		}
+	})
+}
+
+// TestTheListPathNeverRevealsAValueByDefault pins the call site rather than the
+// helper: the property is that `agent list` does not pass includeValue unless
+// the caller asked, which a test of decorate alone would not catch.
+func TestTheListPathNeverRevealsAValueByDefault(t *testing.T) {
+	src, err := os.ReadFile("agent.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(src)
+	i := strings.Index(text, "func runAgentList(")
+	if i < 0 {
+		t.Fatal("runAgentList not found")
+	}
+	body := text[i:]
+	if j := strings.Index(body, "\nfunc "); j > 0 {
+		body = body[:j]
+	}
+	if !strings.Contains(body, "f.includeSession") {
+		t.Fatal("agent list no longer gates the conversation value on f.includeSession; " +
+			"a list that reveals values by default is the regression this pins")
+	}
+	// And it must not acquire an own-shell exemption: get has one, list must not,
+	// because a list is about other people's shells by definition.
+	if strings.Contains(body, "SessionEnv") {
+		t.Fatal("agent list gained an own-shell exemption; only agent get has one")
 	}
 }
