@@ -6,15 +6,12 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
-	"github.com/marcus/sidecar/internal/agentcontrol"
 	"github.com/marcus/sidecar/internal/agentsession"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/sessionrestore"
 	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/tmuxenv"
-	"github.com/marcus/sidecar/internal/workspaceops"
 )
 
 // The cold-restore command group.
@@ -354,58 +351,12 @@ func runSessionRestore(env Env, args []string) int {
 }
 
 // sessionRestoreDeps binds the executor to the real machine.
-func sessionRestoreDeps(env Env) sessionrestore.Deps {
-	namespace := tmuxenv.Namespace()
-	collector := sessionCollector(env)
-	svc := agentcontrol.Service{Terminal: newAgentTerminal()}
-
-	return sessionrestore.Deps{
-		Live: func(session string) sessionrestore.LiveState {
-			ctx := sessionContext(env)
-			if !workspaceops.SessionExists(session) {
-				return sessionrestore.LiveAbsent
-			}
-			if collector.ManagedSessionOrDefault(ctx, session) {
-				return sessionrestore.LiveManaged
-			}
-			return sessionrestore.LiveForeign
-		},
-		CurrentServer: collector.ServerIDOrDefault,
-		CreateShell: func(_ context.Context, step sessionrestore.Step) error {
-			// CreateShell, not CreateManagedShell: the manifest record already
-			// exists and is the thing being restored. Creating the record again
-			// would fail, and creating it with a fresh CreatedAt would discard
-			// the identity every other fence in the system is keyed on.
-			_, err := workspaceops.CreateShell(workspaceops.ShellSpec{
-				WorkDir:     step.WorkDir,
-				SessionName: step.Session,
-				DisplayName: step.Name,
-			})
-			return err
-		},
-		ResumePlanFor: func(step sessionrestore.Step) (agentsession.ResumePlan, error) {
-			return sessionrestore.ResumePlanFor(step, namespace)
-		},
-		ResumeAgent: func(ctx context.Context, step sessionrestore.Step, plan agentsession.ResumePlan) error {
-			target := agentcontrol.Target{
-				Host:      "local",
-				Project:   step.Project,
-				Session:   step.Session,
-				Name:      step.Name,
-				Namespace: namespace,
-			}
-			ready, err := svc.WaitShellReady(ctx, target, 30*time.Second)
-			if err != nil {
-				return err
-			}
-			_, err = svc.StartResume(ctx, agentcontrol.ResumeRequest{
-				Target:  ready.Target,
-				Plan:    plan,
-				Timeout: 60 * time.Second,
-			})
-			return err
-		},
-	}
+//
+// It delegates to sessionrestore.LocalDeps rather than assembling its own, so
+// the CLI restore and the automatic startup restore are the same restore rather
+// than two implementations that agree today.
+func sessionRestoreDeps(_ Env) sessionrestore.Deps {
+	return sessionrestore.LocalDeps(sessionrestore.LocalDepsOptions{Namespace: tmuxenv.Namespace()})
 }
 
 type outcomeDocument struct {

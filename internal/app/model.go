@@ -724,6 +724,14 @@ func (m Model) Init() tea.Cmd {
 		cmds = append(cmds, cmd)
 	}
 
+	// Cold restore of managed shells lost to a tmux server restart, on the same
+	// terms: it waits on the first-ready-frame latch before it reads a manifest
+	// or spawns tmux, so the first paint never waits for it, and it returns nil
+	// entirely when configuration has turned restore off.
+	if cmd := restoreSessionsCmd(m.cfg); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+
 	// A launch command's destination opens through the same message an empty
 	// state sends, so there is one way into Configuration and one way back out.
 	if m.startupConfigPage != "" {

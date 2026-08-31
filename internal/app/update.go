@@ -694,6 +694,10 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.leaveOverview(false)
 		return m, m.FocusPluginByID(msg.PluginID)
 
+	case SessionRestoredMsg:
+		// One grouped summary for the whole restore, never one per shell.
+		return m, m.handleSessionRestored(msg)
+
 	case ResourceProvidersDescribedMsg:
 		// Recording the outcome is metadata — instance, state, matcher count —
 		// never a locator, a title, or provider output.

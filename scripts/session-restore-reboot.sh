@@ -182,6 +182,26 @@ cmd_mark() {
   note "server $(cmd_server_id)"
 }
 
+# cmd_trace launches the real TUI inside the harness tmux server with startup
+# tracing on, so the ordering of `first ready frame` against any restore work can
+# be read from a real run rather than argued about.
+cmd_trace() {
+  assert_isolated
+  [[ -x "$BIN" ]] || die "no binary; run '$0 build' first"
+  local out="$HARNESS_ROOT/trace.out"
+  rm -f "$out"
+  tmux_here new-session -d -s trace-run -x 200 -y 50 \
+    "SIDECAR_STARTUP_TRACE=stderr SIDECAR_STARTUP_TRACE_DELAY=8s '$BIN' -config '$CONFIG_PATH' 2> '$out'"
+  note "sidecar started in the harness tmux; waiting for the delayed trace dump"
+  sleep 12
+  tmux_here kill-session -t trace-run 2>/dev/null || true
+  if [[ -s "$out" ]]; then
+    cat "$out"
+  else
+    note "no trace was written to $out"
+  fi
+}
+
 cmd_manifest() {
   assert_isolated
   local f
@@ -199,6 +219,7 @@ case "${1:-}" in
   seed)      shift; cmd_seed "$@" ;;
   mark)      cmd_mark ;;
   manifest)  cmd_manifest ;;
+  trace)     cmd_trace ;;
   server-id) cmd_server_id ;;
   reboot)    cmd_reboot ;;
   cli)       shift; cli "$@" ;;
