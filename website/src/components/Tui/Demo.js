@@ -100,12 +100,7 @@ export default function SidecarDemo({theme = 'sidecar-modern', clock = '21:02'})
       <div className={demo.pan}>
         <TuiWindow
           theme={theme}
-          titlebar={{
-            label: 'sidecar — ~/code/sidecar',
-            right: (
-              <span>{screen.scope === 'global' ? 'global' : 'sidecar'}</span>
-            ),
-          }}
+          titlebar={{label: 'sidecar'}}
           style={{height: 'clamp(400px, 42vw, 520px)'}}
           onKeyDown={onKeyDown}>
           <TuiHeader
@@ -141,7 +136,7 @@ export function SidecarStill({
   const entry = SCREENS[screen];
   const Screen = entry.render;
   return (
-    <TuiWindow theme={theme} style={{height}}>
+    <TuiWindow theme={theme} titlebar={{label: 'sidecar'}} style={{height}}>
       <TuiHeader
         globalTabs={GLOBAL_TABS}
         projectTabs={PROJECT_TABS}

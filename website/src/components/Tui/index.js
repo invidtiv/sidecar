@@ -17,33 +17,40 @@ export function useTuiTheme() {
 
 export function TuiWindow({
   theme = DEFAULT_THEME,
-  titlebar,
+  titlebar = true,
   children,
   className,
   style,
   ...rest
 }) {
   const vars = useMemo(() => themeVars(findTheme(theme)), [theme]);
+  const titlebarProps =
+    titlebar === true
+      ? {label: 'sidecar'}
+      : typeof titlebar === 'object' && titlebar !== null
+      ? {label: 'sidecar', ...titlebar}
+      : null;
+
   return (
     <ThemeCtx.Provider value={theme}>
       <div
         className={clsx(styles.window, className)}
         style={{...vars, ...style}}
         {...rest}>
-        {titlebar ? <TitleBar {...titlebar} /> : null}
+        {titlebarProps ? <TitleBar {...titlebarProps} /> : null}
         {children}
       </div>
     </ThemeCtx.Provider>
   );
 }
 
-function TitleBar({label, right}) {
+function TitleBar({label = 'sidecar', right}) {
   return (
     <div className={styles.titlebar}>
       <span className={styles.dot} style={{background: '#e05c52'}} />
       <span className={styles.dot} style={{background: '#dfae3c'}} />
       <span className={styles.dot} style={{background: '#3fa858'}} />
-      <span className={styles.titlebarLabel}>{label}</span>
+      {label ? <span className={styles.titlebarLabel}>{label}</span> : null}
       {right ? <span className={styles.titlebarRight}>{right}</span> : null}
     </div>
   );
