@@ -148,6 +148,7 @@ See `docs/guides/active/releasing.md`.
 - [ ] Working tree clean; `main` == `origin/main`
 - [ ] td bump considered; td tab smoke if td moved
 - [ ] No `replace` in go.mod; `GOWORK=off` build works
+- [ ] Agent integration assets: if any bundled asset's bytes changed, its version constant, `internal/agentlifecycle/capabilities.json`, and the golden in `internal/agentintegration/asset_golden_test.go` all moved with it (the golden test fails if they did not)
 - [ ] CHANGELOG bullets under `## [Unreleased]`
 - [ ] `BUMP=minor make release` (or `RELEASE_VERSION=vX.Y.Z make release`) succeeded
 - [ ] Release assets present; formula URL/sha match (automatic)

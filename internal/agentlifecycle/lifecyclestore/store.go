@@ -98,6 +98,24 @@ type Store interface {
 	// Append validates and stores one report, returning how it was accepted.
 	Append(r agentlifecycle.Report) (agentlifecycle.Acceptance, error)
 
+	// AppendNext stores one report at the next free sequence within its key,
+	// assigned under the same exclusive lock the append itself takes, and
+	// returns the report as stored.
+	//
+	// This exists because "the reporter knows its own sequence" is a property of
+	// exactly one shape of integration. OpenCode's plugin is a single long-lived
+	// process that can hold a counter in memory. Codex and Claude Code run each
+	// hook as an independent short-lived process with no shared state, so every
+	// one of them would have to guess, and guesses collide: the store enforces a
+	// strictly increasing sequence per run and correctly rejects the loser,
+	// which silently drops a report.
+	//
+	// Assigning here is the only place it can be done correctly, because it is
+	// the only place that already holds the lock that makes read-then-write
+	// atomic. A caller that computed "latest + 1" first and appended second
+	// would have a race between the two.
+	AppendNext(r agentlifecycle.Report) (agentlifecycle.Report, agentlifecycle.Acceptance, error)
+
 	// Latest returns the newest retained report for a pane, of any kind, from
 	// the pane's current run.
 	Latest(k PaneKey) (agentlifecycle.Report, bool)
@@ -188,6 +206,29 @@ func (ix *index) admit(r agentlifecycle.Report) (agentlifecycle.Acceptance, bool
 		}
 	}
 	return agentlifecycle.AcceptedAuthoritative, true, nil
+}
+
+// nextSequence is the sequence a report should take to be the next one in its
+// key. It is one past the highest accepted, or 1 when the key is new.
+//
+// It must only ever be called while holding whatever lock guards the fold, and
+// with the fold freshly reloaded, or it answers about a world that has already
+// moved on.
+func (ix *index) nextSequence(r agentlifecycle.Report) uint64 {
+	pane := PaneKeyFor(r)
+	// A new run reanchors sequencing, so the previous run's high-water mark is
+	// not this run's floor. Without this, a relaunched agent in the same pane
+	// would start numbering above the dead run's last report, which is harmless
+	// but makes the sequence stop meaning "how far into this run".
+	if cur, ok := ix.currentRun[pane]; ok && cur != r.Identity.RunID {
+		if !ix.seenRuns[pane][r.Identity.RunID] {
+			return 1
+		}
+	}
+	if high, ok := ix.highSeq[r.Key()]; ok {
+		return high + 1
+	}
+	return 1
 }
 
 // commit records an admitted report in the fold.
@@ -372,6 +413,22 @@ func (m *Memory) Append(r agentlifecycle.Report) (agentlifecycle.Acceptance, err
 		m.ix.commit(rec)
 	}
 	return acc, nil
+}
+
+func (m *Memory) AppendNext(r agentlifecycle.Report) (agentlifecycle.Report, agentlifecycle.Acceptance, error) {
+	rec, err := prepare(r, m.now())
+	if err != nil {
+		return agentlifecycle.Report{}, "", err
+	}
+	rec.Sequence = m.ix.nextSequence(rec)
+	acc, store, err := m.ix.admit(rec)
+	if err != nil {
+		return agentlifecycle.Report{}, "", err
+	}
+	if store {
+		m.ix.commit(rec)
+	}
+	return rec, acc, nil
 }
 
 func (m *Memory) Release(r agentlifecycle.Report) (agentlifecycle.Acceptance, error) {

@@ -215,19 +215,25 @@ type FileState struct {
 	// even when that path is unusable, because "it is a symlink" is the answer
 	// to why an install refused.
 	Kind string `json:"kind,omitempty"`
-	// Owned reports whether this file is Sidecar's to write or remove. A file
+	// Owned reports that Sidecar has something of its own in this file. A file
 	// that merely has the right name is never owned.
 	//
-	// How that is decided depends on the shape of the integration. For an
-	// adapter that drops a whole Sidecar-owned file, it means the bytes carry
-	// this integration's marker comment. For an adapter that adds one entry to
-	// a shared, user-owned config file -- which has no comment syntax to carry
-	// a marker -- it means the file contains Sidecar's own entry, identified by
-	// its content. The second reading is an overload of the first and is
-	// recorded as adapter-interface debt in the Herdr plan; a future revision
-	// should let an adapter declare its own ownership predicate rather than
-	// having two meanings behind one boolean.
+	// What "something of its own" means is not a second meaning smuggled behind
+	// one boolean: it is whatever [Asset.Ownership] declares for the asset that
+	// installs here, and [FileState.Ownership] repeats it so a reader of this
+	// value never has to guess. For [OwnsFile] the whole file is Sidecar's and
+	// ownership is the marker its bytes carry. For [OwnsEntry] the file is the
+	// user's, Sidecar owns one entry inside it, and ownership is that entry's
+	// content.
+	//
+	// The distinction is not cosmetic. It is the difference between "remove
+	// this file" and "remove this entry and leave the file", which is why the
+	// two are named rather than inferred.
 	Owned bool `json:"owned"`
+	// Ownership is what Owned means here. It is meaningful only when the path
+	// is one an asset installs to; it is zero for a path no asset claims, such
+	// as a directory or a backup.
+	Ownership Ownership `json:"ownership,omitempty"`
 	// Version is the asset version, parsed from the marker where there is one.
 	Version string `json:"version,omitempty"`
 	// Checksum is the sha256 of the file's bytes.
@@ -265,18 +271,59 @@ type Plan struct {
 	Unchanged bool `json:"unchanged"`
 }
 
-// Asset is one bundled Sidecar-owned file.
+// Ownership is the shape of one bundled asset: what installing it does to the
+// file at its path, and therefore how Sidecar recognizes its own work there
+// again afterwards.
+//
+// There are exactly two shapes because there are exactly two things a provider
+// can ask for. Either it loads whole files from a directory it scans, in which
+// case Sidecar's integration *is* a file; or it reads one configuration file
+// the user owns, in which case Sidecar's integration is an entry inside a file
+// it must otherwise leave alone. Every rule that differs between adapters --
+// how ownership is decided, whether a checksum means anything, what uninstall
+// removes, what a surface should call it -- follows from this one distinction,
+// so it is declared once here rather than rediscovered per adapter.
+type Ownership string
+
+const (
+	// OwnsFile: the whole file at the asset's path is Sidecar's. It is
+	// recognized by the integration marker its own bytes carry, it is written
+	// byte-for-byte from the bundled content, its checksum is meaningful, and
+	// uninstall removes the file.
+	OwnsFile Ownership = "file"
+	// OwnsEntry: the file at the asset's path belongs to the user and Sidecar
+	// owns one entry inside it. It is recognized by that entry's content -- a
+	// user-owned config format has no comment syntax to carry a marker -- the
+	// file's checksum says nothing about ownership, and uninstall removes the
+	// entry and leaves every other byte alone.
+	OwnsEntry Ownership = "entry"
+)
+
+// Asset is one bundled unit an integration installs.
+//
+// An integration has one asset per file it touches. A file-drop integration
+// therefore has exactly one; an integration that must edit two configuration
+// files has two, and each declares its own [Ownership]. Plurality is not
+// speculative generality: Codex genuinely edits hooks.json and config.toml,
+// and describing that as one asset meant describing one of the two files and
+// staying quiet about the other.
 type Asset struct {
 	// Name is the filename the asset is installed as.
 	Name string `json:"name"`
 	// Source is the integration identifier reports carry.
 	Source string `json:"source"`
-	// SchemaVersion is the marker schema the asset declares.
+	// SchemaVersion is the marker schema the asset declares. It is meaningful
+	// only for [OwnsFile].
 	SchemaVersion int `json:"schemaVersion"`
 	// Version is the asset version. Authority is granted to a source at a
 	// version, so this changing is what makes an installed copy outdated.
 	Version string `json:"version"`
-	// Content is the exact bytes installed.
+	// Ownership is what installing this asset does to the file at its path.
+	Ownership Ownership `json:"ownership"`
+	// Content is the exact bytes installed for [OwnsFile]. For [OwnsEntry] it
+	// is the canonical file Sidecar would create in an empty tree, which is a
+	// description of the entry rather than something ever written verbatim over
+	// a user's file.
 	Content string `json:"-"`
 }
 
@@ -438,8 +485,10 @@ type Adapter interface {
 	Provider() string
 	// Source is the integration identifier reports carry.
 	Source() string
-	// Asset is the bundled Sidecar-owned file.
-	Asset() Asset
+	// Assets are the bundled units this integration installs, one per file it
+	// touches, each declaring its own [Ownership]. The order is the order a
+	// surface should show them in.
+	Assets() []Asset
 	// Inspect reads the current state. It never mutates anything and never
 	// fails: an unreadable path becomes a FileState carrying the reason.
 	Inspect(Env) Status
@@ -506,7 +555,24 @@ func (s Service) List() []Status {
 		seen[a.Provider()] = true
 		out = append(out, s.withLastReport(a.Inspect(s.Env)))
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Provider < out[j].Provider })
+	// Agents you can do something about come first, alphabetically, then the
+	// evaluation records -- providers Sidecar has surveyed and deliberately not
+	// built an integration for, listed so that "evaluated, not built" is
+	// distinguishable from "never looked at".
+	//
+	// Ordering is part of the answer rather than a cosmetic preference. There
+	// are twice as many evaluation records as integrations, and plain
+	// alphabetical order buried every actionable row beneath them: at 60x24 the
+	// list opened on five agents the user cannot install, and the ones they
+	// could were off the page.
+	sort.Slice(out, func(i, j int) bool {
+		li := out[i].Status == agentlifecycle.StatusUnsupported
+		lj := out[j].Status == agentlifecycle.StatusUnsupported
+		if li != lj {
+			return lj
+		}
+		return out[i].Provider < out[j].Provider
+	})
 	return out
 }
 
@@ -627,6 +693,19 @@ func unsupportedStatus(env Env, capability agentlifecycle.Capability) Status {
 // completed operations in place, which is why a replacement is ordered
 // backup-then-write and why the write itself is a rename over the existing file
 // rather than a truncate: there is no moment at which the asset is half a file.
+//
+// The remaining time-of-check-to-time-of-use window is named rather than closed,
+// and it is narrower than "safety is decided at plan time" makes it sound. A
+// plan is built and applied inside one process, microseconds apart, with no user
+// interaction in between; the only paths involved are files under the user's own
+// configuration directory; and every destructive operation was gated on
+// ownership proved from the file's own bytes at plan time. Re-proving that here
+// would not make the window disappear, only move it — a file that stopped being
+// Sidecar's between the two checks is a file something else is rewriting at this
+// exact moment, and no ordering of checks inside this loop can win that race.
+// What is worth having instead is that a lost race fails safe, which is why
+// [OpRemove] tolerates an already-absent path and [OpRmdir] tolerates a
+// directory that is no longer empty.
 func Apply(p Plan) error {
 	for _, op := range p.Ops {
 		if err := applyOp(op); err != nil {
@@ -655,9 +734,22 @@ func applyOp(op Op) error {
 		return nil
 	case OpRmdir:
 		// Remove, not RemoveAll. This is only planned for a directory observed
-		// to be empty, and if something appeared in it since, failing to remove
-		// it is exactly the right outcome.
-		if err := os.Remove(op.Path); err != nil && !os.IsNotExist(err) {
+		// to hold nothing but Sidecar's own files, so it can never take
+		// somebody else's plugin with it.
+		//
+		// It is also the one operation that is conditional by construction, and
+		// a lost race on it is not a failure. "The directory is empty" is
+		// evaluated while the plan is built; if anything landed in it between
+		// then and here, the correct outcome is to leave the directory alone —
+		// not to fail an uninstall that has already correctly removed the asset,
+		// the duplicate, and the backup, and report exit 1 for a tidy-up that
+		// was never the point. POSIX names that ENOTEMPTY; some systems surface
+		// the same condition as EEXIST, so both are treated as the no-op they
+		// are.
+		if err := os.Remove(op.Path); err != nil &&
+			!os.IsNotExist(err) &&
+			!errors.Is(err, syscall.ENOTEMPTY) &&
+			!errors.Is(err, syscall.EEXIST) {
 			return err
 		}
 		return nil
@@ -747,10 +839,27 @@ func inspectFile(env Env, path string, want Asset) FileState {
 		return st
 	}
 	st.Checksum = checksum(b)
+	st.Ownership = want.Ownership
+	// The marker rule belongs to OwnsFile and only to it. Running it over a
+	// user's settings.json or config.toml could never succeed -- neither format
+	// carries a `//` comment Sidecar would have written -- so doing it anyway
+	// was not merely wasted work: it left every entry adapter with a FileState
+	// whose Owned was false for a file it demonstrably had an entry in, and the
+	// adapters then corrected it afterwards. The correction is now the rule.
+	if want.Ownership == OwnsEntry {
+		return st
+	}
 	if id, schema, version, ok := parseMarker(string(b)); ok && id == want.Source && schema == want.SchemaVersion {
 		st.Owned, st.Version = true, version
 	}
 	return st
+}
+
+// ownEntry records that an entry adapter found its own entry in a user-owned
+// file. It is the OwnsEntry counterpart to the marker check in inspectFile:
+// same conclusion, reached by the rule that shape of integration actually has.
+func ownEntry(st *FileState, version string) {
+	st.Owned, st.Version, st.Ownership = true, version, OwnsEntry
 }
 
 // inspectDir reads a directory's state for the purpose of writing into it.

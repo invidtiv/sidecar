@@ -1,0 +1,5 @@
+# ms	event	session	turn	tool	fields
+0	UserPromptSubmit	session-1	-	-	cwd,hook_event_name,permission_mode,prompt,prompt_id,session_id,transcript_path
+6639	PreToolUse	session-1	-	Bash	cwd,effort,hook_event_name,permission_mode,prompt_id,session_id,tool_input,tool_name,tool_use_id,transcript_path
+6674	PermissionRequest	session-1	-	Bash	cwd,effort,hook_event_name,permission_mode,permission_suggestions,prompt_id,session_id,tool_input,tool_name,transcript_path
+12678	Notification	session-1	-	-	cwd,hook_event_name,message,notification_type,prompt_id,session_id,transcript_path

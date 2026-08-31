@@ -75,7 +75,7 @@ func integrationCommand() *Command {
 			Name:      name,
 			Summary:   summary,
 			Usage:     "sidecar agent integration " + name + " PROVIDER [--dry-run] [--json]",
-			Long:      long + "\n\nThe exact ordered file operations are printed, each with the state of its path before and after and whether Sidecar owns it. --dry-run prints that same plan and changes nothing.\n\nSidecar only ever writes, replaces, or removes a file carrying its own integration marker. A file that merely has the name Sidecar would have chosen is refused and left exactly as it is." + integrationPrivacy,
+			Long:      long + "\n\nThe exact ordered file operations are printed, each with the state of its path before and after and whether Sidecar owns it. --dry-run prints that same plan and changes nothing.\n\nSidecar only ever writes, replaces, or removes something it can prove is its own. Where the integration is a whole Sidecar-owned file, that proof is the integration marker its bytes carry. Where the integration is one entry inside a configuration file the user owns, it is that entry's own content, and every other byte of the file is preserved. Either way, something that merely has the name or shape Sidecar would have chosen is refused and left exactly as it is." + integrationPrivacy,
 			Flags:     []Flag{dryRun, jsonFlag, helpFlag},
 			Args:      ArgSpec{Min: 1, Max: 1, Description: "Provider name, e.g. opencode"},
 			ExitCodes: integrationExitCodes(),
@@ -88,7 +88,7 @@ func integrationCommand() *Command {
 
 	install := mutating("install",
 		"Install a provider's Sidecar lifecycle integration",
-		"Writes the bundled integration asset into the provider's user-level configuration directory. Nothing is installed into a repository, and no existing user configuration is rewritten from a template.\n\nInstalling when the current version is already installed is a no-op. Installing over an older or a damaged installation is refused, naming update or repair instead: the verb should mean what the user believes the situation to be.",
+		"Writes the bundled integration into the provider's user-level configuration: a Sidecar-owned file for a provider that loads whole files from a directory, or one added entry for a provider whose hooks live in a configuration file the user owns. Nothing is installed into a repository, and an existing user configuration is edited in place rather than rewritten from a template.\n\nInstalling when the current version is already installed is a no-op. Installing over an older or a damaged installation is refused, naming update or repair instead: the verb should mean what the user believes the situation to be.",
 		[]Example{
 			{Command: "sidecar agent integration install opencode --dry-run", Description: "see the exact files first"},
 			{Command: "sidecar agent integration install opencode --json"},
@@ -117,7 +117,7 @@ func integrationCommand() *Command {
 		Name:    "integration",
 		Summary: "Inspect and manage agent lifecycle integrations",
 		Usage:   "sidecar agent integration <command>",
-		Long: "An integration is a small Sidecar-owned file installed beside a supported agent, which reports that agent's own lifecycle events so Sidecar does not have to infer them from its screen.\n\nInstallation is always explicit, always previewable, and always reversible. Sidecar shows the exact user-level paths it would change before changing them, writes atomically, keeps a recoverable backup of anything it replaces, and removes only what it installed." +
+		Long: "An integration is a small addition to a supported agent's own user-level configuration -- a Sidecar-owned file, or one entry in a file the user owns -- which reports that agent's own lifecycle events so Sidecar does not have to infer them from its screen.\n\nInstallation is always explicit, always previewable, and always reversible. Sidecar shows the exact user-level paths it would change before changing them, writes atomically, keeps a recoverable backup of anything it replaces, and removes only what it installed." +
 			"\n\nThe same application service answers Configuration → Agents → Integrations, so every fact and action there has an equivalent here." + integrationPrivacy,
 		Sub: []*Command{install, list, repair, status, uninstall, update},
 		Run: runIntegrationRoot,
@@ -384,7 +384,14 @@ func describeFileState(f agentintegration.FileState) string {
 	case !f.Exists:
 		b.WriteString("  absent")
 	case f.Owned:
-		b.WriteString("  sidecar-owned version " + f.Version)
+		b.WriteString("  " + describeOwned(f))
+	case f.Kind == "dir":
+		// A directory is not something ownership is claimed over: Sidecar
+		// creates it when it is missing and removes it only when removing its
+		// own files leaves it empty. Saying "not Sidecar's" here reused the
+		// phrase reserved for a foreign file at Sidecar's own path, which is a
+		// refusal, and made a perfectly ordinary directory read as damage.
+		b.WriteString("  directory")
 	default:
 		b.WriteString("  " + f.Kind + ", not Sidecar's")
 	}
@@ -481,7 +488,7 @@ func writePlanBody(env Env, p agentintegration.Plan) {
 }
 
 // describeOwnership is the before/after ownership status the plan requires to
-// be visible. "absent" and "sidecar-owned" are the only two states a mutation
+// be visible. "absent" and an owned state are the only two things a mutation
 // ever leaves behind; anything else means the plan refused instead.
 func describeOwnership(f agentintegration.FileState) string {
 	switch {
@@ -490,8 +497,24 @@ func describeOwnership(f agentintegration.FileState) string {
 	case f.Kind == "dir":
 		return "directory " + f.Mode
 	case f.Owned:
-		return "sidecar-owned version " + f.Version + " " + f.Mode
+		return describeOwned(f) + " " + f.Mode
 	default:
 		return "not Sidecar's (" + f.Kind + ") " + f.Mode
 	}
+}
+
+// describeOwned names what Sidecar owns here, which is not the same sentence
+// for the two shapes of integration. "sidecar-owned file" claims the whole
+// file; for a user's settings.json or config.toml that would be false and
+// alarming, and it also produced a dangling "version " with nothing after it
+// whenever the owned thing had no version of its own to report.
+func describeOwned(f agentintegration.FileState) string {
+	noun := "sidecar-owned"
+	if f.Ownership == agentintegration.OwnsEntry {
+		noun = "contains Sidecar's entry"
+	}
+	if f.Version == "" {
+		return noun
+	}
+	return noun + " version " + f.Version
 }

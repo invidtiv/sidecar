@@ -37,24 +37,29 @@
     "source": "sidecar.codex.hooks",
     "assetVersion": "1",
     "tier": "session-identity",
-    "evidence": "docs-only",
+    "evidence": "real-trace",
     "minProviderVersion": "0.151.0",
-    "testedProviderRange": "",
+    "testedProviderRange": "0.151.0",
     "covered": [
       "session_identity"
     ],
     "knownGaps": [
-      "The shipped asset is a single SessionStart hook: session identity only, by design. The broader HookEventName vocabulary (work, tools, blocking, cancellation, subagents, exit) exists upstream but nothing shipped exercises it, so no lifecycle transition is claimed and screen/process detection stays the sole lifecycle authority.",
-      "No Sidecar lifecycle trace was captured. The event vocabulary and payload fields were read from the installed codex-cli 0.151.0 binary and the codex-rs source, which is stronger than documentation prose but is not an observed trace.",
+      "The shipped asset is a single SessionStart hook: session identity only, by design, and that is what the tier reflects. Codex's own contract is far broader and is now fully traced (see the next gap), so the ceiling here is what Sidecar ships rather than what Codex can do.",
+      "Codex's full lifecycle IS traced and would support the full tier once an adapter ships for it. Real captures on 0.151.0 cover work start (UserPromptSubmit), tool use (PreToolUse/PostToolUse), blocking (PermissionRequest, the last event before the pane blocks), unblocking (PostToolUse on approval), turn completion (Stop), cancellation (Interrupt, captured by two independent routes), session identity (SessionStart) and process exit (SessionEnd). Every event carries session_id and, from UserPromptSubmit onward, turn_id.",
+      "Denying a permission request emits Interrupt, not PostToolUse and not Stop. Interrupt is therefore the universal 'the turn ended without completing' signal and the blocked lane always resolves; an adapter that treats only PostToolUse as the unblock would latch on blocked whenever a user says no.",
+      "SessionEnd does not fire under `codex exec` at all. It was observed only in the interactive TUI, so process exit on a non-interactive run is detectable only by process liveness.",
+      "No event re-asserts state. Unlike OpenCode's session.status, every Codex event is transition-shaped, so a dropped or missed event does not self-correct and an adapter cannot rely on the next event to repair the lane.",
+      "The trusted_hash is computed over the EFFECTIVE hook, after Codex clamps it, not over the hook as written. Codex clamps SessionEnd and Interrupt hook timeouts to 3s and prints a warning naming hooks.json on every start. A pre-written record for those two events at Sidecar's canonical timeout of 10 does not match, and the user gets the interactive 'Hooks need review' prompt. Proved by letting Codex write its own records and diffing them: the identity hashed with timeout=3 matches byte-for-byte and timeout=10 does not. Any lifecycle adapter must declare timeout<=3 on those two events.",
       "Hooks are disabled by default behind features.hooks, so the integration must edit config.toml as well as hooks.json: three owned mutations (entry, feature flag, trust record) rather than one. Uninstall deliberately leaves features.hooks on, because other installed hooks may depend on it.",
-      "Codex only auto-runs hooks whose trusted_hash in config.toml matches a hash of the hook's normalized identity; an untrusted hook triggers an interactive 'Hooks need review' prompt (observed live on 0.151.0), where 'Trust all and continue' makes Codex write the record itself. Sidecar pre-writes the record using the algorithm reproduced from codex-rs and verified byte-for-byte against a live 0.151.0 trust record, so no prompt appears; the algorithm is a provider implementation detail, not a published contract, and if it drifts on a future version the failure mode is that visible one-time prompt, not a silent loss.",
-      "Trust records are keyed by the hook's position in hooks.json (path:event:group:hook). Any edit that reorders groups — by the user, or by Sidecar removing its own group when others follow it — silently invalidates the trust records of the hooks that shifted, and Codex re-prompts for them.",
+      "Codex only auto-runs hooks whose trusted_hash in config.toml matches a hash of the hook's normalized identity; an untrusted hook triggers an interactive 'Hooks need review' prompt. Sidecar pre-writes the record using the algorithm reproduced from codex-rs; it is now live-verified across eleven distinct event names in a single run rather than the one session_start vector, which is considerably stronger evidence that the reproduction is correct. It remains a provider implementation detail rather than a published contract, and if it drifts the failure mode is that visible one-time prompt, not a silent loss.",
+      "Trust records are keyed by the hook's position in hooks.json (path:event:group:hook). Any edit that reorders groups, by the user or by Sidecar removing its own group when others follow it, silently invalidates the trust records of the hooks that shifted, and Codex re-prompts for them.",
+      "config.toml is edited by a line writer with a TOML parser as its read-only oracle. A config.toml containing a genuine multi-line string (a structural triple-quote delimiter) is refused outright: install, repair and uninstall all decline rather than guess where a table header ends, so the integration is unavailable to a user whose config uses one. A delimiter appearing inside a comment or an ordinary single-line string no longer refuses. The scanner also declines any key = value line it cannot normalise, which is stricter than necessary. All of these fail in the safe direction.",
       "The integration manages ~/.codex only; a CODEX_HOME override relocates the provider's configuration where the installer does not look.",
-      "Herdr shipped a full-lifecycle Codex hook set through eight asset versions and then deliberately removed it, retaining SessionStart for session identity only. That rollback is unexplained by the published contract and must be reproduced or refuted before Codex is trusted for state."
+      "Herdr shipped a full-lifecycle Codex hook set through eight asset versions and then deliberately removed it, retaining SessionStart for session identity only. Sidecar's own traces do not reproduce a reason for that rollback: every transition such a hook set needs is observable on 0.151.0. It stays recorded as unexplained rather than refuted, because a contract that held in one capture session is not the same as one that holds across versions."
     ],
     "orderingGuaranteed": false,
     "sourceDoc": "https://developers.openai.com/codex/config-reference",
-    "sourceVersionNote": "codex-cli 0.151.0 installed locally; hook event vocabulary and payload fields read from the installed binary and codex-rs source, and the trusted_hash algorithm verified against a live 0.151.0 trust record, but no lifecycle trace captured. The published config-reference URL redirects and truncates before the hooks section; the authoritative contract is codex-rs/app-server-protocol HookEventName plus the generated JSON schemas."
+    "sourceVersionNote": "codex-cli 0.151.0 on darwin/arm64, traced 2026-08-30 into an isolated CODEX_HOME with hooks that recorded event names only, on a private tmux socket; the user's real ~/.codex was never written. Traces are in testdata/traces/codex. The published config-reference URL redirects and truncates before the hooks section; the authoritative contract is codex-rs/app-server-protocol HookEventName plus the JSON schemas embedded in the shipped binary, which enumerate PreToolUse, PostToolUse, PermissionRequest, PreCompact, PostCompact, SessionStart, SessionEnd, SubagentStart, SubagentStop, UserPromptSubmit, Stop and Interrupt."
   },
   {
     "schemaVersion": 1,
@@ -62,24 +67,27 @@
     "source": "sidecar.claude.hooks",
     "assetVersion": "1",
     "tier": "session-identity",
-    "evidence": "docs-only",
+    "evidence": "real-trace",
     "minProviderVersion": "2.1.0",
-    "testedProviderRange": "",
+    "testedProviderRange": "2.1.220",
     "covered": [
       "session_identity"
     ],
     "knownGaps": [
-      "The shipped asset is a single SessionStart hook entry: session identity only, by design. Claude publishes further hook events (work, tools, blocking, subagents, exit) but nothing shipped exercises them, so no lifecycle transition is claimed and screen/process detection stays the sole lifecycle authority.",
-      "No Sidecar lifecycle trace was captured. The event list and payload fields were read from the installed claude 2.1.220 binary's documentation surface, not observed.",
-      "No user-cancellation event exists at all. This is a contract gap rather than a tracing gap, and it alone prevents full lifecycle authority: a state machine driven only by these hooks latches on working when the user interrupts a turn.",
+      "The shipped asset is a single SessionStart hook entry: session identity only, by design, and that is what the tier reflects.",
+      "Claude's lifecycle is traced and supports ADVISORY, not full. Real captures on 2.1.220 cover work start (UserPromptSubmit), tool use (PreToolUse/PostToolUse), blocking (PermissionRequest plus a Notification), turn completion (Stop), session identity (SessionStart) and process exit (SessionEnd). What is missing is a contract gap rather than a tracing gap; see below.",
+      "PermissionRequest DOES fire on the current release, correcting an earlier docs-only reading of this entry which held that session identity was all Claude offered. Blocking is first-class: PreToolUse, then PermissionRequest, then Notification, and then nothing at all until the user answers.",
+      "PostToolUse is silently skipped for any tool that went through the interactive permission prompt. The same tool with no prompt fires it normally. An adapter that unblocks on PostToolUse therefore unblocks on exactly the turns that never blocked, and never on the ones that did.",
+      "No user-cancellation event exists at all. Interrupting a live turn with Escape produced no hook event whatsoever: not Stop, and not any of the speculative event names Claude accepted into its settings without complaint. Denying a permission request, or Escape-cancelling the prompt, is equally silent. Because Stop does not fire either, a state machine driven only by these hooks latches on working or blocked forever. This is the single gap that caps Claude below full lifecycle authority, and no amount of further tracing can close it.",
       "Stop means stopped generating, not ready for input, so turn completion cannot be taken from it without reconciliation against screen state.",
+      "Both halves of Herdr's stated reason for removing its own full-lifecycle Claude hook set, missed permission results and escape interrupts, are independently reproduced here on the current release. That rollback is now explained rather than merely recorded.",
       "Hook configuration merges additively across five layers (enterprise, project, local, user, plugin), so Sidecar can own exactly its one entry in ~/.claude/settings.json and can never own the effective hook set; another layer can add, but not remove, hooks beside it.",
       "The integration manages ~/.claude/settings.json only; a CLAUDE_CONFIG_DIR override relocates the provider's configuration where the installer does not look.",
-      "Herdr shipped a full-lifecycle Claude hook set and then removed it, keeping only SessionStart for session identity, citing missed permission results and escape interrupts."
+      "grok reads hooks from ~/.claude/settings.json by design -- its shipped documentation carries a 'Claude Code Compatibility' section for exactly that -- so Sidecar's installed Claude entry also fires inside grok sessions. Because --kind is a flag rather than something checked against the pane's actual occupant, a grok session can be bound as kind=claude carrying grok's session identifier. Tracked as td-11040b."
     ],
     "orderingGuaranteed": false,
     "sourceDoc": "https://code.claude.com/docs/en/hooks",
-    "sourceVersionNote": "claude 2.1.220 installed locally but not traced. Event list is vendor documentation prose only."
+    "sourceVersionNote": "claude 2.1.220 on darwin/arm64, traced 2026-08-30. Hooks were injected with the additive --settings flag and an isolated working directory, so nothing in the user's ~/.claude was written; the interactive half ran on a private tmux socket. Traces are in testdata/traces/claude. Recording captured event names and field names only, never any field value."
   },
   {
     "schemaVersion": 1,
@@ -98,13 +106,114 @@
       "process_exit"
     ],
     "knownGaps": [
-      "No Sidecar trace was captured.",
-      "The blocked lane has no portable official source. The one working production integration obtains it from a pi.events bus message named for that consumer rather than from a documented lifecycle event, and ui_prompt_start covers only extension-driven prompts.",
-      "No subagent events are enumerated, and there is no cancellation event.",
-      "The extension API publishes no version or stability guarantee."
+      "No Sidecar trace was captured. This entry is read from the released TypeScript definitions shipped in the installed package (dist/core/extensions/types.d.ts), which is stronger than vendor prose but is not an observed trace.",
+      "Blocking and unblocking do not exist, and this is a deliberate product decision rather than a missing event: Pi ships no permission system, so there is nothing to be blocked on. An extension can open its own ctx.ui dialog, but that is invisible to every other extension, so no portable blocked signal exists at all. This caps Pi at advisory however it is traced.",
+      "An earlier docs-only version of this entry cited a `ui_prompt_start` event as partial cover for blocking. No such event exists anywhere in the 0.84.3 package. The blocked lane is NO, not PARTIAL.",
+      "There is no cancellation event. Cancellation is inferable, exactly the way OpenCode's was before it was traced: the final assistant message carries a StopReason that includes \"aborted\", and agent_settled is emitted from a finally block so it arrives however the turn ended. That shares its shape with \"error\", so an adapter reading only the event would get the lane right and the outcome wrong.",
+      "Turn completion must be taken from agent_settled rather than agent_end: agent_end can be followed by an automatic retry or a compaction, so it means 'this attempt stopped' rather than 'the turn is over'.",
+      "Process exit is session_shutdown, which fires on quit, reload, new, resume and fork; an adapter must read the reason, because three of those five are not an exit at all.",
+      "No subagent events. Extension-spawned agents are separate processes.",
+      "The extension API publishes no version or stability guarantee, and the changelog records breaking changes that have already shipped."
     ],
     "orderingGuaranteed": false,
     "sourceDoc": "https://pi.dev/docs/latest/extensions",
-    "sourceVersionNote": "pi 0.84.3 installed locally but not traced. Event list is vendor documentation prose only; upstream type definitions were not read."
+    "sourceVersionNote": "pi 0.84.3 installed locally but not traced. The event inventory is read from the released type definitions in the installed package rather than from documentation prose, and the extension loading contract (--extension/-e, repeatable; --no-extensions; discovery from ~/.pi/agent/extensions/) is documented. No stability guarantee is published."
+  },
+  {
+    "schemaVersion": 1,
+    "provider": "grok",
+    "source": "",
+    "assetVersion": "",
+    "tier": "screen-fallback",
+    "evidence": "none",
+    "minProviderVersion": "",
+    "testedProviderRange": "",
+    "covered": [],
+    "knownGaps": [
+      "No Sidecar integration is built, so nothing is claimed and screen detection remains the sole authority.",
+      "Not traced. Every statement here is read from the shipped binary's embedded documentation, so it selects a candidate rather than earning a tier.",
+      "grok also reads ~/.claude/settings.json and ~/.cursor/hooks.json by default, so hooks installed for those providers execute inside grok sessions. Any grok integration must expect cross-provider firing in both directions, and payload field naming differs."
+    ],
+    "orderingGuaranteed": false,
+    "sourceDoc": "https://docs.x.ai/docs/grok-cli",
+    "sourceVersionNote": "grok 1.0.13. The strongest hook contract in the catalog and the only one with a dedicated cancellation event: StopCancelled carries reasons including user_interrupt, permission_rejected and permission_cancelled, alongside PermissionDenied, Notification{permission_prompt,idle_prompt}, SessionStart/SessionEnd and GROK_SESSION_ID. Verified in the shipped binary's embedded documentation, which documents StopCancelled where the vendor website does not. A full-tier candidate once traced."
+  },
+  {
+    "schemaVersion": 1,
+    "provider": "cursor",
+    "source": "",
+    "assetVersion": "",
+    "tier": "screen-fallback",
+    "evidence": "none",
+    "minProviderVersion": "",
+    "testedProviderRange": "",
+    "covered": [],
+    "knownGaps": [
+      "No Sidecar integration is built, so nothing is claimed and screen detection remains the sole authority.",
+      "Not traced. Read from the shipped bundle rather than observed.",
+      "There are user reports of events being omitted on particular versions, so tracing is mandatory rather than a formality before any tier is claimed."
+    ],
+    "orderingGuaranteed": false,
+    "sourceDoc": "https://cursor.com/docs/agent/hooks",
+    "sourceVersionNote": "cursor-agent 2026.08.25. A full event registry is present in the shipped bundle: beforeSubmitPrompt, tool events, stop carrying status \"aborted\", postToolUseFailure.is_interrupt, subagentStart/Stop and sessionStart/End, configured through ~/.cursor/hooks.json. A full-tier candidate once traced."
+  },
+  {
+    "schemaVersion": 1,
+    "provider": "copilot",
+    "source": "",
+    "assetVersion": "",
+    "tier": "screen-fallback",
+    "evidence": "none",
+    "minProviderVersion": "",
+    "testedProviderRange": "",
+    "covered": [],
+    "knownGaps": [
+      "No Sidecar integration is built, so nothing is claimed and screen detection remains the sole authority.",
+      "Not installed on any machine Sidecar has surveyed, so nothing here is verified even against a shipped artifact -- this is the weakest evidence in the registry.",
+      "Interrupt appears to be reported at session granularity rather than per turn, which would not distinguish a cancelled turn from a closed session."
+    ],
+    "orderingGuaranteed": false,
+    "sourceDoc": "https://docs.github.com/en/copilot",
+    "sourceVersionNote": "Not installed locally. A hooks feature reached general availability in 2026 offering permissionRequest, sessionEnd carrying an abort reason, and a sessionId on every event, including HTTP hooks. A full-tier candidate on paper only."
+  },
+  {
+    "schemaVersion": 1,
+    "provider": "amp",
+    "source": "",
+    "assetVersion": "",
+    "tier": "screen-fallback",
+    "evidence": "none",
+    "minProviderVersion": "",
+    "testedProviderRange": "",
+    "covered": [],
+    "knownGaps": [
+      "No Sidecar integration is built, so nothing is claimed and screen detection remains the sole authority.",
+      "Not installed locally and not traced.",
+      "No permission or blocking event, and no reliable process-exit signal, so the blocked lane and process exit would both stay with screen and process detection.",
+      "No stability guarantee is published for the plugin interface."
+    ],
+    "orderingGuaranteed": false,
+    "sourceDoc": "https://ampcode.com/manual",
+    "sourceVersionNote": "Not installed locally. Observability is via a TypeScript plugin process rather than shell hooks: session.start, agent.start, tool.call, tool.result carrying a cancelled flag, and agent.end. An advisory candidate at best."
+  },
+  {
+    "schemaVersion": 1,
+    "provider": "antigravity",
+    "source": "",
+    "assetVersion": "",
+    "tier": "screen-fallback",
+    "evidence": "none",
+    "minProviderVersion": "",
+    "testedProviderRange": "",
+    "covered": [],
+    "knownGaps": [
+      "No Sidecar integration is built, so nothing is claimed and screen detection remains the sole authority.",
+      "Not traced; read from documentation embedded in the shipped binary.",
+      "No session start or end event, no blocking event and no cancellation event, so neither the blocked lane nor process exit could be authored from hooks.",
+      "The hooks configuration path has already moved between releases, so any integration would need a version-aware installer."
+    ],
+    "orderingGuaranteed": false,
+    "sourceDoc": "https://antigravity.google/docs",
+    "sourceVersionNote": "agy 1.1.22. The thinnest hook surface in the catalog: exactly five events -- PreToolUse, PostToolUse, PreInvocation, PostInvocation and Stop -- carrying a conversationId. An advisory candidate at best."
   }
 ]

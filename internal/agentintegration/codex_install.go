@@ -161,18 +161,37 @@ type CodexAdapter struct{}
 func (CodexAdapter) Provider() string { return CodexProvider }
 func (CodexAdapter) Source() string   { return CodexSource }
 
-// Asset returns the bundled integration identity. As with Claude there is no
-// standalone file: Content is the canonical hooks.json Sidecar would create in
-// an empty tree, carried so surfaces can show exactly what an install adds.
-func (CodexAdapter) Asset() Asset {
-	return Asset{
-		Name:          "hooks.json",
-		Source:        CodexSource,
-		SchemaVersion: CodexAssetSchema,
-		Version:       CodexAssetVersion,
-		Content:       string(renderJSONFile([]jsonMember{{key: "hooks", val: marshalJSONObject([]jsonMember{{key: "SessionStart", val: marshalJSONArray([]json.RawMessage{codexCanonicalGroup()})}})}})),
+// Assets returns the two entry assets this integration installs.
+//
+// This is the adapter that made assets plural. Codex needs an entry in
+// hooks.json *and* two regions of config.toml, and both files are the user's.
+// While an integration could describe only one bundled thing, the second file
+// was simply absent from everything an asset feeds: a surface asking "what does
+// this integration install" was answered with hooks.json and told nothing about
+// the feature flag and trust record that make hooks.json do anything at all.
+func (CodexAdapter) Assets() []Asset {
+	return []Asset{
+		{
+			Name:          "hooks.json",
+			Source:        CodexSource,
+			SchemaVersion: CodexAssetSchema,
+			Version:       CodexAssetVersion,
+			Ownership:     OwnsEntry,
+			Content:       string(renderJSONFile([]jsonMember{{key: "hooks", val: marshalJSONObject([]jsonMember{{key: "SessionStart", val: marshalJSONArray([]json.RawMessage{codexCanonicalGroup()})}})}})),
+		},
+		{
+			Name:          "config.toml",
+			Source:        CodexSource,
+			SchemaVersion: CodexAssetSchema,
+			Version:       CodexAssetVersion,
+			Ownership:     OwnsEntry,
+			Content:       "[features]\nhooks = true\n\n" + codexStateBlock("<hooks.json path>:session_start:<group>:<hook>", codexTrustHashes()[len(codexTrustHashes())-1]),
+		},
 	}
 }
+
+func (a CodexAdapter) hooksAsset() Asset  { return a.Assets()[0] }
+func (a CodexAdapter) configAsset() Asset { return a.Assets()[1] }
 
 type codexPaths struct {
 	Dir          string
@@ -239,8 +258,8 @@ func (a CodexAdapter) inspect(env Env) codexState {
 		paths:        p,
 		spec:         codexEntrySpec(),
 		dir:          inspectDir(env, p.Dir),
-		hooks:        inspectFile(env, p.Hooks, a.Asset()),
-		config:       inspectFile(env, p.Config, a.Asset()),
+		hooks:        inspectFile(env, p.Hooks, a.hooksAsset()),
+		config:       inspectFile(env, p.Config, a.configAsset()),
 		hooksBackup:  FileState{Path: p.HooksBackup, Exists: fileExists(p.HooksBackup)},
 		configBackup: FileState{Path: p.ConfigBackup, Exists: fileExists(p.ConfigBackup)},
 	}
@@ -250,8 +269,7 @@ func (a CodexAdapter) inspect(env Env) codexState {
 	}
 	_, s.hooksScan = scanEntryFile(s.hooks, s.spec)
 	if len(s.hooksScan.owned) > 0 {
-		s.hooks.Owned = true
-		s.hooks.Version = s.hooksScan.owned[len(s.hooksScan.owned)-1].version
+		ownEntry(&s.hooks, s.hooksScan.owned[len(s.hooksScan.owned)-1].version)
 	}
 
 	configRaw, configOK := readEntryFileBytes(s.config)
@@ -268,7 +286,12 @@ func (a CodexAdapter) inspect(env Env) codexState {
 	}
 	s.ownedTables = codexOwnedTables(s.configScan, s.wantKey)
 	if len(s.ownedTables) > 0 {
-		s.config.Owned = true
+		// The version of a trust record is the version of the entry whose
+		// command it hashes, so a record found by hash names its version and one
+		// found only by position does not. Leaving it empty in the second case is
+		// the honest answer, and it is now renderable: a surface asks Ownership
+		// what Owned means rather than assuming every owned file has a version.
+		ownEntry(&s.config, codexTrustVersion(s.ownedTables))
 	}
 	s.trustConverged = s.wantKey != "" && s.configScan.parseErr == "" &&
 		s.configScan.hooksEnabled() && len(s.ownedTables) == 1 &&
@@ -304,6 +327,102 @@ func codexOwnedTables(scan codexConfigScan, wantKey string) []tomlStateTable {
 		}
 	}
 	return out
+}
+
+// multilineStringOpener finds the first `"""` or `”'` that actually opens a
+// multi-line string, returning its 1-based line number.
+//
+// The previous rule was a substring search over the whole file, which refused
+// on any occurrence anywhere -- including inside a `#` comment and inside an
+// ordinary single-line string. That is not a cautious over-approximation of a
+// small risk: parseErr refuses install, refuses repair, AND refuses uninstall,
+// so a user whose config.toml merely mentions `"""` in a comment could neither
+// integrate Codex nor clean up an existing integration. The file has already
+// been proved valid TOML by the oracle above, so the only thing left to decide
+// is whether a delimiter is structural, and comment and single-line-string
+// state is exactly what tells us.
+//
+// The refusal itself is kept: a genuine multi-line string really does defeat a
+// line scanner. This narrows it to the case that warrants it.
+func multilineStringOpener(content string) (int, bool) {
+	for i, line := range strings.Split(content, "\n") {
+		if multilineOpenerInLine(line) {
+			return i + 1, true
+		}
+	}
+	return 0, false
+}
+
+// multilineOpenerInLine walks one line tracking basic-string, literal-string,
+// and comment state, and reports whether a triple delimiter survives outside
+// all three.
+//
+// A triple delimiter that opens and closes on the same line is still a
+// multi-line string syntactically, and TOML permits it; it is reported, because
+// the scanner's problem is the delimiter, not the newline.
+func multilineOpenerInLine(line string) bool {
+	const (
+		plain = iota
+		basic
+		literal
+	)
+	state := plain
+	for i := 0; i < len(line); i++ {
+		switch state {
+		case plain:
+			switch {
+			case strings.HasPrefix(line[i:], `"""`), strings.HasPrefix(line[i:], "'''"):
+				return true
+			case line[i] == '#':
+				// The rest of the line is a comment and has no structure.
+				return false
+			case line[i] == '"':
+				state = basic
+			case line[i] == '\'':
+				state = literal
+			}
+		case basic:
+			// Only a basic string honours backslash escapes, so only here can a
+			// quote be escaped rather than closing.
+			if line[i] == '\\' {
+				i++
+				continue
+			}
+			if line[i] == '"' {
+				state = plain
+			}
+		case literal:
+			if line[i] == '\'' {
+				state = plain
+			}
+		}
+	}
+	return false
+}
+
+// codexTrustVersion names the asset version a set of owned trust tables
+// records, or "" when none of them can be attributed to a version.
+//
+// codexTrustHashes is ordered oldest-first and its last element is the current
+// version's hash, which is the same ordering codexEntrySpec's canonical history
+// uses, so the two are indexed together.
+func codexTrustVersion(tables []tomlStateTable) string {
+	hashes := codexTrustHashes()
+	versions := codexEntrySpec().canonical
+	if len(hashes) != len(versions) {
+		// The two lists are grown together by hand. If they ever disagree,
+		// claiming a version would be guessing about a security record.
+		return ""
+	}
+	best := ""
+	for _, t := range tables {
+		for i, h := range hashes {
+			if t.hash == h {
+				best = versions[i].version
+			}
+		}
+	}
+	return best
 }
 
 // readEntryFileBytes reads an inspected file's bytes, honoring the inspection:
@@ -466,7 +585,7 @@ func (a CodexAdapter) planConverge(s codexState, p Plan, act Action) (Plan, erro
 		wantKey = codexStateKey(s.paths.Hooks, group, 0)
 		wantHash = codexTrustHashes()[len(codexTrustHashes())-1]
 		p.Ops = entryFileOps(p.Ops, s.env, s.dir, s.hooks, s.hooksBackup, renderJSONFile(top),
-			"write the Sidecar session-identity hook entry, preserving every other hook")
+			"write the Sidecar session-identity hook entry, preserving every other hook", CodexAssetVersion)
 	}
 
 	content, err := codexConfigConverge(s.configScan, wantKey, wantHash)
@@ -484,7 +603,7 @@ func (a CodexAdapter) planConverge(s codexState, p Plan, act Action) (Plan, erro
 			dirPlanned = FileState{Path: s.paths.Dir, Exists: true}
 		}
 		p.Ops = entryFileOps(p.Ops, s.env, dirPlanned, s.config, s.configBackup, content,
-			note)
+			note, CodexAssetVersion)
 	}
 
 	if len(p.Ops) == 0 {
@@ -536,7 +655,7 @@ func (a CodexAdapter) planUninstall(s codexState, p Plan) (Plan, error) {
 			return Plan{}, refuse(RefuseUnreadable, s.paths.Config, "%s: %v", s.paths.Config, err)
 		}
 		p.Ops = entryFileOps(p.Ops, s.env, s.dir, s.config, s.configBackup, content,
-			"remove Sidecar's hook trust records, preserving every other line including features.hooks")
+			"remove Sidecar's hook trust records, preserving every other line including features.hooks", "")
 	}
 
 	if len(p.Ops) == 0 {
@@ -886,11 +1005,11 @@ func scanCodexConfig(exists bool, b []byte) codexConfigScan {
 	}
 
 	content := string(b)
-	if strings.Contains(content, `"""`) || strings.Contains(content, "'''") {
-		// A multi-line string could contain text that looks exactly like a
-		// table header, and a line scanner cannot tell the difference. Refuse
-		// rather than guess.
-		s.parseErr = "the file contains multi-line strings, which this editor does not support"
+	if line, found := multilineStringOpener(content); found {
+		// Once a multi-line string opens, every following line's structure is
+		// unknowable to a line scanner: the body can contain text that looks
+		// exactly like a table header. Refuse rather than guess.
+		s.parseErr = "the file contains a multi-line string (line " + strconv.Itoa(line) + "), which this editor does not support"
 		return s
 	}
 	s.lines = strings.Split(content, "\n")

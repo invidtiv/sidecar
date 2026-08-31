@@ -11,7 +11,7 @@ import (
 
 // Configuration → Agents → Integrations.
 //
-// An integration is a small Sidecar-owned file installed beside a supported
+// An integration is a small addition to a supported agent's own configuration
 // agent, which reports that agent's own lifecycle events so Sidecar does not
 // have to read them off its screen.
 //
@@ -97,7 +97,6 @@ type agentIntegrationsState struct {
 	generation uint64
 
 	list   []agentintegration.Status
-	err    string
 	cursor int
 
 	// notice is the outcome of the last mutation, shown until the next one.
@@ -147,7 +146,7 @@ func (m *Model) queueIntegrationProbe() {
 	if state.checking {
 		return
 	}
-	state.checking, state.checked, state.err = true, false, ""
+	state.checking, state.checked = true, false
 	state.generation++
 	generation := state.generation
 	svc := m.integrations()
@@ -157,10 +156,15 @@ func (m *Model) queueIntegrationProbe() {
 }
 
 // agentIntegrationsMsg carries a completed discovery back to the route.
+//
+// It has no error field on purpose. [agentintegration.Service.List] cannot
+// fail: a path it cannot read becomes a FileState carrying the reason, and a
+// provider it cannot inspect is reported as unsupported. Carrying an error that
+// is never set would give the route a branch nothing can reach and a reader the
+// impression that discovery has a failure mode it does not have.
 type agentIntegrationsMsg struct {
 	Generation uint64
 	List       []agentintegration.Status
-	Err        string
 }
 
 func (agentIntegrationsMsg) configMsg() {}
@@ -193,7 +197,7 @@ func (m *Model) applyIntegrationList(msg agentIntegrationsMsg) {
 		return
 	}
 	state.checking, state.checked = false, true
-	state.list, state.err = msg.List, msg.Err
+	state.list = msg.List
 	if state.cursor >= len(state.list) {
 		state.cursor = max(0, len(state.list)-1)
 	}
@@ -335,23 +339,29 @@ func (m *Model) planIntegration(provider string, act agentintegration.Action) te
 func (m *Model) buildAgentIntegrations(b *paneBuilder) {
 	state := m.agentIntegrations()
 
-	if !state.checked && !state.checking {
-		// Reached without going through OpenAgentIntegrations — a restored
-		// route, or a direct push. Discovery still has to be asked for, and
-		// still has to happen off this frame.
-		m.queueIntegrationProbe()
-	}
-
-	b.lead("A small Sidecar-owned file installed beside an agent, so Sidecar learns what that agent is doing from its own lifecycle events instead of its screen.")
+	b.lead("A small addition to an agent's own configuration, so Sidecar learns what that agent is doing from its own lifecycle events instead of its screen.")
 	b.blank()
 
 	if state.checking && !state.checked {
 		b.lead("Checking which agents are installed…")
 		return
 	}
-	if state.err != "" {
-		b.lead("Sidecar could not inspect the installed integrations: " + state.err)
+	if !state.checked {
+		// Reached without going through OpenAgentIntegrations — a restored
+		// route, or a direct push. Discovery is deliberately not started from
+		// here. This is a render path, and inspecting integrations stats
+		// directories, hashes files, and looks up executables on PATH; queuing
+		// it here also painted "Checking…" over work that only a keypress would
+		// drain, so the route claimed to be looking while nothing was. It now
+		// says what it actually knows, and names the key that finds out.
+		b.rightControl(Body("Agents")+"  "+Muted("not checked yet"),
+			regionIntegrationRecheck, "r", "R  Recheck", func(m *Model) tea.Cmd {
+				m.queueIntegrationProbe()
+				return m.drain(nil)
+			})
 		b.blank()
+		b.lead("Sidecar has not looked yet. Press R to check which agents are installed.")
+		return
 	}
 
 	b.rightControl(Body("Agents")+"  "+Muted(summariseIntegrations(state.list)),
@@ -382,15 +392,32 @@ func (m *Model) buildAgentIntegrations(b *paneBuilder) {
 	b.note("Every fact and action here is also `sidecar agent integration`, with --dry-run and --json.")
 }
 
+// summariseIntegrations counts installations against the agents that can
+// actually have one.
+//
+// The denominator is deliberately not the row count. The list also carries
+// evaluation records -- agents Sidecar has surveyed and deliberately not built
+// an integration for, shown so that "evaluated, not built" is distinguishable
+// from "never looked at". Counting those in the denominator would report
+// "0 of 9 installed" on a machine where four of the nine can never be anything
+// else, which reads as nine things being broken rather than four being
+// available.
 func summariseIntegrations(list []agentintegration.Status) string {
-	installed := 0
+	installed, available := 0, 0
 	for _, st := range list {
+		if st.Status == agentlifecycle.StatusUnsupported {
+			continue
+		}
+		available++
 		switch st.Status {
 		case agentlifecycle.StatusCurrent, agentlifecycle.StatusOutdated, agentlifecycle.StatusNeedsRepair:
 			installed++
 		}
 	}
-	return fmt.Sprintf("%d of %d installed", installed, len(list))
+	if unsupported := len(list) - available; unsupported > 0 {
+		return fmt.Sprintf("%d of %d installed · %d unsupported", installed, available, unsupported)
+	}
+	return fmt.Sprintf("%d of %d installed", installed, available)
 }
 
 // syncIntegrationCursor keeps the route's own selection and the pane's row

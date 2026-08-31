@@ -1,0 +1,2 @@
+# ms	event	session	turn	tool	fields
+0	UserPromptSubmit	session-1	-	-	cwd,hook_event_name,permission_mode,prompt,prompt_id,session_id,transcript_path

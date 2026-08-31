@@ -188,6 +188,45 @@ func (s *JSONL) Append(r agentlifecycle.Report) (agentlifecycle.Acceptance, erro
 	return acc, nil
 }
 
+func (s *JSONL) AppendNext(r agentlifecycle.Report) (agentlifecycle.Report, agentlifecycle.Acceptance, error) {
+	rec, err := prepare(r, s.now())
+	if err != nil {
+		return agentlifecycle.Report{}, "", err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var acc agentlifecycle.Acceptance
+	err = s.withFileLock(func() error {
+		// The reload, the assignment, and the write are all inside one exclusive
+		// file lock. That is the entire point: two hook processes racing here
+		// each see the other's records before choosing a number, so they cannot
+		// choose the same one.
+		if err := s.reload(); err != nil {
+			return err
+		}
+		rec.Sequence = s.ix.nextSequence(rec)
+		a, store, err := s.ix.admit(rec)
+		if err != nil {
+			return err
+		}
+		acc = a
+		if !store {
+			return nil
+		}
+		if err := s.appendLine(rec); err != nil {
+			return err
+		}
+		s.ix.commit(rec)
+		return nil
+	})
+	if err != nil {
+		return agentlifecycle.Report{}, "", err
+	}
+	return rec, acc, nil
+}
+
 func (s *JSONL) Release(r agentlifecycle.Report) (agentlifecycle.Acceptance, error) {
 	if r.Kind != agentlifecycle.KindRelease {
 		return "", fmt.Errorf("%w: release requires kind %q, got %q",

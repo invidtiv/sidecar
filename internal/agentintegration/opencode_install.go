@@ -42,15 +42,20 @@ func (OpenCodeAdapter) Source() string   { return OpenCodeSource }
 
 // Asset returns the bundled plugin with the identity a marker check compares
 // against.
-func (OpenCodeAdapter) Asset() Asset {
-	return Asset{
+func (OpenCodeAdapter) Assets() []Asset {
+	return []Asset{{
 		Name:          OpenCodeAssetName,
 		Source:        OpenCodeSource,
 		SchemaVersion: OpenCodeAssetSchema,
 		Version:       OpenCodeAssetVersion,
+		Ownership:     OwnsFile,
 		Content:       openCodeAsset,
-	}
+	}}
 }
+
+// asset is the single file this integration drops. OpenCode loads whole plugin
+// files from a directory it scans, so there is exactly one and it is Sidecar's.
+func (a OpenCodeAdapter) asset() Asset { return a.Assets()[0] }
 
 // openCodePaths are the exact user-level paths this adapter inspects.
 type openCodePaths struct {
@@ -116,7 +121,7 @@ type openCodeState struct {
 }
 
 func (a OpenCodeAdapter) inspect(env Env) openCodeState {
-	asset := a.Asset()
+	asset := a.asset()
 	p := openCodePathsFor(env)
 	s := openCodeState{
 		env:      env,
@@ -181,11 +186,23 @@ func openCodeAssetStatus(s openCodeState) (agentlifecycle.IntegrationStatus, str
 		// Anything with the asset's name in the directory Sidecar does not own
 		// is damage whether or not Sidecar wrote it: OpenCode loads both
 		// directories, so this file fires every event a second time.
-		if s.owned.Owned {
+		//
+		// Which of the two files Sidecar owns is what decides both the sentence
+		// and the verb that helps, so all four combinations are named rather
+		// than collapsed. The one that used to be missing is a *foreign* file in
+		// the unowned directory while Sidecar's own asset is installed in the
+		// owned one: reporting that as "the asset is installed in both" claimed
+		// ownership of a file Sidecar refuses to touch, and it contradicted the
+		// planner, which refuses that case with foreign_file and therefore
+		// offers no Repair to the user it just told to repair.
+		switch {
+		case s.owned.Owned && s.conflict.Owned:
 			return agentlifecycle.StatusNeedsRepair, "the asset is installed in both " + OpenCodeOwnedDir + "/ and " + OpenCodeConflictDir + "/; OpenCode loads both, so every event is reported twice"
-		}
-		if s.conflict.Owned {
+		case s.conflict.Owned:
 			return agentlifecycle.StatusNeedsRepair, "the asset is installed in " + OpenCodeConflictDir + "/, which Sidecar does not own; move it to " + OpenCodeOwnedDir + "/"
+		case s.owned.Owned:
+			return agentlifecycle.StatusNeedsRepair, "a file that is not Sidecar's occupies " + s.paths.Conflict +
+				"; OpenCode loads it alongside Sidecar's own asset in " + OpenCodeOwnedDir + "/, so every event is reported twice. Sidecar will not modify or remove a file it does not own — remove it yourself"
 		}
 		return agentlifecycle.StatusNotInstalled, "a file that is not Sidecar's occupies " + s.paths.Conflict + "; Sidecar will not modify or remove it"
 	case !s.owned.Exists:

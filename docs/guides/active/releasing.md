@@ -119,6 +119,15 @@ the activated artifact so the next `sidecar` is that build.
 - **Lint:** Go CI runs tests *and* full-codebase `golangci-lint` (linux,
   `GOWORK=off`, v2.12.2). `make lint` is that same command. `go test` alone
   is not the gate.
+- **Agent integration assets:** a bundled asset's bytes may not change without
+  its version constant changing too — authority is granted to a source *at a
+  version*, so unversioned bytes inherit authority nobody qualified and every
+  installed copy keeps reading as `current`. The guard is
+  `TestEveryBundledAssetMatchesItsRecordedGolden` in
+  `internal/agentintegration/asset_golden_test.go`: when it fails, bump the
+  version constant, move the matching `assetVersion` in
+  `internal/agentlifecycle/capabilities.json`, requalify against the recorded
+  traces, and only then update the golden.
 - **Homebrew builds from source** (avoids Gatekeeper warnings). The formula is
   rendered from `packaging/homebrew/sidecar.rb.tmpl`, not sed-edited in place.
 

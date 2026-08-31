@@ -1,0 +1,6 @@
+# ms	event	session	turn	tool	fields
+0	UserPromptSubmit	session-1	turn-1	-	cwd,hook_event_name,model,permission_mode,prompt,session_id,transcript_path,turn_id
+4565	PreToolUse	session-1	turn-1	Bash	cwd,hook_event_name,model,permission_mode,session_id,tool_input,tool_name,tool_use_id,transcript_path,turn_id
+4613	PermissionRequest	session-1	turn-1	Bash	cwd,hook_event_name,model,permission_mode,session_id,tool_input,tool_name,transcript_path,turn_id
+37538	PostToolUse	session-1	turn-1	Bash	cwd,hook_event_name,model,permission_mode,session_id,tool_input,tool_name,tool_response,tool_use_id,transcript_path,turn_id
+43421	Stop	session-1	turn-1	-	cwd,hook_event_name,last_assistant_message,model,permission_mode,session_id,stop_hook_active,transcript_path,turn_id

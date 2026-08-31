@@ -11,6 +11,11 @@ on:
       - ".golangci.yml"
       - "Makefile"
       - ".github/workflows/go-ci.yml"
+      # Bundled integration assets are shipped JavaScript that the Go suite
+      # drives under node. A change to one of them changes what Sidecar
+      # installs into a user's agent, and without this it triggered no CI run
+      # at all.
+      - "internal/agentintegration/assets/**"
   push:
     branches:
       - main
@@ -21,6 +26,7 @@ on:
       - ".golangci.yml"
       - "Makefile"
       - ".github/workflows/go-ci.yml"
+      - "internal/agentintegration/assets/**"
   # Releases gate on a Go CI run for the exact commit being tagged
   # (scripts/check-release-state.sh). A release head is often a docs-only
   # commit — a changelog entry — which the path filters above skip, leaving
@@ -42,8 +48,21 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # The bundled OpenCode integration is shipped JavaScript, and the only
+      # tests that run it need node. They skip when node is absent, so without
+      # this step CI reported green while the asset's lane mapping, its export
+      # surface, and its report ordering went unchecked. SIDECAR_REQUIRE_NODE
+      # turns that skip into a failure, so losing node here breaks the build
+      # rather than quietly stopping the checks.
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
       - name: Test
         run: go test ./...
+        env:
+          SIDECAR_REQUIRE_NODE: "1"
 
   lint:
     runs-on: ubuntu-latest

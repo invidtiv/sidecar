@@ -162,6 +162,46 @@ func TestDiscoveryNeverRunsOnARenderPath(t *testing.T) {
 	}
 }
 
+func TestARouteReachedWithoutDiscoverySaysSoRatherThanClaimingToBeChecking(t *testing.T) {
+	// buildAgentIntegrations used to queue discovery from the render path when
+	// it found the route unchecked — a restored route, or a direct push. The
+	// queue is drained only by a key, a mouse event, or TakePending, so the
+	// route painted "Checking which agents are installed…" over work nothing
+	// was running, and stayed there until the user happened to press something.
+	//
+	// A render path may not start work, so the honest state is "not looked
+	// yet", with the key that looks named on screen.
+	m, _, _ := integrationsFixture(t)
+	m.Open(PageAgents)
+	m.PushChild(ChildAgentIntegrations, "Integrations")
+
+	for i := 0; i < 3; i++ {
+		view := ansi.Strip(m.View(160, 45))
+		if strings.Contains(view, "Checking") {
+			t.Fatalf("the route says it is checking with nothing running:\n%s", view)
+		}
+		if !strings.Contains(view, "Press R") {
+			t.Fatalf("the route does not name the key that checks:\n%s", view)
+		}
+	}
+	if cmd := m.TakePending(); cmd != nil {
+		t.Fatal("rendering queued discovery")
+	}
+	if state := m.agentIntegrations(); state.checking || state.checked {
+		t.Fatalf("rendering changed the route's state: %+v", state)
+	}
+
+	// And the key it names does the work.
+	runIntegrationControl(t, m, regionIntegrationRecheck)
+	settle(t, m)
+	if state := m.agentIntegrations(); !state.checked || len(state.list) == 0 {
+		t.Fatalf("Recheck produced nothing: %+v", state)
+	}
+	if view := ansi.Strip(m.View(160, 45)); !strings.Contains(view, "opencode") {
+		t.Fatalf("the list did not appear after Recheck:\n%s", view)
+	}
+}
+
 func TestTheRouteShowsEveryProviderAndItsHonestState(t *testing.T) {
 	m, _, _ := integrationsFixture(t)
 	view := openIntegrations(t, m)
@@ -170,7 +210,7 @@ func TestTheRouteShowsEveryProviderAndItsHonestState(t *testing.T) {
 			t.Fatalf("the route does not mention %q:\n%s", want, view)
 		}
 	}
-	if !strings.Contains(view, "0 of 4 installed") {
+	if !strings.Contains(view, "0 of 3 installed") {
 		t.Fatalf("the summary is wrong:\n%s", view)
 	}
 }
@@ -298,7 +338,7 @@ func TestInstallingIsConfirmedByNamingTheFilesAndThenActuallyInstalls(t *testing
 	// The route re-reads rather than assuming, so what it shows is what is on
 	// disk.
 	view = ansi.Strip(m.View(160, 45))
-	if !strings.Contains(view, "current") || !strings.Contains(view, "1 of 4 installed") {
+	if !strings.Contains(view, "current") || !strings.Contains(view, "1 of 3 installed") {
 		t.Fatalf("the route did not refresh after the mutation:\n%s", view)
 	}
 }
