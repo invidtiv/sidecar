@@ -178,6 +178,7 @@ export function SessionsScreen() {
         focused={false}
         grow={0}
         basis={`${leftWidth}%`}>
+        <Row>&nbsp;</Row>
         {SESSION_GROUPS.map((group) => (
           <React.Fragment key={group.project}>
             <Row>
@@ -185,8 +186,9 @@ export function SessionsScreen() {
               <span className={tui.bright}>{group.project}</span>
               <span className={tui.subtle}>({group.rows.length})</span>
             </Row>
-            {group.rows.map((r) => (
+            {group.rows.map((r, i) => (
               <React.Fragment key={r.name}>
+                {i > 0 && group.project === 'sidecar' ? <Row>&nbsp;</Row> : null}
                 <Row selected={r.selected}>
                   <span
                     className={r.state === 'live' ? tui.live : undefined}
