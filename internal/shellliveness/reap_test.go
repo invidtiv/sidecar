@@ -177,11 +177,12 @@ func TestReapShellRefusesAResurrectedSession(t *testing.T) {
 	var forgotten []string
 	resurrected, err := ReapShell(
 		func(string) Verdict { return Alive },
-		func(_, session, _ string, _ time.Time) error {
+		func(_, session, _ string, _ time.Time, _ string) error {
 			forgotten = append(forgotten, session)
 			return nil
 		},
 		ReapProbe{Shell: reapShellRecord()},
+		tmuxserver.Present(1, 1, 4242),
 	)
 	if err != nil {
 		t.Fatalf("ReapShell: %v", err)
@@ -198,15 +199,16 @@ func TestReapShellWritesTheTombstoneWithTheObservedIdentity(t *testing.T) {
 	record := reapShellRecord()
 	record.CreatedAt = time.Unix(1700000000, 0)
 
-	var gotRoot, gotSession, gotNamespace string
+	var gotRoot, gotSession, gotNamespace, gotServer string
 	var gotObserved time.Time
 	resurrected, err := ReapShell(
 		func(string) Verdict { return Gone },
-		func(root, session, namespace string, observedAt time.Time) error {
-			gotRoot, gotSession, gotNamespace, gotObserved = root, session, namespace, observedAt
+		func(root, session, namespace string, observedAt time.Time, currentServer string) error {
+			gotRoot, gotSession, gotNamespace, gotObserved, gotServer = root, session, namespace, observedAt, currentServer
 			return nil
 		},
 		ReapProbe{Shell: record},
+		tmuxserver.Present(1, 1, 4242),
 	)
 	if err != nil || resurrected {
 		t.Fatalf("ReapShell: resurrected=%v err=%v", resurrected, err)
@@ -218,13 +220,47 @@ func TestReapShellWritesTheTombstoneWithTheObservedIdentity(t *testing.T) {
 		t.Errorf("forget(%q, %q, %q, %v) does not describe the observed record",
 			gotRoot, gotSession, gotNamespace, gotObserved)
 	}
+	// The server identity has to reach the writer, because it is what the writer
+	// uses to decide between tombstoning a closed terminal and preserving the
+	// record of a shell whose server died underneath it.
+	if gotServer != "pid=4242" {
+		t.Errorf("forget received server %q, want pid=4242", gotServer)
+	}
+}
+
+// TestReapShellPassesAnAbsentServerAsNoIdentity pins the signal the writer needs
+// for the incident case: when no tmux server is running there is no id to pass,
+// and the empty string is what tells the writer that nothing can be shown to
+// have exited.
+func TestReapShellPassesAnAbsentServerAsNoIdentity(t *testing.T) {
+	var gotServer string
+	seen := false
+	_, err := ReapShell(
+		func(string) Verdict { return Gone },
+		func(_, _, _ string, _ time.Time, currentServer string) error {
+			gotServer, seen = currentServer, true
+			return nil
+		},
+		ReapProbe{Shell: reapShellRecord()},
+		tmuxserver.Absent(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !seen {
+		t.Fatal("the writer was never called")
+	}
+	if gotServer != "" {
+		t.Errorf("an absent server must produce no id, got %q", gotServer)
+	}
 }
 
 func TestReapShellReportsAFailedWrite(t *testing.T) {
 	_, err := ReapShell(
 		func(string) Verdict { return Gone },
-		func(string, string, string, time.Time) error { return fmt.Errorf("manifest locked") },
+		func(string, string, string, time.Time, string) error { return fmt.Errorf("manifest locked") },
 		ReapProbe{Shell: reapShellRecord()},
+		tmuxserver.Present(1, 1, 4242),
 	)
 	if err == nil {
 		t.Fatal("a failed tombstone write was reported as success")

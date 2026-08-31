@@ -252,6 +252,92 @@ func (m *ShellManifest) EnsureShells(defs []ShellDefinition) (bool, error) {
 	return changed, err
 }
 
+// MarkRestoreEligible records that one shell is running under this tmux server.
+//
+// It writes only on a transition — a record already marked eligible under the
+// same server is left completely alone, timestamp included — so the marker costs
+// one write per shell per tmux-server lifetime rather than one per observation.
+func (m *ShellManifest) MarkRestoreEligible(tmuxName, serverID string, now time.Time) error {
+	if tmuxName == "" || serverID == "" {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.mutateLocked(func(shells []ShellDefinition) ([]ShellDefinition, bool) {
+		for i, s := range shells {
+			if s.TmuxName != tmuxName {
+				continue
+			}
+			if s.Restore != nil && s.Restore.Eligible && s.Restore.LastSeenServer == serverID {
+				return shells, false
+			}
+			next := shellstate.RestoreState{}
+			if s.Restore != nil {
+				next = *s.Restore
+			}
+			next.Eligible = true
+			next.LastSeenServer = serverID
+			next.LastSeenAliveAt = now
+			s.Restore = &next
+			shells[i] = s
+			return shells, true
+		}
+		return shells, false
+	})
+}
+
+// ReapShell retires a shell whose tmux session is gone, and declines to delete
+// the record when it was the tmux server that went away rather than the shell.
+//
+// This surface reaps per shell, driven by one capture failing, and it has no
+// equivalent of the global browser's empty-listing guard — there is no listing
+// here to be empty. That makes it the path most exposed to the failure this work
+// exists to fix: when a server dies, every shell's capture fails at once, and a
+// per-shell "this one is dead" conclusion, applied N times, empties the file.
+//
+// The rule is the same one shellstate.ForgetOrPreserveAtPath applies for the
+// other surface, and it is stated here rather than delegated because this
+// manifest has its own serializer and its own lock. A record whose last-confirmed
+// server is not the one running now, or that is being judged with no server
+// running at all, is preserved and marked as a cold-restore candidate. Only a
+// shell that vanished inside a server that is still up is tombstoned, because
+// that is a terminal someone closed.
+func (m *ShellManifest) ReapShell(tmuxName, currentServer string) (shellstate.ReapOutcome, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	outcome := shellstate.ReapAbsent
+	err := m.mutateLockedKind(true, func(shells []ShellDefinition) ([]ShellDefinition, bool) {
+		for i, s := range shells {
+			if s.TmuxName != tmuxName {
+				continue
+			}
+			lastSeen := ""
+			if s.Restore != nil {
+				lastSeen = s.Restore.LastSeenServer
+			}
+			if currentServer == "" || (lastSeen != "" && lastSeen != currentServer) {
+				outcome = shellstate.ReapPreserved
+				if s.Restore != nil && s.Restore.Eligible {
+					return shells, false
+				}
+				next := shellstate.RestoreState{}
+				if s.Restore != nil {
+					next = *s.Restore
+				}
+				next.Eligible = true
+				s.Restore = &next
+				shells[i] = s
+				return shells, true
+			}
+			outcome = shellstate.ReapTombstoned
+			m.Tombstones = appendWorkspaceTombstone(m.Tombstones, s)
+			return append(shells[:i], shells[i+1:]...), true
+		}
+		return shells, false
+	})
+	return outcome, err
+}
+
 // RemoveShell moves a shell by tmuxName into tombstones and saves.
 func (m *ShellManifest) RemoveShell(tmuxName string) error {
 	m.mu.Lock()

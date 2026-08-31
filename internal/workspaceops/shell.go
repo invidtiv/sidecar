@@ -132,6 +132,73 @@ func ForgetManagedShell(projectRoot, sessionName, namespace string, observedAt t
 	)
 }
 
+// ReapManagedShell is what a liveness pass calls instead of ForgetManagedShell.
+//
+// It is the same conditional write with one question asked first: did this shell
+// exit, or did its tmux server? When the server is gone or has been replaced,
+// the record is kept and marked as a cold-restore candidate instead of being
+// tombstoned, because a session that vanished along with the process hosting it
+// has not been closed by anyone — it is exactly what a cold restore exists to
+// bring back.
+//
+// This is the fix for the failure mode that destroyed a user's sidecar and braid
+// shell records: when a server dies, every session disappears in the same
+// instant, and a per-shell "is this one gone?" question has no true answer.
+// Answering it anyway tombstones the whole file. Routing the liveness path
+// through here means a server death can no longer produce a deletion at all,
+// rather than being guarded against producing one.
+//
+// currentServer is the tmux server observed at the moment of the write, as a
+// "pid=N" id from tmuxserver.Incarnation.ServerID, or empty when no server is
+// running.
+func ReapManagedShell(projectRoot, sessionName, namespace string, observedAt time.Time, currentServer string) (shellstate.ReapOutcome, error) {
+	projectDir, err := projectdir.Resolve(projectRoot)
+	if err != nil {
+		return shellstate.ReapAbsent, err
+	}
+	return shellstate.ForgetOrPreserveAtPath(
+		filepath.Join(projectDir, "shells.json"),
+		shellstate.Identity{TmuxName: sessionName, Namespace: namespace},
+		observedAt,
+		currentServer,
+	)
+}
+
+// ReapManagedShellFunc adapts ReapManagedShell to shellliveness.ForgetFunc.
+//
+// The outcome is dropped here rather than never produced: ReapManagedShell
+// returns it because preserved-versus-tombstoned is the fact worth asserting on
+// in a test, while the liveness surfaces need only success or failure — a
+// preserved record simply reappears as an offline row on the next refresh, which
+// is the correct display for a cold-restore candidate.
+func ReapManagedShellFunc(projectRoot, sessionName, namespace string, observedAt time.Time, currentServer string) error {
+	_, err := ReapManagedShell(projectRoot, sessionName, namespace, observedAt, currentServer)
+	return err
+}
+
+// ObserveManagedShellsLive records that these sessions are running under this
+// tmux server, which is what makes them cold-restore candidates later.
+//
+// It writes only when a shell's marker actually changes, so calling it once per
+// refresh cycle costs one manifest read and, in the steady state, no write.
+func ObserveManagedShellsLive(projectRoot, namespace, currentServer string, sessionNames []string, now time.Time) (int, error) {
+	if currentServer == "" || len(sessionNames) == 0 {
+		return 0, nil
+	}
+	projectDir, err := projectdir.Resolve(projectRoot)
+	if err != nil {
+		return 0, err
+	}
+	ids := make([]shellstate.Identity, 0, len(sessionNames))
+	for _, name := range sessionNames {
+		if strings.TrimSpace(name) == "" {
+			continue
+		}
+		ids = append(ids, shellstate.Identity{TmuxName: name, Namespace: namespace})
+	}
+	return shellstate.ObserveLiveAtPath(filepath.Join(projectDir, "shells.json"), currentServer, ids, now)
+}
+
 // RestoreManagedShell moves a forgotten shell record back onto the project's
 // live list. It does not start a tmux session.
 func RestoreManagedShell(projectRoot, sessionName, namespace string) (shellstate.Definition, error) {

@@ -442,7 +442,7 @@ func (r *reapRecorder) probeCount() int {
 	return len(r.probes)
 }
 
-func (r *reapRecorder) forget(_, session, _ string, _ time.Time) error {
+func (r *reapRecorder) forget(_, session, _ string, _ time.Time, _ string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.forgotten = append(r.forgotten, session)

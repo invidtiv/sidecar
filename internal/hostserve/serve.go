@@ -146,7 +146,7 @@ type Options struct {
 	// Namespace reports which tmux server this host's shell records belong to;
 	// a record in another namespace is invisible to the pane listing and is
 	// never judged. ProbeShell is the independent second opinion. ForgetShell
-	// writes the tombstone — workspaceops.ForgetManagedShell in production,
+	// writes the tombstone — workspaceops.ReapManagedShellFunc in production,
 	// which is the browser's writer, not a second one.
 	Namespace   func() string
 	ProbeShell  shellliveness.ProbeFunc
@@ -202,7 +202,7 @@ func (o Options) withDefaults() Options {
 		o.ProbeShell = shellliveness.ProbeSession
 	}
 	if o.ForgetShell == nil {
-		o.ForgetShell = workspaceops.ForgetManagedShell
+		o.ForgetShell = workspaceops.ReapManagedShellFunc
 	}
 	if o.Hostname == nil {
 		o.Hostname = func() string {

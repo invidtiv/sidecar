@@ -33,7 +33,8 @@ import (
 var (
 	shellLivenessProbe  = shellliveness.ProbeSession
 	shellLivenessServer = tmuxserver.Socket
-	forgetShell         = workspaceops.ForgetManagedShell
+	forgetShell         = workspaceops.ReapManagedShellFunc
+	observeShellsLive   = workspaceops.ObserveManagedShellsLive
 )
 
 type (
@@ -81,13 +82,67 @@ func (m *Model) observeTmuxServer(inc tmuxserver.Incarnation) {
 // shape of this surface's evidence: the single `tmux list-panes -a` the refresh
 // cycle already took, and the cached per-project inventory it was correlated
 // against.
+// observedTmuxServer is the socket identity qualified with the server pid this
+// refresh's pane listing reported.
+//
+// The socket alone is not enough for anything that gets written down. Its inode
+// and ctime are rewritten by tmux whenever the set of attached clients changes,
+// so a persisted marker keyed on them reads as a server replacement the moment a
+// user attaches a client. The pid is stable for the server's life and new after
+// a restart, and the listing already carries it, so qualifying the identity here
+// costs nothing and is what makes the eligibility marker trustworthy.
+func (m *Model) observedTmuxServer() tmuxserver.Incarnation {
+	socket := shellLivenessServer()
+	for _, pane := range m.currentPanes {
+		if pane.ServerPID > 0 {
+			return tmuxserver.Combine(socket, pane.ServerPID)
+		}
+	}
+	return socket
+}
+
+// markShellsRestoreEligible records that these shells were running under this
+// tmux server, so a later cold restore can tell a shell that died with its
+// server from one nobody had open.
+//
+// It runs off the reap observation rather than taking its own listing, and the
+// writer beneath it skips the file entirely when no marker changes, so the
+// steady-state cost of this call is one manifest read per project per refresh
+// and no writes at all. It deliberately reuses the reap guards' notion of a
+// usable listing: a failed or empty listing is not evidence of death, and it is
+// not evidence of life either.
+func (m *Model) markShellsRestoreEligible(obs shellliveness.ReapObservation) {
+	server := obs.Server.ServerID()
+	if server == "" {
+		return
+	}
+	live := shellliveness.LiveShells(obs)
+	if len(live) == 0 {
+		return
+	}
+	byRoot := map[string][]string{}
+	namespaces := map[string]string{}
+	for _, shell := range live {
+		byRoot[shell.ProjectRoot] = append(byRoot[shell.ProjectRoot], shell.TmuxName)
+		namespaces[shell.ProjectRoot] = shell.Namespace
+	}
+	now := time.Now().UTC()
+	for root, names := range byRoot {
+		if _, err := observeShellsLive(root, namespaces[root], server, names, now); err != nil {
+			// A marker is an optimization for a future restore, never a
+			// precondition for anything happening now. Trace it and carry on.
+			m.tracef("shell restore eligibility for %s: %v", root, err)
+		}
+	}
+}
+
 func (m *Model) reapDeadShells() tea.Cmd {
 	obs := shellliveness.ReapObservation{
 		// Socket-stat is how a Sidecar running outside tmux notices a restart
 		// on this inventory pass. PlanReap records it before its own guards, so
 		// a vanished server resets the tracker even on a cycle that decides
 		// nothing.
-		Server:        shellLivenessServer(),
+		Server:        m.observedTmuxServer(),
 		Namespace:     tmuxenv.Namespace(),
 		ListingFailed: m.tmuxErr != nil,
 		Now:           time.Now(),
@@ -116,6 +171,13 @@ func (m *Model) reapDeadShells() tea.Cmd {
 			})
 		}
 	}
+
+	// Record cold-restore eligibility from the same listing, before the reap
+	// decision and regardless of it. A shell confirmed running under this server
+	// is what makes it a restore candidate if the server later dies, and this is
+	// the cheapest possible place to notice: the listing is already in hand, and
+	// the write below is skipped entirely unless a marker actually changes.
+	m.markShellsRestoreEligible(obs)
 
 	plan := shellliveness.PlanReap(m.shellLivenessTracker(), obs)
 	if plan.Skipped != "" {
@@ -150,7 +212,7 @@ func (m *Model) applyShellProbe(msg shellProbedMsg) tea.Cmd {
 	m.syncBoard()
 	probe := msg.Probe
 	return func() tea.Msg {
-		resurrected, err := shellliveness.ReapShell(shellLivenessProbe, forgetShell, probe)
+		resurrected, err := shellliveness.ReapShell(shellLivenessProbe, forgetShell, probe, shellLivenessServer())
 		// A resurrected shell leaves the manifest alone; the next refresh
 		// re-reads shells.json and restores the row.
 		return shellForgottenMsg{

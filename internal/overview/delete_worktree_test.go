@@ -419,7 +419,7 @@ func TestGlobalWorktreeDeleteLeavesTheShellManifestAlone(t *testing.T) {
 
 	forgotten := 0
 	restoreForget := forgetShell
-	forgetShell = func(string, string, string, time.Time) error { forgotten++; return nil }
+	forgetShell = func(string, string, string, time.Time, string) error { forgotten++; return nil }
 	restoreDelete := execDeleteWorktree
 	execDeleteWorktree = func(context.Context, workspaceops.WorktreeRemoval) error { return nil }
 	t.Cleanup(func() { forgetShell, execDeleteWorktree = restoreForget, restoreDelete })

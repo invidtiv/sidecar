@@ -34,6 +34,7 @@ import (
 	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/termpanes"
 	"github.com/marcus/sidecar/internal/termpreview"
+	"github.com/marcus/sidecar/internal/tmuxserver"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/workspacecreate"
@@ -646,7 +647,14 @@ type Plugin struct {
 	shellStartupHooks    shellStartupHooks
 	// shellLiveness holds what this surface has observed about each shell's
 	// tmux session, so a dead one closes and a hiccup does not (td-6a4100).
-	shellLiveness       *shellliveness.Tracker
+	shellLiveness *shellliveness.Tracker
+	// restoreMarked remembers which shells have had their cold-restore
+	// eligibility recorded under which tmux server, so the marker costs no
+	// syscalls once written. restoreServerSocket/restoreServerID cache the one
+	// `tmux display-message` needed to qualify the socket identity with a pid.
+	restoreMarked       map[string]string
+	restoreServerSocket tmuxserver.Incarnation
+	restoreServerID     string
 	shellStartupEpoch   uint64
 	shellStartupVersion uint64
 	shellStartupLoading bool

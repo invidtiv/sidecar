@@ -35,7 +35,17 @@ const (
 type Pane struct {
 	ID, Session, Path, Command, Title string
 	PID                               int
-	Dead                              bool
+	// ServerPID is the pid of the tmux server that listed this pane, from the
+	// server-scoped `#{pid}` format. It is the same for every pane in one
+	// listing and it is here because it is free: the refresh already takes this
+	// listing, so carrying the server identity on it is what lets shell
+	// cold-restore eligibility be recorded without a single extra tmux spawn.
+	//
+	// Unlike the socket's inode and ctime, a server pid is stable for the
+	// server's whole lifetime and new after a restart, which is what makes it
+	// the part of the identity that may be written to disk.
+	ServerPID int
+	Dead      bool
 }
 
 type Workspace struct {
@@ -422,7 +432,7 @@ func (c Collector) Metrics() MetricsSnapshot {
 // ListPanes takes the single global tmux inventory used by an Overview refresh.
 func (c Collector) ListPanes(ctx context.Context) ([]Pane, error) {
 	c = c.defaults()
-	out, err := c.Runner.Output(ctx, "tmux", "list-panes", "-a", "-F", "#{pane_id}\t#{session_name}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_title}\t#{pane_dead}\t#{pane_pid}")
+	out, err := c.Runner.Output(ctx, "tmux", "list-panes", "-a", "-F", "#{pane_id}\t#{session_name}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_title}\t#{pane_dead}\t#{pane_pid}\t#{pid}")
 	if err != nil {
 		message := strings.ToLower(string(out))
 		if strings.Contains(message, "no server running") || strings.Contains(message, "no sessions") ||
@@ -436,13 +446,20 @@ func (c Collector) ListPanes(ctx context.Context) ([]Pane, error) {
 		if line == "" {
 			continue
 		}
-		parts := strings.SplitN(line, "\t", 7)
+		// The trailing fields are read defensively by index rather than by an
+		// exact count, so a listing from an older format string — a fixture, or a
+		// tmux too old to answer one of them — still yields the fields it does
+		// have instead of being discarded whole.
+		parts := strings.SplitN(line, "\t", 8)
 		if len(parts) < 6 {
 			continue
 		}
 		p := Pane{ID: parts[0], Session: parts[1], Path: filepath.Clean(parts[2]), Command: parts[3], Title: parts[4], Dead: parts[5] == "1"}
-		if len(parts) == 7 {
+		if len(parts) >= 7 {
 			p.PID, _ = strconv.Atoi(strings.TrimSpace(parts[6]))
+		}
+		if len(parts) >= 8 {
+			p.ServerPID, _ = strconv.Atoi(strings.TrimSpace(parts[7]))
 		}
 		// The pane hosting this process never enters the inventory. Correlation
 		// is by cwd, so without this a sidecar launched from a plain shell in
