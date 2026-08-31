@@ -215,8 +215,18 @@ func Resolve(in Input) Decision {
 		// different problem from one that was never installed, and it is the
 		// one worth naming: it tells the user their agent's state just stopped
 		// being deterministic, rather than that it never was.
+		//
+		// The identity check is what makes the claim true. Latest is the newest
+		// report for the *pane*, not for this run, so it can easily be a
+		// leftover from a previous run, a replaced process, or a recycled pane
+		// ID after a server restart. Reporting "your integration was removed
+		// mid-run" for one of those sends the reader looking for a missing file
+		// that was never there. Without a matching report, the honest answer is
+		// the plain tier reason.
 		if tierReason == ReasonNoIntegration && in.Latest != nil {
-			return fallback(ReasonIntegrationRemovedMid)
+			if _, ok := identityMismatch(in.Live, in.Latest.Identity); ok {
+				return fallback(ReasonIntegrationRemovedMid)
+			}
 		}
 		return fallback(tierReason)
 	}
