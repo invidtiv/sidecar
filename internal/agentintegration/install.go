@@ -439,7 +439,9 @@ type Adapter interface {
 }
 
 // DefaultAdapters returns the adapters this build ships.
-func DefaultAdapters() []Adapter { return []Adapter{OpenCodeAdapter{}} }
+func DefaultAdapters() []Adapter {
+	return []Adapter{OpenCodeAdapter{}, CodexAdapter{}, ClaudeAdapter{}}
+}
 
 // Service is the application service behind the CLI and the Configuration
 // route.

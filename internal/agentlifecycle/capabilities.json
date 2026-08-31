@@ -35,52 +35,46 @@
     "schemaVersion": 1,
     "provider": "codex",
     "source": "sidecar.codex.hooks",
-    "assetVersion": "0",
-    "tier": "advisory",
+    "assetVersion": "1",
+    "tier": "session-identity",
     "evidence": "docs-only",
     "minProviderVersion": "0.151.0",
     "testedProviderRange": "",
     "covered": [
-      "work_start",
-      "tool_use",
-      "blocked_on_request",
-      "turn_complete",
-      "cancelled",
-      "session_identity",
-      "subagent",
-      "process_exit"
+      "session_identity"
     ],
     "knownGaps": [
-      "No Sidecar trace was captured. Every transition above is read from the upstream HookEventName schema, not observed.",
-      "Hooks are disabled by default behind features.hooks, so an integration must modify config.toml as well as install a hook file: two owned mutations rather than one.",
-      "Unblocking has no explicit resolution event and must be inferred from PostToolUse.",
+      "The shipped asset is a single SessionStart hook: session identity only, by design. The broader HookEventName vocabulary (work, tools, blocking, cancellation, subagents, exit) exists upstream but nothing shipped exercises it, so no lifecycle transition is claimed and screen/process detection stays the sole lifecycle authority.",
+      "No Sidecar lifecycle trace was captured. The event vocabulary and payload fields were read from the installed codex-cli 0.151.0 binary and the codex-rs source, which is stronger than documentation prose but is not an observed trace.",
+      "Hooks are disabled by default behind features.hooks, so the integration must edit config.toml as well as hooks.json: three owned mutations (entry, feature flag, trust record) rather than one. Uninstall deliberately leaves features.hooks on, because other installed hooks may depend on it.",
+      "Codex only auto-runs hooks whose trusted_hash in config.toml matches a hash of the hook's normalized identity; an untrusted hook triggers an interactive 'Hooks need review' prompt (observed live on 0.151.0), where 'Trust all and continue' makes Codex write the record itself. Sidecar pre-writes the record using the algorithm reproduced from codex-rs and verified byte-for-byte against a live 0.151.0 trust record, so no prompt appears; the algorithm is a provider implementation detail, not a published contract, and if it drifts on a future version the failure mode is that visible one-time prompt, not a silent loss.",
+      "Trust records are keyed by the hook's position in hooks.json (path:event:group:hook). Any edit that reorders groups — by the user, or by Sidecar removing its own group when others follow it — silently invalidates the trust records of the hooks that shifted, and Codex re-prompts for them.",
+      "The integration manages ~/.codex only; a CODEX_HOME override relocates the provider's configuration where the installer does not look.",
       "Herdr shipped a full-lifecycle Codex hook set through eight asset versions and then deliberately removed it, retaining SessionStart for session identity only. That rollback is unexplained by the published contract and must be reproduced or refuted before Codex is trusted for state."
     ],
     "orderingGuaranteed": false,
     "sourceDoc": "https://developers.openai.com/codex/config-reference",
-    "sourceVersionNote": "codex-cli 0.151.0 installed locally but not traced. The published config-reference URL redirects and truncates before the hooks section; the authoritative contract is codex-rs/app-server-protocol HookEventName plus the generated JSON schemas."
+    "sourceVersionNote": "codex-cli 0.151.0 installed locally; hook event vocabulary and payload fields read from the installed binary and codex-rs source, and the trusted_hash algorithm verified against a live 0.151.0 trust record, but no lifecycle trace captured. The published config-reference URL redirects and truncates before the hooks section; the authoritative contract is codex-rs/app-server-protocol HookEventName plus the generated JSON schemas."
   },
   {
     "schemaVersion": 1,
     "provider": "claude",
     "source": "sidecar.claude.hooks",
-    "assetVersion": "0",
+    "assetVersion": "1",
     "tier": "session-identity",
     "evidence": "docs-only",
     "minProviderVersion": "2.1.0",
     "testedProviderRange": "",
     "covered": [
-      "work_start",
-      "tool_use",
-      "blocked_on_request",
-      "session_identity",
-      "subagent",
-      "process_exit"
+      "session_identity"
     ],
     "knownGaps": [
+      "The shipped asset is a single SessionStart hook entry: session identity only, by design. Claude publishes further hook events (work, tools, blocking, subagents, exit) but nothing shipped exercises them, so no lifecycle transition is claimed and screen/process detection stays the sole lifecycle authority.",
+      "No Sidecar lifecycle trace was captured. The event list and payload fields were read from the installed claude 2.1.220 binary's documentation surface, not observed.",
       "No user-cancellation event exists at all. This is a contract gap rather than a tracing gap, and it alone prevents full lifecycle authority: a state machine driven only by these hooks latches on working when the user interrupts a turn.",
       "Stop means stopped generating, not ready for input, so turn completion cannot be taken from it without reconciliation against screen state.",
-      "Hook configuration merges additively across five layers, so Sidecar can add entries but can never own the effective hook set.",
+      "Hook configuration merges additively across five layers (enterprise, project, local, user, plugin), so Sidecar can own exactly its one entry in ~/.claude/settings.json and can never own the effective hook set; another layer can add, but not remove, hooks beside it.",
+      "The integration manages ~/.claude/settings.json only; a CLAUDE_CONFIG_DIR override relocates the provider's configuration where the installer does not look.",
       "Herdr shipped a full-lifecycle Claude hook set and then removed it, keeping only SessionStart for session identity, citing missed permission results and escape interrupts."
     ],
     "orderingGuaranteed": false,

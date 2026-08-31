@@ -28,7 +28,7 @@ This is enforced rather than documented. `Capability.TierFor` polices every tier
 | Provider | Version seen | Evidence | Tier now | Herdr's tier | Blocking gap |
 | --- | --- | --- | --- | --- | --- |
 | OpenCode | 1.18.23, 1.18.25 | real-trace | `full` | lifecycle authority | none blocking; see gaps below |
-| Codex | 0.151.0 | docs-only | `advisory` | session only | no traces; feature-flagged off |
+| Codex | 0.151.0 | docs-only | `session-identity` | session only | shipped hook is SessionStart only; lifecycle untraced |
 | Claude Code | 2.1.220 | docs-only | `session-identity` | session only | no cancellation event exists |
 | Pi | 0.84.3 | docs-only | `session-identity` | lifecycle authority | no portable blocked signal |
 
@@ -112,6 +112,8 @@ Codex has the best-shaped event set of the four on paper. Twelve events close th
 
 Two things keep it out of the steel-thread position. Hooks are disabled by default behind `features.hooks`, so an integration must modify `config.toml` as well as install a hook file, which is two owned mutations instead of one. And Herdr, having shipped a Codex integration through eight asset versions, deliberately removed its `PreToolUse`/`working`, `PermissionRequest`/`blocked` and `Stop`/`idle` hooks and now installs only `SessionStart` for session identity. That rollback is not explained by anything in the published contract, and it should be reproduced or refuted empirically before Codex is trusted for state.
 
+**What ships (asset version 1):** a single `SessionStart` entry in `~/.codex/hooks.json` invoking `sidecar agent report-session --kind codex --hook-stdin` (fixed argv, payload on stdin, no matcher key — Codex groups carry none), `features.hooks = true` in `config.toml`, and a `[hooks.state]` trust record. Codex only auto-runs a hook whose `trusted_hash` matches its normalized identity; an untrusted hook raises an interactive "Hooks need review" prompt (observed live on 0.151.0). Sidecar pre-writes the record with the algorithm reproduced from codex-rs (`hook_hash` + `version_for_toml`: sha256 over the key-sorted canonical JSON of `{"event_name","hooks":[normalized handler]}`) and verified byte-for-byte against a live 0.151.0 record; if the algorithm drifts on a future version, the failure mode is that visible one-time prompt. The trust key is positional (`<hooks.json path>:session_start:<group>:<hook>`), so edits that reorder `hooks.json` invalidate trust records for every hook that shifted. The tier is `session-identity` because that is all the shipped hook exercises — the wider event vocabulary stays unclaimed until Phase D traces it.
+
 ## Claude Code
 
 **Source:** <https://code.claude.com/docs/en/hooks>. **Not traced.**
@@ -121,6 +123,8 @@ Claude Code has by far the richest event surface, including the best subagent mo
 Two further limits matter. `Stop` means "stopped generating", not "ready for input", so completion cannot be taken from it without reconciliation against screen state. And hook configuration merges additively across five layers, so Sidecar can add entries but can never own the effective hook set.
 
 Herdr shipped a full-lifecycle Claude hook set and then removed it, keeping only `SessionStart`, citing missed permission results and escape interrupts. Sidecar should reach the same place deliberately: Claude Code is a strong `advisory` candidate whose events reconcile against screen state, and a strong `session-identity` source today.
+
+**What ships (asset version 1):** a single `SessionStart` group in `~/.claude/settings.json` — matcher `"*"`, one entry invoking `sidecar agent report-session --kind claude --hook-stdin` (fixed argv, payload on stdin). The installer owns exactly that entry, identified by its command being an invocation of Sidecar's own report-session verb; every other setting and hook in the file is preserved token-for-token and in order, and uninstall removes only the entry and any container it alone occupied. The tier is `session-identity` because that is all the shipped entry exercises.
 
 ## Pi
 

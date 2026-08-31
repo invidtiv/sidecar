@@ -219,8 +219,21 @@ func focusIntegration(t *testing.T, m *Model, provider string) int {
 			continue
 		}
 		m.detailFocus = true
-		m.focusControlByID(regionIntegrationRow + itoa(i))
-		m.View(160, 45)
+		// Focus, render, and re-anchor once. The row cursor is a *position*
+		// among the cursor-visitable controls of the previous frame, and the
+		// previously focused row's action pills are cursor controls too: when
+		// focus leaves that row its pills vanish, every later row shifts up by
+		// the pill count, and a single focus lands on the wrong provider. Rows
+		// before the target are unfocused after the first render, so the
+		// second anchoring is computed against a pill-free prefix and
+		// converges.
+		for range [2]int{} {
+			m.focusControlByID(regionIntegrationRow + itoa(i))
+			m.View(160, 45)
+		}
+		if m.focusedID != regionIntegrationRow+itoa(i) {
+			t.Fatalf("focus landed on %q, want row %d (%s)", m.focusedID, i, provider)
+		}
 		return i
 	}
 	t.Fatalf("no row for %q", provider)
