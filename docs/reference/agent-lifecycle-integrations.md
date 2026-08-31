@@ -46,6 +46,8 @@ Status is decided by inspecting the installed files, never by trusting a version
 
 The status maps onto an authority tier through the capability registry: `needs-repair`, `not-installed`, `provider-missing`, and `unsupported` all resolve to screen fallback, so a damaged integration never authors a lane.
 
+`status` also reports the newest record the source has written on this machine — its lane or terminal outcome, its sequence, the pane, and how long ago. That is the difference between *installed* and *working*, which are not the same claim: an integration can be `current` at tier `full` and have never reported anything, because reports only come from agents launched in a Sidecar-managed shell after it was installed. The summary deliberately omits the run id and the salted session fingerprint, which answer no question being asked here.
+
 ### Which verb applies when
 
 The verbs are distinct because a verb should mean what the user believes the situation to be. All three mutating verbs converge on the same target state — exactly one Sidecar-owned asset, at the bundled version, in the directory Sidecar owns — and differ only in which starting states they accept.

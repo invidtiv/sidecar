@@ -543,6 +543,16 @@ func integrationDetail(st agentintegration.Status, home string) string {
 		}
 		parts = append(parts, "Files: "+strings.Join(shown, ", ")+".")
 	}
+	if r := st.LastReport; r != nil {
+		what := string(r.State)
+		if r.Kind != agentlifecycle.KindState {
+			what = string(r.Kind)
+			if r.Outcome != "" {
+				what += " " + string(r.Outcome)
+			}
+		}
+		parts = append(parts, fmt.Sprintf("Last report: %s on pane %s, %s ago.", what, r.PaneID, r.Age))
+	}
 	if n := len(st.KnownGaps); n > 0 {
 		gaps := "1 known gap"
 		if n > 1 {

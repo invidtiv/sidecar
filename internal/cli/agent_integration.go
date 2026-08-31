@@ -340,6 +340,18 @@ func writeIntegrationStatusText(env Env, st agentintegration.Status) {
 		line("provider cli", "not found on PATH")
 	}
 	line("message", st.Message)
+	if r := st.LastReport; r != nil {
+		// The difference between "installed" and "working", which are not the
+		// same claim and are what someone runs this command to tell apart.
+		what := string(r.State)
+		if r.Kind != agentlifecycle.KindState {
+			what = string(r.Kind)
+			if r.Outcome != "" {
+				what += " " + string(r.Outcome)
+			}
+		}
+		line("last report", fmt.Sprintf("%s seq %d on pane %s, %s ago (%s)", what, r.Sequence, r.PaneID, r.Age, r.Reason))
+	}
 
 	for i, file := range st.Files {
 		if i == 0 {

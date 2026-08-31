@@ -13,8 +13,12 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
+	"github.com/marcus/sidecar/internal/agentactivity"
 	"github.com/marcus/sidecar/internal/agentlifecycle"
+	"github.com/marcus/sidecar/internal/agentlifecycle/lifecyclestore"
+	"github.com/marcus/sidecar/internal/config"
 )
 
 // The integration installer.
@@ -291,6 +295,11 @@ type Env struct {
 	ProviderVersion func(provider string) string
 	// UID is the user this process runs as, compared against file ownership.
 	UID int
+	// StateDir is Sidecar's host-local state directory, where the lifecycle log
+	// lives. Empty means the last report is simply not reported: an integration
+	// that has never been used has none anyway, and a status command must not
+	// fail because a log is missing.
+	StateDir string
 }
 
 // OSEnv returns the real machine.
@@ -301,6 +310,7 @@ func OSEnv() Env {
 		LookPath:        exec.LookPath,
 		ProviderVersion: detectProviderVersion,
 		UID:             os.Getuid(),
+		StateDir:        config.StateDir(),
 	}
 }
 
@@ -340,6 +350,72 @@ type Status struct {
 	Files []FileState `json:"files,omitempty"`
 	// Offered lists the actions that would not be refused right now.
 	Offered []Action `json:"offered,omitempty"`
+	// LastReport is the newest record this source has written on this machine.
+	//
+	// It is the difference between "the integration is installed" and "the
+	// integration is working", which are not the same claim and are exactly what
+	// someone opens this surface to tell apart.
+	LastReport *ReportSummary `json:"lastReport,omitempty"`
+}
+
+// ReportSummary is what a surface shows about a source's newest report.
+//
+// It is a summary rather than the record because a record carries identity
+// fields — a salted session fingerprint, a run id — that answer no question a
+// human is asking here, and the rule for this data is to carry the minimum that
+// serves the purpose.
+type ReportSummary struct {
+	Kind     agentlifecycle.Kind       `json:"kind"`
+	State    agentactivity.State       `json:"state,omitempty"`
+	Outcome  agentlifecycle.Outcome    `json:"outcome,omitempty"`
+	Reason   agentlifecycle.ReasonCode `json:"reason,omitempty"`
+	Sequence uint64                    `json:"sequence"`
+	// ObservedAt and Age are both reported: the timestamp for a caller
+	// computing against it, the rendered age for a human reading it.
+	ObservedAt time.Time `json:"observedAt"`
+	Age        string    `json:"age"`
+	PaneID     string    `json:"paneId,omitempty"`
+	Version    string    `json:"sourceVersion,omitempty"`
+}
+
+// lastReportFor returns the newest record a source wrote, or nil.
+//
+// The read is [lifecyclestore.ReadAll], which never locks, repairs, or creates
+// anything: a status command must not contend with the hook processes appending
+// to the log, and must not be able to damage it. Every failure yields nil,
+// because "there is no last report" and "the log could not be read" both mean
+// the same thing to a surface that is only reporting it.
+func lastReportFor(stateDir, source string) *ReportSummary {
+	if stateDir == "" || source == "" {
+		return nil
+	}
+	records, err := lifecyclestore.ReadAll(filepath.Join(stateDir, lifecyclestore.FileName))
+	if err != nil {
+		return nil
+	}
+	var newest *agentlifecycle.Report
+	for i := range records {
+		if records[i].Source != source {
+			continue
+		}
+		if newest == nil || records[i].ObservedAt.After(newest.ObservedAt) {
+			newest = &records[i]
+		}
+	}
+	if newest == nil {
+		return nil
+	}
+	return &ReportSummary{
+		Kind:       newest.Kind,
+		State:      newest.State,
+		Outcome:    newest.Outcome,
+		Reason:     newest.Reason,
+		Sequence:   newest.Sequence,
+		ObservedAt: newest.ObservedAt,
+		Age:        time.Since(newest.ObservedAt).Round(time.Second).String(),
+		PaneID:     newest.Identity.PaneID,
+		Version:    newest.SourceVersion,
+	}
 }
 
 // Adapter is one provider's integration.
@@ -416,7 +492,7 @@ func (s Service) List() []Status {
 			continue
 		}
 		seen[a.Provider()] = true
-		out = append(out, a.Inspect(s.Env))
+		out = append(out, s.withLastReport(a.Inspect(s.Env)))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Provider < out[j].Provider })
 	return out
@@ -429,7 +505,7 @@ func (s Service) Status(provider string) (Status, error) {
 		return Status{}, refuse(RefuseUnknownProvider, "", "a provider is required")
 	}
 	if a, ok := s.adapter(provider); ok {
-		return a.Inspect(s.Env), nil
+		return s.withLastReport(a.Inspect(s.Env)), nil
 	}
 	capability, known := capabilityForProvider(provider)
 	if !known {
@@ -440,9 +516,15 @@ func (s Service) Status(provider string) (Status, error) {
 
 func (s Service) statusFor(provider string, capability agentlifecycle.Capability) Status {
 	if a, ok := s.adapter(provider); ok {
-		return a.Inspect(s.Env)
+		return s.withLastReport(a.Inspect(s.Env))
 	}
-	return unsupportedStatus(s.Env, capability)
+	return s.withLastReport(unsupportedStatus(s.Env, capability))
+}
+
+// withLastReport attaches the newest record this source has written.
+func (s Service) withLastReport(st Status) Status {
+	st.LastReport = lastReportFor(s.Env.StateDir, st.Source)
+	return st
 }
 
 // Plan describes one action without performing it.
