@@ -1,0 +1,2 @@
+# ms	event	session	turn	tool	fields
+0	SessionEnd	session-1	-	-	cwd,hook_event_name,reason,session_id,transcript_path

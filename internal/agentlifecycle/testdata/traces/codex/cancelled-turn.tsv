@@ -1,0 +1,3 @@
+# ms	event	session	turn	tool	fields
+0	UserPromptSubmit	session-1	turn-1	-	cwd,hook_event_name,model,permission_mode,prompt,session_id,transcript_path,turn_id
+4984	Interrupt	session-1	turn-1	-	cwd,hook_event_name,model,permission_mode,session_id,transcript_path,turn_id
