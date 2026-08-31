@@ -2,6 +2,12 @@
 
 All notable changes to sidecar are documented here.
 
+## [Unreleased]
+
+### Bug Fixes
+
+- **The read-only worktree planning proof now ignores Git's transient bookkeeping wherever the fixture repository sits beneath its snapshot root.** Background maintenance can create or remove lock files without Sidecar doing anything; the proof continues to compare every path Sidecar owns while no longer treating Git's internal locks as product mutations.
+
 ## [v1.11.1] - 2026-08-31
 
 ### Bug Fixes
