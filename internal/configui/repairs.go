@@ -16,10 +16,13 @@ import (
 // is open the surface reports the config-confirm context, so the footer and the
 // palette describe the only two things that can happen next.
 type confirmState struct {
-	title  string
-	intro  []string
-	body   []string
-	footer []string
+	title string
+	intro []string
+	body  []string
+	// wrapBody is body lines supplied as plain text, wrapped to the pane rather
+	// than truncated at its edge.
+	wrapBody []string
+	footer   []string
 	// apply runs only after the user confirms.
 	apply func(*Model) tea.Cmd
 }
@@ -66,6 +69,8 @@ func (m *Model) buildChild(b *paneBuilder, route Route) {
 		m.buildAgentRepair(b)
 	case ChildRepairConfiguration:
 		m.buildConfigRepair(b)
+	case ChildAgentIntegrations:
+		m.buildAgentIntegrations(b)
 	case ChildEnableIntegration:
 		m.buildEnableRoute(b)
 	case ChildNotificationAgentRules:
@@ -95,6 +100,16 @@ func (m *Model) buildConfirm(b *paneBuilder) {
 	b.blank()
 	for _, line := range confirm.body {
 		b.text(line)
+	}
+	// wrapBody is plain text the pane wraps to its own width. A confirmation
+	// whose job is to name the exact files it will change must not be where a
+	// long path loses its last component to the pane's truncation.
+	for _, line := range confirm.wrapBody {
+		if line == "" {
+			b.blank()
+			continue
+		}
+		b.note(line)
 	}
 	b.blank()
 	b.buttons(

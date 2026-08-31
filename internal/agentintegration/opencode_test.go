@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/marcus/sidecar/internal/agentactivity"
 	"github.com/marcus/sidecar/internal/agentlifecycle"
@@ -459,5 +460,88 @@ func TestReportArgsCarryTheAssetVersion(t *testing.T) {
 	if cap.AssetVersion != OpenCodeAssetVersion {
 		t.Fatalf("registry asset version %q != bundled %q; every report would look outdated",
 			cap.AssetVersion, OpenCodeAssetVersion)
+	}
+}
+
+// TestTheAssetSerializesReportsUnderInvertedExitOrder pins the promise chain that makes report
+// ordering safe.
+//
+// This is the defect that cost the Phase B exit gate two attempts, and it was
+// invisible to every offline test: each report is a subprocess taking an
+// exclusive lock on an append-only store that enforces a strictly increasing
+// sequence, so spawning them concurrently assigns sequences in order and
+// delivers them out of order. The store then correctly rejects the loser — and
+// what was lost, in two live runs out of three, was the terminal `end` report
+// carrying the cancelled-versus-failed outcome.
+//
+// The fix was to chain each spawn onto the previous one's exit. Until now that
+// was proven only by running against a real provider, which means a regression
+// would have reached a user before it reached a test. This drives the real
+// plugin factory against a stub whose processes are rigged to exit in the
+// opposite order to the one they were started in, so serialized and concurrent
+// produce different recorded orders and the assertion cannot pass by luck.
+func TestTheAssetSerializesReportsUnderInvertedExitOrder(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is not installed; cannot drive the shipped asset")
+	}
+	dir := t.TempDir()
+	stub := filepath.Join(dir, "sidecar-stub")
+	orderLog := filepath.Join(dir, "order.log")
+
+	cmd := exec.Command(node, "ordering-harness.mjs", stub, orderLog)
+	cmd.Dir = filepath.Join("assets", "opencode")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	// The harness process is timed from out here, and that is load-bearing
+	// rather than convenient. See the dispose assertion below: the defect being
+	// pinned is a pending timer holding Node's event loop open, which delays
+	// process *exit* and not the dispose await the harness can time from
+	// inside itself. cmd.Output waits for exit, so this is the only clock that
+	// can see it.
+	started := time.Now()
+	out, err := cmd.Output()
+	processElapsed := time.Since(started)
+	if err != nil {
+		t.Fatalf("running the ordering harness: %v\n%s", err, stderr.String())
+	}
+
+	var result struct {
+		Order     []string `json:"order"`
+		ElapsedMS int      `json:"elapsedMs"`
+	}
+	if err := json.Unmarshal(out, &result); err != nil {
+		t.Fatalf("harness output is not JSON: %q (%v)", out, err)
+	}
+	order := result.Order
+
+	// Four reports: idle/session_start, working/turn_start, end/cancelled, and
+	// the release dispose adds. Anything fewer means one was dropped, which is
+	// the same failure in a different disguise.
+	want := []string{"1", "2", "3", "4"}
+	if strings.Join(order, ",") != strings.Join(want, ",") {
+		t.Fatalf("reports were delivered in order %v, want %v.\n"+
+			"3,2,1,4 is the signature of concurrent spawns: the stub inverts the exit order, so that is what "+
+			"unserialized delivery produces and it is exactly what the store rejects.", order, want)
+	}
+
+	// The same harness pins a second defect it found. dispose bounds its wait
+	// with a timer, and that timer has to be cleared when the queue wins: a
+	// pending timer keeps Node's event loop alive, so leaving it held OpenCode's
+	// process open for the full budget after every report had already landed —
+	// a five second pause added to every quit, in a file whose whole premise is
+	// that nothing in it may delay what OpenCode does.
+	//
+	// The measurement is the harness *process's* lifetime, not the time dispose
+	// itself took. Those differ by exactly the bug: dispose returns the moment
+	// Promise.race picks the queue, so an uncleared timer leaves its own await
+	// looking fast — measured 1098ms with the defect reintroduced — while the
+	// process lingers for the full budget behind the live event loop. Measured
+	// end to end: 1.26s clean, 5.03s with the clearTimeout removed. The stub's
+	// own sleeps total about 1050ms, so a four second bound separates the two
+	// without depending on how fast this machine is.
+	if processElapsed >= 4*time.Second {
+		t.Fatalf("the harness process lived %v (dispose itself reported %dms); the reports take about 1050ms, so the bounding timer is holding the process open after the queue drained",
+			processElapsed.Round(time.Millisecond), result.ElapsedMS)
 	}
 }

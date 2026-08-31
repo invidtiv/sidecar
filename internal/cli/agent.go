@@ -15,7 +15,6 @@ import (
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/managedtarget"
 	"github.com/marcus/sidecar/internal/shellstate"
-	"github.com/marcus/sidecar/internal/tmuxenv"
 	"github.com/marcus/sidecar/internal/workspaceops"
 )
 
@@ -147,7 +146,7 @@ func agentCommand() *Command {
 
 	// Sub is rendered in slice order by both RenderHelp and the generated CLI
 	// doc, so it is kept alphabetical and TestCLIDocDrift enforces the result.
-	sub := []*Command{lcEnd, lcExplain, get, list, prompt, read, lcRelease, lcReport, sendKeys, start, wait}
+	sub := []*Command{lcEnd, lcExplain, get, integrationCommand(), list, prompt, read, lcRelease, lcReport, sendKeys, start, wait}
 	return &Command{Name: "agent", Summary: "Inspect, start, and coordinate agents in Sidecar-managed shells", Usage: "sidecar agent <command>", Long: "Provider-aware control over shells Sidecar owns. The feature is discoverable while disabled; enable agent_control to run it.\n\nThe safe sequence is: create the layout separately with sidecar create shell, start the provider with agent start, prompt and wait, read before you send keys, and never close a target you did not create.\n\nThe report, end, release, and explain commands are a separate surface: they record and inspect the lifecycle events a provider's own integration reports, and they are not gated behind agent_control.", Sub: sub, Run: runAgentRoot}
 }
 
@@ -305,11 +304,15 @@ func splitAgentTarget(positional []string, wantArgs int) (target string, rest []
 }
 
 // resolveAgentTarget turns the shared flags into a pinned target.
-func resolveAgentTarget(env Env, target string, f agentFlags, explicit bool) (agentcontrol.Target, int) {
+//
+// lookup may be nil. Passing one lets a command that has already scanned for
+// managed targets — `agent prompt`, checking whether its lone positional names
+// one — reuse that scan instead of walking every project's worktrees again.
+func resolveAgentTarget(env Env, lookup *shellTargetLookup, target string, f agentFlags, explicit bool) (agentcontrol.Target, int) {
 	if target == "" {
 		return agentcontrol.Target{}, emitAgentError(env, f.json, &agentcontrol.Error{Code: agentcontrol.ErrNotFound, Message: "target is required outside a managed shell"})
 	}
-	tgt, code := resolveAgentShellTarget(env, target, f.shell, f.project, explicit && f.shell == "" && f.project == "", f.json)
+	tgt, code := resolveAgentShellTarget(env, lookup, target, f.shell, f.project, explicit && f.shell == "" && f.project == "", f.json)
 	if code != 0 {
 		return agentcontrol.Target{}, code
 	}
@@ -356,10 +359,20 @@ func runAgentPrompt(env Env, args []string) int {
 	// word names a managed target, the caller meant `agent prompt TARGET TEXT`
 	// and left the text off — and carrying on would type the target's own name
 	// into the caller's own shell, which is both useless and unasked for. Say
-	// what is missing instead.
+	// what is missing instead, and name the way out: someone whose prompt
+	// genuinely is one word that collides with a shell name needs to be told
+	// how to send it, not merely that they cannot.
+	//
+	// The scan is memoized because the happy path runs the identical lookup a
+	// few lines below through resolveAgentShellTarget, and it walks
+	// `git worktree list` per registered project. Paying for that twice on
+	// every one-positional prompt is a cost with nothing to show for it.
+	var guard shellTargetLookup
 	if len(f.positional) == 1 {
-		if _, _, err := findShellTarget(env, f.positional[0], f.shell, f.project, f.shell == "" && f.project == "", tmuxenv.Namespace()); err == nil {
-			cliErrf(env.Stderr, "agent prompt %s: the prompt text is missing\n\n%s", f.positional[0], help)
+		if _, _, err := guard.find(env, f.positional[0], f.shell, f.project, f.shell == "" && f.project == ""); err == nil {
+			cliErrf(env.Stderr,
+				"agent prompt %s: the prompt text is missing\n\nIf %s really is the prompt, name the target explicitly: sidecar agent prompt %s %q\n\n%s",
+				f.positional[0], f.positional[0], f.positional[0], f.positional[0], help)
 			return 2
 		}
 	}
@@ -375,7 +388,7 @@ func runAgentPrompt(env Env, args []string) int {
 		return code
 	}
 	name, rest, explicit := splitAgentTarget(f.positional, 1)
-	target, code := resolveAgentTarget(env, name, f, explicit)
+	target, code := resolveAgentTarget(env, &guard, name, f, explicit)
 	if code != 0 {
 		return code
 	}
@@ -407,7 +420,7 @@ func runAgentWait(env Env, args []string) int {
 		return code
 	}
 	name, _, explicit := splitAgentTarget(f.positional, 0)
-	target, code := resolveAgentTarget(env, name, f, explicit)
+	target, code := resolveAgentTarget(env, nil, name, f, explicit)
 	if code != 0 {
 		return code
 	}
@@ -435,7 +448,7 @@ func runAgentRead(env Env, args []string) int {
 		return code
 	}
 	name, _, explicit := splitAgentTarget(f.positional, 0)
-	target, code := resolveAgentTarget(env, name, f, explicit)
+	target, code := resolveAgentTarget(env, nil, name, f, explicit)
 	if code != 0 {
 		return code
 	}
@@ -482,7 +495,7 @@ func runAgentSendKeys(env Env, args []string) int {
 	if code = requireAgentControl(env, f.json); code >= 0 {
 		return code
 	}
-	target, code := resolveAgentTarget(env, name, f, explicit)
+	target, code := resolveAgentTarget(env, nil, name, f, explicit)
 	if code != 0 {
 		return code
 	}
@@ -615,7 +628,7 @@ func runAgentGet(env Env, args []string) int {
 	if target == "" {
 		return emitAgentError(env, f.json, &agentcontrol.Error{Code: agentcontrol.ErrNotFound, Message: "target is required outside a managed shell"})
 	}
-	tgt, code := resolveAgentShellTarget(env, target, f.shell, f.project, len(f.positional) == 1 && f.shell == "" && f.project == "", f.json)
+	tgt, code := resolveAgentShellTarget(env, nil, target, f.shell, f.project, len(f.positional) == 1 && f.shell == "" && f.project == "", f.json)
 	if code != 0 {
 		return code
 	}
@@ -711,7 +724,7 @@ func runAgentStart(env Env, args []string) int {
 	if err != nil {
 		return emitAgentError(env, f.json, &agentcontrol.Error{Code: agentcontrol.ErrNotReady, Message: err.Error(), Err: err})
 	}
-	tgt, code := resolveAgentShellTarget(env, target, f.shell, f.project, len(f.positional) == 1 && f.shell == "" && f.project == "", f.json)
+	tgt, code := resolveAgentShellTarget(env, nil, target, f.shell, f.project, len(f.positional) == 1 && f.shell == "" && f.project == "", f.json)
 	if code != 0 {
 		return code
 	}
@@ -726,8 +739,11 @@ func runAgentStart(env Env, args []string) int {
 	return emitAgent(env, f.json, a)
 }
 
-func resolveAgentShellTarget(env Env, target, shellFlag, projectFlag string, globalExplicit, jsonOutput bool) (shellTarget, int) {
-	tgt, code, err := findShellTarget(env, target, shellFlag, projectFlag, globalExplicit, tmuxenv.Namespace())
+func resolveAgentShellTarget(env Env, lookup *shellTargetLookup, target, shellFlag, projectFlag string, globalExplicit, jsonOutput bool) (shellTarget, int) {
+	if lookup == nil {
+		lookup = &shellTargetLookup{}
+	}
+	tgt, code, err := lookup.find(env, target, shellFlag, projectFlag, globalExplicit)
 	if err == nil {
 		return tgt, 0
 	}

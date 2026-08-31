@@ -122,6 +122,240 @@ Usage: sidecar agent get [TARGET] [--project NAME] [--json]
 sidecar agent get reviewer --json
 ```
 
+### `sidecar agent integration`
+
+Inspect and manage agent lifecycle integrations
+
+An integration is a small Sidecar-owned file installed beside a supported agent, which reports that agent's own lifecycle events so Sidecar does not have to infer them from its screen.
+
+Installation is always explicit, always previewable, and always reversible. Sidecar shows the exact user-level paths it would change before changing them, writes atomically, keeps a recoverable backup of anything it replaces, and removes only what it installed.
+
+The same application service answers Configuration → Agents → Integrations, so every fact and action there has an equivalent here.
+
+An installed integration reports lifecycle facts only: lanes, a terminal outcome, a bounded reason code, a sequence, and an opaque session digest. It never sends prompt text, response text, tool arguments or results, file paths, environment values, or credentials, and it cannot notify, play a sound, or choose delivery policy.
+
+```
+Usage: sidecar agent integration <command>
+```
+
+#### `sidecar agent integration install`
+
+Install a provider's Sidecar lifecycle integration
+
+Writes the bundled integration asset into the provider's user-level configuration directory. Nothing is installed into a repository, and no existing user configuration is rewritten from a template.
+
+Installing when the current version is already installed is a no-op. Installing over an older or a damaged installation is refused, naming update or repair instead: the verb should mean what the user believes the situation to be.
+
+The exact ordered file operations are printed, each with the state of its path before and after and whether Sidecar owns it. --dry-run prints that same plan and changes nothing.
+
+Sidecar only ever writes, replaces, or removes a file carrying its own integration marker. A file that merely has the name Sidecar would have chosen is refused and left exactly as it is.
+
+An installed integration reports lifecycle facts only: lanes, a terminal outcome, a bounded reason code, a sequence, and an opaque session digest. It never sends prompt text, response text, tool arguments or results, file paths, environment values, or credentials, and it cannot notify, play a sound, or choose delivery policy.
+
+```
+Usage: sidecar agent integration install PROVIDER [--dry-run] [--json]
+```
+
+**Options:**
+
+- `--dry-run`: Print the exact ordered file operations and change nothing
+- `--json`: Write stable structured JSON
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: success, including a no-op when nothing needed changing
+- `1`: the change was attempted and failed part-way
+- `2`: usage error
+- `5`: refused: unknown or unsupported provider, wrong verb for the current state, or an unsafe path
+
+**Examples:**
+
+```bash
+# see the exact files first
+sidecar agent integration install opencode --dry-run
+sidecar agent integration install opencode --json
+```
+
+#### `sidecar agent integration list`
+
+List every agent integration Sidecar knows about
+
+One line per provider: whether its CLI is installed, whether Sidecar's integration is installed and current, and the authority tier that integration can actually exercise.
+
+A provider Sidecar has recorded evidence for but ships no asset for is listed as unsupported rather than omitted, so "not yet" is distinguishable from "never heard of it".
+
+An installed integration reports lifecycle facts only: lanes, a terminal outcome, a bounded reason code, a sequence, and an opaque session digest. It never sends prompt text, response text, tool arguments or results, file paths, environment values, or credentials, and it cannot notify, play a sound, or choose delivery policy.
+
+```
+Usage: sidecar agent integration list [--json]
+```
+
+**Options:**
+
+- `--json`: Write stable structured JSON
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: success, including a no-op when nothing needed changing
+- `1`: the change was attempted and failed part-way
+- `2`: usage error
+- `5`: refused: unknown or unsupported provider, wrong verb for the current state, or an unsafe path
+
+**Examples:**
+
+```bash
+sidecar agent integration list --json
+```
+
+#### `sidecar agent integration repair`
+
+Repair a damaged or duplicated installation
+
+Restores the bundled asset over one that has been modified or truncated, and removes a duplicate copy Sidecar owns in a second directory the provider also loads.
+
+It cannot repair a file Sidecar does not own, and says so rather than deleting it.
+
+The exact ordered file operations are printed, each with the state of its path before and after and whether Sidecar owns it. --dry-run prints that same plan and changes nothing.
+
+Sidecar only ever writes, replaces, or removes a file carrying its own integration marker. A file that merely has the name Sidecar would have chosen is refused and left exactly as it is.
+
+An installed integration reports lifecycle facts only: lanes, a terminal outcome, a bounded reason code, a sequence, and an opaque session digest. It never sends prompt text, response text, tool arguments or results, file paths, environment values, or credentials, and it cannot notify, play a sound, or choose delivery policy.
+
+```
+Usage: sidecar agent integration repair PROVIDER [--dry-run] [--json]
+```
+
+**Options:**
+
+- `--dry-run`: Print the exact ordered file operations and change nothing
+- `--json`: Write stable structured JSON
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: success, including a no-op when nothing needed changing
+- `1`: the change was attempted and failed part-way
+- `2`: usage error
+- `5`: refused: unknown or unsupported provider, wrong verb for the current state, or an unsafe path
+
+**Examples:**
+
+```bash
+sidecar agent integration repair opencode --json
+```
+
+#### `sidecar agent integration status`
+
+Report one provider's integration state in full
+
+Reports the installed and bundled asset versions, the provider CLI version and whether it falls inside the range Sidecar has proved, the authority tier and any demotion reason, every path inspected with what was found in it, the known gaps recorded for the source, and the actions that would be accepted right now.
+
+Status is decided by inspecting the installed files: the bytes on disk are hashed against the bundled asset, so a modified, truncated, or hand-edited asset reports needs-repair rather than current.
+
+With no PROVIDER, every provider is reported.
+
+An installed integration reports lifecycle facts only: lanes, a terminal outcome, a bounded reason code, a sequence, and an opaque session digest. It never sends prompt text, response text, tool arguments or results, file paths, environment values, or credentials, and it cannot notify, play a sound, or choose delivery policy.
+
+```
+Usage: sidecar agent integration status [PROVIDER] [--json]
+```
+
+**Options:**
+
+- `--json`: Write stable structured JSON
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: success, including a no-op when nothing needed changing
+- `1`: the change was attempted and failed part-way
+- `2`: usage error
+- `5`: refused: unknown or unsupported provider, wrong verb for the current state, or an unsafe path
+
+**Examples:**
+
+```bash
+sidecar agent integration status opencode --json
+# every provider
+sidecar agent integration status
+```
+
+#### `sidecar agent integration uninstall`
+
+Remove a Sidecar-owned integration and nothing else
+
+Removes the asset Sidecar installed, any duplicate copy Sidecar owns, and the backup Sidecar kept. The provider's own configuration and every unrelated plugin are left untouched, and the plugin directory is removed only when removing Sidecar's files empties it.
+
+Uninstalling when nothing is installed is a no-op, so a cleanup script can run unconditionally. It works with the provider CLI already gone.
+
+The exact ordered file operations are printed, each with the state of its path before and after and whether Sidecar owns it. --dry-run prints that same plan and changes nothing.
+
+Sidecar only ever writes, replaces, or removes a file carrying its own integration marker. A file that merely has the name Sidecar would have chosen is refused and left exactly as it is.
+
+An installed integration reports lifecycle facts only: lanes, a terminal outcome, a bounded reason code, a sequence, and an opaque session digest. It never sends prompt text, response text, tool arguments or results, file paths, environment values, or credentials, and it cannot notify, play a sound, or choose delivery policy.
+
+```
+Usage: sidecar agent integration uninstall PROVIDER [--dry-run] [--json]
+```
+
+**Options:**
+
+- `--dry-run`: Print the exact ordered file operations and change nothing
+- `--json`: Write stable structured JSON
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: success, including a no-op when nothing needed changing
+- `1`: the change was attempted and failed part-way
+- `2`: usage error
+- `5`: refused: unknown or unsupported provider, wrong verb for the current state, or an unsafe path
+
+**Examples:**
+
+```bash
+sidecar agent integration uninstall opencode --dry-run
+```
+
+#### `sidecar agent integration update`
+
+Update an installed integration to the bundled version
+
+Replaces an older installed asset with the version this Sidecar build ships, keeping a recoverable copy of what it replaced.
+
+Refused when nothing is installed, and when the installation is damaged rather than merely old.
+
+The exact ordered file operations are printed, each with the state of its path before and after and whether Sidecar owns it. --dry-run prints that same plan and changes nothing.
+
+Sidecar only ever writes, replaces, or removes a file carrying its own integration marker. A file that merely has the name Sidecar would have chosen is refused and left exactly as it is.
+
+An installed integration reports lifecycle facts only: lanes, a terminal outcome, a bounded reason code, a sequence, and an opaque session digest. It never sends prompt text, response text, tool arguments or results, file paths, environment values, or credentials, and it cannot notify, play a sound, or choose delivery policy.
+
+```
+Usage: sidecar agent integration update PROVIDER [--dry-run] [--json]
+```
+
+**Options:**
+
+- `--dry-run`: Print the exact ordered file operations and change nothing
+- `--json`: Write stable structured JSON
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: success, including a no-op when nothing needed changing
+- `1`: the change was attempted and failed part-way
+- `2`: usage error
+- `5`: refused: unknown or unsupported provider, wrong verb for the current state, or an unsafe path
+
+**Examples:**
+
+```bash
+sidecar agent integration update opencode
+```
+
 ### `sidecar agent list`
 
 List live managed agents

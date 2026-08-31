@@ -17,6 +17,7 @@ import (
 	"github.com/marcus/sidecar/internal/agentlifecycle/lifecyclestore"
 	"github.com/marcus/sidecar/internal/agentresolve"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/tmuxenv"
 	"github.com/marcus/sidecar/internal/tty"
 )
 
@@ -497,18 +498,14 @@ func runAgentExplain(env Env, args []string) int {
 		cliErrf(env.Stderr, "--current and --shell name different panes; pass one\n\n%s", help)
 		return 2
 	}
-	if f.shell != "" {
-		// Explaining another shell needs that shell's pane and run identity,
-		// which comes from the managed-shell inventory rather than from this
-		// process's environment. That path lands with the resolver extraction;
-		// refusing plainly is better than answering about the wrong pane.
-		cliErrf(env.Stderr, "explaining another shell is not implemented yet; run this inside the shell you want explained")
-		return exitInputRejected
-	}
 
 	stateDir := env.StateDir
 	if stateDir == "" {
 		stateDir = config.StateDir()
+	}
+
+	if f.shell != "" {
+		return explainManagedShell(env, f, stateDir)
 	}
 
 	ctx, err := lifecycleenv.Resolve(stateDir)
@@ -558,7 +555,94 @@ func runAgentExplain(env Env, args []string) int {
 	}
 	ob.Agent = agentactivity.Identify(ob)
 
-	dec := agentresolve.Resolve(ob, agentresolve.PaneRef{PaneID: ctx.PaneID, Session: ctx.Session}, src, time.Now())
+	// The identity is supplied so that a pane with no integration still reports
+	// which host, server, and pane it is talking about. Without it the
+	// no-evidence explanation carried a pane id and nothing else, which reads
+	// as a failure to determine the server rather than as there being no report
+	// to check one against. It is used only on that path; when a report does
+	// apply, arbitration builds the live identity itself.
+	dec := agentresolve.Resolve(ob, agentresolve.PaneRef{
+		PaneID:  ctx.PaneID,
+		Session: ctx.Session,
+		Identity: agentlifecycle.Identity{
+			Host:              ctx.Host,
+			ServerIncarnation: ctx.ServerIncarnation,
+			PaneID:            ctx.PaneID,
+			ProcessGeneration: ctx.ProcessGeneration,
+		},
+	}, src, time.Now())
+
+	if f.json {
+		return encodeStdout(env, explainResult{
+			SchemaVersion: agentlifecycle.SchemaVersion,
+			Managed:       true,
+			Explanation:   &dec.Explanation,
+		})
+	}
+	writeExplanationText(env, dec.Explanation)
+	return 0
+}
+
+// explainManagedShell answers about a shell this process is not running in.
+//
+// This is the path `--current` cannot cover, and the reason it matters is
+// specific: an agent's pane is normally occupied by the agent's own TUI, so
+// there is no ordinary way to run a command inside it. Without this, the only
+// way to ask why a pane's integration was or was not driving its state was to
+// take the pane over, which changes the thing being diagnosed.
+//
+// Identity comes from the managed-shell inventory and live tmux, never from
+// this process's environment or from a stored record. Concretely: the target
+// resolves to a registered session, tmux is asked which pane that session holds
+// right now, and the host and server incarnation are read live. A record that
+// claims that pane is then checked against those observations by the ordinary
+// resolver, exactly as it would be on a polling surface.
+func explainManagedShell(env Env, f lifecycleFlags, stateDir string) int {
+	tgt, code, err := findShellTarget(env, f.shell, "", "", false, tmuxenv.Namespace())
+	if err != nil {
+		if code == shellTargetUnregistered {
+			return emitLifecycleError(env, f.json, agentlifecycle.ErrInvalidContext,
+				fmt.Errorf("no registered Sidecar shell named %q; run `sidecar shell list --json` to see what Sidecar owns", f.shell))
+		}
+		return emitLifecycleError(env, f.json, agentlifecycle.ErrInvalidContext, err)
+	}
+
+	// The shell's own tmux namespace, not this process's. A managed shell can
+	// live on a socket other than the one explain happens to be running under,
+	// and a bare tmux call would then answer confidently about a pane on the
+	// wrong server.
+	identity := agentintegration.PaneIdentity(tgt.Namespace, tgt.Session)
+	if identity.PaneID == "" {
+		// The shell is registered but its tmux session is not live. That is a
+		// real and common state — a shell whose server has gone away — and it
+		// is a different answer from "no integration", so it says so.
+		res := explainResult{
+			SchemaVersion: agentlifecycle.SchemaVersion,
+			Managed:       true,
+			Note:          "shell " + tgt.DisplayName + " is registered but has no live tmux pane; there is nothing to explain until it is running",
+		}
+		if f.json {
+			return encodeStdout(env, res)
+		}
+		_, _ = fmt.Fprintln(env.Stdout, res.Note)
+		return 0
+	}
+
+	src := agentintegration.NewStoreSourceOn(stateDir, tgt.Namespace)
+	screen, paneTitle, command := capturePaneForExplainOn(tgt.Namespace, identity.PaneID)
+	ob := agentactivity.Observation{
+		Screen:         screen,
+		PaneTitle:      paneTitle,
+		CurrentCommand: command,
+		CapturedAt:     time.Now(),
+	}
+	ob.Agent = agentactivity.Identify(ob)
+
+	dec := agentresolve.Resolve(ob, agentresolve.PaneRef{
+		PaneID:   identity.PaneID,
+		Session:  tgt.Session,
+		Identity: identity,
+	}, src, time.Now())
 
 	if f.json {
 		return encodeStdout(env, explainResult{
@@ -578,6 +662,12 @@ func runAgentExplain(env Env, args []string) int {
 // opinion". A diagnostic command that could not capture a screen should still
 // report everything else it knows rather than fail outright.
 func capturePaneForExplain(paneID string) (screen, paneTitle, command string) {
+	return capturePaneForExplainOn("", paneID)
+}
+
+// capturePaneForExplainOn is capturePaneForExplain against an explicit tmux
+// socket, for a pane in a namespace this process is not running in.
+func capturePaneForExplainOn(namespace, paneID string) (screen, paneTitle, command string) {
 	if paneID == "" {
 		return "", "", ""
 	}
@@ -585,8 +675,11 @@ func capturePaneForExplain(paneID string) (screen, paneTitle, command string) {
 	if err != nil {
 		screen = ""
 	}
-	out, err := exec.Command("tmux", "display-message", "-p", "-t", paneID,
-		"#{pane_title}\x1f#{pane_current_command}").Output()
+	args := []string{"display-message", "-p", "-t", paneID, "#{pane_title}\x1f#{pane_current_command}"}
+	if namespace != "" {
+		args = append([]string{"-S", namespace}, args...)
+	}
+	out, err := exec.Command("tmux", args...).Output()
 	if err == nil {
 		fields := strings.Split(strings.TrimRight(string(out), "\n"), "\x1f")
 		if len(fields) == 2 {
