@@ -22,6 +22,19 @@ type Plugin interface {
 	FocusContext() string
 }
 
+// SelfConstrainedView is an optional presentation capability for plugins whose
+// View already returns the exact width and height requested by the app shell.
+// Opting in lets the shell skip its defensive Lip Gloss clamp; View is still
+// called on every frame so live content and pointer regions remain current.
+//
+// Implementations must keep every rendered line within width, return no more
+// than height lines, and preserve the padding that the shell's Width/Height
+// wrapper would otherwise add. Plugins without this capability keep the
+// defensive wrapper.
+type SelfConstrainedView interface {
+	ViewIsSelfConstrained() bool
+}
+
 // AttentionOriginProvider projects the workspace/session actually visible in
 // a presentation-only surface. The app owns focus and publishes this identity
 // for host-wide background policy.

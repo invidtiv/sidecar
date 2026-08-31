@@ -726,6 +726,13 @@ func (p *Plugin) Name() string { return pluginName }
 // Icon returns the plugin icon.
 func (p *Plugin) Icon() string { return pluginIcon }
 
+// ViewIsSelfConstrained reports the View contract the workspace already
+// enforces for its panels, boards, and overlays. The app may therefore avoid
+// wrapping the finished frame in a second full-screen Lip Gloss style.
+func (p *Plugin) ViewIsSelfConstrained() bool { return true }
+
+var _ plugin.SelfConstrainedView = (*Plugin)(nil)
+
 // IsFocused returns whether the plugin is focused.
 func (p *Plugin) IsFocused() bool { return p.focused }
 

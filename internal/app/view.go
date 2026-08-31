@@ -1173,6 +1173,9 @@ func (m *Model) renderContent(width, height int) string {
 	if height == 0 {
 		return ""
 	}
+	if constrained, ok := p.(plugin.SelfConstrainedView); ok && constrained.ViewIsSelfConstrained() {
+		return content
+	}
 	// Use MaxHeight to truncate content that exceeds allocated space.
 	// Height() only pads short content; MaxHeight() also truncates tall content.
 	// This prevents plugin content from pushing the header off-screen.
