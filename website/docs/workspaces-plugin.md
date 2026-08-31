@@ -1,80 +1,134 @@
 ---
-sidebar_position: 6
+sidebar_position: 1
 title: Workspaces Plugin
 ---
 
 # Workspaces Plugin
 
-Parallel development environments with integrated AI agents. Create isolated workspaces, launch coding agents (Claude, Codex, Gemini, Cursor, OpenCode, Pi), stream real-time output, and merge when ready—all from one terminal interface.
+Parallel development environments with integrated AI agents. Create isolated workspaces, launch coding agents (Claude Code, Codex, Gemini CLI, Cursor, OpenCode, Pi, Aider), stream real-time output, tile multi-pane layouts, and merge when ready—all from one terminal interface.
 
 ![Workspaces Plugin](/img/sidecar-workspaces.png)
 
-## What is this?
+## Overview
 
-The Workspaces plugin turns git worktrees into managed development environments. Each workspace gets its own directory, branch, and optional AI agent (Claude Code, Codex, Gemini, Cursor, OpenCode, or Pi Agent). You work on multiple features in parallel, watch agent output in real-time, review diffs, and merge via PR—all without leaving sidecar.
+The Workspaces plugin turns git worktrees into managed development environments. Each workspace gets its own directory, branch, and optional AI agent. You can work on multiple features in parallel, watch agent output in real time, review diffs, compose side-by-side document and task panes, and merge via PR—all without leaving Sidecar.
 
 **Key capabilities:**
 
-- **Create workspaces** from one form: Kind, Name, Base Branch (worktree), Agent, Auto-approve
-- **Launch AI agents** into isolated environments, with task context when a task is linked
-- **Stream real-time output** from any supported agent (Claude, Codex, Gemini, Cursor, OpenCode, Pi)
-- **Monitor multiple agents** via Kanban board or list view with live status
-- **Review & merge** with built-in diff viewer and GitHub PR workflow
-- **Automatic cleanup** of local/remote branches after merge
-
-This workflow eliminates context-switching between branches and enables true parallel development.
-
-## The Problem
-
-**Without workspaces:**
-- Switch branches to start new work, losing current context
-- Stash/commit WIP changes to avoid conflicts
-- One agent at a time, waiting for completion
-- Manual tmux session management
-- Scattered terminal tabs for different tasks
-
-**With sidecar workspaces:**
-- Instant parallel development: 5 agents on 5 branches simultaneously
-- Zero context loss: each workspace is isolated, never conflicts
-- Unified dashboard: see all agents, all output, all diffs in one place
-- Automatic session management: reconnects to agents after restart
-- Integrated PR workflow: diff → push → PR → cleanup in 4 keystrokes
-
-**Real use case:**
-You're working on a feature when a critical bug report arrives. Press `n`, create a "hotfix-login" workspace from `main`, launch Claude Code, and let it work while you continue your feature. Both agents run in parallel. When Claude finishes, review the hotfix diff, merge it via PR, and return to your feature—without ever switching branches or losing state.
+- **Create Workspaces & Shells**: Open isolated branches or terminal shells with custom names, base branches, and agent configurations.
+- **Card-Based Sidebar**: Clean visual cards with category glyphs (`📌 PINNED`, `● LIVE`, `○ IDLE`, `◆ NEEDS ATTENTION`, `● WORKING`) and project theme hues.
+- **Multi-Pane Windowing**: Tile shells, code files, diffs, TD issues, notes, and external resources in custom 2×2 grid layouts.
+- **Visual Pane Repositioning (`M` / `⊞`)**: Rearrange panes using vim direction keys (`h/j/k/l`), zoom (`z`), and atomic commit (`enter`).
+- **Universal Pane Switcher (`n`)**: Open any pane kind directly from whatever pane you are focused on.
+- **Real-Time Output Streaming**: Sub-500ms adaptive terminal captures with synchronized redraws (DEC mode 2026) and truecolor support.
+- **Durable Session Persistence**: Shells survive tmux crashes and reboots; resume exact agent conversations with `sidecar session restore`.
+- **Review & Merge Workflow**: Integrated diff reviews, commit staging, GitHub PR creation, and automatic branch cleanup.
 
 ## Prerequisites
 
 **Required:**
 - Git 2.25+ (for worktree support)
-- Tmux 3.0+ (for agent session management)
+- Tmux 3.0+ (for background session management)
 
-**Optional (for specific features):**
-- `gh` CLI (for GitHub PR creation in merge workflow)
-- `claude` CLI (for Claude Code agent)
-- `cursor-agent` CLI (for Cursor agent)
-- `codex` CLI (for Codex agent)
-- `gemini` CLI (for Gemini agent)
-- `opencode` CLI (for OpenCode agent)
-- `pi` CLI (for Pi Agent)
-- `td` CLI (for task linking)
+**Supported Agents (Installed as needed):**
+- Claude Code (`claude`)
+- Codex (`codex`)
+- Cursor CLI (`cursor-agent`)
+- Gemini CLI (`gemini`)
+- OpenCode (`opencode`)
+- Pi Agent (`pi`)
+- Aider (`aider`)
 
-Install agents as needed. The plugin gracefully handles missing CLIs—only installed agents appear in the picker.
+Sidecar automatically detects installed CLIs and populates the agent selection picker accordingly.
 
 ## Quick Start
 
-Press `n` to open Create Workspace. Kind is Worktree. Type a name, confirm the base branch, choose an agent, and optionally enable Auto-approve. Press Enter. The agent starts immediately in an isolated tmux session. Press `enter` to type in the pane, or watch output stream live in the preview.
+1. Press `n` to open the **Create Workspace** modal.
+2. Select **Worktree**, enter a name (e.g. `feature-auth`), select your base branch (`main`), choose your agent, and optionally enable Auto-approve.
+3. Press Enter. Sidecar creates the worktree and starts the agent in an isolated tmux session.
+4. Watch output stream live in the preview pane or press `enter` to type into the shell.
+5. When finished, press `m` to review the diff, push to remote, and open a GitHub PR.
 
-When done, press `m` to review the diff, create a GitHub PR, and clean up branches—all in one flow.
+## Workspace Layout & Sidebar
+
+The Workspaces interface features an adaptable two-pane or multi-pane layout:
+
+- **Left Pane (Sidebar)**: List or Kanban board of active workspaces and shells.
+- **Right Pane (Content Deck)**: Live terminal output, code documents, diffs, task cards, notes, and resource cards.
+- **Draggable Dividers**: Adjust column and row widths with the mouse or keyboard (`+` / `-`).
+
+### Card-Based Sidebar
+
+The sidebar presents workspaces as distinct cards separated by blank lines and section dividers:
+- **Category Glyphs**: `📌 PINNED`, `● LIVE`, `○ IDLE`, `◆ NEEDS ATTENTION`, `● WORKING`.
+- **Section Headers**: Flush-left uppercase headers with project-stable theme colors for instant recognition.
+- **Selection Fill**: Full-width active row fill that softens to outline when focus moves into the terminal or document panes.
+
+### View Modes
+
+Press `v` to toggle between **List View** and **Kanban View**:
+
+- **List View (Default)**: High-density vertical list showing workspace name, branch, agent kind, task link, relative time, and live status.
+- **Kanban View**: Multi-column board categorizing workspaces by state (Active, Waiting, Done, Paused). Navigate columns with `h`/`l` and cards with `j`/`k`.
+
+## Multi-Pane Windowing & Layouts
+
+Workspaces supports a unified multi-pane tiling system. You can open multiple panes alongside your active terminal:
+
+- **Document Panes**: Syntax-highlighted code or rendered Markdown with in-file search (`/`) and inline editing (`e`).
+- **Diff Panes**: Side-by-side or unified diff previews for commits, branches, and working tree changes.
+- **Issue Panes**: TD task cards with acceptance criteria and execution logs.
+- **Note Panes**: Project notes and scratchpads.
+- **Resource Panes**: External tickets from Jira, Linear, or custom providers.
+
+### Universal Pane Switcher (`n`)
+
+Press `n` from any focused pane or sidebar to open the Pane Switcher. Choose any pane kind and select your target via fuzzy search.
+
+### Visual Repositioning Modal (`M` / `⊞`)
+
+Press `M` from any pane (or click the `⊞` icon on the pane header) to rearrange your layout:
+- `h`, `j`, `k`, `l` move the draft layout.
+- `z` toggles zoom.
+- `enter` commits the new layout atomically.
+- `esc` cancels.
+- Active inline text edits are safely guarded with a save/discard confirmation dialog.
+
+See [Panes & Layouts](./layout-and-panes) for full details.
+
+## Shell & Session Management
+
+In addition to git worktrees, Workspaces manages standalone terminal shells for manual tasks:
+
+- **Instant Shell (`ctrl+n`)**: Instantly creates a new managed shell in the current project directory.
+- **Create Form (`n` → Kind: Shell)**: Create a named shell or seed an agent with auto-approve.
+- **Rename Shell (`R`)**: Rename the shell display name (persisted across restarts).
+- **Send Command (`sidecar shell send`)**: Send commands into background shells programmatically.
+- **Delete Shell (`D`)**: Close the tmux session and move the record to a recoverable tombstone.
+
+### Cold Session Restoration
+
+Shell records survive tmux crashes and reboots via `shells.json` (v3). Use the session restore engine to recover lost sessions:
+
+- `sidecar session status`: Inspect the read-only restore plan.
+- `sidecar session restore --agents --yes`: Recreate shells and resume exact agent conversations.
+- `sidecar session policy <target> --inherit|--shell|--resume|--never`: Configure per-shell recovery behavior.
+
+See [Session Durability & Recovery](./session-durability) for full details.
+
+## Agent Lifecycle & Integration
+
+Workspaces runs agents inside isolated tmux sessions and monitors their execution in real time:
+
+- **Real-Time Streaming**: Sub-500ms captures with synchronized redraws (DEC mode 2026) and native background color inheritance.
+- **Status Detection**: Automatically detects when agents are Working (`●`), Waiting on approval (`◆`), Done (`✓`), or Idle (`○`).
+- **Approval Shortcuts**: Press `y` to approve pending prompts, `Y` to approve all, or `N` to reject.
+- **Interactive Mode (`enter`)**: Connect directly to the terminal session to type commands or provide feedback.
+- **Session-Identity Hooks**: Install official hooks via `sidecar agent integration install <provider>` so agents report their exact conversation IDs.
 
 ## Configuration
 
-Workspace behavior is configured via:
-
-- **Global config:** `~/.config/sidecar/config.json` (for `plugins.workspace.*` settings)
-- **Project config:** `.sidecar/config.json` (project overrides)
-
-**Example config:**
+Configure workspace options in `~/.config/sidecar/config.json` or `.sidecar/config.json`:
 
 ```json
 {
@@ -82,873 +136,80 @@ Workspace behavior is configured via:
     "workspace": {
       "dirPrefix": true,
       "defaultAgentType": "claude",
+      "autoCreateShell": false,
       "agentStart": {
         "claude": "claude --dangerously-skip-permissions",
         "opencode": "opencode --profile fast",
         "*": "claude"
       },
-      "setupScript": ".sidecar/setup-workspace.sh"
+      "setupScript": ".sidecar/setup-workspace.sh",
+      "sessionRestore": {
+        "resumeAgents": "ask"
+      }
     }
   }
 }
 ```
 
-**Config options:**
+### Configuration Options
 
 | Option | Type | Description |
 |--------|------|-------------|
-| `dirPrefix` | bool | Prefix workspace dir with repo name (e.g., `myrepo-feature-auth`) |
-| `autoCreateShell` | bool | Create a shell session the first time the workspaces tab is focused in a session, if no shells exist yet. Default `false` |
-| `defaultAgentType` | string | Default agent family selected in create-workspace modal for new worktrees (AgentType value, e.g. `claude`, `codex`, `opencode`) |
-| `agentStart` | object | Default startup command map keyed by AgentType (plus optional `*`/`default` fallback) |
-| `setupScript` | string | Path to script run after workspace creation (for env setup, symlinks, etc.) |
-
-Environment override: set `SIDECAR_WORKSPACE_DEFAULT_AGENT_TYPE` (or `SIDECAR_DEFAULT_AGENT_TYPE`) before launching sidecar to override `defaultAgentType` for that process.
-
-### Per-worktree / per-branch agent command
-
-To override startup for one specific worktree/branch, create this file in that worktree root:
-
-- `.sidecar-agent-start` (exact filename)
-
-Its contents should be a single-line command prefix (hidden characters are stripped; empty/multiline values are ignored).
-
-**Command precedence** when starting an agent in a worktree:
-
-1. `.sidecar-agent-start` in that worktree
-2. `plugins.workspace.agentStart[<selectedAgentType>]`
-3. `plugins.workspace.agentStart["*"]` (or `"default"`)
-4. Built-in command for the selected agent type (`AgentCommands`)
-5. `claude` (only if the selected type has no built-in command mapping)
-
-**Selected agent type precedence** (used for `s` start/restart/reconnect):
-
-1. `.sidecar-agent` in that worktree
-2. `plugins.workspace.defaultAgentType` (or `SIDECAR_WORKSPACE_DEFAULT_AGENT_TYPE` / `SIDECAR_DEFAULT_AGENT_TYPE`)
-3. `claude`
-
-For OpenCode, provide the command prefix (e.g. `opencode --profile fast`), not `opencode run ...`; sidecar handles `run` when needed for prompt launch.
-
-The setup script runs in the new workspace directory with `$SIDECAR_WORKTREE_NAME` and `$SIDECAR_BASE_BRANCH` environment variables.
-
-## Overview
-
-The Workspaces plugin provides a two-pane layout:
-
-- **Left pane**: Workspace list (or Kanban columns)
-- **Right pane**: Preview tabs (Output, Diff, Task)
-- **Draggable divider**: Resize panes to your preference
-
-Toggle views with `v` for list or Kanban board.
-
-## View Modes
-
-### List View (Default)
-
-Vertical list of all workspaces with rich status information:
-
-| Status | Meaning | Visual Indicator |
-|--------|---------|------------------|
-| **Active** | Agent running, processing tasks | Green dot |
-| **Waiting** | Agent paused for approval | Yellow dot |
-| **Done** | Work completed successfully | Blue checkmark |
-| **Paused** | Agent stopped or no agent | Gray dot |
-| **Error** | Agent crashed or failed | Red X |
-
-Each row shows:
-- Workspace name and branch
-- Agent type (Claude Code, Cursor, etc.), or branch name for the root workspace
-- Task ID (if linked to TD)
-- Creation time (relative, e.g., "2h ago")
-- Status indicator
-
-### Kanban View
-
-Press `v` to switch to Kanban board with columns organized by status:
-
-| Column | Description |
-|--------|-------------|
-| **Active** | Agents currently processing (green) |
-| **Waiting** | Agents blocked on approval (yellow) |
-| **Done** | Completed work ready to merge (blue) |
-| **Paused** | Stopped or idle workspaces (gray) |
-
-Each column shows:
-- Workspace count at the top
-- Cards with name, agent type, and task
-- Visual color coding for quick status assessment
-
-Navigate columns with `h`/`l` (vim keys) or arrow keys. Press `v` to toggle back to list view.
-
-**When to use Kanban:**
-- Managing 5+ parallel workspaces
-- Visual overview of agent pipeline
-- Quick status triage across many tasks
-
-**When to use List:**
-- Detailed view of individual workspaces
-- Faster keyboard navigation
-- More information density
-
-## Workspace Navigation
-
-| Key | Action |
-|-----|--------|
-| `j`, `↓` | Move down |
-| `k`, `↑` | Move up |
-| `g` | Jump to first |
-| `G` | Jump to last |
-| `h`, `←` | Previous column (Kanban) |
-| `l`, `→` | Next column (Kanban) or focus preview |
-| `v` | Toggle list/Kanban view |
-
-## Preview Tabs
-
-Three tabs in the preview pane provide different views of workspace state:
-
-| Key | Action |
-|-----|--------|
-| `[` | Previous tab |
-| `]` | Next tab |
-
-### Output Tab
-
-Real-time streaming of agent terminal output. Shows exactly what the agent sees—including prompts, tool calls, file edits, and command outputs.
-
-**Features:**
-- Captures tmux pane content every 500ms (adaptive: slower when idle, faster when active)
-- Auto-scroll follows new output (pauses on manual scroll, resumes with `G`)
-- ANSI color support for syntax highlighting
-- Unicode-safe truncation (no broken multibyte chars)
-- Handles high-velocity output without memory leaks
-
-| Key | Action |
-|-----|--------|
-| `j`, `↓` | Scroll down (pauses auto-scroll) |
-| `k`, `↑` | Scroll up |
-| `ctrl+d` | Page down |
-| `ctrl+u` | Page up |
-| `g` | Jump to top |
-| `G` | Jump to bottom (resumes auto-scroll) |
-
-#### Open files beside the terminal
-
-An unmodified click on a resolvable file path in a selected workspace or
-project shell terminal opens it beside that terminal. `README.md` and
-`internal/plugins/workspace/plugin.go:37` are both links. Markdown with no
-line number opens rendered; anything else, including `path:line`, opens as
-highlighted source.
-
-A second click adds a tab instead of replacing the file. Clicking a path
-that is already open focuses that tab (and jumps to the line when the link
-has one). Click a drawn tab to select it; `{` / `}` still cycle. The header is
-the tab strip plus a close control: each label is the relative path,
-left-truncated so the filename always survives (`…/workspace/plugin.go`).
-Click the `×` in the top-right corner to close the pane completely. There
-is no Raw chip or in-header hint.
-
-The same tabs work on the global Workspaces view. Those stay in memory for
-the selected row; they are not restored after a relaunch.
-
-Document panes are enabled by default. To turn them off for a launch, run
-`sidecar --disable-feature=workspace_doc_panes`, or set the persistent flag in
-`~/.config/sidecar/config.json`. When the flag is off there is no pane tree,
-so Diff is also unavailable (`d`, the Diff chip, and `sidecar open --diff`
-toast or no-op):
-
-```json
-{
-  "features": {
-    "flags": {
-      "workspace_doc_panes": false
-    }
-  }
-}
-```
-
-Click a pane or use `tab` and `shift+tab` to move focus. Document focus
-provides these commands:
-
-| Key | Action |
-|-----|--------|
-| `j`, `↓` / `k`, `↑` | Scroll by one line |
-| `ctrl+d` / `ctrl+u` | Scroll by half a page |
-| `g` / `G` | Jump to the start / end |
-| `x` | Close the active tab. The last tab closes the pane and forgets the set |
-| `{` / `}` | Previous / next tab |
-| `m` | Toggle rendered / raw markdown. No-op on other files |
-| `w` | Toggle line wrap |
-| `I` | File info |
-| `ctrl+r` | Reveal in the OS file manager |
-| `Y` | Copy the relative path |
-| `+` / `-` | Grow / shrink the split |
-| `tab` / `shift+tab` | Move focus between sidebar, terminal, and document |
-| `q`, `esc` | Hide the pane. The files stay remembered for this shell or workspace |
-
-`q` hides; `x` on the last file forgets. Switching to another shell and
-back, or relaunching onto the same surface, restores open files, the active
-tab, render mode, wrap, scroll, and split ratio. A surface with no
-remembered files stays a full-width terminal. Clicking a file while the
-pane is hidden reopens the remembered set and focuses (or appends) that
-path.
-
-`{` / `}` cycle Diff target tabs while a Diff leaf is focused, the same as
-they cycle document tabs on a focused document; `,` / `.` step between the
-files inside the focused Diff target. `m` on a focused document does not start a merge.
-Drag the divider to resize.
-
-`shift`-drag and `alt`-drag remain terminal text-selection gestures; neither
-is an override for opening links. Use an unmodified click to follow a path.
-
-#### Open issues beside the terminal
-
-An unmodified click on a `td-…` link in a selected workspace or
-project shell terminal opens it beside that terminal.
-
-A second click adds a tab instead of replacing the issue. Clicking an
-ID that is already open focuses that tab. Click a drawn tab to select
-it; `{` / `}` cycle. `x` closes the active tab. The header is the tab
-strip plus a close control: each label is the issue ID plus headline,
-truncated at the end so the ID stays visible (`td-abc123: Fix the lo…`).
-Click the `×` in the top-right corner to close the pane completely. There
-is no in-header hint. The footer shows Tab×, Tab←, and Tab→.
-
-The same open, append, click, cycle, and close journey works on the
-global Workspaces view. Those tabs stay in memory for the selected row;
-they are not written to disk and are not restored after a relaunch.
-
-`enter` on a parent or subtask uses the same open-or-focus path as a
-terminal link: an already-open issue is focused; a new one is appended.
-It does not create a duplicate tab or replace the issue you were
-reading.
-
-File tabs keep left-truncated paths so the filename survives. Issue
-tabs keep the ID visible and truncate the headline.
-
-Click a pane or use `tab` and `shift+tab` to move focus. Issue focus
-provides these commands:
-
-| Key | Action |
-|-----|--------|
-| `j` / `k` | Scroll by one line |
-| `↓` / `↑` | Walk parent, siblings, and subtasks (scrolls when none) |
-| `ctrl+d` / `ctrl+u` | Scroll by half a page |
-| `g` / `G` | Jump to the start / end |
-| `x` | Close the active tab. The last tab closes the pane and forgets the set |
-| `{` / `}` | Previous / next tab |
-| `enter` | Open or focus the selected parent or subtask as a tab |
-| `y` | Copy the issue as markdown |
-| `Y` | Copy the issue ID |
-| `tab` / `shift+tab` | Move focus between sidebar, terminal, document, and issue |
-| `q`, `esc` | Hide the pane. The issues stay remembered for this shell or workspace |
-
-In project Workspaces, `q` hides; `x` on the last issue forgets.
-Switching to another shell and back, or relaunching onto the same
-surface, restores open issues, the active tab, and each tab's scroll.
-Clicking an issue while the pane is hidden reopens the remembered set
-and focuses (or appends) that ID.
-
-On the global Workspaces view, `q` / `esc` and last-`x` close the pane
-and forget that row's in-memory set. Switching rows and back restores
-tabs that were still open.
-
-`{` / `}` cycle Diff target tabs while a Diff leaf is focused, the same as
-they cycle issue tabs on a focused issue; `,` / `.` step between the files
-inside the focused Diff target.
-
-**What you'll see:**
-- Agent initialization and model selection
-- Tool calls and file operations
-- Approval prompts (if not skipped)
-- Error messages and stack traces
-- Completion messages
-
-### Diff pane
-
-`d`, the **Diff** header chip, or `sidecar open --diff` opens a working-tree
-Diff leaf beside the terminal. Click a printed hash or `A..B` range to open a
-commit or range tab on the same leaf. `{` / `}` cycle those target tabs while
-the leaf is focused, and `,` / `.` step between the files in the active target. Click the `×` in the top-right corner to close the pane
-completely. `q` / `esc` hide it.
-
-`--disable-feature=workspace_doc_panes` disables Diff: there is no pane tree,
-so those paths toast or no-op.
-
-### Task chip
-
-When a worktree has a linked `TaskID`, the **Task** chip opens that id in the
-Issues leaf. Press `T` in the sidebar to link or unlink a task.
-
-## Agent Integration
-
-The workspaces plugin runs AI coding agents in isolated tmux sessions and streams their output in real-time. Each workspace can have one active agent. Sessions persist across plugin restarts—sidecar automatically reconnects to running agents.
-
-### Supported Agents
-
-| Agent | Command | Description |
-|-------|---------|-------------|
-| **Claude Code** | `claude` | Anthropic's official CLI with browser control |
-| **Codex** | `codex` | Alternative Claude-based coding agent |
-| **Gemini** | `gemini` | Google's Gemini CLI |
-| **Cursor Agent** | `cursor-agent` | Cursor's autonomous coding agent |
-| **OpenCode** | `opencode` | OpenRouter-based coding assistant |
-
-### Starting Agents
-
-| Key | Action |
-|-----|--------|
-| `s` | Start agent (opens agent picker) |
-
-If no agent is running, opens a modal to select:
-- Claude Code
-- Codex
-- Gemini
-- Cursor Agent
-- OpenCode
-- None (just open terminal)
-
-### Attaching to Agents
-
-Typing stays in Sidecar. Press `enter` to enter interactive mode and type into the pane.
-
-Full-screen `tmux attach-session` (`t`, `ctrl+]`, double-click) is off unless `features.flags.tmux_full_attach` is enabled. With that flag on, `t` opens the agent's tmux session; `ctrl+b` then `d` detaches back to Sidecar.
-
-### Real-Time Output Streaming
-
-Agent output streams live in the **Output** tab. The plugin captures tmux pane content every 500ms (or slower when idle). Auto-scroll follows new output—manual scrolling pauses it, press `G` to resume.
-
-**Status detection:**
-- **Active**: Agent running, cursor visible in output
-- **Waiting**: Agent paused for approval (detected via prompts)
-- **Done**: Agent completed successfully
-- **Paused**: Agent stopped or session ended
-- **Error**: Agent crashed or failed
-
-### Agent Controls
-
-| Key | Action |
-|-----|--------|
-| `S` | Stop agent (kills tmux session) |
-| `y` | Approve pending action |
-| `Y` | Approve all pending prompts |
-| `N` | Reject pending action |
-
-Approval keys work with agents in "Waiting" status. The plugin detects common approval prompts from Claude Code, Codex, and Cursor.
-
-### Skip Permissions Mode
-
-When creating a workspace, enable Auto-approve to skip agent permission prompts. Each agent has a corresponding flag:
-
-| Agent | Flag |
-|-------|------|
-| Claude Code | `--dangerously-skip-permissions` |
-| Codex | `--dangerously-bypass-approvals-and-sandbox` |
-| Gemini | `--yolo` |
-| Cursor | `-f` |
-
-**Warning:** Skip permissions mode grants agents unrestricted file access. Only use for trusted prompts in sandboxed environments.
-
-## Shell Management
-
-Shells are standalone tmux sessions created for direct terminal access without an AI agent. They appear in the sidebar alongside workspaces for easy switching.
-
-### Creating Shells
-
-Press `ctrl+n` to create a shell immediately. Press `n` to open the Create Workspace form (Worktree selected); toggle Kind to Shell for a named shell or one that starts with an agent and auto-approve. Each shell is created with an auto-numbered display name (e.g., "Shell 1", "Shell 2") unless you type a name, and a stable tmux session name for state persistence.
-
-`ctrl+n` uses `plugins.workspace.defaultAgentType` when one is configured; with no default set it creates a plain shell. It never passes an agent's skip-permissions flag — use the Create Workspace form (Kind: Shell) for that.
-
-### Automatic Shells
-
-Set `plugins.workspace.autoCreateShell` to `true` to have a shell waiting the first time you open the workspaces tab in a session:
-
-```json
-{
-  "plugins": {
-    "workspace": {
-      "autoCreateShell": true
-    }
-  }
-}
-```
-
-The shell is created only when no shell sessions already exist — shells whose tmux sessions survived a sidecar restart are reattached instead. It does not move the sidebar selection, so your restored workspace stays selected. Nothing is created until the tab is actually focused, so the setting costs nothing at startup if you open elsewhere.
-
-### Renaming Shells
-
-Press `R` to rename a shell with a custom display name:
-
-1. **Modal appears**: Shows current name and tmux session ID
-2. **Type new name**: Input field accepts up to 50 characters
-3. **Validation**: Name must be unique and non-empty
-4. **Confirm**: Press Enter to save, Esc to cancel
-
-Custom names persist across sidecar restarts. The underlying tmux session name (e.g., `sidecar-sh-project-1`) remains stable for reliable state restoration.
-
-**Example:**
-- Default name: "Shell 1"
-- Rename to: "Backend"
-- Rename to: "Testing"
-- Custom names appear in the sidebar for easy identification
-
-### Deleting Shells
-
-Press `D` to delete a shell session. This terminates the underlying tmux session and removes it from the sidebar.
-
-### Shell Capabilities
-
-| Operation | Key | Description |
-|-----------|-----|-------------|
-| Create shell | `ctrl+n` | Create new terminal session immediately |
-| Create shell (form) | `n` then Kind: Shell | Create with a custom name, agent, and auto-approve |
-| Rename shell | `R` | Change display name (50 char limit) |
-| Delete shell | `D` | Terminate tmux session (confirm) |
-| Interactive mode | `enter` | Enter interactive mode for typing |
-| Attach to shell | `t` | Full-screen tmux access (`tmux_full_attach`) |
-
-## Workspace Operations
-
-### Creating Workspaces
-
-Press `n` to open the Create Workspace form. Kind is Worktree; toggle to Shell for a named or agent shell. Header `[+]` opens the same form with Worktree selected and Kind focused. Project `ctrl+n` does not open the form — it creates a shell immediately.
-
-| Field | Description |
-|-------|-------------|
-| **Kind** | Shell or Worktree |
-| **Name** | Display name (spaces allowed; for worktrees, git branch and directory use a slug). Optional for shells (placeholder is the next "Shell N"); required for worktrees |
-| **Base Branch** | Worktree only. Branch to create from (pre-filled with the current branch) |
-| **Agent** | AI agent to launch (Claude Code, Cursor, etc.). None is first for shells and last for worktrees |
-| **Auto-approve** | Auto-approve agent actions when the selected agent has a skip flag (dangerous, see warning above) |
-
-**What happens on creation:**
-
-1. Git creates a workspace in a sibling directory (e.g., `../feature-auth`)
-2. A new branch is created from the base branch
-3. Env files (`.env`, `.env.local`, etc.) are copied from the main worktree — see [Worktree Setup Hooks](./worktree-setup.md)
-4. If a task is linked, a `.sidecar-task` file is created and `td start` runs
-5. If an agent is selected, it launches in a tmux session named `sidecar-ws-<name>`
-6. The workspace appears in the list with "Active" status (if agent running)
-
-Modal navigation:
-
-| Key | Action |
-|-----|--------|
-| `tab` | Next field |
-| `shift+tab` | Previous field |
-| `j`, `↓` | Navigate dropdowns |
-| `k`, `↑` | Navigate dropdowns |
-| `enter` | Select or confirm |
-| `esc` | Cancel |
-
-### Global Sessions
-
-The same Create Workspace form is on the global Sessions browser (`8`, or the Sessions header entry). Auto-approve and Base Branch exist there too.
-
-| Entry | What opens |
-|-------|------------|
-| `n` | Create Workspace, Worktree selected, focus on Name |
-| Header `+` | Same form, Worktree selected, Kind focused |
-| `ctrl+n` | Same form, Shell selected, focus on Name (a modal, not instant create) |
-
-The Project field is shown on this surface. Base Branch appears when Kind is Worktree; Auto-approve appears when the selected agent has a skip flag. Fetch PR is a separate project-surface action (`P`), not a form kind.
-
-With the `sidecar_remote_hosts` feature enabled, this surface also lists the shells, worktrees and agents on machines you have registered, and the Project field can name a project on one of them. See [Remote Hosts](./remote-hosts) for what you can and cannot do to a workspace that lives on another machine.
-
-### Deleting Workspaces
-
-| Key | Action |
-|-----|--------|
-| `D` | Delete workspace |
-
-Opens confirmation with options:
-- Delete local branch
-- Delete remote branch
-
-| Key | Action |
-|-----|--------|
-| `j`, `↓` | Navigate options |
-| `space` | Toggle checkbox |
-| `enter` | Confirm |
-| `D` | Quick delete (power user) |
-| `esc` | Cancel |
-
-### Fetching Remote PRs
-
-Press `P` to fetch a pull request created remotely (e.g., via Claude Code on your phone) and create a local workspace from it.
-
-| Key | Action |
-|-----|--------|
-| `P` | Open PR fetch modal |
-
-The modal lists open PRs from GitHub (via `gh pr list`). Filter by typing, select a PR, and press Enter. Sidecar fetches the branch and creates a worktree tracking it, with the PR URL pre-linked. Start an agent with `s` to continue the work locally.
-
-**Requirements:** `gh` CLI installed and authenticated.
-
-### Push & Remote
-
-| Key | Action |
-|-----|--------|
-| `p` | Push branch to remote |
-
-## Task Linking
-
-Link workspaces to TD tasks for context:
-
-| Key | Action |
-|-----|--------|
-| `T` | Link/unlink TD task |
-
-Opens task picker to select from open tasks.
-
-## Complete Workflow Example
-
-Here's a typical workspace lifecycle from creation to merge:
-
-**1. Create a workspace for a new feature:**
-
-Press `n`, enter name "feature auth", confirm base branch "main", choose agent "Claude Code", enable Auto-approve for autonomy. Press Enter. Link a TD task afterwards with `T` if you want the agent to have that context.
-
-**2. Agent works autonomously:**
-
-Claude Code starts immediately. A linked task injects its context. Watch live output in the **Output** tab. Status updates to "Active" → "Waiting" (if approval needed) → "Done" when complete.
-
-**3. Review the diff:**
-
-Switch to **Diff** tab to see all changes. Press `v` to toggle side-by-side view. Scroll horizontally with `h`/`l` for wide diffs.
-
-**4. Merge via PR:**
-
-Press `m` to start the merge workflow:
-- **Step 1**: Review final diff
-- **Step 2**: Choose merge method (merge commit / squash / rebase)
-- **Step 3**: Create GitHub PR (via `gh pr create`)
-- **Step 4**: Choose cleanup options (delete local branch, delete remote branch)
-
-**5. Cleanup:**
-
-After PR is merged (manually or via GitHub), run step 4 again to delete the workspace directory and branches.
+| `dirPrefix` | bool | Prefix workspace directory with repository name |
+| `autoCreateShell` | bool | Automatically create a shell when opening Workspaces if none exist |
+| `defaultAgentType` | string | Default agent selected in creation modal (`claude`, `codex`, etc.) |
+| `agentStart` | object | Startup command prefixes mapped by agent type |
+| `setupScript` | string | Script executed in newly created worktree directories |
+| `sessionRestore.resumeAgents` | string | Agent resume policy on cold restart (`ask`, `always`, `never`) |
+
+### Per-Worktree Agent Overrides
+
+To customize agent commands for a specific worktree, create `.sidecar-agent-start` in the worktree root with your custom command prefix.
 
 ## Merge Workflow
 
-Press `m` to start a multi-step merge:
+Press `m` on any workspace to launch the multi-step merge workflow:
 
-1. **Diff review**: See all changes to be merged
-2. **Method selection**: Choose merge strategy (merge commit, squash, rebase)
-3. **PR creation**: Creates GitHub PR via `gh` CLI (requires `gh` installed)
-4. **Cleanup options**: Delete local branch, remote branch, and workspace directory
+1. **Diff Review**: Inspect all changes made on the branch.
+2. **Strategy Selection**: Choose merge commit, squash merge, or rebase.
+3. **PR Creation**: Create a GitHub PR automatically using `gh pr create`.
+4. **Branch Cleanup**: Safely delete local and remote branches and remove the worktree directory.
 
-| Key | Action |
-|-----|--------|
-| `j`, `↓` | Navigate options |
-| `enter` | Proceed to next step |
-| `space` | Toggle checkboxes |
-| `tab` | Cycle focus |
-| `s` | Skip step (if already pushed) |
-| `esc`, `q` | Cancel merge |
-
-**Prerequisites:**
-
-- `gh` CLI installed and authenticated (`gh auth login`)
-- Remote tracking branch configured (push first with `p` if needed)
-
-## Pane Navigation
-
-| Key | Action |
-|-----|--------|
-| `tab` | Switch to next pane |
-| `shift+tab` | Switch to previous pane |
-| `l`, `→` | Focus preview pane |
-| `h`, `←` | Focus sidebar |
-| `enter` | Focus preview (from list) |
-| `esc` | Return to sidebar |
-| `\` | Toggle sidebar visibility |
-
-When a document or issue is open, this cycle includes sidebar, terminal, and
-those panes. The focused pane's header and adjacent divider show which inner
-pane has focus.
-
-## Mouse Support
-
-- **Click workspace**: Select
-- **Click tab**: Select a file or issue tab. Diff and Task header chips open leaves.
-- **Click button**: Execute action
-- **Drag divider**: Resize panes
-- **Scroll**: Navigate lists and content
-
-## Session Persistence & Reconnection
-
-The plugin remembers state across restarts and automatically reconnects to running agents.
-
-**What persists:**
-
-| State | Storage Location |
-|-------|------------------|
-| View mode (list/Kanban) | User config |
-| Sidebar width | User config |
-| Diff view mode | User config |
-| Active tab | User config |
-| Open file and issue tabs, wrap, render mode, scroll, and split (per shell / workspace) | Per-project workspace state |
-| Agent type | `.sidecar-agent` in workspace dir |
-| Agent start command override | `.sidecar-agent-start` in workspace dir |
-| Task link | `.sidecar-task` in workspace dir |
-| PR URL | `.sidecar-pr` in workspace dir |
-
-**Automatic reconnection:**
-
-When sidecar starts, it:
-1. Lists all workspaces via `git workspace list`
-2. Checks for existing tmux sessions named `sidecar-ws-*`
-3. Reconnects to active sessions and resumes output streaming
-4. Detects agent status (Active, Waiting, Done) by analyzing recent output
-5. Resolves agent type using `.sidecar-agent` -> `defaultAgentType` -> `claude`
-
-**Claude Code integration:**
-
-For Claude Code specifically, the plugin also:
-- Detects running Claude sessions by matching worktree paths to `~/.claude/projects/*`
-- Reads session JSONL to determine if agent is active or waiting
-- Shows Claude status even if tmux session is unavailable (direct attachment not possible without tmux)
-
-This means you can close sidecar, continue working with Claude Code directly, then reopen sidecar and see live status updates.
-
-## Tips & Best Practices
-
-**Naming conventions:**
-- Use descriptive branch names: `feature-auth`, `bugfix-login`, `refactor-api`
-- Keep names short (under 30 chars) for better display in lists
-- Use kebab-case for consistency with git conventions
-
-**Agent usage:**
-- Start with Auto-approve disabled for safety—enable only for trusted, sandboxed work
-- Link tasks to workspaces for context—the agent receives the task title and description
-- Monitor "Waiting" status agents regularly—they need approval to continue
-
-**Parallel workflows:**
-- Create workspaces from different base branches (main, develop, etc.)
-- Use Kanban view when managing 5+ workspaces for visual overview
-- Review "Done" workspaces daily and merge promptly to avoid conflicts
-
-**Performance:**
-- Limit active workspaces to 10-15 for best performance (tmux polling overhead)
-- Stop agents when not needed—"Paused" workspaces have minimal overhead
-- Delete merged workspaces to keep the list manageable
-
-**Integration:**
-- Configure setup scripts for automatic dependency installation (npm, pip, etc.)
-- Use `dirPrefix` when working across multiple repos to avoid directory conflicts
-- Link workspaces to TD tasks for automatic time tracking and status sync
-
-## Troubleshooting
-
-**Agent won't start:**
-- Verify CLI is installed: `which claude` (or codex, cursor-agent, etc.)
-- Check tmux is running: `tmux ls`
-- Look for existing session: `tmux ls | grep sidecar-ws-`
-- Kill stale session: `tmux kill-session -t sidecar-ws-<name>`
-
-**Output not streaming:**
-- Ensure workspace is selected in sidebar (output only streams for selected workspace)
-- Check tmux session is alive: `tmux ls | grep sidecar-ws-<name>`
-- Try pressing `r` to refresh workspace list
-- Restart sidecar to trigger reconnection
-
-**Merge fails:**
-- Install `gh` CLI: `brew install gh` or `gh auth login`
-- Push branch first: press `p` before merge workflow
-- Check GitHub permissions: `gh auth status`
-- Merge conflicts: resolve manually in workspace directory, then retry
-
-**Workspace won't delete:**
-- Stop agent first with `S`
-- Check for uncommitted changes: switch to workspace and commit or stash
-- Force remove: `git worktree remove --force <path>`
-- Manual cleanup: `rm -rf <worktree-path>` then `git worktree prune`
-
-**Status stuck on "Active":**
-- Agent may be idle waiting for input—check Output tab
-- Try sending approval with `y` if agent is waiting
-- Attach with `enter` and check terminal directly
-- Restart agent: `S` to stop, `s` to start
-
-**Performance issues:**
-- Reduce active workspaces (stop agents on paused workspaces)
-- Increase poll intervals in config (advanced, requires code change)
-- Close unused workspaces with `D`
-- Clear tmux scrollback: `tmux clear-history -t sidecar-ws-<name>`
-
-## Command Reference
-
-All keyboard shortcuts by context:
+## Keyboard Reference
 
 ### Sidebar Context (`workspace-sidebar`)
 
 | Key | Action |
 |-----|--------|
-| `j`, `↓` | Move down |
-| `k`, `↑` | Move up |
-| `g` | Jump to top |
-| `G` | Jump to bottom |
-| `h`, `←` | Previous column (Kanban) |
-| `l`, `→` | Next column / focus preview |
-| `v` | Toggle view mode |
-| `n` | Create workspace |
-| `P` | Fetch remote PR as workspace |
-| `F` | Open a file pane on the file finder (list view) |
+| `j`, `k`, `↓`, `↑` | Move down / up |
+| `g` / `G` | Jump to top / bottom |
+| `h` / `l` | Previous / next column (Kanban) or focus preview |
+| `v` | Toggle List / Kanban view |
+| `n` | Open Create Workspace / Pane Switcher |
+| `ctrl+n` | Create Shell immediately |
+| `P` | Fetch remote GitHub PR as a workspace |
 | `D` | Delete workspace / Delete shell |
-| `p` | Push branch |
-| `d` | Show diff |
-| `m` | Merge workflow |
-| `T` | Link task |
-| `R` | Rename shell (display name only) |
-| `s` | Start agent |
-| `S` | Stop agent |
-| `y` | Approve action |
-| `Y` | Approve all |
-| `N` | Reject action |
-| `enter` | Interactive mode |
-| `t` | Attach to agent (`tmux_full_attach`) |
-| `[` | Previous tab |
-| `]` | Next tab |
-| `tab` | Focus preview |
-| `\` | Toggle sidebar |
-
-### Preview Context (`workspace-preview`)
-
-| Key | Action |
-|-----|--------|
-| `j`, `↓` | Scroll down |
-| `k`, `↑` | Scroll up |
-| `ctrl+d` | Page down |
-| `ctrl+u` | Page up |
-| `g` | Jump to top |
-| `G` | Jump to bottom |
-| `v` | Toggle diff view (diff tab) |
-| `h`, `←` | Scroll left / focus sidebar |
-| `l`, `→` | Scroll right |
-| `0` | Reset scroll |
-| `m` | Toggle markdown (task tab) |
-| `s` | Start agent |
-| `S` | Stop agent |
-| `y` | Approve action |
-| `Y` | Approve all |
-| `N` | Reject action |
-| `[` | Previous tab |
-| `]` | Next tab |
-| `tab` | Focus sidebar |
-| `esc` | Focus sidebar |
-| `\` | Toggle sidebar |
+| `R` | Rename shell display name |
+| `m` | Launch merge & PR workflow |
+| `T` | Link / unlink TD task |
+| `s` / `S` | Start / Stop agent |
+| `y` / `Y` / `N` | Approve / Approve All / Reject pending agent prompt |
+| `enter` | Enter interactive terminal mode |
+| `\` | Toggle sidebar visibility |
 
 ### Document Context (`workspace-doc`)
 
-File tabs beside the selected workspace or shell terminal. `q` hides the
-pane and remembers the set; `x` on the last tab forgets it. Each surface
-restores its own tabs.
-
-A pane can search for its own next file. `ctrl+p` opens Find, the fuzzy file
-finder, and `f` opens Search, a project-wide ripgrep search — the same two
-keys under the same two names the Files plugin uses, both rooted at the
-pane's own workspace or shell directory and drawn as a modal inside the
-pane, below its header row: sized to its own content and centred with the
-document dimmed around it when the pane is wide enough to show a readable
-margin of itself, and taking the whole pane when it is not. The header row
-keeps saying which mode the pane is in at every size. While one is open it owns every key
-in the pane; `esc` closes it, `enter` loads the hit in the active tab,
-and `shift+enter` opens it in a new tab. `F` in the list view opens a new file
-pane straight into the finder; kanban draws no pane tree, so it is offered
-only in the list.
-
 | Key | Action |
 |-----|--------|
-| `j`, `↓` | Scroll down |
-| `k`, `↑` | Scroll up |
-| `ctrl+d`, `ctrl+u` | Scroll down / up half a page |
-| `g`, `G` | Jump to start / end |
-| `ctrl+p` | Find a file by name in this pane |
-| `f` | Search the project in this pane |
-| `x` | Close the active tab. Last tab forgets the set |
-| `{`, `}` | Previous / next file tab |
-| `m` | Toggle rendered / raw markdown (markdown only) |
-| `w` | Toggle line wrap |
-| `I` | File info |
-| `ctrl+r` | Reveal in the OS file manager |
-| `Y` | Copy the relative path |
-| `+`, `-` | Grow / shrink the split |
-| `tab`, `shift+tab` | Move focus between sidebar, terminal, and document |
-| `q`, `esc` | Hide the pane. Tabs stay remembered for this surface |
-
-### Issue Context (`workspace-issue`)
-
-Issue tabs beside the selected workspace or shell terminal. `q` hides the
-pane and remembers the set; `x` on the last tab forgets it. Each surface
-restores its own tabs, active tab, and scroll. Global Workspaces uses
-the same `{` / `}` / `x` keys; those tabs stay in memory for the
-selected row and are forgotten by `q` / last-`x`.
-
-| Key | Action |
-|-----|--------|
-| `j`, `k` | Scroll down / up |
-| `↓`, `↑` | Walk parent, siblings, and subtasks |
-| `ctrl+d`, `ctrl+u` | Scroll down / up half a page |
-| `g`, `G` | Jump to start / end |
-| `x` | Close the active tab. Last tab forgets the set |
-| `{`, `}` | Previous / next issue tab |
-| `enter` | Open or focus the selected parent or subtask as a tab |
-| `y` | Copy the issue as markdown |
-| `Y` | Copy the issue ID |
-| `tab`, `shift+tab` | Move focus between sidebar, terminal, document, and issue |
-| `q`, `esc` | Hide the pane. Tabs stay remembered for this surface |
-
-### Create Modal (`workspace-create`)
-
-| Key | Action |
-|-----|--------|
-| `tab` | Next field |
-| `shift+tab` | Previous field |
-| `j`, `↓` | Navigate dropdown |
-| `k`, `↑` | Navigate dropdown |
-| `enter` | Select / confirm |
-| `esc` | Cancel |
-
-### Merge Modal (`workspace-merge`)
-
-| Key | Action |
-|-----|--------|
-| `j`, `↓` | Navigate options |
-| `k`, `↑` | Navigate options |
-| `enter` | Proceed |
-| `space` | Toggle checkbox |
-| `tab` | Cycle focus |
-| `s` | Skip step |
-| `esc`, `q` | Cancel |
-
-### Delete Modal (`workspace-delete`)
-
-| Key | Action |
-|-----|--------|
-| `j`, `↓` | Navigate options |
-| `k`, `↑` | Navigate options |
-| `space` | Toggle checkbox |
-| `enter` | Confirm |
-| `D` | Quick delete |
-| `esc`, `q` | Cancel |
-
----
-
-## Summary
-
-The Workspaces plugin is sidecar's most powerful feature for parallel AI-assisted development. It combines git worktrees, tmux session management, real-time output streaming, and GitHub PR workflows into a unified interface.
-
-**Start using it:**
-1. Press `n` to create a workspace
-2. Choose Claude Code or Cursor as your agent
-3. Watch output stream live in the Output tab
-4. Press `m` when done to merge via PR
-5. Repeat for multiple parallel branches
-
-**Advanced features:**
-- Kanban board for 5+ simultaneous workspaces
-- Automatic reconnection to running agents
-- Skip permissions mode for autonomous agents
-- TD task integration for time tracking
-
-The workspaces plugin enables a new development workflow: let AI agents work in parallel on isolated branches while you orchestrate from a single dashboard. No more context-switching, no more manual tmux management, no more scattered terminal tabs.
+| `j`, `k`, `↓`, `↑` | Scroll down / up |
+| `ctrl+d` / `ctrl+u` | Page down / Page up |
+| `ctrl+p` | Find file by name |
+| `f` | Search project with ripgrep |
+| `/` | In-file search with `n`/`N` navigation |
+| `e` | Edit file inline |
+| `E` | Open file in external `$EDITOR` |
+| `m` | Toggle rendered / raw Markdown |
+| `{` / `}` | Previous / next file tab |
+| `x` | Close active tab |
+| `M` | Open visual reposition modal |
+| `q`, `esc` | Hide pane |

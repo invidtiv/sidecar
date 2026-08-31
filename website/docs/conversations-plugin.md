@@ -1,14 +1,14 @@
 ---
-sidebar_position: 5
+sidebar_position: 7
 title: Conversations Plugin
 ---
 
 # Conversations Plugin
 
-Browse and search your AI coding sessions with turn-based organization, message expansion, and session analytics—see what your agents have been doing across multiple tools.
+Browse, search, and inspect past AI coding sessions across multiple agent providers with turn-based organization, token analytics, and one-key resumption.
 
-:::caution Opt-in (default off)
-The Conversations plugin is **disabled by default**. When off, Sidecar does not construct history adapters or read agent session stores.
+:::info Opt-In Feature (Default Off)
+The Conversations plugin is **disabled by default**. When disabled, Sidecar does not construct history adapters or read agent session stores from your disk.
 
 **Enable** in `~/.config/sidecar/config.json`:
 
@@ -23,209 +23,70 @@ The Conversations plugin is **disabled by default**. When off, Sidecar does not 
 ```
 
 Or run: `sidecar --enable-feature=conversations_plugin`
-
-With the flag on, set `plugins.conversations.enabled` to `false` for a hard off-switch without clearing the feature flag.
 :::
 
 ![Conversations Plugin](/img/sidecar-conversations.png)
 
-## Supported Agents
+## Supported Agents & Adapters
 
-The Conversations plugin automatically detects and displays sessions from:
+The Conversations plugin automatically parses and normalizes session histories from:
 
-| Agent | Icon | Description |
-|-------|------|-------------|
-| Amp Code | ⚡ | Amp's AI coding assistant |
-| Claude Code | ◆ | Anthropic's CLI coding agent |
-| Codex | ▶ | OpenAI's CLI coding agent |
-| Cursor CLI | ▌ | Cursor's background agent |
-| Gemini CLI | ★ | Google's CLI coding agent |
-| GitHub Copilot CLI | ⋮⋮ | GitHub's terminal assistant |
-| Kiro | κ | Amazon's AI coding assistant |
-| OpenCode | ◇ | Open-source coding agent |
-| Pi | 🐾 | Pi AI agent (OpenClaw) |
-| Warp | » | Warp terminal AI |
+| Agent | Icon | Provider |
+|-------|------|----------|
+| **Claude Code** | ◆ | Anthropic CLI agent |
+| **Codex** | ▶ | OpenAI coding agent |
+| **Cursor CLI** | ▌ | Cursor background agent |
+| **Gemini CLI** | ★ | Google terminal agent |
+| **OpenCode** | ◇ | Open-source terminal assistant |
+| **Pi** | 🐾 | Pi agent (OpenClaw) |
+| **Amp Code** | ⚡ | Amp coding assistant |
+| **xAI Grok** | ✕ | Grok developer CLI |
+| **Kiro** | κ | Amazon AI assistant |
+| **Warp** | » | Warp terminal AI |
+| **GitHub Copilot CLI** | ⋮⋮ | GitHub Copilot assistant |
 
-Sessions from all detected agents appear in a unified list, with icons indicating the source.
+## Key Capabilities
 
-## Overview
+- **Unified Session Index**: Aggregates sessions across all supported CLI tools into one chronological list.
+- **Search & Filter (`/`, `f`)**: Search across session titles, prompt content, and response text, or filter by project.
+- **Turn-by-Turn Message View**: Expand user prompts, agent thoughts, tool invocations, and command outputs.
+- **Exact Session Resumption**: Resumes sessions using structured command vectors (`agentcatalog`) to reopen the exact native conversation.
+- **Export to Markdown (`y`)**: Copy full conversation logs to your system clipboard formatted as clean Markdown.
 
-The Conversations plugin provides a two-pane layout:
+## Layout & Navigation
 
-- **Left pane**: Session list with search and filters
-- **Right pane**: Message detail with expandable turns
-- **Draggable divider**: Resize panes to your preference
+The Conversations plugin provides a two-pane interface:
 
-Toggle the sidebar with `\` to maximize message space.
+- **Left Pane (Session List)**: Chronological list of sessions with agent icon, title, relative timestamp, message count, and token usage.
+- **Right Pane (Message Detail)**: Formatted conversation transcript with expandable tool calls.
 
-## Session List
-
-Browse all sessions from your local history across all supported agents.
-
-| Key | Action |
-|-----|--------|
-| `j`, `↓` | Move down |
-| `k`, `↑` | Move up |
-| `g` | Jump to first session |
-| `G` | Jump to last session |
-| `ctrl+d` | Page down |
-| `ctrl+u` | Page up |
-| `enter` | View selected session |
-
-### Search & Filter
+### Session List (Left Pane)
 
 | Key | Action |
 |-----|--------|
-| `/` | Search sessions by title or ID |
+| `j`, `↓` | Move down session list |
+| `k`, `↑` | Move up session list |
+| `g` / `G` | Jump to top / bottom |
+| `ctrl+d` / `ctrl+u` | Page down / Page up |
+| `/` | Search session content and titles |
 | `f` | Filter by project |
-| `esc` | Clear search/filter |
+| `enter`, `l` | Focus message detail pane |
+| `o` | Resume/reopen selected session in CLI |
+| `y` | Copy conversation transcript as Markdown |
+| `esc` | Clear search or filter |
 
-Search matches session titles and conversation content.
-
-### Session Actions
-
-| Key | Action |
-|-----|--------|
-| `y` | Copy session as markdown |
-| `o` | Open/resume session in CLI (agent-specific) |
-
-## Message View
-
-Two view modes for reading conversations:
+### Message Detail (Right Pane)
 
 | Key | Action |
 |-----|--------|
-| `l` or `r` | Toggle between flow and turn view |
+| `j`, `k`, `↓`, `↑` | Scroll conversation |
+| `ctrl+d` / `ctrl+u` | Page down / Page up |
+| `enter` | Expand / collapse selected message turn |
+| `l` / `r` | Toggle between flow view and turn view |
+| `h`, `esc` | Return focus to session list |
 
-### Conversation Flow
+## Exact Conversation Binding & Resuming
 
-Messages display in order, similar to chat-style interfaces:
-- User messages with prompts
-- Assistant responses with tool results collapsed
-- Expandable tool invocations
+When using Sidecar with provider integration hooks (installed via `sidecar agent integration install`), running agents automatically report their unique native session ID to Sidecar.
 
-### Turn View
-
-Groups messages into conversation "turns" (user prompt + assistant response):
-- Collapsed by default
-- Shows token counts and tool summary
-- Expand to see full message content
-
-## Message Navigation
-
-| Key | Action |
-|-----|--------|
-| `j`, `↓` | Next turn/message |
-| `k`, `↑` | Previous turn/message |
-| `enter` or `d` | Expand/collapse turn or view detail |
-| `y` | Copy turn content |
-| `o` | Open in CLI |
-
-### Detail View
-
-Press `enter` on a turn to see full details in the right pane:
-
-| Key | Action |
-|-----|--------|
-| `j`, `↓` | Scroll down |
-| `k`, `↑` | Scroll up |
-| `ctrl+d` | Page down |
-| `ctrl+u` | Page up |
-| `y` | Copy detail content |
-| `h`, `←` | Return to turn list |
-| `esc` | Close detail view |
-
-## Pane Navigation
-
-| Key | Action |
-|-----|--------|
-| `tab` | Switch to next pane |
-| `shift+tab` | Switch to previous pane |
-| `l`, `→` | Focus message pane |
-| `h`, `←` | Focus sidebar |
-| `\` | Toggle sidebar visibility |
-
-## Session Analytics
-
-View statistics about a session:
-- Model usage breakdown (tokens by model)
-- File impacts (which files were created/modified)
-- Tool invocations (count by tool type)
-- Total token consumption
-
-## Pagination
-
-Sessions load 50 messages at a time. Scroll to load older messages automatically with "load older" support for long conversations.
-
-## Incremental Updates
-
-The plugin watches for new messages and coalesces updates for performance. Your session list stays current as agents work.
-
-## Render Caching
-
-Markdown rendering is cached per-message to maintain smooth scrolling even with large conversations.
-
-## Mouse Support
-
-- **Click session**: Select and view
-- **Click turn**: Expand/collapse
-- **Click tool**: Toggle tool result visibility
-- **Drag divider**: Resize panes
-- **Scroll**: Navigate lists and content
-
-## State Persistence
-
-These preferences save across sessions:
-- Sidebar width
-- View mode (flow/turn)
-- Expanded states
-
-## Command Reference
-
-All keyboard shortcuts by context:
-
-### Sidebar Context (`conversations-sidebar`)
-
-| Key | Action |
-|-----|--------|
-| `j`, `↓` | Move down |
-| `k`, `↑` | Move up |
-| `g` | Jump to top |
-| `G` | Jump to bottom |
-| `ctrl+d` | Page down |
-| `ctrl+u` | Page up |
-| `/` | Search sessions |
-| `f` | Filter by project |
-| `enter` | View session |
-| `y` | Copy markdown |
-| `o` | Open in CLI |
-| `l`, `→` | Focus messages |
-| `tab` | Focus messages |
-| `\` | Toggle sidebar |
-
-### Messages Context (`conversations-messages`)
-
-| Key | Action |
-|-----|--------|
-| `j`, `↓` | Next turn |
-| `k`, `↑` | Previous turn |
-| `l` or `r` | Toggle view mode |
-| `enter`, `d` | Expand/view detail |
-| `y` | Copy content |
-| `o` | Open in CLI |
-| `h`, `←` | Focus sidebar |
-| `tab` | Focus sidebar |
-| `esc` | Return to sidebar |
-| `\` | Toggle sidebar |
-
-### Detail Context (`conversations-detail`)
-
-| Key | Action |
-|-----|--------|
-| `j`, `↓` | Scroll down |
-| `k`, `↑` | Scroll up |
-| `ctrl+d` | Page down |
-| `ctrl+u` | Page up |
-| `y` | Copy content |
-| `h`, `←` | Close detail |
-| `esc` | Close detail |
+All session resume commands are generated through a centralized structured registry (`agentcatalog`), ensuring safe argument construction and exact session continuation without guessing.

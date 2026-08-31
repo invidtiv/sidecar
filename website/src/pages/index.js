@@ -264,6 +264,11 @@ const AGENTS = [
 
 const DETAILS = [
   [
+    'Multi-pane windowing',
+    'M · n',
+    'Tile shells, files, diffs, and tasks in flexible 2×2 grid layouts with visual repositioning.',
+  ],
+  [
     'Cross-project context',
     '@',
     'Switch between repositories with zero friction. Active tabs, cursor position, and scrollback are remembered per project.',
@@ -274,14 +279,19 @@ const DETAILS = [
     'Switch between worktrees instantly inside any repository with state restored automatically.',
   ],
   [
-    'Configuration screen',
-    ',',
-    'Visual settings for appearance, projects, workspaces, agents, terminal behavior, and integrations.',
+    'Notification Centre',
+    'N',
+    'Corner toast stacks and slide-over notification history with actionable jumps into files and tasks.',
   ],
   [
-    'Setup check',
-    'sidecar setup',
-    'Analyzes your environment, color support, projects, and agent configurations with automated fixes.',
+    'Session durability',
+    'restore',
+    'Shells survive tmux crashes and reboots. Resume exact agent conversations with cold session restore.',
+  ],
+  [
+    'Configuration & setup',
+    ',',
+    'Visual settings for appearance, projects, workspaces, agents, remote hosts, and integrations.',
   ],
   [
     'Fuzzy finder & search',

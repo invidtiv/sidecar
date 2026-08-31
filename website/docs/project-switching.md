@@ -1,165 +1,106 @@
 ---
-sidebar_position: 6
-title: Project Switching
+sidebar_position: 2
+title: Project & Worktree Switching
 ---
 
-# Project Switching
+# Project & Worktree Switching
 
-Switch back and forth between projects instantly and seamlessly.
+Switch back and forth between repositories and git worktrees instantly with full context preservation.
+
+## Overview
+
+Sidecar provides two dedicated switching interfaces to keep your workflow fluid across codebases:
+
+1. **Project Switcher (`@`)**: Jump between different repositories configured on your system.
+2. **Worktree Switcher (`W`)**: Switch between parallel git worktrees within the current repository.
+
+Both switchers preserve your exact context per project—including active plugin tab, cursor positions, expanded directory folders, composed pane layouts, and scroll offsets.
+
+```
+┌────────────────────────────────────────────────────────────┐
+│ SWITCH PROJECT                                             │
+│                                                            │
+│ > sidecar           ~/code/sidecar         (current)       │
+│   frontend          ~/code/frontend                        │
+│   backend           ~/work/backend                         │
+│   api-gateway       ~/work/gateway                         │
+│                                                            │
+│ Switch: Enter · Navigate: j/k · Filter: Type · Cancel: Esc │
+└────────────────────────────────────────────────────────────┘
+```
 
 ## Quick Start
 
-1. Add projects to `~/.config/sidecar/config.json`:
+### Project Switching (`@`)
 
-```json
-{
-  "projects": {
-    "list": [
-      {"name": "sidecar", "path": "~/code/sidecar"},
-      {"name": "frontend", "path": "~/code/frontend"},
-      {"name": "backend", "path": "~/work/backend"}
-    ]
-  }
-}
-```
+1. Register your projects in `~/.config/sidecar/config.json`:
+   ```json
+   {
+     "projects": {
+       "list": [
+         {"name": "sidecar", "path": "~/code/sidecar"},
+         {"name": "frontend", "path": "~/code/frontend"},
+         {"name": "backend", "path": "~/work/backend"}
+       ]
+     }
+   }
+   ```
+2. Press `@` from anywhere in Sidecar (or click the project name in the header bar).
+3. Type to filter or use `j`/`k` to navigate.
+4. Press `enter` to switch.
 
-2. Press `@` to open the project switcher
-3. Select a project and press `Enter`
+### Worktree Switching (`W`)
+
+1. In any repository with git worktrees, press `W` (or click the worktree badge in the header bar).
+2. Select the worktree branch you want to switch into and press `enter`.
+3. Sidecar restores your last-active worktree whenever you return to that repository.
 
 ## What Gets Preserved
 
-When you switch projects, sidecar saves and restores your context per-project:
+When switching projects or worktrees, Sidecar saves and restores your full environment context:
 
 | State | Description |
 |-------|-------------|
-| Active plugin | Which plugin tab was focused |
-| Cursor position | Selected item in file browser, git status, etc. |
-| Expanded directories | File browser tree state |
-| Sidebar widths | Panel sizing preferences |
-| Last worktree | If using worktrees, restores your last-active one |
+| **Active Plugin Tab** | Restores whichever tab (Workspaces, Git, Files, Notes, Tasks) you were using |
+| **Composed Panes & Layouts** | Restores open Document, Diff, Issue, and Resource panes |
+| **Cursor Position** | Restores selected items in file tree, git status, and task lists |
+| **Directory Expansion** | Restores expanded/collapsed folder states in File Browser |
+| **Sidebar & Split Widths** | Restores custom pane split ratios and divider positions |
+| **Last Active Worktree** | Restores your last active worktree branch when switching between repositories |
 
-This means you can jump between projects and pick up exactly where you left off.
+## Project vs. Worktree Switching
 
-## Keyboard Shortcuts
+| Feature | Project Switching (`@`) | Worktree Switching (`W`) |
+|---------|------------------------|-------------------------|
+| **Primary Use** | Switch between different repositories | Switch between branches within the same repository |
+| **Setup** | Defined in `~/.config/sidecar/config.json` | Auto-discovered from git worktrees |
+| **Scope** | Any configured directory | Git worktrees within the active repo |
 
-### Opening the Switcher
+## Configuration Options
 
-| Key | Action |
-|-----|--------|
-| `@` | Open/close project switcher |
-| `W` | Open worktree switcher (within current repo) |
+### Project Definitions & Themes
 
-### Navigation
-
-| Key | Action |
-|-----|--------|
-| `j` / `ctrl+n` | Move cursor down |
-| `k` / `ctrl+p` | Move cursor up |
-| `Enter` | Switch to selected project |
-| `Esc` | Close without switching |
-
-Type to filter the project list. The current project is highlighted in green.
-
-## Mouse Support
-
-### Header Bar
-
-- **Click the repo name** in the header bar (next to "Sidecar") to open the project switcher
-- **Click the worktree indicator** (e.g., `[feature-branch]`) to open the worktree switcher
-
-### Inside the Switcher Modal
-
-- **Click** on a project to switch to it
-- **Scroll** to navigate the list
-- **Click outside** the modal to close it
-
-## Configuration
-
-### Config Location
-
-`~/.config/sidecar/config.json`
-
-### Project Entry Format
+Projects can specify individual theme overrides so each repository is visually distinct:
 
 ```json
 {
   "projects": {
     "list": [
       {
-        "name": "display-name",
-        "path": "/absolute/path/to/repo"
+        "name": "sidecar",
+        "path": "~/code/sidecar",
+        "theme": "sidecar-modern"
+      },
+      {
+        "name": "backend",
+        "path": "~/work/backend",
+        "theme": "monokai"
       }
     ]
   }
 }
 ```
 
-### Path Expansion
+### Uninitialized Project Discovery
 
-Paths support `~` expansion:
-- `~/code/myapp` expands to `/Users/you/code/myapp`
-
-### Per-Project Themes
-
-Projects can have individual themes:
-
-```json
-{
-  "projects": {
-    "list": [
-      {"name": "work", "path": "~/work/main", "theme": "dark"},
-      {"name": "personal", "path": "~/code/personal", "theme": "monokai"}
-    ]
-  }
-}
-```
-
-## Project vs Worktree Switching
-
-Sidecar supports two types of switching:
-
-| Feature | Project Switching (`@`) | Worktree Switching (`W`) |
-|---------|------------------------|-------------------------|
-| Use case | Jump between different repos | Jump between branches in same repo |
-| Setup | Manual config in `config.json` | Auto-discovered from git |
-| Scope | Any directory | Git worktrees only |
-
-Use project switching for different codebases. Use worktree switching for parallel branches within the same repo.
-
-## What Happens on Switch
-
-When you switch projects:
-
-1. All plugins stop (file watchers, git commands, etc.)
-2. Plugin context updates to new working directory
-3. All plugins reinitialize with new path
-4. Your previously active plugin for that project is restored
-5. A toast notification confirms the switch
-
-## Session Isolation
-
-Each sidecar instance maintains its own project state:
-
-- Switching projects in one terminal doesn't affect others
-- Each session tracks its own active plugin per project
-- State is persisted per working directory
-
-## Troubleshooting
-
-### "No projects configured" message
-
-Add projects to your config file as shown in Quick Start.
-
-### Project path doesn't exist
-
-The switcher shows the project but switching will fail. Verify paths:
-
-```bash
-ls ~/code/myproject
-```
-
-### Current project not highlighted
-
-The current project shows in green with "(current)" label. If not highlighted:
-- Check that the path in config exactly matches the current working directory
-- Paths are compared after `~` expansion
+Sidecar can resolve and switch to any project listed in `config.projects.list` even before that project has ever been opened or initialized on disk.

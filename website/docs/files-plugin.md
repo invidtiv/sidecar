@@ -1,400 +1,134 @@
 ---
-sidebar_position: 4
+sidebar_position: 3
 title: Files Plugin
 ---
 
 # Files Plugin
 
-A full-featured terminal file browser with syntax-highlighted previews, project-wide search powered by ripgrep, markdown rendering, and complete file operations—no leaving the terminal.
+A full-featured terminal file browser with syntax-highlighted previews, ripgrep project search, rendered Markdown with live content links, drag-and-drop file moving, and inline editing—all without leaving your terminal.
 
 ![Files Plugin](/img/sidecar-files.png)
 
 ## Key Capabilities
 
-- **Instant search across millions of files**: Fuzzy file finder caches 50,000 files with sub-second response
-- **Ripgrep-powered project search**: Find any text across your codebase in milliseconds with regex support
-- **Rich content previews**: Syntax highlighting for code, rendered markdown, and terminal graphics for images
-- **Live file watching**: Preview updates automatically when files change on disk
-- **Full file operations**: Create, rename, move, delete, yank/paste—all with safety confirmations
-- **Persistent state**: Your cursor position, expanded folders, and layout survive restarts
-- **Two-pane interface**: Resizable tree and preview with vim keybindings throughout
+- **Instant Fuzzy Finder (`ctrl+p`)**: Caches up to 50,000 files for instantaneous file navigation across large codebases.
+- **Project Search (`f`)**: Full-text ripgrep search with regex support, case matching, and multi-file previews.
+- **Rich Content Previews**: Language-aware syntax highlighting across 100+ languages, rendered Markdown with live links, and terminal graphics protocol support for image previews.
+- **Inline Text Editing (`e`)**: Edit files directly inside the preview pane using a lightweight tmux PTY editor backend.
+- **In-File Search (`/`)**: Incremental search within the active file preview with `n`/`N` match navigation and wrapped highlights.
+- **Drag-to-Move**: Drag files or directories to reorganize folders, with spring-loaded folder opening on hover.
+- **Full File Management**: Create (`a`/`A`), rename (`r`), move (`m`), delete (`D`), copy (`y`/`c`), and paste (`p`) with safety confirmations.
+- **Interactive Scrollbars**: Grab and drag scrollbars on both the directory tree and file preview panes.
 
 ## Quick Start
 
 | Key | Action |
 |-----|--------|
-| `ctrl+p` | Find a file by name |
-| `f` | Search the project's contents |
-| `/` | Filter visible files in tree, or search the previewed file |
-| `\` | Toggle tree pane |
+| `ctrl+p` | Open fuzzy file finder |
+| `f` | Search project contents with ripgrep |
+| `/` | Filter tree files (tree pane) or search inside file (preview pane) |
+| `e` | Edit previewed file inline |
+| `E` | Open file in external `$EDITOR` |
+| `m` | Toggle between raw text and rendered Markdown |
+| `\` | Toggle directory tree pane visibility |
 
-## Core Concepts
+## Core Concepts & Layout
 
-The plugin has two main panes:
+The Files plugin provides a two-pane interface:
 
-- **Tree pane** (left): Navigate your project structure, perform file operations
-- **Preview pane** (right): View file contents with syntax highlighting and markdown rendering
+- **Tree Pane (Left)**: Navigate project directory hierarchy, perform file creation, renaming, moving, and deletion.
+- **Preview Pane (Right)**: View file contents with syntax highlighting, search matches, and inline editing.
+- **Draggable Divider**: Adjust pane widths with the mouse or keyboard (`+` / `-`).
 
-Drag the divider between panes to resize. Toggle tree visibility with `\` to maximize preview space.
+```
+┌──────────────────────────────┬──────────────────────────────────────────┐
+│ Tree                         │ Preview: internal/app/commands.go        │
+│                              │                                          │
+│ ▾ internal/                  │ package app                              │
+│   ▾ app/                     │                                          │
+│     • app.go                 │ // FocusPlugin switches the active view. │
+│     • commands.go            │ func FocusPlugin(id string) tea.Cmd {    │
+│     • options.go             │     return func() tea.Msg {              │
+│   ▾ plugins/                 │         return FocusPluginByIDMsg{       │
+│     ▸ filebrowser/           │             PluginID: id,                │
+│     ▸ gitstatus/             │         }                                │
+│     ▸ notes/                 │     }                                    │
+│                              │ }                                        │
+└──────────────────────────────┴──────────────────────────────────────────┘
+```
 
-## Navigation
+## Navigation & Search
 
 ### Tree Navigation (Left Pane)
 
-Vim-style movement through your project structure.
-
 | Key | Action |
 |-----|--------|
-| `j`, `↓` | Move down |
-| `k`, `↑` | Move up |
-| `g` | Jump to top |
-| `G` | Jump to bottom |
-| `ctrl+d` | Page down |
-| `ctrl+u` | Page up |
-| `l`, `→` | Expand directory or preview file |
-| `h`, `←` | Collapse directory or jump to parent |
-| `enter` | Toggle directory or preview file |
+| `j`, `↓` | Move down the file tree |
+| `k`, `↑` | Move up the file tree |
+| `g` / `G` | Jump to top / bottom of tree |
+| `ctrl+d` / `ctrl+u` | Page down / Page up |
+| `l`, `→`, `enter` | Expand folder or focus file preview |
+| `h`, `←` | Collapse folder or jump to parent directory |
 
-### Search Features
+### Search Modes
 
-Four search modes, each optimized for different scenarios:
+The plugin includes four distinct search modes for different tasks:
 
-#### Find (`ctrl+p`)
+#### 1. Fuzzy File Finder (`ctrl+p`)
+Find files by partial name match across your entire repository. Type any part of the path (e.g. `plugnote` matches `internal/plugins/notes/plugin.go`).
 
-Fuzzy file finder that caches up to 50,000 files for instant results. Type any part of the filename—no exact matches needed.
+#### 2. Project Search (`f`)
+Search file contents across your entire codebase using ripgrep. Supports regex queries, case sensitivity toggles, and live result previews.
 
-```
-Example: "mdplug" matches "website/docs/files-plugin.md"
-```
+#### 3. Tree Filter (`/` in Tree Pane)
+Filter visible items in the current directory tree view by filename.
 
-#### Search (`f`)
+#### 4. In-File Search (`/` in Preview Pane)
+Perform incremental searches within the previewed file. Use `n` to jump to the next match and `N` to jump to the previous match.
 
-Full-text search across your entire codebase using ripgrep. Supports regex, case sensitivity toggles, and whole-word matching. Shows up to 1,000 matches with context.
+## File Preview & Inline Editing
 
-```
-Example: Search "TODO" to find all pending tasks
-Toggle regex mode for pattern matching
-```
+### Rich Content Previews
 
-#### Tree Filter (`/`, in the tree pane)
+- **Syntax Highlighting**: Language-aware Chroma highlighting synchronized with your active Sidecar color theme.
+- **Rendered Markdown (`m`)**: Styled headings, lists, blockquotes, and tables. All internal links (`path:line`, `td-*`, git commits, URLs) are active and clickable.
+- **Image Previews**: Native terminal graphics protocol rendering (Kitty, iTerm2) for PNG, JPG, GIF, and SVG assets.
+- **Live File Watching**: Previews reload automatically whenever background agents or external tools modify files on disk.
 
-Filter visible files in the tree by name. Great for quick navigation in the current view.
+### Inline Editing (`e`)
 
-#### InFile (`/`, in the preview pane)
+Press `e` (or double-click) in the preview pane to edit the file directly in the terminal without opening an external editor:
+- Powered by a lightweight tmux PTY backend with responsive cursor positioning.
+- Make quick edits, adjust configuration values, or fix syntax errors directly in place.
+- If you navigate away or click outside while unsaved edits are present, Sidecar prompts you with a Save / Discard / Cancel dialog.
 
-Search within the currently previewed file. Use `n`/`N` to jump between matches.
+### External Editor (`E`)
 
-## File Preview (Right Pane)
+Press `E` to suspend Sidecar and open the file in your configured `$EDITOR` (e.g. Neovim, Helix, VS Code). When the editor closes, Sidecar instantly reloads the updated file.
 
-### Scrolling
+## File Management Operations
 
-| Key | Action |
-|-----|--------|
-| `j`, `↓` | Scroll down |
-| `k`, `↑` | Scroll up |
-| `ctrl+d` | Half page down |
-| `ctrl+u` | Half page up |
-| `g` | Jump to top |
-| `G` | Jump to bottom |
-| `h`, `←`, `esc` | Return to tree |
+All mutating file operations feature validation and confirmation dialogs to prevent accidental data loss:
 
-### Rich Content Support
+| Key | Action | Description |
+|-----|--------|-------------|
+| `a` | New File | Create a new file (supports nested paths like `src/auth/jwt.go`) |
+| `A` | New Directory | Create a new folder |
+| `r` | Rename | Rename file or directory |
+| `m` | Move | Move file/folder with auto-complete path suggestions |
+| `y` | Yank (Copy) | Mark file or folder for copying |
+| `p` | Paste | Paste yanked item into the selected folder |
+| `D` | Delete | Delete file or directory (with confirmation modal) |
+| `I` | File Info | Inspect permissions, size, modification date, and git status |
+| `c` | Copy Path | Copy relative path to system clipboard |
 
-**Syntax Highlighting**
-Automatic language detection and highlighting for 100+ programming languages. Uses the Chroma highlighter with theme matching your terminal configuration.
+## Mouse & Drag Operations
 
-**Markdown Rendering**
-Press `m` to toggle between raw markdown and rendered output with styled headings, lists, code blocks, and links. Perfect for viewing README files.
-
-**Image Preview**
-Displays images directly in the terminal using graphics protocols (Kitty, iTerm2). Automatically detected for PNG, JPG, GIF, and more.
-
-**Smart File Handling**
-- Large files (>500KB): Shows truncated preview with file size warning
-- Binary files: Displays metadata instead of corrupted content
-- Live reload: Automatically updates when file changes on disk (perfect for watching AI edits)
-
-### Clipboard Operations
-
-| Key | Action |
-|-----|--------|
-| `y` | Copy entire file contents |
-| `c` | Copy relative file path |
-
-Files are copied to your system clipboard for use anywhere.
-
-## File Operations
-
-Complete file management without leaving the terminal. All operations include safety confirmations and validation.
-
-### Creating Files
-
-| Key | Action |
-|-----|--------|
-| `a` | Create new file |
-| `A` | Create new directory |
-
-Type the path (supports nested paths like `src/components/Button.tsx`). Missing parent directories are created automatically with confirmation.
-
-### Modifying Files
-
-| Key | Action |
-|-----|--------|
-| `r` | Rename file or directory |
-| `m` | Move to different location |
-
-The move operation includes path auto-completion showing up to 5 directory suggestions. All paths are validated to prevent moving files outside the project.
-
-### Yank and Paste
-
-| Key | Action |
-|-----|--------|
-| `y` | Yank (mark for copy) |
-| `p` | Paste to current location |
-
-Yank a file, navigate to the destination directory, and paste. Works for both files and entire directories.
-
-### Deleting
-
-| Key | Action |
-|-----|--------|
-| `D` | Delete with confirmation |
-
-Confirmation modal shows the item being deleted and requires explicit approval.
-
-### File Information
-
-Press `I` for detailed file info modal:
-
-- **Git status**: Tracked, modified, staged, untracked
-- **File size**: Human-readable format
-- **Modified**: Last modification timestamp
-- **Permissions**: Unix permission bits
-- **Last commit**: Most recent git commit affecting this file (when available)
-
-## Advanced Features
-
-### Mouse Support
-
-Full mouse integration for faster workflows:
-
-- **Click files/folders**: Select and preview or expand/collapse
-- **Double-click**: Expand/collapse a folder, or open a file for editing
-- **Drag a tree row**: Move the file or folder — see below
-- **Drag divider**: Resize panes to your preference
-- **Scroll wheel**: Navigate tree or preview content
-- **Click and drag in preview**: Multi-line text selection for copying
-
-### Drag to Move
-
-Press on a row in the tree and move two cells in any direction to pick it up. A
-press that moves less than that is still an ordinary click, so selecting a file
-never moves it.
-
-- **Drop on a folder** moves the item into that folder.
-- **Drop on a file** moves the item alongside it, into that file's parent
-  directory — the same rule Finder and VS Code use.
-- **Rest over a collapsed folder** for about half a second and it springs open,
-  so a single gesture can reach a nested destination.
-- **Drag to the top or bottom edge** of the tree pane and it scrolls, making
-  off-screen destinations reachable.
-- **Press `esc`** (or any other key) to cancel a gesture in flight.
-
-The status line at the top of the tree names what is being dragged and where it
-will land. Moves that would corrupt the tree — a folder into itself or into its
-own subtree — and moves that would change nothing are refused with a message
-explaining why. There is no undo, so a drop is ignored unless the destination
-row was on screen when you released.
-
-:::note Agent parity
-Moving a file is currently reachable only through the TUI — the drag gesture and
-the `m` dialog. There is no CLI, API, or MCP surface for it yet. Both TUI paths
-share one state-free validator (`validateMove` in the files plugin), so a
-headless surface can be added without restating the rules.
-:::
-
-### Live File Watching
-
-The preview pane watches the current file and automatically reloads when it changes on disk. This is particularly useful for:
-
-- Watching AI agents modify code in real-time
-- Monitoring log files
-- Previewing generated files during build processes
-
-### State Persistence
-
-Your workspace state survives restarts. These are saved automatically:
-
-- **Expanded directories**: Your tree structure stays intact
-- **Cursor position**: Resume exactly where you left off
-- **Scroll offsets**: Both tree and preview scroll positions
-- **Active pane**: Tree or preview focus is remembered
-- **Pane width**: Custom divider position is preserved
-
-State is saved per-project based on working directory.
-
-### System Integration
-
-| Key | Action |
-|-----|--------|
-| `⌘+o` (or configured) | Open file in $EDITOR |
-| `⌘+r` (or configured) | Reveal in Finder/Explorer |
-
-Opens files in your configured editor (respects `$EDITOR` and `$VISUAL` environment variables). Defaults to vim if not set.
-
-Reveal opens the system file manager with the file selected (macOS Finder, Windows Explorer, Linux file manager).
-
-## Keyboard Reference
-
-### Global (Available Anywhere)
-
-| Key | Action |
-|-----|--------|
-| `ctrl+p` | Find a file by name (fuzzy file finder) |
-| `f` | Search the project's contents (ripgrep) |
-| `\` | Toggle tree pane visibility |
-| `tab` | Switch between tree and preview |
-
-### Tree Pane
-
-| Key | Action |
-|-----|--------|
-| `j/k` or `↓/↑` | Move down/up |
-| `g` / `G` | Jump to top/bottom |
-| `ctrl+d` / `ctrl+u` | Page down/up |
-| `l` or `→` or `enter` | Expand directory or preview file |
-| `h` or `←` | Collapse directory or go to parent |
-| `/` | Filter tree by filename |
-| `a` / `A` | Create new file/directory |
-| `r` / `m` | Rename/move file |
-| `D` | Delete (with confirmation) |
-| `y` / `p` | Yank/paste file |
-| `c` | Copy file path |
-| `I` | Show file info modal |
-| `H` | Toggle hidden/ignored files |
-
-### Preview Pane
-
-| Key | Action |
-|-----|--------|
-| `j/k` or `↓/↑` | Scroll down/up |
-| `g` / `G` | Jump to top/bottom |
-| `ctrl+d` / `ctrl+u` | Page down/up |
-| `h` or `←` or `esc` | Return to tree |
-| `/` | Search within file (InFile) |
-| `n` / `N` | Next/previous search match |
-| `m` | Toggle markdown rendering |
-| `y` | Copy file contents |
-| `c` | Copy file path |
-
-### Find Modal
-
-| Key | Action |
-|-----|--------|
-| type | Filter by filename (fuzzy) |
-| `j/k` or `↓/↑` | Navigate results |
-| `enter` | Open selected file |
-| `esc` | Cancel |
-
-### Search Modal
-
-| Key | Action |
-|-----|--------|
-| type | Search query |
-| `j/k` or `↓/↑` | Navigate results |
-| `enter` | Open file at match line |
-| `space` | Toggle file expansion |
-| `esc` | Close search |
-
-Supports regex mode, case sensitivity, and whole-word toggles (see hints in modal).
-
-## Performance
-
-The files plugin is built for speed, even on large codebases:
-
-- **Find**: Caches 50,000 files in memory with 2-second scan timeout—handles massive monorepos
-- **Search**: Uses ripgrep (one of the fastest code search tools) with 30-second timeout
-- **Preview rendering**: Syntax highlighting is cached until file changes
-- **File watching**: Efficient fsnotify-based watching only for the previewed file
-- **Lazy loading**: Tree nodes expand on demand, keeping memory usage low
-
-**Limits:**
-- Preview files truncated at 500KB (with warning shown)
-- Max 10,000 lines displayed per file
-- Max 1,000 results shown per search
-- Max 50 Find results displayed
-
-## Common Workflows
-
-### Finding and Editing a File
-
-1. Press `ctrl+p` to find a file by name
-2. Type part of the filename (fuzzy matching)
-3. Press `enter` to preview
-4. Press `⌘+o` (or configured) to open in your editor
-
-### Searching Across the Project
-
-1. Press `f` to search the project's contents
-2. Type your search query (supports regex)
-3. Navigate results with `j/k`
-4. Press `enter` to jump to the match
-
-### Refactoring Files
-
-1. Navigate to file in tree with `j/k`
-2. Press `r` to rename or `m` to move
-3. Type the new name/path (auto-completion for move)
-4. Press `enter` to confirm
-
-### Copying File Structure
-
-1. Navigate to file/directory
-2. Press `y` to yank
-3. Navigate to destination with `j/k` and `l/h`
-4. Press `p` to paste
-
-## Tips and Tricks
-
-- **Use Find for everything**: `ctrl+p` is faster than navigating the tree manually
-- **Markdown previews**: Press `m` in any `.md` file to see rendered output
-- **Watch AI changes**: Preview a file before starting an AI agent—watch it update in real-time
-- **Multi-line copy**: Click and drag in the preview to select specific lines to copy
-- **Regex search**: In Search, toggle regex mode to find patterns like `TODO|FIXME|HACK`
-- **Path completion**: When moving files, start typing a path to see directory suggestions
-- **Tree filtering**: Use `/` to quickly filter visible files without changing your tree expansion state
-
-## Troubleshooting
-
-**Find shows no results**
-- Check the timeout wasn't exceeded (look for timeout message)
-- Some files may be ignored by git patterns
-- Try Search (`f`) instead—it searches all files
-
-**Preview shows "Binary file"**
-- File contains null bytes in the first 512 bytes
-- Use `⌘+o` to open in an external editor that supports binary files
-
-**Syntax highlighting looks wrong**
-- Highlighting is based on file extension
-- Rename the file to use the correct extension
-- Check that your terminal supports 256 colors
-
-**File watching not working**
-- File watching only works for the currently previewed file
-- Some filesystems (network drives, some Docker volumes) don't support fsnotify
-- Large files may take a moment to reload after changes
-
-**Tree pane disappeared**
-- Press `\` to toggle tree visibility
-- You may have accidentally hidden it
-
-## Integration with Other Plugins
-
-The files plugin communicates with other plugins through messages:
-
-- **Git plugin**: Can navigate to files in the file browser using `NavigateToFileMsg`
-- **Editor integration**: Opens files at specific line numbers from search results
-- **Focus switching**: Use `app.FocusPlugin("file-browser")` to switch to files plugin
-
-See the plugin communication guide for details on integrating with the files plugin.
+- **Click to Preview**: Select files and expand/collapse directories with a single click.
+- **Drag-to-Move**: Press on any tree row and drag to move the item.
+  - Drop on a folder to move into that folder.
+  - Drop on a file to place alongside it in that file's parent directory.
+  - Hover over a collapsed folder for 500ms to spring it open automatically.
+  - Drag to top or bottom edges to auto-scroll off-screen directories.
+- **Drag Divider**: Resize tree and preview panes smoothly.
+- **Scroll Wheel**: Scroll smoothly through file trees, search results, and code previews.

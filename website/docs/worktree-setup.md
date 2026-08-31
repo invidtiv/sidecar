@@ -1,141 +1,127 @@
 ---
-sidebar_position: 7
-title: Worktree Setup Hooks
+sidebar_position: 2
+title: Worktree Setup & Hooks
 ---
 
-# Worktree Setup Hooks
+# Worktree Setup & Hooks
 
-When sidecar creates a new worktree, it automatically runs a series of setup steps so the workspace is ready to use — no manual `npm install` or config copying required.
+Configure automatic workspace initialization, environment variable propagation, shared directory symlinks, and agent startup scripts for new git worktrees.
 
-## What happens automatically
+## Overview
 
-Every time a worktree is created, sidecar:
+When Sidecar creates a new git worktree, it automatically executes a sequence of setup steps to ensure the workspace is immediately ready for coding and agent execution—without manual dependency installation or copying configuration files.
 
-1. **Copies env files** from the main worktree into the new one
-2. **Creates symlinks** for any directories you've opted in to share (e.g. `node_modules`)
-3. **Runs `.worktree-setup.sh`** if it exists at the project root
+```
+┌────────────────────────────────────────────────────────────┐
+│ $ sidecar create worktree --name feature-auth              │
+│                                                            │
+│ 1. Git branch & worktree created at ../feature-auth        │
+│ 2. Copied environment files (.env, .env.local)             │
+│ 3. Linked shared directories (node_modules)                │
+│ 4. Executed setup hook (.worktree-setup.sh)                │
+│ 5. Launched agent (Claude Code) in isolated tmux session   │
+└────────────────────────────────────────────────────────────┘
+```
 
-Setup failures are non-fatal — if a step fails, sidecar logs a warning and continues. The worktree is always created even if setup encounters errors.
+## What Happens Automatically
 
-## Env file copying
+Every time a worktree is created, Sidecar automatically:
 
-Sidecar copies these files from the main worktree automatically (if they exist):
+1. **Copies Environment Files**: Propagates local environment variables and secrets from the main worktree.
+2. **Creates Symlinks**: Links shared large directories (such as `node_modules` or `.venv`) if configured.
+3. **Executes Setup Scripts**: Runs `.worktree-setup.sh` or your configured `setupScript`.
+4. **Applies Agent Overrides**: Checks for `.sidecar-agent-start` or `.sidecar-agent` in the worktree root.
+
+Setup script failures are non-fatal—Sidecar logs the output warning and continues, ensuring the worktree remains accessible.
+
+## Environment File Propagation
+
+Sidecar automatically copies the following files from the main repository worktree if they exist:
 
 - `.env`
 - `.env.local`
 - `.env.development`
 - `.env.development.local`
 
-Files are copied as-is, preserving permissions. Missing files are silently skipped. Your API keys, database URLs, and local overrides are available in the new workspace immediately — without committing secrets to git.
+Files are copied preserving permissions. Missing files are silently skipped. Your local secrets and database credentials remain available in new workspaces without committing them to git.
 
-## Directory symlinks
+## Shared Directory Symlinks
 
-By default, no directories are symlinked. To share large directories (like `node_modules`) across worktrees, configure `symlinkDirs` in your project config:
+To save disk space and eliminate repetitive package installations across worktrees, configure `symlinkDirs` in `.sidecar/config.json`:
 
 ```json
-// .sidecar/config.json
 {
   "plugins": {
     "workspace": {
-      "symlinkDirs": ["node_modules", ".venv"]
+      "symlinkDirs": [
+        "node_modules",
+        ".venv"
+      ]
     }
   }
 }
 ```
 
-Sidecar replaces any existing directory in the new worktree with a symlink to the main worktree's copy. Only directories that exist in the main worktree are linked — missing ones are skipped.
+Sidecar creates symlinks in the new worktree pointing back to the main worktree's copies, saving gigabytes of disk space across parallel branches.
 
-**When to use this:** Large directories that are identical across branches (e.g. unmodified `node_modules`) save significant disk space and setup time. Avoid symlinking directories that differ between branches.
+## Setup Script Hooks
 
-## The `.worktree-setup.sh` hook
+### 1. `.worktree-setup.sh` (Repository Root)
 
-Place a `.worktree-setup.sh` file at your project root (in the main worktree). Sidecar runs it automatically with `bash` whenever a new worktree is created.
+Create an executable `.worktree-setup.sh` script in your project root. Sidecar runs this script inside the newly created worktree directory with bash.
 
-The script runs with the **new worktree as the working directory** in a clean, isolated environment.
-
-### Environment variables
+**Available Environment Variables:**
 
 | Variable | Value |
 |----------|-------|
-| `MAIN_WORKTREE` | Absolute path to the main worktree |
-| `WORKTREE_BRANCH` | Name of the new branch |
-| `WORKTREE_PATH` | Absolute path to the new worktree |
+| `MAIN_WORKTREE` | Absolute path to the main repository worktree |
+| `WORKTREE_BRANCH` | Name of the newly created branch |
+| `WORKTREE_PATH` | Absolute path to the new worktree directory |
+| `SIDECAR_BASE_BRANCH` | Name of the base branch the worktree was created from |
 
-### Creating the hook
-
-```bash
-touch .worktree-setup.sh
-chmod +x .worktree-setup.sh
-```
-
-Add `.worktree-setup.sh` to `.gitignore` if it contains anything machine-specific, or commit it if it should apply to the whole team.
-
-### Examples
-
-**Install dependencies:**
-
-```bash
-#!/bin/bash
-npm install
-```
-
-**Start backing services:**
-
-```bash
-#!/bin/bash
-docker-compose up -d db redis
-```
-
-**Run a makefile target:**
-
-```bash
-#!/bin/bash
-make setup
-```
-
-**Copy config from example:**
-
-```bash
-#!/bin/bash
-if [ ! -f config.yaml ]; then
-  cp config.example.yaml config.yaml
-fi
-```
-
-**Combine multiple steps:**
+**Example Script:**
 
 ```bash
 #!/bin/bash
 set -e
 
-echo "Setting up worktree: $WORKTREE_BRANCH"
-echo "Main worktree: $MAIN_WORKTREE"
+echo "Initializing worktree: $WORKTREE_BRANCH"
 
-# Install dependencies
+# Install dependencies if not symlinked
 npm install
 
-# Copy any additional config not covered by env file copying
-if [ ! -f .env.test ]; then
-  cp "$MAIN_WORKTREE/.env.test" .env.test 2>/dev/null || true
-fi
-
-# Start services
+# Start local test database if needed
 docker-compose up -d db
 
-echo "Setup complete."
+echo "Worktree setup complete."
 ```
 
-## Error handling
+### 2. Configured `setupScript`
 
-If the setup script exits with a non-zero status, sidecar logs a warning with the script output but **does not block worktree creation**. The worktree is available immediately regardless.
+Alternatively, specify a custom script path in `~/.config/sidecar/config.json`:
 
-To re-run setup manually:
-
-```bash
-cd /path/to/new-worktree
-bash /path/to/main-worktree/.worktree-setup.sh
+```json
+{
+  "plugins": {
+    "workspace": {
+      "setupScript": ".sidecar/setup-workspace.sh"
+    }
+  }
+}
 ```
 
-## See also
+## Per-Worktree Agent Overrides
 
-- [Workspaces Plugin](./workspaces-plugin.md) — full worktree and workspace management
+You can customize the agent and startup command used in a specific worktree by placing configuration files in the worktree root:
+
+- **`.sidecar-agent`**: Contains the agent type name (e.g. `codex`, `claude`, `opencode`).
+- **`.sidecar-agent-start`**: Single-line custom command prefix for launching the agent (e.g. `opencode --profile fast` or `claude --dangerously-skip-permissions`).
+
+### Startup Command Precedence
+
+When launching an agent in a worktree, Sidecar evaluates startup commands in this order:
+
+1. `.sidecar-agent-start` in the worktree root
+2. `plugins.workspace.agentStart[<selectedAgent>]` from configuration
+3. `plugins.workspace.agentStart["*"]` default fallback
+4. Built-in default command for the agent provider

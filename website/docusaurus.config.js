@@ -179,12 +179,20 @@ const config = {
                 to: '/docs/intro',
               },
               {
+                label: 'Panes & Layouts',
+                to: '/docs/layout-and-panes',
+              },
+              {
                 label: 'Task Management',
                 to: '/docs/td',
               },
               {
                 label: 'Git Workflow',
                 to: '/docs/git-plugin',
+              },
+              {
+                label: 'CLI Reference',
+                to: '/docs/cli-reference',
               },
             ],
           },
