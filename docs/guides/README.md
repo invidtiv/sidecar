@@ -1,36 +1,31 @@
-# Guides Moved to Skills
+# Sidecar Guides and Skills
 
-The Markdown guides that used to live in this folder were migrated to **skills**.
+Documentation and guides for Sidecar are organized into skills and active operational guides:
 
-- Primary skill location for this repo: `.agents/skills/`
-- Additional shared skills may be listed in `AGENTS.md`
-
-Legacy guide files are preserved at:
-
-- `docs/guides/deprecated/`
+- **Skills (`.agents/skills/` & `.claude/skills/`)**: Interactive agent skill modules for plugin creation, modals, adapters, multi-agent coordination, drag-pane interactions, and keyboard shortcuts.
+- **Active Guides (`docs/guides/active/`)**: Operational, performance, architecture, and feature guides:
+  - [`pane-layout-automation.md`](active/pane-layout-automation.md) — Multi-pane layout composition and automation via CLI.
+  - [`notifications-and-alerting.md`](active/notifications-and-alerting.md) — Toast alerts, sound cues, quiet hours, and notification targets.
+  - [`remote-agent-control.md`](active/remote-agent-control.md) — Coordinating and controlling agents on remote hosts over SSH.
+  - [`demo-environments.md`](active/demo-environments.md) — Running ephemeral isolated demo environments.
+  - [`headless-testing.md`](active/headless-testing.md) — Testing Sidecar headlessly with `tmux-drive.sh`.
+  - [`tmux-compatibility.md`](active/tmux-compatibility.md) — Tmux version compatibility contract and verification.
+  - [`releasing.md`](active/releasing.md) — Release process and versioning.
+  - [`worktree-creation.md`](active/worktree-creation.md) — Git worktree creation workflows.
+  - [`embedding-tasks.md`](active/embedding-tasks.md) — Integrating tasks into the workspace.
+  - [`getting-started.md`](active/getting-started.md) — Installation and initial setup.
+- **Archived Guides (`docs/guides/deprecated/`)**: Preserved historical guides from earlier development phases.
 
 ## Quick Skill Tutorial
 
-1. Find a relevant skill
-   - Browse the available skill list in `AGENTS.md`
+1. **Find a relevant skill**:
+   - Browse the available skill list in `AGENTS.md` / `GEMINI.md`
    - Or list local repo skills with `ls .agents/skills`
 
-2. Open the skill instructions
+2. **Open the skill instructions**:
    - Each skill is documented in `SKILL.md`
-   - Example: `cat .agents/skills/create-plugin/SKILL.md`
+   - Example: `cat .agents/skills/coordinate-agents/SKILL.md`
 
-3. Follow the referenced workflow files
-   - Skills may point to `references/`, `scripts/`, or templates
+3. **Follow the referenced workflow files**:
+   - Skills point to `references/`, `scripts/`, or templates
    - Prefer using those artifacts directly instead of rewriting from scratch
-
-4. Ask your agent to use a skill explicitly
-   - Mention the skill name in your request (for example, `use create-plugin`)
-   - If multiple skills apply, name each one and the agent should combine them
-
-## Migration Note
-
-If you find an old guide link, replace it with either:
-
-- the corresponding skill (`.agents/skills/<name>/SKILL.md`), or
-- the archived copy under `docs/guides/deprecated/`
-
