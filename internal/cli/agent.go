@@ -299,6 +299,10 @@ func parseAgentArgs(env Env, args []string, help string, allowed agentOpt) (agen
 			f.positional = append(f.positional, arg)
 		}
 	}
+	if allowed.has(optSource) && f.source == "" {
+		// Documented default: omitting --source reads the current screen.
+		f.source = agentcontrol.SourceVisible
+	}
 	return f, -1
 }
 
