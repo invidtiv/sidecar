@@ -33,6 +33,10 @@ import (
 // no-change gate livewatch uses, for the same reason.
 type StoreSource struct {
 	path string
+	// namespace is the tmux socket this source resolves panes and the server
+	// incarnation through. Empty means whichever server this process is already
+	// talking to, which is what the polling surfaces want.
+	namespace string
 
 	// resolvePane maps a tmux session name to its pane id. Injectable so tests
 	// do not need a tmux server.
@@ -60,14 +64,32 @@ type StoreSource struct {
 	cachedHost   string
 }
 
-// NewStoreSource returns a source reading the lifecycle log in stateDir.
+// NewStoreSource returns a source reading the lifecycle log in stateDir,
+// resolving tmux through whichever server this process is already talking to.
 func NewStoreSource(stateDir string) *StoreSource {
+	return NewStoreSourceOn(stateDir, "")
+}
+
+// NewStoreSourceOn is [NewStoreSource] bound to a specific tmux socket.
+//
+// The distinction is not theoretical. A caller asking about a pane it is not
+// running in — `sidecar agent explain --shell TARGET` — knows which namespace
+// that shell belongs to, and a bare `tmux` invocation would instead answer from
+// $TMUX or the default socket. On a machine with more than one tmux server that
+// silently reads the wrong server: the pane lookup returns a pane id from
+// somewhere else, the server incarnation is somebody else's, and the pane being
+// asked about resolves to screen fallback with no indication that the question
+// was answered about the wrong machine's worth of state. That was found by
+// running the Phase C gate from inside a tmux session, which is where anyone
+// using Sidecar runs everything.
+func NewStoreSourceOn(stateDir, namespace string) *StoreSource {
 	return &StoreSource{
 		path:            filepath.Join(stateDir, lifecyclestore.FileName),
-		resolvePane:     tmuxPaneForSession,
+		namespace:       namespace,
+		resolvePane:     func(session string) string { return tmuxPaneForSession(namespace, session) },
 		processAlive:    generationAlive,
 		providerVersion: detectProviderVersion,
-		serverID:        liveServerIncarnation,
+		serverID:        func() string { return liveServerIncarnation(namespace) },
 		host:            hostname,
 		panes:           map[string]string{},
 		versions:        map[string]string{},
@@ -97,8 +119,8 @@ func (s *StoreSource) hostname() string {
 // liveServerIncarnation reports the current tmux server in the same form the
 // managed shell publishes, so a stored record and a live observation are
 // directly comparable.
-func liveServerIncarnation() string {
-	out, err := exec.Command("tmux", "display-message", "-p", "#{pid}").Output()
+func liveServerIncarnation(namespace string) string {
+	out, err := exec.Command("tmux", tmuxArgs(namespace, "display-message", "-p", "#{pid}")...).Output()
 	if err != nil {
 		return ""
 	}
@@ -107,6 +129,18 @@ func liveServerIncarnation() string {
 		return ""
 	}
 	return "pid=" + strconv.Itoa(pid)
+}
+
+// tmuxArgs prefixes an explicit socket when one is known.
+//
+// Without it every tmux call here answers from $TMUX or the default socket,
+// which is the right server only by coincidence when the caller is asking about
+// a pane somewhere else.
+func tmuxArgs(namespace string, args ...string) []string {
+	if namespace == "" {
+		return args
+	}
+	return append([]string{"-S", namespace}, args...)
 }
 
 func hostname() string {
@@ -128,11 +162,11 @@ func hostname() string {
 //
 // A pane that cannot be resolved yields an identity with an empty PaneID, which
 // every caller reads as "no lifecycle evidence applies".
-func PaneIdentity(session string) agentlifecycle.Identity {
+func PaneIdentity(namespace, session string) agentlifecycle.Identity {
 	return agentlifecycle.Identity{
 		Host:              hostname(),
-		ServerIncarnation: liveServerIncarnation(),
-		PaneID:            tmuxPaneForSession(session),
+		ServerIncarnation: liveServerIncarnation(namespace),
+		PaneID:            tmuxPaneForSession(namespace, session),
 	}
 }
 
@@ -432,8 +466,8 @@ func processStartToken(pid int) string {
 	return strings.Join(strings.Fields(string(out)), "-")
 }
 
-func tmuxPaneForSession(session string) string {
-	out, err := exec.Command("tmux", "list-panes", "-t", session, "-F", "#{pane_id}").Output()
+func tmuxPaneForSession(namespace, session string) string {
+	out, err := exec.Command("tmux", tmuxArgs(namespace, "list-panes", "-t", session, "-F", "#{pane_id}")...).Output()
 	if err != nil {
 		return ""
 	}

@@ -607,7 +607,11 @@ func explainManagedShell(env Env, f lifecycleFlags, stateDir string) int {
 		return emitLifecycleError(env, f.json, agentlifecycle.ErrInvalidContext, err)
 	}
 
-	identity := agentintegration.PaneIdentity(tgt.Session)
+	// The shell's own tmux namespace, not this process's. A managed shell can
+	// live on a socket other than the one explain happens to be running under,
+	// and a bare tmux call would then answer confidently about a pane on the
+	// wrong server.
+	identity := agentintegration.PaneIdentity(tgt.Namespace, tgt.Session)
 	if identity.PaneID == "" {
 		// The shell is registered but its tmux session is not live. That is a
 		// real and common state — a shell whose server has gone away — and it
@@ -624,8 +628,8 @@ func explainManagedShell(env Env, f lifecycleFlags, stateDir string) int {
 		return 0
 	}
 
-	src := agentintegration.NewStoreSource(stateDir)
-	screen, paneTitle, command := capturePaneForExplain(identity.PaneID)
+	src := agentintegration.NewStoreSourceOn(stateDir, tgt.Namespace)
+	screen, paneTitle, command := capturePaneForExplainOn(tgt.Namespace, identity.PaneID)
 	ob := agentactivity.Observation{
 		Screen:         screen,
 		PaneTitle:      paneTitle,
@@ -658,6 +662,12 @@ func explainManagedShell(env Env, f lifecycleFlags, stateDir string) int {
 // opinion". A diagnostic command that could not capture a screen should still
 // report everything else it knows rather than fail outright.
 func capturePaneForExplain(paneID string) (screen, paneTitle, command string) {
+	return capturePaneForExplainOn("", paneID)
+}
+
+// capturePaneForExplainOn is capturePaneForExplain against an explicit tmux
+// socket, for a pane in a namespace this process is not running in.
+func capturePaneForExplainOn(namespace, paneID string) (screen, paneTitle, command string) {
 	if paneID == "" {
 		return "", "", ""
 	}
@@ -665,8 +675,11 @@ func capturePaneForExplain(paneID string) (screen, paneTitle, command string) {
 	if err != nil {
 		screen = ""
 	}
-	out, err := exec.Command("tmux", "display-message", "-p", "-t", paneID,
-		"#{pane_title}\x1f#{pane_current_command}").Output()
+	args := []string{"display-message", "-p", "-t", paneID, "#{pane_title}\x1f#{pane_current_command}"}
+	if namespace != "" {
+		args = append([]string{"-S", namespace}, args...)
+	}
+	out, err := exec.Command("tmux", args...).Output()
 	if err == nil {
 		fields := strings.Split(strings.TrimRight(string(out), "\n"), "\x1f")
 		if len(fields) == 2 {

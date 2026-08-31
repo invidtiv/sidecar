@@ -1,8 +1,8 @@
 # Agent lifecycle capability matrix
 
-**Status:** Phase A evidence baseline recorded 2026-08-30; OpenCode cancellation traced and promoted to `full` in Phase B, 2026-08-30. **Plan:** [Deterministic agent lifecycle hooks](../plans/active/notification-agent-lifecycle-hooks.md). **Tracking:** `td-43a93f`.
+**Status:** Phase A evidence baseline recorded 2026-08-30; OpenCode cancellation traced and promoted to `full` in Phase B, 2026-08-30; installation, status, and repair added in Phase C, 2026-08-30. **Plan:** [Deterministic agent lifecycle hooks](../plans/active/notification-agent-lifecycle-hooks.md). **Tracking:** `td-43a93f`.
 
-This document records what each agent provider's own lifecycle events can actually tell Sidecar, how strong the evidence for that claim is, and what authority tier the evidence justifies. It is the prose companion to `internal/agentlifecycle/capabilities.json`, which is the machine-readable version the code reads and the tests police. That file is embedded into the binary and read at runtime through `agentlifecycle.Capabilities()`, so the registry the resolver trusts and the evidence these tests police are one file rather than two that could drift.
+How an integration is installed, inspected, and removed is [Agent lifecycle integrations](agent-lifecycle-integrations.md). This document records what each agent provider's own lifecycle events can actually tell Sidecar, how strong the evidence for that claim is, and what authority tier the evidence justifies. It is the prose companion to `internal/agentlifecycle/capabilities.json`, which is the machine-readable version the code reads and the tests police. That file is embedded into the binary and read at runtime through `agentlifecycle.Capabilities()`, so the registry the resolver trusts and the evidence these tests police are one file rather than two that could drift.
 
 The matrix is evidence, not aspiration. A provider does not get full lifecycle authority because its documentation lists the right event names. It gets full lifecycle authority when sanitized real traces show the transitions arriving, in order, from a released version.
 
