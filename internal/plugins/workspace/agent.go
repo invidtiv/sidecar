@@ -23,6 +23,7 @@ import (
 	"github.com/marcus/sidecar/internal/agentactivity"
 	"github.com/marcus/sidecar/internal/agentcatalog"
 	"github.com/marcus/sidecar/internal/agentcontrol"
+	"github.com/marcus/sidecar/internal/agentresolve"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/tty"
@@ -1001,7 +1002,11 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 		activity := agentactivity.Result{}
 		if supportsAgentActivity(observedAgentType) {
 			observation.Agent = string(observedAgentType)
-			activity = agentactivity.Detect(observation)
+			// One resolver, three call sites. Whether a provider's own
+			// lifecycle report or the screen detectors author this lane is
+			// decided in exactly one place; this surface only supplies the
+			// observation and the pane it belongs to.
+			activity = agentresolve.Result(observation, agentresolve.PaneRef{Session: sessionName}, lifecycleSource(), capturedAt)
 		}
 
 		// Detect status. Both detectors run; each is authoritative for what it's good at (td-2fca7d):

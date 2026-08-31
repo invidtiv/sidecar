@@ -3,29 +3,33 @@
     "schemaVersion": 1,
     "provider": "opencode",
     "source": "sidecar.opencode.plugin",
-    "assetVersion": "0",
-    "tier": "advisory",
+    "assetVersion": "1",
+    "tier": "full",
     "evidence": "real-trace",
     "minProviderVersion": "1.18.0",
-    "testedProviderRange": "1.18.23",
+    "testedProviderRange": "1.18.23 - 1.18.25",
     "covered": [
       "work_start",
       "tool_use",
       "blocked_on_request",
       "unblocked",
       "turn_complete",
+      "cancelled",
       "session_identity",
       "process_exit"
     ],
     "knownGaps": [
-      "Cancellation is untraced. No dedicated cancel event exists; the expectation is that an interrupt resolves through session.status, but that was not observed. This is the single transition blocking promotion to full lifecycle authority.",
+      "Cancellation has no dedicated event. A user interrupt surfaces as session.error carrying error.name=MessageAbortedError, immediately followed by session.status{idle} and session.idle. An adapter that ignores the error name cannot tell a cancelled turn from a failed one: a provider auth failure emits the identical event shape with error.name=ProviderAuthError. The lane is correct either way because session.status is state-shaped; only the terminal outcome depends on reading the name.",
       "Subagent activity has no dedicated event. Child sessions are identifiable only by info.parentID on session events.",
       "The blocked lane is transition-shaped, not state-shaped: session.status only ever carried busy or idle, and blocking is visible solely as the permission.asked/permission.replied pair. A dropped permission.asked therefore does not self-correct the way a dropped busy/idle does.",
-      "tool.execute.after did not fire on 1.18.23 even though tool.execute.before did, so tool completion cannot be relied on as an event."
+      "tool.execute.after did not fire on 1.18.23 even though tool.execute.before did, so tool completion cannot be relied on as an event. The cancellation traces used a tool-free prompt and did not re-test this on 1.18.25.",
+      "Both ~/.config/opencode/plugin/ and ~/.config/opencode/plugins/ are loaded, and an asset present in both fires every event twice. The installer must own exactly one path and repair must detect the other.",
+      "Every export of a plugin module must be a plugin factory. One non-function export and the module is imported and then never called, silently and with no error. Measured on 1.18.25 with four probe plugins. This is invisible to offline tests: the plugin installs cleanly, its unit tests pass, and it reports nothing at all.",
+      "There is no event ordering guarantee across separate report processes. Reports must be serialized by the integration, because the lifecycle store enforces a strictly increasing sequence per run and correctly rejects an out-of-order arrival."
     ],
     "orderingGuaranteed": false,
     "sourceDoc": "https://opencode.ai/docs/plugins/",
-    "sourceVersionNote": "Traced against opencode 1.18.23 on darwin/arm64, 2026-08-30. Docs page states no version or stability level; the hook interface was cross-read from packages/plugin/src/index.ts."
+    "sourceVersionNote": "Traced against opencode 1.18.23 (Phase A) and 1.18.25 (Phase B cancellation) on darwin/arm64, 2026-08-30. Docs page states no version or stability level; the hook interface was cross-read from packages/plugin/src/index.ts."
   },
   {
     "schemaVersion": 1,

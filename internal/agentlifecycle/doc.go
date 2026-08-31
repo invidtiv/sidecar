@@ -11,10 +11,22 @@
 // package's [agentactivity.Result] — introducing a parallel state vocabulary
 // here would create exactly the second classifier the M6 plan forbids.
 //
-// The JSONL store, the `sidecar agent report` command, the provider adapters,
-// the bundled integration assets, and the workspace/inventory call sites are
-// Phase B and Phase C. They depend on this package; this package never learns
-// about them.
+// The stores live one level down, in [lifecyclestore], for exactly this
+// reason: persistence is the one part of the lifecycle core that must touch a
+// disk, and putting it here would cost this package the purity that lets its
+// resolver and schemas be table-tested as plain values. The subpackage depends
+// on this one, never the reverse — the same shape as [lifecycleharness].
+//
+// The `sidecar agent report` command, the provider adapters, the bundled
+// integration assets, and the workspace/inventory call sites likewise depend on
+// this package; this package never learns about them.
+//
+// # Validation belongs at the seam
+//
+// [Validate] and [SanitizeDetail] are here rather than in the CLI because a
+// bound that lives in one entry point is a bound the next caller silently does
+// not have. A test helper, a future socket transport, or a custom reporter all
+// reach the store through the same check.
 //
 // # A report is evidence, not a verdict
 //

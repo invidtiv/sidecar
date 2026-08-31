@@ -10,8 +10,85 @@ Provider-aware control over shells Sidecar owns. The feature is discoverable whi
 
 The safe sequence is: create the layout separately with sidecar create shell, start the provider with agent start, prompt and wait, read before you send keys, and never close a target you did not create.
 
+The report, end, release, and explain commands are a separate surface: they record and inspect the lifecycle events a provider's own integration reports, and they are not gated behind agent_control.
+
 ```
 Usage: sidecar agent <command>
+```
+
+### `sidecar agent end`
+
+Report that the current agent run ended
+
+Records a terminal outcome and clears lifecycle authority. The outcome is not a fourth lane: a finished run's lane is idle, and the outcome is separate evidence the status projection may use for health. Process liveness still confirms the run really ended before any surface calls the pane orphaned or failed.
+This is a hook surface and it fails open: outside a Sidecar-managed shell it exits 0 and prints nothing, and no failure here ever changes the provider's own behavior or output.
+
+Identity is derived by Sidecar from the managed-shell environment, live tmux, and this process's ancestry. Host, tmux server, pane, and provider process cannot be selected through flags, so a hook can only ever report about the pane it is running in.
+
+Nothing is stored beyond lanes, outcomes, bounded reason codes, sequences, timestamps, and opaque identity. Prompt text, response text, tool arguments and results, and credentials are never recorded.
+
+```
+Usage: sidecar agent end --outcome completed|cancelled|failed|unknown --source SOURCE --provider PROVIDER --seq N [--session-id ID] [--reason CODE] [--json]
+```
+
+**Options:**
+
+- `--outcome OUTCOME`: completed, cancelled, failed, or unknown (required)
+- `--source SOURCE`: Integration source identifier (required)
+- `--source-version VERSION`: Installed integration asset version
+- `--provider PROVIDER`: Catalog agent kind (required)
+- `--seq N`: Strictly increasing sequence within this run (required)
+- `--session-id ID`: Provider session identifier; only a salted digest is retained
+- `--reason CODE`: Bounded reason code from the frozen allowlist
+- `--detail TEXT`: Short sanitized diagnostic; never prompt, response, or tool content
+- `--json`: Write stable structured JSON
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: success, or no-op outside a Sidecar-managed shell
+- `1`: the report could not be stored
+- `2`: usage error
+- `5`: invalid context, stale sequence, or run mismatch
+
+**Examples:**
+
+```bash
+sidecar agent end --outcome cancelled --source sidecar.opencode.plugin --provider opencode --seq 9 --reason cancelled
+```
+
+### `sidecar agent explain`
+
+Explain which evidence authored a pane's lifecycle state
+
+Reports the effective state, which evidence authored it, the source's exercisable tier, the last valid report, and — when lifecycle evidence did not win — exactly why not.
+
+Every diagnostic fact the Configuration surface shows is available here, so a pane that is not being driven by its integration always has an actionable reason rather than silence.
+
+This command is read-only. It never locks, compacts, repairs, or creates the lifecycle log.
+
+```
+Usage: sidecar agent explain [--current | --shell TARGET] [--json]
+```
+
+**Options:**
+
+- `--current`: Explain the pane this command is running in (the default)
+- `--shell TARGET`: Explain a managed shell by name
+- `--json`: Write stable structured JSON
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: success, or no-op outside a Sidecar-managed shell
+- `1`: the report could not be stored
+- `2`: usage error
+- `5`: invalid context, stale sequence, or run mismatch
+
+**Examples:**
+
+```bash
+sidecar agent explain --current --json
 ```
 
 ### `sidecar agent get`
@@ -166,6 +243,87 @@ Usage: sidecar agent read [TARGET] [--source SOURCE] [--lines N] [--ansi] [--jso
 sidecar agent read reviewer --source recent-unwrapped --lines 120
 # the evidence behind the status
 sidecar agent read reviewer --source detection --json
+```
+
+### `sidecar agent release`
+
+Surrender lifecycle authority for the current agent run
+
+Gives up authority without claiming an outcome, for an integration that is being uninstalled or disabled, or that has detected it can no longer observe the run truthfully. The pane returns to ordinary screen and process detection immediately rather than holding its last reported lane.
+This is a hook surface and it fails open: outside a Sidecar-managed shell it exits 0 and prints nothing, and no failure here ever changes the provider's own behavior or output.
+
+Identity is derived by Sidecar from the managed-shell environment, live tmux, and this process's ancestry. Host, tmux server, pane, and provider process cannot be selected through flags, so a hook can only ever report about the pane it is running in.
+
+Nothing is stored beyond lanes, outcomes, bounded reason codes, sequences, timestamps, and opaque identity. Prompt text, response text, tool arguments and results, and credentials are never recorded.
+
+```
+Usage: sidecar agent release --source SOURCE --provider PROVIDER --seq N [--session-id ID] [--reason CODE] [--json]
+```
+
+**Options:**
+
+- `--source SOURCE`: Integration source identifier (required)
+- `--source-version VERSION`: Installed integration asset version
+- `--provider PROVIDER`: Catalog agent kind (required)
+- `--seq N`: Strictly increasing sequence within this run (required)
+- `--session-id ID`: Provider session identifier; only a salted digest is retained
+- `--reason CODE`: Bounded reason code from the frozen allowlist
+- `--detail TEXT`: Short sanitized diagnostic; never prompt, response, or tool content
+- `--json`: Write stable structured JSON
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: success, or no-op outside a Sidecar-managed shell
+- `1`: the report could not be stored
+- `2`: usage error
+- `5`: invalid context, stale sequence, or run mismatch
+
+**Examples:**
+
+```bash
+sidecar agent release --source sidecar.opencode.plugin --provider opencode --seq 10 --reason integration_removed
+```
+
+### `sidecar agent report`
+
+Report a lifecycle lane for the current agent run
+
+Records what a provider's own lifecycle event observed. A report is evidence, not a verdict: whether it authors the pane's state depends on the source's proved capability tier, the report's freshness, and whether every identity field still matches the live pane.
+This is a hook surface and it fails open: outside a Sidecar-managed shell it exits 0 and prints nothing, and no failure here ever changes the provider's own behavior or output.
+
+Identity is derived by Sidecar from the managed-shell environment, live tmux, and this process's ancestry. Host, tmux server, pane, and provider process cannot be selected through flags, so a hook can only ever report about the pane it is running in.
+
+Nothing is stored beyond lanes, outcomes, bounded reason codes, sequences, timestamps, and opaque identity. Prompt text, response text, tool arguments and results, and credentials are never recorded.
+
+```
+Usage: sidecar agent report --state working|blocked|idle --source SOURCE --provider PROVIDER --seq N [--session-id ID] [--reason CODE] [--json]
+```
+
+**Options:**
+
+- `--state LANE`: working, blocked, or idle (required)
+- `--source SOURCE`: Integration source identifier (required)
+- `--source-version VERSION`: Installed integration asset version
+- `--provider PROVIDER`: Catalog agent kind (required)
+- `--seq N`: Strictly increasing sequence within this run (required)
+- `--session-id ID`: Provider session identifier; only a salted digest is retained
+- `--reason CODE`: Bounded reason code from the frozen allowlist
+- `--detail TEXT`: Short sanitized diagnostic; never prompt, response, or tool content
+- `--json`: Write stable structured JSON
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: success, or no-op outside a Sidecar-managed shell
+- `1`: the report could not be stored
+- `2`: usage error
+- `5`: invalid context, stale sequence, or run mismatch
+
+**Examples:**
+
+```bash
+sidecar agent report --state working --source sidecar.opencode.plugin --provider opencode --seq 1 --reason turn_start
 ```
 
 ### `sidecar agent send-keys`

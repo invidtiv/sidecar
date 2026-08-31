@@ -458,11 +458,91 @@ func TestArbitrationTable(t *testing.T) {
 			wantFreshness: FreshnessFresh,
 		},
 
+		// Advisory crossed with the non-healthy conditions, rather than only
+		// with agreement and disagreement. Staleness is checked before the
+		// advisory contradiction rule, so a stale advisory report must report
+		// why it actually lost — it aged out — and not the generic tier reason
+		// that would also have applied.
+		{
+			name: "an advisory report past its window reports staleness, not its tier",
+			in: mutate(func(in *Input) {
+				in.Capability = capabilityAt(TierAdvisory)
+				in.Latest = withReport(stateReport(agentactivity.StateIdle, ReasonTurnComplete), func(r *Report) {
+					r.ObservedAt = resolveNow.Add(-9 * time.Hour)
+				})
+			}),
+			wantState:     agentactivity.StateWorking,
+			wantAuthority: AuthorityScreen,
+			wantTier:      TierAdvisory,
+			wantFreshness: FreshnessStale,
+			wantReason:    ReasonReportStale,
+		},
+		{
+			name: "an advisory source that released authority says so rather than deferring on tier",
+			in: mutate(func(in *Input) {
+				in.Capability = capabilityAt(TierAdvisory)
+				in.Latest = withReport(stateReport(agentactivity.StateIdle, ReasonTurnComplete), func(r *Report) {
+					r.Kind = KindRelease
+					r.State = ""
+					r.Reason = ReasonIntegrationRemoved
+				})
+			}),
+			wantState:     agentactivity.StateWorking,
+			wantAuthority: AuthorityScreen,
+			wantTier:      TierAdvisory,
+			wantFreshness: FreshnessReleased,
+			wantReason:    ReasonAuthorityRelease,
+		},
+		{
+			name: "an advisory source with a replaced process reports the identity break",
+			in: mutate(func(in *Input) {
+				in.Capability = capabilityAt(TierAdvisory)
+				in.Latest = withReport(stateReport(agentactivity.StateBlocked, ReasonPermissionRequest), func(r *Report) {
+					r.Identity.ProcessGeneration = "gen-old"
+				})
+			}),
+			wantState:     agentactivity.StateWorking,
+			wantAuthority: AuthorityScreen,
+			wantTier:      TierAdvisory,
+			wantFreshness: FreshnessNone,
+			wantReason:    ReasonProcessGenChanged,
+		},
+
 		// ---- Tier: session identity ----
 		{
 			name: "a session-identity source never authors a lane",
 			in: mutate(func(in *Input) {
 				in.Capability = capabilityAt(TierSessionIdentity)
+			}),
+			wantState:     agentactivity.StateWorking,
+			wantAuthority: AuthorityScreen,
+			wantTier:      TierSessionIdentity,
+			wantFreshness: FreshnessNone,
+			wantReason:    ReasonTierSessionIdentity,
+		},
+		{
+			// The row above already has a report present, but that is an
+			// accident of the healthy baseline rather than something it states.
+			// These two make the pair explicit: a session-identity source is
+			// refused for its tier whether or not it has anything to say, so a
+			// future change that started consulting its report would fail here
+			// rather than pass quietly.
+			name: "a session-identity source with a fresh lane-asserting report is still refused",
+			in: mutate(func(in *Input) {
+				in.Capability = capabilityAt(TierSessionIdentity)
+				in.Latest = stateReport(agentactivity.StateIdle, ReasonTurnComplete)
+			}),
+			wantState:     agentactivity.StateWorking,
+			wantAuthority: AuthorityScreen,
+			wantTier:      TierSessionIdentity,
+			wantFreshness: FreshnessNone,
+			wantReason:    ReasonTierSessionIdentity,
+		},
+		{
+			name: "a session-identity source with no report at all is refused for the same reason",
+			in: mutate(func(in *Input) {
+				in.Capability = capabilityAt(TierSessionIdentity)
+				in.Latest = nil
 			}),
 			wantState:     agentactivity.StateWorking,
 			wantAuthority: AuthorityScreen,
@@ -494,6 +574,25 @@ func TestArbitrationTable(t *testing.T) {
 			wantTier:      TierScreenFallback,
 			wantFreshness: FreshnessNone,
 			wantReason:    ReasonIntegrationRemovedMid,
+		},
+		{
+			// The claim "removed mid-run" is only true if the leftover report
+			// belongs to the run being resolved. Latest is the newest report for
+			// the *pane*, so it is routinely a leftover from a previous run or a
+			// recycled pane ID. Reporting a removed integration for one of those
+			// sends the reader hunting for a file that was never installed.
+			name: "a leftover report from another pane does not become a removed integration",
+			in: mutate(func(in *Input) {
+				in.Status = StatusNotInstalled
+				in.Latest = withReport(stateReport(agentactivity.StateBlocked, ReasonPermissionRequest), func(r *Report) {
+					r.Identity.PaneID = "%99"
+				})
+			}),
+			wantState:     agentactivity.StateWorking,
+			wantAuthority: AuthorityScreen,
+			wantTier:      TierScreenFallback,
+			wantFreshness: FreshnessNone,
+			wantReason:    ReasonNoIntegration,
 		},
 		{
 			name: "a missing provider cli has no integration to run",
@@ -690,6 +789,65 @@ func TestLifecycleAuthorityProducesPositiveEvidenceFlags(t *testing.T) {
 				t.Fatal("a reported lane must never skip the state update")
 			}
 		})
+	}
+}
+
+// TestAdvisoryAgreementUpgradesAnInferredIdle is td-f4d92c finding 5, proved
+// deliberately rather than left as an emergent behavior.
+//
+// The setup is ordinary and will happen constantly in production: the screen
+// detectors find no positive match and infer idle, marking the result
+// FallbackIdle so that downstream refuses to announce a completion it did not
+// actually see. An advisory integration then reports idle, agreeing. Because
+// agreement is permitted at advisory tier, the report authors the lane — and a
+// reported idle is positive evidence, so FallbackIdle becomes false.
+//
+// The consequence is real and is the reason this is asserted rather than
+// described: a pane that would have gone quiet now produces a completion
+// notification. That is the correct outcome — the provider genuinely said the
+// turn ended, which is strictly better evidence than the absence of a regex
+// match — but it means an advisory integration changes which notifications a
+// user receives, not merely how a lane is labelled. Anyone weakening the
+// advisory rules has to come through this test.
+func TestAdvisoryAgreementUpgradesAnInferredIdle(t *testing.T) {
+	inferredIdle := agentactivity.Result{
+		State:        agentactivity.StateIdle,
+		Evidence:     "opencode.inferred-idle",
+		FallbackIdle: true,
+	}
+
+	// Baseline: with no integration, the inferred idle passes through untouched
+	// and stays unannounceable.
+	base := healthyInput()
+	base.Status = StatusNotInstalled
+	base.Latest = nil
+	base.Screen = inferredIdle
+	if got := Resolve(base).Result; !got.FallbackIdle {
+		t.Fatal("screen fallback must preserve FallbackIdle")
+	}
+
+	in := healthyInput()
+	in.Capability = capabilityAt(TierAdvisory)
+	in.Latest = stateReport(agentactivity.StateIdle, ReasonTurnComplete)
+	in.Screen = inferredIdle
+
+	got := Resolve(in)
+	if got.Explanation.Authority != AuthorityLifecycle {
+		t.Fatalf("advisory agreement did not author the lane: %+v", got.Explanation)
+	}
+	if got.Result.State != agentactivity.StateIdle {
+		t.Fatalf("state = %q", got.Result.State)
+	}
+	if got.Result.FallbackIdle {
+		t.Fatal("an idle the provider positively reported must not stay marked as inferred")
+	}
+	if !got.Result.VisibleIdle {
+		t.Fatal("a reported idle must be visible so it is not held by the idle debounce")
+	}
+	// The screen's own opinion stays on the record, so the upgrade is
+	// diagnosable rather than invisible.
+	if got.Explanation.ScreenEvidence != "opencode.inferred-idle" {
+		t.Fatalf("screen evidence was lost: %q", got.Explanation.ScreenEvidence)
 	}
 }
 
