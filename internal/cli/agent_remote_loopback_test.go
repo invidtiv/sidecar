@@ -1223,19 +1223,27 @@ func fakeSSHRefusingToConnect(t *testing.T, dir string) {
 // all, and nothing the viewer can ask for over the transport returns a
 // lifecycle record, a provider session id, or a hook payload.
 //
-// NOT PROVED HERE, and not fakeable: that a hook-authored lane crosses SSH as a
-// bounded semantic notification and that the viewer's delivery providers fire
-// once for it. Nothing in the shipped status or notification pipeline reads the
-// lifecycle store — no package outside internal/agentlifecycle,
-// internal/agentintegration and internal/cli imports lifecyclestore, and neither
-// workspaceinventory nor agentstatus nor hostserve consults a lifecycle
-// resolver. Phase B step 3 ("call one observation-plus-authority resolver from
-// worktree polling, managed-shell polling, and workspaceinventory") is
-// therefore not yet in place, so a hook report cannot influence the lane
-// hostserve publishes, cannot produce a notify event, and cannot reach a
-// delivery provider. Until that wiring exists there is no honest way to assert
-// (c) "the fake delivery provider was invoked exactly once for the transition":
-// the transition never becomes an event.
+// NOT PROVED HERE: that a hook-authored lane crosses SSH as a bounded semantic
+// notification and that the viewer's delivery providers fire once for it.
+//
+// The reason is the shape of this harness, not a missing pipeline. An earlier
+// draft of this comment claimed the Phase B step 3 wiring did not exist,
+// reasoning from the fact that no package outside internal/agentlifecycle,
+// internal/agentintegration and internal/cli imports lifecyclestore directly.
+// That inference was wrong: the binding goes through agentintegration.Source,
+// and internal/workspaceinventory/lifecycle.go and
+// internal/plugins/workspace/lifecycle.go both construct a real store-backed
+// source from config.StateDir() in production. hostserve builds a
+// workspaceinventory.Collector, so a hook report on the host does reach the
+// resolver and can influence the lane it publishes.
+//
+// What this harness cannot do is observe that. It drives one-shot CLI verbs
+// over a fake ssh; a notification is produced by a running viewer consuming a
+// host's serve stream, passing resolved lanes through notify.LaneTracker and
+// into a delivery provider. Proving (c) needs that viewer, not another CLI
+// invocation, so it belongs to a notification-side harness rather than to this
+// one — and stating it that way keeps the gap honest without inventing a defect
+// in wiring that is present.
 func TestALifecycleReportFromARemoteAgentStaysInTheHostsOwnStore(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds two binaries and drives a tmux server")
