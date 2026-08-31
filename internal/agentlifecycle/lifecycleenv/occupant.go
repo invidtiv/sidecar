@@ -7,7 +7,71 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+
+	"github.com/marcus/sidecar/internal/agentactivity"
+	"github.com/marcus/sidecar/internal/agentsession"
 )
+
+// OccupantKind names the provider positively identified in the pane's
+// foreground process group, or "" when no provider can be named.
+//
+// The generation fence answers "is the process that produced this report still
+// the pane's provider". It cannot answer "which provider is it", because a
+// generation is a pid and a start time — identifying, but anonymous. This
+// answers the second question, from process ownership evidence (argv[0] of the
+// foreground process group) rather than from anything the reporter said.
+//
+// "shell" is folded into "" deliberately. An interactive shell in the
+// foreground means no provider is running, which is an absence of evidence, not
+// evidence that the claim is wrong.
+func OccupantKind(panePID int) string {
+	if panePID <= 0 {
+		return ""
+	}
+	switch identity := agentactivity.ResolveForegroundProcess(panePID); identity {
+	case "", "shell":
+		return ""
+	default:
+		return identity
+	}
+}
+
+// VerifyReportedKind refuses a report whose claimed provider is not the
+// provider occupying the pane.
+//
+// It exists because a hook entry is a file, not a channel. grok reads
+// ~/.claude/settings.json by design — its own shipped docs carry a "Claude Code
+// Compatibility" section — so Sidecar's installed Claude entry fires inside grok
+// sessions and arrives carrying `--kind claude`, describing the file it was
+// installed in rather than the process that ran it.
+func VerifyReportedKind(panePID int, reported string) error {
+	return CheckReportedKind(reported, OccupantKind(panePID))
+}
+
+// CheckReportedKind is the pure decision behind [VerifyReportedKind], separated
+// so the rule can be tested without a live process table.
+//
+// The asymmetry is the whole design: only a positive identification refuses. An
+// occupant that cannot be named is not treated as a mismatch, because the
+// alternative refuses far more than the bug. Process identity is unavailable on
+// platforms with no adapter, and a provider that spawns its hook into a fresh
+// process group leaves the pane's foreground group holding nothing recognizable
+// — in both cases every session binding would silently stop working, which is a
+// worse outcome than the wrong-kind bind this guards, and it would fail in the
+// direction hook surfaces are required not to fail.
+//
+// So: named and different is a refusal, named and equal passes, unnamed passes.
+// A caller wanting the stricter rule has to ask for evidence it can actually
+// get, and today it cannot.
+func CheckReportedKind(reported, occupant string) error {
+	reported = strings.TrimSpace(reported)
+	occupant = strings.TrimSpace(occupant)
+	if reported == "" || occupant == "" || reported == occupant {
+		return nil
+	}
+	return fmt.Errorf("%w: this pane is running %s, but the report claims %s",
+		agentsession.ErrKindMismatch, occupant, reported)
+}
 
 // LiveProviderGeneration reports the generation of the process that occupies the
 // pane right now.

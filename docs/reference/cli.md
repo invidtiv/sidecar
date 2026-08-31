@@ -576,6 +576,8 @@ The shell it binds is derived from the managed-shell environment and verified ag
 
 A report wins only if it comes from the provider process that currently occupies the pane. Late output from an exited or replaced provider is ignored rather than allowed to overwrite its successor's binding.
 
+--kind is a claim, not evidence. Some providers read another provider's settings file on purpose, so an installed hook can fire under an agent it was not installed for. A kind that does not match the pane's own provider is refused rather than bound, because a wrong binding would offer to resume one agent's conversation with a different agent.
+
 Only an official Sidecar integration source may set an auto-resumable reference. A path reference must be absolute, normalized, and inside one of that provider's approved conversation store roots. Session values are never interpolated into a shell command, and never appear in ordinary `agent list` output.
 
 ```
@@ -598,7 +600,7 @@ Usage: sidecar agent report-session --kind KIND (--id ID | --path ABS_PATH | --c
 - `0`: recorded, or a no-op outside a Sidecar-managed shell
 - `1`: the binding could not be written
 - `2`: usage error
-- `5`: invalid reference, untrusted source, unusable hook payload, unverifiable shell context, or a stale provider generation
+- `5`: invalid reference, untrusted source, unusable hook payload, unverifiable shell context, a provider that does not occupy the pane, or a stale provider generation
 
 **Examples:**
 

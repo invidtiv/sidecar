@@ -1,6 +1,7 @@
 package shellstate
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -79,6 +80,31 @@ func BindSessionAtPath(path string, id Identity, update SessionUpdate) (SessionO
 			prior = def.Agent.Session
 		}
 
+		// The shell already knows what provider it runs. A report that names a
+		// different one is refused here, before the fence and before any write.
+		//
+		// This is the second of two independent gates on the same condition. The
+		// caller checks the claim against the pane's live foreground process,
+		// which is stronger evidence but is only available where a process
+		// identity adapter exists and where the provider did not hide its hook in
+		// a fresh process group. This one needs no process table at all: it
+		// compares the claim against what the manifest recorded when the shell was
+		// created, so a grok shell refuses a claude report on every platform.
+		//
+		// Enforcing it here is also what keeps AgentType and Agent.Kind from
+		// disagreeing. The two are documented as the same value, and the previous
+		// writer set Agent.Kind from the report while leaving AgentType alone
+		// whenever it was already populated — so a mis-attributed report produced a
+		// record that named two different providers and made every reader's answer
+		// depend on which field it happened to consult.
+		if kind := strings.TrimSpace(update.Kind); kind != "" && def.AgentType != "" && kind != def.AgentType {
+			out.Ref = prior
+			out.Kind = def.AgentType
+			return errSessionKindMismatch{err: fmt.Errorf(
+				"%w: this shell runs %s, but the report claims %s",
+				agentsession.ErrKindMismatch, def.AgentType, kind)}
+		}
+
 		var (
 			decision agentsession.Decision
 			fenceErr error
@@ -110,10 +136,12 @@ func BindSessionAtPath(path string, id Identity, update SessionUpdate) (SessionO
 			def.Agent = &clone
 		}
 		if kind := strings.TrimSpace(update.Kind); kind != "" {
+			// Both fields, always, and unconditionally: the mismatch gate above
+			// has already established that AgentType is either empty or exactly
+			// this kind, so writing both is what makes "the two are the same
+			// value" true by construction rather than by the caller remembering.
 			def.Agent.Kind = kind
-			if def.AgentType == "" {
-				def.AgentType = kind
-			}
+			def.AgentType = kind
 		}
 		if update.Clear {
 			def.Agent.Session = nil
@@ -144,6 +172,8 @@ func BindSessionAtPath(path string, id Identity, update SessionUpdate) (SessionO
 		return out, nil
 	case errSessionFenced:
 		return out, e.err
+	case errSessionKindMismatch:
+		return out, e.err
 	}
 	if err != nil {
 		return SessionOutcome{}, err
@@ -166,6 +196,15 @@ type errSessionFenced struct{ err error }
 
 func (e errSessionFenced) Error() string { return e.err.Error() }
 func (e errSessionFenced) Unwrap() error { return e.err }
+
+// errSessionKindMismatch aborts the mutation because the report named a
+// different provider than the shell runs. It is separate from errSessionFenced
+// so the two refusals cannot be confused: one is the right provider too late,
+// the other is the wrong provider.
+type errSessionKindMismatch struct{ err error }
+
+func (e errSessionKindMismatch) Error() string { return e.err.Error() }
+func (e errSessionKindMismatch) Unwrap() error { return e.err }
 
 // SessionHoldersAtPath lists the session claims recorded in one manifest.
 //

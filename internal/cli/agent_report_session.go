@@ -37,7 +37,7 @@ func agentReportSessionExitCodes() []ExitCode {
 		{Code: 0, Summary: "recorded, or a no-op outside a Sidecar-managed shell"},
 		{Code: 1, Summary: "the binding could not be written"},
 		{Code: 2, Summary: "usage error"},
-		{Code: 5, Summary: "invalid reference, untrusted source, unusable hook payload, unverifiable shell context, or a stale provider generation"},
+		{Code: 5, Summary: "invalid reference, untrusted source, unusable hook payload, unverifiable shell context, a provider that does not occupy the pane, or a stale provider generation"},
 	}
 }
 
@@ -56,6 +56,10 @@ func agentReportSessionCommand() *Command {
 			"tmux server through a flag.\n\n" +
 			"A report wins only if it comes from the provider process that currently occupies the pane. Late output " +
 			"from an exited or replaced provider is ignored rather than allowed to overwrite its successor's binding.\n\n" +
+			"--kind is a claim, not evidence. Some providers read another provider's settings file on purpose, so an " +
+			"installed hook can fire under an agent it was not installed for. A kind that does not match the pane's own " +
+			"provider is refused rather than bound, because a wrong binding would offer to resume one agent's " +
+			"conversation with a different agent.\n\n" +
 			"Only an official Sidecar integration source may set an auto-resumable reference. A path reference must be " +
 			"absolute, normalized, and inside one of that provider's approved conversation store roots. Session values " +
 			"are never interpolated into a shell command, and never appear in ordinary `agent list` output.",
@@ -249,6 +253,19 @@ func runAgentReportSession(env Env, args []string) int {
 	}
 
 	kind := strings.TrimSpace(f.kind)
+
+	// --kind describes the settings file the hook was installed in, not the
+	// process that ran it, and those differ: grok reads ~/.claude/settings.json
+	// for Claude Code compatibility, so Sidecar's Claude entry fires inside grok
+	// sessions carrying --kind claude. Check the claim against the pane's actual
+	// occupant before anything reads a payload or touches the manifest — a report
+	// from the wrong provider has nothing to say about this pane's conversation,
+	// and binding it would make a cold restore offer `claude --resume` on a grok
+	// session id.
+	if err := lifecycleenv.VerifyReportedKind(ctx.PanePID, kind); err != nil {
+		return emitReportSessionError(env, f.json, "kind_mismatch", err)
+	}
+
 	refKind := agentsession.RefID
 	value := strings.TrimSpace(f.id)
 
@@ -415,6 +432,8 @@ func reportSessionConflicts(stateDir string, tgt shellTarget, out shellstate.Ses
 
 func reportSessionCode(err error) string {
 	switch {
+	case errors.Is(err, agentsession.ErrKindMismatch):
+		return "kind_mismatch"
 	case errors.Is(err, agentsession.ErrStaleGeneration):
 		return "stale_generation"
 	case errors.Is(err, agentsession.ErrUntrustedSource):

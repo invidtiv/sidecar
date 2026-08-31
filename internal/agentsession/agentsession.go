@@ -85,6 +85,22 @@ var (
 	ErrStaleGeneration = errors.New("session report is from a stale provider generation")
 	// ErrUnsupportedKind means the provider does not name sessions that way.
 	ErrUnsupportedKind = errors.New("provider does not support that session reference kind")
+	// ErrKindMismatch means the provider a report names is not the provider
+	// running in the pane it would bind.
+	//
+	// This is a different failure from a stale generation, and the distinction
+	// matters. A stale generation is the right provider talking too late; a kind
+	// mismatch is the wrong provider talking on time. The second is reachable
+	// because a hook entry is a file on disk, not a channel: grok reads
+	// ~/.claude/settings.json deliberately, for Claude Code compatibility, so an
+	// installed Claude session-identity hook fires inside grok sessions too and
+	// arrives with a --kind flag that describes the file it was installed in
+	// rather than the process that ran it. Binding on that flag alone recorded a
+	// grok conversation as kind=claude, which a cold restore would then offer to
+	// resume with `claude --resume <grok-id>` — wrong rather than refused.
+	//
+	// So the flag is treated as a claim to be checked, never as evidence.
+	ErrKindMismatch = errors.New("the reported provider is not the provider running in this pane")
 )
 
 // Ref is an exact native session reference as reported by an integration.

@@ -153,6 +153,119 @@ func TestANewProviderGenerationTakesOverThePane(t *testing.T) {
 	}
 }
 
+// seedShellRunning seeds a shell that already records which provider it runs,
+// which is the ordinary case: every shell Sidecar launches an agent into
+// records its agentType at creation.
+func seedShellRunning(t *testing.T, name, agentType string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "shells.json")
+	if err := AddAtPath(path, Definition{
+		TmuxName: name, DisplayName: name, Namespace: testNS, AgentType: agentType,
+		CreatedAt: time.Now().UTC().Truncate(time.Second), WorkDir: "/repo",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// TestAClaudeHookInsideAGrokPaneIsRefusedNotBound is td-11040b at the
+// persistence layer.
+//
+// grok reads ~/.claude/settings.json for Claude Code compatibility, so an
+// installed Claude session-identity hook fires inside grok sessions and calls
+// report-session with --kind claude carrying grok's own session id. The
+// generation fence cannot catch it: the reporter really is a child of the pane's
+// live provider, so it is not stale — it is simply the wrong provider. Before
+// this refusal the report bound, and a cold restore would have offered
+// `claude --resume <grok-session-id>`.
+func TestAClaudeHookInsideAGrokPaneIsRefusedNotBound(t *testing.T) {
+	path := seedShellRunning(t, "sidecar-sh-p-1", "grok")
+	id := Identity{TmuxName: "sidecar-sh-p-1", Namespace: testNS}
+
+	out, err := BindSessionAtPath(path, id, SessionUpdate{
+		Ref: reportRef("grok-session-id", testLive), Kind: "claude", Live: testLive})
+	if err == nil {
+		t.Fatal("a claude report inside a grok shell was accepted")
+	}
+	if !errors.Is(err, agentsession.ErrKindMismatch) {
+		t.Fatalf("refusal = %v; wanted a kind mismatch", err)
+	}
+	if errors.Is(err, agentsession.ErrStaleGeneration) {
+		t.Fatalf("a wrong-provider report was reported as a stale generation: %v", err)
+	}
+
+	// Nothing was written, and in particular the shell did not quietly become a
+	// claude shell.
+	ref, kind, bound, err := SessionRefAtPath(path, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bound {
+		t.Fatalf("the refused report still bound a reference: %+v", ref)
+	}
+	if kind != "grok" {
+		t.Fatalf("the shell's provider became %q; wanted it left as grok", kind)
+	}
+	// The refusal must also be visible to the caller rather than silently
+	// swallowed, and it must name the shell's real provider.
+	if out.Kind != "grok" {
+		t.Fatalf("refusal outcome named %q as the provider; wanted grok", out.Kind)
+	}
+}
+
+// TestAGenuineClaudePaneStillBinds is the other half: the guard must refuse the
+// wrong provider without costing the right one anything.
+func TestAGenuineClaudePaneStillBinds(t *testing.T) {
+	path := seedShellRunning(t, "sidecar-sh-p-1", "claude")
+	id := Identity{TmuxName: "sidecar-sh-p-1", Namespace: testNS}
+
+	out, err := BindSessionAtPath(path, id, SessionUpdate{
+		Ref: reportRef("claude-session-id", testLive), Kind: "claude", Live: testLive})
+	if err != nil || out.Decision != agentsession.DecisionRecorded {
+		t.Fatalf("a genuine claude report = %v, %v; wanted recorded", out.Decision, err)
+	}
+	ref, kind, bound, err := SessionRefAtPath(path, id)
+	if err != nil || !bound || ref.Value != "claude-session-id" || kind != "claude" {
+		t.Fatalf("binding = %+v (kind=%q bound=%v err=%v)", ref, kind, bound, err)
+	}
+}
+
+// TestAReportNeverLeavesTheTwoProviderFieldsDisagreeing pins the reconciliation.
+//
+// AgentBinding.Kind and Definition.AgentType are documented as the same value.
+// The previous writer set Kind from the report but left AgentType alone whenever
+// it was already populated, so a mis-attributed report produced a record naming
+// two different providers — and which one a reader saw depended on which field
+// it happened to consult. SessionHoldersAtPath and SessionRefAtPath both prefer
+// Agent.Kind and fall back to AgentType, so the disagreement was reachable.
+func TestAReportNeverLeavesTheTwoProviderFieldsDisagreeing(t *testing.T) {
+	for _, tc := range []struct{ name, seeded, reported string }{
+		{"a shell with no recorded provider learns one", "", "codex"},
+		{"a shell that already agrees stays agreeing", "codex", "codex"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := seedShellRunning(t, "sidecar-sh-p-1", tc.seeded)
+			id := Identity{TmuxName: "sidecar-sh-p-1", Namespace: testNS}
+			if _, err := BindSessionAtPath(path, id, SessionUpdate{
+				Ref: reportRef("s", testLive), Kind: tc.reported, Live: testLive}); err != nil {
+				t.Fatal(err)
+			}
+			defs, err := ListAtPath(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			def := defs[0]
+			if def.Agent == nil {
+				t.Fatal("no agent binding was written")
+			}
+			if def.Agent.Kind != tc.reported || def.AgentType != tc.reported {
+				t.Fatalf("agent.kind=%q agentType=%q; both wanted %q",
+					def.Agent.Kind, def.AgentType, tc.reported)
+			}
+		})
+	}
+}
+
 func TestBindingRefusesAShellItDoesNotKnow(t *testing.T) {
 	path := seedShell(t, "sidecar-sh-p-1")
 	_, err := BindSessionAtPath(path, Identity{TmuxName: "sidecar-sh-nope", Namespace: testNS},

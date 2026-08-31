@@ -1,9 +1,12 @@
 package lifecycleenv
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/marcus/sidecar/internal/agentsession"
 )
 
 // TestTheStrictGenerationRefusesWhereTheLenientOneFallsBack is the regression
@@ -116,4 +119,70 @@ func unrelatedPID(t *testing.T) int {
 	}
 	t.Skip("no unrelated childless process was available to model an orphaned reporter")
 	return 0
+}
+
+// TestOnlyAPositiveMismatchRefusesAReportedKind pins the rule behind td-11040b
+// in both directions, because both directions are load-bearing.
+//
+// Refusing a named mismatch is the fix: grok reads ~/.claude/settings.json for
+// Claude Code compatibility, so Sidecar's installed Claude hook fires inside
+// grok sessions and reports --kind claude for a grok conversation.
+//
+// Passing an unnamed occupant is not laziness, it is the fail-open rule this
+// surface owes its callers. Process identity has no adapter on some platforms
+// and resolves to nothing when a provider spawns its hook into a fresh process
+// group; refusing there would silently disable session binding for every
+// provider on those hosts, which is a far larger failure than the one being
+// guarded — and it would fail in the direction a hook surface must never fail.
+func TestOnlyAPositiveMismatchRefusesAReportedKind(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		reported string
+		occupant string
+		refuse   bool
+	}{
+		{"the grok pane running a claude hook", "claude", "grok", true},
+		{"a claude hook in a codex pane", "claude", "codex", true},
+		{"a genuine claude pane", "claude", "claude", false},
+		{"a genuine grok pane", "grok", "grok", false},
+		{"an occupant no adapter could name", "claude", "", false},
+		{"an occupant this platform cannot see", "claude", "   ", false},
+		{"no claim to check", "", "grok", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := CheckReportedKind(tc.reported, tc.occupant)
+			if tc.refuse && err == nil {
+				t.Fatalf("%q reported inside a %q pane was accepted", tc.reported, tc.occupant)
+			}
+			if !tc.refuse && err != nil {
+				t.Fatalf("%q reported inside a %q pane was refused: %v", tc.reported, tc.occupant, err)
+			}
+			if !tc.refuse {
+				return
+			}
+			if !errors.Is(err, agentsession.ErrKindMismatch) {
+				t.Fatalf("refusal did not carry the kind-mismatch sentinel: %v", err)
+			}
+			// The message has to name both providers or a user reading a hook's
+			// stderr cannot tell which of their agents is misconfigured.
+			if !strings.Contains(err.Error(), tc.reported) || !strings.Contains(err.Error(), tc.occupant) {
+				t.Fatalf("refusal named neither side clearly: %v", err)
+			}
+		})
+	}
+}
+
+// TestAnEmptyPaneNamesNoOccupant keeps OccupantKind from turning "no provider is
+// running" into evidence, and keeps an ordinary live process from being
+// mistaken for a provider that contradicts the report.
+func TestAnEmptyPaneNamesNoOccupant(t *testing.T) {
+	if got := OccupantKind(0); got != "" {
+		t.Fatalf("OccupantKind(0) = %q; wanted no claim", got)
+	}
+	if got := OccupantKind(-1); got != "" {
+		t.Fatalf("OccupantKind(-1) = %q; wanted no claim", got)
+	}
+	if err := VerifyReportedKind(os.Getpid(), "claude"); err != nil {
+		t.Fatalf("a non-provider process refused a report: %v", err)
+	}
 }
