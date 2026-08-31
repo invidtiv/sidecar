@@ -37,7 +37,7 @@ Usage: sidecar agent end --outcome completed|cancelled|failed|unknown --source S
 - `--source SOURCE`: Integration source identifier (required)
 - `--source-version VERSION`: Installed integration asset version
 - `--provider PROVIDER`: Catalog agent kind (required)
-- `--seq N`: Strictly increasing sequence within this run (required)
+- `--seq N`: Strictly increasing sequence within this run. Omit it to have the store assign the next one, which is what a per-event hook process should do
 - `--session-id ID`: Provider session identifier; only a salted digest is retained
 - `--reason CODE`: Bounded reason code from the frozen allowlist
 - `--detail TEXT`: Short sanitized diagnostic; never prompt, response, or tool content
@@ -503,7 +503,7 @@ Usage: sidecar agent release --source SOURCE --provider PROVIDER --seq N [--sess
 - `--source SOURCE`: Integration source identifier (required)
 - `--source-version VERSION`: Installed integration asset version
 - `--provider PROVIDER`: Catalog agent kind (required)
-- `--seq N`: Strictly increasing sequence within this run (required)
+- `--seq N`: Strictly increasing sequence within this run. Omit it to have the store assign the next one, which is what a per-event hook process should do
 - `--session-id ID`: Provider session identifier; only a salted digest is retained
 - `--reason CODE`: Bounded reason code from the frozen allowlist
 - `--detail TEXT`: Short sanitized diagnostic; never prompt, response, or tool content
@@ -544,7 +544,7 @@ Usage: sidecar agent report --state working|blocked|idle --source SOURCE --provi
 - `--source SOURCE`: Integration source identifier (required)
 - `--source-version VERSION`: Installed integration asset version
 - `--provider PROVIDER`: Catalog agent kind (required)
-- `--seq N`: Strictly increasing sequence within this run (required)
+- `--seq N`: Strictly increasing sequence within this run. Omit it to have the store assign the next one, which is what a per-event hook process should do
 - `--session-id ID`: Provider session identifier; only a salted digest is retained
 - `--reason CODE`: Bounded reason code from the frozen allowlist
 - `--detail TEXT`: Short sanitized diagnostic; never prompt, response, or tool content

@@ -98,7 +98,6 @@ func TestLifecycleUsageErrorsComeBeforeAnythingElse(t *testing.T) {
 		{"report with a bad state", []string{"agent", "report", "--state", "thinking", "--source", "s", "--provider", "p", "--seq", "1"}, "must be working, blocked, or idle"},
 		{"report without a source", []string{"agent", "report", "--state", "idle", "--provider", "p", "--seq", "1"}, "--source is required"},
 		{"report without a provider", []string{"agent", "report", "--state", "idle", "--source", "s", "--seq", "1"}, "--provider is required"},
-		{"report without a sequence", []string{"agent", "report", "--state", "idle", "--source", "s", "--provider", "p"}, "--seq is required"},
 		{"a non-numeric sequence", []string{"agent", "report", "--state", "idle", "--source", "s", "--provider", "p", "--seq", "x"}, "--seq must be"},
 		{"end without an outcome", []string{"agent", "end", "--source", "s", "--provider", "p", "--seq", "1"}, "--outcome is required"},
 		{"end with a bad outcome", []string{"agent", "end", "--outcome", "exploded", "--source", "s", "--provider", "p", "--seq", "1"}, "--outcome must be"},
@@ -204,5 +203,31 @@ func TestLifecycleCommandsAreRegisteredAlphabetically(t *testing.T) {
 		if agent.FindSubcommand(want) == nil {
 			t.Fatalf("agent %s is not registered", want)
 		}
+	}
+}
+
+// TestASequenceIsOptionalSoAPerEventHookCanReport pins the flag contract that
+// makes a multi-process integration possible at all. Requiring --seq assumed
+// the reporter is one long-lived process holding a counter, which is true of
+// OpenCode's plugin and false of Codex's and Claude Code's hooks: those run a
+// fresh process per event with nothing to count with. Omitting it now asks the
+// store to assign the next sequence under the lock it already takes.
+func TestASequenceIsOptionalSoAPerEventHookCanReport(t *testing.T) {
+	t.Setenv(shellstate.ManagedEnv, "")
+
+	for _, args := range [][]string{
+		{"agent", "report", "--state", "working", "--source", "s", "--provider", "codex"},
+		{"agent", "end", "--outcome", "cancelled", "--source", "s", "--provider", "codex"},
+		{"agent", "release", "--source", "s", "--provider", "codex"},
+	} {
+		t.Run(args[1], func(t *testing.T) {
+			code, _, errOut := runLifecycleCLI(t, args...)
+			if code == 2 {
+				t.Fatalf("omitting --seq was still a usage error: %s", errOut)
+			}
+			if code != 0 {
+				t.Fatalf("exit %d (stderr: %s)", code, errOut)
+			}
+		})
 	}
 }

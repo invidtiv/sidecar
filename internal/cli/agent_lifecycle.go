@@ -71,7 +71,7 @@ func lifecycleCommands() (report, end, release, explain *Command) {
 		{Name: "--source", Arg: "SOURCE", Summary: "Integration source identifier (required)"},
 		{Name: "--source-version", Arg: "VERSION", Summary: "Installed integration asset version"},
 		{Name: "--provider", Arg: "PROVIDER", Summary: "Catalog agent kind (required)"},
-		{Name: "--seq", Arg: "N", Summary: "Strictly increasing sequence within this run (required)"},
+		{Name: "--seq", Arg: "N", Summary: "Strictly increasing sequence within this run. Omit it to have the store assign the next one, which is what a per-event hook process should do"},
 		{Name: "--session-id", Arg: "ID", Summary: "Provider session identifier; only a salted digest is retained"},
 		{Name: "--reason", Arg: "CODE", Summary: "Bounded reason code from the frozen allowlist"},
 		{Name: "--detail", Arg: "TEXT", Summary: "Short sanitized diagnostic; never prompt, response, or tool content"},
@@ -261,9 +261,13 @@ func parseLifecycleFlags(env Env, args []string, help string, kind agentlifecycl
 	if f.provider == "" {
 		return f, usage("--provider is required")
 	}
-	if !f.seqSet {
-		return f, usage("--seq is required")
-	}
+	// --seq is deliberately optional. Requiring it assumed the reporter is one
+	// long-lived process that can hold a counter, which is true of a plugin and
+	// false of a hook: a provider that runs each hook as its own short-lived
+	// process has nothing to count with, and every process guessing produces
+	// collisions the store correctly rejects by dropping a report. Omitting it
+	// asks the store to assign the next sequence under the lock it already
+	// takes, which is the only place the read and the write are atomic.
 	switch kind {
 	case agentlifecycle.KindState:
 		if f.state == "" {
@@ -399,9 +403,16 @@ func runLifecycleWrite(env Env, args []string, name string, kind agentlifecycle.
 	}
 
 	var acc agentlifecycle.Acceptance
-	if kind == agentlifecycle.KindRelease {
+	switch {
+	case !f.seqSet:
+		// The store assigns. Release goes through the same path rather than
+		// store.Release, whose only job is to check the kind -- already checked
+		// above -- because two ways of appending a release is how the two would
+		// eventually disagree.
+		rec, acc, err = store.AppendNext(rec)
+	case kind == agentlifecycle.KindRelease:
 		acc, err = store.Release(rec)
-	} else {
+	default:
 		acc, err = store.Append(rec)
 	}
 	if err != nil {
