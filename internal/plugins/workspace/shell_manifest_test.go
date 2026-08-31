@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -773,4 +774,58 @@ func TestRevivingAShellKeepsItsSessionBinding(t *testing.T) {
 	if kind != "codex" {
 		t.Fatalf("provider kind = %q", kind)
 	}
+}
+
+// A manifest handle with no path used to resolve ".lock" against the process's
+// working directory and lock (and create) a file there. Under `go test` that
+// directory is the package source tree, so every run dirtied the repository.
+// Both the reader and the writer now refuse instead, and the proof is that the
+// working directory gains no file.
+func TestAPathlessShellManifestRefusesInsteadOfWritingBesideTheProcess(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := dirEntryNames(t, cwd)
+
+	if _, err := LoadShellManifest(""); !errors.Is(err, errNoManifestPath) {
+		t.Fatalf("LoadShellManifest(\"\") error = %v, want errNoManifestPath", err)
+	}
+	if _, err := LoadShellManifest("   "); !errors.Is(err, errNoManifestPath) {
+		t.Fatalf("LoadShellManifest(blank) error = %v, want errNoManifestPath", err)
+	}
+
+	pathless := &ShellManifest{Version: manifestVersion}
+	if err := pathless.AddShell(ShellDefinition{TmuxName: "sidecar-sh-x", DisplayName: "X"}); !errors.Is(err, errNoManifestPath) {
+		t.Fatalf("AddShell on a pathless manifest error = %v, want errNoManifestPath", err)
+	}
+	if err := pathless.UpdateShell(ShellDefinition{TmuxName: "sidecar-sh-x", DisplayName: "X"}); !errors.Is(err, errNoManifestPath) {
+		t.Fatalf("UpdateShell on a pathless manifest error = %v, want errNoManifestPath", err)
+	}
+	if err := pathless.MarkRestoreEligible("sidecar-sh-x", "pid=1", time.Now()); !errors.Is(err, errNoManifestPath) {
+		t.Fatalf("MarkRestoreEligible on a pathless manifest error = %v, want errNoManifestPath", err)
+	}
+	if _, err := acquireManifestLock("", true); !errors.Is(err, errNoManifestPath) {
+		t.Fatalf("acquireManifestLock(\"\") error = %v, want errNoManifestPath", err)
+	}
+
+	after := dirEntryNames(t, cwd)
+	for name := range after {
+		if !before[name] {
+			t.Fatalf("a pathless manifest created %q in the working directory %s", name, cwd)
+		}
+	}
+}
+
+func dirEntryNames(t *testing.T, dir string) map[string]bool {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		out[e.Name()] = true
+	}
+	return out
 }

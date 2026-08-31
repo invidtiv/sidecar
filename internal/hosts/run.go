@@ -245,6 +245,26 @@ func runHost(host Host) Host {
 	return host
 }
 
+// OneShotClient builds a client for a single CLI invocation of RunSidecar.
+//
+// The health gate in RunSidecar exists to protect the TUI: attempting a
+// mutation on a host nothing has dialled means waiting out an ssh connect
+// timeout inside whatever asked for it. A one-shot CLI process is the opposite
+// situation. Nothing has dialled because nothing had the chance to, the user
+// named the host explicitly on the command line, and waiting out a connect
+// timeout is the correct behaviour rather than the hang. So this marks the
+// client reachable and lets ssh itself decide, which turns "no stream is
+// running" back into what it should be — an attempt that may fail with the
+// transport's own reason, not a refusal before anything was tried.
+//
+// It does not start a stream, so it observes nothing and must not be used
+// where a Registry would do.
+func OneShotClient(host Host, opts ClientOptions) *Client {
+	client := NewClient(host, opts)
+	client.setHealth(StateOnline, "", 0)
+	return client
+}
+
 // RunSidecar runs a sidecar verb on the host and decodes its --json result
 // into out. Pass a nil out for a verb whose result does not matter.
 //

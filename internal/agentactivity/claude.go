@@ -48,5 +48,5 @@ func DetectClaude(ob Observation) Result {
 
 func claudeProcess(command string) bool {
 	return command == "claude" || command == "node" || command == "bun" ||
-		semanticVersionCommand.MatchString(command)
+		claudeVersionArgv0(command)
 }

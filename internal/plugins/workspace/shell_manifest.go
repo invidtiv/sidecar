@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -61,9 +62,19 @@ type ShellDefinition = shellstate.Definition
 // disagree about what "current" means.
 const manifestVersion = shellstate.CurrentVersion
 
+// errNoManifestPath is returned by every manifest operation whose handle was
+// built without a file to act on. It is a refusal rather than a fallback: there
+// is no sensible default location for a project's shells.json, and inventing a
+// relative one silently writes state next to whatever directory the process
+// happens to be in.
+var errNoManifestPath = errors.New("shell manifest has no path")
+
 // LoadShellManifest loads the shell manifest from disk.
 // Returns an empty manifest (not error) if file doesn't exist or is corrupted.
 func LoadShellManifest(path string) (*ShellManifest, error) {
+	if strings.TrimSpace(path) == "" {
+		return nil, errNoManifestPath
+	}
 	// A process that claims isolated state must not even observe the real
 	// user's manifest: reading it is how an isolated instance would come to
 	// believe those shells are its own (td-8d18de).
@@ -121,6 +132,9 @@ func (m *ShellManifest) mutateLocked(apply func([]ShellDefinition) ([]ShellDefin
 // mutateLockedKind is the writer boundary. identityRemoval is true only for
 // RemoveShell; that is the only workspace path allowed to shrink live shells.
 func (m *ShellManifest) mutateLockedKind(identityRemoval bool, apply func([]ShellDefinition) ([]ShellDefinition, bool)) error {
+	if strings.TrimSpace(m.path) == "" {
+		return errNoManifestPath
+	}
 	if err := config.AssertIsolatedPath(m.path); err != nil {
 		return err
 	}
@@ -467,6 +481,16 @@ const lockRetryInterval = 10 * time.Millisecond
 // acquireManifestLock acquires an advisory lock on the manifest file with timeout.
 // exclusive=true for writes, false for reads.
 func acquireManifestLock(path string, exclusive bool) (*os.File, error) {
+	// A manifest with no path is not a manifest with a default location: every
+	// path here is derived from the project's state directory, so an empty one
+	// means a caller built a handle it never gave a home. Resolving it anyway
+	// makes ".lock" relative to whatever the process's working directory
+	// happens to be — the source tree, under `go test` — and then locks and
+	// writes there. Refusing keeps that unrepresentable rather than merely
+	// unlikely.
+	if strings.TrimSpace(path) == "" {
+		return nil, errNoManifestPath
+	}
 	lockPath := path + ".lock"
 
 	// Ensure directory exists for lock file

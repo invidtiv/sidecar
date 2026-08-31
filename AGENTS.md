@@ -59,6 +59,8 @@ discover (`sidecar agent list --json`) → create the layout separately (`sideca
 
 Preserve the user's focus, and never close a target you did not create. There is no implicit timeout on any wait. A blocked agent is a question for you to read and answer deliberately — Sidecar never auto-answers an approval. Raw terminal work still belongs to tmux, not to `agent send-keys`.
 
+Every verb above also takes `--host ID` to run on a registered remote host (`sidecar host list`), as one invocation over the ssh connection Sidecar already holds open. The sequence and the refusals are identical, because the verb runs on the machine that owns the pane and you get that machine's own answer back. Two differences are worth knowing: a remote verb needs an explicit TARGET, since the omitted-target rule names the shell *you* are in, and remote output tells you whether a shell is bound to a conversation but not which one unless you pass `--include-session-ref`. `sidecar session status --host ID` and `session restore --host ID` work the same way — the host plans and executes, you request and observe.
+
 ## Demoing Features
 
 When you finish building or modifying a user-facing feature, make it easy for

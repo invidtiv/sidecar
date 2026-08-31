@@ -1456,9 +1456,14 @@ func TestManifestSyncPreservesPaneLayoutsByShellIdentity(t *testing.T) {
 			}
 			p.saveSelectionState()
 
-			manifest := &ShellManifest{Version: manifestVersion, Shells: []ShellDefinition{{
-				TmuxName: "test-shell-b", DisplayName: "Shell B", WorkDir: root,
-			}}}
+			// A real path in a temp dir, not the zero value: the sync path
+			// writes restore markers through this handle, and a pathless
+			// manifest used to resolve its lock file against the process's
+			// working directory — the source tree, under `go test`.
+			manifest := &ShellManifest{Version: manifestVersion, path: filepath.Join(t.TempDir(), "shells.json"),
+				Shells: []ShellDefinition{{
+					TmuxName: "test-shell-b", DisplayName: "Shell B", WorkDir: root,
+				}}}
 			p.shellManifest = manifest
 			p.applyManifestSync(shellManifestSyncMsg{
 				Manifest: manifest,

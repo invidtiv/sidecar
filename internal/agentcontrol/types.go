@@ -94,6 +94,22 @@ const (
 	ErrTimeout               ErrorCode = "timeout"
 	ErrTransport             ErrorCode = "transport_failed"
 	ErrFeatureDisabled       ErrorCode = "feature_disabled"
+	// ErrHostUnavailable and ErrVersionSkew are M5 additions, and they exist
+	// because a remote target has two failure modes the local vocabulary
+	// cannot express without lying about them.
+	//
+	// A machine that is not reachable is not a transport that failed
+	// mid-operation: nothing was attempted, retrying later is the fix, and
+	// reporting transport_failed for it sends a reader looking for a fault
+	// that is not there. And a host whose Sidecar does not know the verb
+	// answers with a usage error — the exit-code contract's own capability
+	// negotiation — where the fix is to update one of the two binaries and no
+	// other code says so. Both keep the exit status the CLI already documents:
+	// host_unavailable exits 1 with the other retryable failures, version_skew
+	// exits 2, which agentExitCodes has always described as "usage error or
+	// version skew".
+	ErrHostUnavailable ErrorCode = "host_unavailable"
+	ErrVersionSkew     ErrorCode = "version_skew"
 )
 
 type Error struct {

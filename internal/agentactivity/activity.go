@@ -120,10 +120,30 @@ func Identify(ob Observation) string {
 	return ""
 }
 
+// claudeVersionArgv0 reports the one non-name argv[0] this resolver treats as a
+// provider identity: Claude Code renames its own process to its version string,
+// so a pane running it reports "2.0.14" rather than "claude".
+//
+// It is spelled out rather than inlined because what a false positive costs
+// changed. This resolver was written to label a pane in the UI, where guessing
+// wrong meant a wrong label; it is now also the evidence
+// lifecycleenv.VerifyReportedKind checks a hook's --kind claim against, where
+// guessing wrong means refusing a legitimate report. The direction is the safe
+// one — a wrongly-named pane refuses a report rather than binding one provider's
+// conversation to another — but it is a refusal, so the pattern stays exactly as
+// narrow as Claude's own format: three dot-separated integers, nothing else. No
+// "v" prefix, no prerelease suffix, no fourth component, and nothing that merely
+// contains a version. TestOnlyClaudesOwnVersionArgv0ResolvesToAProvider and
+// TestTheProcessNameVocabularyMatchesTheAgentCatalog pin both halves of that:
+// the shape, and that no other catalog family could ever present this argv[0].
+func claudeVersionArgv0(command string) bool {
+	return semanticVersionCommand.MatchString(command)
+}
+
 func identifyProcessName(command string) string {
 	command = strings.ToLower(strings.TrimSpace(command))
 	switch {
-	case command == "claude" || semanticVersionCommand.MatchString(command):
+	case command == "claude" || claudeVersionArgv0(command):
 		return "claude"
 	case command == "codex" || command == "codex-cli":
 		return "codex"

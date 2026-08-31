@@ -6,9 +6,11 @@ Sidecar provides non-interactive commands for scripting and agent workflows.
 
 Inspect, start, and coordinate agents in Sidecar-managed shells
 
-Provider-aware control over shells Sidecar owns. The feature is discoverable while disabled; enable agent_control to run it.
+Provider-aware control over shells Sidecar owns.
 
 The safe sequence is: create the layout separately with sidecar create shell, start the provider with agent start, prompt and wait, read before you send keys, and never close a target you did not create.
+
+With --host ID the verb runs on that registered host instead, as one invocation over the existing ssh connection, and the host's own answer is what you get back. A remote verb needs an explicit TARGET, because the omitted-target rule names the shell you are in and that shell is on this machine. Conversation identifiers stay on the host that owns them: remote output reports whether a shell is bound, not what it is bound to, unless you ask with --include-session-ref.
 
 The report, end, release, and explain commands are a separate surface: they record and inspect the lifecycle events a provider's own integration reports, and they are not gated behind agent_control.
 
@@ -107,6 +109,7 @@ Usage: sidecar agent get [TARGET] [--project NAME] [--include-session-ref] [--js
 
 - `--project NAME`: Target project (slug, basename, or path)
 - `--shell NAME`: Resolve the project from a registered shell
+- `--host ID`: Run the verb on a registered remote host (requires an explicit TARGET)
 - `--json`: Write stable structured JSON
 - `-h, --help`: Show this help
 - `--include-session-ref`: Include the bound conversation's value, not only its presence
@@ -371,6 +374,7 @@ Usage: sidecar agent list [--project NAME] [--include-session-ref] [--json]
 
 - `--project NAME`: Target project (slug, basename, or path)
 - `--shell NAME`: Resolve the project from a registered shell
+- `--host ID`: Run the verb on a registered remote host (requires an explicit TARGET)
 - `--json`: Write stable structured JSON
 - `-h, --help`: Show this help
 - `--include-session-ref`: Include the bound conversation's value, not only its presence
@@ -416,6 +420,7 @@ Usage: sidecar agent prompt [TARGET] TEXT [--wait] [--until STATUS]... [--timeou
 
 - `--project NAME`: Target project (slug, basename, or path)
 - `--shell NAME`: Resolve the project from a registered shell
+- `--host ID`: Run the verb on a registered remote host (requires an explicit TARGET)
 - `--json`: Write stable structured JSON
 - `-h, --help`: Show this help
 - `--wait`: Submit and wait for the agent to settle under one pinned target
@@ -461,6 +466,7 @@ Usage: sidecar agent read [TARGET] [--source SOURCE] [--lines N] [--ansi] [--jso
 
 - `--project NAME`: Target project (slug, basename, or path)
 - `--shell NAME`: Resolve the project from a registered shell
+- `--host ID`: Run the verb on a registered remote host (requires an explicit TARGET)
 - `--json`: Write stable structured JSON
 - `-h, --help`: Show this help
 - `--source SOURCE`: visible, recent, recent-unwrapped, detection, or transcript (default visible)
@@ -635,6 +641,7 @@ Usage: sidecar agent send-keys [TARGET] KEY [KEY ...] [--json]
 
 - `--project NAME`: Target project (slug, basename, or path)
 - `--shell NAME`: Resolve the project from a registered shell
+- `--host ID`: Run the verb on a registered remote host (requires an explicit TARGET)
 - `--json`: Write stable structured JSON
 - `-h, --help`: Show this help
 
@@ -668,6 +675,7 @@ Usage: sidecar agent start [TARGET] --kind KIND [--timeout DURATION] [-- AGENT_A
 
 - `--project NAME`: Target project (slug, basename, or path)
 - `--shell NAME`: Resolve the project from a registered shell
+- `--host ID`: Run the verb on a registered remote host (requires an explicit TARGET)
 - `--json`: Write stable structured JSON
 - `-h, --help`: Show this help
 - `--kind KIND`: Catalog provider kind (required)
@@ -703,6 +711,7 @@ Usage: sidecar agent wait [TARGET] [--until STATUS]... --timeout DURATION [--jso
 
 - `--project NAME`: Target project (slug, basename, or path)
 - `--shell NAME`: Resolve the project from a registered shell
+- `--host ID`: Run the verb on a registered remote host (requires an explicit TARGET)
 - `--json`: Write stable structured JSON
 - `-h, --help`: Show this help
 - `--until STATUS`: Repeatable settled state: idle, done, blocked, or working (default idle, done, blocked)
@@ -1844,7 +1853,7 @@ Conversations are resumed only with --agents, only from an exact reference an of
 The tmux session name is the idempotency key, so running this twice does not produce two shells or two agents, and a run interrupted at any point converges when it is run again. Nothing here ever deletes a shell record: a failure is reported and left retryable.
 
 ```
-Usage: sidecar session restore [--dry-run] [--shell TARGET] [--agents] [--yes] [--json]
+Usage: sidecar session restore [--dry-run] [--shell TARGET] [--agents] [--yes] [--host ID] [--json]
 ```
 
 **Options:**
@@ -1853,6 +1862,7 @@ Usage: sidecar session restore [--dry-run] [--shell TARGET] [--agents] [--yes] [
 - `--shell TARGET`: Restore only this shell, by tmux session name or display name
 - `--agents`: Also resume eligible exact agent conversations
 - `--yes`: Confirm agent resumes non-interactively when the policy is ask
+- `--host ID`: Restore on a registered remote host instead of this machine
 - `--json`: Write the stable structured document to stdout
 - `-h, --help`: Show this help
 
@@ -1883,11 +1893,12 @@ Reads Sidecar's managed shell records and the current tmux inventory and prints 
 Every managed shell is named as reattach, recreate-shell, resume-agent, manual, skip, or refuse, with the reason and whether performing it would run an agent process. This command is read-only: it creates nothing, starts nothing, and does not require a running Sidecar.
 
 ```
-Usage: sidecar session status [--json]
+Usage: sidecar session status [--host ID] [--json]
 ```
 
 **Options:**
 
+- `--host ID`: Read the plan on a registered remote host instead of this machine
 - `--json`: Write the stable structured document to stdout
 - `-h, --help`: Show this help
 

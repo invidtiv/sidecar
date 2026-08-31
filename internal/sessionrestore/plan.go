@@ -117,6 +117,14 @@ const (
 	ReasonAgentsNotRequested Reason = "agents_not_requested"
 	// ReasonPolicyResume — the resume is authorized and will run.
 	ReasonPolicyResume Reason = "policy_resume"
+	// ReasonKindDisagreement — the record names two different providers, so
+	// which CLI would be handed the conversation is not knowable from it. The
+	// shell is recreated; the conversation is not resumed by either.
+	//
+	// This is a refusal rather than a preference on purpose. A reader that picks
+	// a field is a reader that will eventually run `claude --resume` on a grok
+	// conversation id, which is the exact defect that produced these records.
+	ReasonKindDisagreement Reason = "kind_disagreement"
 )
 
 // ResumeMode is the machine-wide resumeAgents setting.
@@ -400,6 +408,12 @@ func dedupWinners(shells []Shell) map[string]agentsession.Holder {
 		if !ok {
 			continue
 		}
+		// A record that names two providers can never resume, so letting it
+		// enter deduplication would only let it beat a healthy shell for a
+		// conversation neither would then get.
+		if kindConflict(sh.Def) != "" {
+			continue
+		}
 		holders = append(holders, agentsession.Holder{
 			Project: sh.Project,
 			Session: sh.Def.TmuxName,
@@ -424,10 +438,15 @@ func binding(def shellstate.Definition) (agentsession.Ref, string, bool) {
 }
 
 func agentKind(def shellstate.Definition) string {
-	if def.Agent != nil && strings.TrimSpace(def.Agent.Kind) != "" {
-		return def.Agent.Kind
-	}
-	return def.AgentType
+	kind, _ := shellstate.AgentKindOf(def)
+	return kind
+}
+
+// kindConflict names the second provider a self-contradicting record holds, and
+// is empty for every record a current writer produces.
+func kindConflict(def shellstate.Definition) string {
+	_, conflict := shellstate.AgentKindOf(def)
+	return conflict
 }
 
 func policyOf(def shellstate.Definition) agentsession.Policy {
@@ -557,6 +576,14 @@ func planShell(in Input, sh Shell, dirExists func(string) bool, providerAvailabl
 		step.Reason = ReasonPolicyResume
 		step.Detail = "recreate the shell and resume its exact conversation"
 		step.ExternalExecution = true
+	case agent.Reason == ReasonKindDisagreement:
+		// The shell part is unaffected and still happens. Naming both providers
+		// here is the whole remediation an affected user gets: the record is not
+		// rewritten by a restore, so the sentence has to be enough to fix it by
+		// hand or to start the agent deliberately.
+		step.Detail = fmt.Sprintf(
+			"recreate the shell; its record names two providers (%s and %s), so Sidecar will not resume its conversation with either",
+			agent.Kind, kindConflict(def))
 	case agent.Reason == ReasonNeedsConfirmation:
 		// The shell part is authorized; the agent part is waiting on a human.
 		// ExternalExecution stays true because the question being asked is
@@ -594,6 +621,18 @@ func decideAgent(in Input, sh Shell, policy agentsession.Policy, providerAvailab
 	if bound {
 		out.RefKind = string(ref.Kind)
 		out.Reported = ref.Reported
+	}
+
+	// Before anything else the record says: does it agree with itself? A
+	// mis-attributed hook report used to set Agent.Kind and leave AgentType
+	// alone, and the resulting record names one provider's conversation and
+	// another provider's CLI. Nothing downstream can tell which half is the
+	// mistake, so this is checked ahead of the reference, deduplication, the
+	// catalog and policy — every one of which would otherwise answer confidently
+	// about a record that has no single answer.
+	if conflict := kindConflict(def); conflict != "" {
+		out.Reason = ReasonKindDisagreement
+		return out
 	}
 
 	if !bound {
@@ -665,6 +704,12 @@ func decideAgent(in Input, sh Shell, policy agentsession.Policy, providerAvailab
 // resumeRefusal maps agentsession's typed refusals onto plan reasons.
 func resumeRefusal(err error) Reason {
 	switch {
+	case errors.Is(err, shellstate.ErrKindDisagreement):
+		// The executor re-reads the record at the moment of mutation, so this is
+		// the same refusal the plan already made, arriving through the other
+		// door. Mapping it to the generic "provider rejected" reason would hide
+		// a corrupt record behind a capability answer.
+		return ReasonKindDisagreement
 	case errors.Is(err, agentsession.ErrUntrustedSource):
 		return ReasonUnreportedRef
 	case errors.Is(err, agentsession.ErrUnsupportedKind):
