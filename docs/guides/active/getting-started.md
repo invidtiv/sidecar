@@ -20,6 +20,7 @@ The script will ask what you want to install:
 
 - macOS, Linux, or Windows (WSL)
 - Terminal access
+- tmux 3.4 or newer for workspaces and embedded shells
 - Go 1.21+ (only if building from source — Homebrew and binary installs don't require Go)
 
 ## What the Setup Script Does

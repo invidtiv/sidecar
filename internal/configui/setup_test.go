@@ -55,8 +55,8 @@ func problemResults() configchecks.Results {
 		{ID: configchecks.CheckTerminalColors, Title: "Terminal colors", OK: true, Summary: "Truecolor available"},
 		{
 			ID: configchecks.CheckTmux, Title: "tmux", OK: false,
-			Summary: "Not found on PATH · workspaces need tmux 3.0+", Evidence: []string{"tmux was not found on PATH."},
-			Action: "Set up tmux", ActionDetail: "Workspaces and embedded shells need tmux 3.0+",
+			Summary: "Not found on PATH · workspaces need tmux 3.4+", Evidence: []string{"tmux was not found on PATH."},
+			Action: "Set up tmux", ActionDetail: "Workspaces and embedded shells need tmux 3.4+",
 			Badge: configchecks.BadgeFix, Repair: configchecks.RepairTmux,
 		},
 		{ID: configchecks.CheckConfiguration, Title: "Configuration", OK: true, Summary: "Readable and valid"},

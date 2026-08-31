@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/marcus/sidecar/internal/testenv"
 )
 
 // Paste is delivered by tmux, so the only honest test of it is a real tmux
@@ -31,12 +33,7 @@ set -g default-terminal "tmux-256color"
 
 func startPasteTmux(t *testing.T) *pasteTmux {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("skipping tmux integration in short mode")
-	}
-	if _, err := exec.LookPath("tmux"); err != nil {
-		t.Skip("tmux not installed")
-	}
+	testenv.RequireTmux(t)
 	// t.TempDir's name embeds the test name, which overruns the ~104-byte unix
 	// socket path limit; a short private temp dir stays under it.
 	root, err := os.MkdirTemp("", "scpaste")

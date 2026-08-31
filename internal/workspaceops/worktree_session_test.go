@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/marcus/sidecar/internal/testenv"
 )
 
 // td-a66836. Deleting a worktree has to close the tmux session running in it
@@ -31,10 +33,11 @@ func tmuxTest(t *testing.T, args ...string) (string, error) {
 // fails to kill it.
 func startThrowawaySession(t *testing.T, name, workDir string) {
 	t.Helper()
-	if _, err := exec.LookPath("tmux"); err != nil {
-		t.Skip("tmux not installed")
-	}
+	testenv.RequireTmux(t)
 	if out, err := tmuxTest(t, "new-session", "-d", "-s", name, "-c", workDir); err != nil {
+		if testenv.TmuxCompatibilityRequired() {
+			t.Fatalf("cannot start required isolated tmux session (%v): %s", err, out)
+		}
 		t.Skipf("cannot start an isolated tmux session (%v): %s", err, out)
 	}
 	t.Cleanup(func() { _, _ = tmuxTest(t, "kill-session", "-t", name) })

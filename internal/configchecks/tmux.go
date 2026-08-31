@@ -11,11 +11,11 @@ import (
 // missing or differently spelled.
 const (
 	minTmuxMajor = 3
-	minTmuxMinor = 0
+	minTmuxMinor = 4
 )
 
 // MinTmuxVersion is the requirement, phrased for the user.
-const MinTmuxVersion = "3.0"
+const MinTmuxVersion = "3.4"
 
 // checkTmux reports tmux availability and version. Availability stays a
 // LookPath — the same one the shell operations use — so the check and the thing

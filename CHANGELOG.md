@@ -2,6 +2,12 @@
 
 All notable changes to sidecar are documented here.
 
+## [Unreleased]
+
+### Changed
+
+- **Tmux 3.4 is now Sidecar's explicit compatibility floor, with 3.7c continuously tested.** One checksum-pinned manifest drives local source builds and an oldest/latest CI matrix, including real private-server coverage for control mode, terminal rendering, paste, metadata and shell lifecycle. A separate latest-client/minimum-server proof models a Homebrew upgrade without touching the live default server and verifies capture fallback when tmux explicitly declines cross-version control mode. Future stable upgrades are one manifest change plus the same repeatable proof. (td-22399a)
+
 ## [v1.11.2] - 2026-08-31
 
 ### Bug Fixes

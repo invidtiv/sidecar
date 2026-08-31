@@ -9,15 +9,12 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/marcus/sidecar/internal/testenv"
 )
 
 func TestControlManagerIsolatedTmuxSessionPool(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping tmux integration in short mode")
-	}
-	if _, err := exec.LookPath("tmux"); err != nil {
-		t.Skip("tmux not installed")
-	}
+	testenv.RequireTmux(t)
 	socket := fmt.Sprintf("/tmp/sidecar-control-test-%d-%d.sock", os.Getpid(), time.Now().UnixNano())
 	t.Cleanup(func() { _ = exec.Command("tmux", "-S", socket, "kill-server").Run() })
 
@@ -127,12 +124,7 @@ func TestControlManagerIsolatedTmuxSessionPool(t *testing.T) {
 }
 
 func TestControlBarrierUnsetsLeaseBeforeLastClientCloses(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping tmux integration in short mode")
-	}
-	if _, err := exec.LookPath("tmux"); err != nil {
-		t.Skip("tmux not installed")
-	}
+	testenv.RequireTmux(t)
 	socket := fmt.Sprintf("/tmp/sidecar-control-barrier-test-%d-%d.sock", os.Getpid(), time.Now().UnixNano())
 	t.Cleanup(func() { _ = exec.Command("tmux", "-S", socket, "kill-server").Run() })
 	const session = "release-barrier"

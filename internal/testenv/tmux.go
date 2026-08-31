@@ -38,6 +38,34 @@ import (
 // `go test ./...` never finishes and the run cannot be interrupted either.
 const teardownCommandTimeout = 5 * time.Second
 
+// RequireTmux keeps real-tmux tests convenient in an ordinary checkout while
+// making the compatibility matrix fail closed. A missing prerequisite may be
+// a local skip, but it is a broken compatibility proof when the driver sets
+// SIDECAR_REQUIRE_TMUX_COMPAT=1.
+func RequireTmux(t *testing.T) {
+	t.Helper()
+	required := os.Getenv("SIDECAR_REQUIRE_TMUX_COMPAT") == "1"
+	if testing.Short() {
+		if required {
+			t.Fatal("SIDECAR_REQUIRE_TMUX_COMPAT=1 but the tmux integration suite is running in short mode")
+		}
+		t.Skip("skipping tmux integration in short mode")
+	}
+	if _, err := exec.LookPath("tmux"); err != nil {
+		if required {
+			t.Fatalf("SIDECAR_REQUIRE_TMUX_COMPAT=1 but tmux is not on PATH: %v", err)
+		}
+		t.Skip("tmux not installed")
+	}
+}
+
+// TmuxCompatibilityRequired reports whether skips that would weaken the tmux
+// matrix contract must instead fail. It is for integration setup failures
+// that happen after RequireTmux has found the binary.
+func TmuxCompatibilityRequired() bool {
+	return os.Getenv("SIDECAR_REQUIRE_TMUX_COMPAT") == "1"
+}
+
 // SocketPath is where tmux puts its default socket under a given TMUX_TMPDIR.
 func SocketPath(tmuxTmpDir string) string {
 	return filepath.Join(tmuxTmpDir, "tmux-"+strconv.Itoa(os.Getuid()), "default")

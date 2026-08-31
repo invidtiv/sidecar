@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/marcus/sidecar/internal/testenv"
 )
 
 // The byte-fed screen model's bootstrap contract can only be proved against a
@@ -37,12 +39,7 @@ set -g history-limit 5000
 
 func startModelTmux(t *testing.T) *modelTmux {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("skipping tmux integration in short mode")
-	}
-	if _, err := exec.LookPath("tmux"); err != nil {
-		t.Skip("tmux not installed")
-	}
+	testenv.RequireTmux(t)
 	root, err := os.MkdirTemp("", "scmodel")
 	if err != nil {
 		t.Fatalf("temp dir: %v", err)
