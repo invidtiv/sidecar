@@ -119,3 +119,20 @@ Before creating a second disposable real-state overlay, the proof preflight foun
 Marcus's direct report that the integrated candidate was a notable improvement over main, especially while scrolling, remains the real-journey qualitative evidence. That report was made against the pre-cadence Slices 1–4 candidate; it is not misattributed to the adaptive build. The adaptive build is accepted pragmatically because the same deterministic journey gains a further greater-than-half synthetic CPU reduction, its p95 remains below 50 ms, the per-feed cadence and trailing-state contract pass deterministic and race review, and final isolated visual proof is required before closing the implementation plan. No final real-pane CPU number is inferred from those facts.
 
 The synthetic candidate and diagnostic processes were stopped, their private tmux server and ports were gone, and only numeric JSON/logs plus six pprof files remain under the proof root. No real pane received input, no personal state was copied, and the default tmux server was not stopped, restarted, or replaced.
+
+## Active-session rendering candidate: 2026-08-31
+
+The accepted active-session candidate is `a2eb12d4`. It used the same private 220×58 Sidecar fixture in each comparison, with a 132×56 Workspace preview split evenly between an active primary terminal and rendered `docs/terminal.md`. The terminal emitted deterministic OpenCode-shaped output every 8 ms. CPU profiles ran with only `SIDECAR_PPROF`; `SIDECAR_TERMINAL_PERF` and traces were unset, and `/debug/terminalperf` returned 404.
+
+| Run | Sampled / elapsed | CPU |
+| --- | ---: | ---: |
+| 1 | 1.78 s / 15.05 s | 11.83% |
+| 2 | 2.02 s / 15.15 s | 13.34% |
+| 3 | 1.89 s / 15.05 s | 12.56% |
+| Median | — | 12.56% |
+
+The approved identical post-Slice-3 fixture median was 26.13%, so normalized median CPU fell 51.93%. In the median candidate profile, app `renderContent` fell from 1.39 s to 0.44 s, footer work fell from 0.70 s to 0.13 s, and the former 0.58 s `WorktreeActionRefusal`/`os.Stat` chain was unsampled. This is an exact synthetic-fixture comparison, not a numeric claim against the original live ~35% observation.
+
+A separate counter-enabled 15-second pass recorded 568 application/Workspace/sidebar views, 466 terminal-driven preview composes and terminal views, 102 activity-only preview-cache hits, 466 document-frame cache hits with zero builds/scans, 23,366 row-cache hits, 1,332 misses, zero analyzer bypasses, and 34 ms output-to-frame p95. Focused proofs preserve byte-distinct activity frames, current pointer regions, small-dimension app clamping, and fresh action refusal after inventory-backed footer presentation.
+
+The private tmux server, Sidecar state/config tree, fixture worktrees, processes, socket, and pprof port were cleaned. Raw profiles, reports, and the exact candidate binary remain under `/private/tmp/sidecar-post-slice4-gate.KwJrFY`. The absolute 15% budget passes in all three runs, so no higher-complexity incremental composition slice is justified without fresh regression evidence.
