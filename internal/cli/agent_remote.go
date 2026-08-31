@@ -28,11 +28,11 @@ func productionRemoteRunner(env Env, hostID string) (agentremote.Runner, int) {
 	if err != nil {
 		return nil, emitAgentError(env, true, err)
 	}
-	if !features.IsEnabled(features.SidecarRemoteHosts.Name) {
+	if !remoteHostsEnabled(env, cfg) {
 		return nil, remoteRefusal(env, agentcontrol.ErrFeatureDisabled,
 			fmt.Sprintf("remote hosts are disabled; enable the %s feature", features.SidecarRemoteHosts.Name))
 	}
-	registered := hosts.FromConfig(cfg)
+	registered := hostsFromConfigForCLI(cfg)
 	for _, host := range registered {
 		if host.ID != hostID {
 			continue
@@ -43,6 +43,63 @@ func productionRemoteRunner(env Env, hostID string) (agentremote.Runner, int) {
 		}, -1
 	}
 	return nil, remoteRefusal(env, agentcontrol.ErrHostUnavailable, unknownHostMessage(hostID, registered))
+}
+
+// remoteHostsEnabled answers whether this run may reach a registered host.
+//
+// It resolves the same way agentControlEnabled does, and for the same reason:
+// a CLI invocation's -enable-feature lands in Env.FeatureOverrides, while
+// features.IsEnabled reads the global manager that a CLI process never sets up
+// from config. Asking the global manager alone made `-enable-feature
+// sidecar_remote_hosts` a flag that parsed, was accepted, and did nothing —
+// every --host verb refused as if the feature were off. Found by running the
+// command rather than by a test, which is why there is now a test.
+func remoteHostsEnabled(env Env, cfg *config.Config) bool {
+	if enabled, ok := env.FeatureOverrides[features.SidecarRemoteHosts.Name]; ok {
+		return enabled
+	}
+	if cfg == nil {
+		return false
+	}
+	return cfg.Features.Flags[features.SidecarRemoteHosts.Name]
+}
+
+// hostsFromConfigForCLI lists registered hosts without consulting the feature
+// flag a second time.
+//
+// hosts.FromConfig returns nothing when the flag is off, reading the global
+// manager — which is the rollback guarantee for the TUI and exactly wrong here,
+// because the CLI has already decided the question against Env.FeatureOverrides.
+// Going through it would make an -enable-feature run see zero hosts and report
+// "no host is registered as X" for a host that is registered.
+func hostsFromConfigForCLI(cfg *config.Config) []hosts.Host {
+	if cfg == nil {
+		return nil
+	}
+	registered := make([]hosts.Host, 0, len(cfg.Hosts.List))
+	seen := make(map[string]bool, len(cfg.Hosts.List))
+	for _, entry := range cfg.Hosts.List {
+		target := strings.TrimSpace(entry.Target)
+		if target == "" || entry.Disabled {
+			continue
+		}
+		id := strings.TrimSpace(entry.ID)
+		if id == "" {
+			id = target
+		}
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		registered = append(registered, hosts.Host{
+			ID:           id,
+			Target:       target,
+			RemoteBinary: strings.TrimSpace(entry.Binary),
+			RemoteConfig: strings.TrimSpace(entry.Config),
+			Env:          append([]string(nil), entry.Env...),
+		})
+	}
+	return registered
 }
 
 func unknownHostMessage(hostID string, registered []hosts.Host) string {
@@ -233,11 +290,11 @@ func runRemoteSessionDocument(env Env, hostID string, jsonOutput bool, build fun
 	if err != nil {
 		return emitAgentError(env, jsonOutput, err)
 	}
-	var raw json.RawMessage
-	if err := client.Run(remoteContext(env), hostID, args, &raw); err != nil {
+	var doc agentremote.SessionDocument
+	if err := client.Run(remoteContext(env), hostID, args, &doc); err != nil {
 		return emitAgentError(env, jsonOutput, agentremote.TranslateError(hostID, err))
 	}
-	return emitRemoteSessionDocument(env, hostID, jsonOutput, raw)
+	return emitRemoteSessionDocument(env, hostID, jsonOutput, doc)
 }
 
 // emitRemoteSessionDocument prints the host's document, annotated with which
@@ -246,19 +303,23 @@ func runRemoteSessionDocument(env Env, hostID string, jsonOutput bool, build fun
 // The annotation is not decoration. A restore plan names tmux sessions and
 // working directories, and those read exactly like local ones; a plan pasted
 // into an issue without its host is a plan nobody can act on.
-func emitRemoteSessionDocument(env Env, hostID string, jsonOutput bool, raw json.RawMessage) int {
-	if jsonOutput {
-		var document map[string]any
-		if err := json.Unmarshal(raw, &document); err != nil {
-			// Forward what the host said rather than replacing it with a
-			// complaint; a caller can still read it.
-			_, _ = fmt.Fprintln(env.Stdout, string(raw))
-			return 0
-		}
-		document["host"] = hostID
-		return writeAgentJSON(env, document)
+func emitRemoteSessionDocument(env Env, hostID string, jsonOutput bool, doc agentremote.SessionDocument) int {
+	if doc == nil {
+		doc = agentremote.SessionDocument{}
 	}
+	doc["host"] = hostID
+	if jsonOutput {
+		return writeAgentJSON(env, doc)
+	}
+	// The human form is the host's own document rendered as indented JSON.
+	// Re-implementing writeSessionPlanHuman against a map would be a second
+	// renderer of the host's schema, which is the thing this relay exists not
+	// to have; --json is the shape a caller should be using here anyway.
 	_, _ = fmt.Fprintf(env.Stdout, "host: %s\n", hostID)
-	_, _ = fmt.Fprintln(env.Stdout, string(raw))
+	encoded, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return emitAgentError(env, jsonOutput, err)
+	}
+	_, _ = fmt.Fprintln(env.Stdout, string(encoded))
 	return 0
 }

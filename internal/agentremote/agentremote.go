@@ -288,30 +288,56 @@ func (c Client) Read(ctx context.Context, session string, source agentcontrol.Re
 	return result, nil
 }
 
+// SessionDocument is a host's restore plan or restore result, relayed whole.
+//
+// It is a map rather than a struct because the viewer has no decision to make
+// about the contents — it is relaying, not interpreting, and re-modelling the
+// host's schema here would create a second copy of it that drifts. It is a
+// named type rather than a bare map so it can carry ValidRemoteResult.
+type SessionDocument map[string]any
+
+// ValidRemoteResult tells the transport's decoder which JSON object on stdout
+// is the document.
+//
+// This is not defensive: without it the relay returns the wrong object, and the
+// loopback suite caught it doing so. `session status --json` is *indented*, and
+// hosts.decodeRemoteResult scans stdout for lines that begin an object and
+// tries them last-first — correct for a result printed after banner noise, and
+// exactly wrong for a pretty-printed document whose every nested object starts
+// its own line. The last such line is the final element of "steps", which
+// decodes perfectly well, so the viewer received one step of the plan wearing
+// the whole document's place.
+//
+// resumePolicy is the discriminator because both document shapes carry it
+// without omitempty (planDocument and resultDocument in internal/cli/session.go)
+// and no individual step or outcome has the field, so a fragment can never
+// satisfy it.
+func (d SessionDocument) ValidRemoteResult() bool {
+	if len(d) == 0 {
+		return false
+	}
+	_, ok := d["resumePolicy"]
+	return ok
+}
+
 // SessionStatus reads the host's ordered restore plan. It is read-only and
 // runs on the host: a viewer never reconstructs another machine's state
 // locally, it asks the machine that owns it.
-func (c Client) SessionStatus(ctx context.Context) (json.RawMessage, error) {
-	return c.rawDocument(ctx, c.SessionStatusArgs())
+func (c Client) SessionStatus(ctx context.Context) (SessionDocument, error) {
+	return c.document(ctx, c.SessionStatusArgs())
 }
 
 // SessionRestore performs, or previews, a restore on the host.
-func (c Client) SessionRestore(ctx context.Context, dryRun, agents, yes bool, shell string) (json.RawMessage, error) {
-	return c.rawDocument(ctx, c.SessionRestoreArgs(dryRun, agents, yes, shell))
+func (c Client) SessionRestore(ctx context.Context, dryRun, agents, yes bool, shell string) (SessionDocument, error) {
+	return c.document(ctx, c.SessionRestoreArgs(dryRun, agents, yes, shell))
 }
 
-// rawDocument forwards the host's own JSON document unchanged.
-//
-// The restore plan and result documents are the host's answer about the host's
-// state. Re-modelling them here would create a second schema that drifts, and
-// the viewer has no decision to make about their contents — it is relaying,
-// not interpreting.
-func (c Client) rawDocument(ctx context.Context, args []string) (json.RawMessage, error) {
-	var raw json.RawMessage
-	if err := c.run(ctx, args, &raw); err != nil {
+func (c Client) document(ctx context.Context, args []string) (SessionDocument, error) {
+	var doc SessionDocument
+	if err := c.run(ctx, args, &doc); err != nil {
 		return nil, err
 	}
-	return raw, nil
+	return doc, nil
 }
 
 func (c Client) one(ctx context.Context, args []string) (agentcontrol.Agent, error) {
