@@ -272,6 +272,15 @@ var ErrNoBinding = errors.New("no session reference is bound to this shell")
 // restatement of what was already believed. An integration can have rotated or
 // cleared the reference in between.
 func ResumePlanFor(step Step, namespace string) (agentsession.ResumePlan, error) {
+	// The manifest path is unexported and so does not survive a JSON round trip.
+	// A plan that has been serialized and read back is a fine thing to display
+	// but is not a thing to execute, and saying so plainly is better than
+	// letting an empty path turn into a confusing read error — or, worse, into
+	// a silent decision not to resume.
+	if strings.TrimSpace(step.ManifestPath()) == "" {
+		return agentsession.ResumePlan{}, errors.New(
+			"this step has no manifest path, so it was not built by this process; rebuild the plan before executing it")
+	}
 	ref, kind, bound, err := shellstate.SessionRefAtPath(step.ManifestPath(), shellstate.Identity{
 		TmuxName:  step.Session,
 		Namespace: namespace,
