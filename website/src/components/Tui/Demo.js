@@ -60,7 +60,7 @@ const ORDER = [...GLOBAL_TABS, ...PROJECT_TABS].map((t) => t.id);
 
 const CAPTIONS = {
   sessions:
-    'Every agent you have running, across every repo and remote host, in one unified terminal. This is where most days start.',
+    'Every agent you have running, across every repo and remote host, in one unified terminal.',
   activity:
     'The same fleet as a board. Blocked means an agent is waiting on you — that lane is the whole point.',
   tasks:
