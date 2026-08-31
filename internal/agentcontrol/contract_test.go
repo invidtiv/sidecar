@@ -41,8 +41,11 @@ func TestStatusAndErrorCodeVocabularyIsFrozen(t *testing.T) {
 	if !reflect.DeepEqual(statuses, wantStatuses) {
 		t.Fatalf("statuses = %#v", statuses)
 	}
-	codes := []ErrorCode{ErrNotFound, ErrPaneBusy, ErrKindMismatch, ErrNotReady, ErrStartFailed, ErrBlocked, ErrPromptStalled, ErrReplaced, ErrTranscriptUnavailable, ErrTimeout, ErrTransport, ErrFeatureDisabled}
-	wantCodes := []ErrorCode{"agent_not_found", "agent_pane_busy", "agent_kind_mismatch", "agent_not_ready", "agent_start_failed", "agent_blocked", "agent_prompt_stalled", "agent_replaced", "transcript_unavailable", "timeout", "transport_failed", "feature_disabled"}
+	// host_unavailable and version_skew were added by M5 for remote targets.
+	// The vocabulary is frozen against accidental drift, not against a
+	// milestone that states what it is adding and why; see types.go.
+	codes := []ErrorCode{ErrNotFound, ErrPaneBusy, ErrKindMismatch, ErrNotReady, ErrStartFailed, ErrBlocked, ErrPromptStalled, ErrReplaced, ErrTranscriptUnavailable, ErrTimeout, ErrTransport, ErrFeatureDisabled, ErrHostUnavailable, ErrVersionSkew}
+	wantCodes := []ErrorCode{"agent_not_found", "agent_pane_busy", "agent_kind_mismatch", "agent_not_ready", "agent_start_failed", "agent_blocked", "agent_prompt_stalled", "agent_replaced", "transcript_unavailable", "timeout", "transport_failed", "feature_disabled", "host_unavailable", "version_skew"}
 	if !reflect.DeepEqual(codes, wantCodes) {
 		t.Fatalf("error codes = %#v", codes)
 	}

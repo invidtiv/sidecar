@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/marcus/sidecar/internal/agentremote"
 	"github.com/marcus/sidecar/internal/agentsession"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/sessionrestore"
@@ -42,12 +43,12 @@ func sessionCommand() *Command {
 	status := &Command{
 		Name:    "status",
 		Summary: "Report what a cold restore would do, without doing it",
-		Usage:   "sidecar session status [--json]",
+		Usage:   "sidecar session status [--host ID] [--json]",
 		Long: "Reads Sidecar's managed shell records and the current tmux inventory and prints the ordered restore plan.\n\n" +
 			"Every managed shell is named as reattach, recreate-shell, resume-agent, manual, skip, or refuse, with the reason " +
 			"and whether performing it would run an agent process. This command is read-only: it creates nothing, starts nothing, " +
 			"and does not require a running Sidecar.",
-		Flags:     []Flag{jsonFlag, helpFlag},
+		Flags:     []Flag{{Name: "--host", Arg: "ID", Summary: "Read the plan on a registered remote host instead of this machine"}, jsonFlag, helpFlag},
 		Args:      ArgSpec{Min: 0, Max: 0},
 		ExitCodes: sessionExitCodes(),
 		Examples: []Example{
@@ -64,7 +65,7 @@ func sessionCommand() *Command {
 	restore := &Command{
 		Name:    "restore",
 		Summary: "Recreate managed shells, and optionally resume their exact conversations",
-		Usage:   "sidecar session restore [--dry-run] [--shell TARGET] [--agents] [--yes] [--json]",
+		Usage:   "sidecar session restore [--dry-run] [--shell TARGET] [--agents] [--yes] [--host ID] [--json]",
 		Long: "Executes the plan `session status` prints.\n\n" +
 			"Shells are recreated under their own tmux session names and existing working directories; no --run command, dev server, " +
 			"or test watcher is ever replayed. A missing working directory is a refusal, never a fallback to another directory, and a " +
@@ -79,6 +80,7 @@ func sessionCommand() *Command {
 			{Name: "--shell", Arg: "TARGET", Summary: "Restore only this shell, by tmux session name or display name"},
 			{Name: "--agents", Summary: "Also resume eligible exact agent conversations", Bool: true},
 			{Name: "--yes", Summary: "Confirm agent resumes non-interactively when the policy is ask", Bool: true},
+			{Name: "--host", Arg: "ID", Summary: "Restore on a registered remote host instead of this machine"},
 			jsonFlag,
 			helpFlag,
 		},
@@ -232,17 +234,32 @@ func runSessionStatus(env Env, args []string) int {
 	cmd := RootCommand().FindSubcommand("session").FindSubcommand("status")
 	help := RenderHelp(cmd)
 	jsonOutput := false
-	for _, arg := range args {
+	host := ""
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		name, _, _ := strings.Cut(arg, "=")
 		switch {
 		case isHelp(arg):
 			_, _ = fmt.Fprint(env.Stdout, help)
 			return 0
 		case arg == "--json":
 			jsonOutput = true
+		case name == "--host":
+			v, n, ok := takeFlagArg(arg, args, i, "--host")
+			if !ok || v == "" {
+				cliErrf(env.Stderr, "--host requires a value\n\n%s", help)
+				return 2
+			}
+			host, i = v, n
 		default:
 			cliErrf(env.Stderr, "unknown option %q\n\n%s", arg, help)
 			return 2
 		}
+	}
+	if host != "" {
+		return runRemoteSessionDocument(env, host, jsonOutput, func(c agentremote.Client) ([]string, error) {
+			return c.SessionStatusArgs(), nil
+		})
 	}
 
 	cfg := sessionConfig()
@@ -282,7 +299,7 @@ func runSessionRestore(env Env, args []string) int {
 
 	var (
 		jsonOutput, dryRun, agents, yes bool
-		shellTargetName                 string
+		shellTargetName, host           string
 	)
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -305,9 +322,23 @@ func runSessionRestore(env Env, args []string) int {
 				return usage("--shell requires a value")
 			}
 			shellTargetName, i = value, next
+		case name == "--host":
+			value, next, ok := takeFlagArg(arg, args, i, "--host")
+			if !ok || strings.TrimSpace(value) == "" {
+				return usage("--host requires a value")
+			}
+			host, i = value, next
 		default:
 			return usage("unknown option %q", arg)
 		}
+	}
+	if host != "" {
+		// The host applies its own policy and its own ask/--yes rule. Forwarding
+		// the flags rather than deciding here is what keeps a remote restore
+		// answerable by the machine that would run the agents.
+		return runRemoteSessionDocument(env, host, jsonOutput, func(c agentremote.Client) ([]string, error) {
+			return c.SessionRestoreArgs(dryRun, agents, yes, shellTargetName), nil
+		})
 	}
 
 	cfg := sessionConfig()

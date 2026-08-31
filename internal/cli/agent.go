@@ -23,7 +23,7 @@ import (
 var newAgentTerminal = func() agentcontrol.Terminal { return agentcontrol.NewLocalTerminal() }
 
 func agentCommand() *Command {
-	common := []Flag{{Name: "--project", Arg: "NAME", Summary: "Target project (slug, basename, or path)"}, {Name: "--shell", Arg: "NAME", Summary: "Resolve the project from a registered shell"}, {Name: "--json", Summary: "Write stable structured JSON", Bool: true}, {Name: "--help", Short: "-h", Summary: "Show this help", Bool: true}}
+	common := []Flag{{Name: "--project", Arg: "NAME", Summary: "Target project (slug, basename, or path)"}, {Name: "--shell", Arg: "NAME", Summary: "Resolve the project from a registered shell"}, {Name: "--host", Arg: "ID", Summary: "Run the verb on a registered remote host (requires an explicit TARGET)"}, {Name: "--json", Summary: "Write stable structured JSON", Bool: true}, {Name: "--help", Short: "-h", Summary: "Show this help", Bool: true}}
 	sessionRefFlag := Flag{Name: "--include-session-ref", Summary: "Include the bound conversation's value, not only its presence", Bool: true}
 	listFlags := append(append([]Flag{}, common...), sessionRefFlag)
 	list := &Command{Name: "list", Summary: "List live managed agents", Usage: "sidecar agent list [--project NAME] [--include-session-ref] [--json]", Flags: listFlags, ExitCodes: agentExitCodes(), Examples: []Example{{Command: "sidecar agent list --json"}}, Agent: AgentDoc{Invocation: "sidecar agent list --json", Summary: "List live managed agents and their current status"}, Run: runAgentList}
@@ -152,7 +152,7 @@ func agentCommand() *Command {
 	// Sub is rendered in slice order by both RenderHelp and the generated CLI
 	// doc, so it is kept alphabetical and TestCLIDocDrift enforces the result.
 	sub := []*Command{lcEnd, lcExplain, get, integrationCommand(), list, prompt, read, lcRelease, lcReport, agentReportSessionCommand(), sendKeys, start, wait}
-	return &Command{Name: "agent", Summary: "Inspect, start, and coordinate agents in Sidecar-managed shells", Usage: "sidecar agent <command>", Long: "Provider-aware control over shells Sidecar owns. The feature is discoverable while disabled; enable agent_control to run it.\n\nThe safe sequence is: create the layout separately with sidecar create shell, start the provider with agent start, prompt and wait, read before you send keys, and never close a target you did not create.\n\nThe report, end, release, and explain commands are a separate surface: they record and inspect the lifecycle events a provider's own integration reports, and they are not gated behind agent_control.", Sub: sub, Run: runAgentRoot}
+	return &Command{Name: "agent", Summary: "Inspect, start, and coordinate agents in Sidecar-managed shells", Usage: "sidecar agent <command>", Long: "Provider-aware control over shells Sidecar owns.\n\nThe safe sequence is: create the layout separately with sidecar create shell, start the provider with agent start, prompt and wait, read before you send keys, and never close a target you did not create.\n\nWith --host ID the verb runs on that registered host instead, as one invocation over the existing ssh connection, and the host's own answer is what you get back. A remote verb needs an explicit TARGET, because the omitted-target rule names the shell you are in and that shell is on this machine. Conversation identifiers stay on the host that owns them: remote output reports whether a shell is bound, not what it is bound to, unless you ask with --include-session-ref.\n\nThe report, end, release, and explain commands are a separate surface: they record and inspect the lifecycle events a provider's own integration reports, and they are not gated behind agent_control.", Sub: sub, Run: runAgentRoot}
 }
 
 func agentExitCodes() []ExitCode {
@@ -175,6 +175,10 @@ func runAgentRoot(env Env, args []string) int {
 type agentFlags struct {
 	json           bool
 	project, shell string
+	// host names a registered remote host. It is accepted by every control
+	// verb rather than declared per command, because "run this somewhere else"
+	// is orthogonal to what the verb does.
+	host           string
 	positional     []string
 	wait           bool
 	ansi           bool
@@ -236,6 +240,12 @@ func parseAgentArgs(env Env, args []string, help string, allowed agentOpt) (agen
 				return f, usage("--shell requires a value")
 			}
 			f.shell, i = v, n
+		case name == "--host":
+			v, n, ok := value(arg, "--host", i)
+			if !ok {
+				return f, usage("--host requires a value")
+			}
+			f.host, i = v, n
 		case name == "--wait" && allowed.has(optWait):
 			f.wait = true
 		case name == "--include-session-ref" && allowed.has(optIncludeSession):
@@ -422,6 +432,9 @@ func runAgentPrompt(env Env, args []string) int {
 		return code
 	}
 	name, rest, explicit := splitAgentTarget(f.positional, 1)
+	if f.host != "" {
+		return runRemoteAgentPrompt(env, f, name, rest[0], explicit)
+	}
 	target, code := resolveAgentTarget(env, &guard, name, f, explicit)
 	if code != 0 {
 		return code
@@ -454,6 +467,9 @@ func runAgentWait(env Env, args []string) int {
 		return code
 	}
 	name, _, explicit := splitAgentTarget(f.positional, 0)
+	if f.host != "" {
+		return runRemoteAgentWait(env, f, name, explicit)
+	}
 	target, code := resolveAgentTarget(env, nil, name, f, explicit)
 	if code != 0 {
 		return code
@@ -482,6 +498,9 @@ func runAgentRead(env Env, args []string) int {
 		return code
 	}
 	name, _, explicit := splitAgentTarget(f.positional, 0)
+	if f.host != "" {
+		return runRemoteAgentRead(env, f, name, explicit)
+	}
 	target, code := resolveAgentTarget(env, nil, name, f, explicit)
 	if code != 0 {
 		return code
@@ -492,19 +511,7 @@ func runAgentRead(env Env, args []string) int {
 	if err != nil {
 		return emitAgentError(env, f.json, err)
 	}
-	if f.json {
-		return writeAgentJSON(env, result)
-	}
-	for _, message := range result.Messages {
-		_, _ = fmt.Fprintf(env.Stdout, "%s: %s\n", message.Role, message.Text)
-	}
-	if result.Text != "" {
-		_, _ = fmt.Fprint(env.Stdout, result.Text)
-		if !strings.HasSuffix(result.Text, "\n") {
-			_, _ = fmt.Fprintln(env.Stdout)
-		}
-	}
-	return 0
+	return emitReadResult(env, f.json, result)
 }
 
 func runAgentSendKeys(env Env, args []string) int {
@@ -528,6 +535,9 @@ func runAgentSendKeys(env Env, args []string) int {
 	}
 	if code = requireAgentControl(env, f.json); code >= 0 {
 		return code
+	}
+	if f.host != "" {
+		return runRemoteAgentSendKeys(env, f, name, explicit, keys)
 	}
 	target, code := resolveAgentTarget(env, nil, name, f, explicit)
 	if code != 0 {
@@ -591,6 +601,9 @@ func runAgentList(env Env, args []string) int {
 	if code = requireAgentControl(env, f.json); code >= 0 {
 		return code
 	}
+	if f.host != "" {
+		return runRemoteAgentList(env, f)
+	}
 	ctx := env.Ctx
 	if ctx == nil {
 		ctx = context.Background()
@@ -631,7 +644,14 @@ func runAgentList(env Env, args []string) int {
 			agents = append(agents, a)
 		}
 	}
-	if f.json {
+	return emitAgentList(env, f.json, agents)
+}
+
+// emitAgentList renders a list of agents. Extracted so the local and remote
+// paths cannot render the same answer two ways: a parity suite that compared
+// two renderers would be testing the test.
+func emitAgentList(env Env, jsonOutput bool, agents []agentcontrol.Agent) int {
+	if jsonOutput {
 		return writeAgentJSON(env, map[string]any{"agents": agents})
 	}
 	if len(agents) == 0 {
@@ -640,6 +660,23 @@ func runAgentList(env Env, args []string) int {
 	}
 	for _, a := range agents {
 		_, _ = fmt.Fprintf(env.Stdout, "%-20s %-10s %s\n", a.Target.Name, a.Agent.Kind, a.Agent.Status)
+	}
+	return 0
+}
+
+// emitReadResult renders a passive read or an exact-transcript read.
+func emitReadResult(env Env, jsonOutput bool, result agentcontrol.ReadResult) int {
+	if jsonOutput {
+		return writeAgentJSON(env, result)
+	}
+	for _, message := range result.Messages {
+		_, _ = fmt.Fprintf(env.Stdout, "%s: %s\n", message.Role, message.Text)
+	}
+	if result.Text != "" {
+		_, _ = fmt.Fprint(env.Stdout, result.Text)
+		if !strings.HasSuffix(result.Text, "\n") {
+			_, _ = fmt.Fprintln(env.Stdout)
+		}
 	}
 	return 0
 }
@@ -657,6 +694,14 @@ func runAgentGet(env Env, args []string) int {
 	}
 	if code = requireAgentControl(env, f.json); code >= 0 {
 		return code
+	}
+	if f.host != "" {
+		explicit := len(f.positional) == 1
+		name := ""
+		if explicit {
+			name = f.positional[0]
+		}
+		return runRemoteAgentGet(env, f, name, explicit)
 	}
 	target := ""
 	if len(f.positional) == 1 {
@@ -739,6 +784,14 @@ func runAgentStart(env Env, args []string) int {
 			}
 			f.shell = v
 			i = n
+		case arg == "--host" || strings.HasPrefix(arg, "--host="):
+			v, n, ok := takeFlagArg(arg, args, i, "--host")
+			if !ok || v == "" {
+				cliErrf(env.Stderr, "--host requires a value\n\n%s", help)
+				return 2
+			}
+			f.host = v
+			i = n
 		default:
 			if strings.HasPrefix(arg, "-") {
 				cliErrf(env.Stderr, "unknown option %q\n\n%s", arg, help)
@@ -753,6 +806,21 @@ func runAgentStart(env Env, args []string) int {
 	}
 	if code := requireAgentControl(env, f.json); code >= 0 {
 		return code
+	}
+	if f.host != "" {
+		// The provider argv is built on the host, not here: the catalog that
+		// knows how to launch a provider is the one on the machine the
+		// provider will run on, and a viewer building argv for a host running a
+		// different Sidecar version would be guessing. The extra arguments
+		// cross as separate argv entries, which is what keeps them out of any
+		// shell string.
+		f.timeout = timeout
+		explicit := len(f.positional) == 1
+		name := ""
+		if explicit {
+			name = f.positional[0]
+		}
+		return runRemoteAgentStart(env, f, name, kind, explicit, extra)
 	}
 	target := ""
 	if len(f.positional) == 1 {
@@ -779,6 +847,7 @@ func runAgentStart(env Env, args []string) int {
 	if err != nil {
 		return emitAgentError(env, f.json, err)
 	}
+	recordStartedAgentKind(tgt, kind)
 	return emitAgent(env, f.json, a)
 }
 
@@ -850,8 +919,16 @@ func emitAgentError(env Env, jsonOutput bool, err error) int {
 	switch typed.Code {
 	case agentcontrol.ErrNotFound:
 		return 3
-	case agentcontrol.ErrTransport, agentcontrol.ErrTimeout:
+	case agentcontrol.ErrTransport, agentcontrol.ErrTimeout, agentcontrol.ErrHostUnavailable:
+		// host_unavailable joins the retryable failures: nothing was refused,
+		// the machine could not be reached, and trying again later is the fix.
 		return 1
+	case agentcontrol.ErrVersionSkew:
+		// Exit 2 is what agentExitCodes has always documented as "usage error
+		// or version skew", and it is what the host itself exited with. A
+		// caller relaying a remote verb keeps the same status it would have
+		// seen running it there.
+		return 2
 	default:
 		return 5
 	}
