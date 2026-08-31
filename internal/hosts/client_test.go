@@ -328,9 +328,10 @@ func TestClientReconnects(t *testing.T) {
 		if attempt == 1 {
 			return nil, fmt.Errorf("connection refused")
 		}
+		reader, closeReader := heldOpenReader(encodeStream(t, helloMessage(), snapshotMessage(agentItem("a", "idle"))))
 		return &Conn{
-			Stdout: strings.NewReader(encodeStream(t, helloMessage(), snapshotMessage(agentItem("a", "idle")))),
-			Close:  func() {},
+			Stdout: reader,
+			Close:  closeReader,
 		}, nil
 	}
 	client := NewClient(Host{ID: "h", Target: "h"}, ClientOptions{
