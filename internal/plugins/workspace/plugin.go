@@ -272,7 +272,15 @@ type Plugin struct {
 	// to place) answers no leaf boxes rather than last frame's.
 	paneFrame      PaneLayout
 	paneFrameDrawn bool
-	docs           map[int]*docPane
+	// projectPreview caches only the expensive composed pane-tree bytes. Layout
+	// and mutable pointer regions are still rebuilt on every frame.
+	projectPreview projectPreviewCache
+	// projectPreviewRevision advances for every application update except the
+	// sidebar-only activity animation tick. Leaf-owned output/document
+	// revisions remain separate so producer updates are visible even in tests
+	// and direct callers that mutate them without routing a Bubble Tea message.
+	projectPreviewRevision uint64
+	docs                   map[int]*docPane
 	// docLinkHits are the content-link targets the last composed document
 	// bodies earned. They are registered in the frame's Body slot so tabs and
 	// close buttons keep the header row.
@@ -848,6 +856,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.deactivateTerminalOwnership()
 	p.reuseHeldWheelViewOnce = false
 	p.wheelViewCacheOK = false
+	p.projectPreview = projectPreviewCache{}
 	p.ctx = ctx
 	// Filter state is in-memory and per consumer: a project or worktree switch
 	// starts from an unfiltered list rather than restoring a query whose origin

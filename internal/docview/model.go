@@ -685,6 +685,16 @@ func (m *Model) bumpVisualRevision() {
 	m.preparedValid = false
 }
 
+// VisualRevision is the cheap identity of everything Model owns that can
+// change its visible document frame. Hosts combine it with their own root,
+// resolution, matcher, geometry, and chrome identity.
+func (m *Model) VisualRevision() uint64 {
+	if m == nil {
+		return 0
+	}
+	return m.visualRevision
+}
+
 func (m *Model) maxScroll() int {
 	return max(len(m.display().rows)-m.contentHeight(), 0)
 }

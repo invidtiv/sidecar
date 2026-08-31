@@ -1557,8 +1557,24 @@ func (p *Plugin) renderDocumentSplit(width, height int) (string, bool) {
 	// through the legacy fallback drew its header but skipped RegisterRegions,
 	// leaving the visible layout button inert. One shared frame now owns both
 	// the cells and their targets in tiled and zoomed states.
-	terminalperf.Record(terminalperf.ProjectPreviewComposed)
-	view := paneframe.Compose(paneHost{p}, layout, canvasBox, width, height)
+	key, cacheable := p.projectPreviewKeyFor(layout, width, height)
+	view, hit := "", false
+	if cacheable {
+		view, hit = p.reuseProjectPreview(key)
+	}
+	if hit {
+		p.replayProjectPreviewRegions(layout)
+	} else {
+		terminalperf.Record(terminalperf.ProjectPreviewComposed)
+		view = paneframe.Compose(paneHost{p}, layout, canvasBox, width, height)
+		if cacheable {
+			// Compose may settle document state while preparing a frame. Store the
+			// resulting identity, not the pre-compose candidate.
+			if settled, ok := p.projectPreviewKeyFor(layout, width, height); ok {
+				p.storeProjectPreview(settled, view)
+			}
+		}
+	}
 	p.registerPaneTreeRegions(layout)
 	// The frame a pointer is tested against is THIS frame, recorded beside the
 	// regions it earned rather than re-derived later from state that does not

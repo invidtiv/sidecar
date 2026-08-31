@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"testing"
 
@@ -162,31 +163,37 @@ func TestProjectActiveSessionPulseAttribution(t *testing.T) {
 		t.Fatal("reconstructed terminal leaf has no row analyzer")
 	}
 
-	_ = fixture.p.View(220, 58)
+	previous := fixture.p.View(220, 58)
+	warmRegions := fixture.p.mouseHandler.HitMap.Regions()
 	counters := &terminalperf.Counters{}
 	restore := terminalperf.Install(counters)
 	t.Cleanup(restore)
 	for i := 0; i < 100; i++ {
 		fixture.p.activityAnimationFrame++
-		_ = fixture.p.View(220, 58)
+		current := fixture.p.View(220, 58)
+		if current == previous {
+			t.Fatalf("activity pulse frame %d did not change visible marker bytes", i+1)
+		}
+		if regions := fixture.p.mouseHandler.HitMap.Regions(); !reflect.DeepEqual(regions, warmRegions) {
+			t.Fatalf("activity pulse frame %d changed pointer regions\n got: %#v\nwant: %#v", i+1, regions, warmRegions)
+		}
+		previous = current
 	}
 
 	snapshot := counters.Snapshot()
 	if snapshot.ProjectWorkspaceViewsRendered != 100 || snapshot.ProjectSidebarRendered != 100 ||
-		snapshot.ProjectPreviewComposes != 100 || snapshot.TerminalViewsRendered != 100 {
-		t.Fatalf("pulse attribution = %+v, want 100 complete project frames before Slice 3", snapshot)
+		snapshot.ProjectPreviewComposes != 0 || snapshot.ProjectPreviewCacheHits != 100 ||
+		snapshot.TerminalViewsRendered != 0 {
+		t.Fatalf("pulse attribution = %+v, want 100 sidebar frames and cached previews", snapshot)
 	}
-	if snapshot.DocumentFramesBuilt != 0 || snapshot.DocumentLinkScans != 0 || snapshot.DocumentFrameCacheHits != 100 {
-		t.Fatalf("document attribution = %+v, want 100 prepared-frame hits and no rebuild/scan", snapshot)
+	if snapshot.DocumentFramesBuilt != 0 || snapshot.DocumentLinkScans != 0 || snapshot.DocumentFrameCacheHits != 0 {
+		t.Fatalf("document attribution = %+v, want no document frame work", snapshot)
 	}
 	if snapshot.DocumentResolutionRequests != 0 {
 		t.Fatalf("document attribution = %+v, want no pulse-only resolution work", snapshot)
 	}
-	if snapshot.ProjectPreviewCacheHits != 0 {
-		t.Fatalf("pre-Slice-3 fixture unexpectedly reused the composed preview: %+v", snapshot)
-	}
-	if snapshot.RowAnalyzerBypasses != 0 || snapshot.RowCacheMisses != 0 || snapshot.RowCacheHits == 0 {
-		t.Fatalf("durable analyzer attribution = %+v, want warm hits without misses or bypass", snapshot)
+	if snapshot.RowAnalyzerBypasses != 0 || snapshot.RowCacheMisses != 0 || snapshot.RowCacheHits != 0 {
+		t.Fatalf("durable analyzer attribution = %+v, want no terminal row work", snapshot)
 	}
 }
 

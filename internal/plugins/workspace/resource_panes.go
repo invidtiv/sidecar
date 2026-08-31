@@ -77,6 +77,7 @@ var _ resourceview.Surface = (*Plugin)(nil)
 func (p *Plugin) SetResourceMatchers(matchers []terminallink.ResourceMatcher) {
 	p.resourceMatchers = matchers
 	p.linkMatcherGeneration++
+	p.bumpProjectPreviewRevision()
 }
 
 // SetResourceResolver injects how a reference becomes a document. The host

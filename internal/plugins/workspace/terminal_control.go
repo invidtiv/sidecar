@@ -73,6 +73,9 @@ type workspaceTerminalTarget = termpanes.Target
 // routed explicitly by interactive mode so a visible preview never captures
 // input intended for workspace navigation.
 func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
+	if _, sidebarOnly := msg.(activityAnimationTickMsg); !sidebarOnly {
+		p.bumpProjectPreviewRevision()
+	}
 	_, seedingLaneTrackers := msg.(notify.SeedLaneTrackersMsg)
 	// Hold must be on the models before a forwarded deferredResizeMsg can
 	// assert, and again after mouse handling so reconcile sees the drag state.

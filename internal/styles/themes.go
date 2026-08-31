@@ -3,12 +3,18 @@ package styles
 import (
 	"regexp"
 	"sync"
+	"sync/atomic"
 
 	"charm.land/lipgloss/v2"
 )
 
 // themeMu protects access to themeRegistry and currentTheme for thread safety
 var themeMu sync.RWMutex
+
+// visualRevision advances whenever the active palette is applied. Render
+// caches use it instead of retaining or hashing the palette's mutable slices
+// and maps. Zero is reserved for callers that have not observed a theme yet.
+var visualRevision atomic.Uint64
 
 // hexColorRegex validates hex color codes (#RRGGBB or #RRGGBBAA with alpha)
 var hexColorRegex = regexp.MustCompile(`^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$`)
@@ -353,6 +359,10 @@ func GetCurrentThemeName() string {
 	defer themeMu.RUnlock()
 	return currentTheme
 }
+
+// VisualRevision is the process-wide identity of the colors and presentation
+// styles derived from the current theme.
+func VisualRevision() uint64 { return visualRevision.Load() }
 
 // ListThemes returns the names of all available themes in canonical order
 func ListThemes() []string {
@@ -747,6 +757,7 @@ func ApplyThemeColors(theme Theme) {
 
 	// Rebuild all styles that depend on these colors
 	rebuildStyles()
+	visualRevision.Add(1)
 }
 
 // rebuildStyles recreates all lipgloss styles with current colors

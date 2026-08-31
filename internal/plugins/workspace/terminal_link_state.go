@@ -12,6 +12,7 @@ import (
 
 func (p *Plugin) SetTerminalLinkCoordinator(coordinator termpreview.LinkCoordinator) {
 	p.terminalLinks = coordinator
+	p.bumpProjectPreviewRevision()
 }
 
 func (p *Plugin) terminalAllowedLinkKinds() contentlink.KindSet {
