@@ -79,6 +79,19 @@ func CreateManagedShell(spec ManagedShellSpec) (ShellResult, error) {
 			Namespace: tmuxenv.Namespace(), CreatedAt: time.Now(), AgentType: spec.AgentType,
 			SkipPerms: spec.SkipPerms, WorkDir: spec.WorkDir,
 		}
+		// Creation is the strongest liveness evidence there is: the session was
+		// just made, in this server, by this process. Stamping cold-restore
+		// eligibility here rather than waiting for a refresh cycle closes the
+		// window in which a shell created seconds before a crash would come back
+		// as "never confirmed live" and be left for the user to recreate by hand.
+		// It costs no extra write — the record is being written anyway.
+		if server := tmuxserver.Combine(tmuxserver.Socket(), ServerPID()).ServerID(); server != "" {
+			definition.Restore = &shellstate.RestoreState{
+				Eligible:        true,
+				LastSeenServer:  server,
+				LastSeenAliveAt: time.Now().UTC(),
+			}
+		}
 		err = shellstate.AddAtPath(filepath.Join(projectDir, "shells.json"), definition)
 	}
 	if err != nil {
@@ -130,6 +143,124 @@ func ForgetManagedShell(projectRoot, sessionName, namespace string, observedAt t
 		shellstate.Identity{TmuxName: sessionName, Namespace: namespace},
 		observedAt,
 	)
+}
+
+// ReapManagedShell is what a liveness pass calls instead of ForgetManagedShell.
+//
+// It is the same conditional write with one question asked first: did this shell
+// exit, or did its tmux server? When the server is gone or has been replaced,
+// the record is kept and marked as a cold-restore candidate instead of being
+// tombstoned, because a session that vanished along with the process hosting it
+// has not been closed by anyone — it is exactly what a cold restore exists to
+// bring back.
+//
+// This is the fix for the failure mode that destroyed a user's sidecar and braid
+// shell records: when a server dies, every session disappears in the same
+// instant, and a per-shell "is this one gone?" question has no true answer.
+// Answering it anyway tombstones the whole file. Routing the liveness path
+// through here means a server death can no longer produce a deletion at all,
+// rather than being guarded against producing one.
+//
+// currentServer is the tmux server observed at the moment of the write, as a
+// "pid=N" id from tmuxserver.Incarnation.ServerID, or empty when no server is
+// running.
+func ReapManagedShell(projectRoot, sessionName, namespace string, observedAt time.Time, server tmuxserver.Incarnation) (shellstate.ReapOutcome, error) {
+	projectDir, err := projectdir.Resolve(projectRoot)
+	if err != nil {
+		return shellstate.ReapAbsent, err
+	}
+	return shellstate.ForgetOrPreserveAtPath(
+		filepath.Join(projectDir, "shells.json"),
+		shellstate.Identity{TmuxName: sessionName, Namespace: namespace},
+		observedAt,
+		ServerStateOf(server),
+	)
+}
+
+// ServerStateOf maps an observed tmux incarnation onto the evidence the shell
+// writer reasons about.
+//
+// The fourth case is the one that matters and the one that was missed: an
+// incarnation can be Present and still carry pid 0, because a socket stat alone
+// identifies a socket rather than a server process. That is not "the server is
+// gone" and it is not "the server is this one" — it is "I cannot tell which
+// server this is", and it has to arrive at the writer as exactly that. Reading
+// it as death is what made two production surfaces stop tombstoning entirely.
+func ServerStateOf(inc tmuxserver.Incarnation) shellstate.ServerState {
+	switch {
+	case inc.IsAbsent():
+		return shellstate.ServerGone()
+	case inc.IsPresent():
+		if id := inc.ServerID(); id != "" {
+			return shellstate.ServerRunning(id)
+		}
+		return shellstate.ServerUnknown()
+	default:
+		return shellstate.ServerUnknown()
+	}
+}
+
+// ServerIncarnation observes the tmux server with its pid, distinguishing "no
+// server is running" from "the question could not be answered".
+//
+// ServerPID alone cannot make that distinction — it returns 0 for both — and a
+// caller that needs to decide whether a shell died with its server must not
+// treat a failed subprocess as a dead server.
+func ServerIncarnation() tmuxserver.Incarnation {
+	out, err := exec.Command("tmux", "display-message", "-p", "#{pid}").CombinedOutput()
+	if err != nil {
+		if noServerRunning(string(out)) {
+			return tmuxserver.Absent()
+		}
+		return tmuxserver.Unknown()
+	}
+	pid, ok := tmuxserver.ParsePID(strings.TrimSpace(string(out)))
+	if !ok {
+		return tmuxserver.Unknown()
+	}
+	return tmuxserver.Combine(tmuxserver.Socket(), pid)
+}
+
+func noServerRunning(message string) bool {
+	message = strings.ToLower(message)
+	return strings.Contains(message, "no server running") ||
+		strings.Contains(message, "no sessions") ||
+		strings.Contains(message, "error connecting to")
+}
+
+// ReapManagedShellFunc adapts ReapManagedShell to shellliveness.ForgetFunc.
+//
+// The outcome is dropped here rather than never produced: ReapManagedShell
+// returns it because preserved-versus-tombstoned is the fact worth asserting on
+// in a test, while the liveness surfaces need only success or failure — a
+// preserved record simply reappears as an offline row on the next refresh, which
+// is the correct display for a cold-restore candidate.
+func ReapManagedShellFunc(projectRoot, sessionName, namespace string, observedAt time.Time, server tmuxserver.Incarnation) error {
+	_, err := ReapManagedShell(projectRoot, sessionName, namespace, observedAt, server)
+	return err
+}
+
+// ObserveManagedShellsLive records that these sessions are running under this
+// tmux server, which is what makes them cold-restore candidates later.
+//
+// It writes only when a shell's marker actually changes, so calling it once per
+// refresh cycle costs one manifest read and, in the steady state, no write.
+func ObserveManagedShellsLive(projectRoot, namespace, currentServer string, sessionNames []string, now time.Time) (int, error) {
+	if currentServer == "" || len(sessionNames) == 0 {
+		return 0, nil
+	}
+	projectDir, err := projectdir.Resolve(projectRoot)
+	if err != nil {
+		return 0, err
+	}
+	ids := make([]shellstate.Identity, 0, len(sessionNames))
+	for _, name := range sessionNames {
+		if strings.TrimSpace(name) == "" {
+			continue
+		}
+		ids = append(ids, shellstate.Identity{TmuxName: name, Namespace: namespace})
+	}
+	return shellstate.ObserveLiveAtPath(filepath.Join(projectDir, "shells.json"), currentServer, ids, now)
 }
 
 // RestoreManagedShell moves a forgotten shell record back onto the project's

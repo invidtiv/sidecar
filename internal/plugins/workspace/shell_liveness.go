@@ -1,11 +1,13 @@
 package workspace
 
 import (
+	"log/slog"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/shellliveness"
 	"github.com/marcus/sidecar/internal/tmuxserver"
+	"github.com/marcus/sidecar/internal/workspaceops"
 )
 
 // The project Workspaces surface binds to the shared liveness rule here, and
@@ -17,6 +19,11 @@ import (
 var (
 	shellLivenessProbe  = shellliveness.ProbeSession
 	shellLivenessServer = tmuxserver.Socket
+	// observeServerIncarnation answers "which tmux server is running, if any".
+	// Indirected for the same reason the two above are: a test needs to state
+	// which of the three answers it is exercising, and the reap decision is
+	// entirely determined by that answer.
+	observeServerIncarnation = workspaceops.ServerIncarnation
 )
 
 type (
@@ -68,6 +75,69 @@ func (p *Plugin) noteShellAlive(tmuxName string) {
 	// observation (which would otherwise clear seenAlive).
 	p.observeTmuxServer(shellLivenessServer())
 	p.shellLivenessTracker().Observe(tmuxName)
+	p.markShellRestoreEligible(tmuxName)
+}
+
+// observedServerID resolves the tmux server identity that may be written down
+// and compared later, as a "pid=N" id.
+//
+// The tracker's own identity is socket-only on this surface, and a socket has no
+// pid, so it is resolved here and cached for the life of that socket identity.
+// The one `tmux display-message` this costs happens once per server rather than
+// once per shell or once per cycle.
+//
+// An empty result means no tmux server is running, and callers rely on that
+// exact reading: it is the condition under which a shell cannot be shown to have
+// exited, and so the condition under which its record must be preserved rather
+// than tombstoned.
+func (p *Plugin) observedServer() tmuxserver.Incarnation {
+	socket := shellLivenessServer()
+	if p.restoreServerKnown && socket.Equal(p.restoreServerSocket) {
+		return p.restoreServer
+	}
+	// ServerIncarnation, not ServerPID: the pid alone returns 0 both when no
+	// server is running and when the question could not be answered, and this
+	// surface's reap decision turns on telling those apart. Reading a failed
+	// subprocess as a dead server is what marks a shell the user closed as a
+	// restore candidate.
+	inc := observeServerIncarnation()
+	p.restoreServerSocket, p.restoreServer, p.restoreServerKnown = socket, inc, true
+	return inc
+}
+
+// observedServerID is the persistable id of the observed server, empty when the
+// server is absent or unidentifiable.
+func (p *Plugin) observedServerID() string { return p.observedServer().ServerID() }
+
+// markShellRestoreEligible records that this shell is running under the current
+// tmux server, which is what lets a later cold restore tell a shell that died
+// with its server from one nobody had open.
+//
+// noteShellAlive is called on every capture, so the in-memory set is what keeps
+// this from becoming a manifest read per capture: the writer beneath already
+// declines to write an unchanged marker, but it would still have to open the
+// file to find that out. Steady state here is no syscalls at all.
+func (p *Plugin) markShellRestoreEligible(tmuxName string) {
+	if p.shellManifest == nil {
+		return
+	}
+	server := p.observedServerID()
+	if server == "" {
+		return
+	}
+	if p.restoreMarked == nil {
+		p.restoreMarked = map[string]string{}
+	}
+	if p.restoreMarked[tmuxName] == server {
+		return
+	}
+	if err := p.shellManifest.MarkRestoreEligible(tmuxName, server, time.Now().UTC()); err != nil {
+		// A marker is an optimization for a future restore, never a precondition
+		// for anything happening now.
+		slog.Debug("workspace: restore eligibility", "shell", tmuxName, "err", err)
+		return
+	}
+	p.restoreMarked[tmuxName] = server
 }
 
 // suspectShellDeath raises suspicion about one session from outside the poll

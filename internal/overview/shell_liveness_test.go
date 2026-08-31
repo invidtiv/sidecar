@@ -61,7 +61,7 @@ func stubReapSequence(t *testing.T, first, rest shellliveness.Verdict) *[]string
 		}
 		return rest
 	}
-	forgetShell = func(_, session, _ string, _ time.Time) error {
+	forgetShell = func(_, session, _ string, _ time.Time, _ tmuxserver.Incarnation) error {
 		forgotten = append(forgotten, session)
 		return nil
 	}

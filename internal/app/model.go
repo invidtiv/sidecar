@@ -384,6 +384,11 @@ type Model struct {
 	// surface rather than replacing it: escape still returns to the app the
 	// user would have had.
 	startupConfigPage configui.PageID
+	// sessionRestoreStarted makes the cold restore fire on the first
+	// WindowSizeMsg and no later one, so a resize does not schedule a second.
+	// It lives on the model rather than in a package-level sync.Once so that a
+	// second Model in one process still gets its own restore.
+	sessionRestoreStarted bool
 	// firstRunProbePending is set when launch has no configured projects and
 	// no startup destination. A tea.Cmd answers whether cwd is a Git repo;
 	// until it does, the content area shows a guided loading state instead of
@@ -723,6 +728,14 @@ func (m Model) Init() tea.Cmd {
 	if cmd := describeResourceProvidersCmd(m.cfg); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
+
+	// Cold restore is deliberately NOT started here. It is kicked off by the
+	// first WindowSizeMsg instead (see update.go), because a command returned
+	// from Init that parks on the first-ready-frame latch hangs any caller that
+	// runs Init's commands synchronously — which is what several tests do, and
+	// what an embedding of this model could reasonably do too. Starting it from
+	// the update loop means it exists only inside a program that is actually
+	// running a UI, which is the only situation in which it can finish.
 
 	// A launch command's destination opens through the same message an empty
 	// state sends, so there is one way into Configuration and one way back out.

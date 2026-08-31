@@ -302,11 +302,14 @@ func main() {
 		defer startuptrace.Report(logger)
 		time.AfterFunc(startuptrace.ReportDelay(), func() { startuptrace.Report(logger) })
 	}
-	// Provider work is the only thing the app starts that outlives a frame and
-	// owns a child process, so it gets an explicit stop on both exit paths.
+	// Provider work and the cold-restore pass are the things the app starts that
+	// outlive a frame and own child processes, so they get an explicit stop on
+	// both exit paths. A restore cancelled mid-run leaves every record intact.
 	defer app.ShutdownResourceProviders()
+	defer app.ShutdownSessionRestore()
 	if _, err := p.Run(); err != nil {
 		app.ShutdownResourceProviders()
+		app.ShutdownSessionRestore()
 		// Report before exiting: os.Exit skips deferred calls, and a trace of a
 		// run that died is exactly the one worth having.
 		startuptrace.Report(logger)

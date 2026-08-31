@@ -204,11 +204,23 @@ func ConfirmReap(tracker *Tracker, server tmuxserver.Incarnation, probe ReapProb
 	return tracker.Confirm(probe.TmuxName, verdict, probe.Incarnation, probe.Server)
 }
 
-// ForgetFunc tombstones one shell record. workspaceops.ForgetManagedShell is
-// the production implementation; its signature is restated here rather than
-// imported so this package stays free of the writer's dependencies and both
-// callers can substitute it in tests.
-type ForgetFunc func(projectRoot, tmuxName, namespace string, observedAt time.Time) error
+// ForgetFunc retires one shell record. workspaceops.ReapManagedShell is the
+// production implementation; its signature is restated here rather than imported
+// so this package stays free of the writer's dependencies and both callers can
+// substitute it in tests.
+//
+// server is the tmux server observed at the moment of the write. It is the
+// whole incarnation rather than an id string because the writer must be able to
+// tell "no server is running" from "I could not identify the server": a
+// socket-only observation is Present with pid 0, and reading that as death is
+// what made two surfaces stop tombstoning entirely. It is a parameter
+// rather than a detail of the writer because the writer's most important
+// decision depends on it: a shell that vanished along with its server is
+// preserved and marked as a cold-restore candidate, and only a shell that
+// vanished inside a server that is still running is tombstoned. Passing the
+// server identity down to the write is what makes a server death structurally
+// unable to produce a deletion, instead of merely guarded against producing one.
+type ForgetFunc func(projectRoot, tmuxName, namespace string, observedAt time.Time, server tmuxserver.Incarnation) error
 
 // ReapShell performs the write half: one fresh probe, then the conditional
 // tombstone.
@@ -222,12 +234,45 @@ type ForgetFunc func(projectRoot, tmuxName, namespace string, observedAt time.Ti
 // probe, which makes the evidence fresh at the instant of the deletion.
 //
 // resurrected reports that the session was back and no write was attempted.
-func ReapShell(probe ProbeFunc, forget ForgetFunc, target ReapProbe) (resurrected bool, err error) {
+//
+// server is the tmux server observed at the instant of the write, and it travels
+// all the way into the writer: see [ForgetFunc] for why the decision the writer
+// makes with it is the difference between tombstoning a closed terminal and
+// deleting the record of a shell whose server crashed underneath it.
+func ReapShell(probe ProbeFunc, forget ForgetFunc, target ReapProbe, server tmuxserver.Incarnation) (resurrected bool, err error) {
 	if probe == nil || forget == nil {
 		return false, nil
 	}
 	if probe(target.TmuxName) != Gone {
 		return true, nil
 	}
-	return false, forget(target.ProjectRoot, target.TmuxName, target.Namespace, target.CreatedAt)
+	return false, forget(target.ProjectRoot, target.TmuxName, target.Namespace, target.CreatedAt, server)
+}
+
+// LiveShells reports the shells this observation saw running, so a caller can
+// record their cold-restore eligibility.
+//
+// It is derived from the same listing PlanReap already consumed rather than from
+// a second tmux call, which is what keeps the marker free: the surfaces collect
+// this listing for their own display every cycle. It returns nothing when the
+// pass was skipped, because a listing that was not evidence of death is not
+// evidence of life either.
+func LiveShells(obs ReapObservation) []Shell {
+	if obs.ListingFailed || len(obs.Panes) == 0 || obs.Namespace == "" {
+		return nil
+	}
+	live := make(map[string]bool, len(obs.Panes))
+	for _, session := range obs.Panes {
+		live[session] = true
+	}
+	var out []Shell
+	for _, shell := range obs.Shells {
+		if shell.TmuxName == "" || shell.Namespace != obs.Namespace {
+			continue
+		}
+		if live[shell.TmuxName] {
+			out = append(out, shell)
+		}
+	}
+	return out
 }

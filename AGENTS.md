@@ -47,6 +47,10 @@ Three verbs over one model, all acting on the surface showing this shell (or, wi
 
 Full reference: `docs/reference/cli.md`.
 
+### Shells lost to a tmux restart are recoverable, not gone
+
+If a tmux server has died, managed shell records survive it — a server death marks them as restore candidates rather than deleting them. `sidecar session status` prints the ordered plan (read-only, no TUI needed), `sidecar session restore [--dry-run]` performs it, and `sidecar session policy TARGET --shell|--resume|--never|--inherit` decides per shell how far a restore should go. Resuming an agent conversation is a separate, confirmed decision: under the default `ask` policy a non-interactive resume needs `--yes`, and a refusal says so rather than quietly restoring shells only.
+
 ## Coordinating another agent
 
 Sidecar can start and drive a second agent in a shell it owns, behind the default-off `agent_control` feature flag. See `.claude/skills/coordinate-agents/SKILL.md` for the full contract; the sequence it exists to protect is:

@@ -102,6 +102,7 @@ type saveWorkspaceConfig struct {
 	OverviewWorktreeScope     string                `json:"overviewWorktreeScope,omitempty"`
 	SidebarDisplay            *SidebarDisplayConfig `json:"sidebarDisplay,omitempty"`
 	WorktreeSetup             WorktreeSetupConfig   `json:"worktreeSetup"`
+	SessionRestore            SessionRestoreConfig  `json:"sessionRestore"`
 }
 
 // toSaveConfig converts Config to the JSON-serializable format.
@@ -152,6 +153,7 @@ func toSaveConfig(cfg *Config) saveConfig {
 				CopyOnSelect:              &cfg.Plugins.Workspace.CopyOnSelect,
 				OverviewWorktreeScope:     cfg.Plugins.Workspace.OverviewWorktreeScope,
 				WorktreeSetup:             cfg.Plugins.Workspace.WorktreeSetup,
+				SessionRestore:            cfg.Plugins.Workspace.SessionRestore,
 				SidebarDisplay:            &cfg.Plugins.Workspace.SidebarDisplay,
 			},
 		},
