@@ -6,7 +6,6 @@ import (
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/terminalperf"
-	"github.com/marcus/sidecar/internal/termpreview"
 	terminalfixture "github.com/marcus/sidecar/internal/testfixture/terminal"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
@@ -39,7 +38,6 @@ func globalTerminalFixture(b testing.TB) (*Model, terminalfixture.OpenCode, *tty
 		previewOwnership: &previewOwnershipLease{},
 	}
 	m.previewTerminalLeaf().Buffer = buffer
-	m.previewTerminalLeaf().RowAnalyzer = &termpreview.RowAnalyzer{}
 	m.workspaces.SetItems([]workspacelist.Item{listItem(workspace.Item(), workspace.ProjectName, 0, false)})
 	m.workspaces.SelectID(workspace.ID)
 	return m, fixture, buffer
@@ -47,6 +45,9 @@ func globalTerminalFixture(b testing.TB) (*Model, terminalfixture.OpenCode, *tty
 
 func TestGlobalTerminalFixtureViewPerformsNoResolutionWork(t *testing.T) {
 	m, _, _ := globalTerminalFixture(t)
+	if m.previewTerminalLeaf().RowAnalyzer == nil {
+		t.Fatal("global fixture leaf has no row analyzer")
+	}
 	counters := &terminalperf.Counters{}
 	restore := terminalperf.Install(counters)
 	t.Cleanup(restore)
@@ -58,6 +59,9 @@ func TestGlobalTerminalFixtureViewPerformsNoResolutionWork(t *testing.T) {
 	}
 	if snapshot.ContentLinkResolutionRequests != 0 || snapshot.SynchronousResolverCalls != 0 {
 		t.Fatalf("global repeated View counters = %+v, want zero resolution work", snapshot)
+	}
+	if snapshot.RowAnalyzerBypasses != 0 || snapshot.RowCacheMisses == 0 || snapshot.RowCacheHits == 0 {
+		t.Fatalf("global repeated View counters = %+v, want durable row reuse without bypass", snapshot)
 	}
 }
 

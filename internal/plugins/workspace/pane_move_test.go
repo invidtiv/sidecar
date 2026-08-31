@@ -207,6 +207,10 @@ func TestProjectRestoredShellMoveUsesDeckOwnedPassiveIDs(t *testing.T) {
 	if got := p.terminalPanes.Leaf(shell.ID); got != stagedShellState {
 		t.Fatal("restore replaced the staged Shell terminal state")
 	}
+	if stagedShellState.RowAnalyzer == nil {
+		t.Fatal("restored staged Shell has no row analyzer")
+	}
+	stagedAnalyzer := stagedShellState.RowAnalyzer
 
 	enableWorkspaceFeature(t, features.PaneMove.Name)
 	p.focusLeaf(shell.ID)
@@ -225,6 +229,9 @@ func TestProjectRestoredShellMoveUsesDeckOwnedPassiveIDs(t *testing.T) {
 	}
 	if p.shellLeaf() != shell || p.terminalPanes.Leaf(shell.ID) != stagedShellState || p.paneFocus != shell.ID || !p.shellLeafFocused() {
 		t.Fatal("restored-tree projection lost Shell leaf/state/focus identity")
+	}
+	if stagedShellState.RowAnalyzer != stagedAnalyzer {
+		t.Fatal("restored-tree projection replaced the Shell row analyzer")
 	}
 	if got := panelayout.LiveLeafCount(p.paneRoot); got != liveBefore {
 		t.Fatalf("restored-tree live count = %d, want %d", got, liveBefore)

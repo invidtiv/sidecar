@@ -67,6 +67,22 @@ func TestRowAnalyzerAnalyzesEachRequiredRawRowOnceAndReusesFacts(t *testing.T) {
 	if changed.RowCacheMisses != 1 || changed.RowCacheHits != 69 {
 		t.Fatalf("one-row revision counters = %+v, want one changed fingerprint only", changed)
 	}
+
+	// ANSI styling is part of the exact raw-row identity. A style-only change
+	// must invalidate that row without discarding facts for its neighbours.
+	lines[51] = "\x1b[31mrow-051\x1b[0m"
+	buffer.Update(strings.Join(lines, "\n"))
+	styledCounters := &terminalperf.Counters{}
+	restoreStyled := terminalperf.Install(styledCounters)
+	styled := DrawRows(in)
+	restoreStyled()
+	styledSnapshot := styledCounters.Snapshot()
+	if styledSnapshot.RowCacheMisses != 1 || styledSnapshot.RowCacheHits != 69 {
+		t.Fatalf("style-only revision counters = %+v, want one changed fingerprint only", styledSnapshot)
+	}
+	if !strings.Contains(strings.Join(styled.Rows, "\n"), "\x1b[31mrow-051") {
+		t.Fatal("style-only revision reused stale rendered bytes")
+	}
 }
 
 func TestRowAnalyzerRotatesWindowsAndModesWithoutRetainingHistoryGaps(t *testing.T) {

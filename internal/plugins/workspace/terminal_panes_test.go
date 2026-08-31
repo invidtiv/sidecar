@@ -25,6 +25,9 @@ func TestReviewReinitDoesNotReuseFormerShellStateAsPrimary(t *testing.T) {
 	p.primaryTermPane().Terminal = &tty.Model{}
 	p.requestShellLeaf()
 	oldShell := p.requireShellTermPane()
+	if oldShell.RowAnalyzer == nil {
+		t.Fatal("staged Shell leaf has no row analyzer")
+	}
 	oldShell.Session = "sidecar-tp-old-shell"
 	oldShell.Buffer = tty.NewOutputBuffer(8)
 
@@ -37,6 +40,9 @@ func TestReviewReinitDoesNotReuseFormerShellStateAsPrimary(t *testing.T) {
 	}
 	if primary.Session != "" || primary.Requested {
 		t.Fatalf("new primary inherited Shell state: session=%q requested=%v", primary.Session, primary.Requested)
+	}
+	if primary.RowAnalyzer == nil || primary.RowAnalyzer == oldShell.RowAnalyzer {
+		t.Fatal("reinit did not give the replacement primary its own durable analyzer")
 	}
 }
 
@@ -59,6 +65,11 @@ func TestReviewInteractiveLeafIdentityFollowsLayoutRekey(t *testing.T) {
 			p.primaryTermPane().Terminal = primaryModel
 			p.requestShellLeaf()
 			p.requireShellTermPane().Terminal = shellModel
+			primaryAnalyzer := p.primaryTermPane().RowAnalyzer
+			shellAnalyzer := p.requireShellTermPane().RowAnalyzer
+			if primaryAnalyzer == nil || shellAnalyzer == nil || primaryAnalyzer == shellAnalyzer {
+				t.Fatal("live leaves do not own distinct row analyzers")
+			}
 			p.interactiveState = &InteractiveState{Active: true, LeafID: tc.activeOld}
 
 			p.rebindTerminalPaneTree(oldRoot, newRoot)
@@ -76,6 +87,9 @@ func TestReviewInteractiveLeafIdentityFollowsLayoutRekey(t *testing.T) {
 			}
 			if got := p.activeInteractiveTerminal(); got != wantModel {
 				t.Fatalf("active terminal = %p, want %p", got, wantModel)
+			}
+			if p.primaryTermPane().RowAnalyzer != primaryAnalyzer || p.requireShellTermPane().RowAnalyzer != shellAnalyzer {
+				t.Fatal("layout rekey replaced a live leaf row analyzer")
 			}
 		})
 	}

@@ -10,6 +10,9 @@ import (
 func TestDeckKeysLeavesAndCountsTheTree(t *testing.T) {
 	d := New()
 	leaf := Decode(7, "session", "%1", nil)
+	if leaf.RowAnalyzer == nil {
+		t.Fatal("decoded leaf has no row analyzer")
+	}
 	if !d.Attach(leaf) || d.Leaf(7) != leaf {
 		t.Fatal("attached leaf was not addressable by tree ID")
 	}
@@ -28,6 +31,10 @@ func TestDeckKeysLeavesAndCountsTheTree(t *testing.T) {
 func TestRekeyCarriesLeafInteractionState(t *testing.T) {
 	d := New()
 	leaf := NewLeaf(2, nil)
+	if leaf.RowAnalyzer == nil {
+		t.Fatal("new leaf has no row analyzer")
+	}
+	analyzer := leaf.RowAnalyzer
 	leaf.Interactive = true
 	leaf.Selection.SelectRange(ui.SelectionPoint{Line: 4, Col: 1}, ui.SelectionPoint{Line: 4, Col: 5}, false)
 	leaf.HostState = "host gesture"
@@ -39,5 +46,8 @@ func TestRekeyCarriesLeafInteractionState(t *testing.T) {
 	}
 	if !got.Interactive || !got.Selection.HasSelection() || got.HostState != "host gesture" {
 		t.Fatal("rekey dropped interaction state owned by the leaf")
+	}
+	if got.RowAnalyzer != analyzer {
+		t.Fatal("rekey replaced the leaf's durable row analyzer")
 	}
 }

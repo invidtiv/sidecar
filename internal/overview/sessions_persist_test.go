@@ -128,7 +128,7 @@ func TestSessionsRestoreCatalogSelectsRowAndWarmsComposedTree(t *testing.T) {
 		t.Fatalf("restored tree missing shell: %+v", m.preview.paneRoot)
 	}
 	leaf := m.preview.terminalPanes.Leaf(shell.ID)
-	if leaf == nil || leaf.Session != session {
+	if leaf == nil || leaf.Session != session || leaf.RowAnalyzer == nil {
 		t.Fatalf("restored shell leaf = %+v", leaf)
 	}
 	if len(ensured) != 1 || ensured[0] != session+"|"+root {
@@ -273,7 +273,7 @@ func TestSessionsRestoreDecodesTreeAndReattachesShellSession(t *testing.T) {
 		t.Fatalf("restored tree missing shell: %+v", m.preview.paneRoot)
 	}
 	leaf := m.preview.terminalPanes.Leaf(shell.ID)
-	if leaf == nil || leaf.Session != session || leaf.Name != "build logs" {
+	if leaf == nil || leaf.Session != session || leaf.Name != "build logs" || leaf.RowAnalyzer == nil {
 		t.Fatalf("restored shell leaf = %+v", leaf)
 	}
 	if len(ensured) != 1 {

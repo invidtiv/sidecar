@@ -462,7 +462,7 @@ func New(collector workspaceinventory.Collector) *Model {
 	}
 	m := &Model{collector: collector, results: make(map[string]workspaceinventory.ProjectResult), projectErrors: make(map[string]error), stale: make(map[string]bool), completed: make(map[int]bool), cards: make(map[string]workspaceinventory.Workspace), catalog: make(map[string]workspaceinventory.Workspace), mouse: mouse.NewHandler(), workspacesMouse: mouse.NewHandler(), viewFlyoutMouse: mouse.NewHandler(), renameMouse: mouse.NewHandler(), createMouse: mouse.NewHandler(), deleteMouse: mouse.NewHandler(), sidebarWidth: defaultWorkspaceSidebarPercent, sidebarVisible: true, showIdleWorktrees: loadShowIdleWorktrees(), previewOwnership: &previewOwnershipLease{}}
 	m.preview.terminalPanes = termpanes.New()
-	m.previewTerminalLeaf().RowAnalyzer = &termpreview.RowAnalyzer{}
+	m.previewTerminalLeaf()
 	if savedWidth := loadWorkspaceSidebarWidth(); savedWidth > 0 {
 		m.sidebarWidth = savedWidth
 	}

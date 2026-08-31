@@ -14,6 +14,10 @@ func TestPreviewTerminalStateFollowsTreeLeafIdentity(t *testing.T) {
 	m := New(workspaceinventory.Collector{})
 	m.preview.paneRoot = &panelayout.Node{ID: 4, Kind: panelayout.Terminal}
 	leaf := m.previewTerminalLeaf()
+	if leaf.RowAnalyzer == nil {
+		t.Fatal("primary preview leaf has no row analyzer")
+	}
+	analyzer := leaf.RowAnalyzer
 	leaf.Scroll = 9
 	leaf.Interactive = true
 	leaf.Selection.SelectRange(
@@ -33,6 +37,9 @@ func TestPreviewTerminalStateFollowsTreeLeafIdentity(t *testing.T) {
 	if got.Scroll != 9 || !got.Interactive || !got.Selection.HasSelection() || m.previewTerminalState() != state || !state.termBar.active {
 		t.Fatal("terminal leaf rekey dropped viewport, input, selection, or gesture state")
 	}
+	if got.RowAnalyzer != analyzer {
+		t.Fatal("terminal leaf rekey replaced its durable row analyzer")
+	}
 
 	// An interactive terminal only owns input while its own leaf owns focus.
 	m.preview.paneFocus = got.ID
@@ -48,6 +55,7 @@ func TestPreviewTerminalStateFollowsTreeLeafIdentity(t *testing.T) {
 func TestReviewRowSwitchClearsTerminalLeafGestures(t *testing.T) {
 	m, _ := previewModel(t)
 	leaf := m.previewTerminalLeaf()
+	analyzer := leaf.RowAnalyzer
 	at := time.Unix(300, 0)
 	if _, ok := leaf.Wheel.Add(1, at); !ok {
 		t.Fatal("test premise: first wheel event was unexpectedly held")
@@ -62,6 +70,8 @@ func TestReviewRowSwitchClearsTerminalLeafGestures(t *testing.T) {
 
 	if got := m.previewTerminalLeaf(); got != leaf {
 		t.Fatal("test premise: row switch did not reuse the N=1 terminal leaf")
+	} else if got.RowAnalyzer != analyzer {
+		t.Fatal("row switch replaced the reused leaf's row analyzer")
 	}
 	if pending := leaf.Wheel.Pending(); pending != 0 {
 		t.Fatalf("row switch retained pending terminal wheel delta %d", pending)

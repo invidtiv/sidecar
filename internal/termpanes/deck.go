@@ -65,9 +65,10 @@ type Leaf struct {
 	Name    string
 }
 
-// NewLeaf constructs detached leaf state without I/O.
+// NewLeaf constructs detached leaf state and its durable presentation helpers
+// without I/O. Hosts must not patch shared leaf invariants after construction.
 func NewLeaf(id int, terminal *tty.Model) *Leaf {
-	return &Leaf{ID: id, Terminal: terminal}
+	return &Leaf{ID: id, Terminal: terminal, RowAnalyzer: &termpreview.RowAnalyzer{}}
 }
 
 // Decode reconstructs detached state without opening a terminal.

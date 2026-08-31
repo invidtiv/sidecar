@@ -3,7 +3,6 @@ package overview
 import (
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/termpanes"
-	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
 )
 
@@ -64,7 +63,6 @@ func (m *Model) terminalLeaf(id int) *termpanes.Leaf {
 		return leaf
 	}
 	leaf := termpanes.NewLeaf(id, nil)
-	leaf.RowAnalyzer = &termpreview.RowAnalyzer{}
 	m.preview.terminalPanes.Attach(leaf)
 	return leaf
 }

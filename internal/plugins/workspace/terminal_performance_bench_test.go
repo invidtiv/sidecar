@@ -158,6 +158,9 @@ func TestProjectActiveSessionPulseAttribution(t *testing.T) {
 	root, terminal := prepareProjectActiveSessionRoot(t)
 	fixture := newProjectActiveSessionFixture(t, root, terminal)
 	leaf := fixture.p.primaryTermPane()
+	if leaf.RowAnalyzer == nil {
+		t.Fatal("reconstructed terminal leaf has no row analyzer")
+	}
 
 	counters := &terminalperf.Counters{}
 	restore := terminalperf.Install(counters)
@@ -180,11 +183,7 @@ func TestProjectActiveSessionPulseAttribution(t *testing.T) {
 	if snapshot.ProjectPreviewCacheHits != 0 || snapshot.DocumentFrameCacheHits != 0 {
 		t.Fatalf("pre-cache fixture unexpectedly reused prepared presentation: %+v", snapshot)
 	}
-	if leaf.RowAnalyzer == nil {
-		if snapshot.RowAnalyzerBypasses != 2 || snapshot.RowCacheMisses == 0 || snapshot.RowCacheHits != 0 {
-			t.Fatalf("nil analyzer attribution = %+v, want two bypasses and cold misses", snapshot)
-		}
-	} else if snapshot.RowAnalyzerBypasses != 0 || snapshot.RowCacheHits == 0 {
+	if snapshot.RowAnalyzerBypasses != 0 || snapshot.RowCacheMisses == 0 || snapshot.RowCacheHits == 0 {
 		t.Fatalf("durable analyzer attribution = %+v, want reuse without bypass", snapshot)
 	}
 }

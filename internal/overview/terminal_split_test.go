@@ -39,6 +39,9 @@ func createOverviewTerminalSplit(t *testing.T, placement workspacecreate.Placeme
 	if leaf == nil {
 		t.Fatal("terminal split did not attach collection state")
 	}
+	if leaf.RowAnalyzer == nil {
+		t.Fatal("terminal split has no row analyzer")
+	}
 	m.applyPreviewTerminalSplitCreated(msg)
 	return m, leaf
 }
@@ -104,6 +107,7 @@ func TestOverviewTerminalSplitCapRefusesCreate(t *testing.T) {
 
 func TestOverviewTerminalSplitSurvivesRowNavigation(t *testing.T) {
 	m, leaf := createOverviewTerminalSplit(t, workspacecreate.PlacementAuto)
+	analyzer := leaf.RowAnalyzer
 	leaf.Scroll = 17
 	leaf.Name = "build logs"
 	m.workspaces.SelectID("b")
@@ -115,6 +119,8 @@ func TestOverviewTerminalSplitSurvivesRowNavigation(t *testing.T) {
 	m.bindPreview(false)
 	if got := m.preview.terminalPanes.Leaf(leaf.ID); got != leaf || got.Scroll != 17 || got.Name != "build logs" {
 		t.Fatalf("row A terminal state was not reattached: got=%p %+v want=%p", got, got, leaf)
+	} else if got.RowAnalyzer != analyzer {
+		t.Fatal("row reattach replaced the terminal split's row analyzer")
 	}
 }
 
@@ -253,6 +259,7 @@ func TestOverviewTerminalBoxFollowsFocusedLeaf(t *testing.T) {
 func TestOverviewPassiveOpenKeepsTerminalSplit(t *testing.T) {
 	m, leaf := createOverviewTerminalSplit(t, workspacecreate.PlacementRight)
 	session := leaf.Session
+	analyzer := leaf.RowAnalyzer
 
 	if cmd := m.openPreviewContent(contentlink.Ref{Kind: contentlink.KindFile, Value: "README.md"}, "Document"); cmd == nil {
 		t.Fatal("document open returned no command")
@@ -270,6 +277,9 @@ func TestOverviewPassiveOpenKeepsTerminalSplit(t *testing.T) {
 	moved := m.preview.terminalPanes.Leaf(shell.ID)
 	if moved == nil || moved.Session != session || moved.Target.Source != "shell" {
 		t.Fatalf("shell state did not follow the graft: %+v", moved)
+	}
+	if moved.RowAnalyzer != analyzer {
+		t.Fatal("shell graft replaced its durable row analyzer")
 	}
 	if m.preview.paneFocus != shell.ID {
 		t.Fatalf("projection stole focus from the shell: focus=%d shell=%d", m.preview.paneFocus, shell.ID)

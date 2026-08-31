@@ -707,7 +707,7 @@ func New() *Plugin {
 		terminalPanes:       termpanes.New(),
 		shellStartupHooks:   defaultShellStartupHooks(),
 	}
-	p.primaryTermPane().RowAnalyzer = &termpreview.RowAnalyzer{}
+	p.primaryTermPane()
 	return p
 }
 

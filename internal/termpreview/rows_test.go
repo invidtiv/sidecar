@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/terminalperf"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 )
@@ -94,6 +95,55 @@ func TestDrawRowsResolvesChildDefaultCellsToTheHostBackground(t *testing.T) {
 	}
 	if !strings.Contains(draw.Rows[1], panel+"panel"+ui.RowBackgroundDefault+host+" default tail") {
 		t.Errorf("explicit child panel or host-default tail was lost: %q", draw.Rows[1])
+	}
+}
+
+func TestDrawRowsFallbackIsObservableAndByteEquivalent(t *testing.T) {
+	buffer := canvasBuffer(t, []string{"first", "second"}, 2)
+	layout := tty.FitViewport(tty.ViewportInput{Buffer: buffer, Width: 20, Height: 2, Follow: true})
+	in := RowsInput{Buffer: buffer, Layout: layout, PaneHeight: 2, Follow: true, Backgrounds: tty.BackgroundAuto}
+
+	fallbackCounters := &terminalperf.Counters{}
+	restoreFallback := terminalperf.Install(fallbackCounters)
+	fallback := DrawRows(in)
+	restoreFallback()
+	if got := fallbackCounters.Snapshot(); got.RowAnalyzerBypasses != 1 || got.RowCacheMisses == 0 {
+		t.Fatalf("fallback counters = %+v, want one observable bypass and cold analysis", got)
+	}
+
+	durableCounters := &terminalperf.Counters{}
+	restoreDurable := terminalperf.Install(durableCounters)
+	in.Analyzer = &RowAnalyzer{}
+	durable := DrawRows(in)
+	restoreDurable()
+	if got := durableCounters.Snapshot(); got.RowAnalyzerBypasses != 0 || got.RowCacheMisses == 0 {
+		t.Fatalf("durable counters = %+v, want cold analysis without a bypass", got)
+	}
+	if strings.Join(fallback.Rows, "\n") != strings.Join(durable.Rows, "\n") || fallback.CanvasBackground != durable.CanvasBackground {
+		t.Fatal("fallback analyzer changed rendered terminal output")
+	}
+}
+
+func TestRowAnalyzerReuseDoesNotFreezeHostBackground(t *testing.T) {
+	buffer := canvasBuffer(t, []string{"child default"}, 1)
+	layout := tty.FitViewport(tty.ViewportInput{Buffer: buffer, Width: 20, Height: 1, Follow: true})
+	analyzer := &RowAnalyzer{}
+	in := RowsInput{
+		Buffer: buffer, Layout: layout, PaneHeight: 1, Follow: true,
+		Backgrounds: tty.BackgroundAuto, Analyzer: analyzer,
+		DefaultBackground: "\x1b[48;2;1;2;3m",
+	}
+	first := DrawRows(in)
+	in.DefaultBackground = "\x1b[48;2;9;8;7m"
+	counters := &terminalperf.Counters{}
+	restore := terminalperf.Install(counters)
+	second := DrawRows(in)
+	restore()
+	if got := counters.Snapshot(); got.RowCacheMisses != 0 || got.RowCacheHits == 0 {
+		t.Fatalf("host background change counters = %+v, want reusable raw facts", got)
+	}
+	if strings.Join(first.Rows, "\n") == strings.Join(second.Rows, "\n") || !strings.Contains(second.Rows[0], in.DefaultBackground) {
+		t.Fatal("cached raw facts froze the previous host background")
 	}
 }
 
