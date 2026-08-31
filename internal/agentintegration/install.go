@@ -515,7 +515,7 @@ func unsupportedStatus(env Env, capability agentlifecycle.Capability) Status {
 		Source:        capability.Source,
 		Status:        agentlifecycle.StatusUnsupported,
 		KnownGaps:     capability.KnownGaps,
-		Message:       "Sidecar ships no integration asset for this provider yet; the recorded capability is evidence for a future adapter, not something that can be installed",
+		Message:       "No integration ships for this agent yet; its recorded capability is evidence for a future adapter",
 	}}
 	if path, ok := env.lookPath(capability.Provider); ok {
 		st.ProviderPath = path

@@ -224,6 +224,12 @@ func (m *Model) Handle(msg Msg) tea.Cmd {
 		return m.applyInstallResult(msg)
 	case installTickMsg:
 		return m.tickInstallSpinner()
+	case agentIntegrationsMsg:
+		m.applyIntegrationList(msg)
+	case agentIntegrationPlanMsg:
+		return m.applyIntegrationPlan(msg)
+	case agentIntegrationMutationMsg:
+		return m.applyIntegrationMutation(msg)
 	case NotificationDeliveryStatusMsg:
 		state := m.notifications()
 		if msg.Generation != 0 && msg.Generation != state.probeGeneration {

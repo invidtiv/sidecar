@@ -72,6 +72,8 @@ var settingsIndex = []IndexEntry{
 	{Page: PageAgents, Label: "Agent launch command", Keywords: []string{"agent", "command", "launch", "start"}},
 	{Page: PageAgents, Label: "Agent instructions", Keywords: []string{"agents.md", "instructions", "guidance", "repair"}},
 	{Page: PageAgents, Label: "Default launch command", Keywords: []string{"agentstart", "command", "default", "reset", "agent"}},
+	{Page: PageAgents, Label: "Agent integrations", Keywords: []string{"integration", "hook", "plugin", "lifecycle", "opencode", "install", "uninstall", "repair"}},
+	{Page: PageAgents, Label: "Install an agent integration", Keywords: []string{"install", "integration", "plugin", "hook", "opencode"}},
 
 	// Notifications
 	{Page: PageNotifications, Label: "System notifications", Keywords: []string{"native", "desktop", "system notification", "terminal-notifier", "osascript", "notify-send"}},

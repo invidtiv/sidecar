@@ -178,6 +178,9 @@ func (m *Model) buildAgents(b *paneBuilder) {
 	b.blank()
 	b.lead("Enter on a launch command edits it; an empty value restores the default.")
 
+	b.text(SectionHeader("Integrations"))
+	m.buildAgentIntegrationsRow(b)
+
 	b.text(SectionHeader("Instructions"))
 	m.buildAgentInstructionsRow(b)
 }

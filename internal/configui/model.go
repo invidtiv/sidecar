@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/agentintegration"
 	"github.com/marcus/sidecar/internal/configchecks"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugin"
@@ -120,16 +121,17 @@ type Model struct {
 
 	// Page state. Each is built lazily against the running configuration and
 	// dropped when Configuration closes.
-	appearanceState    *appearanceState
-	projectsState      *projectsState
-	remotesState       *remotesState
-	agentsState        *agentsState
-	notificationsState *notificationsState
-	terminalState      *terminalState
-	panelsState        *panelsState
-	advancedState      *advancedState
-	aboutState         *aboutState
-	enable             *enableState
+	appearanceState        *appearanceState
+	projectsState          *projectsState
+	remotesState           *remotesState
+	agentsState            *agentsState
+	agentIntegrationsState *agentIntegrationsState
+	notificationsState     *notificationsState
+	terminalState          *terminalState
+	panelsState            *panelsState
+	advancedState          *advancedState
+	aboutState             *aboutState
+	enable                 *enableState
 	// installing is a confirmed install whose route was left while it ran. The
 	// attempt is the user's own, so its outcome is still announced and a
 	// successful one still enables the panel.
@@ -139,6 +141,11 @@ type Model struct {
 	remoteForm *remoteForm
 	// confirm is a consequential change awaiting an explicit yes.
 	confirm *confirmState
+
+	// integrationService overrides the agent-integration application service.
+	// It is nil in the running application, which builds the real one on
+	// demand; a test injects one over a temporary tree.
+	integrationService *agentintegration.Service
 
 	width, height int
 	sidebarWidth  int
@@ -214,6 +221,7 @@ func (m *Model) Open(page PageID) {
 	m.projectsState = nil
 	m.remotesState = nil
 	m.agentsState = nil
+	m.agentIntegrationsState = nil
 	m.notificationsState = nil
 	m.terminalState = nil
 	m.panelsState = nil
@@ -475,6 +483,14 @@ func controlCommand(key string) (plugin.Command, bool) {
 		return plugin.Command{ID: "use-global-theme", Name: "Use global", Category: plugin.CategoryActions, Context: ContextConfig, Priority: 8}, true
 	case "t":
 		return plugin.Command{ID: "test-notifications", Name: "Test", Category: plugin.CategoryActions, Context: ContextConfig, Priority: 5}, true
+	case keyIntegrationInstall:
+		return plugin.Command{ID: "install-integration", Name: "Install", Category: plugin.CategoryActions, Context: ContextConfig, Priority: 5}, true
+	case keyIntegrationUpdate:
+		return plugin.Command{ID: "update-integration", Name: "Update", Category: plugin.CategoryActions, Context: ContextConfig, Priority: 6}, true
+	case keyIntegrationRepair:
+		return plugin.Command{ID: "repair-integration", Name: "Repair", Category: plugin.CategoryActions, Context: ContextConfig, Priority: 6}, true
+	case keyIntegrationUninstall:
+		return plugin.Command{ID: "uninstall-integration", Name: "Remove", Category: plugin.CategoryActions, Context: ContextConfig, Priority: 7}, true
 	}
 	return plugin.Command{}, false
 }
