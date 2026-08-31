@@ -373,8 +373,14 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// before touching anything, so the ordering guarantee is unchanged, but
 		// it now exists only inside a running program rather than being returned
 		// from Init where a synchronous command-runner would park on it forever.
+		// Per model, not per process: a second Model in one process is entitled
+		// to its own restore, and a package-global latch would let test order
+		// decide which one got it.
 		var restoreCmd tea.Cmd
-		startSessionRestoreOnce.Do(func() { restoreCmd = restoreSessionsCmd(m.cfg) })
+		if !m.sessionRestoreStarted {
+			m.sessionRestoreStarted = true
+			restoreCmd = restoreSessionsCmd(m.cfg)
+		}
 		// Reset diagnostics modal on resize (will be rebuilt on next render)
 		if m.showDiagnostics {
 			m.diagnosticsModalWidth = 0

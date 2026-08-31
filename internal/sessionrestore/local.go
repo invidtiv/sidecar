@@ -67,6 +67,18 @@ func LocalDeps(opts LocalDepsOptions) Deps {
 			})
 			return err
 		},
+		NoteLive: func(step Step) {
+			// Re-stamp the eligibility marker to the server the shell is running
+			// in now. Without this a restored shell keeps the marker of the
+			// server it died in, and closing it later reads as another server
+			// death rather than as a terminal someone closed.
+			server := collector.ServerIDOrDefault()
+			if server == "" || step.ProjectRoot == "" {
+				return
+			}
+			_, _ = workspaceops.ObserveManagedShellsLive(
+				step.ProjectRoot, opts.Namespace, server, []string{step.Session}, time.Now().UTC())
+		},
 		ResumePlanFor: func(step Step) (agentsession.ResumePlan, error) {
 			return ResumePlanFor(step, opts.Namespace)
 		},

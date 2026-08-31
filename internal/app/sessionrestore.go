@@ -52,10 +52,6 @@ var sessionRestoreHost struct {
 	cancel context.CancelFunc
 }
 
-// startSessionRestoreOnce makes the restore fire on the first WindowSizeMsg and
-// no later one, so a terminal resize does not schedule a second restore.
-var startSessionRestoreOnce sync.Once
-
 // sessionRestoreGate is the barrier the restore waits behind, indirected so a
 // test can prove the ordering rather than assert it in a comment. In production
 // it is the first-ready-frame latch and nothing else.

@@ -109,6 +109,18 @@ type Deps struct {
 	// ResumeAgent runs the resume in the shell and returns once the provider is
 	// identified and ready.
 	ResumeAgent func(context.Context, Step, agentsession.ResumePlan) error
+	// NoteLive records that this shell is now running under the current tmux
+	// server. It is optional, and skipping it costs only accuracy in a later
+	// restore.
+	//
+	// It exists because a restored shell's eligibility marker still named the
+	// server it died in. If the user then closed that shell, its marker did not
+	// match the running server, so the reap path read it as "died with its
+	// server" and preserved it as a restore candidate — the same immortal
+	// candidate the marker exists to prevent, reintroduced by the restore
+	// itself. On a surface with a TUI the next liveness pass healed it; a
+	// CLI-only workflow never did.
+	NoteLive func(Step)
 }
 
 // ErrServerReplaced aborts a run whose tmux server changed underneath it.
@@ -148,6 +160,15 @@ func Execute(ctx context.Context, plan Plan, deps Deps) Result {
 			continue
 		}
 		out := executeStep(ctx, step, deps, run)
+		// Any outcome that leaves the session running is a fresh, first-hand
+		// observation that it is alive in this server — the strongest evidence
+		// there is, and the moment to record it.
+		if deps.NoteLive != nil {
+			switch out.Status {
+			case StatusReattached, StatusRestored, StatusResumed, StatusConverged:
+				deps.NoteLive(out.Step)
+			}
+		}
 		result.Outcomes = append(result.Outcomes, out)
 		if errors.Is(out.Err, ErrServerReplaced) {
 			aborted = true

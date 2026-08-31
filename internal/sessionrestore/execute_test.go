@@ -16,6 +16,7 @@ type fakeWorld struct {
 	created []string
 	resumed []string
 
+	noted      []string
 	createErr  error
 	resumeErr  error
 	planErr    error
@@ -51,6 +52,7 @@ func (w *fakeWorld) deps() Deps {
 			}
 			return nil
 		},
+		NoteLive: func(step Step) { w.noted = append(w.noted, step.Session) },
 		ResumePlanFor: func(step Step) (agentsession.ResumePlan, error) {
 			if w.planErr != nil {
 				return agentsession.ResumePlan{}, w.planErr
@@ -397,4 +399,38 @@ func TestExecuteRunsNoAgentUnderAskWithoutConfirmation(t *testing.T) {
 	if len(w.resumed) != 0 {
 		t.Fatal("an unconfirmed ask-policy restore ran an agent")
 	}
+}
+
+// TestExecuteRestampsTheLivenessMarker covers the reviewer's finding that a
+// restored shell kept the marker of the server it died in.
+//
+// The consequence was not cosmetic. Closing that shell afterwards produced a
+// marker that did not match the running server, so the reap path read it as
+// another server death and preserved it as a restore candidate — the immortal
+// candidate the marker exists to prevent, reintroduced by the restore itself. A
+// TUI healed it on the next liveness pass; a CLI-only workflow never did.
+func TestExecuteRestampsTheLivenessMarker(t *testing.T) {
+	t.Run("a restored shell", func(t *testing.T) {
+		w := newWorld()
+		runPlan(t, w, resumePlanInput(w))
+		if len(w.noted) != 1 || w.noted[0] != "a" {
+			t.Fatalf("noted %v, want the restored shell", w.noted)
+		}
+	})
+	t.Run("a shell that was already live", func(t *testing.T) {
+		w := newWorld()
+		w.live["a"] = LiveManaged
+		runPlan(t, w, resumePlanInput(w))
+		if len(w.noted) != 1 {
+			t.Fatalf("a reattached shell is live in this server too; noted %v", w.noted)
+		}
+	})
+	t.Run("a refused shell is not claimed to be live", func(t *testing.T) {
+		w := newWorld()
+		w.live["a"] = LiveForeign
+		runPlan(t, w, resumePlanInput(w))
+		if len(w.noted) != 0 {
+			t.Fatalf("a refused shell must not be recorded as ours: %v", w.noted)
+		}
+	})
 }

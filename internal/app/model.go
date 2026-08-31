@@ -384,6 +384,11 @@ type Model struct {
 	// surface rather than replacing it: escape still returns to the app the
 	// user would have had.
 	startupConfigPage configui.PageID
+	// sessionRestoreStarted makes the cold restore fire on the first
+	// WindowSizeMsg and no later one, so a resize does not schedule a second.
+	// It lives on the model rather than in a package-level sync.Once so that a
+	// second Model in one process still gets its own restore.
+	sessionRestoreStarted bool
 	// firstRunProbePending is set when launch has no configured projects and
 	// no startup destination. A tea.Cmd answers whether cwd is a Git repo;
 	// until it does, the content area shows a guided loading state instead of

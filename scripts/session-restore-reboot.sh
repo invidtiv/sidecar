@@ -175,41 +175,181 @@ cmd_seed() {
   cli create shell --project harness --name builder --wait 0 --json >/dev/null
   cli create shell --project harness --name reviewer --wait 0 --json >/dev/null
   note "created two managed shells under $(cmd_server_id)"
+  bind_fake_agent
 }
 
-cmd_mark() {
-  assert_isolated
-  note "server $(cmd_server_id)"
+# bind_fake_agent gives one shell an exact conversation binding.
+#
+# It writes the binding into the manifest rather than going through `agent
+# report-session`, and the reason is worth stating: that command evaluates a
+# generation fence against the provider process actually occupying the pane, so
+# a report that no live provider produced is refused — correctly. The exit gate
+# needs a bound shell, not a demonstration of the fence, so the binding is
+# seeded as durable state a previous session would have left behind.
+#
+# The reference is marked reported, which is what makes it resume-eligible, so
+# the ask-policy refusal and the resume plan both have something real to act on.
+bind_fake_agent() {
+  local manifest="$STATE_DIR/projects/harness/shells.json"
+  [[ -f "$manifest" ]] || die "no manifest to bind an agent into"
+  SIDECAR_MANIFEST="$manifest" python3 - <<'PY'
+import json, os, datetime
+path = os.environ["SIDECAR_MANIFEST"]
+with open(path) as fh:
+    doc = json.load(fh)
+now = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+bound = None
+for shell in doc.get("shells", []):
+    if shell.get("displayName") == "reviewer":
+        shell["agentType"] = "codex"
+        shell["agent"] = {
+            "kind": "codex",
+            "session": {
+                "kind": "id",
+                "value": "01a05614-0ca7-7c31-9b1e-000000000001",
+                "source": "sidecar.codex.hooks",
+                "reported": True,
+                "reportedAt": now,
+            },
+        }
+        bound = shell["tmuxName"]
+with open(path, "w") as fh:
+    json.dump(doc, fh, indent=2)
+    fh.write("\n")
+print(bound or "none")
+PY
+  note "bound a fake codex conversation to the reviewer shell"
 }
 
-# cmd_trace launches the real TUI inside the harness tmux server with startup
-# tracing on, so the ordering of `first ready frame` against any restore work can
-# be read from a real run rather than argued about.
-cmd_trace() {
+# cmd_gate runs the whole exit gate end to end and fails loudly on any step.
+#
+# It exists because the gate is only worth as much as its reproducibility: a
+# journey that has to be driven by hand from a description is a journey nobody
+# re-runs, and the first version of this file documented a `gate` verb it never
+# implemented.
+cmd_gate() {
   assert_isolated
-  [[ -x "$BIN" ]] || die "no binary; run '$0 build' first"
-  local out="$HARNESS_ROOT/trace.out"
-  rm -f "$out"
-  tmux_here new-session -d -s trace-run -x 200 -y 50 \
-    "SIDECAR_STARTUP_TRACE=stderr SIDECAR_STARTUP_TRACE_DELAY=8s '$BIN' -config '$CONFIG_PATH' 2> '$out'"
-  note "sidecar started in the harness tmux; waiting for the delayed trace dump"
-  sleep 12
-  tmux_here kill-session -t trace-run 2>/dev/null || true
-  if [[ -s "$out" ]]; then
-    cat "$out"
-  else
-    note "no trace was written to $out"
+  local failures=0
+  check() {
+    if [[ "$2" == "$3" ]]; then
+      printf '  ok    %s\n' "$1"
+    else
+      printf '  FAIL  %s\n        got %q want %q\n' "$1" "$2" "$3"
+      failures=$((failures + 1))
+    fi
+  }
+  contains() {
+    if grep -qF -- "$3" <<<"$2"; then
+      printf '  ok    %s\n' "$1"
+    else
+      printf '  FAIL  %s\n        %q does not contain %q\n' "$1" "$2" "$3"
+      failures=$((failures + 1))
+    fi
+  }
+
+  echo "== isolation"
+  cmd_paths | tail -3
+
+  echo "== build and seed"
+  cmd_reset >/dev/null
+  cmd_build >/dev/null
+  cmd_seed >/dev/null
+  local before_server records
+  before_server="$(cmd_server_id)"
+  records="$(manifest_shell_count)"
+  check "two managed shells recorded" "$records" "2"
+
+  echo "== terminate only the harness server"
+  local default_before default_after
+  default_before="$(default_server_session_count)"
+  cmd_reboot >/dev/null
+  check "harness server is gone" "$(cmd_server_id)" "none"
+  default_after="$(default_server_session_count)"
+  check "the default tmux server was not touched" "$default_after" "$default_before"
+
+  echo "== records survive the server death"
+  check "both shell records survived" "$(manifest_shell_count)" "2"
+  check "nothing was tombstoned" "$(manifest_tombstone_count)" "0"
+
+  echo "== status reports a cold restore"
+  local status_json
+  status_json="$(cli session status --json)"
+  contains "serverChanged is true" "$status_json" '"serverChanged": true'
+  contains "the dead server is named" "$status_json" "$before_server"
+  contains "the session value is never printed" "$(printf '%s' "$status_json" | grep -c '01a05614' || true)" "0"
+
+  echo "== ask policy refuses an unconfirmed resume"
+  local refuse_out refuse_code
+  refuse_out="$(cli session restore --agents 2>&1)" && refuse_code=0 || refuse_code=$?
+  check "exit 5 (input rejected)" "$refuse_code" "5"
+  contains "the refusal names --yes" "$refuse_out" "--yes"
+  check "nothing was created" "$(tmux_session_count)" "0"
+
+  echo "== dry run creates nothing"
+  cli session restore --dry-run >/dev/null
+  check "still no sessions" "$(tmux_session_count)" "0"
+
+  echo "== restore"
+  cli session restore >/dev/null
+  check "both shells are back" "$(tmux_session_count)" "2"
+  check "records intact" "$(manifest_shell_count)" "2"
+  contains "markers re-stamped to the new server" "$(manifest_markers)" "$(cmd_server_id)"
+
+  echo "== second restore is idempotent"
+  local second
+  second="$(cli session restore)"
+  contains "everything reattached" "$second" "reattached"
+  check "still exactly two sessions" "$(tmux_session_count)" "2"
+
+  echo
+  if ((failures)); then
+    printf 'GATE FAILED: %d check(s)\n' "$failures"
+    return 1
   fi
+  printf 'GATE PASSED\n'
 }
 
-cmd_manifest() {
-  assert_isolated
-  local f
-  for f in "$STATE_DIR"/projects/*/shells.json; do
-    [[ -e "$f" ]] || continue
-    echo "--- $f"
-    cat "$f"
-  done
+# count_matches emits exactly one number. `grep -c` prints 0 *and* exits 1 when
+# nothing matches, so the naive `grep -c ... || echo 0` prints two lines.
+count_matches() {
+  local n
+  n="$(grep -c "$1" "$2" 2>/dev/null || true)"
+  printf '%s' "${n:-0}"
+}
+
+manifest_shell_count() {
+  local f="$STATE_DIR/projects/harness/shells.json"
+  [[ -f "$f" ]] || { printf '0'; return; }
+  count_matches '"tmuxName"' "$f"
+}
+
+manifest_markers() {
+  local f="$STATE_DIR/projects/harness/shells.json"
+  [[ -f "$f" ]] && grep -o '"lastSeenServer": *"[^"]*"' "$f" || true
+}
+
+manifest_tombstone_count() {
+  local f="$STATE_DIR/projects/harness/shells.json"
+  [[ -f "$f" ]] || { printf '0'; return; }
+  count_matches '"deletedAt"' "$f"
+}
+
+tmux_session_count() {
+  local n
+  n="$(tmux_here list-sessions -F '#{session_name}' 2>/dev/null | grep -c . || true)"
+  printf '%s' "${n:-0}"
+}
+
+# default_server_session_count counts the DEVELOPER's sessions, read-only, so the
+# gate can prove it never touched them. It is the only place this file looks
+# outside the harness, and it can only read.
+default_server_session_count() {
+  local n
+  # env -u TMUX_TMPDIR so this reads the DEVELOPER's default socket rather than
+  # the harness one every other tmux call in this file is pinned to. It is the
+  # only outward-facing call here and it is read-only by construction.
+  n="$(env -u TMUX_TMPDIR tmux list-sessions -F '#{session_name}' 2>/dev/null | grep -c . || true)"
+  printf '%s' "${n:-0}"
 }
 
 case "${1:-}" in
@@ -220,6 +360,7 @@ case "${1:-}" in
   mark)      cmd_mark ;;
   manifest)  cmd_manifest ;;
   trace)     cmd_trace ;;
+  gate)      cmd_gate ;;
   server-id) cmd_server_id ;;
   reboot)    cmd_reboot ;;
   cli)       shift; cli "$@" ;;
