@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/marcus/sidecar/internal/agentactivity"
 	"github.com/marcus/sidecar/internal/agentlifecycle"
@@ -492,7 +493,15 @@ func TestTheAssetSerializesReportsUnderInvertedExitOrder(t *testing.T) {
 	cmd.Dir = filepath.Join("assets", "opencode")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
+	// The harness process is timed from out here, and that is load-bearing
+	// rather than convenient. See the dispose assertion below: the defect being
+	// pinned is a pending timer holding Node's event loop open, which delays
+	// process *exit* and not the dispose await the harness can time from
+	// inside itself. cmd.Output waits for exit, so this is the only clock that
+	// can see it.
+	started := time.Now()
 	out, err := cmd.Output()
+	processElapsed := time.Since(started)
 	if err != nil {
 		t.Fatalf("running the ordering harness: %v\n%s", err, stderr.String())
 	}
@@ -521,10 +530,18 @@ func TestTheAssetSerializesReportsUnderInvertedExitOrder(t *testing.T) {
 	// pending timer keeps Node's event loop alive, so leaving it held OpenCode's
 	// process open for the full budget after every report had already landed —
 	// a five second pause added to every quit, in a file whose whole premise is
-	// that nothing in it may delay what OpenCode does. The stub's own sleeps
-	// total about 1050ms, so anything near the budget means the timer is
-	// outliving its purpose again.
-	if result.ElapsedMS >= 4000 {
-		t.Fatalf("dispose took %dms; the reports take about 1050ms, so the bounding timer is holding the process open", result.ElapsedMS)
+	// that nothing in it may delay what OpenCode does.
+	//
+	// The measurement is the harness *process's* lifetime, not the time dispose
+	// itself took. Those differ by exactly the bug: dispose returns the moment
+	// Promise.race picks the queue, so an uncleared timer leaves its own await
+	// looking fast — measured 1098ms with the defect reintroduced — while the
+	// process lingers for the full budget behind the live event loop. Measured
+	// end to end: 1.26s clean, 5.03s with the clearTimeout removed. The stub's
+	// own sleeps total about 1050ms, so a four second bound separates the two
+	// without depending on how fast this machine is.
+	if processElapsed >= 4*time.Second {
+		t.Fatalf("the harness process lived %v (dispose itself reported %dms); the reports take about 1050ms, so the bounding timer is holding the process open after the queue drained",
+			processElapsed.Round(time.Millisecond), result.ElapsedMS)
 	}
 }

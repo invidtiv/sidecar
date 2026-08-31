@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/agentintegration"
 	"github.com/marcus/sidecar/internal/agentlifecycle"
 )
@@ -577,5 +576,4 @@ func (m *Model) buildAgentIntegrationsRow(b *paneBuilder) {
 	b.lines = append(b.lines, lines...)
 	rowWidth := RowWidth(b.inner)
 	b.m.mouse.HitMap.AddRect(regionAgentIntegrations, b.originX, 1+y, rowWidth, len(lines), nil)
-	_ = ansi.StringWidth(arrow)
 }

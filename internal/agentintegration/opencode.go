@@ -27,6 +27,18 @@ const (
 	// OpenCodeAssetVersion is the bundled asset's version. Authority is granted
 	// to a source at a version, so this changing is what makes an installed
 	// copy "outdated" rather than merely different.
+	//
+	// Bump it whenever assets/opencode/sidecar-lifecycle.js changes, once a
+	// release has shipped `agent integration install`. The rule is stated here
+	// rather than only in the plan because this constant and that file are what
+	// someone making the change is actually looking at. Version 1's bytes were
+	// revised twice during Phase C without a bump, which was safe only because
+	// no release had ever installed them: there was no earlier copy of version 1
+	// anywhere to be misread. Once there is, an unbumped change makes every
+	// installed copy report `needs-repair` — its marker claims the current
+	// version while its checksum matches nothing — and a source that has not
+	// been requalified at its new version should not keep the authority the old
+	// one earned.
 	OpenCodeAssetVersion = "1"
 
 	// OpenCodeAssetName is the filename the asset is installed as.
