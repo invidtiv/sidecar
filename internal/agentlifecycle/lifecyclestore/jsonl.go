@@ -286,16 +286,29 @@ func (s *JSONL) Compact() error {
 // writer can never interleave inside a line. Sync is not optional here: hook
 // processes exit immediately after reporting, and an unsynced write that dies
 // with the machine loses the transition Sidecar was told about.
+//
+// The line is re-framed first when the file does not end in a newline. That is
+// the state a machine losing power mid-append leaves behind, and without the
+// repair the next report is appended straight onto the truncated fragment —
+// producing one unparseable line out of two records, so the crash costs not
+// only the report that was interrupted but the next healthy one as well, while
+// Append reports success for it.
 func (s *JSONL) appendLine(r agentlifecycle.Report) error {
 	data, err := json.Marshal(r)
 	if err != nil {
 		return err
 	}
-	f, err := os.OpenFile(s.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	// O_RDWR rather than O_WRONLY so the framing check below reuses this handle
+	// instead of opening the file a second time. Under O_APPEND every write
+	// still goes to the end regardless.
+	f, err := os.OpenFile(s.path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o644)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = f.Close() }()
+	if unterminated, err := endsWithoutNewline(f); err == nil && unterminated {
+		data = append([]byte{'\n'}, data...)
+	}
 	if _, err := f.Write(append(data, '\n')); err != nil {
 		return err
 	}
@@ -304,6 +317,26 @@ func (s *JSONL) appendLine(r agentlifecycle.Report) error {
 	}
 	s.lines++
 	return nil
+}
+
+// endsWithoutNewline reports whether the log's final byte is something other
+// than a newline, which means its last line was never finished.
+//
+// An empty file is terminated by definition — there is no fragment for the next
+// record to be welded onto.
+func endsWithoutNewline(f *os.File) (bool, error) {
+	info, err := f.Stat()
+	if err != nil {
+		return false, err
+	}
+	if info.Size() == 0 {
+		return false, nil
+	}
+	var last [1]byte
+	if _, err := f.ReadAt(last[:], info.Size()-1); err != nil {
+		return false, err
+	}
+	return last[0] != '\n', nil
 }
 
 // rewrite replaces the file with exactly records. Must be called under the lock.
