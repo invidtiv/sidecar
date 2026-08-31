@@ -47,22 +47,29 @@ func TestLocalSourceLoadDocumentMatchesFilepreview(t *testing.T) {
 
 type fakeDocumentSource struct {
 	body        string
+	revision    string
 	notModified bool
 	loads       int
+	lastIfRev   string
 }
 
 func (f *fakeDocumentSource) Resolve(_ context.Context, _ SourceContext, pending contentlink.Pending) (contentlink.Ref, error) {
 	return contentlink.Ref{Kind: contentlink.KindFile, Value: pending.Raw}, nil
 }
 
-func (f *fakeDocumentSource) LoadDocument(_ context.Context, _ SourceContext, _ DocumentReadRequest) (DocumentReadResult, error) {
+func (f *fakeDocumentSource) LoadDocument(_ context.Context, _ SourceContext, req DocumentReadRequest) (DocumentReadResult, error) {
 	f.loads++
+	f.lastIfRev = req.IfRevision
+	rev := f.revision
+	if rev == "" {
+		rev = "1"
+	}
 	if f.notModified {
-		return DocumentReadResult{NotModified: true, Revision: "1"}, nil
+		return DocumentReadResult{NotModified: true, Revision: rev}, nil
 	}
 	return DocumentReadResult{
 		Value:    filepreview.PreviewResult{Content: f.body, Lines: strings.Split(f.body, "\n")},
-		Revision: "1",
+		Revision: rev,
 	}, nil
 }
 
@@ -127,6 +134,31 @@ func TestDocumentNotModifiedRefreshDoesNotReplaceContent(t *testing.T) {
 	}
 	if !strings.Contains(view.View(), "FAKE-BODY") {
 		t.Fatalf("content was dropped: %q", view.View())
+	}
+}
+
+func TestDocumentRefreshSendsLastAdoptedRevision(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	fake := &fakeDocumentSource{body: "FAKE-BODY\n", revision: "rev-1"}
+	ctx := testContext(dir)
+	d := New(ctx, Config{Source: fake})
+	out := d.Open(ctx, fileRef("doc.md"), testPlacement())
+	if _, applied := d.Apply(out.Command().(Result)); !applied {
+		t.Fatal("initial apply failed")
+	}
+	if fake.lastIfRev != "" {
+		t.Fatalf("first load IfRevision = %q, want empty", fake.lastIfRev)
+	}
+	view := d.Viewer(out.LeafID).(*docview.Model)
+	view.Observe()
+	cmd := view.Refresh(false)
+	if cmd == nil {
+		t.Fatal("Refresh() = nil after Observe")
+	}
+	_ = cmd()
+	if fake.lastIfRev != "rev-1" {
+		t.Fatalf("refresh IfRevision = %q, want rev-1", fake.lastIfRev)
 	}
 }
 

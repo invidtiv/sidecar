@@ -133,6 +133,8 @@ func documentLoadCmd(src Source, ctx SurfaceContext, ref contentlink.Ref, ifRevi
 		if result.NotModified {
 			return docview.NotModified{Path: ref.Value, Epoch: epoch, Revision: result.Revision}
 		}
-		return filepreview.PreviewLoadedMsg{Epoch: epoch, Path: ref.Value, Result: result.Value}
+		return docview.LoadedMsg{
+			Epoch: epoch, Path: ref.Value, Result: result.Value, Revision: result.Revision,
+		}
 	}
 }
