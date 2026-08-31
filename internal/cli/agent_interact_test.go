@@ -200,6 +200,14 @@ func TestAgentReadPassesTheSourceThroughAndPrintsTheText(t *testing.T) {
 		t.Fatalf("capture request = %+v", terminal.captured)
 	}
 
+	code, out, errOut = runAgentCLI(t, "agent", "read", "sidecar-sh-demo-2")
+	if code != 0 || errOut != "" || !strings.Contains(out, "visible capture") {
+		t.Fatalf("omitted --source = %d stdout=%q stderr=%q", code, out, errOut)
+	}
+	if len(terminal.captured) != 2 || terminal.captured[1].Source != agentcontrol.SourceVisible {
+		t.Fatalf("omitted --source capture = %+v", terminal.captured)
+	}
+
 	code, out, errOut = runAgentCLI(t, "agent", "read", "sidecar-sh-demo-2", "--json")
 	if code != 0 || errOut != "" {
 		t.Fatalf("read json = %d stderr=%q", code, errOut)

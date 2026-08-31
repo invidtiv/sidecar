@@ -559,9 +559,14 @@ func TestReadPassesEverySourceThroughAndBoundsLines(t *testing.T) {
 	if _, err := svc.Read(context.Background(), ReadRequest{Target: terminal.target, Source: "screenshot"}); codeOf(t, err) != ErrNotReady {
 		t.Fatal("Read accepted an unknown source")
 	}
-	// An omitted source is the visible screen, not an error.
+	// An omitted source is the visible screen, not an error. The default has
+	// to reach Capture too: leaving it only on the result JSON is how a live
+	// LocalTerminal used to refuse with `source "" is not a terminal capture`.
 	if got, err := svc.Read(context.Background(), ReadRequest{Target: terminal.target}); err != nil || got.Source != SourceVisible {
 		t.Fatalf("default source = %+v, %v", got, err)
+	}
+	if last := terminal.captures[len(terminal.captures)-1]; last.Source != SourceVisible {
+		t.Fatalf("omitted source was captured as %q", last.Source)
 	}
 }
 

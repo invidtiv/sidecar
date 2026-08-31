@@ -211,6 +211,7 @@ func (s Service) Read(ctx context.Context, req ReadRequest) (ReadResult, error) 
 	if !source.valid() {
 		return ReadResult{}, &Error{Code: ErrNotReady, Message: fmt.Sprintf("unknown read source %q", req.Source), Target: &req.Target}
 	}
+	req.Source = source
 	var tracker agentactivity.Tracker
 	snap, state, err := s.observeOnce(ctx, req.Target, &tracker)
 	if err != nil {
