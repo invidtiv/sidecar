@@ -285,7 +285,37 @@ func (h *loopbackHost) startAgent() agentcontrol.Agent {
 	if result.code != 0 {
 		h.t.Fatalf("starting the fixture provider: exit %d\nstdout: %s\nstderr: %s", result.code, result.stdout, result.stderr)
 	}
-	return decodeAgent(h.t, result.stdout)
+	started := decodeAgent(h.t, result.stdout)
+	// Every caller of this helper goes on to compare steady state, so settle
+	// before handing the pane over. See settleAgent.
+	h.settleAgent()
+	return started
+}
+
+// settleAgent waits until the pane's status comes from the provider's own
+// on-screen composer rather than from the known-live fallback.
+//
+// `agent start` returns on the first idle observation, and an early poll can
+// identify the provider from its process name before it has painted anything —
+// which resolves idle through `codex.known-live-fallback`. That is a correct
+// answer, but it is a transient one, and comparing two independent invocations
+// that each raced it would compare noise. Settling first is what lets the
+// steady-state rows assert Evidence exactly.
+func (h *loopbackHost) settleAgent() {
+	h.t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	var last string
+	for time.Now().Before(deadline) {
+		result := h.local("agent", "get", h.agentSession, "--json")
+		if result.code == 0 {
+			last = decodeAgent(h.t, result.stdout).Agent.Evidence
+			if last == "codex.screen.idle" {
+				return
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	h.t.Fatalf("the fixture provider never settled on its own composer; last evidence was %q", last)
 }
 
 // resetAgentPane hands the pane back to a fresh interactive shell so a start
@@ -530,6 +560,10 @@ func TestALoopbackHostAnswersEveryAgentVerbExactlyAsTheHostItselfWould(t *testin
 		// panePIDChanges marks a row whose preparation replaces the pane
 		// process, so PanePID cannot be compared.
 		panePIDChanges bool
+		// evidenceIsARaceAtReadiness marks the one row whose compared value is
+		// produced AT the moment of readiness rather than after it. See the
+		// handling below.
+		evidenceIsARaceAtReadiness bool
 	}
 
 	agentRows := []row{
@@ -541,10 +575,11 @@ func TestALoopbackHostAnswersEveryAgentVerbExactlyAsTheHostItselfWould(t *testin
 		{name: "wait", args: []string{"agent", "wait", h.agentSession, "--timeout", "30s", "--json"}},
 		{name: "send-keys", args: []string{"agent", "send-keys", h.agentSession, "space", "--json"}},
 		{
-			name:           "start",
-			prepare:        h.resetAgentPane,
-			args:           []string{"agent", "start", h.agentSession, "--kind", "codex", "--timeout", "30s", "--json"},
-			panePIDChanges: true,
+			name:                       "start",
+			prepare:                    func() { h.resetAgentPane() },
+			args:                       []string{"agent", "start", h.agentSession, "--kind", "codex", "--timeout", "30s", "--json"},
+			panePIDChanges:             true,
+			evidenceIsARaceAtReadiness: true,
 		},
 	}
 
@@ -582,6 +617,39 @@ func TestALoopbackHostAnswersEveryAgentVerbExactlyAsTheHostItselfWould(t *testin
 			// Everything a caller acts on.
 			if localAgent.Agent.Kind == "" || localAgent.Agent.Status == "" || localAgent.Agent.Evidence == "" {
 				t.Fatalf("the local answer is too thin to prove anything: %+v", localAgent.Agent)
+			}
+			if tc.evidenceIsARaceAtReadiness {
+				// Evidence is the one field `start` cannot promise, and the
+				// reason is a true property of Service.Start rather than a
+				// wobble worth hiding. Start returns on its FIRST idle
+				// observation. tmux reports a pane's foreground command the
+				// instant exec happens, which is before the provider has
+				// painted anything, so an early poll identifies codex against a
+				// blank screen and resolves idle through
+				// `codex.known-live-fallback`; a poll 100ms later sees the
+				// composer and resolves the same idle through
+				// `codex.screen.idle`. Two independent starts can land on
+				// either side of that, and under a loaded `go test ./...` they
+				// do — this test failed once in three full-package runs before
+				// the distinction was made.
+				//
+				// So the row asserts both paths reached readiness by a
+				// legitimate idle route and compares everything else exactly,
+				// rather than normalising a field that is stable for every
+				// other verb. The steady-state rows above are settled first
+				// (h.settleAgent), so for them Evidence IS compared.
+				for _, side := range []struct {
+					name  string
+					agent agentcontrol.Agent
+				}{{"local", localAgent}, {"remote", remoteAgent}} {
+					switch side.agent.Agent.Evidence {
+					case "codex.screen.idle", "codex.known-live-fallback":
+					default:
+						t.Fatalf("%s start reached readiness by an unexpected route: %q",
+							side.name, side.agent.Agent.Evidence)
+					}
+				}
+				localAgent.Agent.Evidence, remoteAgent.Agent.Evidence = "", ""
 			}
 			gotLocal := mustJSON(t, normalizeAgent(localAgent, tc.panePIDChanges))
 			gotRemote := mustJSON(t, normalizeAgent(remoteAgent, tc.panePIDChanges))
@@ -641,13 +709,16 @@ func TestALoopbackHostAnswersEveryAgentVerbExactlyAsTheHostItselfWould(t *testin
 		if localRead.Text == "" || !strings.Contains(localRead.Text, "›") {
 			t.Fatalf("the local read returned nothing recognisable:\n%q", localRead.Text)
 		}
-		// FINDING, asserted so it cannot change silently: agentremote.Client.Read
-		// is the one verb that does NOT stamp the host id onto its result, while
-		// List/Get/Start/Prompt/Wait/SendKeys all do (Client.stampOne). A caller
-		// holding read results from two machines cannot tell them apart.
-		if remoteRead.Target.Host != "local" {
-			t.Errorf("agentremote.Client.Read now stamps the host id (%q); update this assertion and the finding it records",
-				remoteRead.Target.Host)
+		// Read's result carries a Target, so it is stamped like every other
+		// verb's. This assertion records a finding: Read was originally the one
+		// verb that returned the host's own "local" unstamped, which left a
+		// caller holding reads from two machines with nothing to tell them
+		// apart by. The parity suite is what caught it.
+		if remoteRead.Target.Host != "loopback" {
+			t.Errorf("the remote read was not stamped with the host id: %q", remoteRead.Target.Host)
+		}
+		if localRead.Target.Host != "local" {
+			t.Errorf("the host answering for itself reported host %q, want local", localRead.Target.Host)
 		}
 		if got, want := mustJSON(t, normalizeRead(remoteRead)), mustJSON(t, normalizeRead(localRead)); got != want {
 			t.Fatalf("the two read paths answered differently\n--- local ---\n%s\n--- remote ---\n%s", want, got)

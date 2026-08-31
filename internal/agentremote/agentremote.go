@@ -280,11 +280,18 @@ func (c Client) SendKeys(ctx context.Context, session string, keys []string) (ag
 }
 
 // Read passively captures the remote pane or its bound transcript.
+//
+// Its result carries a Target too, so it is stamped for the same reason every
+// other verb's is: a caller holding reads from two machines has nothing else to
+// tell them apart by, and the host describes itself as "local". This was missed
+// on the first pass — Read was the one verb that returned the host's own view
+// unstamped — and the parity suite caught it.
 func (c Client) Read(ctx context.Context, session string, source agentcontrol.ReadSource, lines int, ansi bool) (agentcontrol.ReadResult, error) {
 	var result agentcontrol.ReadResult
 	if err := c.run(ctx, c.ReadArgs(session, source, lines, ansi), &result); err != nil {
 		return agentcontrol.ReadResult{}, err
 	}
+	result.Target.Host = c.HostID
 	return result, nil
 }
 
