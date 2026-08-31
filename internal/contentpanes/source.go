@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/contentlink"
+	"github.com/marcus/sidecar/internal/contentservice"
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/filepreview"
-	"github.com/marcus/sidecar/internal/terminallink"
+	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
@@ -53,41 +55,77 @@ type Source interface {
 	LoadDocument(context.Context, SourceContext, DocumentReadRequest) (DocumentReadResult, error)
 }
 
-// LocalSource is today's filepreview / terminallink functions. A nil Config.Source
-// also delegates to those functions so tests constructing Config{} stay valid.
+// LocalSource is the in-process Document adapter. It uses the same
+// contentservice file contract as `sidecar content`, then highlights with
+// this process's theme. A nil Config.Source also delegates here so tests
+// constructing Config{} stay valid.
 type LocalSource struct{}
 
 // Resolve maps a file token onto a regular file on this machine.
-func (LocalSource) Resolve(_ context.Context, src SourceContext, pending contentlink.Pending) (contentlink.Ref, error) {
+func (LocalSource) Resolve(ctx context.Context, src SourceContext, pending contentlink.Pending) (contentlink.Ref, error) {
 	if pending.Kind != contentlink.KindFile {
 		return contentlink.Ref{}, fmt.Errorf("unsupported pending kind %q", pending.Kind)
 	}
-	display, abs, ok := terminallink.ResolveFile(src.Root, pending.Raw)
-	if !ok {
-		return contentlink.Ref{}, fmt.Errorf("file %q is not readable from %s", pending.Raw, src.Root)
+	if err := ctx.Err(); err != nil {
+		return contentlink.Ref{}, err
 	}
-	file, err := terminallink.OpenRegular(abs)
+	resolved, err := contentservice.ResolveFile(src.Root, pending.Raw)
 	if err != nil {
 		return contentlink.Ref{}, err
 	}
-	_ = file.Close()
-	return contentlink.Ref{Kind: contentlink.KindFile, Value: display}, nil
+	return contentlink.Ref{Kind: contentlink.KindFile, Value: resolved.Display}, nil
 }
 
-// LoadDocument reads through filepreview.LoadPreview. It always returns a body;
-// the viewer's fingerprint gate drops a no-op refresh.
-func (LocalSource) LoadDocument(_ context.Context, src SourceContext, req DocumentReadRequest) (DocumentReadResult, error) {
+// LoadDocument reads through contentservice.ReadFile so local/direct and
+// remote/JSON share containment, revision, and notModified.
+func (LocalSource) LoadDocument(ctx context.Context, src SourceContext, req DocumentReadRequest) (DocumentReadResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	root := src.Root
 	path := req.Ref.Value
 	if filepath.IsAbs(filepath.FromSlash(path)) {
 		root = ""
 	}
-	msg := filepreview.LoadPreview(root, path, 0)()
-	loaded, ok := msg.(filepreview.PreviewLoadedMsg)
-	if !ok {
-		return DocumentReadResult{}, fmt.Errorf("unexpected preview load result")
+	doc, err := contentservice.ReadFile(ctx, root, path, req.IfRevision)
+	if err != nil {
+		return DocumentReadResult{}, err
 	}
-	return DocumentReadResult{Value: loaded.Result}, nil
+	return DocumentReadResult{
+		Value:       previewFromDocument(doc),
+		Revision:    doc.Revision,
+		NotModified: doc.NotModified,
+	}, nil
+}
+
+func previewFromDocument(doc contentservice.Document) filepreview.PreviewResult {
+	result := filepreview.PreviewResult{
+		Content:     doc.Content,
+		IsBinary:    doc.Binary,
+		IsImage:     doc.Image,
+		IsTruncated: doc.Truncated,
+		TotalSize:   doc.TotalSize,
+		ModTime:     doc.ModTime,
+		Mode:        doc.Mode,
+	}
+	if result.IsBinary || result.IsImage {
+		return result
+	}
+	result.Lines = strings.Split(result.Content, "\n")
+	highlighted, err := filepreview.Highlight(result.Content, filepath.Ext(doc.Display), styles.GetSyntaxTheme())
+	if err == nil {
+		result.HighlightedLines = strings.Split(highlighted, "\n")
+	} else {
+		result.HighlightedLines = result.Lines
+	}
+	if len(result.Lines) > filepreview.MaxPreviewLines {
+		result.Lines = result.Lines[:filepreview.MaxPreviewLines]
+		if len(result.HighlightedLines) > filepreview.MaxPreviewLines {
+			result.HighlightedLines = result.HighlightedLines[:filepreview.MaxPreviewLines]
+		}
+		result.IsTruncated = true
+	}
+	return result
 }
 
 // ResolveDocument uses src, or LocalSource when src is nil.

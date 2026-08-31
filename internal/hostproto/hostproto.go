@@ -167,6 +167,12 @@ type VerbCapabilities struct {
 	// creating the shell and then starting the agent with `shell send --run`,
 	// which is what it did before the flag existed.
 	CreateShellAgent bool `json:"createShellAgent,omitempty"`
+
+	// ContentReadV1 is `sidecar content resolve|read --json`, the read-only
+	// file contract a viewer uses to load Document panes from a host. A host
+	// that predates the verbs is read as false; the viewer must refuse rather
+	// than guess, and must not infer ordering from version strings.
+	ContentReadV1 bool `json:"contentReadV1,omitempty"`
 }
 
 // Snapshot is the complete observable state of the host at one instant. Serve

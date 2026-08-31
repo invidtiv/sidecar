@@ -21,8 +21,11 @@ import (
 )
 
 const (
-	maxPreviewSize  = 500 * 1024 // 500KB
-	maxPreviewLines = 10000
+	// MaxPreviewSize is the raw-byte cap for a document preview. JSON-encoded
+	// remote payloads may have to cut earlier; see contentservice.MaxEncodedBytes.
+	MaxPreviewSize = 500 * 1024
+	// MaxPreviewLines caps the line split a viewer keeps from a preview.
+	MaxPreviewLines = 10000
 )
 
 // PreviewResult contains the loaded file content.
@@ -101,8 +104,8 @@ func LoadPreviewFile(file *os.File, path string, epoch uint64) tea.Cmd {
 func loadPreviewFromOpenFile(file *os.File, path string, info os.FileInfo) PreviewResult {
 	result := PreviewResult{TotalSize: info.Size(), ModTime: info.ModTime(), Mode: info.Mode()}
 	readSize := info.Size()
-	if readSize > maxPreviewSize {
-		readSize = maxPreviewSize
+	if readSize > MaxPreviewSize {
+		readSize = MaxPreviewSize
 		result.IsTruncated = true
 	}
 	data := make([]byte, readSize)
@@ -124,9 +127,9 @@ func loadPreviewFromOpenFile(file *os.File, path string, info os.FileInfo) Previ
 	} else {
 		result.HighlightedLines = result.Lines
 	}
-	if len(result.Lines) > maxPreviewLines {
-		result.Lines = result.Lines[:maxPreviewLines]
-		result.HighlightedLines = result.HighlightedLines[:maxPreviewLines]
+	if len(result.Lines) > MaxPreviewLines {
+		result.Lines = result.Lines[:MaxPreviewLines]
+		result.HighlightedLines = result.HighlightedLines[:MaxPreviewLines]
 		result.IsTruncated = true
 	}
 	return result

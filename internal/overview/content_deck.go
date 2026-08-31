@@ -42,6 +42,14 @@ func (m *Model) localPreviewSurfaceContext(workspace workspaceinventory.Workspac
 	}
 }
 
+// documentSource is the place slice 3 flips remote rows onto
+// contentpanes.NewRemoteSource. This slice keeps LocalSource so a registered
+// host is not a reason to invoke a content verb, and previewDeckContext still
+// refuses remote rows before any source is asked.
+func (m *Model) documentSource(contentpanes.SurfaceContext) contentpanes.Source {
+	return contentpanes.LocalSource{}
+}
+
 func sourceContextFromWorkspace(ws workspaceinventory.Workspace, incarnation uint64) contentpanes.SourceContext {
 	src := contentpanes.SourceContext{
 		HostID:          ws.HostID,
@@ -66,7 +74,7 @@ func sourceContextFromWorkspace(ws workspaceinventory.Workspace, incarnation uin
 
 func (m *Model) previewDeckConfig(ctx contentpanes.SurfaceContext) contentpanes.Config {
 	return contentpanes.Config{
-		Source:           contentpanes.LocalSource{},
+		Source:           m.documentSource(ctx),
 		ResourceResolver: m.previewResourceResolver(ctx.Surface, ctx.Epoch),
 		ConfigureViewer: func(kind panelayout.Kind, model any) {
 			switch view := model.(type) {

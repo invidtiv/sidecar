@@ -8,6 +8,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/contentlink"
+	"github.com/marcus/sidecar/internal/contentpanes"
 	"github.com/marcus/sidecar/internal/targetactivation"
 	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/uirequest"
@@ -151,6 +152,22 @@ func TestRemoteSessionsDispatchDeclaresEveryPlanKindWithoutLocalContent(t *testi
 	}
 	if refs := resolver.refs(); len(refs) != 0 {
 		t.Fatalf("remote resource activation asked the local resolver: %v", refs)
+	}
+}
+
+func TestPreviewDeckConfigStaysOnLocalSource(t *testing.T) {
+	m, stub := remoteCreateModel(t)
+	cfg := m.previewDeckConfig(contentpanes.SurfaceContext{
+		Source: contentpanes.SourceContext{HostID: "mac-mini", WorkspaceID: "p:shell:s1"},
+	})
+	if _, ok := cfg.Source.(contentpanes.LocalSource); !ok {
+		t.Fatalf("document source = %T, want LocalSource (slice 3 flips this)", cfg.Source)
+	}
+	if ctx, ok := m.previewDeckContext(); ok && ctx.Source.Remote() {
+		t.Fatal("previewDeckContext admitted a remote workspace")
+	}
+	if len(stub.calls) != 0 {
+		t.Fatalf("a registered host invoked sidecar: %v", stub.calls)
 	}
 }
 

@@ -14,6 +14,22 @@ import (
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
+func TestLocalSourceRefusesRelativeEscape(t *testing.T) {
+	t.Parallel()
+	parent := t.TempDir()
+	root := filepath.Join(parent, "proj")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(parent, "secret.txt"), []byte("nope\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LocalSource{}.Resolve(context.Background(), SourceContext{Root: root}, contentlink.Pending{Kind: contentlink.KindFile, Raw: "../secret.txt"})
+	if err == nil {
+		t.Fatal("relative traversal resolved")
+	}
+}
+
 func TestLocalSourceLoadDocumentMatchesFilepreview(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -42,6 +58,19 @@ func TestLocalSourceLoadDocumentMatchesFilepreview(t *testing.T) {
 	if got.Value.IsTruncated != msg.Result.IsTruncated || got.Value.IsBinary != msg.Result.IsBinary {
 		t.Fatalf("local source flags truncated=%v binary=%v, filepreview truncated=%v binary=%v",
 			got.Value.IsTruncated, got.Value.IsBinary, msg.Result.IsTruncated, msg.Result.IsBinary)
+	}
+	if got.Revision == "" {
+		t.Fatal("local source omitted revision")
+	}
+
+	again, err := LocalSource{}.LoadDocument(context.Background(), SourceContext{Root: dir}, DocumentReadRequest{
+		Ref: contentlink.Ref{Kind: contentlink.KindFile, Value: rel}, IfRevision: got.Revision,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !again.NotModified || again.Revision != got.Revision {
+		t.Fatalf("conditional local load = %+v", again)
 	}
 }
 
