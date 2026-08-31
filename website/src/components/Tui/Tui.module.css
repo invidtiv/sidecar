@@ -71,6 +71,7 @@
   align-items: stretch;
   height: calc(var(--row) * 1em);
   background: var(--tui-bar);
+  border-bottom: 1px solid var(--tui-border-a);
   flex: none;
   white-space: nowrap;
   overflow: hidden;
@@ -174,25 +175,24 @@
   flex: 1;
   min-height: 0;
   background: var(--tui-bg);
-  padding: 0 1px 0 0;
 }
 
-/* A terminal draws its border as a row of box-drawing glyphs; on the web a 1px
-   gradient hairline reads the same and stays crisp at any zoom. */
+/* A terminal draws its border as a row of box-drawing glyphs; the top and
+   bottom borders take full character line space in the grid. */
 .pane {
   position: relative;
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  border-radius: 5px;
-  padding: 1px;
-  background: linear-gradient(30deg, var(--pane-edge-a), var(--pane-edge-b));
+  background: var(--tui-bg);
+  border: 1px solid var(--tui-border-a);
   --pane-edge-a: var(--tui-border-a);
   --pane-edge-b: var(--tui-border-b);
 }
 
 .paneFocused {
+  border-color: var(--tui-border-active-a);
   --pane-edge-a: var(--tui-border-active-a);
   --pane-edge-b: var(--tui-border-active-b);
 }
@@ -202,18 +202,25 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  border-radius: 4px;
   background: var(--tui-bg);
   overflow: hidden;
 }
 
+/* Top border row of the pane in the terminal grid — takes 1 full character row */
 .paneHeader {
   display: flex;
   align-items: center;
   gap: 1ch;
+  height: calc(var(--row) * 1em);
   padding: 0 1ch;
   flex: none;
   white-space: nowrap;
+  border-bottom: 1px solid var(--tui-border-a);
+  background: var(--tui-bg);
+}
+
+.paneFocused .paneHeader {
+  border-bottom-color: var(--tui-border-active-a);
 }
 
 .paneTitle {
@@ -243,6 +250,18 @@
   min-height: 0;
   padding: 0 1ch;
   overflow: hidden;
+}
+
+/* Bottom border row of the pane in the terminal grid */
+.paneBottomBorder {
+  height: calc(var(--row) * 0.5em);
+  flex: none;
+  border-top: 1px solid var(--tui-border-a);
+  background: var(--tui-bg);
+}
+
+.paneFocused .paneBottomBorder {
+  border-top-color: var(--tui-border-active-a);
 }
 
 /* The vertical drag handle Sidecar puts between sibling panes. */
@@ -336,6 +355,7 @@
   height: calc(var(--row) * 1em);
   padding: 0 1ch;
   background: var(--tui-bar);
+  border-top: 1px solid var(--tui-border-a);
   color: var(--tui-muted);
   flex: none;
   white-space: nowrap;
