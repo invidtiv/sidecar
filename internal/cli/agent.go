@@ -11,6 +11,7 @@ import (
 
 	"github.com/marcus/sidecar/internal/agentcatalog"
 	"github.com/marcus/sidecar/internal/agentcontrol"
+	"github.com/marcus/sidecar/internal/agentsession"
 	"github.com/marcus/sidecar/internal/agenttranscript"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/features"
@@ -619,13 +620,14 @@ func runAgentList(env Env, args []string) int {
 	}
 	svc := agentcontrol.Service{Terminal: newAgentTerminal()}
 	agents := make([]agentcontrol.Agent, 0, len(targets))
+	refs := newSessionRefCache()
 	for _, target := range targets {
 		a, e := svc.Get(ctx, targetFromManaged(target))
 		if e == nil && a.Agent.Kind != "" {
 			// A list never reveals a conversation value unless the caller
 			// asked for it by name; presence and capability are what a
 			// discovery command owes.
-			decorateSessionRef(&a, target.ManifestPath, target.Session, target.Namespace, f.includeSession)
+			refs.decorate(&a, target.ManifestPath, target.Session, target.Namespace, f.includeSession)
 			agents = append(agents, a)
 		}
 	}
@@ -867,12 +869,60 @@ func emitAgentError(env Env, jsonOutput bool, err error) int {
 // A shell with no binding gets no sessionRef key at all rather than an empty
 // one, so "not bound" and "bound but redacted" stay distinguishable.
 func decorateSessionRef(a *agentcontrol.Agent, manifestPath, session, namespace string, includeValue bool) {
+	newSessionRefCache().decorate(a, manifestPath, session, namespace, includeValue)
+}
+
+// sessionRefCache reads each shell manifest at most once.
+//
+// SessionRefAtPath parses a whole manifest to answer about one shell, and
+// `agent list` asks about every shell in every registered project -- so without
+// this the command re-parses the same file once per row it prints. It follows
+// the same reasoning as shellTargetLookup's memo: the scan is per-manifest, the
+// questions are per-shell, and a loop is the wrong place to pay for a file.
+type sessionRefCache struct {
+	byManifest map[string][]shellstate.Definition
+}
+
+func newSessionRefCache() *sessionRefCache {
+	return &sessionRefCache{byManifest: map[string][]shellstate.Definition{}}
+}
+
+func (c *sessionRefCache) definitions(manifestPath string) []shellstate.Definition {
+	if defs, ok := c.byManifest[manifestPath]; ok {
+		return defs
+	}
+	defs, err := shellstate.ListAtPath(manifestPath)
+	if err != nil {
+		// A manifest that cannot be read means no binding is known, which is
+		// the same answer as no binding recorded. Caching the empty result
+		// keeps a broken file from being re-read once per row.
+		defs = nil
+	}
+	c.byManifest[manifestPath] = defs
+	return defs
+}
+
+func (c *sessionRefCache) decorate(a *agentcontrol.Agent, manifestPath, session, namespace string, includeValue bool) {
 	if a == nil || manifestPath == "" || session == "" {
 		return
 	}
-	ref, _, ok, err := shellstate.SessionRefAtPath(manifestPath,
-		shellstate.Identity{TmuxName: session, Namespace: namespace})
-	if err != nil || !ok || ref.Empty() {
+	var (
+		ref agentsession.Ref
+		ok  bool
+	)
+	for _, def := range c.definitions(manifestPath) {
+		if def.TmuxName != session {
+			continue
+		}
+		if def.Namespace != "" && namespace != "" && def.Namespace != namespace {
+			continue
+		}
+		if def.Agent != nil && def.Agent.Session != nil && !def.Agent.Session.Empty() {
+			ref, ok = *def.Agent.Session, true
+		}
+		break
+	}
+	if !ok || ref.Empty() {
 		return
 	}
 	projected := &agentcontrol.SessionRef{Kind: string(ref.Kind), Reported: ref.Reported}
