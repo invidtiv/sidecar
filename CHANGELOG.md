@@ -2,6 +2,12 @@
 
 All notable changes to sidecar are documented here.
 
+## [Unreleased]
+
+### Bug Fixes
+
+- **Release verification no longer intermittently loses its private tmux server between agent-control integration tests.** The suite now keeps one inert session alive for the package lifetime, so one test cleaning up its last working session cannot race the next test's server startup. The package still uses its own socket and tears down only that isolated server.
+
 ## [v1.11.0] - 2026-08-31
 
 ### Features
