@@ -15,14 +15,14 @@ Terminal Resource Providers allow Sidecar to recognize external ticket identifie
 ┌──────────────────────────────────────┬──────────────────────────────────────────┐
 │ Terminal Output                      │ Resource Card: JIRA-4812                 │
 │                                      │                                          │
-│ $ git commit -m "fix(auth): JIRA-4812"│ Implement OAuth2 PKCE token exchange     │
+│ $ git commit -m "fix(auth): JIRA-48" │ Implement OAuth2 PKCE token exchange     │
 │ [main abc1234] fix(auth): JIRA-4812  │                                          │
 │  2 files changed, 45 insertions(+)   │ Status: IN PROGRESS · Priority: High     │
 │                                      │ Assignee: Marcus · Reporter: Sarah       │
 │                                      │                                          │
 │                                      │ Description:                             │
 │                                      │ Replace standard authorization code flow │
-│                                      │ with PKCE verification for mobile clients│
+│                                      │ with PKCE verification for clients.      │
 └──────────────────────────────────────┴──────────────────────────────────────────┘
 ```
 

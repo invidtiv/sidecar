@@ -65,7 +65,7 @@ Press `M` from any pane—or click the `⊞` icon on the pane header (left of th
 ┌────────────────────────────────────────────────────────────┐
 │ Reposition Pane: [1.2] Diff: HEAD~1                        │
 │                                                            │
-│ Move: h / j / k / l · Zoom: z · Commit: Enter · Cancel: Esc │
+│ Move: h/j/k/l · Zoom: z · Commit: Enter · Cancel: Esc      │
 └────────────────────────────────────────────────────────────┘
 ```
 

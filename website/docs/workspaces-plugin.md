@@ -13,10 +13,26 @@ Parallel development environments with integrated AI agents. Create isolated wor
 
 The Workspaces plugin turns git worktrees into managed development environments. Each workspace gets its own directory, branch, and optional AI agent. You can work on multiple features in parallel, watch agent output in real time, review diffs, compose side-by-side document and task panes, and merge via PR—all without leaving Sidecar.
 
+```
+┌──────────────────────────────┬──────────────────────────────────────────┐
+│ WORKSPACES                   │ TERMINAL · claude (Working)              │
+│                              │                                          │
+│ [PINNED]                     │ $ claude                                 │
+│   sidecar · main             │ Inspecting internal/app/commands.go...   │
+│   ● sidecar-sh-sidecar-1     │ Found 3 functions handling focus.        │
+│                              │                                          │
+│ ● LIVE (2)                   │ $ sidecar layout get --json              │
+│   sidecar · feature-auth     │ { "grid": "2x2", "panes": 3 }            │
+│   ● claude (Working) · 4m    │                                          │
+│   sidecar · fix-tests        │ ──────────────────────────────────────── │
+│   ● codex (Idle) · 12m       │ Diff: 2 files changed, +18 -4 lines      │
+└──────────────────────────────┴──────────────────────────────────────────┘
+```
+
 **Key capabilities:**
 
 - **Create Workspaces & Shells**: Open isolated branches or terminal shells with custom names, base branches, and agent configurations.
-- **Card-Based Sidebar**: Clean visual cards with category glyphs (`📌 PINNED`, `● LIVE`, `○ IDLE`, `◆ NEEDS ATTENTION`, `● WORKING`) and project theme hues.
+- **Card-Based Sidebar**: Clean visual cards with category headers (`[PINNED]`, `LIVE`, `IDLE`, `NEEDS ATTENTION`, `WORKING`) and project theme hues.
 - **Multi-Pane Windowing**: Tile shells, code files, diffs, TD issues, notes, and external resources in custom 2×2 grid layouts.
 - **Visual Pane Repositioning (`M` / `⊞`)**: Rearrange panes using vim direction keys (`h/j/k/l`), zoom (`z`), and atomic commit (`enter`).
 - **Universal Pane Switcher (`n`)**: Open any pane kind directly from whatever pane you are focused on.

@@ -19,10 +19,10 @@ Both views sit in the global header tier alongside your project tabs and can be 
 ```
 ┌────────────────────────────────────────────────────────────────────────────┐
 │ [1 Workspaces] [2 Git] [3 Files] [4 Notes] ... | [8 Sessions] [9 Activity] │
-├────────────────────────────────────────────────────────────────────────────┤
+├─────────────────────────────────────────┬──────────────────────────────────┤
 │ SESSIONS                                │ PREVIEW                          │
 │                                         │                                  │
-│ 📌 PINNED                               │ $ git status                     │
+│ [PINNED]                                │ $ git status                     │
 │   sidecar · main                        │ On branch main                   │
 │   ● sidecar-sh-sidecar-1                │ Your branch is up to date.       │
 │                                         │                                  │
@@ -31,7 +31,7 @@ Both views sit in the global header tier alongside your project tabs and can be 
 │   ● claude (Working) · 12m ago          │   "applied": true,               │
 │   backend · api-v2                      │   "panes": 3                     │
 │   ● codex (Working) · 4m ago            │ }                                │
-│   ⇅ book · frontend · redesign          │                                  │
+│   [remote] book · frontend              │                                  │
 │   ● opencode (Working) · 18m ago        │                                  │
 │                                         │                                  │
 │ ◆ NEEDS ATTENTION (1)                   │                                  │

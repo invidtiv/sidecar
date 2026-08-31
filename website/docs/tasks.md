@@ -16,11 +16,11 @@ While [TD](./td) is purpose-built as structured memory and verification for AI c
 │ Tasks                        │ Task Detail                              │
 │ [Outline] [Inbox] [Next] ... │                                          │
 │                              │ Refactor layout engine fit calculations  │
-│ 📌 HIGH PRIORITY             │ Project: sidecar · P1 · Due: Tomorrow    │
+│ [HIGH PRIORITY]              │ Project: sidecar · P1 · Due: Tomorrow    │
 │ • Write documentation site   │                                          │
 │ • Fix layout engine bounds   │ Ensure 2x2 grid fits within terminal     │
 │                              │ floors and caps.                         │
-│ 📋 PROJECT: sidecar          │                                          │
+│ [PROJECT: sidecar]           │                                          │
 │ • Add notification center    │ Subtasks (2/3):                          │
 │ • Test remote host mutations │ [x] Calculate column widths              │
 │                              │ [x] Fit row heights                      │

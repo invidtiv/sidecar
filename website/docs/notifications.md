@@ -12,24 +12,24 @@ A rich notification system featuring non-intrusive corner toasts, a dedicated No
 Sidecar replaces ephemeral status-line flashes with a robust, persistent notification system. When an AI agent completes a long-running task, requires your approval, or encounters an error, Sidecar delivers a notification toast in the top-right corner and records it in your Notification Centre.
 
 ```
-┌────────────────────────────────────────────────────────────┐
-│ [Workspaces] [Git] [Files] [Notes] ...   🔔 3 ⚙ [10:45 AM] │
-├──────────────────────────────────────────┬─────────────────┤
-│                                          │ NOTIFICATIONS   │
-│ (Active Workspace Content)               │                 │
-│                                          │ 📌 AGENTS (2)   │
-│                                          │ [1] claude      │
-│                                          │ Ready for review│
-│                                          │ fix-auth · 2m   │
-│                                          │                 │
-│                                          │ [2] codex       │
-│                                          │ Tests passing   │
-│                                          │ api-v2 · 5m     │
-│                                          │                 │
-│                                          │ 📋 TASKS (1)    │
-│                                          │ [3] td-8ec2cc   │
-│                                          │ Review required │
-└──────────────────────────────────────────┴─────────────────┘
+┌────────────────────────────────────────────────────────────────────────┐
+│ [1 Workspaces] [2 Git] [3 Files] [4 Notes] ...     [3 Alerts] [Config] │
+├──────────────────────────────────────────────────┬─────────────────────┤
+│                                                  │ NOTIFICATIONS (3)   │
+│ (Active Workspace Content)                       │                     │
+│                                                  │ • AGENTS (2)        │
+│ $ git status                                     │ [1] claude          │
+│ On branch feature-auth                           │     Ready to review │
+│ Changes to be committed:                         │     fix-auth · 2m   │
+│   modified: internal/auth/jwt.go                 │                     │
+│                                                  │ [2] codex           │
+│ $ sidecar layout apply                           │     Tests passing   │
+│ applied: 3 panes composed                        │     api-v2 · 5m     │
+│                                                  │                     │
+│                                                  │ • TASKS (1)         │
+│                                                  │ [3] td-8ec2cc       │
+│                                                  │     Review required │
+└──────────────────────────────────────────────────┴─────────────────────┘
 ```
 
 ## Key Capabilities
