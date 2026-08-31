@@ -1,6 +1,7 @@
 package agentintegration
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -479,11 +480,39 @@ func tmuxPaneForSession(namespace, session string) string {
 	return ""
 }
 
+// providerVersionTimeout bounds one `<provider> --version` call.
+//
+// Three seconds is far longer than any of these take -- every provider surveyed
+// answers in under one -- and the value is not a performance tuning knob. It is
+// the difference between "this provider did not tell us its version", which is
+// a blank field, and Sidecar hanging.
+const providerVersionTimeout = 3 * time.Second
+
+// detectProviderVersion asks a provider CLI for its version, and gives up.
+//
+// The timeout is load-bearing rather than defensive hygiene. These are
+// third-party binaries chosen by name from a catalog, invoked by a surface that
+// asks *every* known provider at once, and one of them not returning is not
+// hypothetical: `cursor --version` does not exit, so listing integrations hung
+// indefinitely as soon as the catalog gained an entry named `cursor`. A version
+// string is decoration on a status line; nothing decides anything on its
+// absence, so the only correct response to a provider that will not answer is
+// to stop waiting for it.
+//
+// Stdin is explicitly closed, because a binary that decides to prompt is the
+// other way this blocks, and WaitDelay ensures a child that ignores the kill
+// signal cannot hold the pipe open past the deadline either.
 func detectProviderVersion(provider string) string {
 	if provider == "" {
 		return ""
 	}
-	out, err := exec.Command(provider, "--version").Output()
+	ctx, cancel := context.WithTimeout(context.Background(), providerVersionTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, provider, "--version")
+	cmd.Stdin = nil
+	cmd.WaitDelay = time.Second
+	out, err := cmd.Output()
 	if err != nil {
 		return ""
 	}
