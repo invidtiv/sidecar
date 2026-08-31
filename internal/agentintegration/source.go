@@ -14,6 +14,8 @@ import (
 	"github.com/marcus/sidecar/internal/agentlifecycle"
 	"github.com/marcus/sidecar/internal/agentlifecycle/lifecyclestore"
 	"github.com/marcus/sidecar/internal/agentresolve"
+	"github.com/marcus/sidecar/internal/procgroup"
+	"github.com/marcus/sidecar/internal/resource"
 	"github.com/marcus/sidecar/internal/tmuxserver"
 )
 
@@ -512,11 +514,25 @@ func detectProviderVersion(provider string) string {
 	cmd := exec.CommandContext(ctx, provider, "--version")
 	cmd.Stdin = nil
 	cmd.WaitDelay = time.Second
+	// The timeout kills the child, but a provider CLI is often a wrapper that
+	// forks a runtime, and killing only the wrapper leaves the grandchild alive
+	// still holding the stdout pipe. Own a group and kill the group: this probe
+	// exists because `cursor --version` never exits, and half-killing it would
+	// have traded an infinite hang for a leak.
+	procgroup.Set(cmd)
+	cmd.Cancel = func() error {
+		procgroup.Kill(cmd)
+		return nil
+	}
 	out, err := cmd.Output()
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(strings.SplitN(strings.TrimSpace(string(out)), "\n", 2)[0])
+	first := strings.SplitN(strings.TrimSpace(string(out)), "\n", 2)[0]
+	// This is the output of a third-party binary on the user's PATH, and it goes
+	// straight into the TUI. Unbounded and unsanitized it could carry ANSI, an
+	// OSC hyperlink, or a kilobyte of text into a table cell.
+	return resource.SanitizeLine(first, resource.MaxProviderVersionChars)
 }
 
 var _ agentresolve.Source = (*StoreSource)(nil)

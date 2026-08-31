@@ -77,3 +77,69 @@ func TestADirectoryIsNotDescribedAsAForeignFile(t *testing.T) {
 		t.Fatalf("a directory is not described as one: %q", got)
 	}
 }
+
+// TestNothingOrdinaryIsDescribedAsARefusal finishes the sweep the directory case
+// started. "not Sidecar's" means a foreign file at a path Sidecar claims whole,
+// which is a conflict a mutation declines; three ordinary states were wearing
+// that sentence and so read as damage to a user checking their integration.
+func TestNothingOrdinaryIsDescribedAsARefusal(t *testing.T) {
+	cases := []struct {
+		name  string
+		state agentintegration.FileState
+		want  string
+	}{{
+		// The normal pre-install state of the file the integration exists to
+		// add an entry to.
+		name: "a user's settings.json before install",
+		state: agentintegration.FileState{
+			Path: "/home/u/.claude/settings.json", Exists: true, Kind: "file",
+			Ownership: agentintegration.OwnsEntry, Mode: "0644",
+		},
+		want: "the user's file",
+	}, {
+		// Dotfile repositories symlink config directories constantly, and
+		// inspectDir already resolved this one and accepted it.
+		name: "a symlinked configuration directory",
+		state: agentintegration.FileState{
+			Path: "/home/u/.codex", Exists: true, Kind: "symlink", Mode: "0755",
+		},
+		want: "directory",
+	}, {
+		// A backup path is recorded with existence and nothing else, which
+		// rendered as a bare ", not Sidecar's" with a dangling comma.
+		name: "a FileState with no kind at all",
+		state: agentintegration.FileState{
+			Path: "/home/u/.claude/settings.json.sidecar-backup", Exists: true,
+		},
+		want: "present",
+	}}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for label, got := range map[string]string{
+				"describeFileState": describeFileState(tc.state),
+				"describeOwnership": describeOwnership(tc.state),
+			} {
+				if strings.Contains(got, "not Sidecar's") {
+					t.Fatalf("%s described an ordinary state as a refusal: %q", label, got)
+				}
+				if strings.Contains(got, ", not") || strings.Contains(got, "  ,") {
+					t.Fatalf("%s left a dangling token: %q", label, got)
+				}
+				if !strings.Contains(got, tc.want) {
+					t.Fatalf("%s = %q, wanted it to say %q", label, got, tc.want)
+				}
+			}
+		})
+	}
+
+	// The refusal sentence must survive for the case it is actually for: a
+	// foreign file sitting where Sidecar claims the whole path.
+	foreign := agentintegration.FileState{
+		Path: "/home/u/.config/opencode/plugin/sidecar.js", Exists: true, Kind: "file",
+		Ownership: agentintegration.OwnsFile, Mode: "0644",
+	}
+	if got := describeFileState(foreign); !strings.Contains(got, "not Sidecar's") {
+		t.Fatalf("a genuine conflict stopped saying so: %q", got)
+	}
+}
