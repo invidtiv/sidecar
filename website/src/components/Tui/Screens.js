@@ -112,18 +112,21 @@ const STATE_COLOR = {
 };
 
 export function SessionsScreen() {
-  const [stage, setStage] = useState(0); // 0: solo shell, 1: shell + td issue, 2: shell + td issue + code file
+  const [elapsed, setElapsed] = useState(0); // 0 to 45000ms
   const [leftWidth, setLeftWidth] = useState(19); // 19% default (~15-20%)
-  const [splitRatio, setSplitRatio] = useState(46); // 46% terminal in 2-pane split
-  const [midRatio, setMidRatio] = useState(30); // 30% terminal in 3-pane split
+  const [midRatio, setMidRatio] = useState(48); // 48% terminal width when right column is open
+  const [topSplitRatio, setTopSplitRatio] = useState(44); // 44% height for top TD issue pane in right column
   const containerRef = useRef(null);
   const rightAreaRef = useRef(null);
+  const rightColumnRef = useRef(null);
 
-  // 10s animation loop: 0 -> 1 -> 2 -> 0
+  // 45s animation loop: 0ms -> 45000ms -> 0ms
   useEffect(() => {
+    const start = Date.now();
     const timer = setInterval(() => {
-      setStage((prev) => (prev + 1) % 3);
-    }, 3333);
+      const ms = (Date.now() - start) % 45000;
+      setElapsed(ms);
+    }, 150);
     return () => clearInterval(timer);
   }, []);
 
@@ -135,21 +138,36 @@ export function SessionsScreen() {
     setLeftWidth(Math.max(14, Math.min(32, pct)));
   }, []);
 
-  const onSplitResize = useCallback((_deltaX, currentX) => {
-    if (!rightAreaRef.current) return;
-    const rect = rightAreaRef.current.getBoundingClientRect();
-    if (!rect.width) return;
-    const pct = ((currentX - rect.left) / rect.width) * 100;
-    setSplitRatio(Math.max(25, Math.min(75, pct)));
-  }, []);
-
   const onMidResize = useCallback((_deltaX, currentX) => {
     if (!rightAreaRef.current) return;
     const rect = rightAreaRef.current.getBoundingClientRect();
     if (!rect.width) return;
     const pct = ((currentX - rect.left) / rect.width) * 100;
-    setMidRatio(Math.max(20, Math.min(50, pct)));
+    setMidRatio(Math.max(25, Math.min(75, pct)));
   }, []);
+
+  const onTopSplitResize = useCallback((_deltaY, currentY) => {
+    if (!rightColumnRef.current) return;
+    const rect = rightColumnRef.current.getBoundingClientRect();
+    if (!rect.height) return;
+    const pct = ((currentY - rect.top) / rect.height) * 100;
+    setTopSplitRatio(Math.max(25, Math.min(75, pct)));
+  }, []);
+
+  // Compute conversation & simulation stages based on elapsed time (45s cycle)
+  const promptFull = 'Can you implement OAuth2 PKCE token verification for mobile clients?';
+  const promptChars = elapsed < 6000 ? Math.min(promptFull.length, Math.floor((elapsed / 5200) * promptFull.length)) : promptFull.length;
+  const promptTyped = promptFull.slice(0, promptChars);
+
+  // Phases:
+  // 0: 0s - 7s (User typing prompt)
+  // 1: 7s - 14s (Agent responds and creates td task)
+  // 2: 14s - 25s (Right column opens with TD task card)
+  // 3: 25s - 37s (Right column splits horizontally into TD Task (top) + Code file (bottom))
+  // 4: 37s - 45s (Tests pass, subtasks checked, task in review)
+  const isRightColumnOpen = elapsed >= 14000;
+  const isHorizSplit = elapsed >= 25000;
+  const isVerified = elapsed >= 37000;
 
   return (
     <TuiPanes innerRef={containerRef}>
@@ -194,7 +212,7 @@ export function SessionsScreen() {
 
       <TuiHandle onResize={onLeftResize} />
 
-      {/* 2. Right Multi-Stage Live Agent Simulation (10s animation loop) */}
+      {/* 2. Main Area: Terminal + Horizontally Split Right Column */}
       <div
         ref={rightAreaRef}
         style={{
@@ -203,336 +221,230 @@ export function SessionsScreen() {
           minWidth: 0,
           height: '100%',
         }}>
-        {stage === 0 ? (
-          /* Stage 0: Agent Shell Running */
-          <TuiPane
-            key="stage-0"
-            title="TERMINAL · claude (Working)"
-            titleDim="sidecar · feat/auth-pkce"
-            focused
-            chips={['td-847b0c', 'LIVE']}>
-            <div className={tui.stageFade}>
-              <Row>&nbsp;</Row>
-              <Row>
-                <span className={tui.dim}>› Session:</span>
-                <span className={tui.teal}>feat/auth-pkce</span>
-                <span className={tui.subtle}>·</span>
-                <span className={tui.dim}>Provider: claude-3.5-sonnet</span>
-              </Row>
-              <Row>
-                <span className={tui.dim}>› Task assigned:</span>
-                <span className={tui.gold}>td-847b0c</span>
-                <span className={tui.bright}>OAuth2 PKCE Token Flow</span>
-              </Row>
-              <Row>&nbsp;</Row>
-              <Row>
-                <span className={tui.dim}>› Reading token verification architecture across codebase...</span>
-              </Row>
-              <Row>
-                <span className={tui.dim}>›</span>
-                <span className={tui.teal}>sidecar open td-847b0c --at 1.2</span>
-              </Row>
-              <Row>&nbsp;</Row>
-              <Row>
-                <span className={tui.green}>●</span>
-                <span className={tui.bright}>Opening issue context in adjacent split pane...</span>
-              </Row>
-              <Row>
-                <span className={tui.dim}>❯</span>
-                <Cursor />
-              </Row>
-            </div>
-          </TuiPane>
-        ) : stage === 1 ? (
-          /* Stage 1: Terminal + TD Issue Split Pane */
-          <>
-            <TuiPane
-              key="stage-1-term"
-              title="TERMINAL · claude (Working)"
-              titleDim="feat/auth-pkce"
-              grow={0}
-              basis={`${splitRatio}%`}
-              chips={['td-847b0c']}>
-              <div className={tui.stageFade}>
-                <Row>&nbsp;</Row>
+        {/* Terminal / Conversation Pane */}
+        <TuiPane
+          title="TERMINAL · claude (Working)"
+          titleDim="feat/auth-pkce"
+          focused={!isRightColumnOpen}
+          grow={isRightColumnOpen ? 0 : 1}
+          basis={isRightColumnOpen ? `${midRatio}%` : undefined}
+          chips={['td-847b0c', 'LIVE']}>
+          <div className={tui.stageFade} key={isRightColumnOpen ? 'term-split' : 'term-solo'}>
+            <Row>&nbsp;</Row>
+            {/* User prompt typing simulation */}
+            <Row>
+              <span className={tui.gold}>&gt;</span>
+              <span className={tui.bright}>{promptTyped}</span>
+              {elapsed < 6000 ? <Cursor /> : null}
+            </Row>
+            <Row>&nbsp;</Row>
+
+            {/* Agent response & action stream */}
+            {elapsed >= 7000 ? (
+              <>
                 <Row>
-                  <span className={tui.dim}>› Task:</span>
-                  <span className={tui.gold}>td-847b0c</span>
-                  <span className={tui.subtle}>·</span>
-                  <span className={tui.teal}>feat/auth-pkce</span>
+                  <span className={tui.teal}>◆ claude</span>
+                  <span className={tui.dim}>I'll create a task for OAuth2 PKCE verification,</span>
                 </Row>
                 <Row>
+                  <span className={tui.dim} style={{paddingLeft: '2ch'}}>
+                    implement S256 challenge checks, and test the flow.
+                  </span>
+                </Row>
+                <Row>&nbsp;</Row>
+                <Row>
                   <span className={tui.dim}>›</span>
-                  <span className={tui.teal}>sidecar open td-847b0c --at 1.2</span>
+                  <span className={tui.teal}>td create "OAuth2 PKCE Token Flow" -p P1 --tag @auth</span>
                 </Row>
                 <Row>
                   <span className={tui.green}>✓</span>
-                  <span>Composed TD issue pane into layout</span>
+                  <span>Created task <strong className={tui.gold}>td-847b0c</strong></span>
                 </Row>
-                <Row>&nbsp;</Row>
-                <Row>
-                  <span className={tui.dim}>› Inspecting PKCE challenge verifier logic...</span>
-                </Row>
-                <Row>
-                  <span className={tui.dim}>›</span>
-                  <span className={tui.teal}>sidecar open internal/auth/pkce.go --at 1.3</span>
-                </Row>
-                <Row>&nbsp;</Row>
-                <Row>
-                  <span className={tui.dim}>❯</span>
-                  <Cursor />
-                </Row>
-              </div>
-            </TuiPane>
-
-            <TuiHandle onResize={onSplitResize} />
-
-            <TuiPane
-              key="stage-1-issue"
-              title="td-847b0c: OAuth2 PKCE Flow"
-              titleDim="P1 · IN PROGRESS"
-              focused
-              chips={['Issue']}>
-              <div className={tui.stageFade}>
-                <Row>&nbsp;</Row>
-                <Row>
-                  <span className={tui.gold}>td-847b0c</span>
-                  <span className={tui.bright}>OAuth2 PKCE Token Flow</span>
-                </Row>
-                <Row>
-                  <span className={tui.dim}>sidecar · feat/auth-pkce</span>
-                  <span className={tui.subtle}>·</span>
-                  <span className={tui.teal}>P1 High</span>
-                </Row>
-                <Rule />
-                <Row>
-                  <span className={tui.dim}>Replace authorization code grant with PKCE S256 verifier.</span>
-                </Row>
-                <Rule />
-                <Row>
-                  <span className={tui.subtle}>SUBTASKS (2/3):</span>
-                </Row>
-                <Row>
-                  <span className={tui.green}>[x]</span>
-                  <span className={tui.dim}>Generate code_verifier cryptographic seed</span>
-                </Row>
-                <Row>
-                  <span className={tui.green}>[x]</span>
-                  <span className={tui.dim}>SHA-256 code_challenge method</span>
-                </Row>
-                <Row>
-                  <span className={tui.gold}>[ ]</span>
-                  <span className={tui.bright}>Validate token expiry in token_verifier.go</span>
-                </Row>
-                <Rule />
-                <Row>
-                  <span className={tui.green}>●</span>
-                  <span className={tui.dim}>claude editing internal/auth/pkce.go...</span>
-                </Row>
-              </div>
-            </TuiPane>
-          </>
-        ) : (
-          /* Stage 2: Terminal + TD Issue + Syntax-Highlighted Code File */
-          <>
-            <TuiPane
-              key="stage-2-term"
-              title="TERMINAL"
-              titleDim="claude"
-              grow={0}
-              basis={`${midRatio}%`}
-              chips={['feat/auth-pkce']}>
-              <div className={tui.stageFade}>
                 <Row>&nbsp;</Row>
                 <Row>
                   <span className={tui.dim}>›</span>
-                  <span className={tui.teal}>sidecar open pkce.go --at 1.3</span>
+                  <span className={tui.teal}>sidecar open td-847b0c --at 2.1</span>
+                </Row>
+              </>
+            ) : null}
+
+            {elapsed >= 25000 ? (
+              <>
+                <Row>&nbsp;</Row>
+                <Row>
+                  <span className={tui.dim}>›</span>
+                  <span className={tui.teal}>sidecar open internal/auth/pkce.go --at 2.2</span>
                 </Row>
                 <Row>
                   <span className={tui.green}>✓</span>
-                  <span>Opened file preview with live highlight</span>
+                  <span>Split right column horizontally with syntax preview</span>
                 </Row>
                 <Row>&nbsp;</Row>
-                <Row>
-                  <span className={tui.dim}>› Running verification:</span>
-                </Row>
                 <Row>
                   <span className={tui.dim}>$</span>
                   <span className={tui.teal}>go test -v ./internal/auth/</span>
                 </Row>
+              </>
+            ) : null}
+
+            {isVerified ? (
+              <>
                 <Row>
                   <span className={tui.green}>=== RUN</span>
-                  <span>TestPKCEChallenge</span>
+                  <span>TestPKCEChallengeExchange</span>
                 </Row>
                 <Row>
                   <span className={tui.green}>--- PASS:</span>
-                  <span>TestPKCEChallenge (0.02s)</span>
+                  <span>TestPKCEChallengeExchange (0.02s)</span>
                 </Row>
                 <Row>
                   <span className={tui.green}>PASS</span>
                   <span className={tui.dim}>ok 0.12s</span>
                 </Row>
+                <Row>&nbsp;</Row>
                 <Row>
-                  <span className={tui.dim}>❯</span>
-                  <Cursor />
+                  <span className={tui.purple}>› td review td-847b0c</span>
+                  <span className={tui.green}>✓ ready for review</span>
                 </Row>
-              </div>
-            </TuiPane>
+              </>
+            ) : null}
 
+            <Row>
+              <span className={tui.dim}>❯</span>
+              {elapsed >= 6000 ? <Cursor /> : null}
+            </Row>
+          </div>
+        </TuiPane>
+
+        {isRightColumnOpen ? (
+          <>
+            {/* Vertical handle between Terminal and Right Column */}
             <TuiHandle onResize={onMidResize} />
 
-            <TuiPane
-              key="stage-2-issue"
-              title="td-847b0c"
-              titleDim="P1"
-              grow={0}
-              basis="26%"
-              chips={['[IN_PROGRESS]']}>
-              <div className={tui.stageFade}>
-                <Row>&nbsp;</Row>
-                <Row>
-                  <span className={tui.gold}>td-847b0c</span>
-                </Row>
-                <Row>
-                  <span className={tui.bright}>OAuth2 PKCE</span>
-                </Row>
-                <Row>
-                  <span className={tui.dim}>feat/auth-pkce</span>
-                </Row>
-                <Rule />
-                <Row>
-                  <span className={tui.subtle}>Checklist (2/3):</span>
-                </Row>
-                <Row>
-                  <span className={tui.green}>✓</span>
-                  <span className={tui.dim}>code_verifier seed</span>
-                </Row>
-                <Row>
-                  <span className={tui.green}>✓</span>
-                  <span className={tui.dim}>SHA-256 challenge</span>
-                </Row>
-                <Row>
-                  <span className={tui.gold}>○</span>
-                  <span className={tui.bright}>token expiry test</span>
-                </Row>
-                <Rule />
-                <Row>
-                  <span className={tui.green}>●</span>
-                  <span className={tui.dim}>claude editing...</span>
-                </Row>
-              </div>
-            </TuiPane>
+            {/* 3. Right Column: Stacked Horizontally (Top: TD Task, Bottom: Code File) */}
+            <div
+              ref={rightColumnRef}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                flex: 1,
+                minWidth: 0,
+                height: '100%',
+              }}>
+              {/* Top Pane: TD Task Card */}
+              <TuiPane
+                title="td-847b0c: OAuth2 PKCE Flow"
+                titleDim="P1 · sidecar"
+                focused={!isHorizSplit}
+                grow={isHorizSplit ? 0 : 1}
+                basis={isHorizSplit ? `${topSplitRatio}%` : '100%'}
+                chips={[isVerified ? 'IN_REVIEW' : 'IN_PROGRESS']}>
+                <div className={tui.stageFade}>
+                  <Row>&nbsp;</Row>
+                  <Row>
+                    <span className={tui.gold}>td-847b0c</span>
+                    <span className={tui.bright}>OAuth2 PKCE Token Flow</span>
+                  </Row>
+                  <Row>
+                    <span className={tui.dim}>sidecar · feat/auth-pkce</span>
+                    <span className={tui.subtle}>·</span>
+                    <span className={isVerified ? tui.purple : tui.teal}>
+                      {isVerified ? '[IN_REVIEW]' : '[IN_PROGRESS]'}
+                    </span>
+                  </Row>
+                  <Rule />
+                  <Row>
+                    <span className={tui.subtle}>Checklist ({isVerified ? '3/3' : isHorizSplit ? '2/3' : '1/3'}):</span>
+                  </Row>
+                  <Row>
+                    <span className={tui.green}>[x]</span>
+                    <span className={tui.dim}>Generate code_verifier seed</span>
+                  </Row>
+                  <Row>
+                    <span className={isHorizSplit ? tui.green : tui.gold}>
+                      {isHorizSplit ? '[x]' : '[ ]'}
+                    </span>
+                    <span className={isHorizSplit ? tui.dim : tui.bright}>
+                      SHA-256 code_challenge method
+                    </span>
+                  </Row>
+                  <Row>
+                    <span className={isVerified ? tui.green : tui.gold}>
+                      {isVerified ? '[x]' : '[ ]'}
+                    </span>
+                    <span className={isVerified ? tui.dim : tui.bright}>
+                      Validate token expiry in token_verifier.go
+                    </span>
+                  </Row>
+                </div>
+              </TuiPane>
 
-            <TuiHandle />
+              {/* Horizontal Resize Handle & Bottom Code File Pane */}
+              {isHorizSplit ? (
+                <>
+                  <TuiHandle horizontal onResize={onTopSplitResize} />
 
-            <TuiPane
-              key="stage-2-file"
-              title="pkce.go"
-              titleDim="internal/auth"
-              focused
-              grow={1}
-              chips={['Go', '84 lines']}>
-              <div className={tui.stageFade}>
-                <Row>&nbsp;</Row>
-                <Row>
-                  <span className={tui.subtle}>42</span>
-                  <span className={tui.dim}>// ValidateChallenge verifies PKCE code_verifier.</span>
-                </Row>
-                <Row>
-                  <span className={tui.subtle}>43</span>
-                  <span className={tui.purple}>func</span>
-                  <span className={tui.teal}>ValidateChallenge</span>
-                  <span>(verifier, challenge</span>
-                  <span className={tui.teal}>string</span>
-                  <span>)</span>
-                  <span className={tui.teal}>bool</span>
-                  <span>{'{'}</span>
-                </Row>
-                <Row>
-                  <span className={tui.subtle}>44</span>
-                  <span style={{paddingLeft: '2ch'}}>h := sha256.Sum256([]</span>
-                  <span className={tui.teal}>byte</span>
-                  <span>(verifier))</span>
-                </Row>
-                <Row>
-                  <span className={tui.subtle}>45</span>
-                  <span style={{paddingLeft: '2ch'}}>computed := base64.RawURLEncoding.EncodeToString(h[:])</span>
-                </Row>
-                <Row>
-                  <span className={tui.subtle}>46</span>
-                  <span style={{paddingLeft: '2ch'}} className={tui.purple}>return</span>
-                  <span>subtle.ConstantTimeCompare(</span>
-                </Row>
-                <Row>
-                  <span className={tui.subtle}>47</span>
-                  <span style={{paddingLeft: '4ch'}}>[]</span>
-                  <span className={tui.teal}>byte</span>
-                  <span>(computed),</span>
-                </Row>
-                <Row>
-                  <span className={tui.subtle}>48</span>
-                  <span style={{paddingLeft: '4ch'}}>[]</span>
-                  <span className={tui.teal}>byte</span>
-                  <span>(challenge),</span>
-                </Row>
-                <Row>
-                  <span className={tui.subtle}>49</span>
-                  <span style={{paddingLeft: '2ch'}}>) == 1</span>
-                </Row>
-                <Row>
-                  <span className={tui.subtle}>50</span>
-                  <span>{'}'}</span>
-                </Row>
-                <Row>
-                  <span className={tui.subtle}>51</span>
-                </Row>
-                <Row>
-                  <span className={tui.subtle}>52</span>
-                  <span className={tui.purple}>func</span>
-                  <span className={tui.teal}>GenerateVerifier</span>
-                  <span>() (</span>
-                  <span className={tui.teal}>string</span>
-                  <span>,</span>
-                  <span className={tui.teal}>error</span>
-                  <span>) {'{'}</span>
-                </Row>
-                <Row>
-                  <span className={tui.subtle}>53</span>
-                  <span style={{paddingLeft: '2ch'}}>buf := make([]</span>
-                  <span className={tui.teal}>byte</span>
-                  <span>, 32)</span>
-                </Row>
-                <Row>
-                  <span className={tui.subtle}>54</span>
-                  <span style={{paddingLeft: '2ch'}} className={tui.purple}>if</span>
-                  <span>_, err := rand.Read(buf); err !=</span>
-                  <span className={tui.purple}>nil</span>
-                  <span>{'{'}</span>
-                </Row>
-                <Row>
-                  <span className={tui.subtle}>55</span>
-                  <span style={{paddingLeft: '4ch'}} className={tui.purple}>return</span>
-                  <span className={tui.green}>""</span>
-                  <span>, err</span>
-                </Row>
-                <Row>
-                  <span className={tui.subtle}>56</span>
-                  <span style={{paddingLeft: '2ch'}}>{'}'}</span>
-                </Row>
-                <Row>
-                  <span className={tui.subtle}>57</span>
-                  <span style={{paddingLeft: '2ch'}} className={tui.purple}>return</span>
-                  <span>base64.RawURLEncoding.EncodeToString(buf),</span>
-                  <span className={tui.purple}>nil</span>
-                </Row>
-                <Row>
-                  <span className={tui.subtle}>58</span>
-                  <span>{'}'}</span>
-                </Row>
-              </div>
-            </TuiPane>
+                  <TuiPane
+                    title="pkce.go"
+                    titleDim="internal/auth"
+                    focused
+                    grow={1}
+                    chips={['Go', '84 lines']}>
+                    <div className={tui.stageFade}>
+                      <Row>&nbsp;</Row>
+                      <Row>
+                        <span className={tui.subtle}>42</span>
+                        <span className={tui.dim}>// ValidateChallenge verifies PKCE code_verifier.</span>
+                      </Row>
+                      <Row>
+                        <span className={tui.subtle}>43</span>
+                        <span className={tui.purple}>func</span>
+                        <span className={tui.teal}>ValidateChallenge</span>
+                        <span>(verifier, challenge</span>
+                        <span className={tui.teal}>string</span>
+                        <span>)</span>
+                        <span className={tui.teal}>bool</span>
+                        <span>{'{'}</span>
+                      </Row>
+                      <Row>
+                        <span className={tui.subtle}>44</span>
+                        <span style={{paddingLeft: '2ch'}}>h := sha256.Sum256([]</span>
+                        <span className={tui.teal}>byte</span>
+                        <span>(verifier))</span>
+                      </Row>
+                      <Row>
+                        <span className={tui.subtle}>45</span>
+                        <span style={{paddingLeft: '2ch'}}>computed := base64.RawURLEncoding.EncodeToString(h[:])</span>
+                      </Row>
+                      <Row>
+                        <span className={tui.subtle}>46</span>
+                        <span style={{paddingLeft: '2ch'}} className={tui.purple}>return</span>
+                        <span>subtle.ConstantTimeCompare(</span>
+                      </Row>
+                      <Row>
+                        <span className={tui.subtle}>47</span>
+                        <span style={{paddingLeft: '4ch'}}>[]</span>
+                        <span className={tui.teal}>byte</span>
+                        <span>(computed),</span>
+                        <span style={{paddingLeft: '1ch'}}>[]</span>
+                        <span className={tui.teal}>byte</span>
+                        <span>(challenge),</span>
+                      </Row>
+                      <Row>
+                        <span className={tui.subtle}>48</span>
+                        <span style={{paddingLeft: '2ch'}}>) == 1</span>
+                      </Row>
+                      <Row>
+                        <span className={tui.subtle}>49</span>
+                        <span>{'}'}</span>
+                      </Row>
+                    </div>
+                  </TuiPane>
+                </>
+              ) : null}
+            </div>
           </>
-        )}
+        ) : null}
       </div>
     </TuiPanes>
   );

@@ -120,7 +120,7 @@ export function TuiPanes({children, className, style, innerRef, ...rest}) {
   );
 }
 
-export function TuiHandle({onResize, className, style, ...rest}) {
+export function TuiHandle({onResize, horizontal = false, className, style, ...rest}) {
   const [isDragging, setIsDragging] = useState(false);
 
   const handlePointerDown = useCallback(
@@ -128,15 +128,16 @@ export function TuiHandle({onResize, className, style, ...rest}) {
       if (!onResize) return;
       e.preventDefault();
       setIsDragging(true);
-      const startX = e.clientX;
+      const startPos = horizontal ? e.clientY : e.clientX;
       const handleEl = e.currentTarget;
       try {
         handleEl.setPointerCapture?.(e.pointerId);
       } catch (_) {}
 
       const onPointerMove = (moveEv) => {
-        const deltaX = moveEv.clientX - startX;
-        onResize(deltaX, moveEv.clientX);
+        const currentPos = horizontal ? moveEv.clientY : moveEv.clientX;
+        const delta = currentPos - startPos;
+        onResize(delta, currentPos);
       };
 
       const onPointerUp = (upEv) => {
@@ -151,13 +152,13 @@ export function TuiHandle({onResize, className, style, ...rest}) {
       window.addEventListener('pointermove', onPointerMove);
       window.addEventListener('pointerup', onPointerUp);
     },
-    [onResize],
+    [onResize, horizontal],
   );
 
   return (
     <div
       className={clsx(
-        styles.handle,
+        horizontal ? styles.handleHorizontal : styles.handle,
         isDragging && styles.handleActive,
         onResize && styles.handleInteractive,
         className,
