@@ -367,6 +367,20 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.refreshWorktreeCache()
 		}
 		m.ready = true
+		// The terminal has real dimensions, so a UI is genuinely being driven
+		// and the first ready frame is imminent. This is where cold restore is
+		// scheduled: the command still waits on the first-ready-frame latch
+		// before touching anything, so the ordering guarantee is unchanged, but
+		// it now exists only inside a running program rather than being returned
+		// from Init where a synchronous command-runner would park on it forever.
+		// Per model, not per process: a second Model in one process is entitled
+		// to its own restore, and a package-global latch would let test order
+		// decide which one got it.
+		var restoreCmd tea.Cmd
+		if !m.sessionRestoreStarted {
+			m.sessionRestoreStarted = true
+			restoreCmd = restoreSessionsCmd(m.cfg)
+		}
 		// Reset diagnostics modal on resize (will be rebuilt on next render)
 		if m.showDiagnostics {
 			m.diagnosticsModalWidth = 0
@@ -379,6 +393,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// First real frame: name the terminal after the project.
 		if cmd := (&m).syncTerminalTitle(false); cmd != nil {
 			cmds = append(cmds, cmd)
+		}
+		if restoreCmd != nil {
+			cmds = append(cmds, restoreCmd)
 		}
 		return m, tea.Batch(cmds...)
 
@@ -693,6 +710,10 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Switch to requested plugin
 		m.leaveOverview(false)
 		return m, m.FocusPluginByID(msg.PluginID)
+
+	case SessionRestoredMsg:
+		// One grouped summary for the whole restore, never one per shell.
+		return m, m.handleSessionRestored(msg)
 
 	case ResourceProvidersDescribedMsg:
 		// Recording the outcome is metadata — instance, state, matcher count —

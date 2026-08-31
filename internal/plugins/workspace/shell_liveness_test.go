@@ -52,10 +52,23 @@ func shellDeathPlugin(t *testing.T) (*Plugin, string) {
 			OutputBuf: tty.NewOutputBuffer(outputBufferCap),
 		},
 	}}
+	// A live, identified tmux server, which is the situation every one of these
+	// tests is about: a shell going away inside a server that is still there.
+	// Without this the fixture asserts against "no server is running", where the
+	// honest verdict is that the server died and the record must be preserved.
+	stubServerIncarnation(t, tmuxserver.Present(11, 22, 4242))
 	// Production records liveness from a successful discovery listing, a
 	// successful capture, or a create. The fixture stands in for the first.
 	p.noteShellAlive(livenessSession)
 	return p, manifestPath
+}
+
+// stubServerIncarnation pins which of the three server answers a test is about.
+func stubServerIncarnation(t *testing.T, inc tmuxserver.Incarnation) {
+	t.Helper()
+	previous := observeServerIncarnation
+	observeServerIncarnation = func() tmuxserver.Incarnation { return inc }
+	t.Cleanup(func() { observeServerIncarnation = previous })
 }
 
 func stubLivenessProbe(t *testing.T, verdict shellliveness.Verdict) *int {

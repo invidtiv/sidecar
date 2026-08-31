@@ -28,6 +28,7 @@ import (
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspacecreate"
 	"github.com/marcus/sidecar/internal/workspacediff"
+	"github.com/marcus/sidecar/internal/workspaceops"
 )
 
 // update handles messages. The public Update wrapper in terminal_control.go
@@ -1286,9 +1287,14 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				// Clean up pane cache and active registry (td-018f25)
 				globalPaneCache.remove(msg.TmuxName)
 				globalActiveRegistry.remove(msg.TmuxName)
-				// Remove from manifest (td-f88fdd)
+				// Retire the manifest record (td-f88fdd), but only tombstone it
+				// when this shell exited inside a tmux server that is still
+				// running. If the server is the thing that went away, the record
+				// is preserved and marked as a cold-restore candidate instead —
+				// N per-shell death verdicts arriving at once is exactly how a
+				// server crash used to empty shells.json.
 				if p.shellManifest != nil {
-					_ = p.shellManifest.RemoveShell(msg.TmuxName)
+					_, _ = p.shellManifest.ReapShell(msg.TmuxName, workspaceops.ServerStateOf(p.observedServer()))
 				}
 				break
 			}

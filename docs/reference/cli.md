@@ -1774,6 +1774,139 @@ sidecar open README.md --at 2.1
 sidecar open --project sidecar README.md
 ```
 
+## `sidecar session`
+
+Inspect and perform cold restore of managed shells after a tmux restart
+
+A tmux server restart destroys every managed shell's processes; tmux exposes no way to hand a live PTY to a replacement server, so Sidecar reconstructs rather than preserves. These commands read what is reconstructible, do the reconstruction, and decide per shell how far it should go.
+
+Shell records are never deleted by a restore, a restore failure, or a tmux server death. A shell that cannot be restored stays as a visible row with a reason.
+
+```
+Usage: sidecar session <command>
+```
+
+### `sidecar session policy`
+
+Read or set one shell's cold-restore policy
+
+With no policy flag, reports the effective policy for the target shell.
+
+  --inherit  follow the machine default (plugins.workspace.sessionRestore)
+  --shell    recreate the terminal, but never resume its agent
+  --resume   recreate the terminal and resume its exact conversation
+  --never    leave this shell out of restore entirely
+
+This is per shell, so a long-running server, a disposable helper, and a sensitive agent session can differ without changing the machine default. Omitting TARGET inside a managed shell targets that shell.
+
+```
+Usage: sidecar session policy [TARGET] [--shell|--resume|--never|--inherit] [--json]
+```
+
+**Options:**
+
+- `--inherit`: Follow the machine default
+- `--shell`: Recreate the shell, never resume the agent
+- `--resume`: Recreate the shell and resume the exact conversation
+- `--never`: Never restore this shell
+- `--project NAME`: Target project (slug, basename, or path)
+- `--json`: Write the stable structured document to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: Success
+- `1`: Reading state or talking to tmux failed
+- `2`: Usage error
+- `5`: The request was refused: confirmation is required, the policy value is unknown, or the target is not a managed shell
+
+**Examples:**
+
+```bash
+# Read this shell's policy
+sidecar session policy
+# Never resume this agent automatically
+sidecar session policy reviewer --shell
+# Always resume this one
+sidecar session policy reviewer --resume
+```
+
+### `sidecar session restore`
+
+Recreate managed shells, and optionally resume their exact conversations
+
+Executes the plan `session status` prints.
+
+Shells are recreated under their own tmux session names and existing working directories; no --run command, dev server, or test watcher is ever replayed. A missing working directory is a refusal, never a fallback to another directory, and a tmux session name held by something else is a refusal too — Sidecar never closes a live session to take its name.
+
+Conversations are resumed only with --agents, only from an exact reference an official integration reported, and only when the policy allows it. Under the default ask policy a non-interactive resume additionally requires --yes.
+
+The tmux session name is the idempotency key, so running this twice does not produce two shells or two agents, and a run interrupted at any point converges when it is run again. Nothing here ever deletes a shell record: a failure is reported and left retryable.
+
+```
+Usage: sidecar session restore [--dry-run] [--shell TARGET] [--agents] [--yes] [--json]
+```
+
+**Options:**
+
+- `--dry-run`: Print the plan and exit without creating or starting anything
+- `--shell TARGET`: Restore only this shell, by tmux session name or display name
+- `--agents`: Also resume eligible exact agent conversations
+- `--yes`: Confirm agent resumes non-interactively when the policy is ask
+- `--json`: Write the stable structured document to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: Success
+- `1`: Reading state or talking to tmux failed
+- `2`: Usage error
+- `5`: The request was refused: confirmation is required, the policy value is unknown, or the target is not a managed shell
+
+**Examples:**
+
+```bash
+# Recreate eligible shells, no agents
+sidecar session restore
+# See exactly what would happen first
+sidecar session restore --agents --dry-run
+# Recreate one shell and resume its conversation
+sidecar session restore --shell reviewer --agents --yes
+```
+
+### `sidecar session status`
+
+Report what a cold restore would do, without doing it
+
+Reads Sidecar's managed shell records and the current tmux inventory and prints the ordered restore plan.
+
+Every managed shell is named as reattach, recreate-shell, resume-agent, manual, skip, or refuse, with the reason and whether performing it would run an agent process. This command is read-only: it creates nothing, starts nothing, and does not require a running Sidecar.
+
+```
+Usage: sidecar session status [--json]
+```
+
+**Options:**
+
+- `--json`: Write the stable structured document to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: Success
+- `1`: Reading state or talking to tmux failed
+- `2`: Usage error
+- `5`: The request was refused: confirmation is required, the policy value is unknown, or the target is not a managed shell
+
+**Examples:**
+
+```bash
+# See whether the last tmux server was replaced and what is restorable
+sidecar session status
+# Read the plan as JSON
+sidecar session status --json
+```
+
 ## `sidecar setup`
 
 Start Sidecar with Configuration open on Sidecar Setup

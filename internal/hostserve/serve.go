@@ -146,7 +146,7 @@ type Options struct {
 	// Namespace reports which tmux server this host's shell records belong to;
 	// a record in another namespace is invisible to the pane listing and is
 	// never judged. ProbeShell is the independent second opinion. ForgetShell
-	// writes the tombstone — workspaceops.ForgetManagedShell in production,
+	// writes the tombstone — workspaceops.ReapManagedShellFunc in production,
 	// which is the browser's writer, not a second one.
 	Namespace   func() string
 	ProbeShell  shellliveness.ProbeFunc
@@ -193,7 +193,19 @@ func (o Options) withDefaults() Options {
 		o.Runner = workspaceinventory.ExecRunner{}
 	}
 	if o.ServerIncarnation == nil {
-		o.ServerIncarnation = tmuxserver.Socket
+		// Not tmuxserver.Socket. A socket stat is Present with pid 0, which
+		// names a file rather than a server process, and the reap writer must be
+		// able to tell "no server is running" from "I cannot identify the
+		// server" — reading the latter as the former made this loop preserve and
+		// mark every shell an operator closed, then recreate them after the next
+		// restart. ServerIncarnation answers with a pid, and distinguishes tmux
+		// saying "no server running" from a question that could not be answered.
+		//
+		// It costs one `tmux display-message` on the paths that re-read the
+		// server fresh, which are the confirmation and write of an already
+		// suspected death — rare, and this loop already spawns a list-sessions
+		// probe per suspicion.
+		o.ServerIncarnation = workspaceops.ServerIncarnation
 	}
 	if o.Namespace == nil {
 		o.Namespace = tmuxenv.Namespace
@@ -202,7 +214,7 @@ func (o Options) withDefaults() Options {
 		o.ProbeShell = shellliveness.ProbeSession
 	}
 	if o.ForgetShell == nil {
-		o.ForgetShell = workspaceops.ForgetManagedShell
+		o.ForgetShell = workspaceops.ReapManagedShellFunc
 	}
 	if o.Hostname == nil {
 		o.Hostname = func() string {
@@ -383,7 +395,14 @@ func Serve(ctx context.Context, opts Options) error {
 		// correlated against this same list, which is what makes shell
 		// collision resolution possible at all.
 		panes, paneErr := collector.ListPanes(ctx)
-		incarnation := opts.ServerIncarnation()
+		// Qualify the socket identity with the server pid this very listing
+		// reported. The listing is the evidence the reap decision below is built
+		// from, so it is also the authoritative answer to "which server is this",
+		// and it costs nothing: the pid rides in on a format string the refresh
+		// was already running. Without it the incarnation is Present with pid 0,
+		// which the shell writer must read as "unidentified" — and this loop
+		// would then never tombstone a shell that genuinely exited.
+		incarnation := tmuxserver.Combine(opts.ServerIncarnation(), workspaceinventory.ServerPIDOf(panes))
 
 		ordered := make([]workspaceinventory.ProjectResult, 0, len(opts.Projects))
 		roots := make([]string, 0, len(opts.Projects))

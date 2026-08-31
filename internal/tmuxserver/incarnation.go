@@ -116,6 +116,26 @@ func (a Incarnation) Equal(b Incarnation) bool {
 
 func (i Incarnation) hasSocket() bool { return i.inode != 0 && i.ctime != 0 }
 
+// ServerID is the durable, persistable identity of a tmux server: "pid=N".
+//
+// It exists because String() must not be written to disk. String() embeds the
+// socket's inode and ctime, and tmux rewrites the socket's metadata whenever the
+// set of attached clients changes — so a record keyed on it would appear to name
+// a different server the moment a user attached a client, which is exactly the
+// false "the server was replaced" verdict a cold restore must not act on. The
+// pid is stable for the server's whole lifetime and is new after a restart,
+// which is the only distinction a persisted marker needs to make.
+//
+// An unknown or absent server has no id, and the empty string says so rather
+// than inventing "pid=0" — a caller comparing markers must be able to tell "a
+// different server" from "no observation".
+func (i Incarnation) ServerID() string {
+	if i.kind != kindPresent || i.pid == 0 {
+		return ""
+	}
+	return "pid=" + strconv.Itoa(i.pid)
+}
+
 func (i Incarnation) String() string {
 	switch i.kind {
 	case kindAbsent:

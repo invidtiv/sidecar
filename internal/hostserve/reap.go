@@ -97,7 +97,7 @@ func reapPass(
 		if !shellliveness.ConfirmReap(tracker, opts.ServerIncarnation(), probe, verdict) {
 			continue
 		}
-		resurrected, err := shellliveness.ReapShell(opts.ProbeShell, opts.ForgetShell, probe)
+		resurrected, err := shellliveness.ReapShell(opts.ProbeShell, opts.ForgetShell, probe, opts.ServerIncarnation())
 		if resurrected || err == nil {
 			continue
 		}
