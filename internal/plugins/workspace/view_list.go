@@ -11,6 +11,7 @@ import (
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/terminalperf"
 	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/workspacelist"
 )
@@ -41,6 +42,7 @@ const (
 
 // View renders the plugin UI.
 func (p *Plugin) View(width, height int) string {
+	terminalperf.Record(terminalperf.ProjectWorkspaceViewRendered)
 	// Clear truncation cache if dimensions changed
 	if p.width != width || p.height != height {
 		p.truncateCache.Clear()

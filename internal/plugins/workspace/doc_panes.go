@@ -20,6 +20,7 @@ import (
 	"github.com/marcus/sidecar/internal/panesearch"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/terminallink"
+	"github.com/marcus/sidecar/internal/terminalperf"
 	"github.com/marcus/sidecar/internal/ui"
 )
 
@@ -1556,6 +1557,7 @@ func (p *Plugin) renderDocumentSplit(width, height int) (string, bool) {
 	// through the legacy fallback drew its header but skipped RegisterRegions,
 	// leaving the visible layout button inert. One shared frame now owns both
 	// the cells and their targets in tiled and zoomed states.
+	terminalperf.Record(terminalperf.ProjectPreviewComposed)
 	view := paneframe.Compose(paneHost{p}, layout, canvasBox, width, height)
 	p.registerPaneTreeRegions(layout)
 	// The frame a pointer is tested against is THIS frame, recorded beside the

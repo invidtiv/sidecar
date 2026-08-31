@@ -12,7 +12,7 @@ import (
 func TestSnapshotHandlerReturnsOnlyFixedNumericCounters(t *testing.T) {
 	counters := &Counters{}
 	restore := Install(counters)
-	for event := ModelFrameBuilt; event <= GlobalWorkspacePreviewRendered; event++ {
+	for event := ModelFrameBuilt; event < eventMax; event++ {
 		Record(event)
 	}
 	RecordOutputToFrame(1500 * time.Microsecond)
@@ -33,6 +33,22 @@ func TestSnapshotHandlerReturnsOnlyFixedNumericCounters(t *testing.T) {
 	wantFields := reflect.TypeOf(Snapshot{}).NumField()
 	if len(got) != wantFields {
 		t.Fatalf("JSON fields = %d, want %d: %s", len(got), wantFields, recorder.Body.String())
+	}
+	wantKeys := []string{
+		"model_frames_built", "model_frames_published", "terminal_views_rendered",
+		"row_cache_hits", "row_cache_misses", "content_link_resolution_requests",
+		"content_link_resolution_cache_hits", "synchronous_resolver_calls",
+		"global_workspace_list_rendered", "global_workspace_preview_rendered",
+		"application_views_rendered", "project_workspace_views_rendered",
+		"project_sidebar_rendered", "project_preview_composes", "project_preview_cache_hits",
+		"document_frames_built", "document_frame_cache_hits", "document_link_scans",
+		"document_resolution_requests", "document_resolution_cache_hits", "row_analyzer_bypasses",
+		"output_to_frame_samples", "output_to_frame_p95_us", "output_to_frame_max_us",
+	}
+	for _, key := range wantKeys {
+		if _, ok := got[key]; !ok {
+			t.Fatalf("JSON lacks fixed counter %q: %s", key, recorder.Body.String())
+		}
 	}
 	wantLatency := map[string]float64{
 		"output_to_frame_samples": 1,

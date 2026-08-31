@@ -102,6 +102,7 @@ func DrawRows(in RowsInput) DrawResult {
 	}
 	analyzer := in.Analyzer
 	if analyzer == nil {
+		terminalperf.Record(terminalperf.RowAnalyzerBypass)
 		analyzer = &RowAnalyzer{}
 	}
 	analysis := analyzer.analyze(in, backgrounds, spanMax)

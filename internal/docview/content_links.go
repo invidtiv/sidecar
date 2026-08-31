@@ -8,6 +8,7 @@ import (
 	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/terminalperf"
 )
 
 // ContentLinkKinds is the set the Files plugin advertises. Workspace and
@@ -89,6 +90,8 @@ func (m *Model) ScanContentLinks(body string, opts contentlink.FrameOptions) Con
 	if m == nil {
 		return ContentLinkFrame{Output: body}
 	}
+	terminalperf.Record(terminalperf.DocumentFrameBuilt)
+	terminalperf.Record(terminalperf.DocumentLinkScan)
 	if opts.AllowedKinds == nil {
 		opts.AllowedKinds = ContentLinkKinds()
 	}
@@ -111,6 +114,7 @@ func (m *Model) ScanContentLinks(body string, opts contentlink.FrameOptions) Con
 	for row := 0; row < rect.H && row < len(lines); row++ {
 		segment := ansi.Cut(lines[row], relX, relX+rect.W)
 		result := contentlink.ScanFrame(segment, opts)
+		terminalperf.Add(terminalperf.DocumentResolutionCacheHit, result.ReadyHits)
 		for _, span := range result.Spans {
 			if span.Kind == "" || !contentlink.Activatable(span.Kind) {
 				continue

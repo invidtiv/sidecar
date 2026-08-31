@@ -10,6 +10,7 @@ import (
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/terminallink"
+	"github.com/marcus/sidecar/internal/terminalperf"
 	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
@@ -71,6 +72,7 @@ func (m *Model) queuePreviewDocLinkResolve(root string, candidate contentlink.Pe
 		return
 	}
 	m.preview.docLinkPending[candidate] = true
+	terminalperf.Record(terminalperf.DocumentResolutionRequest)
 	m.queuePreviewCmd(resolvePreviewDocContentLink(root, candidate))
 }
 

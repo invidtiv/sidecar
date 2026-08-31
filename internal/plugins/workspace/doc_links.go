@@ -9,6 +9,7 @@ import (
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/terminallink"
+	"github.com/marcus/sidecar/internal/terminalperf"
 	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
@@ -64,6 +65,7 @@ func (p *Plugin) queueDocLinkResolve(root string, candidate contentlink.Pending)
 		return
 	}
 	p.docLinkPending[candidate] = true
+	terminalperf.Record(terminalperf.DocumentResolutionRequest)
 	p.paneSizeCmds = append(p.paneSizeCmds, resolveDocContentLink(root, candidate))
 }
 

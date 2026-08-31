@@ -9,6 +9,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/terminalperf"
 	"github.com/marcus/sidecar/internal/workspacelist"
 )
 
@@ -241,6 +242,7 @@ func fitToast(msg string, width int) string {
 // Workspaces. Nothing in workspacelist can create, attach, delete or load a
 // preview; those remain callbacks reached through the typed regions below.
 func (p *Plugin) renderSidebarContent(width, height int) string {
+	terminalperf.Record(terminalperf.ProjectSidebarRendered)
 	warnings := make([]string, 0, len(p.deleteWarnings)+1)
 	warningStyle := lipgloss.NewStyle().Foreground(styles.Warning)
 	for _, warning := range p.deleteWarnings {

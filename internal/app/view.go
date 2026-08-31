@@ -19,6 +19,7 @@ import (
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/startuptrace"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/terminalperf"
 	"github.com/marcus/sidecar/internal/ui"
 )
 
@@ -53,6 +54,7 @@ func projectSwitcherItemID(idx int) string {
 // View renders the entire application UI and declares the terminal features
 // (alt-screen, mouse) that were previously NewProgram options in v1.
 func (m Model) View() tea.View {
+	terminalperf.Record(terminalperf.ApplicationViewRendered)
 	if m.ready {
 		firstReadyFrame.Do(func() {
 			startuptrace.Mark("first ready frame")

@@ -13,7 +13,7 @@ func TestProbeRecordsOnlyFixedNumericCounters(t *testing.T) {
 	restore := Install(counters)
 	t.Cleanup(restore)
 
-	for event := ModelFrameBuilt; event <= GlobalWorkspacePreviewRendered; event++ {
+	for event := ModelFrameBuilt; event < eventMax; event++ {
 		Record(event)
 	}
 	snapshot := counters.Snapshot()
@@ -23,7 +23,7 @@ func TestProbeRecordsOnlyFixedNumericCounters(t *testing.T) {
 			t.Fatalf("diagnostic field %s has kind %s, want uint64", v.Type().Field(i).Name, v.Field(i).Kind())
 		}
 	}
-	if snapshot.ModelFramesBuilt != 1 || snapshot.GlobalWorkspacePreviewRendered != 1 {
+	if snapshot.ModelFramesBuilt != 1 || snapshot.RowAnalyzerBypasses != 1 {
 		t.Fatalf("fixed event counters not recorded: %+v", snapshot)
 	}
 	if snapshot.OutputToFrameSamples != 0 || snapshot.OutputToFrameP95US != 0 || snapshot.OutputToFrameMaxUS != 0 {

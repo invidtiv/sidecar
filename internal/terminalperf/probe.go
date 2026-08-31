@@ -23,6 +23,18 @@ const (
 	SynchronousResolverCall
 	GlobalWorkspaceListRendered
 	GlobalWorkspacePreviewRendered
+	ApplicationViewRendered
+	ProjectWorkspaceViewRendered
+	ProjectSidebarRendered
+	ProjectPreviewComposed
+	ProjectPreviewCacheHit
+	DocumentFrameBuilt
+	DocumentFrameCacheHit
+	DocumentLinkScan
+	DocumentResolutionRequest
+	DocumentResolutionCacheHit
+	RowAnalyzerBypass
+	eventMax
 )
 
 // Counters is an injectable recorder. It is intentionally data-free apart from
@@ -38,6 +50,17 @@ type Counters struct {
 	synchronousResolverCalls       atomic.Uint64
 	globalWorkspaceListRendered    atomic.Uint64
 	globalWorkspacePreviewRendered atomic.Uint64
+	applicationViewsRendered       atomic.Uint64
+	projectWorkspaceViewsRendered  atomic.Uint64
+	projectSidebarRendered         atomic.Uint64
+	projectPreviewComposes         atomic.Uint64
+	projectPreviewCacheHits        atomic.Uint64
+	documentFramesBuilt            atomic.Uint64
+	documentFrameCacheHits         atomic.Uint64
+	documentLinkScans              atomic.Uint64
+	documentResolutionRequests     atomic.Uint64
+	documentResolutionCacheHits    atomic.Uint64
+	rowAnalyzerBypasses            atomic.Uint64
 	outputToFrameMu                sync.Mutex
 	outputToFrameSamples           uint64
 	outputToFrameMaxUS             uint64
@@ -57,6 +80,17 @@ type Snapshot struct {
 	SynchronousResolverCalls       uint64 `json:"synchronous_resolver_calls"`
 	GlobalWorkspaceListRendered    uint64 `json:"global_workspace_list_rendered"`
 	GlobalWorkspacePreviewRendered uint64 `json:"global_workspace_preview_rendered"`
+	ApplicationViewsRendered       uint64 `json:"application_views_rendered"`
+	ProjectWorkspaceViewsRendered  uint64 `json:"project_workspace_views_rendered"`
+	ProjectSidebarRendered         uint64 `json:"project_sidebar_rendered"`
+	ProjectPreviewComposes         uint64 `json:"project_preview_composes"`
+	ProjectPreviewCacheHits        uint64 `json:"project_preview_cache_hits"`
+	DocumentFramesBuilt            uint64 `json:"document_frames_built"`
+	DocumentFrameCacheHits         uint64 `json:"document_frame_cache_hits"`
+	DocumentLinkScans              uint64 `json:"document_link_scans"`
+	DocumentResolutionRequests     uint64 `json:"document_resolution_requests"`
+	DocumentResolutionCacheHits    uint64 `json:"document_resolution_cache_hits"`
+	RowAnalyzerBypasses            uint64 `json:"row_analyzer_bypasses"`
 	OutputToFrameSamples           uint64 `json:"output_to_frame_samples"`
 	OutputToFrameP95US             uint64 `json:"output_to_frame_p95_us"`
 	OutputToFrameMaxUS             uint64 `json:"output_to_frame_max_us"`
@@ -115,6 +149,28 @@ func Add(event Event, count int) {
 		counters.globalWorkspaceListRendered.Add(n)
 	case GlobalWorkspacePreviewRendered:
 		counters.globalWorkspacePreviewRendered.Add(n)
+	case ApplicationViewRendered:
+		counters.applicationViewsRendered.Add(n)
+	case ProjectWorkspaceViewRendered:
+		counters.projectWorkspaceViewsRendered.Add(n)
+	case ProjectSidebarRendered:
+		counters.projectSidebarRendered.Add(n)
+	case ProjectPreviewComposed:
+		counters.projectPreviewComposes.Add(n)
+	case ProjectPreviewCacheHit:
+		counters.projectPreviewCacheHits.Add(n)
+	case DocumentFrameBuilt:
+		counters.documentFramesBuilt.Add(n)
+	case DocumentFrameCacheHit:
+		counters.documentFrameCacheHits.Add(n)
+	case DocumentLinkScan:
+		counters.documentLinkScans.Add(n)
+	case DocumentResolutionRequest:
+		counters.documentResolutionRequests.Add(n)
+	case DocumentResolutionCacheHit:
+		counters.documentResolutionCacheHits.Add(n)
+	case RowAnalyzerBypass:
+		counters.rowAnalyzerBypasses.Add(n)
 	}
 }
 
@@ -190,6 +246,17 @@ func (c *Counters) Snapshot() Snapshot {
 		SynchronousResolverCalls:       c.synchronousResolverCalls.Load(),
 		GlobalWorkspaceListRendered:    c.globalWorkspaceListRendered.Load(),
 		GlobalWorkspacePreviewRendered: c.globalWorkspacePreviewRendered.Load(),
+		ApplicationViewsRendered:       c.applicationViewsRendered.Load(),
+		ProjectWorkspaceViewsRendered:  c.projectWorkspaceViewsRendered.Load(),
+		ProjectSidebarRendered:         c.projectSidebarRendered.Load(),
+		ProjectPreviewComposes:         c.projectPreviewComposes.Load(),
+		ProjectPreviewCacheHits:        c.projectPreviewCacheHits.Load(),
+		DocumentFramesBuilt:            c.documentFramesBuilt.Load(),
+		DocumentFrameCacheHits:         c.documentFrameCacheHits.Load(),
+		DocumentLinkScans:              c.documentLinkScans.Load(),
+		DocumentResolutionRequests:     c.documentResolutionRequests.Load(),
+		DocumentResolutionCacheHits:    c.documentResolutionCacheHits.Load(),
+		RowAnalyzerBypasses:            c.rowAnalyzerBypasses.Load(),
 		OutputToFrameSamples:           latencySamples,
 		OutputToFrameP95US:             latencyP95,
 		OutputToFrameMaxUS:             latencyMax,

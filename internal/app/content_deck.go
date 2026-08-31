@@ -33,6 +33,7 @@ import (
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tabs"
 	"github.com/marcus/sidecar/internal/terminallink"
+	"github.com/marcus/sidecar/internal/terminalperf"
 	"github.com/marcus/sidecar/internal/textselect"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
@@ -679,6 +680,7 @@ func (h *appContentDeck) queueContentLinkResolve(root string, candidate contentl
 		return
 	}
 	h.pending[candidate] = true
+	terminalperf.Record(terminalperf.DocumentResolutionRequest)
 	h.queued = append(h.queued, resolveAppContentLink(h.key, root, candidate))
 }
 
