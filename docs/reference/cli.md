@@ -598,7 +598,7 @@ Usage: sidecar agent report-session --kind KIND (--id ID | --path ABS_PATH | --c
 - `0`: recorded, or a no-op outside a Sidecar-managed shell
 - `1`: the binding could not be written
 - `2`: usage error
-- `5`: invalid reference, untrusted source, or a stale provider generation
+- `5`: invalid reference, untrusted source, unusable hook payload, unverifiable shell context, or a stale provider generation
 
 **Examples:**
 
