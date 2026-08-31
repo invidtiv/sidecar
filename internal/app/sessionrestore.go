@@ -52,6 +52,10 @@ var sessionRestoreHost struct {
 	cancel context.CancelFunc
 }
 
+// startSessionRestoreOnce makes the restore fire on the first WindowSizeMsg and
+// no later one, so a terminal resize does not schedule a second restore.
+var startSessionRestoreOnce sync.Once
+
 // sessionRestoreGate is the barrier the restore waits behind, indirected so a
 // test can prove the ordering rather than assert it in a comment. In production
 // it is the first-ready-frame latch and nothing else.
@@ -83,12 +87,18 @@ func restoreSessionsCmd(cfg *config.Config) tea.Cmd {
 		return nil
 	}
 	section := cfg.Plugins.Workspace.SessionRestore
+	// recreateShells off means there is nothing to schedule, whatever
+	// resumeAgents says. That is not a shortcut: the planner refuses to
+	// recreate before it ever considers an agent, so a shell that is not being
+	// recreated cannot host a resume and cannot produce a pending confirmation
+	// either. Scheduling a command that provably cannot act would cost a
+	// goroutine parked on the first-frame latch for the life of the process.
+	if !section.RecreateShells {
+		return nil
+	}
 	mode, err := sessionrestore.ParseResumeMode(section.ResumeAgents)
 	if err != nil {
 		mode = sessionrestore.ResumeAsk
-	}
-	if !section.RecreateShells && mode == sessionrestore.ResumeOff {
-		return nil
 	}
 	restoreCfg := sessionrestore.Config{RecreateShells: section.RecreateShells, ResumeAgents: mode}
 

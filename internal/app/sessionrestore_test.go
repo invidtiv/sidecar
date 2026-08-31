@@ -71,6 +71,33 @@ func TestRestoreDoesNoWorkBeforeTheFirstReadyFrame(t *testing.T) {
 	}
 }
 
+// TestInitSchedulesNoBlockingRestore is a regression test for a hang.
+//
+// The restore command parks on the first-ready-frame latch, which only closes
+// when View renders a model with real dimensions. Returned from Init, that
+// command hung every caller which runs Init's commands synchronously — which is
+// what collectMsgs does, and what an embedder could reasonably do. The restore
+// is now started from the first WindowSizeMsg instead, so it exists only inside
+// a program that is actually driving a UI and can therefore close the latch.
+//
+// The test drives Init's commands to completion with a deadline. It is the
+// deadline that is the assertion: any Init command that waits on the latch will
+// never return.
+func TestInitSchedulesNoBlockingRestore(t *testing.T) {
+	m, _ := scopeBaselineModel(t, "git")
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		collectMsgs(m.Init())
+	}()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("an Init command blocked; nothing returned from Init may wait on the first ready frame")
+	}
+}
+
 // TestRestoreIsFreeWhenDisabled pins that a user who has turned restore off pays
 // nothing at all: no command, so no goroutine, no manifest read, no tmux call.
 func TestRestoreIsFreeWhenDisabled(t *testing.T) {
@@ -80,9 +107,18 @@ func TestRestoreIsFreeWhenDisabled(t *testing.T) {
 	if cmd := restoreSessionsCmd(nil); cmd != nil {
 		t.Fatal("a nil config must schedule no command")
 	}
-	// Resume-only is still work worth scheduling.
-	if cmd := restoreSessionsCmd(restoreConfig(false, "auto")); cmd == nil {
-		t.Fatal("resumeAgents=auto must still schedule a restore")
+	// recreateShells off schedules nothing even with resumeAgents=auto, because
+	// the planner refuses to recreate before it considers an agent, so no shell
+	// in that configuration can host a resume. This is the case that hung the
+	// app suite: a zero-value config has RecreateShells false and an empty
+	// resumeAgents that parses to "ask", and the earlier guard read that
+	// combination as work to do, parking a goroutine on the first-frame latch
+	// that a synchronous test command-runner then waited on forever.
+	if cmd := restoreSessionsCmd(restoreConfig(false, "auto")); cmd != nil {
+		t.Fatal("recreateShells=false must schedule nothing, whatever resumeAgents says")
+	}
+	if cmd := restoreSessionsCmd(&config.Config{}); cmd != nil {
+		t.Fatal("a zero-value config must schedule no restore")
 	}
 }
 

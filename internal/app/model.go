@@ -724,13 +724,13 @@ func (m Model) Init() tea.Cmd {
 		cmds = append(cmds, cmd)
 	}
 
-	// Cold restore of managed shells lost to a tmux server restart, on the same
-	// terms: it waits on the first-ready-frame latch before it reads a manifest
-	// or spawns tmux, so the first paint never waits for it, and it returns nil
-	// entirely when configuration has turned restore off.
-	if cmd := restoreSessionsCmd(m.cfg); cmd != nil {
-		cmds = append(cmds, cmd)
-	}
+	// Cold restore is deliberately NOT started here. It is kicked off by the
+	// first WindowSizeMsg instead (see update.go), because a command returned
+	// from Init that parks on the first-ready-frame latch hangs any caller that
+	// runs Init's commands synchronously — which is what several tests do, and
+	// what an embedding of this model could reasonably do too. Starting it from
+	// the update loop means it exists only inside a program that is actually
+	// running a UI, which is the only situation in which it can finish.
 
 	// A launch command's destination opens through the same message an empty
 	// state sends, so there is one way into Configuration and one way back out.
