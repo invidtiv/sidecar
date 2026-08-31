@@ -79,6 +79,19 @@ func CreateManagedShell(spec ManagedShellSpec) (ShellResult, error) {
 			Namespace: tmuxenv.Namespace(), CreatedAt: time.Now(), AgentType: spec.AgentType,
 			SkipPerms: spec.SkipPerms, WorkDir: spec.WorkDir,
 		}
+		// Creation is the strongest liveness evidence there is: the session was
+		// just made, in this server, by this process. Stamping cold-restore
+		// eligibility here rather than waiting for a refresh cycle closes the
+		// window in which a shell created seconds before a crash would come back
+		// as "never confirmed live" and be left for the user to recreate by hand.
+		// It costs no extra write — the record is being written anyway.
+		if server := tmuxserver.Combine(tmuxserver.Socket(), ServerPID()).ServerID(); server != "" {
+			definition.Restore = &shellstate.RestoreState{
+				Eligible:        true,
+				LastSeenServer:  server,
+				LastSeenAliveAt: time.Now().UTC(),
+			}
+		}
 		err = shellstate.AddAtPath(filepath.Join(projectDir, "shells.json"), definition)
 	}
 	if err != nil {

@@ -188,6 +188,10 @@ const (
 type Shell struct {
 	// Project is the project key whose manifest holds the record.
 	Project string
+	// ProjectRoot is that project's working tree, which is where a recreated
+	// shell's record already says it belongs. It is never used as a fallback
+	// directory for a shell whose own WorkDir has gone: that case is a refusal.
+	ProjectRoot string
 	// ManifestPath is where the record lives, so the executor can write the
 	// outcome back without re-deriving the path.
 	ManifestPath string
@@ -264,6 +268,9 @@ type Step struct {
 	Session string `json:"session"`
 	Name    string `json:"name,omitempty"`
 	WorkDir string `json:"workDir,omitempty"`
+
+	// ProjectRoot is the project's working tree, carried for the executor.
+	ProjectRoot string `json:"projectRoot,omitempty"`
 
 	Action Action `json:"action"`
 	Reason Reason `json:"reason"`
@@ -434,6 +441,7 @@ func planShell(in Input, sh Shell, dirExists func(string) bool, providerAvailabl
 	def := sh.Def
 	step := Step{
 		Project:      sh.Project,
+		ProjectRoot:  sh.ProjectRoot,
 		Session:      def.TmuxName,
 		Name:         def.DisplayName,
 		WorkDir:      def.WorkDir,

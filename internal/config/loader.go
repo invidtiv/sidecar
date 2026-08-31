@@ -196,6 +196,16 @@ type rawWorkspaceConfig struct {
 	OverviewWorktreeScope     string                   `json:"overviewWorktreeScope"`
 	SidebarDisplay            *rawSidebarDisplayConfig `json:"sidebarDisplay"`
 	WorktreeSetup             *rawWorktreeSetupConfig  `json:"worktreeSetup"`
+	SessionRestore            *rawSessionRestoreConfig `json:"sessionRestore"`
+}
+
+// rawSessionRestoreConfig keeps RecreateShells a pointer so that "absent" is
+// distinguishable from an explicit false: the default is true, and a
+// non-pointer bool would silently turn shell restoration off for everyone whose
+// config mentions the object at all.
+type rawSessionRestoreConfig struct {
+	RecreateShells *bool  `json:"recreateShells"`
+	ResumeAgents   string `json:"resumeAgents"`
 }
 
 type rawWorktreeSetupConfig struct {
@@ -381,6 +391,14 @@ func mergeConfig(cfg *Config, raw *rawConfig) {
 		}
 		if setup.HookRequired != nil {
 			cfg.Plugins.Workspace.WorktreeSetup.HookRequired = *setup.HookRequired
+		}
+	}
+	if restore := raw.Plugins.Workspace.SessionRestore; restore != nil {
+		if restore.RecreateShells != nil {
+			cfg.Plugins.Workspace.SessionRestore.RecreateShells = *restore.RecreateShells
+		}
+		if restore.ResumeAgents != "" {
+			cfg.Plugins.Workspace.SessionRestore.ResumeAgents = restore.ResumeAgents
 		}
 	}
 	if raw.Plugins.Workspace.TmuxCaptureMaxBytes != nil {

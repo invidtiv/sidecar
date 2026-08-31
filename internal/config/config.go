@@ -268,7 +268,36 @@ type WorkspacePluginConfig struct {
 	// creating a worktree. The creation confirmation always names the discovered
 	// files and hook and requires an explicit per-operation selection.
 	WorktreeSetup WorktreeSetupConfig `json:"worktreeSetup"`
+	// SessionRestore controls what happens on the first Sidecar start after the
+	// tmux server that was hosting the managed shells has been replaced.
+	SessionRestore SessionRestoreConfig `json:"sessionRestore"`
 }
+
+// SessionRestoreConfig configures cold restore after a tmux server replacement.
+//
+// The two settings are independent on purpose. Getting a terminal back in the
+// right directory costs nothing and loses nothing, so it is on by default.
+// Resuming a conversation starts a provider process that can spend money and
+// change a repository, so it is a separate decision that defaults to asking.
+type SessionRestoreConfig struct {
+	// RecreateShells recreates managed shells that were confirmed live in the
+	// previous tmux server, under their own names and existing working
+	// directories. It never replays an arbitrary --run command. Default: true.
+	RecreateShells bool `json:"recreateShells"`
+	// ResumeAgents is off | ask | auto. Default: ask, which paints the restored
+	// shells and layout and then presents one grouped summary; nothing paid or
+	// agent-mutating happens until the user confirms or runs the CLI. auto is
+	// explicit standing authorization, and applies only to exact session
+	// references an official integration reported.
+	ResumeAgents string `json:"resumeAgents,omitempty"`
+}
+
+// Session restore resumeAgents values.
+const (
+	ResumeAgentsOff  = "off"
+	ResumeAgentsAsk  = "ask"
+	ResumeAgentsAuto = "auto"
+)
 
 // WorktreeSetupConfig configures the optional setup phase after git creates a
 // worktree. Paths are relative to the canonical main worktree.
@@ -368,6 +397,7 @@ func Default() *Config {
 					EnvFiles:     []string{".env", ".env.local", ".env.development", ".env.development.local"},
 					RunHook:      true, HookPath: ".worktree-setup.sh", HookRequired: true,
 				},
+				SessionRestore: SessionRestoreConfig{RecreateShells: true, ResumeAgents: ResumeAgentsAsk},
 			},
 		},
 		Keymap: KeymapConfig{
@@ -413,6 +443,14 @@ func (c *Config) Validate() error {
 	}
 	if c.Plugins.Workspace.ResizeDebounceMs < 0 {
 		c.Plugins.Workspace.ResizeDebounceMs = 300
+	}
+	// An unrecognized resumeAgents value falls back to the safest of the three
+	// rather than failing the whole config. "ask" is the right landing place for
+	// a typo specifically because it is the option that does not act on its own.
+	switch c.Plugins.Workspace.SessionRestore.ResumeAgents {
+	case ResumeAgentsOff, ResumeAgentsAsk, ResumeAgentsAuto:
+	default:
+		c.Plugins.Workspace.SessionRestore.ResumeAgents = ResumeAgentsAsk
 	}
 	// An unrecognized (or empty) tasks position falls back to the default
 	// anchor rather than failing the whole config, which is how the rest of
