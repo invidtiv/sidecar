@@ -288,8 +288,12 @@ type OpenCreateModalWithTaskMsg struct {
 type ResumeConversationMsg struct {
 	SessionID string // Adapter session ID for resume command
 	AdapterID string // Adapter type (claude-code, codex, etc.)
-	ResumeCmd string // Full resume command (e.g., "claude --resume xyz")
-	Type      string // "shell" or "worktree"
+	// ResumeArgv is the resume command as structured arguments, built by
+	// internal/agentcatalog. It is the only source for the command line that
+	// gets typed or run; rendering happens once, at the tmux boundary, through
+	// agentcatalog.ShellCommand.
+	ResumeArgv []string
+	Type       string // "shell" or "worktree"
 	// Worktree-specific fields (only used when Type == "worktree")
 	WorktreeName string    // Branch name for new worktree
 	BaseBranch   string    // Base branch to create from

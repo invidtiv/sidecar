@@ -53,6 +53,24 @@ type AgentState struct {
 	ChangedAt        time.Time `json:"changedAt,omitzero"`
 	CapturedAt       time.Time `json:"capturedAt"`
 	InteractiveReady bool      `json:"interactiveReady"`
+	// SessionRef reports whether this shell is bound to an exact provider
+	// conversation. It is absent when there is no binding.
+	SessionRef *SessionRef `json:"sessionRef,omitempty"`
+}
+
+// SessionRef is what an agent query says about a shell's exact conversation
+// binding.
+//
+// Kind and Reported are capability and presence: they answer "can this shell be
+// resumed, and did an official integration say so" without naming the
+// conversation. Value is the conversation itself and is filled only for a
+// caller's own shell or an explicit opt-in, because `agent list` output lands in
+// logs, transcripts, and CI output, and a conversation identifier sprayed across
+// those is not something a later decision to redact can take back.
+type SessionRef struct {
+	Kind     string `json:"kind,omitempty"`
+	Reported bool   `json:"reported"`
+	Value    string `json:"value,omitempty"`
 }
 
 // Agent is the stable result shared by list, get, and start.

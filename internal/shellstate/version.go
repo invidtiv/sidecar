@@ -17,7 +17,20 @@ import (
 //
 // A v1 file is upgraded in place on the first write: v1 is a subset of v2, so
 // there is nothing to migrate beyond the number.
-const CurrentVersion = 2
+//
+// Version 3 adds the per-shell `agent` and `restore` objects: the structured
+// provider binding, the exact native session reference an official integration
+// reported, and the cold-restore policy and eligibility. Like v1→v2 the change
+// is purely additive, so v3 needs no migration step either — a v2 file read by
+// this build simply has no agent or restore object on any record, which is
+// exactly what "this shell has never run a reported agent" already means.
+//
+// The bump is what buys the refusal in the other direction, and here it matters
+// more than it did for tombstones. A v2 binary that rewrote a v3 file would drop
+// the session reference, and the visible symptom would not be an error: it would
+// be a cold restore that quietly declines to resume a conversation it was
+// holding a valid reference for. CheckWritableVersion is what prevents that.
+const CurrentVersion = 3
 
 // ErrUnknownVersion reports a manifest written by a newer Sidecar than this
 // one. Callers that want to distinguish "the file is from the future" from an

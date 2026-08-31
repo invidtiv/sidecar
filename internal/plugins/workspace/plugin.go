@@ -623,7 +623,10 @@ type Plugin struct {
 	attachSession func(sessionName, displayName string) tea.Cmd
 
 	// Resume conversation state (td-aa4136)
-	pendingResumeCmd      string // Resume command to inject after shell creation
+	// pendingPrefillCmd is the command line typed at a new shell's prompt once
+	// it exists. A resume fills it by rendering catalog argv; the Configuration
+	// repair flow fills it with a command line it already had.
+	pendingPrefillCmd     string
 	pendingResumeWorktree string // Worktree name to enter interactive mode after agent starts
 
 	// Fetch PR modal state

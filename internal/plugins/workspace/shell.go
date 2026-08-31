@@ -1159,9 +1159,12 @@ func (p *Plugin) getSelectedShell() *ShellSession {
 // handleResumeConversation processes ResumeConversationMsg from conversations plugin (td-aa4136).
 // Creates a new shell or worktree based on msg.Type and starts the resume flow.
 func (p *Plugin) handleResumeConversation(msg ResumeConversationMsg) (*Plugin, tea.Cmd) {
+	if len(msg.ResumeArgv) == 0 {
+		return p, nil
+	}
 	switch msg.Type {
 	case "shell":
-		return p, p.createShellWithResume(msg.ResumeCmd)
+		return p, p.createShellWithResume(msg.ResumeArgv)
 	case "worktree":
 		return p, p.createWorktreeWithResume(msg)
 	default:
@@ -1171,17 +1174,32 @@ func (p *Plugin) handleResumeConversation(msg ResumeConversationMsg) (*Plugin, t
 
 // createShellWithResume creates a new shell and injects the resume command.
 // The command is typed into the shell but not executed - user presses Enter.
-func (p *Plugin) createShellWithResume(resumeCmd string) tea.Cmd {
-	// Store pending resume command to inject after shell creation
-	p.pendingResumeCmd = resumeCmd
+//
+// The structured argv is rendered here, at the boundary where a command line is
+// unavoidable, so a session value cannot end an argument and start a command.
+func (p *Plugin) createShellWithResume(resumeArgv []string) tea.Cmd {
+	if len(resumeArgv) == 0 {
+		return nil
+	}
+	return p.createShellWithPrefilledCommand(agentcatalog.DisplayCommand(resumeArgv))
+}
+
+// createShellWithPrefilledCommand creates a new shell and types a command line
+// at its prompt without running it. Callers holding structured arguments render
+// them with agentcatalog.ShellCommand first; the free-form entry point is for
+// text that is already a shell line (a Configuration repair command).
+func (p *Plugin) createShellWithPrefilledCommand(command string) tea.Cmd {
+	// Store pending command to inject after shell creation
+	p.pendingPrefillCmd = command
 
 	// Create new shell (ShellCreatedMsg will trigger command injection)
 	return p.createNewShell("")
 }
 
-// sendResumeCommandToShell injects a command into the shell without executing it.
+// sendResumeCommandToShell injects a command line into the shell without
+// executing it.
 func (p *Plugin) sendResumeCommandToShell(tmuxSession string, resumeCmd string) tea.Cmd {
-	if !isTmuxInstalled() {
+	if !isTmuxInstalled() || resumeCmd == "" {
 		return nil
 	}
 
@@ -1206,11 +1224,11 @@ type shellResumeErrorMsg struct {
 // worktreeResumeCreatedMsg signals that a worktree for resume was created (td-aa4136).
 type worktreeResumeCreatedMsg struct {
 	OperationScope
-	Worktree  *Worktree
-	ResumeCmd string
-	AgentType AgentType
-	SkipPerms bool
-	Err       error
+	Worktree   *Worktree
+	ResumeArgv []string
+	AgentType  AgentType
+	SkipPerms  bool
+	Err        error
 }
 
 // createWorktreeWithResume creates a new worktree and starts the agent with the resume command.
@@ -1220,7 +1238,7 @@ func (p *Plugin) createWorktreeWithResume(msg ResumeConversationMsg) tea.Cmd {
 	baseBranch := msg.BaseBranch
 	agentType := msg.AgentType
 	skipPerms := msg.SkipPerms
-	resumeCmd := msg.ResumeCmd
+	resumeArgv := msg.ResumeArgv
 
 	if name == "" {
 		return func() tea.Msg {
@@ -1241,15 +1259,21 @@ func (p *Plugin) createWorktreeWithResume(msg ResumeConversationMsg) tea.Cmd {
 		return worktreeResumeCreatedMsg{
 			OperationScope: scope,
 			Worktree:       wt,
-			ResumeCmd:      resumeCmd,
+			ResumeArgv:     resumeArgv,
 			AgentType:      agentType,
 			SkipPerms:      skipPerms,
 		}
 	}
 }
 
-// startAgentWithResumeCmd starts an agent in a worktree with a resume command instead of normal startup.
-func (p *Plugin) startAgentWithResumeCmd(wt *Worktree, agentType AgentType, skipPerms bool, resumeCmd string) tea.Cmd {
+// startAgentWithResumeCmd starts an agent in a worktree with a resume command
+// instead of normal startup. The structured argv is rendered once here, where a
+// tmux command line is unavoidable.
+func (p *Plugin) startAgentWithResumeCmd(wt *Worktree, agentType AgentType, skipPerms bool, resumeArgv []string) tea.Cmd {
+	if len(resumeArgv) == 0 {
+		return nil
+	}
+	resumeCmd := agentcatalog.DisplayCommand(resumeArgv)
 	epoch := p.ctx.Epoch // Capture epoch for stale detection
 	workDir := p.ctx.WorkDir
 	name, path := wt.Name, wt.Path

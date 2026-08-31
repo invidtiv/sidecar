@@ -3,14 +3,17 @@ package conversations
 import (
 	"fmt"
 	"io"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/adapter"
+	"github.com/marcus/sidecar/internal/agentcatalog"
 	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/plugins/workspace"
 )
 
 func TestNew(t *testing.T) {
@@ -3130,6 +3133,21 @@ func TestResumeCommand(t *testing.T) {
 			expected: "grok --resume 019fef25-eee2-7532-9fc3-e7e23ed49721",
 		},
 		{
+			name:     "pi-agent adapter",
+			session:  &adapter.Session{ID: "ses_abc123", AdapterID: "pi-agent"},
+			expected: "pi --session ses_abc123",
+		},
+		{
+			name:     "pi adapter (catalog id)",
+			session:  &adapter.Session{ID: "ses_abc123", AdapterID: "pi"},
+			expected: "pi --session ses_abc123",
+		},
+		{
+			name:     "copilot has no resume",
+			session:  &adapter.Session{ID: "ses_abc123", AdapterID: "copilot"},
+			expected: "",
+		},
+		{
 			name:     "unknown adapter",
 			session:  &adapter.Session{ID: "ses_abc123", AdapterID: "unknown"},
 			expected: "",
@@ -3153,6 +3171,179 @@ func TestResumeCommand(t *testing.T) {
 				t.Errorf("resumeCommand() = %q, want %q", result, tt.expected)
 			}
 		})
+	}
+}
+
+// TestDefaultAgentIdxForAdapter pins the adapter-id to preselected-agent
+// mapping now that it resolves through the catalog instead of a local switch.
+func TestDefaultAgentIdxForAdapter(t *testing.T) {
+	idxOf := func(t *testing.T, agent workspace.AgentType) int {
+		t.Helper()
+		for i, at := range workspace.AgentTypeOrder {
+			if at == agent {
+				return i
+			}
+		}
+		t.Fatalf("agent %q is not in AgentTypeOrder", agent)
+		return 0
+	}
+
+	tests := []struct {
+		adapterID string
+		want      workspace.AgentType
+	}{
+		{"claude-code", workspace.AgentClaude},
+		{"claude", workspace.AgentClaude},
+		{"codex", workspace.AgentCodex},
+		{"antigravity", workspace.AgentAntigravity},
+		{"agy", workspace.AgentAntigravity}, // resolved by command name
+		{"cursor-cli", workspace.AgentCursor},
+		{"opencode", workspace.AgentOpenCode},
+		{"pi-agent", workspace.AgentPi},
+		{"pi", workspace.AgentPi},
+		{"grok", workspace.AgentGrok},
+		// amp and copilot fell through to Claude while the mapping was a
+		// switch that omitted them; the catalog knows both.
+		{"amp", workspace.AgentAmp},
+		{"copilot", workspace.AgentCopilot},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.adapterID, func(t *testing.T) {
+			if got := defaultAgentIdxForAdapter(tt.adapterID); got != idxOf(t, tt.want) {
+				t.Errorf("defaultAgentIdxForAdapter(%q) = %d, want %d (%s)",
+					tt.adapterID, got, idxOf(t, tt.want), tt.want)
+			}
+		})
+	}
+
+	// Unknown ids, and legacy families absent from the picker, fall back to the
+	// first entry.
+	for _, id := range []string{"", "unknown", "aider"} {
+		if got := defaultAgentIdxForAdapter(id); got != 0 {
+			t.Errorf("defaultAgentIdxForAdapter(%q) = %d, want 0", id, got)
+		}
+	}
+}
+
+// TestResumeArgv verifies the structured resume the UI hands the workspace
+// plugin. This is the form that gets executed; the string above is only what a
+// human reads.
+func TestResumeArgv(t *testing.T) {
+	tests := []struct {
+		name    string
+		session *adapter.Session
+		want    []string
+	}{
+		{
+			name:    "claude-code adapter",
+			session: &adapter.Session{ID: "ses_abc123", AdapterID: "claude-code"},
+			want:    []string{"claude", "--resume", "ses_abc123"},
+		},
+		{
+			name:    "codex adapter",
+			session: &adapter.Session{ID: "ses_abc123", AdapterID: "codex"},
+			want:    []string{"codex", "resume", "ses_abc123"},
+		},
+		{
+			name:    "opencode adapter",
+			session: &adapter.Session{ID: "ses_abc123", AdapterID: "opencode"},
+			want:    []string{"opencode", "--continue", "-s", "ses_abc123"},
+		},
+		{
+			name:    "antigravity adapter",
+			session: &adapter.Session{ID: "ses_abc123", AdapterID: "antigravity"},
+			want:    []string{"agy", "--conversation", "ses_abc123"},
+		},
+		{
+			name:    "cursor-cli adapter",
+			session: &adapter.Session{ID: "ses_abc123", AdapterID: "cursor-cli"},
+			want:    []string{"cursor-agent", "--resume", "ses_abc123"},
+		},
+		{
+			name:    "amp adapter",
+			session: &adapter.Session{ID: "T-a38f981d", AdapterID: "amp"},
+			want:    []string{"amp", "threads", "continue", "T-a38f981d"},
+		},
+		{
+			name:    "pi-agent adapter",
+			session: &adapter.Session{ID: "ses_abc123", AdapterID: "pi-agent"},
+			want:    []string{"pi", "--session", "ses_abc123"},
+		},
+		{
+			name:    "grok adapter",
+			session: &adapter.Session{ID: "019fef25", AdapterID: "grok"},
+			want:    []string{"grok", "--resume", "019fef25"},
+		},
+		{
+			name:    "copilot has no resume",
+			session: &adapter.Session{ID: "ses_abc123", AdapterID: "copilot"},
+			want:    nil,
+		},
+		{
+			name:    "unknown adapter",
+			session: &adapter.Session{ID: "ses_abc123", AdapterID: "unknown"},
+			want:    nil,
+		},
+		{
+			name:    "nil session",
+			session: nil,
+			want:    nil,
+		},
+		{
+			name:    "empty session ID",
+			session: &adapter.Session{ID: "", AdapterID: "claude-code"},
+			want:    nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := resumeArgv(tt.session)
+			if ok != (tt.want != nil) {
+				t.Fatalf("resumeArgv() ok = %v, want %v", ok, tt.want != nil)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("resumeArgv() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestResumeArgvHostileSessionID proves a session id cannot end an argument and
+// start a command: it stays one argv entry, and the rendering that is actually
+// executed quotes it.
+func TestResumeArgvHostileSessionID(t *testing.T) {
+	hostile := "abc; rm -rf ~ #"
+	session := &adapter.Session{ID: hostile, AdapterID: "claude-code"}
+
+	argv, ok := resumeArgv(session)
+	if !ok {
+		t.Fatalf("resumeArgv() returned no argv for a hostile id")
+	}
+	want := []string{"claude", "--resume", hostile}
+	if !reflect.DeepEqual(argv, want) {
+		t.Fatalf("resumeArgv() = %q, want %q", argv, want)
+	}
+
+	executed := agentcatalog.ShellCommand(argv)
+	if executed != `'claude' '--resume' 'abc; rm -rf ~ #'` {
+		t.Errorf("ShellCommand() = %q, want the id contained in one quoted word", executed)
+	}
+
+	// The display projection quotes it too — it only leaves benign words bare.
+	shown := resumeCommand(session)
+	if shown != `claude --resume 'abc; rm -rf ~ #'` {
+		t.Errorf("resumeCommand() = %q, want the id quoted for display", shown)
+	}
+
+	// A quote in the value must not close the quoting in either rendering.
+	quoted := &adapter.Session{ID: `a'b`, AdapterID: "claude-code"}
+	if got := agentcatalog.ShellCommand([]string{"claude", "--resume", `a'b`}); got != `'claude' '--resume' 'a'\''b'` {
+		t.Errorf("ShellCommand() with an embedded quote = %q", got)
+	}
+	if got := resumeCommand(quoted); got != `claude --resume 'a'\''b'` {
+		t.Errorf("resumeCommand() with an embedded quote = %q", got)
 	}
 }
 

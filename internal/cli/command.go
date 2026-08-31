@@ -10,8 +10,13 @@ import (
 
 // Env holds the execution environment passed to a command handler.
 type Env struct {
-	Stdout               io.Writer
-	Stderr               io.Writer
+	Stdout io.Writer
+	Stderr io.Writer
+	// Stdin is the caller's standard input. It is used only by surfaces that
+	// accept a bounded structured payload — today, a provider hook handing
+	// `agent report-session` its event JSON — and is nil for every command that
+	// does not read one.
+	Stdin                io.Reader
 	StateDir             string
 	Ctx                  context.Context
 	NotificationDelivery notifydelivery.Coordinator

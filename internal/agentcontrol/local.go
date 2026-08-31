@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/marcus/sidecar/internal/agentactivity"
+	"github.com/marcus/sidecar/internal/agentcatalog"
 	"github.com/marcus/sidecar/internal/tmuxenv"
 	"github.com/marcus/sidecar/internal/tmuxserver"
 	"github.com/marcus/sidecar/internal/tty"
@@ -367,13 +368,10 @@ func ValidateKeys(names []string) error {
 // LogicalKeyVocabulary is the documented named-key allowlist.
 func LogicalKeyVocabulary() []string { return tty.LogicalKeyVocabulary() }
 
-func quoteArgv(argv []string) string {
-	quoted := make([]string, len(argv))
-	for i, arg := range argv {
-		quoted[i] = "'" + strings.ReplaceAll(arg, "'", "'\\''") + "'"
-	}
-	return strings.Join(quoted, " ")
-}
+// quoteArgv delegates to the catalog so the argv-to-shell boundary has one
+// implementation shared by the terminal adapter, the Conversations resume path,
+// and anything else that must hand a command line to a shell.
+func quoteArgv(argv []string) string { return agentcatalog.ShellCommand(argv) }
 
 func tmuxError(err error, output []byte) error {
 	if msg := strings.TrimSpace(string(output)); msg != "" {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/marcus/sidecar/internal/config"
@@ -953,6 +954,7 @@ func defaultEnv(stdout, stderr io.Writer) Env {
 	return Env{
 		Stdout:               stdout,
 		Stderr:               stderr,
+		Stdin:                os.Stdin,
 		StateDir:             stateDir,
 		Ctx:                  context.Background(),
 		NotificationDelivery: notifydelivery.NewDefault(stateDir),
