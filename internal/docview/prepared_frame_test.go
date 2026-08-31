@@ -211,7 +211,7 @@ func TestPreparedFrameInvalidatesScrollbarOnlyPaletteChangeOnce(t *testing.T) {
 	}
 }
 
-func TestPreparedFrameInvalidatesInternalNamespaceSemanticsOnce(t *testing.T) {
+func TestPreparedFrameInvalidatesInternalNamespaceAllowlistOnce(t *testing.T) {
 	m := newSelectableModel(t, 70, 3, "open sidecar://note/nt-1?view=full")
 	opts := PrepareOptions{
 		AllowedKinds: contentlink.NewKindSet(contentlink.KindInternal),
@@ -234,17 +234,57 @@ func TestPreparedFrameInvalidatesInternalNamespaceSemanticsOnce(t *testing.T) {
 	if again := m.PrepareFrame(opts); again.data != allowed.data {
 		t.Fatal("allowlist change rebuilt more than once")
 	}
+}
 
-	opts.InternalNamespaces["note"] = contentlink.URIOptions{
-		AllowedQuery: map[string]struct{}{"view": {}},
-		ValidateID:   func(string) bool { return false },
+func TestPreparedFrameInvalidatesInternalNamespaceValidatorIdentityOnce(t *testing.T) {
+	m := newSelectableModel(t, 70, 3, "open sidecar://note/nt-1")
+	opts := PrepareOptions{
+		AllowedKinds: contentlink.NewKindSet(contentlink.KindInternal),
+		InternalNamespaces: map[string]contentlink.URIOptions{
+			"note": {ValidateID: func(string) bool { return true }},
+		},
+		Decorate: true,
+		Links:    true,
 	}
+	allowed := m.PrepareFrame(opts)
+	if len(allowed.data.hits) != 1 {
+		t.Fatalf("accepting validator produced hits: %+v", allowed.data.hits)
+	}
+
+	opts.InternalNamespaces["note"] = contentlink.URIOptions{ValidateID: func(string) bool { return false }}
+	rejected := m.PrepareFrame(opts)
+	if rejected.data == allowed.data || len(rejected.data.hits) != 0 {
+		t.Fatalf("validator identity change did not reject the cached link: %+v", rejected.data.hits)
+	}
+	if again := m.PrepareFrame(opts); again.data != rejected.data {
+		t.Fatal("validator identity change rebuilt more than once")
+	}
+}
+
+func TestPreparedFrameInvalidatesInternalNamespaceMutableValidatorGenerationOnce(t *testing.T) {
+	accept := true
+	validator := func(string) bool { return accept }
+	m := newSelectableModel(t, 70, 3, "open sidecar://note/nt-1")
+	opts := PrepareOptions{
+		AllowedKinds: contentlink.NewKindSet(contentlink.KindInternal),
+		InternalNamespaces: map[string]contentlink.URIOptions{
+			"note": {ValidateID: validator},
+		},
+		Decorate: true,
+		Links:    true,
+	}
+	allowed := m.PrepareFrame(opts)
+	if len(allowed.data.hits) != 1 {
+		t.Fatalf("accepting mutable validator produced hits: %+v", allowed.data.hits)
+	}
+
+	accept = false
 	opts.NamespaceGeneration++
-	validatorRejected := m.PrepareFrame(opts)
-	if validatorRejected.data == allowed.data || len(validatorRejected.data.hits) != 0 {
-		t.Fatalf("validator generation did not reject the cached link: %+v", validatorRejected.data.hits)
+	rejected := m.PrepareFrame(opts)
+	if rejected.data == allowed.data || len(rejected.data.hits) != 0 {
+		t.Fatalf("validator generation did not reject the cached link: %+v", rejected.data.hits)
 	}
-	if again := m.PrepareFrame(opts); again.data != validatorRejected.data {
+	if again := m.PrepareFrame(opts); again.data != rejected.data {
 		t.Fatal("validator generation rebuilt more than once")
 	}
 }
@@ -260,11 +300,23 @@ func applyDocviewTestTheme(t *testing.T, mutate func(*styles.ColorPalette)) {
 
 func useDocviewTestTheme(t *testing.T) {
 	t.Helper()
-	// Dracula has distinct Primary and Warning fills, which keeps the existing
-	// current-vs-other search-highlight contract observable after this test.
-	base := styles.GetTheme("dracula")
-	styles.ApplyThemeColors(base)
-	t.Cleanup(func() { styles.ApplyThemeColors(base) })
+	originalTheme := styles.GetCurrentTheme()
+	originalSearchMatch := styles.SearchMatch
+	originalSearchMatchCurrent := styles.SearchMatchCurrent
+	originalModalTitle := styles.ModalTitle
+	originalScrollbarTrack := styles.ScrollbarTrackColor
+	originalScrollbarThumb := styles.ScrollbarThumbColor
+	t.Cleanup(func() {
+		// Applying a theme rebuilds style globals. Restore both the caller's
+		// actual theme value and the exact docview-relevant globals it had on
+		// entry, including direct test overrides not represented by the theme.
+		styles.ApplyThemeColors(originalTheme)
+		styles.SearchMatch = originalSearchMatch
+		styles.SearchMatchCurrent = originalSearchMatchCurrent
+		styles.ModalTitle = originalModalTitle
+		styles.ScrollbarTrackColor = originalScrollbarTrack
+		styles.ScrollbarThumbColor = originalScrollbarThumb
+	})
 }
 
 func differentTestColor(current, candidate string) string {
