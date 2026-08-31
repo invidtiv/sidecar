@@ -322,7 +322,7 @@ func (a ClaudeAdapter) planConverge(s claudeState, p Plan, act Action) (Plan, er
 	content := renderJSONFile(top)
 
 	p.Ops = entryFileOps(nil, s.env, s.dir, s.settings, s.backup, content,
-		"write the Sidecar session-identity hook entry, preserving every other setting", ClaudeAssetVersion)
+		"write the Sidecar session-identity hook entry, preserving every other setting", ownedEntry(ClaudeAssetVersion))
 	if len(p.Ops) == 0 {
 		p.Unchanged = true
 		return p, nil
@@ -401,12 +401,36 @@ func refuseUnsafeEntryFile(dir, file FileState, scan hookTreeScan) error {
 	return nil
 }
 
+// entryOutcome is what the file contains once an entry write lands.
+//
+// It is a parameter rather than an assumption because entryFileOps serves both
+// directions: install and repair write Sidecar's entry in, and uninstall writes
+// the same file back out without it. Hard-coding the after-state as owned made
+// the dry-run preview tell a user that the file "contains Sidecar's entry" for
+// the very operation that removes it — the op list was right and only the
+// rendered claim was wrong, which is the more dangerous of the two, because a
+// preview is the thing a cautious user reads instead of the code.
+type entryOutcome struct {
+	// Owned reports whether Sidecar's entry is present in the result.
+	Owned bool
+	// Version is the asset version the entry declares. It is meaningful only
+	// when Owned is set.
+	Version string
+}
+
+// ownedEntry is the after-state of a write that puts Sidecar's entry in.
+func ownedEntry(version string) entryOutcome { return entryOutcome{Owned: true, Version: version} }
+
+// userEntry is the after-state of a write that leaves the file to its user,
+// which is what removing Sidecar's entry from a file the user owns produces.
+func userEntry() entryOutcome { return entryOutcome{} }
+
 // entryFileOps builds the ordered operations that land new content in an
 // entry-carrying file: create the directory if needed, keep a recoverable
 // copy of a pre-existing file, and write atomically. It returns nothing when
 // the content already matches byte for byte, which is how idempotency stays
 // visible.
-func entryFileOps(ops []Op, env Env, dir, file, backup FileState, content []byte, note, version string) []Op {
+func entryFileOps(ops []Op, env Env, dir, file, backup FileState, content []byte, note string, outcome entryOutcome) []Op {
 	if !dir.Exists {
 		mode := fs.FileMode(0o700)
 		ops = append(ops, Op{
@@ -442,6 +466,13 @@ func entryFileOps(ops []Op, env Env, dir, file, backup FileState, content []byte
 			After:    FileState{Path: backup.Path, Exists: true, Kind: "file", Checksum: file.Checksum, Mode: renderMode(mode), Size: file.Size},
 		})
 	}
+	after := FileState{
+		Path: file.Path, Exists: true, Kind: "file",
+		Checksum: checksum(content), Mode: renderMode(mode), Size: int64(len(content)),
+	}
+	if outcome.Owned {
+		after.Owned, after.Ownership, after.Version = true, OwnsEntry, outcome.Version
+	}
 	ops = append(ops, Op{
 		Kind:     OpWrite,
 		Path:     file.Path,
@@ -452,7 +483,7 @@ func entryFileOps(ops []Op, env Env, dir, file, backup FileState, content []byte
 		content:  content,
 		Note:     note,
 		Before:   file,
-		After:    FileState{Path: file.Path, Exists: true, Kind: "file", Owned: true, Ownership: OwnsEntry, Version: version, Checksum: checksum(content), Mode: renderMode(mode), Size: int64(len(content))},
+		After:    after,
 	})
 	return ops
 }

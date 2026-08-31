@@ -1,6 +1,7 @@
 package agentintegration
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -144,6 +145,128 @@ func TestAnOwnedEntryFileCarriesTheShapeASurfaceNeeds(t *testing.T) {
 			t.Fatalf("%s is owned but does not say in which sense, so no surface can describe it honestly", f.Path)
 		}
 	}
+}
+
+// TestAnAssetThatDeclaresNoOwnershipIsNotSidecarsFile pins the safety direction
+// of the marker rule's default.
+//
+// The rule ran for anything that was not explicitly OwnsEntry, so an asset whose
+// Ownership field was never set — a new adapter, a half-finished declaration, a
+// struct built by a caller that did not know about the field — fell through into
+// the marker check. Since a marker is just a comment line, that made a malformed
+// declaration one paste away from Sidecar concluding it owned a user's file, and
+// uninstall deletes what it owns. Unknown ownership must mean "not Sidecar's".
+func TestAnAssetThatDeclaresNoOwnershipIsNotSidecarsFile(t *testing.T) {
+	env := testEnv(t)
+	path := env.Home + "/undeclared.json"
+
+	undeclared := (ClaudeAdapter{}).settingsAsset()
+	undeclared.Ownership = "" // never declared
+	writeFileT(t, path, fmt.Sprintf("// sidecar-integration: id=%s schema=%d version=1\n{}\n",
+		undeclared.Source, undeclared.SchemaVersion))
+
+	got := inspectFile(env, path, undeclared)
+	if got.Unsafe != "" {
+		t.Fatalf("fixture unusable: %s (%s)", got.Unsafe, got.UnsafeDetail)
+	}
+	if got.Owned {
+		t.Fatal("an asset that declared no ownership claimed a file because its bytes carried a marker")
+	}
+	if got.Version != "" {
+		t.Fatalf("an unowned file was given a version %q", got.Version)
+	}
+}
+
+// TestAPreviewsAfterStateMatchesWhatTheOpActuallyDoes is the rendering half of
+// the ownership work, and it covers the direction the previous tests did not.
+//
+// Every entry-file op shared one after-state that said "Sidecar's entry is in
+// this file", including the uninstall op whose whole purpose is to take it out.
+// The op list was correct, so applying always did the right thing and no test
+// noticed; only the dry run lied — to the user who chose to read the preview
+// instead of trusting the code, which is the worst audience to lie to.
+func TestAPreviewsAfterStateMatchesWhatTheOpActuallyDoes(t *testing.T) {
+	// afterFor returns the after-state the plan predicts for one path.
+	afterFor := func(t *testing.T, p Plan, path string) (FileState, bool) {
+		t.Helper()
+		for _, op := range p.Ops {
+			if op.Kind == OpWrite && op.Path == path {
+				return op.After, true
+			}
+		}
+		return FileState{}, false
+	}
+
+	t.Run("claude settings.json", func(t *testing.T) {
+		svc, _, paths := claudeFixture(t)
+		writeFileForTest(t, paths.Settings, `{"model": "opus"}`)
+
+		install, err := svc.Plan(ClaudeProvider, ActionInstall)
+		if err != nil {
+			t.Fatal(err)
+		}
+		after, ok := afterFor(t, install, paths.Settings)
+		if !ok {
+			t.Fatal("install planned no write to settings.json")
+		}
+		if !after.Owned || after.Ownership != OwnsEntry || after.Version != ClaudeAssetVersion {
+			t.Fatalf("install predicted %+v; wanted an owned entry at version %s", after, ClaudeAssetVersion)
+		}
+
+		applyTo(t, svc, ClaudeProvider, ActionInstall)
+		uninstall, err := svc.Plan(ClaudeProvider, ActionUninstall)
+		if err != nil {
+			t.Fatal(err)
+		}
+		after, ok = afterFor(t, uninstall, paths.Settings)
+		if !ok {
+			t.Fatal("uninstall planned no write to settings.json")
+		}
+		if after.Owned || after.Ownership == OwnsEntry {
+			t.Fatalf("uninstall predicted %+v; the op removes Sidecar's entry, so the file it leaves is the user's", after)
+		}
+		if after.Version != "" {
+			t.Fatalf("uninstall predicted a Sidecar version %q on a file it just cleaned", after.Version)
+		}
+	})
+
+	t.Run("codex hooks.json and config.toml", func(t *testing.T) {
+		svc, _, paths := codexFixture(t)
+		writeFileForTest(t, paths.Config, "[features]\nhooks = true\n")
+
+		install, err := svc.Plan(CodexProvider, ActionInstall)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, path := range []string{paths.Hooks, paths.Config} {
+			after, ok := afterFor(t, install, path)
+			if !ok {
+				t.Fatalf("install planned no write to %s", path)
+			}
+			if !after.Owned || after.Ownership != OwnsEntry || after.Version != CodexAssetVersion {
+				t.Fatalf("install predicted %+v for %s; wanted an owned entry", after, path)
+			}
+		}
+
+		applyTo(t, svc, CodexProvider, ActionInstall)
+		uninstall, err := svc.Plan(CodexProvider, ActionUninstall)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// config.toml is the case the reviewer named: it is the user's file, it
+		// survives uninstall, and the op that strips Sidecar's trust records
+		// must not describe the result as containing them.
+		after, ok := afterFor(t, uninstall, paths.Config)
+		if !ok {
+			t.Fatal("uninstall planned no write to config.toml")
+		}
+		if after.Owned || after.Ownership == OwnsEntry {
+			t.Fatalf("uninstall predicted %+v for config.toml; it removes Sidecar's trust records", after)
+		}
+		if after.Version != "" {
+			t.Fatalf("uninstall predicted a Sidecar version %q on the user's config.toml", after.Version)
+		}
+	})
 }
 
 func testEnv(t *testing.T) Env {

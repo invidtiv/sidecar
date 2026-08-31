@@ -846,7 +846,15 @@ func inspectFile(env Env, path string, want Asset) FileState {
 	// was not merely wasted work: it left every entry adapter with a FileState
 	// whose Owned was false for a file it demonstrably had an entry in, and the
 	// adapters then corrected it afterwards. The correction is now the rule.
-	if want.Ownership == OwnsEntry {
+	//
+	// Stated as "only OwnsFile", not as "not OwnsEntry", and the difference is
+	// the safety direction. An asset that declares no ownership at all has the
+	// zero value here, and testing for OwnsEntry let that zero value fall through
+	// into the marker rule — so a malformed or half-written asset declaration
+	// would be one matching comment away from Sidecar concluding it owns a file
+	// it does not, and every planner downstream treats an owned file as one it
+	// may rewrite or delete. The default has to be "not Sidecar's".
+	if want.Ownership != OwnsFile {
 		return st
 	}
 	if id, schema, version, ok := parseMarker(string(b)); ok && id == want.Source && schema == want.SchemaVersion {
