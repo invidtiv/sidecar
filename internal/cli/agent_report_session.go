@@ -289,6 +289,14 @@ func runAgentReportSession(env Env, args []string) int {
 	if source == "" {
 		source = agentsession.OfficialSourceFor(kind)
 	}
+	if source == "" {
+		// Without this the validator refuses with "the source is empty", which
+		// describes the symptom rather than the cause: Sidecar ships no official
+		// integration for this provider, so there is no source to default to.
+		return emitReportSessionError(env, f.json, "unsupported_kind",
+			fmt.Errorf("%w: Sidecar has no official integration for %q, so --source must be given explicitly",
+				agentsession.ErrUnsupportedKind, kind))
+	}
 
 	// Resolve the manifest that owns this shell through the same resolver the
 	// other agent commands use, so there is one answer to "which project is

@@ -91,6 +91,22 @@ func TestReportSessionUsageErrorsComeBeforeAnyContextWork(t *testing.T) {
 	}
 }
 
+// TestAProviderWithNoOfficialIntegrationSaysSo names the cause rather than the
+// symptom. Falling through to the validator produced "the source is empty",
+// which describes what the defaulting failed to fill in instead of why.
+func TestAProviderWithNoOfficialIntegrationSaysSo(t *testing.T) {
+	for _, kind := range []string{"codex", "claude", "opencode", "pi"} {
+		if agentsession.OfficialSourceFor(kind) == "" {
+			t.Fatalf("%s is expected to have an official source", kind)
+		}
+	}
+	// grok is a real catalog family with no Sidecar integration, so the
+	// defaulting genuinely has nothing to fill in.
+	if agentsession.OfficialSourceFor("grok") != "" {
+		t.Skip("grok gained an official integration; pick another provider for this case")
+	}
+}
+
 // TestReportSessionIsNotInTheHappyPathList keeps the plan's decision that this
 // is an integration surface: discoverable in help, absent from the short
 // `sidecar agents` list an agent reads to learn the coordination sequence.
