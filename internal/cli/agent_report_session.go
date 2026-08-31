@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/marcus/sidecar/internal/agentcatalog"
 	"github.com/marcus/sidecar/internal/agentlifecycle/lifecycleenv"
 	"github.com/marcus/sidecar/internal/agentsession"
 	"github.com/marcus/sidecar/internal/config"
@@ -225,6 +226,32 @@ func readHookPayload(r io.Reader) (hookPayload, error) {
 	return p, nil
 }
 
+// resolveReportedKind canonicalizes a hook's --kind claim through the catalog.
+//
+// It runs before the claim is compared to the pane's occupant, and that order is
+// the point. The comparison is a string equality against a resolved process
+// name, so without a lookup first an identifier that names no provider at all —
+// a typo, or an adapter-vocabulary alias like "claude-code" — came back as
+// kind_mismatch: "this pane runs claude, but the report claims claude-code".
+// That names the wrong problem twice, since the pane's provider was never in
+// question and the two spellings are the same provider.
+//
+// One lookup answers both halves. An alias becomes its canonical id and is
+// checked normally; an identifier the catalog does not know is refused as
+// unsupported_kind, which is the truth about it, and is refused without
+// consulting the pane at all. Every shipped integration passes a canonical id
+// already (hookconfig writes them), so this changes no working path — it makes
+// the broken ones say what is broken.
+func resolveReportedKind(claim string) (string, error) {
+	claim = strings.TrimSpace(claim)
+	family, ok := agentcatalog.Lookup(claim)
+	if !ok {
+		return "", fmt.Errorf("%w: %q is not an agent kind Sidecar knows",
+			agentsession.ErrUnsupportedKind, claim)
+	}
+	return family.ID, nil
+}
+
 func runAgentReportSession(env Env, args []string) int {
 	cmd := RootCommand().FindSubcommand("agent").FindSubcommand("report-session")
 	help := RenderHelp(cmd)
@@ -252,7 +279,10 @@ func runAgentReportSession(env Env, args []string) int {
 		})
 	}
 
-	kind := strings.TrimSpace(f.kind)
+	kind, kindErr := resolveReportedKind(f.kind)
+	if kindErr != nil {
+		return emitReportSessionError(env, f.json, reportSessionCode(kindErr), kindErr)
+	}
 
 	// --kind describes the settings file the hook was installed in, not the
 	// process that ran it, and those differ: grok reads ~/.claude/settings.json

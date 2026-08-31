@@ -1,6 +1,7 @@
 package shellstate
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -88,8 +89,18 @@ func BindSessionAtPath(path string, id Identity, update SessionUpdate) (SessionO
 		// which is stronger evidence but is only available where a process
 		// identity adapter exists and where the provider did not hide its hook in
 		// a fresh process group. This one needs no process table at all: it
-		// compares the claim against what the manifest recorded when the shell was
-		// created, so a grok shell refuses a claude report on every platform.
+		// compares the claim against the kind the manifest recorded for this
+		// shell, so wherever a kind was recorded, a grok shell refuses a claude
+		// report on every platform, including the ones with no process identity
+		// adapter.
+		//
+		// It covers only shells whose record names a kind, and that is the exact
+		// limit of the claim. A shell created with `create shell --agent KIND` and
+		// one whose provider was started by `agent start --kind KIND` both record
+		// one (RecordAgentKindAtPath); a plain shell somebody launched an agent
+		// inside by hand, and a pre-existing tmux session adopted at startup, do
+		// not, and for those this gate abstains and the process-identity gate is
+		// the only one standing.
 		//
 		// Enforcing it here is also what keeps AgentType and Agent.Kind from
 		// disagreeing. The two are documented as the same value, and the previous
@@ -206,6 +217,113 @@ type errSessionKindMismatch struct{ err error }
 func (e errSessionKindMismatch) Error() string { return e.err.Error() }
 func (e errSessionKindMismatch) Unwrap() error { return e.err }
 
+// AgentKindOf answers "what provider does this record name", and — because a
+// record can name two — "does it disagree with itself".
+//
+// AgentType and Agent.Kind are documented as the same value and are written
+// together by every writer here, but a record produced before that invariant
+// existed can hold two different providers: a mis-attributed hook report set
+// Agent.Kind and left AgentType alone. Readers preferring one field silently
+// picked a side, which is how a shell created for grok came to offer
+// `claude --resume` on a grok conversation id.
+//
+// So the disagreement is returned rather than resolved. This package will not
+// guess which field is right; a caller about to act on the answer — running a
+// provider CLI against a stored conversation id, above all — is expected to
+// refuse instead. conflict is empty whenever the record is self-consistent,
+// which is every record any current writer produces.
+func AgentKindOf(def Definition) (kind, conflict string) {
+	bound := ""
+	if def.Agent != nil {
+		bound = strings.TrimSpace(def.Agent.Kind)
+	}
+	recorded := strings.TrimSpace(def.AgentType)
+	switch {
+	case bound == "":
+		return recorded, ""
+	case recorded == "" || recorded == bound:
+		return bound, ""
+	default:
+		return bound, recorded
+	}
+}
+
+// RecordAgentKindAtPath records which provider family a managed shell is
+// running.
+//
+// It exists because the bind-time kind gate above can only compare a report
+// against a kind the record already names, and until this call there was
+// exactly one moment that wrote one: shell creation with an explicit --agent.
+// A shell created plain and then handed a provider by `sidecar agent start` —
+// the sequence the coordinate-agents contract actually prescribes — recorded
+// nothing, so the gate abstained for precisely the shells an agent drives.
+//
+// The caller must have already proved the provider occupies the pane. That is
+// what makes overwriting a differing recorded kind correct rather than
+// destructive: process-ownership evidence beats a stale creation-time
+// preference, which is the opposite of the report path, where the kind is an
+// unverified claim and a disagreement is a refusal.
+//
+// Both kind fields are written together, for the same reason BindSessionAtPath
+// writes them together — a record that names two providers is a record whose
+// meaning depends on which field a reader consults. And a changed kind drops
+// the session binding: that reference is the *previous* provider's
+// conversation, and keeping it is how a restore comes to offer one agent's
+// conversation to another.
+func RecordAgentKindAtPath(path string, id Identity, kind string) error {
+	if strings.TrimSpace(id.TmuxName) == "" {
+		return &Error{Kind: KindValidation, Msg: "shell session name is required"}
+	}
+	kind = strings.TrimSpace(kind)
+	if kind == "" {
+		return &Error{Kind: KindValidation, Msg: "agent kind is required"}
+	}
+
+	err := mutateManifest(path, func(m *manifest) error {
+		idx := -1
+		for i := range m.Shells {
+			if m.Shells[i].TmuxName == id.TmuxName && sameNamespace(m.Shells[i].Namespace, id.Namespace) {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			return &Error{Kind: KindNotFound, Msg: "no managed shell named " + id.TmuxName + " is recorded in this project"}
+		}
+		def := m.Shells[idx]
+
+		prior := def.AgentType
+		if def.Agent != nil && strings.TrimSpace(def.Agent.Kind) != "" {
+			prior = def.Agent.Kind
+		}
+		if prior == kind && def.AgentType == kind {
+			// Already recorded, by creation or by an earlier start. Returning
+			// without a write keeps a repeated start from rewriting shells.json
+			// and waking every watcher for no change.
+			return errSessionUnchanged{}
+		}
+
+		if def.Agent == nil {
+			def.Agent = &AgentBinding{}
+		} else {
+			clone := *def.Agent
+			def.Agent = &clone
+		}
+		if prior != "" && prior != kind {
+			def.Agent.Session = nil
+			def.Agent.LaunchArgv = nil
+		}
+		def.Agent.Kind = kind
+		def.AgentType = kind
+		m.Shells[idx] = def
+		return nil
+	})
+	if _, ok := err.(errSessionUnchanged); ok {
+		return nil
+	}
+	return err
+}
+
 // SessionHoldersAtPath lists the session claims recorded in one manifest.
 //
 // Deduplication is a global per-host question, so a caller collects these across
@@ -220,10 +338,7 @@ func SessionHoldersAtPath(path, project string) ([]agentsession.Holder, error) {
 		if def.Agent == nil || def.Agent.Session == nil || def.Agent.Session.Empty() {
 			continue
 		}
-		kind := def.Agent.Kind
-		if kind == "" {
-			kind = def.AgentType
-		}
+		kind, _ := AgentKindOf(def)
 		out = append(out, agentsession.Holder{
 			Project: project,
 			Session: def.TmuxName,
@@ -235,11 +350,24 @@ func SessionHoldersAtPath(path, project string) ([]agentsession.Holder, error) {
 	return out, nil
 }
 
+// ErrKindDisagreement reports a record whose two provider fields name different
+// providers. It is a read-time refusal, not a repair: nothing here can tell
+// which of the two is the mistake, and every way of choosing produces the
+// failure the fields exist to prevent — one provider's CLI handed another
+// provider's conversation.
+var ErrKindDisagreement = errors.New("this shell's record names two different agent kinds")
+
 // SessionRefAtPath returns the exact session reference bound to one shell.
 //
 // It is the read half of BindSessionAtPath and the only supported way to get a
 // reference back out: the transcript reader and the restore planner both go
 // through it rather than unmarshalling shells.json themselves.
+//
+// Being the one door is what lets it carry the reconciliation. A record poisoned
+// before the bind-time kind gate existed still sits in users' manifests, and no
+// migration can fix it — the healing report would have to come from a provider
+// integration that does not ship. So the refusal happens on the way out, once,
+// here, instead of in each of the callers that would otherwise each pick a field.
 func SessionRefAtPath(path string, id Identity) (agentsession.Ref, string, bool, error) {
 	defs, err := ListAtPath(path)
 	if err != nil {
@@ -249,12 +377,10 @@ func SessionRefAtPath(path string, id Identity) (agentsession.Ref, string, bool,
 		if def.TmuxName != id.TmuxName || !sameNamespace(def.Namespace, id.Namespace) {
 			continue
 		}
-		kind := ""
-		if def.Agent != nil {
-			kind = def.Agent.Kind
-		}
-		if kind == "" {
-			kind = def.AgentType
+		kind, conflict := AgentKindOf(def)
+		if conflict != "" {
+			return agentsession.Ref{}, kind, false, fmt.Errorf(
+				"%w: %s and %s", ErrKindDisagreement, conflict, kind)
 		}
 		if def.Agent == nil || def.Agent.Session == nil || def.Agent.Session.Empty() {
 			return agentsession.Ref{}, kind, false, nil
@@ -285,6 +411,21 @@ func CarryForward(prior, next Definition) Definition {
 	}
 	if next.Restore == nil {
 		next.Restore = prior.Restore
+	}
+	// AgentType is modeled by the second serializer, but only for a shell whose
+	// in-memory session carries a chosen agent. A record written by another
+	// surface — `create shell --agent`, or `agent start` — reaches the workspace
+	// plugin as a shell it merely adopted, with no chosen agent, and a wholesale
+	// replacement then cleared the kind. That silently disarmed the bind-time
+	// kind gate, which can only refuse a mis-attributed report when the record
+	// names a kind.
+	//
+	// Empty is not a value here: it means "this writer has nothing to say",
+	// never "this shell runs no agent". Exiting an agent does not clear the
+	// field either — the choice is creation-time truth, which is why the
+	// workspace plugin keeps it in ChosenAgent across an agent's death.
+	if strings.TrimSpace(next.AgentType) == "" {
+		next.AgentType = prior.AgentType
 	}
 	return next
 }

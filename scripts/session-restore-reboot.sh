@@ -28,9 +28,9 @@
 #   scripts/session-restore-reboot.sh reset       # wipe the harness root
 #   scripts/session-restore-reboot.sh build       # compile the working tree
 #   scripts/session-restore-reboot.sh seed        # project + shells + fake agent
-#   scripts/session-restore-reboot.sh mark        # record cold-restore eligibility
 #   scripts/session-restore-reboot.sh server-id   # print the live server pid
 #   scripts/session-restore-reboot.sh reboot      # terminate ONLY this server
+#   scripts/session-restore-reboot.sh trace       # startup phase offsets from a real run
 #   scripts/session-restore-reboot.sh cli ARGS... # run the isolated binary
 #   scripts/session-restore-reboot.sh gate        # the whole exit gate
 
@@ -221,6 +221,111 @@ PY
   note "bound a fake codex conversation to the reviewer shell"
 }
 
+# cmd_trace reproduces the first-frame ordering evidence the plan cites.
+#
+# The claim it exists to check is that the cold restore runs strictly after the
+# app has painted — the plan's numbers are `first ready frame 84.985ms` followed
+# by `session restore 86.15ms` — and that is a claim about a real run, not
+# something a unit test can hold. So it launches the real TUI, inside the
+# harness's own tmux server and against the harness's own state tree, with
+# SIDECAR_STARTUP_TRACE on, and reads the phase offsets back out.
+#
+# The environment is passed explicitly rather than inherited. The harness server
+# may have been started by an earlier subcommand and carries whatever global
+# environment it captured then; naming every isolating variable on the command
+# line means the traced binary cannot be the one that finds the developer's real
+# state tree.
+#
+# The only thing it terminates is the session it just created, by name. There is
+# no kill-server here, and there must never be one: the harness server is also
+# holding the seeded shells.
+TRACE_SESSION="sidecar-startup-trace"
+
+cmd_trace() {
+  assert_isolated
+  [[ -x "$BIN" ]] || die "no binary; run '$0 build' first"
+
+  local out="$HARNESS_ROOT/startup-trace.txt"
+  local delay="${TRACE_DELAY:-4s}"
+  rm -f "$out"
+  mkdir -p "$HARNESS_ROOT"
+
+  tmux_here kill-session -t "$TRACE_SESSION" 2>/dev/null || true
+  tmux_here new-session -d -s "$TRACE_SESSION" -x 200 -y 50 \
+    "env HOME='$HOME' \
+         XDG_STATE_HOME='$XDG_STATE_HOME' \
+         XDG_CONFIG_HOME='$XDG_CONFIG_HOME' \
+         XDG_DATA_HOME='$XDG_DATA_HOME' \
+         XDG_CACHE_HOME='$XDG_CACHE_HOME' \
+         TMUX_TMPDIR='$TMUX_TMPDIR' \
+         SIDECAR_ISOLATED_STATE=1 \
+         SIDECAR_STARTUP_TRACE=stderr \
+         SIDECAR_STARTUP_TRACE_DELAY='$delay' \
+         '$BIN' -config '$CONFIG_PATH' 2>'$out'"
+  note "sidecar running in tmux session $TRACE_SESSION; waiting for the trace dump"
+
+  # The binary dumps the report SIDECAR_STARTUP_TRACE_DELAY after start without
+  # needing a clean quit, so wait for the report's own header rather than
+  # sleeping a guessed interval.
+  local waited=0
+  while ((waited < 300)); do
+    grep -q 'sidecar startup trace' "$out" 2>/dev/null && break
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  tmux_here kill-session -t "$TRACE_SESSION" 2>/dev/null || true
+
+  if ! grep -q 'sidecar startup trace' "$out" 2>/dev/null; then
+    note "no trace was written to $out"
+    [[ -s "$out" ]] && sed -n '1,40p' "$out"
+    return 1
+  fi
+
+  echo
+  cat "$out"
+  echo
+  echo "== phase offsets"
+  trace_phase "$out" "first ready frame"
+  trace_phase "$out" "session restore"
+
+  local frame restore
+  frame="$(trace_offset "$out" "first ready frame")"
+  restore="$(trace_offset "$out" "session restore")"
+  if [[ -z "$frame" || -z "$restore" ]]; then
+    note "one of the two phases is missing; the ordering claim cannot be checked from this run"
+    return 1
+  fi
+  # Offsets are printed in source order by ascending offset, so the line numbers
+  # answer the ordering question without parsing durations.
+  if ((frame < restore)); then
+    printf '  ok    the cold restore starts after the first ready frame\n'
+  else
+    printf '  FAIL  session restore was recorded before the first ready frame\n'
+    return 1
+  fi
+}
+
+# trace_phase prints the report line for one phase, offset included.
+trace_phase() {
+  local line
+  line="$(grep -F -- "$2" "$1" | head -1)"
+  if [[ -z "$line" ]]; then
+    printf '  MISSING  %s\n' "$2"
+  else
+    printf '  %s\n' "$(printf '%s' "$line" | sed 's/^ *//')"
+  fi
+}
+
+# trace_offset prints the 1-based position of a phase within the report body,
+# which is ordered by offset from process start.
+trace_offset() {
+  awk -v want="$2" '
+    /sidecar startup trace/ { body = 1; n = 0; next }
+    body && index($0, want) { print ++n; exit }
+    body { n++ }
+  ' "$1"
+}
+
 # cmd_gate runs the whole exit gate end to end and fails loudly on any step.
 #
 # It exists because the gate is only worth as much as its reproducibility: a
@@ -357,8 +462,6 @@ case "${1:-}" in
   reset)     cmd_reset ;;
   build)     cmd_build ;;
   seed)      shift; cmd_seed "$@" ;;
-  mark)      cmd_mark ;;
-  manifest)  cmd_manifest ;;
   trace)     cmd_trace ;;
   gate)      cmd_gate ;;
   server-id) cmd_server_id ;;

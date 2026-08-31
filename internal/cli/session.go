@@ -495,6 +495,10 @@ func agentReasonSentence(a sessionrestore.AgentStep) string {
 		return "not requested; pass --agents"
 	case sessionrestore.ReasonPolicyResume:
 		return "will be resumed"
+	case sessionrestore.ReasonKindDisagreement:
+		// The step's own detail line, printed just above this one, names both
+		// providers. This says what it means rather than repeating them.
+		return "this record names two different providers, so neither is given the conversation"
 	default:
 		return string(a.Reason)
 	}
