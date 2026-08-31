@@ -12,6 +12,7 @@ package agentintegration
 
 import (
 	_ "embed"
+	"strconv"
 	"strings"
 
 	"github.com/marcus/sidecar/internal/agentactivity"
@@ -64,8 +65,14 @@ type OpenCodeEvent struct {
 	// ErrorName is the error class name on session.error. It is the only thing
 	// separating a cancelled turn from a failed one.
 	ErrorName string
-	// HasSession reports whether the event carried a session identifier.
-	HasSession bool
+	// SessionID is the provider session identifier the event carried, if any.
+	//
+	// It is read rather than merely recorded: session.created fires on a new
+	// id, which covers both the first session and a rotation mid-process. An
+	// earlier version carried only a "has a session" boolean that nothing ever
+	// consulted, which let this handler and the shipped asset disagree about
+	// when a baseline lane is established.
+	SessionID string
 }
 
 // OpenCodeAction is one report the handler wants made.
@@ -85,8 +92,14 @@ type OpenCodeAction struct {
 type OpenCodeHandler struct {
 	lane    agentactivity.State
 	blocked bool
+	session string
 	// ended latches after a terminal outcome so a trailing status event cannot
 	// resurrect a run that already reported its end.
+	//
+	// This is not defensive: the recorded traces show session.error is
+	// immediately followed by session.status idle, so without the latch the
+	// trailing idle supersedes the end report and a cancelled or failed turn is
+	// announced to the user as a clean completion.
 	ended bool
 }
 
@@ -95,15 +108,21 @@ type OpenCodeHandler struct {
 func (h *OpenCodeHandler) Handle(ev OpenCodeEvent) []OpenCodeAction {
 	switch ev.Type {
 	case "session.created":
-		if h.lane == "" {
-			h.lane = agentactivity.StateIdle
-			return []OpenCodeAction{{
-				Kind:   agentlifecycle.KindState,
-				State:  agentactivity.StateIdle,
-				Reason: agentlifecycle.ReasonSessionStart,
-			}}
+		// Fires on a genuinely new session id, which covers both the first
+		// session and a rotation mid-process. A rotation is a new run, so the
+		// baseline lane is re-established and the latch is cleared.
+		if ev.SessionID == h.session {
+			return nil
 		}
-		return nil
+		h.session = ev.SessionID
+		h.ended = false
+		h.blocked = false
+		h.lane = agentactivity.StateIdle
+		return []OpenCodeAction{{
+			Kind:   agentlifecycle.KindState,
+			State:  agentactivity.StateIdle,
+			Reason: agentlifecycle.ReasonSessionStart,
+		}}
 
 	case "session.status":
 		if h.ended {
@@ -206,3 +225,39 @@ func statusType(status string) string {
 		return ""
 	}
 }
+
+// ReportArgs builds the exact CLI argv one action becomes.
+//
+// It mirrors buildArgs in the bundled asset. Both exist because the asset must
+// construct argv in JavaScript at runtime, and the equivalence test compares
+// the two lists element for element -- so this is the Go statement of the same
+// contract, not a convenience wrapper.
+func ReportArgs(action OpenCodeAction, seq uint64, sessionID string) []string {
+	verb := "report"
+	switch action.Kind {
+	case agentlifecycle.KindEnd:
+		verb = "end"
+	case agentlifecycle.KindRelease:
+		verb = "release"
+	}
+	args := []string{
+		"agent", verb,
+		"--source", OpenCodeSource,
+		"--provider", OpenCodeProvider,
+		"--seq", strconv.FormatUint(seq, 10),
+	}
+	if sessionID != "" {
+		args = append(args, "--session-id", sessionID)
+	}
+	if action.Kind == agentlifecycle.KindState {
+		args = append(args, "--state", string(action.State))
+	}
+	if action.Kind == agentlifecycle.KindEnd {
+		args = append(args, "--outcome", string(action.Outcome))
+	}
+	return append(args, "--reason", string(action.Reason))
+}
+
+// Session returns the provider session id the handler has adopted, which the
+// asset also carries on every report.
+func (h *OpenCodeHandler) Session() string { return h.session }

@@ -13,6 +13,7 @@ import (
 	"github.com/marcus/sidecar/internal/agentlifecycle"
 	"github.com/marcus/sidecar/internal/agentlifecycle/lifecyclestore"
 	"github.com/marcus/sidecar/internal/agentresolve"
+	"github.com/marcus/sidecar/internal/tmuxserver"
 )
 
 // StoreSource supplies lifecycle evidence to the shared resolver by reading the
@@ -40,6 +41,11 @@ type StoreSource struct {
 	processAlive func(generation string) bool
 	// providerVersion reports the installed version of a provider CLI.
 	providerVersion func(provider string) string
+	// serverID reports the live tmux server incarnation, in the same form the
+	// managed shell publishes and hooks record.
+	serverID func() string
+	// host reports this machine's name.
+	host func() string
 
 	mu       sync.Mutex
 	folded   []agentlifecycle.Report
@@ -48,8 +54,10 @@ type StoreSource struct {
 	loaded   bool
 	failed   bool
 
-	panes    map[string]string
-	versions map[string]string
+	panes        map[string]string
+	versions     map[string]string
+	cachedServer string
+	cachedHost   string
 }
 
 // NewStoreSource returns a source reading the lifecycle log in stateDir.
@@ -59,9 +67,54 @@ func NewStoreSource(stateDir string) *StoreSource {
 		resolvePane:     tmuxPaneForSession,
 		processAlive:    generationAlive,
 		providerVersion: detectProviderVersion,
+		serverID:        liveServerIncarnation,
+		host:            hostname,
 		panes:           map[string]string{},
 		versions:        map[string]string{},
 	}
+}
+
+// serverIncarnation returns the live tmux server identity, resolved once.
+//
+// Caching is safe within a process because a tmux server restart replaces the
+// panes this source is asked about too: the pane lookup fails, or resolves to a
+// pane whose stored records carry the old incarnation and are therefore not
+// matched. Either way the answer is fallback rather than a wrong lane.
+func (s *StoreSource) serverIncarnation() string {
+	if s.cachedServer == "" {
+		s.cachedServer = s.serverID()
+	}
+	return s.cachedServer
+}
+
+func (s *StoreSource) hostname() string {
+	if s.cachedHost == "" {
+		s.cachedHost = s.host()
+	}
+	return s.cachedHost
+}
+
+// liveServerIncarnation reports the current tmux server in the same form the
+// managed shell publishes, so a stored record and a live observation are
+// directly comparable.
+func liveServerIncarnation() string {
+	out, err := exec.Command("tmux", "display-message", "-p", "#{pid}").Output()
+	if err != nil {
+		return ""
+	}
+	pid, ok := tmuxserver.ParsePID(strings.TrimSpace(string(out)))
+	if !ok {
+		return ""
+	}
+	return "pid=" + strconv.Itoa(pid)
+}
+
+func hostname() string {
+	name, err := os.Hostname()
+	if err != nil {
+		return ""
+	}
+	return name
 }
 
 // Evidence implements [agentresolve.Source].
@@ -91,9 +144,27 @@ func (s *StoreSource) Evidence(ref agentresolve.PaneRef) (agentresolve.Evidence,
 		return agentresolve.Evidence{}, false
 	}
 
+	// The live server incarnation, resolved once and cached. Records are
+	// namespaced by it, so a record from a previous tmux server must not be
+	// found at all when looking up a pane on the current one.
+	//
+	// This is the guard that makes PID namespacing actually implement the
+	// plan's recycled-pane rule. Matching on pane id alone is not enough: tmux
+	// hands out %N from a per-server counter, so after a server restart the very
+	// first pane is %0 again, and with the blocked and idle freshness windows
+	// measured in hours a dead run's lane would be inherited by whatever
+	// occupies that id next.
+	server := s.serverIncarnation()
+	if server == "" {
+		// Without a live server identity nothing can be matched safely. Screen
+		// detection is the honest answer.
+		return agentresolve.Evidence{}, false
+	}
+
 	var latest *agentlifecycle.Report
 	for i := range s.folded {
-		if s.folded[i].Identity.PaneID == paneID {
+		id := s.folded[i].Identity
+		if id.PaneID == paneID && id.ServerIncarnation == server {
 			latest = &s.folded[i]
 		}
 	}
@@ -113,13 +184,31 @@ func (s *StoreSource) Evidence(ref agentresolve.PaneRef) (agentresolve.Evidence,
 		status = agentlifecycle.StatusOutdated
 	}
 
-	// The live identity is the report's own, with the fields the resolver
-	// re-checks taken from the record. This source cannot independently observe
-	// the run -- it has no pane context of its own -- so the identity checks
-	// that matter here are liveness and the ones the store already enforced on
-	// the way in: a prior run's report is never stored, and a record whose
-	// process is gone is caught below.
-	live := latest.Identity
+	// The live identity is built from what is true NOW, never copied from the
+	// record.
+	//
+	// Copying it -- which an earlier version did -- makes every identity check
+	// in the resolver tautological: host, server, pane, run, and generation all
+	// compare a value against itself and can never disagree, so
+	// ReasonServerIncarnationNew and ReasonProcessGenChanged become unreachable
+	// and the record is trusted purely because it exists. The whole point of
+	// arbitration is that a stored claim is checked against the world.
+	live := agentlifecycle.Identity{
+		Host:              s.hostname(),
+		ServerIncarnation: server,
+		PaneID:            paneID,
+		Provider:          latest.Identity.Provider,
+		RunID:             latest.Identity.RunID,
+		ProcessGeneration: latest.Identity.ProcessGeneration,
+	}
+	// Run and generation are the two fields this source genuinely cannot
+	// observe independently -- it has no pane context of its own and the run is
+	// Sidecar-assigned -- so they are carried across and defended by liveness
+	// instead. generationAlive checks the full generation string, start time
+	// included, so a recycled PID does not read as the same process.
+	if !s.processAlive(latest.Identity.ProcessGeneration) {
+		live.ProcessGeneration = "exited"
+	}
 
 	return agentresolve.Evidence{
 		Live:                  live,
@@ -247,11 +336,18 @@ func leadingInt(s string) int {
 	return n
 }
 
-// generationAlive reports whether the process behind a generation string is
-// still running.
+// generationAlive reports whether the exact process behind a generation string
+// is still running.
 //
-// This is what stops a crashed provider from holding a lane until its freshness
-// window expires. Signal 0 checks existence without delivering anything.
+// "Exact" is the whole point. A generation is recorded as
+// "pid=123,start=<process start time>", and the start component exists solely to
+// disambiguate PID reuse. Checking only the pid — which an earlier version did —
+// throws that away: a long-lived pane can outlive enough process churn for the
+// number to come back around, and the new occupant would then keep a dead run's
+// lane alive for the whole of an eight-hour blocked freshness window.
+//
+// So the pid must exist *and*, when a start time was recorded, still report the
+// same one. Signal 0 checks existence without delivering anything.
 func generationAlive(generation string) bool {
 	pid := generationPID(generation)
 	if pid <= 0 {
@@ -264,7 +360,23 @@ func generationAlive(generation string) bool {
 	if err != nil {
 		return false
 	}
-	return proc.Signal(syscall.Signal(0)) == nil
+	if proc.Signal(syscall.Signal(0)) != nil {
+		return false
+	}
+	want := generationStart(generation)
+	if want == "" {
+		// Nothing recorded to compare against. The pid exists, which is all
+		// that can honestly be said.
+		return true
+	}
+	got := processStartToken(pid)
+	if got == "" {
+		// The start time cannot be read now. Refusing here would disable a
+		// working integration on any system where ps is unavailable, so the
+		// weaker liveness answer stands.
+		return true
+	}
+	return got == want
 }
 
 // generationPID extracts the pid from a "pid=123,start=..." generation string.
@@ -279,6 +391,26 @@ func generationPID(generation string) int {
 		}
 	}
 	return 0
+}
+
+// generationStart extracts the start token from a generation string.
+func generationStart(generation string) string {
+	for _, part := range strings.Split(generation, ",") {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(part), "start="); ok {
+			return strings.TrimSpace(rest)
+		}
+	}
+	return ""
+}
+
+// processStartToken reads a process's start time in the same collapsed form
+// lifecycleenv records it in, so the two are directly comparable.
+func processStartToken(pid int) string {
+	out, err := exec.Command("ps", "-o", "lstart=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.Join(strings.Fields(string(out)), "-")
 }
 
 func tmuxPaneForSession(session string) string {

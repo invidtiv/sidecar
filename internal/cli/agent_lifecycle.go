@@ -5,15 +5,19 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/marcus/sidecar/internal/agentactivity"
+	"github.com/marcus/sidecar/internal/agentintegration"
 	"github.com/marcus/sidecar/internal/agentlifecycle"
 	"github.com/marcus/sidecar/internal/agentlifecycle/lifecycleenv"
 	"github.com/marcus/sidecar/internal/agentlifecycle/lifecyclestore"
+	"github.com/marcus/sidecar/internal/agentresolve"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/tty"
 )
 
 // The lifecycle report surface: `sidecar agent report`, `end`, `release`, and
@@ -512,38 +516,37 @@ func runAgentExplain(env Env, args []string) int {
 		return 0
 	}
 
-	// Read-only: ReadAll never locks, compacts, repairs, or creates the log.
-	records, err := lifecyclestore.ReadAll(lifecycleLogPath(stateDir))
-	if err != nil {
-		return emitLifecycleError(env, f.json, agentlifecycle.ErrStoreFailed, err)
-	}
+	// explain answers through exactly the same source and resolver the polling
+	// surfaces use.
+	//
+	// An earlier version built its own Input by hand: it hardcoded
+	// StatusNotInstalled, never populated a capability, passed an unknown
+	// screen, and rebuilt the live run identity from *this* process's ancestry
+	// — which is the explain command's own ancestry, so it could never match a
+	// record written by a hook. TierFor(StatusNotInstalled) then returned
+	// screen-fallback unconditionally and the resolver returned before
+	// populating a single report field. The command reported "no integration"
+	// for a pane with a fresh authoritative report, which is worse than not
+	// having the command: it actively told the user the opposite of the truth.
+	//
+	// Sharing the source is what stops that recurring. If explain and the
+	// surfaces ever disagree about a pane now, it is a bug in one shared answer
+	// rather than a second answer nobody was maintaining.
+	src := agentintegration.NewStoreSource(stateDir)
 
-	pane := lifecyclestore.PaneKey{ServerIncarnation: ctx.ServerIncarnation, PaneID: ctx.PaneID}
-	var latest *agentlifecycle.Report
-	for i := range records {
-		r := records[i]
-		if lifecyclestore.PaneKeyFor(r) == pane {
-			latest = &records[i]
-		}
+	// The screen half is really captured. explain is an on-demand diagnostic,
+	// not a polling path, so one capture is affordable and an invented
+	// "unknown" screen would misrepresent the arbitration it is describing.
+	screen, paneTitle, command := capturePaneForExplain(ctx.PaneID)
+	ob := agentactivity.Observation{
+		Screen:         screen,
+		PaneTitle:      paneTitle,
+		CurrentCommand: command,
+		CapturedAt:     time.Now(),
 	}
+	ob.Agent = agentactivity.Identify(ob)
 
-	live := ctx.IdentityFor("", "")
-	if latest != nil {
-		// The live provider is not something this process can know on its own;
-		// take it from the record so the explanation names the agent the pane
-		// is actually running rather than an empty string.
-		live.Provider = latest.Identity.Provider
-		live = ctx.IdentityFor(live.Provider, "")
-	}
-
-	dec := agentlifecycle.Resolve(agentlifecycle.Input{
-		Now:          time.Now(),
-		Live:         live,
-		ProcessAlive: true,
-		Status:       agentlifecycle.StatusNotInstalled,
-		Latest:       latest,
-		Screen:       agentactivity.Result{State: agentactivity.StateUnknown},
-	})
+	dec := agentresolve.Resolve(ob, agentresolve.PaneRef{PaneID: ctx.PaneID, Session: ctx.Session}, src, time.Now())
 
 	if f.json {
 		return encodeStdout(env, explainResult{
@@ -556,8 +559,29 @@ func runAgentExplain(env Env, args []string) int {
 	return 0
 }
 
-func lifecycleLogPath(stateDir string) string {
-	return stateDir + string(os.PathSeparator) + lifecyclestore.FileName
+// capturePaneForExplain reads the pane's visible screen and metadata so the
+// screen half of the arbitration is real rather than assumed.
+//
+// Every failure degrades to empty values, which the detectors read as "no
+// opinion". A diagnostic command that could not capture a screen should still
+// report everything else it knows rather than fail outright.
+func capturePaneForExplain(paneID string) (screen, paneTitle, command string) {
+	if paneID == "" {
+		return "", "", ""
+	}
+	screen, err := tty.CapturePaneOutput(paneID, 0)
+	if err != nil {
+		screen = ""
+	}
+	out, err := exec.Command("tmux", "display-message", "-p", "-t", paneID,
+		"#{pane_title}\x1f#{pane_current_command}").Output()
+	if err == nil {
+		fields := strings.Split(strings.TrimRight(string(out), "\n"), "\x1f")
+		if len(fields) == 2 {
+			paneTitle, command = fields[0], fields[1]
+		}
+	}
+	return screen, paneTitle, command
 }
 
 func encodeStdout(env Env, v any) int {

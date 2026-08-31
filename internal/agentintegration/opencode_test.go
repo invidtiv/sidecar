@@ -1,7 +1,10 @@
 package agentintegration
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -18,28 +21,49 @@ import (
 // fails here rather than on a user's machine.
 func replayTrace(t *testing.T, name string) []OpenCodeAction {
 	t.Helper()
+	var h OpenCodeHandler
+	var actions []OpenCodeAction
+	for _, ev := range traceEvents(t, name) {
+		actions = append(actions, h.Handle(ev)...)
+	}
+	return actions
+}
+
+// syntheticSession stands in for the session id the traces deliberately do not
+// record. The node harness uses the same value, which is what keeps the two
+// replays comparable.
+const syntheticSession = "s1"
+
+// traceEvents parses a sanitized trace into handler events.
+func traceEvents(t *testing.T, name string) []OpenCodeEvent {
+	t.Helper()
 	path := filepath.Join("..", "agentlifecycle", "testdata", "traces", "opencode", name)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var h OpenCodeHandler
-	var actions []OpenCodeAction
+	var events []OpenCodeEvent
 	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
 		cols := strings.Split(line, "\t")
 		if len(cols) < 7 {
 			t.Fatalf("malformed trace row: %q", line)
 		}
-		ev := OpenCodeEvent{Type: cols[2], HasSession: cols[5] != "-"}
+		ev := OpenCodeEvent{Type: cols[2]}
+		if cols[5] != "-" {
+			// The traces record only that a session id was present, never its
+			// value, so a stable synthetic one stands in. The node harness uses
+			// the same placeholder, which is what keeps the two comparable.
+			ev.SessionID = syntheticSession
+		}
 		if cols[3] != "-" {
 			ev.Status = cols[3]
 		}
 		if len(cols) > 7 && cols[7] != "-" {
 			ev.ErrorName = cols[7]
 		}
-		actions = append(actions, h.Handle(ev)...)
+		events = append(events, ev)
 	}
-	return actions
+	return events
 }
 
 func lanes(actions []OpenCodeAction) []string {
@@ -204,42 +228,135 @@ func TestATerminalOutcomeLatches(t *testing.T) {
 	}
 }
 
-// TestBundledAssetMatchesTheHandler keeps the shipped JavaScript and the Go
-// mirror from drifting into two different mappings.
+// TestBundledAssetBehavesLikeTheHandler is the real asset-to-handler
+// equivalence check, and it replaced a substring-presence test that could not
+// fail for the right reason.
 //
-// It cannot prove they behave identically -- one is JS running inside OpenCode,
-// the other is Go -- so it checks the things that would actually diverge in
-// practice: the identifiers, the discriminator, and the event names each one
-// claims to handle. A mapping added to one and not the other shows up here.
-func TestBundledAssetMatchesTheHandler(t *testing.T) {
+// That earlier test passed while the shipped JavaScript and this Go mirror
+// disagreed about two things that mattered. The asset had no `ended` latch, so
+// the trailing session.status idle that follows every session.error superseded
+// the terminal report and a cancelled turn was announced as a clean
+// completion; and the two used different session.created rules. Neither
+// surfaced until the asset was run against a live provider.
+//
+// So this drives the asset's actual mapping under node, over the same recorded
+// traces, and requires the identical ordered argv list -- sequence numbers
+// included, because ordering is exactly what broke.
+func TestBundledAssetBehavesLikeTheHandler(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is not installed; cannot verify the shipped asset's behavior")
+	}
+
+	traces := []string{
+		"tool-turn-with-permission.tsv",
+		"cancelled-turn.tsv",
+		"provider-error-named.tsv",
+		"session-error-turn.tsv",
+	}
+	for _, trace := range traces {
+		t.Run(trace, func(t *testing.T) {
+			tracePath, err := filepath.Abs(filepath.Join("..", "agentlifecycle", "testdata", "traces", "opencode", trace))
+			if err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command(node, "replay-harness.mjs", tracePath)
+			cmd.Dir = filepath.Join("assets", "opencode")
+			var stderr bytes.Buffer
+			cmd.Stderr = &stderr
+			out, err := cmd.Output()
+			if err != nil {
+				t.Fatalf("running the asset harness: %v\n%s", err, stderr.String())
+			}
+
+			var fromAsset [][]string
+			if err := json.Unmarshal(out, &fromAsset); err != nil {
+				t.Fatalf("harness output is not JSON: %q (%v)", out, err)
+			}
+			fromHandler := handlerArgs(t, trace)
+
+			if len(fromAsset) != len(fromHandler) {
+				t.Fatalf("the asset emitted %d reports, the handler %d:\nasset:   %v\nhandler: %v",
+					len(fromAsset), len(fromHandler), fromAsset, fromHandler)
+			}
+			for i := range fromHandler {
+				if strings.Join(fromAsset[i], " ") != strings.Join(fromHandler[i], " ") {
+					t.Fatalf("report %d differs:\nasset:   %v\nhandler: %v", i, fromAsset[i], fromHandler[i])
+				}
+			}
+			if len(fromHandler) == 0 {
+				t.Fatal("neither produced any report; this trace proves nothing")
+			}
+		})
+	}
+}
+
+// handlerArgs replays a trace through the Go handler and returns the argv each
+// action becomes, in order.
+func handlerArgs(t *testing.T, trace string) [][]string {
+	t.Helper()
+	var h OpenCodeHandler
+	var out [][]string
+	var seq uint64
+	for _, ev := range traceEvents(t, trace) {
+		for _, action := range h.Handle(ev) {
+			seq++
+			out = append(out, ReportArgs(action, seq, h.Session()))
+		}
+	}
+	return out
+}
+
+// TestTheAssetSerializesReports pins the fix for the ordering defect the live
+// exit gate exposed.
+//
+// Each report is a subprocess taking an exclusive lock on an append-only store
+// that enforces a strictly increasing sequence per run. Spawning them
+// concurrently assigns sequences in order but delivers them out of order, and
+// the store correctly rejects the loser -- which silently dropped the terminal
+// `end` report in two live runs out of three. The store's contract is frozen
+// and the late-prior-run rejection depends on it, so the asset serializes
+// rather than the store loosening.
+func TestTheAssetSerializesReports(t *testing.T) {
+	asset := OpenCodeAsset()
+
+	// The queue itself: every report is chained onto the previous one.
+	if !strings.Contains(asset, "queue = queue.then(") {
+		t.Fatal("the asset does not chain reports onto a queue; concurrent spawns lose reports to the store's sequence check")
+	}
+	// Resolving on exit is what makes the chain mean "the previous report has
+	// landed" rather than "the previous report has been started".
+	if !strings.Contains(asset, `child.on("exit"`) {
+		t.Fatal("the asset does not wait for a report process to exit, so the chain does not order deliveries")
+	}
+	// A hung report must not stall every later event for the rest of the run.
+	if !strings.Contains(asset, "REPORT_TIMEOUT_MS") {
+		t.Fatal("the asset has no per-report timeout; one hung subprocess would stall the queue forever")
+	}
+	if strings.Contains(asset, "detached: true") {
+		t.Fatal("reports must not be detached; the queue depends on observing exit")
+	}
+}
+
+// TestTheAssetFailsOpen checks the properties that keep a reporting failure
+// from ever becoming the agent's problem.
+func TestTheAssetFailsOpen(t *testing.T) {
 	asset := OpenCodeAsset()
 	if asset == "" {
 		t.Fatal("the bundled asset is empty")
 	}
 
-	for _, want := range []string{
-		OpenCodeSource,
-		OpenCodeProvider,
-		OpenCodeAbortedError,
-		"session.status",
-		"permission.asked",
-		"permission.replied",
-		"session.error",
-		"session.created",
-	} {
-		if !strings.Contains(asset, want) {
-			t.Fatalf("the bundled asset never mentions %q; the handler and the asset disagree", want)
-		}
+	if !strings.Contains(asset, "SIDECAR_MANAGED_SHELL") {
+		t.Fatal("the asset does not check the managed-shell cue, so it would spawn outside Sidecar")
 	}
-
-	// The asset must invoke the Sidecar binary Sidecar itself published, and
-	// must never build a shell command out of provider data.
 	if !strings.Contains(asset, "SIDECAR_BIN") {
 		t.Fatal("the asset does not use the published Sidecar binary path")
 	}
-	if !strings.Contains(asset, "SIDECAR_MANAGED_SHELL") {
-		t.Fatal("the asset does not check the managed-shell cue, so it would run outside Sidecar")
+	if !strings.Contains(asset, `stdio: "ignore"`) {
+		t.Fatal("the asset does not silence report output; it would appear in the agent's own terminal")
 	}
+	// No shell composition anywhere: every value reaches the CLI as its own
+	// argv element.
 	for _, forbidden := range []string{"exec(", "shell: true", "/bin/sh", "child_process.exec"} {
 		if strings.Contains(asset, forbidden) {
 			t.Fatalf("the asset uses %q; provider data must never be shell-composed", forbidden)

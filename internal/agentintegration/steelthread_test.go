@@ -30,6 +30,7 @@ const (
 	testServer  = "pid=4242"
 	testSession = "sidecar-sh-steel"
 	testGen     = "pid=31337,start=Sat-Aug-30-12-00-00-2026"
+	testHost    = "host-a"
 )
 
 // steelRig wires the real store, source, resolver, and trackers together.
@@ -60,11 +61,15 @@ func newSteelRig(t *testing.T) *steelRig {
 	store.SetClock(func() time.Time { return rig.now })
 
 	rig.source = NewStoreSource(dir)
-	// The pane is named directly and the provider process is pretended alive:
-	// this test is about the evidence path, not about tmux or ps.
+	// The live context is stated rather than observed: this test is about the
+	// evidence path, not about tmux or ps. Every one of these is a value the
+	// source would otherwise read from the machine, and the resolver compares
+	// stored records against them.
 	rig.source.resolvePane = func(string) string { return testPane }
 	rig.source.processAlive = func(string) bool { return true }
 	rig.source.providerVersion = func(string) string { return "1.18.25" }
+	rig.source.serverID = func() string { return testServer }
+	rig.source.host = func() string { return testHost }
 	return rig
 }
 
@@ -79,7 +84,7 @@ func (r *steelRig) emit(h *OpenCodeHandler, ev OpenCodeEvent) {
 			ID:            fmt.Sprintf("rpt-%d", r.seq),
 			Kind:          action.Kind,
 			Identity: agentlifecycle.Identity{
-				Host:              "host-a",
+				Host:              testHost,
 				ServerIncarnation: testServer,
 				PaneID:            testPane,
 				Provider:          OpenCodeProvider,
@@ -104,20 +109,28 @@ func (r *steelRig) emit(h *OpenCodeHandler, ev OpenCodeEvent) {
 // notification lane tracker, exactly as a polling surface does.
 func (r *steelRig) poll(screen agentactivity.Result) agentlifecycle.Explanation {
 	r.t.Helper()
-	ob := agentactivity.Observation{Agent: OpenCodeProvider, CapturedAt: r.now}
-	dec := agentresolve.Resolve(ob, agentresolve.PaneRef{Session: testSession}, r.source, r.now)
-	// The screen half of the arbitration is supplied directly so a test can
-	// state a disagreement; everything else is the real path.
-	dec = agentlifecycle.Resolve(agentlifecycle.Input{
-		Now:                   r.now,
-		Live:                  dec.Explanation.Identity,
-		ProcessAlive:          dec.Explanation.ProcessAlive,
-		Capability:            capabilityFor(r.t),
-		Status:                dec.Explanation.IntegrationStatus,
-		ProviderInTestedRange: true,
-		Latest:                r.latest(),
-		Screen:                screen,
-	})
+	// Everything except the screen comes from the real StoreSource: the latest
+	// record, the capability looked up from the shipped registry, the derived
+	// integration status, the version-range check, and — the part that matters
+	// most — the live identity the resolver checks the record against. Only the
+	// screen half is injected, so a test can state a disagreement.
+	//
+	// This mirrors agentresolve.Resolve's body exactly. Supplying capability or
+	// status from the test instead would hide precisely the class of defect
+	// that shipped last time, where the source handed the resolver an identity
+	// copied from the record and every check compared a value with itself.
+	in := agentlifecycle.Input{Now: r.now, Screen: screen}
+	if ev, ok := r.source.Evidence(agentresolve.PaneRef{Session: testSession}); ok {
+		in.Live = ev.Live
+		in.ProcessAlive = ev.ProcessAlive
+		in.Capability = ev.Capability
+		in.Status = ev.Status
+		in.ProviderInTestedRange = ev.ProviderInTestedRange
+		in.Latest = ev.Latest
+		in.StoreUnavailable = ev.StoreUnavailable
+		in.InvalidReports = ev.InvalidReports
+	}
+	dec := agentlifecycle.Resolve(in)
 
 	r.tracker.Apply(dec.Result, r.now)
 	presentation := agentstatus.Resolve(agentstatus.Input{
@@ -137,24 +150,7 @@ func (r *steelRig) poll(screen agentactivity.Result) agentlifecycle.Explanation 
 	return dec.Explanation
 }
 
-func (r *steelRig) latest() *agentlifecycle.Report {
-	rec, ok := r.store.Latest(lifecyclestore.PaneKey{ServerIncarnation: testServer, PaneID: testPane})
-	if !ok {
-		return nil
-	}
-	return &rec
-}
-
 func (r *steelRig) advance(d time.Duration) { r.now = r.now.Add(d) }
-
-func capabilityFor(t *testing.T) agentlifecycle.Capability {
-	t.Helper()
-	c, ok := agentlifecycle.CapabilityForSource(OpenCodeSource)
-	if !ok {
-		t.Fatal("no capability registered for the bundled source")
-	}
-	return c
-}
 
 // blankScreen is what screen detection produces when it has no opinion, which
 // is the honest baseline for a lane walk driven by native provider events.
@@ -171,7 +167,7 @@ func TestNativeEventsWalkTheLanesAndNotifyOnce(t *testing.T) {
 	// Baseline. The lane tracker never announces a first sighting, so this is
 	// what stops an agent already mid-turn from posting the moment Sidecar
 	// starts watching.
-	rig.emit(&h, OpenCodeEvent{Type: "session.created", HasSession: true})
+	rig.emit(&h, OpenCodeEvent{Type: "session.created", SessionID: "s1"})
 	rig.poll(blankScreen)
 
 	rig.advance(5 * time.Second)
@@ -324,7 +320,7 @@ func TestAnOldRunCannotReplayAfterRestart(t *testing.T) {
 			ID:            fmt.Sprintf("%s-%d", run, seq),
 			Kind:          agentlifecycle.KindState,
 			Identity: agentlifecycle.Identity{
-				Host: "host-a", ServerIncarnation: testServer, PaneID: testPane,
+				Host: testHost, ServerIncarnation: testServer, PaneID: testPane,
 				Provider: OpenCodeProvider, RunID: run, ProcessGeneration: "pid=1,start=x",
 			},
 			Source: OpenCodeSource, SourceVersion: OpenCodeAssetVersion,
