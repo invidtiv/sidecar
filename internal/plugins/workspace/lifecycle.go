@@ -3,7 +3,9 @@ package workspace
 import (
 	"sync"
 
+	"github.com/marcus/sidecar/internal/agentintegration"
 	"github.com/marcus/sidecar/internal/agentresolve"
+	"github.com/marcus/sidecar/internal/config"
 )
 
 // The project Workspace surface's binding to the shared lifecycle resolver.
@@ -24,13 +26,33 @@ var lifecycle struct {
 	src agentresolve.Source
 }
 
-// lifecycleSource returns the current source, or nil.
+var defaultLifecycleOnce sync.Once
+
+// lifecycleSource returns the source to consult, installing the default one on
+// first use.
 //
-// Nil is the ordinary state and is not a degraded one: with no source, the
-// shared resolver returns exactly what agentactivity.Detect returned before the
-// extraction, which is what lets the Phase A compatibility fixtures pass
-// unmodified.
+// The default is enabled rather than opt-in, and that is safe for a specific
+// reason rather than by optimism: with no lifecycle log on disk the source
+// answers "no evidence", and the shared resolver's no-evidence path returns
+// exactly what agentactivity.Detect returned before any of this existed. A
+// machine where nobody has installed an integration therefore behaves
+// identically, and the first poll costs one stat of a file that is not there.
+//
+// Construction does no I/O — it joins a path and allocates two maps — so this
+// stays off the startup and first-frame paths even though it is reached from a
+// polling command.
 func lifecycleSource() agentresolve.Source {
+	lifecycle.mu.RLock()
+	src := lifecycle.src
+	lifecycle.mu.RUnlock()
+	if src != nil {
+		return src
+	}
+	defaultLifecycleOnce.Do(func() {
+		if dir := config.StateDir(); dir != "" {
+			SetLifecycleSource(agentintegration.NewStoreSource(dir))
+		}
+	})
 	lifecycle.mu.RLock()
 	defer lifecycle.mu.RUnlock()
 	return lifecycle.src

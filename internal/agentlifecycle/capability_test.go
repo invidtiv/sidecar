@@ -1,7 +1,6 @@
 package agentlifecycle
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,16 +9,13 @@ import (
 
 func loadCapabilityMatrix(t *testing.T) []Capability {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("testdata", "capabilities.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var caps []Capability
-	if err := json.Unmarshal(data, &caps); err != nil {
-		t.Fatal(err)
-	}
+	// Read through the shipped accessor rather than the file, so these tests
+	// police exactly what the binary trusts. A parse failure would otherwise
+	// leave Capabilities() silently empty while the tests kept passing against
+	// the raw file.
+	caps := Capabilities()
 	if len(caps) == 0 {
-		t.Fatal("capability matrix is empty")
+		t.Fatal("capability registry is empty; check that capabilities.json parses")
 	}
 	return caps
 }

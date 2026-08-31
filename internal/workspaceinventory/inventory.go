@@ -304,6 +304,16 @@ func (c Collector) defaults() Collector {
 	if c.Now == nil {
 		c.Now = time.Now
 	}
+	if c.lifecycle == nil {
+		// The same default the project surface installs, for the same reason:
+		// with no lifecycle log on disk this answers "no evidence" and the
+		// resolver's no-evidence path is byte-identical to plain screen
+		// detection, so a machine with no integration behaves exactly as before
+		// at the cost of one stat. Both surfaces must get it or they would
+		// disagree about the same pane, which is the parity bug this whole
+		// extraction exists to prevent.
+		c.lifecycle = defaultLifecycleSource()
+	}
 	if c.trackers == nil {
 		c.trackers = &trackerStore{values: make(map[string]agentactivity.Tracker)}
 	}
