@@ -429,6 +429,22 @@ func (c Collector) Metrics() MetricsSnapshot {
 	return MetricsSnapshot{ProjectOps: c.metrics.projectOps.Load(), Captures: c.metrics.captures.Load(), MaxCaptures: c.metrics.maxCaptures.Load(), TrackerCommits: c.metrics.trackerCommits.Load()}
 }
 
+// ServerPIDOf returns the tmux server pid a pane listing reported, or 0 when the
+// listing carries none.
+//
+// Every pane in one listing comes from one server, so the first non-zero value
+// is the answer. Callers use it to qualify a socket-only incarnation with the
+// process behind it, which is the difference between an identity that can be
+// written down and compared later and one that only names a file.
+func ServerPIDOf(panes []Pane) int {
+	for _, pane := range panes {
+		if pane.ServerPID > 0 {
+			return pane.ServerPID
+		}
+	}
+	return 0
+}
+
 // ListPanes takes the single global tmux inventory used by an Overview refresh.
 func (c Collector) ListPanes(ctx context.Context) ([]Pane, error) {
 	c = c.defaults()

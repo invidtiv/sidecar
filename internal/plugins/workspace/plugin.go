@@ -654,7 +654,8 @@ type Plugin struct {
 	// `tmux display-message` needed to qualify the socket identity with a pid.
 	restoreMarked       map[string]string
 	restoreServerSocket tmuxserver.Incarnation
-	restoreServerID     string
+	restoreServer       tmuxserver.Incarnation
+	restoreServerKnown  bool
 	shellStartupEpoch   uint64
 	shellStartupVersion uint64
 	shellStartupLoading bool

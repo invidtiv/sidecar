@@ -65,7 +65,7 @@ func TestServerDeathPreservesEveryShellRecord(t *testing.T) {
 
 	// No tmux server is running: currentServer is empty for every call.
 	for _, def := range []Definition{a, b, c} {
-		outcome, err := ForgetOrPreserveAtPath(path, idOf(def), def.CreatedAt, "")
+		outcome, err := ForgetOrPreserveAtPath(path, idOf(def), def.CreatedAt, ServerGone())
 		if err != nil {
 			t.Fatalf("%s: %v", def.TmuxName, err)
 		}
@@ -102,7 +102,7 @@ func TestReplacedServerPreservesRecords(t *testing.T) {
 	a.Restore = &RestoreState{Eligible: true, LastSeenServer: "pid=100"}
 	path := writeManifest(t, a)
 
-	outcome, err := ForgetOrPreserveAtPath(path, idOf(a), a.CreatedAt, "pid=200")
+	outcome, err := ForgetOrPreserveAtPath(path, idOf(a), a.CreatedAt, ServerRunning("pid=200"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestSingleShellExitInTheSameServerStillTombstones(t *testing.T) {
 	b.Restore = &RestoreState{Eligible: true, LastSeenServer: "pid=100"}
 	path := writeManifest(t, a, b)
 
-	outcome, err := ForgetOrPreserveAtPath(path, idOf(a), a.CreatedAt, "pid=100")
+	outcome, err := ForgetOrPreserveAtPath(path, idOf(a), a.CreatedAt, ServerRunning("pid=100"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func TestTombstoneBranchKeepsTheCreatedAtFence(t *testing.T) {
 	path := writeManifest(t, a)
 
 	stale := a.CreatedAt.Add(-time.Hour)
-	if _, err := ForgetOrPreserveAtPath(path, idOf(a), stale, "pid=100"); err == nil {
+	if _, err := ForgetOrPreserveAtPath(path, idOf(a), stale, ServerRunning("pid=100")); err == nil {
 		t.Fatal("a record newer than the observation must be refused")
 	}
 	if got := readShells(t, path); len(got) != 1 {

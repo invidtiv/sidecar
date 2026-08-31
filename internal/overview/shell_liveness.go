@@ -92,13 +92,7 @@ func (m *Model) observeTmuxServer(inc tmuxserver.Incarnation) {
 // a restart, and the listing already carries it, so qualifying the identity here
 // costs nothing and is what makes the eligibility marker trustworthy.
 func (m *Model) observedTmuxServer() tmuxserver.Incarnation {
-	socket := shellLivenessServer()
-	for _, pane := range m.currentPanes {
-		if pane.ServerPID > 0 {
-			return tmuxserver.Combine(socket, pane.ServerPID)
-		}
-	}
-	return socket
+	return tmuxserver.Combine(shellLivenessServer(), workspaceinventory.ServerPIDOf(m.currentPanes))
 }
 
 // markShellsRestoreEligible records that these shells were running under this
@@ -205,14 +199,30 @@ func (m *Model) reapDeadShells() tea.Cmd {
 // incarnation fence in ConfirmReap, the fresh re-probe in ReapShell — and are
 // described there. What this surface adds is dropping the row between them.
 func (m *Model) applyShellProbe(msg shellProbedMsg) tea.Cmd {
-	if !shellliveness.ConfirmReap(m.shellLivenessTracker(), shellLivenessServer(), msg.Probe, msg.Verdict) {
+	// One source for the server identity, here as well as in PlanReap. The
+	// fence compares the identity the verdict is being applied under against
+	// the one the suspicion was formed under, so feeding it a bare socket stat
+	// while the probe carries a pid-qualified identity compares unlike things:
+	// it only appeared to work because Equal treats a missing pid as "not
+	// observed" rather than as a difference.
+	if !shellliveness.ConfirmReap(m.shellLivenessTracker(), m.observedTmuxServer(), msg.Probe, msg.Verdict) {
 		return nil
 	}
 	m.dropShellRow(msg.Probe.ProjectKey, msg.Probe.TmuxName)
 	m.syncBoard()
 	probe := msg.Probe
 	return func() tea.Msg {
-		resurrected, err := shellliveness.ReapShell(shellLivenessProbe, forgetShell, probe, shellLivenessServer())
+		// probe.Server, not shellLivenessServer(). The latter is a socket stat,
+		// which identifies a socket and carries pid 0, so the writer could not
+		// tell which server it named and read every call as "the server died" —
+		// which meant this surface never tombstoned anything and every shell the
+		// user closed became an immortal restore candidate.
+		//
+		// probe.Server is the pid-qualified identity the refresh cycle observed
+		// when the suspicion was formed, and ConfirmReap has already refused the
+		// verdict if the server changed since, so by the time execution reaches
+		// here it is also the server at the instant of the write.
+		resurrected, err := shellliveness.ReapShell(shellLivenessProbe, forgetShell, probe, probe.Server)
 		// A resurrected shell leaves the manifest alone; the next refresh
 		// re-reads shells.json and restores the row.
 		return shellForgottenMsg{

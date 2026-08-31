@@ -164,7 +164,7 @@ func ForgetManagedShell(projectRoot, sessionName, namespace string, observedAt t
 // currentServer is the tmux server observed at the moment of the write, as a
 // "pid=N" id from tmuxserver.Incarnation.ServerID, or empty when no server is
 // running.
-func ReapManagedShell(projectRoot, sessionName, namespace string, observedAt time.Time, currentServer string) (shellstate.ReapOutcome, error) {
+func ReapManagedShell(projectRoot, sessionName, namespace string, observedAt time.Time, server tmuxserver.Incarnation) (shellstate.ReapOutcome, error) {
 	projectDir, err := projectdir.Resolve(projectRoot)
 	if err != nil {
 		return shellstate.ReapAbsent, err
@@ -173,8 +173,59 @@ func ReapManagedShell(projectRoot, sessionName, namespace string, observedAt tim
 		filepath.Join(projectDir, "shells.json"),
 		shellstate.Identity{TmuxName: sessionName, Namespace: namespace},
 		observedAt,
-		currentServer,
+		ServerStateOf(server),
 	)
+}
+
+// ServerStateOf maps an observed tmux incarnation onto the evidence the shell
+// writer reasons about.
+//
+// The fourth case is the one that matters and the one that was missed: an
+// incarnation can be Present and still carry pid 0, because a socket stat alone
+// identifies a socket rather than a server process. That is not "the server is
+// gone" and it is not "the server is this one" — it is "I cannot tell which
+// server this is", and it has to arrive at the writer as exactly that. Reading
+// it as death is what made two production surfaces stop tombstoning entirely.
+func ServerStateOf(inc tmuxserver.Incarnation) shellstate.ServerState {
+	switch {
+	case inc.IsAbsent():
+		return shellstate.ServerGone()
+	case inc.IsPresent():
+		if id := inc.ServerID(); id != "" {
+			return shellstate.ServerRunning(id)
+		}
+		return shellstate.ServerUnknown()
+	default:
+		return shellstate.ServerUnknown()
+	}
+}
+
+// ServerIncarnation observes the tmux server with its pid, distinguishing "no
+// server is running" from "the question could not be answered".
+//
+// ServerPID alone cannot make that distinction — it returns 0 for both — and a
+// caller that needs to decide whether a shell died with its server must not
+// treat a failed subprocess as a dead server.
+func ServerIncarnation() tmuxserver.Incarnation {
+	out, err := exec.Command("tmux", "display-message", "-p", "#{pid}").CombinedOutput()
+	if err != nil {
+		if noServerRunning(string(out)) {
+			return tmuxserver.Absent()
+		}
+		return tmuxserver.Unknown()
+	}
+	pid, ok := tmuxserver.ParsePID(strings.TrimSpace(string(out)))
+	if !ok {
+		return tmuxserver.Unknown()
+	}
+	return tmuxserver.Combine(tmuxserver.Socket(), pid)
+}
+
+func noServerRunning(message string) bool {
+	message = strings.ToLower(message)
+	return strings.Contains(message, "no server running") ||
+		strings.Contains(message, "no sessions") ||
+		strings.Contains(message, "error connecting to")
 }
 
 // ReapManagedShellFunc adapts ReapManagedShell to shellliveness.ForgetFunc.
@@ -184,8 +235,8 @@ func ReapManagedShell(projectRoot, sessionName, namespace string, observedAt tim
 // in a test, while the liveness surfaces need only success or failure — a
 // preserved record simply reappears as an offline row on the next refresh, which
 // is the correct display for a cold-restore candidate.
-func ReapManagedShellFunc(projectRoot, sessionName, namespace string, observedAt time.Time, currentServer string) error {
-	_, err := ReapManagedShell(projectRoot, sessionName, namespace, observedAt, currentServer)
+func ReapManagedShellFunc(projectRoot, sessionName, namespace string, observedAt time.Time, server tmuxserver.Incarnation) error {
+	_, err := ReapManagedShell(projectRoot, sessionName, namespace, observedAt, server)
 	return err
 }
 

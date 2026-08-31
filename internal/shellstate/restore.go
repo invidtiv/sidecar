@@ -41,9 +41,68 @@ const (
 	// ReapPreserved means the record was kept and marked as a cold-restore
 	// candidate, because it did not exit — its tmux server did.
 	ReapPreserved ReapOutcome = "preserved"
+	// ReapDeferred means the record was kept and NOT marked, because the
+	// evidence did not support either conclusion.
+	//
+	// This is the outcome that keeps the other two honest. Tombstoning destroys
+	// a durable identity and marking eligible arranges for a shell to be
+	// recreated after the next restart; both are wrong to do on a guess, and
+	// they are wrong in opposite directions, so there has to be a third answer
+	// for "I cannot tell". Deferring costs only that the row stays visible and
+	// unmarked until the next observation that does know something.
+	ReapDeferred ReapOutcome = "deferred"
 	// ReapAbsent means there was no such record to act on.
 	ReapAbsent ReapOutcome = "absent"
 )
+
+// ServerState is what a caller positively knows about the tmux server at the
+// instant of a liveness write.
+//
+// It exists because the previous signature took a plain "pid=N" string and read
+// the empty string as "no server is running". That conflated two very different
+// facts — tmux answering "no server running", and the caller simply not having
+// resolved a pid — and the conflation was not theoretical: two of the three
+// production reap paths passed a socket-only identity whose pid is always zero,
+// so every call read as "the server died" and those surfaces never tombstoned
+// anything. A shell the user deliberately closed was preserved, marked eligible,
+// and recreated after the next tmux restart.
+//
+// Making the three states distinct in the type is what stops that from being
+// expressible. A caller that cannot identify the server can no longer
+// accidentally claim the server is gone.
+type ServerState struct {
+	id      string
+	known   bool
+	running bool
+}
+
+// ServerRunning reports a positively identified, live tmux server. An empty id
+// is not a running server — it is an unidentified one, and it degrades to
+// ServerUnknown rather than being trusted.
+func ServerRunning(id string) ServerState {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return ServerUnknown()
+	}
+	return ServerState{id: id, known: true, running: true}
+}
+
+// ServerGone reports that tmux itself answered "no server running". This is
+// positive evidence of death, not an absence of evidence.
+func ServerGone() ServerState { return ServerState{known: true} }
+
+// ServerUnknown reports that the caller could not determine the server's state.
+func ServerUnknown() ServerState { return ServerState{} }
+
+// ID is the running server's identity, empty when there is none or it is
+// unknown.
+func (s ServerState) ID() string { return s.id }
+
+// Known reports whether the observation says anything at all.
+func (s ServerState) Known() bool { return s.known }
+
+// Running reports a positively identified live server.
+func (s ServerState) Running() bool { return s.running }
 
 // ObserveLiveAtPath records that these shells are running under this tmux
 // server, so a later cold restore can tell a shell that died with the server
@@ -145,11 +204,10 @@ func ObserveLiveAtPath(path, serverID string, live []Identity, now time.Time) (i
 // The CreatedAt fence from RemoveIfUnchangedAtPath is preserved for the
 // tombstone branch: a record rewritten since it was observed is a different
 // shell wearing a reused name.
-func ForgetOrPreserveAtPath(path string, id Identity, observedAt time.Time, currentServer string) (ReapOutcome, error) {
+func ForgetOrPreserveAtPath(path string, id Identity, observedAt time.Time, server ServerState) (ReapOutcome, error) {
 	if strings.TrimSpace(id.TmuxName) == "" {
 		return ReapAbsent, &Error{Kind: KindValidation, Msg: "shell session name is required"}
 	}
-	currentServer = strings.TrimSpace(currentServer)
 
 	outcome := ReapAbsent
 	err := mutateManifestLive(path, true, func(m *manifest) error {
@@ -170,8 +228,21 @@ func ForgetOrPreserveAtPath(path string, id Identity, observedAt time.Time, curr
 		if def.Restore != nil {
 			lastSeen = def.Restore.LastSeenServer
 		}
-		diedWithServer := currentServer == "" || (lastSeen != "" && lastSeen != currentServer)
-		if diedWithServer {
+
+		// The decision table, stated as evidence rather than as a default.
+		// Tombstoning needs positive evidence that the server is alive and this
+		// shell is gone from it. Marking eligible needs positive evidence that
+		// the server died or was replaced. Anything else defers.
+		switch {
+		case !server.Known():
+			// No idea what the server is doing. Keep the record and do not
+			// claim it is restorable.
+			outcome = ReapDeferred
+			return errRestoreUnchanged{}
+
+		case !server.Running():
+			// tmux said there is no server. The shell did not exit; its host
+			// did, which is the case a cold restore exists to undo.
 			outcome = ReapPreserved
 			if def.Restore != nil && def.Restore.Eligible {
 				return errRestoreUnchanged{} // already a candidate; no write
@@ -184,8 +255,36 @@ func ForgetOrPreserveAtPath(path string, id Identity, observedAt time.Time, curr
 			def.Restore = &next
 			m.Shells[idx] = def
 			return nil
+
+		case lastSeen == "":
+			// A live server, but this record was never confirmed alive in any
+			// server — the shape of a record written before eligibility was
+			// tracked at all. There is no evidence it belonged to the server
+			// running now, so tombstoning it would be acting on an assumption
+			// about an upgrading user's existing shells. Defer; the next
+			// positive observation stamps it and makes a real verdict possible.
+			outcome = ReapDeferred
+			return errRestoreUnchanged{}
+
+		case lastSeen != server.ID():
+			// It was last alive in a different server from the one running now,
+			// so it went away with that one.
+			outcome = ReapPreserved
+			if def.Restore != nil && def.Restore.Eligible {
+				return errRestoreUnchanged{}
+			}
+			next := RestoreState{}
+			if def.Restore != nil {
+				next = *def.Restore
+			}
+			next.Eligible = true
+			def.Restore = &next
+			m.Shells[idx] = def
+			return nil
 		}
 
+		// Positive evidence both ways: this shell was last alive in the server
+		// that is still running, and it is no longer there. Someone closed it.
 		if !observedAt.IsZero() && def.CreatedAt.After(observedAt) {
 			return ErrShellChanged
 		}

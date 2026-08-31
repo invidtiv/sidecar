@@ -177,7 +177,7 @@ func TestReapShellRefusesAResurrectedSession(t *testing.T) {
 	var forgotten []string
 	resurrected, err := ReapShell(
 		func(string) Verdict { return Alive },
-		func(_, session, _ string, _ time.Time, _ string) error {
+		func(_, session, _ string, _ time.Time, _ tmuxserver.Incarnation) error {
 			forgotten = append(forgotten, session)
 			return nil
 		},
@@ -203,8 +203,8 @@ func TestReapShellWritesTheTombstoneWithTheObservedIdentity(t *testing.T) {
 	var gotObserved time.Time
 	resurrected, err := ReapShell(
 		func(string) Verdict { return Gone },
-		func(root, session, namespace string, observedAt time.Time, currentServer string) error {
-			gotRoot, gotSession, gotNamespace, gotObserved, gotServer = root, session, namespace, observedAt, currentServer
+		func(root, session, namespace string, observedAt time.Time, server tmuxserver.Incarnation) error {
+			gotRoot, gotSession, gotNamespace, gotObserved, gotServer = root, session, namespace, observedAt, server.ServerID()
 			return nil
 		},
 		ReapProbe{Shell: record},
@@ -237,8 +237,8 @@ func TestReapShellPassesAnAbsentServerAsNoIdentity(t *testing.T) {
 	seen := false
 	_, err := ReapShell(
 		func(string) Verdict { return Gone },
-		func(_, _, _ string, _ time.Time, currentServer string) error {
-			gotServer, seen = currentServer, true
+		func(_, _, _ string, _ time.Time, server tmuxserver.Incarnation) error {
+			gotServer, seen = server.ServerID(), true
 			return nil
 		},
 		ReapProbe{Shell: reapShellRecord()},
@@ -258,7 +258,9 @@ func TestReapShellPassesAnAbsentServerAsNoIdentity(t *testing.T) {
 func TestReapShellReportsAFailedWrite(t *testing.T) {
 	_, err := ReapShell(
 		func(string) Verdict { return Gone },
-		func(string, string, string, time.Time, string) error { return fmt.Errorf("manifest locked") },
+		func(string, string, string, time.Time, tmuxserver.Incarnation) error {
+			return fmt.Errorf("manifest locked")
+		},
 		ReapProbe{Shell: reapShellRecord()},
 		tmuxserver.Present(1, 1, 4242),
 	)

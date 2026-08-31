@@ -28,6 +28,7 @@ import (
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspacecreate"
 	"github.com/marcus/sidecar/internal/workspacediff"
+	"github.com/marcus/sidecar/internal/workspaceops"
 )
 
 // update handles messages. The public Update wrapper in terminal_control.go
@@ -1293,7 +1294,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				// N per-shell death verdicts arriving at once is exactly how a
 				// server crash used to empty shells.json.
 				if p.shellManifest != nil {
-					_, _ = p.shellManifest.ReapShell(msg.TmuxName, p.observedServerID())
+					_, _ = p.shellManifest.ReapShell(msg.TmuxName, workspaceops.ServerStateOf(p.observedServer()))
 				}
 				break
 			}

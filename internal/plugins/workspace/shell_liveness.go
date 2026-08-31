@@ -19,6 +19,11 @@ import (
 var (
 	shellLivenessProbe  = shellliveness.ProbeSession
 	shellLivenessServer = tmuxserver.Socket
+	// observeServerIncarnation answers "which tmux server is running, if any".
+	// Indirected for the same reason the two above are: a test needs to state
+	// which of the three answers it is exercising, and the reap decision is
+	// entirely determined by that answer.
+	observeServerIncarnation = workspaceops.ServerIncarnation
 )
 
 type (
@@ -85,15 +90,24 @@ func (p *Plugin) noteShellAlive(tmuxName string) {
 // exact reading: it is the condition under which a shell cannot be shown to have
 // exited, and so the condition under which its record must be preserved rather
 // than tombstoned.
-func (p *Plugin) observedServerID() string {
+func (p *Plugin) observedServer() tmuxserver.Incarnation {
 	socket := shellLivenessServer()
-	if p.restoreServerID != "" && socket.Equal(p.restoreServerSocket) {
-		return p.restoreServerID
+	if p.restoreServerKnown && socket.Equal(p.restoreServerSocket) {
+		return p.restoreServer
 	}
-	id := tmuxserver.Combine(socket, workspaceops.ServerPID()).ServerID()
-	p.restoreServerSocket, p.restoreServerID = socket, id
-	return id
+	// ServerIncarnation, not ServerPID: the pid alone returns 0 both when no
+	// server is running and when the question could not be answered, and this
+	// surface's reap decision turns on telling those apart. Reading a failed
+	// subprocess as a dead server is what marks a shell the user closed as a
+	// restore candidate.
+	inc := observeServerIncarnation()
+	p.restoreServerSocket, p.restoreServer, p.restoreServerKnown = socket, inc, true
+	return inc
 }
+
+// observedServerID is the persistable id of the observed server, empty when the
+// server is absent or unidentifiable.
+func (p *Plugin) observedServerID() string { return p.observedServer().ServerID() }
 
 // markShellRestoreEligible records that this shell is running under the current
 // tmux server, which is what lets a later cold restore tell a shell that died

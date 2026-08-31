@@ -209,15 +209,18 @@ func ConfirmReap(tracker *Tracker, server tmuxserver.Incarnation, probe ReapProb
 // so this package stays free of the writer's dependencies and both callers can
 // substitute it in tests.
 //
-// currentServer is the tmux server observed at the moment of the write, as a
-// persistable "pid=N" id, empty when no server is running. It is a parameter
+// server is the tmux server observed at the moment of the write. It is the
+// whole incarnation rather than an id string because the writer must be able to
+// tell "no server is running" from "I could not identify the server": a
+// socket-only observation is Present with pid 0, and reading that as death is
+// what made two surfaces stop tombstoning entirely. It is a parameter
 // rather than a detail of the writer because the writer's most important
 // decision depends on it: a shell that vanished along with its server is
 // preserved and marked as a cold-restore candidate, and only a shell that
 // vanished inside a server that is still running is tombstoned. Passing the
 // server identity down to the write is what makes a server death structurally
 // unable to produce a deletion, instead of merely guarded against producing one.
-type ForgetFunc func(projectRoot, tmuxName, namespace string, observedAt time.Time, currentServer string) error
+type ForgetFunc func(projectRoot, tmuxName, namespace string, observedAt time.Time, server tmuxserver.Incarnation) error
 
 // ReapShell performs the write half: one fresh probe, then the conditional
 // tombstone.
@@ -243,7 +246,7 @@ func ReapShell(probe ProbeFunc, forget ForgetFunc, target ReapProbe, server tmux
 	if probe(target.TmuxName) != Gone {
 		return true, nil
 	}
-	return false, forget(target.ProjectRoot, target.TmuxName, target.Namespace, target.CreatedAt, server.ServerID())
+	return false, forget(target.ProjectRoot, target.TmuxName, target.Namespace, target.CreatedAt, server)
 }
 
 // LiveShells reports the shells this observation saw running, so a caller can

@@ -40,7 +40,7 @@ func newReapManifest(t *testing.T) *ShellManifest {
 func TestReapShellSurvivesAServerDeath(t *testing.T) {
 	m := newReapManifest(t)
 	for _, name := range []string{"sidecar-sh-one", "sidecar-sh-two", "sidecar-sh-three"} {
-		outcome, err := m.ReapShell(name, "") // no tmux server is running
+		outcome, err := m.ReapShell(name, shellstate.ServerGone()) // no tmux server is running
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -69,7 +69,7 @@ func TestReapShellSurvivesAServerDeath(t *testing.T) {
 // is already running by the time the verdict lands.
 func TestReapShellPreservesAcrossAReplacedServer(t *testing.T) {
 	m := newReapManifest(t)
-	outcome, err := m.ReapShell("sidecar-sh-one", "pid=200")
+	outcome, err := m.ReapShell("sidecar-sh-one", shellstate.ServerRunning("pid=200"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestReapShellPreservesAcrossAReplacedServer(t *testing.T) {
 // still tombstoned, and still recoverable by `sidecar shell restore`.
 func TestReapShellStillTombstonesAClosedTerminal(t *testing.T) {
 	m := newReapManifest(t)
-	outcome, err := m.ReapShell("sidecar-sh-one", "pid=100")
+	outcome, err := m.ReapShell("sidecar-sh-one", shellstate.ServerRunning("pid=100"))
 	if err != nil {
 		t.Fatal(err)
 	}
