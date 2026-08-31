@@ -215,10 +215,20 @@ type FileState struct {
 	// even when that path is unusable, because "it is a symlink" is the answer
 	// to why an install refused.
 	Kind string `json:"kind,omitempty"`
-	// Owned reports whether the file carries this integration's marker. A file
-	// that merely has the right name is not owned.
+	// Owned reports whether this file is Sidecar's to write or remove. A file
+	// that merely has the right name is never owned.
+	//
+	// How that is decided depends on the shape of the integration. For an
+	// adapter that drops a whole Sidecar-owned file, it means the bytes carry
+	// this integration's marker comment. For an adapter that adds one entry to
+	// a shared, user-owned config file -- which has no comment syntax to carry
+	// a marker -- it means the file contains Sidecar's own entry, identified by
+	// its content. The second reading is an overload of the first and is
+	// recorded as adapter-interface debt in the Herdr plan; a future revision
+	// should let an adapter declare its own ownership predicate rather than
+	// having two meanings behind one boolean.
 	Owned bool `json:"owned"`
-	// Version is the asset version parsed from the marker.
+	// Version is the asset version, parsed from the marker where there is one.
 	Version string `json:"version,omitempty"`
 	// Checksum is the sha256 of the file's bytes.
 	Checksum string `json:"checksum,omitempty"`
@@ -439,7 +449,9 @@ type Adapter interface {
 }
 
 // DefaultAdapters returns the adapters this build ships.
-func DefaultAdapters() []Adapter { return []Adapter{OpenCodeAdapter{}} }
+func DefaultAdapters() []Adapter {
+	return []Adapter{OpenCodeAdapter{}, CodexAdapter{}, ClaudeAdapter{}}
+}
 
 // Service is the application service behind the CLI and the Configuration
 // route.

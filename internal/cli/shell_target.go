@@ -182,13 +182,20 @@ func buildShellTargetScan(env Env, shellFlag, projectFlag string, globalExplicit
 	return &shellTargetScan{projects: projects, candidates: candidates}
 }
 
+// projectManifestPath is where one registered project keeps its shell manifest.
+// It is stated once so a caller that needs the path — the candidate scan, and
+// the global session dedup check — cannot disagree about where it is.
+func projectManifestPath(proj registeredProject) string {
+	if proj.Dir == "" {
+		return ""
+	}
+	return filepath.Join(proj.Dir, "shells.json")
+}
+
 func managedTargetCandidates(env Env, projects []registeredProject) ([]managedtarget.Target, error) {
 	var candidates []managedtarget.Target
 	for _, proj := range projects {
-		manifest := ""
-		if proj.Dir != "" {
-			manifest = filepath.Join(proj.Dir, "shells.json")
-		}
+		manifest := projectManifestPath(proj)
 		defs, err := shellstate.ListAtPath(manifest)
 		if err != nil {
 			return nil, err

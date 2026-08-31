@@ -8,6 +8,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/adapter"
+	"github.com/marcus/sidecar/internal/agentcatalog"
 	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/plugins/workspace"
@@ -251,8 +252,7 @@ func (p *Plugin) openResumeModal() tea.Cmd {
 	}
 
 	// Check if adapter supports resume
-	cmd := resumeCommand(session)
-	if cmd == "" {
+	if _, ok := resumeArgv(session); !ok {
 		return func() tea.Msg {
 			return app.ToastMsg{Message: "Resume not supported for " + session.AdapterName, IsError: true}
 		}
@@ -305,9 +305,11 @@ func (p *Plugin) executeResume() tea.Cmd {
 		return nil
 	}
 
-	// Generate resume command
-	resumeCmd := resumeCommand(session)
-	if resumeCmd == "" {
+	// Build the resume as structured arguments. The workspace plugin renders
+	// them at the one boundary that needs a command line; nothing between here
+	// and there interpolates the session id into a string.
+	argv, ok := resumeArgv(session)
+	if !ok {
 		return func() tea.Msg {
 			return app.ToastMsg{Message: "Resume not supported for " + session.AdapterName, IsError: true}
 		}
@@ -315,9 +317,9 @@ func (p *Plugin) executeResume() tea.Cmd {
 
 	// Build message based on type
 	msg := workspace.ResumeConversationMsg{
-		SessionID: session.ID,
-		AdapterID: session.AdapterID,
-		ResumeCmd: resumeCmd,
+		SessionID:  session.ID,
+		AdapterID:  session.AdapterID,
+		ResumeArgv: argv,
 	}
 
 	if p.resumeType == resumeTypeShell {
@@ -362,26 +364,17 @@ func (p *Plugin) getSessionForResume() *adapter.Session {
 }
 
 // defaultAgentIdxForAdapter returns the index in AgentTypeOrder for the given adapter.
+//
+// The adapter-id → family mapping lives in the catalog (Family.Aliases), not in
+// a switch here: agent types are catalog ids, so resolving the family answers
+// which agent to preselect. An id the catalog does not know falls back to the
+// first entry, as it always has.
 func defaultAgentIdxForAdapter(adapterID string) int {
-	var agentType workspace.AgentType
-	switch adapterID {
-	case "claude-code":
-		agentType = workspace.AgentClaude
-	case "codex":
-		agentType = workspace.AgentCodex
-	case "antigravity", "agy":
-		agentType = workspace.AgentAntigravity
-	case "cursor-cli":
-		agentType = workspace.AgentCursor
-	case "opencode":
-		agentType = workspace.AgentOpenCode
-	case "pi-agent", "pi":
-		agentType = workspace.AgentPi
-	case "grok":
-		agentType = workspace.AgentGrok
-	default:
+	family, ok := agentcatalog.Lookup(adapterID)
+	if !ok {
 		return 0 // Default to first (Claude)
 	}
+	agentType := workspace.AgentType(family.ID)
 
 	// Find index in AgentTypeOrder
 	for i, at := range workspace.AgentTypeOrder {

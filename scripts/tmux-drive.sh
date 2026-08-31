@@ -25,6 +25,8 @@
 #   ./scripts/tmux-drive.sh type <text>           - send literal text
 #   ./scripts/tmux-drive.sh snap [NAME]           - dump pane text (+ PNG if termshot)
 #   ./scripts/tmux-drive.sh panes                 - inner sidecar tmux panes + sizes
+#   ./scripts/tmux-drive.sh cli <subcmd> [args]   - run a sidecar CLI subcommand
+#                                                   against this run's isolated tree
 #   ./scripts/tmux-drive.sh inner-keys PANE KEY... - send keys to one resolved inner pane
 #   ./scripts/tmux-drive.sh inner-type PANE TEXT   - send literal text to one inner pane
 #   ./scripts/tmux-drive.sh control-clients        - exact control clients below Sidecar
@@ -374,6 +376,19 @@ capture_hook_show() {
     cat "$CAPTURE_LOG"
 }
 
+# Run a sidecar CLI subcommand against this run's isolated tmux server and
+# state tree. The exported TMUX_TMPDIR/XDG_STATE_HOME/SIDECAR_ISOLATED_STATE
+# above already point at RUN_DIR, so the only thing left to add is -config,
+# which is the sole lever for the $HOME-based config and state.json. TMUX is
+# unset so the CLI resolves the inner server the same way sidecar itself does
+# rather than inheriting the caller's session.
+cli() {
+    [ $# -gt 0 ] || { echo "usage: $0 cli SUBCOMMAND [ARG...]" >&2; return 2; }
+    # -config is a global flag, read before command dispatch, so it precedes the
+    # subcommand rather than following it.
+    ( cd "$LAUNCH_REPO" && unset TMUX && exec "${SIDECAR_BIN:-sidecar}" -config "$CONFIG" "$@" )
+}
+
 paths() {
     echo "launch repo:   $LAUNCH_REPO"
     echo "run dir:       $RUN_DIR"
@@ -393,6 +408,7 @@ case "${1:-}" in
     type)  shift; "${T[@]}" send-keys -t "$SESSION" -l "$*" ;;
     snap)  shift; snap "${1:-}" ;;
     panes) panes ;;
+    cli)   shift; cli "$@" ;;
     inner-keys) shift; inner_keys "$@" ;;
     inner-type) shift; inner_type "$@" ;;
     control-clients) control_clients ;;

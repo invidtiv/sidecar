@@ -11,6 +11,8 @@ import (
 
 	"github.com/marcus/sidecar/internal/agentcatalog"
 	"github.com/marcus/sidecar/internal/agentcontrol"
+	"github.com/marcus/sidecar/internal/agentsession"
+	"github.com/marcus/sidecar/internal/agenttranscript"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/managedtarget"
@@ -22,8 +24,11 @@ var newAgentTerminal = func() agentcontrol.Terminal { return agentcontrol.NewLoc
 
 func agentCommand() *Command {
 	common := []Flag{{Name: "--project", Arg: "NAME", Summary: "Target project (slug, basename, or path)"}, {Name: "--shell", Arg: "NAME", Summary: "Resolve the project from a registered shell"}, {Name: "--json", Summary: "Write stable structured JSON", Bool: true}, {Name: "--help", Short: "-h", Summary: "Show this help", Bool: true}}
-	list := &Command{Name: "list", Summary: "List live managed agents", Usage: "sidecar agent list [--project NAME] [--json]", Flags: common, ExitCodes: agentExitCodes(), Examples: []Example{{Command: "sidecar agent list --json"}}, Agent: AgentDoc{Invocation: "sidecar agent list --json", Summary: "List live managed agents and their current status"}, Run: runAgentList}
-	get := &Command{Name: "get", Summary: "Get one managed agent", Usage: "sidecar agent get [TARGET] [--project NAME] [--json]", Long: "TARGET is a managed tmux session name or unique display name. Inside a managed shell it may be omitted.", Flags: common, Args: ArgSpec{Min: 0, Max: 1}, ExitCodes: agentExitCodes(), Examples: []Example{{Command: "sidecar agent get reviewer --json"}}, Agent: AgentDoc{Invocation: "sidecar agent get [TARGET] --json", Summary: "Read one managed agent's provider and lifecycle state"}, Run: runAgentGet}
+	sessionRefFlag := Flag{Name: "--include-session-ref", Summary: "Include the bound conversation's value, not only its presence", Bool: true}
+	listFlags := append(append([]Flag{}, common...), sessionRefFlag)
+	list := &Command{Name: "list", Summary: "List live managed agents", Usage: "sidecar agent list [--project NAME] [--include-session-ref] [--json]", Flags: listFlags, ExitCodes: agentExitCodes(), Examples: []Example{{Command: "sidecar agent list --json"}}, Agent: AgentDoc{Invocation: "sidecar agent list --json", Summary: "List live managed agents and their current status"}, Run: runAgentList}
+	getFlags := append(append([]Flag{}, common...), sessionRefFlag)
+	get := &Command{Name: "get", Summary: "Get one managed agent", Usage: "sidecar agent get [TARGET] [--project NAME] [--include-session-ref] [--json]", Long: "TARGET is a managed tmux session name or unique display name. Inside a managed shell it may be omitted.\n\nsessionRef reports whether the shell is bound to an exact provider conversation. Its value is shown for your own shell, or with --include-session-ref; otherwise only the kind and whether an official integration reported it are returned, so ordinary output does not carry conversation identifiers into logs.", Flags: getFlags, Args: ArgSpec{Min: 0, Max: 1}, ExitCodes: agentExitCodes(), Examples: []Example{{Command: "sidecar agent get reviewer --json"}}, Agent: AgentDoc{Invocation: "sidecar agent get [TARGET] --json", Summary: "Read one managed agent's provider and lifecycle state"}, Run: runAgentGet}
 	startFlags := append([]Flag{}, common...)
 	startFlags = append(startFlags, Flag{Name: "--kind", Arg: "KIND", Summary: "Catalog provider kind (required)"}, Flag{Name: "--timeout", Arg: "DURATION", Summary: "Bound the readiness wait (default 30s)"})
 	start := &Command{Name: "start", Summary: "Start a provider in an idle managed shell and wait for readiness", Usage: "sidecar agent start [TARGET] --kind KIND [--timeout DURATION] [-- AGENT_ARG ...]", Long: "Refuses commands, editors, copy mode, agents, ambiguous panes, and replacement processes. Provider arguments remain structured until the final shell boundary.", Flags: startFlags, Args: ArgSpec{Min: 0, Max: -1}, ExitCodes: agentExitCodes(), Examples: []Example{{Command: "sidecar agent start reviewer --kind codex --timeout 30s"}}, Agent: AgentDoc{Invocation: "sidecar agent start [TARGET] --kind KIND", Summary: "Start a known provider in a shell and return only when it is ready"}, Mutates: true, Run: runAgentStart}
@@ -146,7 +151,7 @@ func agentCommand() *Command {
 
 	// Sub is rendered in slice order by both RenderHelp and the generated CLI
 	// doc, so it is kept alphabetical and TestCLIDocDrift enforces the result.
-	sub := []*Command{lcEnd, lcExplain, get, integrationCommand(), list, prompt, read, lcRelease, lcReport, sendKeys, start, wait}
+	sub := []*Command{lcEnd, lcExplain, get, integrationCommand(), list, prompt, read, lcRelease, lcReport, agentReportSessionCommand(), sendKeys, start, wait}
 	return &Command{Name: "agent", Summary: "Inspect, start, and coordinate agents in Sidecar-managed shells", Usage: "sidecar agent <command>", Long: "Provider-aware control over shells Sidecar owns. The feature is discoverable while disabled; enable agent_control to run it.\n\nThe safe sequence is: create the layout separately with sidecar create shell, start the provider with agent start, prompt and wait, read before you send keys, and never close a target you did not create.\n\nThe report, end, release, and explain commands are a separate surface: they record and inspect the lifecycle events a provider's own integration reports, and they are not gated behind agent_control.", Sub: sub, Run: runAgentRoot}
 }
 
@@ -177,6 +182,7 @@ type agentFlags struct {
 	timeout        time.Duration
 	until          []agentcontrol.Status
 	source         agentcontrol.ReadSource
+	includeSession bool
 }
 
 // agentOpt is the option set one agent subcommand accepts. Options are declared
@@ -191,13 +197,10 @@ const (
 	optSource
 	optLines
 	optANSI
+	optIncludeSession
 )
 
 func (a agentOpt) has(opt agentOpt) bool { return a&opt != 0 }
-
-func parseAgentCommon(env Env, args []string, help string) (agentFlags, int) {
-	return parseAgentArgs(env, args, help, 0)
-}
 
 func parseAgentArgs(env Env, args []string, help string, allowed agentOpt) (agentFlags, int) {
 	var f agentFlags
@@ -235,6 +238,8 @@ func parseAgentArgs(env Env, args []string, help string, allowed agentOpt) (agen
 			f.shell, i = v, n
 		case name == "--wait" && allowed.has(optWait):
 			f.wait = true
+		case name == "--include-session-ref" && allowed.has(optIncludeSession):
+			f.includeSession = true
 		case name == "--ansi" && allowed.has(optANSI):
 			f.ansi = true
 		case name == "--timeout" && allowed.has(optTimeout):
@@ -333,7 +338,36 @@ func agentService(env Env) (agentcontrol.Service, func(), context.Context) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return agentcontrol.Service{Terminal: terminal}, release, ctx
+	return agentcontrol.Service{Terminal: terminal, Transcript: transcriptReader(env)}, release, ctx
+}
+
+// transcriptReader binds `agent read --source transcript` to the conversation a
+// shell was reported to be running.
+//
+// The lookup goes through the same shell-target resolver every other agent
+// command uses and then through shellstate, so the only way to reach a
+// transcript is a binding an official integration actually reported. There is no
+// path here that searches for a session by working directory, which is what
+// makes the refusal honest rather than merely conservative.
+func transcriptReader(env Env) agentcontrol.TranscriptReader {
+	return agenttranscript.Reader{
+		Lookup: func(target agentcontrol.Target) (agenttranscript.Binding, bool, error) {
+			var lookup shellTargetLookup
+			tgt, code, err := lookup.resolve(env, target.Session, "", "", false, target.Namespace)
+			if err != nil {
+				return agenttranscript.Binding{}, false, err
+			}
+			if code > 0 {
+				return agenttranscript.Binding{}, false, nil
+			}
+			ref, kind, ok, err := shellstate.SessionRefAtPath(tgt.ManifestPath,
+				shellstate.Identity{TmuxName: tgt.Session, Namespace: tgt.Namespace})
+			if err != nil {
+				return agenttranscript.Binding{}, false, err
+			}
+			return agenttranscript.Binding{Kind: kind, Ref: ref}, ok, nil
+		},
+	}
 }
 
 func runAgentPrompt(env Env, args []string) int {
@@ -546,7 +580,7 @@ func requireAgentControl(env Env, jsonOutput bool) int {
 func runAgentList(env Env, args []string) int {
 	cmd := RootCommand().FindSubcommand("agent").FindSubcommand("list")
 	help := RenderHelp(cmd)
-	f, code := parseAgentCommon(env, args, help)
+	f, code := parseAgentArgs(env, args, help, optIncludeSession)
 	if code >= 0 {
 		return code
 	}
@@ -586,9 +620,14 @@ func runAgentList(env Env, args []string) int {
 	}
 	svc := agentcontrol.Service{Terminal: newAgentTerminal()}
 	agents := make([]agentcontrol.Agent, 0, len(targets))
+	refs := newSessionRefCache()
 	for _, target := range targets {
 		a, e := svc.Get(ctx, targetFromManaged(target))
 		if e == nil && a.Agent.Kind != "" {
+			// A list never reveals a conversation value unless the caller
+			// asked for it by name; presence and capability are what a
+			// discovery command owes.
+			refs.decorate(&a, target.ManifestPath, target.Session, target.Namespace, f.includeSession)
 			agents = append(agents, a)
 		}
 	}
@@ -608,7 +647,7 @@ func runAgentList(env Env, args []string) int {
 func runAgentGet(env Env, args []string) int {
 	cmd := RootCommand().FindSubcommand("agent").FindSubcommand("get")
 	help := RenderHelp(cmd)
-	f, code := parseAgentCommon(env, args, help)
+	f, code := parseAgentArgs(env, args, help, optIncludeSession)
 	if code >= 0 {
 		return code
 	}
@@ -640,6 +679,10 @@ func runAgentGet(env Env, args []string) int {
 	if err != nil {
 		return emitAgentError(env, f.json, err)
 	}
+	// A shell asking about itself already knows its own conversation, so the
+	// value is not withheld from it; any other target needs the explicit flag.
+	own := tgt.Session != "" && tgt.Session == os.Getenv(shellstate.SessionEnv)
+	decorateSessionRef(&a, tgt.ManifestPath, tgt.Session, tgt.Namespace, f.includeSession || own)
 	return emitAgent(env, f.json, a)
 }
 
@@ -812,4 +855,79 @@ func emitAgentError(env Env, jsonOutput bool, err error) int {
 	default:
 		return 5
 	}
+}
+
+// decorateSessionRef adds the session-binding projection to an agent result.
+//
+// The projection is deliberately asymmetric. Kind and Reported say whether this
+// shell can be resumed and whether an official integration vouched for it, which
+// is what a caller deciding what to do needs. The value names the conversation
+// and is withheld unless the caller is that shell or asked for it explicitly:
+// `agent list` output is routinely captured into logs and CI artifacts, and a
+// conversation identifier written there cannot be unwritten.
+//
+// A shell with no binding gets no sessionRef key at all rather than an empty
+// one, so "not bound" and "bound but redacted" stay distinguishable.
+func decorateSessionRef(a *agentcontrol.Agent, manifestPath, session, namespace string, includeValue bool) {
+	newSessionRefCache().decorate(a, manifestPath, session, namespace, includeValue)
+}
+
+// sessionRefCache reads each shell manifest at most once.
+//
+// SessionRefAtPath parses a whole manifest to answer about one shell, and
+// `agent list` asks about every shell in every registered project -- so without
+// this the command re-parses the same file once per row it prints. It follows
+// the same reasoning as shellTargetLookup's memo: the scan is per-manifest, the
+// questions are per-shell, and a loop is the wrong place to pay for a file.
+type sessionRefCache struct {
+	byManifest map[string][]shellstate.Definition
+}
+
+func newSessionRefCache() *sessionRefCache {
+	return &sessionRefCache{byManifest: map[string][]shellstate.Definition{}}
+}
+
+func (c *sessionRefCache) definitions(manifestPath string) []shellstate.Definition {
+	if defs, ok := c.byManifest[manifestPath]; ok {
+		return defs
+	}
+	defs, err := shellstate.ListAtPath(manifestPath)
+	if err != nil {
+		// A manifest that cannot be read means no binding is known, which is
+		// the same answer as no binding recorded. Caching the empty result
+		// keeps a broken file from being re-read once per row.
+		defs = nil
+	}
+	c.byManifest[manifestPath] = defs
+	return defs
+}
+
+func (c *sessionRefCache) decorate(a *agentcontrol.Agent, manifestPath, session, namespace string, includeValue bool) {
+	if a == nil || manifestPath == "" || session == "" {
+		return
+	}
+	var (
+		ref agentsession.Ref
+		ok  bool
+	)
+	for _, def := range c.definitions(manifestPath) {
+		if def.TmuxName != session {
+			continue
+		}
+		if def.Namespace != "" && namespace != "" && def.Namespace != namespace {
+			continue
+		}
+		if def.Agent != nil && def.Agent.Session != nil && !def.Agent.Session.Empty() {
+			ref, ok = *def.Agent.Session, true
+		}
+		break
+	}
+	if !ok || ref.Empty() {
+		return
+	}
+	projected := &agentcontrol.SessionRef{Kind: string(ref.Kind), Reported: ref.Reported}
+	if includeValue {
+		projected.Value = ref.Value
+	}
+	a.Agent.SessionRef = projected
 }

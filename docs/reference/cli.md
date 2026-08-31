@@ -97,8 +97,10 @@ Get one managed agent
 
 TARGET is a managed tmux session name or unique display name. Inside a managed shell it may be omitted.
 
+sessionRef reports whether the shell is bound to an exact provider conversation. Its value is shown for your own shell, or with --include-session-ref; otherwise only the kind and whether an official integration reported it are returned, so ordinary output does not carry conversation identifiers into logs.
+
 ```
-Usage: sidecar agent get [TARGET] [--project NAME] [--json]
+Usage: sidecar agent get [TARGET] [--project NAME] [--include-session-ref] [--json]
 ```
 
 **Options:**
@@ -107,6 +109,7 @@ Usage: sidecar agent get [TARGET] [--project NAME] [--json]
 - `--shell NAME`: Resolve the project from a registered shell
 - `--json`: Write stable structured JSON
 - `-h, --help`: Show this help
+- `--include-session-ref`: Include the bound conversation's value, not only its presence
 
 **Exit codes:**
 
@@ -361,7 +364,7 @@ sidecar agent integration update opencode
 List live managed agents
 
 ```
-Usage: sidecar agent list [--project NAME] [--json]
+Usage: sidecar agent list [--project NAME] [--include-session-ref] [--json]
 ```
 
 **Options:**
@@ -370,6 +373,7 @@ Usage: sidecar agent list [--project NAME] [--json]
 - `--shell NAME`: Resolve the project from a registered shell
 - `--json`: Write stable structured JSON
 - `-h, --help`: Show this help
+- `--include-session-ref`: Include the bound conversation's value, not only its presence
 
 **Exit codes:**
 
@@ -558,6 +562,50 @@ Usage: sidecar agent report --state working|blocked|idle --source SOURCE --provi
 
 ```bash
 sidecar agent report --state working --source sidecar.opencode.plugin --provider opencode --seq 1 --reason turn_start
+```
+
+### `sidecar agent report-session`
+
+Bind the pane's exact native agent conversation
+
+Records which of a provider's own conversations is running in this managed shell, so a cold restart can offer to resume that exact conversation and `agent read --source transcript` can return it.
+
+This is an integration surface rather than a coordination command: it is meant to be called by a provider hook, and it fails open exactly like `agent report` — outside a Sidecar-managed shell it exits 0, prints nothing, and records nothing.
+
+The shell it binds is derived from the managed-shell environment and verified against live tmux. A hook chooses only which conversation it is talking about; it can never select another shell, pane, host, or tmux server through a flag.
+
+A report wins only if it comes from the provider process that currently occupies the pane. Late output from an exited or replaced provider is ignored rather than allowed to overwrite its successor's binding.
+
+Only an official Sidecar integration source may set an auto-resumable reference. A path reference must be absolute, normalized, and inside one of that provider's approved conversation store roots. Session values are never interpolated into a shell command, and never appear in ordinary `agent list` output.
+
+```
+Usage: sidecar agent report-session --kind KIND (--id ID | --path ABS_PATH | --clear) [--source SOURCE] [--hook-stdin] [--json]
+```
+
+**Options:**
+
+- `--kind KIND`: Catalog agent kind, e.g. codex or claude (required)
+- `--id ID`: Provider session identifier
+- `--path ABS_PATH`: Absolute path to the provider's own transcript file
+- `--clear`: Remove the shell's session binding
+- `--source SOURCE`: Reporting integration source; defaults to this provider's official source
+- `--hook-stdin`: Read the provider's hook payload as bounded JSON on stdin
+- `--json`: Write stable structured JSON
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: recorded, or a no-op outside a Sidecar-managed shell
+- `1`: the binding could not be written
+- `2`: usage error
+- `5`: invalid reference, untrusted source, unusable hook payload, unverifiable shell context, or a stale provider generation
+
+**Examples:**
+
+```bash
+sidecar agent report-session --kind codex --id 019f2c8a-1d4e-7b02-9c11-6f3a0b7d2e55
+sidecar agent report-session --kind claude --hook-stdin
+sidecar agent report-session --kind codex --clear
 ```
 
 ### `sidecar agent send-keys`

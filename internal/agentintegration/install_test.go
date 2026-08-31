@@ -709,10 +709,19 @@ func TestProvidersWithNoBundledAssetAreReportedHonestlyRatherThanHidden(t *testi
 	if len(list) < 2 {
 		t.Fatalf("only %d providers listed", len(list))
 	}
+	shipped := map[string]bool{}
+	for _, a := range DefaultAdapters() {
+		shipped[a.Provider()] = true
+	}
 	var sawOpenCode, sawUnsupported bool
 	for _, st := range list {
 		if st.Provider == OpenCodeProvider {
 			sawOpenCode = true
+			continue
+		}
+		if shipped[st.Provider] {
+			// A provider with a bundled adapter answers from its own
+			// inspection; its honesty is covered by its own suite.
 			continue
 		}
 		if st.Status != agentlifecycle.StatusUnsupported {

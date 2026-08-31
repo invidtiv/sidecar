@@ -70,6 +70,11 @@ type Context struct {
 	PaneID            string
 	ProcessGeneration string
 
+	// PanePID is the pane's root process. It is exposed so a caller that needs
+	// to ask what occupies the pane *now* — as opposed to what spawned this
+	// hook — can do so without re-inspecting the pane.
+	PanePID int
+
 	// salt is the host-local salt used to fingerprint provider session ids.
 	salt []byte
 }
@@ -189,6 +194,7 @@ func Resolve(stateDir string) (Context, error) {
 		ServerIncarnation: "pid=" + strconv.Itoa(live.serverPID),
 		PaneID:            pane,
 		ProcessGeneration: gen,
+		PanePID:           live.panePID,
 		salt:              loadSalt(stateDir),
 	}, nil
 }

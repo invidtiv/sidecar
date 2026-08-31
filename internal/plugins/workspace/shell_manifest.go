@@ -208,7 +208,9 @@ func (m *ShellManifest) AddShell(def ShellDefinition) error {
 		m.Tombstones = dropWorkspaceTombstone(m.Tombstones, def.TmuxName)
 		for i, s := range shells {
 			if s.TmuxName == def.TmuxName {
-				shells[i] = def
+				// Carry the schema fields this serializer does not model. A
+				// wholesale replacement here would drop the v3 session binding.
+				shells[i] = shellstate.CarryForward(s, def)
 				return shells, true
 			}
 		}
@@ -321,7 +323,10 @@ func (m *ShellManifest) UpdateShell(def ShellDefinition) error {
 		m.Tombstones = dropWorkspaceTombstone(m.Tombstones, def.TmuxName)
 		for i, s := range shells {
 			if s.TmuxName == def.TmuxName {
-				shells[i] = def
+				// Same rule as AddShell, and the one that matters most: this is
+				// the path a revived shell takes, so replacing wholesale here
+				// destroyed the binding at the cold-restore moment.
+				shells[i] = shellstate.CarryForward(s, def)
 				return shells, true
 			}
 		}

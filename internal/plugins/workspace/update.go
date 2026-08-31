@@ -965,7 +965,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	case ShellCreatedMsg:
 		if msg.Err != nil {
 			// Creation failed, show error toast
-			p.pendingResumeCmd = "" // Clear pending resume
+			p.pendingPrefillCmd = "" // Clear pending resume
 			return p, func() tea.Msg {
 				return app.ToastMsg{Message: msg.Err.Error(), Duration: 5 * time.Second, IsError: true}
 			}
@@ -1080,9 +1080,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		cmds = append(cmds, p.scheduleShellPollByName(msg.SessionName, 500*time.Millisecond))
 
 		// If there's a pending resume command, inject it and enter interactive mode (td-aa4136)
-		if p.pendingResumeCmd != "" {
-			resumeCmd := p.pendingResumeCmd
-			p.pendingResumeCmd = "" // Clear pending command
+		if p.pendingPrefillCmd != "" {
+			resumeCmd := p.pendingPrefillCmd
+			p.pendingPrefillCmd = "" // Clear pending command
 			cmds = append(cmds, p.sendResumeCommandToShell(msg.SessionName, resumeCmd))
 			// Enter interactive mode after command is injected
 			cmds = append(cmds, func() tea.Msg { return shellResumeInjectedMsg{TmuxSession: msg.SessionName} })
@@ -1208,7 +1208,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		p.pendingResumeWorktree = msg.Worktree.Name
 
 		// Start agent with resume command
-		return p, p.startAgentWithResumeCmd(msg.Worktree, msg.AgentType, msg.SkipPerms, msg.ResumeCmd)
+		return p, p.startAgentWithResumeCmd(msg.Worktree, msg.AgentType, msg.SkipPerms, msg.ResumeArgv)
 
 	case ShellKilledMsg:
 		// Timer leak prevention (td-83dc22): increment generation to invalidate pending timers
@@ -2053,7 +2053,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		if strings.TrimSpace(msg.Command) == "" {
 			return p, nil
 		}
-		return p, p.createShellWithResume(msg.Command)
+		return p, p.createShellWithPrefilledCommand(msg.Command)
 
 	case app.OpenIssuePaneMsg:
 		return p, p.openIssuePaneMsg(msg)

@@ -14,6 +14,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/marcus/sidecar/internal/agentsession"
 	"github.com/marcus/sidecar/internal/config"
 )
 
@@ -395,6 +396,49 @@ type Definition struct {
 	// WorkDir is the parent worktree path this shell was created in. Empty on
 	// pre-td-4819be manifests; callers infer or treat empty as current workDir.
 	WorkDir string `json:"workDir,omitempty"`
+	// Agent is the schema-v3 structured agent binding: what provider is running
+	// here, how it was launched, and which of its own conversations it is in.
+	//
+	// It is a pointer so a shell that has never run an agent serializes no key
+	// at all, which keeps every existing v2 record byte-identical after a v3
+	// binary rewrites it.
+	Agent *AgentBinding `json:"agent,omitempty"`
+	// Restore is the schema-v3 per-shell restore state and policy.
+	Restore *RestoreState `json:"restore,omitempty"`
+}
+
+// AgentBinding is the structured agent metadata added in schema version 3.
+//
+// AgentType above remains the v2 field and stays authoritative for everything
+// that already reads it. Kind here is the same value; it is repeated inside the
+// binding so the agent object is self-contained for a reader that has one, and
+// the two are kept in step by the single writer that sets them.
+type AgentBinding struct {
+	// Kind is the catalog family id, e.g. "codex".
+	Kind string `json:"kind,omitempty"`
+	// LaunchArgv is the structured launch, recorded only for catalog-built
+	// provider launches. A configured free-form agentStart shell string is
+	// deliberately never stored here: it is not safely replayable, and a field
+	// that sometimes holds argv and sometimes holds a command line is a field
+	// whose consumers will eventually run the wrong one.
+	LaunchArgv []string `json:"launchArgv,omitempty"`
+	// Session is the exact native conversation reference, when an official
+	// integration has reported one.
+	Session *agentsession.Ref `json:"session,omitempty"`
+}
+
+// RestoreState is the schema-v3 restore eligibility and policy for one shell.
+type RestoreState struct {
+	// Policy is inherit | shell | resume | never. Empty means inherit.
+	Policy agentsession.Policy `json:"policy,omitempty"`
+	// Eligible records that this shell was confirmed live in the tmux server
+	// incarnation named below, which is what makes it a cold-restore candidate.
+	Eligible bool `json:"eligible,omitempty"`
+	// LastSeenServer is the tmux server incarnation the shell was last confirmed
+	// alive in, in the same "pid=N" form the lifecycle store uses.
+	LastSeenServer string `json:"lastSeenServer,omitempty"`
+	// LastSeenAliveAt is when that confirmation happened.
+	LastSeenAliveAt time.Time `json:"lastSeenAliveAt,omitzero"`
 }
 
 // Tombstone is a forgotten shell definition kept so RestoreAtPath can move it

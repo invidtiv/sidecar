@@ -10,6 +10,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/adapter"
+	"github.com/marcus/sidecar/internal/agentcatalog"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/ui"
 )
@@ -335,30 +336,38 @@ func adapterFilterOptions(adapters map[string]adapter.Adapter) []adapterFilterOp
 	return options
 }
 
-func resumeCommand(session *adapter.Session) string {
+// resumeArgv is the structured resume command for a session, built by the
+// provider registry rather than by this package.
+//
+// It reports false — and the display projection below returns "" — for every
+// case the UI treats as "resume not supported": no session, no session id, an
+// adapter the catalog does not know, and a known provider with no native resume
+// (copilot). The UI's three call sites read "" as that signal.
+func resumeArgv(session *adapter.Session) ([]string, bool) {
 	if session == nil || session.ID == "" {
+		return nil, false
+	}
+	argv, err := agentcatalog.BuildResume(session.AdapterID, "id", session.ID, nil)
+	if err != nil {
+		return nil, false
+	}
+	return argv, true
+}
+
+// resumeCommand is the string projection of resumeArgv: the line shown in the
+// session header and copied by the yank key.
+//
+// It is rendered by agentcatalog.DisplayCommand, the same conservative quoter that
+// renders the line typed at a new shell's prompt, so what a user reads here and
+// what a shell receives are the same text. Bare words survive only when no
+// character in them means anything to a shell; anything else is quoted by
+// agentcatalog.ShellCommand.
+func resumeCommand(session *adapter.Session) string {
+	argv, ok := resumeArgv(session)
+	if !ok {
 		return ""
 	}
-	switch session.AdapterID {
-	case "claude-code":
-		return fmt.Sprintf("claude --resume %s", session.ID)
-	case "codex":
-		return fmt.Sprintf("codex resume %s", session.ID)
-	case "opencode":
-		return fmt.Sprintf("opencode --continue -s %s", session.ID)
-	case "antigravity":
-		return fmt.Sprintf("agy --conversation %s", session.ID)
-	case "cursor-cli":
-		return fmt.Sprintf("cursor-agent --resume %s", session.ID)
-	case "amp":
-		return fmt.Sprintf("amp threads continue %s", session.ID)
-	case "pi-agent", "pi":
-		return fmt.Sprintf("pi --session %s", session.ID)
-	case "grok":
-		return fmt.Sprintf("grok --resume %s", session.ID)
-	default:
-		return ""
-	}
+	return agentcatalog.DisplayCommand(argv)
 }
 
 // modelShortName maps model IDs to short display names.

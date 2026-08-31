@@ -293,7 +293,12 @@ func TestAnUnsupportedOrUnknownProviderIsRefusedNotCrashed(t *testing.T) {
 		provider string
 		want     agentintegration.RefusalCode
 	}{
-		{"codex", agentintegration.RefuseUnsupported},
+		// pi has a recorded capability but no bundled adapter, which is what
+		// keeps the "unsupported" branch honest now that codex and claude
+		// ship adapters. codex covers the third refusal shape: an adapter
+		// exists, but the provider CLI is not on this fixture's PATH.
+		{"pi", agentintegration.RefuseUnsupported},
+		{"codex", agentintegration.RefuseProviderMissing},
 		{"not-an-agent", agentintegration.RefuseUnknownProvider},
 	} {
 		code, _, errOut := run("install", tc.provider, "--json")
