@@ -2,7 +2,7 @@
 
 **Status:** Phase A evidence baseline recorded 2026-08-30; OpenCode cancellation traced and promoted to `full` in Phase B, 2026-08-30. **Plan:** [Deterministic agent lifecycle hooks](../plans/active/notification-agent-lifecycle-hooks.md). **Tracking:** `td-43a93f`.
 
-This document records what each agent provider's own lifecycle events can actually tell Sidecar, how strong the evidence for that claim is, and what authority tier the evidence justifies. It is the prose companion to `internal/agentlifecycle/testdata/capabilities.json`, which is the machine-readable version the code reads and the tests police.
+This document records what each agent provider's own lifecycle events can actually tell Sidecar, how strong the evidence for that claim is, and what authority tier the evidence justifies. It is the prose companion to `internal/agentlifecycle/capabilities.json`, which is the machine-readable version the code reads and the tests police. That file is embedded into the binary and read at runtime through `agentlifecycle.Capabilities()`, so the registry the resolver trusts and the evidence these tests police are one file rather than two that could drift.
 
 The matrix is evidence, not aspiration. A provider does not get full lifecycle authority because its documentation lists the right event names. It gets full lifecycle authority when sanitized real traces show the transitions arriving, in order, from a released version.
 
@@ -134,4 +134,4 @@ The blocked lane is the problem. The one working production integration obtains 
 
 ## Maintaining this document
 
-When a provider version changes, or an integration is added, update `internal/agentlifecycle/testdata/capabilities.json` and this document together. The tests will reject a `real-trace` claim with no trace files, a `docs-only` claim with trace files present, an untraced entry claiming no known gaps, and any tier the entry's own coverage does not earn. Capture procedure and sanitization rules are in `internal/agentlifecycle/testdata/README.md`.
+When a provider version changes, or an integration is added, update `internal/agentlifecycle/capabilities.json` and this document together. The tests will reject a `real-trace` claim with no trace files, a `docs-only` claim with trace files present, an untraced entry claiming no known gaps, and any tier the entry's own coverage does not earn. Capture procedure and sanitization rules are in `internal/agentlifecycle/testdata/README.md`.
