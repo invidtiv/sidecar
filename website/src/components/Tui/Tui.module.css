@@ -24,6 +24,8 @@
   font-feature-settings: 'liga' 0, 'calt' 0;
   -webkit-font-smoothing: antialiased;
   border: 1px solid var(--tui-chrome-edge);
+  border-radius: 12px;
+  box-shadow: 0 28px 70px -15px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.05);
   overflow: hidden;
   container-type: inline-size;
 }
@@ -37,7 +39,6 @@
   height: 30px;
   padding: 0 12px;
   background: var(--tui-titlebar);
-  border-bottom: 1px solid var(--tui-chrome-edge);
   flex: none;
 }
 
