@@ -28,11 +28,8 @@ func treeSnapshot(t *testing.T, root string) []string {
 		if relErr != nil {
 			return relErr
 		}
-		if rel == ".git" || strings.HasPrefix(rel, ".git"+string(filepath.Separator)) {
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
+		if d.IsDir() && d.Name() == ".git" {
+			return filepath.SkipDir
 		}
 		paths = append(paths, rel)
 		return nil

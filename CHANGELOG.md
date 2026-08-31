@@ -8,6 +8,20 @@ All notable changes to sidecar are documented here.
 
 - **Tmux 3.4 is now Sidecar's explicit compatibility floor, with 3.7c continuously tested.** One checksum-pinned manifest drives local source builds and an oldest/latest CI matrix, including real private-server coverage for control mode, terminal rendering, paste, metadata and shell lifecycle. A separate latest-client/minimum-server proof models a Homebrew upgrade without touching the live default server and verifies capture fallback when tmux explicitly declines cross-version control mode. Future stable upgrades are one manifest change plus the same repeatable proof. (td-22399a)
 
+## [v1.11.2] - 2026-08-31
+
+### Bug Fixes
+
+- **The read-only worktree planning proof now ignores Git's transient bookkeeping wherever the fixture repository sits beneath its snapshot root.** Background maintenance can create or remove lock files without Sidecar doing anything; the proof continues to compare every path Sidecar owns while no longer treating Git's internal locks as product mutations.
+
+## [v1.11.1] - 2026-08-31
+
+### Bug Fixes
+
+- **Release verification no longer intermittently loses its private tmux server between agent-control integration tests.** The suite now keeps one inert session alive for the package lifetime, so one test cleaning up its last working session cannot race the next test's server startup. The package still uses its own socket and tears down only that isolated server.
+
+- **The remote-host reconnect test now observes a stable recovered connection instead of a transient state.** Its successful fake stream stays open like the real host protocol, so loaded CI cannot miss the online state between an immediate end-of-stream and the following reconnect.
+
 ## [v1.11.0] - 2026-08-31
 
 ### Features
