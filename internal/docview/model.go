@@ -96,6 +96,14 @@ type Model struct {
 	// search is this document's in-file search: its query, its matches and the
 	// layout they were found in. See search.go.
 	search searchState
+
+	// visualRevision advances only when the visible document answer can change.
+	// Prepared frames add host-owned resolution and matcher generations to this
+	// model-owned identity; pane origin is intentionally excluded.
+	visualRevision uint64
+	preparedKey    preparedFrameKey
+	preparedFrame  PreparedFrame
+	preparedValid  bool
 }
 
 // New creates an empty document viewer. A nil renderer uses the default
@@ -104,7 +112,7 @@ func New(renderer *markdown.Renderer) *Model {
 	if renderer == nil {
 		renderer, _ = markdown.NewRenderer()
 	}
-	return &Model{renderer: renderer, rendered: true, renderWidth: -1}
+	return &Model{renderer: renderer, rendered: true, renderWidth: -1, visualRevision: 1}
 }
 
 // Load retargets the model and returns a command that wraps the existing file
@@ -204,6 +212,7 @@ func (m *Model) Arm(modelID int, relPath string, epoch uint64) {
 	m.epoch = epoch
 	m.path = relPath
 	m.loading = true
+	m.bumpVisualRevision()
 }
 
 // NeedsLoad reports whether this model has never been asked to Load.
@@ -237,12 +246,16 @@ func (m *Model) ApplyLine(line int) {
 	if line <= 0 {
 		return
 	}
+	beforeScroll, beforeRendered := m.scroll, m.rendered
 	m.targetLine = line
 	m.rendered = false
 	m.hasPendingScroll = false
 	if !m.loading {
 		m.scroll = m.displayRowForLine(line)
 		m.clampScroll()
+	}
+	if m.scroll != beforeScroll || m.rendered != beforeRendered {
+		m.bumpVisualRevision()
 	}
 }
 
@@ -251,12 +264,16 @@ func (m *Model) ApplyLine(line int) {
 func (m *Model) SetSize(width, height int) {
 	width = max(width, 0)
 	height = max(height, 0)
+	oldWidth, oldHeight, oldScroll := m.width, m.height, m.scroll
 	if width != m.width {
 		m.invalidateRender()
 	}
 	m.width = width
 	m.height = height
 	m.clampScroll()
+	if width == oldWidth && (height != oldHeight || m.scroll != oldScroll) {
+		m.bumpVisualRevision()
+	}
 }
 
 // View returns exactly the configured number of rows, each no wider than the
@@ -335,15 +352,16 @@ func (m *Model) contentHeight() int {
 
 // HandleKey applies document scrolling keys.
 func (m *Model) HandleKey(k tea.KeyMsg) bool {
+	before := m.scroll
 	switch k.String() {
 	case "j", "down":
-		m.Scroll(1)
+		m.scroll++
 	case "k", "up":
-		m.Scroll(-1)
+		m.scroll--
 	case "ctrl+d", "pgdown":
-		m.Scroll(max(m.contentHeight()/2, 1))
+		m.scroll += max(m.contentHeight()/2, 1)
 	case "ctrl+u", "pgup":
-		m.Scroll(-max(m.contentHeight()/2, 1))
+		m.scroll -= max(m.contentHeight()/2, 1)
 	case "g", "home":
 		m.scroll = 0
 	case "G", "end":
@@ -351,13 +369,21 @@ func (m *Model) HandleKey(k tea.KeyMsg) bool {
 	default:
 		return false
 	}
+	m.clampScroll()
+	if m.scroll != before {
+		m.bumpVisualRevision()
+	}
 	return true
 }
 
 // Scroll moves the viewport by delta rows and clamps it to the document.
 func (m *Model) Scroll(delta int) {
+	before := m.scroll
 	m.scroll += delta
 	m.clampScroll()
+	if m.scroll != before {
+		m.bumpVisualRevision()
+	}
 }
 
 // ToggleRenderMode switches between rendered markdown and raw highlighted
@@ -365,6 +391,7 @@ func (m *Model) Scroll(delta int) {
 func (m *Model) ToggleRenderMode() {
 	m.rendered = !m.rendered
 	m.clampScroll()
+	m.bumpVisualRevision()
 }
 
 // Rendered reports whether markdown is shown rendered rather than raw.
@@ -372,8 +399,12 @@ func (m *Model) Rendered() bool { return m.rendered }
 
 // SetRendered restores the persisted display mode.
 func (m *Model) SetRendered(rendered bool) {
+	if m.rendered == rendered {
+		return
+	}
 	m.rendered = rendered
 	m.clampScroll()
+	m.bumpVisualRevision()
 }
 
 // Wrap reports whether long lines wrap instead of truncating.
@@ -381,14 +412,19 @@ func (m *Model) Wrap() bool { return m.wrap }
 
 // SetWrap restores the persisted wrap flag.
 func (m *Model) SetWrap(wrap bool) {
+	if m.wrap == wrap {
+		return
+	}
 	m.wrap = wrap
 	m.clampScroll()
+	m.bumpVisualRevision()
 }
 
 // ToggleWrap flips line wrapping.
 func (m *Model) ToggleWrap() {
 	m.wrap = !m.wrap
 	m.clampScroll()
+	m.bumpVisualRevision()
 }
 
 // Title returns the document's relative path.
@@ -635,6 +671,18 @@ func (m *Model) invalidateRender() {
 	m.contentGen++
 	m.layoutValid = false
 	m.layout = displayRows{}
+	m.bumpVisualRevision()
+}
+
+func (m *Model) bumpVisualRevision() {
+	if m == nil {
+		return
+	}
+	m.visualRevision++
+	if m.visualRevision == 0 {
+		m.visualRevision++
+	}
+	m.preparedValid = false
 }
 
 func (m *Model) maxScroll() int {

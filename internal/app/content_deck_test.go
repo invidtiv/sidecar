@@ -274,15 +274,19 @@ func TestAppContentDeckResolvedAbsoluteDocumentKeepsCanonicalPath(t *testing.T) 
 		t.Fatal("app content deck was not created")
 	}
 	candidate := contentlink.Pending{Kind: contentlink.KindFile, Raw: raw}
-	resolved := resolveAppContentLink(h.key, root, candidate)().(appContentResolvedMsg)
+	request, ok := h.resolution.Begin(root, candidate)
+	if !ok {
+		t.Fatal("resolution request was not accepted")
+	}
+	resolved := resolveAppContentLink(h.key, request)().(appContentResolvedMsg)
 	want, err := filepath.EvalSymlinks(absPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !resolved.Found || resolved.Ref.Value != filepath.ToSlash(want) {
+	if !resolved.Result.Found || resolved.Result.Ref.Value != filepath.ToSlash(want) {
 		t.Fatalf("absolute resolution = %#v, want %q", resolved, want)
 	}
-	cmd := m.openAppContent(root, p.id, resolved.Ref)
+	cmd := m.openAppContent(root, p.id, resolved.Result.Ref)
 	if cmd == nil {
 		t.Fatal("resolved absolute document returned no load")
 	}
@@ -1860,22 +1864,22 @@ func TestAppContentDeckResolvesDocumentLeafPathsAgainstDeckRoot(t *testing.T) {
 	h := m.currentContentDeck()
 
 	candidate := contentlink.Pending{Kind: contentlink.KindFile, Raw: "other.go"}
-	if !h.pending[candidate] {
+	if !h.pending[appContentResolutionKey{Root: root, Candidate: candidate}] {
 		t.Fatalf("document leaf queued no file resolution: %+v", h.pending)
 	}
 	// Run the command the deck itself queued, not one the test rebuilds: the
-	// root scanDocumentLeaf passed is exactly what is under test, and a test
+	// root prepareDocumentLeaf passed is exactly what is under test, and a test
 	// that supplies its own root would pass even if the deck passed "".
 	var resolved appContentResolvedMsg
 	for _, cmd := range h.queued {
 		if cmd == nil {
 			continue
 		}
-		if msg, ok := cmd().(appContentResolvedMsg); ok && msg.Candidate == candidate {
+		if msg, ok := cmd().(appContentResolvedMsg); ok && msg.Result.Request.Candidate == candidate {
 			resolved = msg
 		}
 	}
-	if !resolved.Found || resolved.Ref.Value != "other.go" {
+	if !resolved.Result.Found || resolved.Result.Ref.Value != "other.go" {
 		t.Fatalf("the deck's own queued resolution = %#v, want other.go found against the deck root", resolved)
 	}
 

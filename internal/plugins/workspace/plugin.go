@@ -278,7 +278,6 @@ type Plugin struct {
 	// close buttons keep the header row.
 	docLinkHits       []docContentLinkHit
 	docLinkResolution *contentlink.ResolutionIndex
-	docLinkPending    map[contentlink.Pending]bool
 	// docSelectLeaf is the document leaf a live text-selection drag started in.
 	// A drag is answered by where it began, never by where the pointer has since
 	// travelled, and the shared pane-leaf region cannot say which leaf that was.
@@ -692,7 +691,6 @@ func New() *Plugin {
 		activePane:          PaneSidebar,
 		mouseHandler:        mouse.NewHandler(),
 		docLinkResolution:   contentlink.NewResolutionIndex(contentlink.MaxPendingResolutions),
-		docLinkPending:      make(map[contentlink.Pending]bool),
 		sidebarWidth:        40,   // Default 40% sidebar
 		sidebarVisible:      true, // Sidebar visible by default
 		tmuxCaptureMaxBytes: defaultTmuxCaptureMaxBytes,

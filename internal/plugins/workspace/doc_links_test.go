@@ -22,12 +22,12 @@ func TestDocPaneContentLinksRegisterAndActivateIssueFileAndDiff(t *testing.T) {
 	if doc == nil || leaf == nil {
 		t.Fatal("no document pane")
 	}
-	p.ensureDocLinkResolution().Put(
+	p.ensureDocLinkResolution().PutForRoot(doc.root,
 		contentlink.Pending{Kind: contentlink.KindFile, Raw: "README.md"},
 		contentlink.Ref{Kind: contentlink.KindFile, Value: "README.md"},
 		true,
 	)
-	p.ensureDocLinkResolution().Put(
+	p.ensureDocLinkResolution().PutForRoot(doc.root,
 		contentlink.Pending{Kind: contentlink.KindDiff, Raw: "abcdef0"},
 		contentlink.Ref{Kind: contentlink.KindDiff, Value: "c:abcdef0"},
 		true,
@@ -77,7 +77,7 @@ func TestDocPaneContentLinksRegisterAndActivateIssueFileAndDiff(t *testing.T) {
 
 	p.mouseHandler.Clear()
 	applyDocOpen(t, p, p.openTerminalPath("links.txt", 1))
-	p.ensureDocLinkResolution().Put(
+	p.ensureDocLinkResolution().PutForRoot(doc.root,
 		contentlink.Pending{Kind: contentlink.KindDiff, Raw: "abcdef0"},
 		contentlink.Ref{Kind: contentlink.KindDiff, Value: "c:abcdef0"},
 		true,

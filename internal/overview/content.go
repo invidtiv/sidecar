@@ -124,7 +124,10 @@ func (c *docContent) Title() string {
 
 func (c *docContent) SetSize(size Size) tea.Cmd {
 	c.size = size
-	return nil
+	if view := c.doc.view(); view != nil {
+		view.SetSize(size.Width, max(size.Height-termpreview.HeaderRows, 0))
+	}
+	return c.m.preparePreviewDocFrame(c.doc)
 }
 
 // View draws the leaf at its own origin. Where the box is, not only how big it

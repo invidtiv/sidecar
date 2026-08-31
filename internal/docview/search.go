@@ -79,15 +79,17 @@ func (m *Model) StartSearch() {
 	}
 	m.search = searchState{phase: searchTyping}
 	m.clampScroll()
+	m.bumpVisualRevision()
 }
 
 // CloseSearch ends the search and drops its matches.
 func (m *Model) CloseSearch() {
-	if m == nil {
+	if m == nil || !m.searchActive() {
 		return
 	}
 	m.search = searchState{}
 	m.clampScroll()
+	m.bumpVisualRevision()
 }
 
 // SearchActive reports whether the search bar is on screen and owns the pane's
@@ -146,6 +148,7 @@ func (m *Model) HandleSearchKey(msg tea.KeyMsg) (bool, tea.Cmd) {
 	if !ok {
 		return false, nil
 	}
+	defer m.bumpVisualRevision()
 	key := press.String()
 
 	// Esc always leaves search entirely, from either phase.

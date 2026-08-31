@@ -9,7 +9,6 @@ import (
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/terminallink"
-	"github.com/marcus/sidecar/internal/terminalperf"
 	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
@@ -22,9 +21,7 @@ type docContentLinkHit struct {
 }
 
 type docLinkResolvedMsg struct {
-	Candidate contentlink.Pending
-	Ref       contentlink.Ref
-	Found     bool
+	Result contentlink.ResolutionResult
 }
 
 func (p *Plugin) ensureDocLinkResolution() *contentlink.ResolutionIndex {
@@ -34,65 +31,68 @@ func (p *Plugin) ensureDocLinkResolution() *contentlink.ResolutionIndex {
 	return p.docLinkResolution
 }
 
-func (p *Plugin) decorateDocBody(doc *docPane, body string) string {
-	if doc == nil || doc.editing() || doc.mode != nil {
-		return body
-	}
-	view := doc.view()
-	if view == nil || !view.ContentLinksSafe() {
-		return body
-	}
-	frame := view.ScanContentLinks(body, contentlink.FrameOptions{
-		Ready:        p.ensureDocLinkResolution().Snapshot(),
-		Matchers:     p.resourceMatchers,
-		AllowedKinds: docview.ContentLinkKinds(),
-		Decorate:     true,
-	})
-	for _, hit := range frame.Hits {
-		p.docLinkHits = append(p.docLinkHits, docContentLinkHit{LeafID: doc.leafID, Ref: hit.Ref, Rect: hit.Rect})
-	}
-	for _, candidate := range frame.Pending {
-		p.queueDocLinkResolve(doc.root, candidate)
-	}
-	return frame.Output
-}
-
-func (p *Plugin) queueDocLinkResolve(root string, candidate contentlink.Pending) {
-	if p.docLinkPending == nil {
-		p.docLinkPending = make(map[contentlink.Pending]bool)
-	}
-	if p.docLinkPending[candidate] {
+func (p *Plugin) prepareDocFrame(doc *docPane) {
+	if doc == nil {
 		return
 	}
-	p.docLinkPending[candidate] = true
-	terminalperf.Record(terminalperf.DocumentResolutionRequest)
-	p.paneSizeCmds = append(p.paneSizeCmds, resolveDocContentLink(root, candidate))
+	view := doc.view()
+	if view == nil {
+		return
+	}
+	index := p.ensureDocLinkResolution()
+	frame := view.PrepareFrame(docview.PrepareOptions{
+		Root:              doc.root,
+		Resolution:        index.SnapshotForRoot(doc.root),
+		Matchers:          p.resourceMatchers,
+		MatcherGeneration: p.linkMatcherGeneration,
+		AllowedKinds:      docview.ContentLinkKinds(),
+		Decorate:          true,
+		Links:             !doc.editing() && doc.mode == nil,
+	})
+	docview.BeginResolutions(index, doc.root, frame, func(request contentlink.ResolutionRequest) {
+		p.paneSizeCmds = append(p.paneSizeCmds, resolveDocContentLink(request))
+	})
 }
 
-func resolveDocContentLink(root string, candidate contentlink.Pending) tea.Cmd {
+func (p *Plugin) preparedDocBody(doc *docPane, originX, originY int) string {
+	if doc == nil {
+		return ""
+	}
+	view := doc.view()
+	if view == nil {
+		return ""
+	}
+	frame := view.PreparedFrame()
+	if !frame.Valid() {
+		return view.View()
+	}
+	frame.EachHitAt(originX, originY, func(hit docview.ContentLinkHit) {
+		p.docLinkHits = append(p.docLinkHits, docContentLinkHit{LeafID: doc.leafID, Ref: hit.Ref, Rect: hit.Rect})
+	})
+	return frame.Output()
+}
+
+func resolveDocContentLink(request contentlink.ResolutionRequest) tea.Cmd {
 	return func() tea.Msg {
-		msg := docLinkResolvedMsg{Candidate: candidate}
-		switch candidate.Kind {
+		result := contentlink.ResolutionResult{Request: request}
+		switch request.Candidate.Kind {
 		case contentlink.KindFile:
-			rel, _, ok := terminallink.ResolveFile(root, candidate.Raw)
-			msg.Ref, msg.Found = contentlink.Ref{Kind: contentlink.KindFile, Value: rel}, ok
+			rel, _, ok := terminallink.ResolveFile(request.Root, request.Candidate.Raw)
+			result.Ref, result.Found = contentlink.Ref{Kind: contentlink.KindFile, Value: rel}, ok
 		case contentlink.KindDiff:
-			target, ok := workspacediff.ParseSpec(candidate.Raw)
+			target, ok := workspacediff.ParseSpec(request.Candidate.Raw)
 			if !ok {
-				return msg
+				return docLinkResolvedMsg{Result: result}
 			}
-			resolved, err := workspacediff.ResolveSpec(context.Background(), root, target)
-			msg.Ref, msg.Found = contentlink.Ref{Kind: contentlink.KindDiff, Value: resolved.Identity()}, err == nil
+			resolved, err := workspacediff.ResolveSpec(context.Background(), request.Root, target)
+			result.Ref, result.Found = contentlink.Ref{Kind: contentlink.KindDiff, Value: resolved.Identity()}, err == nil
 		}
-		return msg
+		return docLinkResolvedMsg{Result: result}
 	}
 }
 
 func (p *Plugin) applyDocLinkResolved(msg docLinkResolvedMsg) {
-	if p.docLinkPending != nil {
-		delete(p.docLinkPending, msg.Candidate)
-	}
-	p.ensureDocLinkResolution().Put(msg.Candidate, msg.Ref, msg.Found)
+	p.ensureDocLinkResolution().Apply(msg.Result)
 }
 
 func (p *Plugin) registerDocLinkHits(node *PaneNode, inner Box) {

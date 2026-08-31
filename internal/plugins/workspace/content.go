@@ -197,6 +197,7 @@ func (c *docContent) SetSize(size Size) tea.Cmd {
 	c.doc.boxW, c.doc.boxH = size.Width, size.Height
 	if view := c.doc.view(); view != nil {
 		view.SetSize(size.Width, maxInt(size.Height-terminalHeaderRows, 0))
+		c.p.prepareDocFrame(c.doc)
 	}
 	// A live editor is sized from the same box, on the same call: a drag
 	// handle, a window resize and +/- all move the leaf through here, so the
@@ -230,7 +231,7 @@ func (c *docContent) View(render Render) string {
 	body := ""
 	if view := c.doc.view(); view != nil {
 		c.p.bindDocSelection(view, render.Origin)
-		body = c.p.decorateDocBody(c.doc, view.View())
+		body = c.p.preparedDocBody(c.doc, render.Origin.X, render.Origin.Y+terminalHeaderRows)
 	}
 	header := c.p.docPaneHeaderRow(c.doc, c.size.Width, render.Focused)
 	if c.doc.mode != nil {

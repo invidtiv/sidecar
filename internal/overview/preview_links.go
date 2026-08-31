@@ -732,9 +732,6 @@ func (m *Model) renderPreviewDoc(doc *previewDoc, box termpreview.Box) string {
 	}
 	view := doc.view()
 	contentHeight := max(box.H-termpreview.HeaderRows, 0)
-	if view != nil {
-		view.SetSize(box.W, contentHeight)
-	}
 	tabsWidth := m.reserveHeader(box.W, true).TabsWidth
 	focused := m.PreviewFocused() && doc.focused
 	strip := docview.LayoutTabStrip(doc.tabs, tabsWidth, focused)
@@ -747,7 +744,7 @@ func (m *Model) renderPreviewDoc(doc *previewDoc, box termpreview.Box) string {
 	body := ""
 	if view != nil {
 		m.bindPreviewDocSelection(view, box)
-		body = m.decoratePreviewDocBody(doc, view.View())
+		body = m.preparedPreviewDocBody(doc, box.X, box.Y+termpreview.HeaderRows)
 	}
 	if contentHeight <= 0 {
 		return header

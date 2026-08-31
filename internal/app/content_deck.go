@@ -50,10 +50,13 @@ const (
 )
 
 type appContentResolvedMsg struct {
-	Key       string
+	Key    string
+	Result contentlink.ResolutionResult
+}
+
+type appContentResolutionKey struct {
+	Root      string
 	Candidate contentlink.Pending
-	Ref       contentlink.Ref
-	Found     bool
 }
 
 type appContentLinkHit struct {
@@ -77,27 +80,28 @@ type appContentDeck struct {
 	queued                            []tea.Cmd
 	// pluginSize is the geometry last announced to plugin, and pluginSized
 	// distinguishes "never sized" from a genuine zero-sized frame.
-	pluginSize       paneframe.Size
-	pluginSized      bool
-	primaryInner     paneframe.Box
-	links            []appContentLinkHit
-	tabHits          []appDeckTabHit
-	hoverTabClose    tabs.CloseHover
-	hoverLayout      int
-	generation       uint64
-	press            *appContentLinkHit
-	pressX, pressY   int
-	dragged          bool
-	resolution       *contentlink.ResolutionIndex
-	pending          map[contentlink.Pending]bool
-	resourceMatchers []contentlink.ResourceMatcher
-	dragSplit        int
-	search           appDeckSearch
-	info             *docview.Info
-	infoLeaf         int
-	live             *livepanes.Set
-	suppressRefresh  bool
-	edit             *appDeckDocumentEdit
+	pluginSize        paneframe.Size
+	pluginSized       bool
+	primaryInner      paneframe.Box
+	links             []appContentLinkHit
+	tabHits           []appDeckTabHit
+	hoverTabClose     tabs.CloseHover
+	hoverLayout       int
+	generation        uint64
+	press             *appContentLinkHit
+	pressX, pressY    int
+	dragged           bool
+	resolution        *contentlink.ResolutionIndex
+	pending           map[appContentResolutionKey]bool
+	resourceMatchers  []contentlink.ResourceMatcher
+	matcherGeneration uint64
+	dragSplit         int
+	search            appDeckSearch
+	info              *docview.Info
+	infoLeaf          int
+	live              *livepanes.Set
+	suppressRefresh   bool
+	edit              *appDeckDocumentEdit
 	// wheel holds one flick per scrollable leaf this deck draws, and wheelNow
 	// is its clock (nil is the wall clock, replaced by tests). Each leaf
 	// scrolls independently, so the delta one of them holds back belongs to it
@@ -154,7 +158,7 @@ func (m *Model) activeContentDeck() *appContentDeck {
 		}
 		h = &appContentDeck{key: key, workdir: m.ui.WorkDir, stateRoot: stateRoot, pluginID: p.ID(), plugin: p, global: global,
 			mouse: mouse.NewHandler(), resolution: contentlink.NewResolutionIndex(contentlink.MaxPendingResolutions),
-			pending: make(map[contentlink.Pending]bool)}
+			pending: make(map[appContentResolutionKey]bool), matcherGeneration: 1}
 		h.live = h.newLiveSet()
 		if manager := ResourceProviderManager(); manager != nil {
 			h.resourceMatchers = manager.Snapshot().TerminalMatchers()
@@ -390,6 +394,14 @@ func (c *appDeckContent) Title() string {
 // markdown ~150 times a second on a terminal nobody had touched (td-fcb03a).
 func (c *appDeckContent) SetSize(size paneframe.Size) tea.Cmd {
 	c.size = size
+	if c.node.Kind == panelayout.Document {
+		if view, ok := c.h.deck.Viewer(c.node.ID).(*docview.Model); ok {
+			bodyH := max(size.Height-paneframe.HeaderRows, 0)
+			view.SetSize(size.Width, bodyH)
+			view.SetSelection(c.h.selKeys, c.h.selCopyOnSelect)
+			c.h.prepareDocumentLeaf(view)
+		}
+	}
 	if c.node.Kind != panelayout.Primary || c.h.plugin == nil {
 		return nil
 	}
@@ -417,13 +429,11 @@ func (c *appDeckContent) View(render paneframe.Render) string {
 	body := ""
 	switch v := c.h.deck.Viewer(c.node.ID).(type) {
 	case *docview.Model:
-		v.SetSize(c.size.Width, bodyH)
-		v.SetSelection(c.h.selKeys, c.h.selCopyOnSelect)
 		// The body sits below the leaf's own tab-header row. Recording where
 		// it was drawn is what makes the viewer's own bar hit-testing agree
 		// with the regions the frame registers for it.
 		v.SetOrigin(render.Origin.X, render.Origin.Y+paneframe.HeaderRows)
-		body = c.h.scanDocumentLeaf(v, v.View())
+		body = c.h.preparedDocumentLeaf(v, render.Origin.X, render.Origin.Y+paneframe.HeaderRows)
 		body = c.h.renderAppContentSearch(c.node.ID, body,
 			mouse.Rect{X: render.Origin.X, Y: render.Origin.Y + paneframe.HeaderRows},
 			paneframe.Size{Width: c.size.Width, Height: bodyH})
@@ -619,7 +629,7 @@ func (h *appContentDeck) scanPrimary(frame string, origin mouse.Rect) string {
 				// contracts explicitly at this boundary.
 				allowedKinds = contentlink.KindSet{}
 			}
-			result := contentlink.ScanFrame(segment, contentlink.FrameOptions{Ready: h.resolution.Snapshot(), Matchers: h.resourceMatchers,
+			result := contentlink.ScanFrame(segment, contentlink.FrameOptions{Ready: h.resolution.SnapshotForRoot(surface.WorkDir), Matchers: h.resourceMatchers,
 				InternalNamespaces: sidecarIntentNamespaces, AllowedKinds: allowedKinds, Decorate: true,
 				RendererOwned: surface.RendererOwned})
 			for _, span := range result.Spans {
@@ -638,7 +648,7 @@ func (h *appContentDeck) scanPrimary(frame string, origin mouse.Rect) string {
 	return strings.Join(lines, "\n")
 }
 
-// scanDocumentLeaf recognizes tokens in a document leaf the deck drew beside
+// prepareDocumentLeaf recognizes tokens in a document leaf the deck drew beside
 // its plugin. A file opened as a Document leaf next to Files is the same
 // document as the Workspace pane that already scans, so it goes through the
 // same docview seam and registers into the deck's own hit list: press/drag/
@@ -649,57 +659,71 @@ func (h *appContentDeck) scanPrimary(frame string, origin mouse.Rect) string {
 // header row, so a hit registered here cannot steal a tab, close, or scrollbar
 // click. Coordinates are already absolute: SetOrigin above told the viewer where
 // its body was drawn.
-func (h *appContentDeck) scanDocumentLeaf(view *docview.Model, body string) string {
-	if view == nil || !view.ContentLinksSafe() {
-		return body
-	}
-	frame := view.ScanContentLinks(body, contentlink.FrameOptions{
-		Ready:        h.resolution.Snapshot(),
-		Matchers:     h.resourceMatchers,
-		AllowedKinds: docview.ContentLinkKinds(),
-		Decorate:     true,
-	})
-	for _, hit := range frame.Hits {
-		h.links = append(h.links, appContentLinkHit{Generation: h.generation, Ref: hit.Ref, Rect: hit.Rect})
-	}
-	for _, candidate := range frame.Pending {
-		h.queueContentLinkResolve(h.workdir, candidate)
-	}
-	return frame.Output
-}
-
-// queueContentLinkResolve schedules one file/diff resolution per distinct
-// candidate. The pending set is deck-wide and keyed on the candidate alone, so
-// the primary plugin's surface and a document leaf naming the same path resolve
-// once between them. That is only sound because every root here is the same
-// one: a plugin's ContentLinkSurface reports its own plugin.Context.WorkDir,
-// which is the m.ui.WorkDir the deck was built with. A surface that ever
-// reported a different root would need the root in this key.
-func (h *appContentDeck) queueContentLinkResolve(root string, candidate contentlink.Pending) {
-	if h.pending[candidate] {
+func (h *appContentDeck) prepareDocumentLeaf(view *docview.Model) {
+	if view == nil {
 		return
 	}
-	h.pending[candidate] = true
-	terminalperf.Record(terminalperf.DocumentResolutionRequest)
-	h.queued = append(h.queued, resolveAppContentLink(h.key, root, candidate))
+	frame := view.PrepareFrame(docview.PrepareOptions{
+		Root:              h.workdir,
+		Resolution:        h.resolution.SnapshotForRoot(h.workdir),
+		Matchers:          h.resourceMatchers,
+		MatcherGeneration: h.matcherGeneration,
+		AllowedKinds:      docview.ContentLinkKinds(),
+		Decorate:          true,
+		Links:             true,
+	})
+	docview.BeginResolutions(h.resolution, h.workdir, frame, h.queueContentLinkRequest)
 }
 
-func resolveAppContentLink(key, root string, candidate contentlink.Pending) tea.Cmd {
+func (h *appContentDeck) preparedDocumentLeaf(view *docview.Model, originX, originY int) string {
+	if view == nil {
+		return ""
+	}
+	frame := view.PreparedFrame()
+	if !frame.Valid() {
+		return view.View()
+	}
+	frame.EachHitAt(originX, originY, func(hit docview.ContentLinkHit) {
+		h.links = append(h.links, appContentLinkHit{Generation: h.generation, Ref: hit.Ref, Rect: hit.Rect})
+	})
+	return frame.Output()
+}
+
+// queueContentLinkResolve schedules root- and token-scoped file/diff work for
+// the primary plugin surface. Document frames enter through BeginResolutions
+// and share queueContentLinkRequest below.
+func (h *appContentDeck) queueContentLinkResolve(root string, candidate contentlink.Pending) {
+	request, outcome := h.resolution.BeginClassified(root, candidate)
+	switch outcome {
+	case contentlink.BeginRequested:
+		terminalperf.Record(terminalperf.DocumentResolutionRequest)
+		h.queueContentLinkRequest(request)
+	case contentlink.BeginReady:
+		terminalperf.Record(terminalperf.DocumentResolutionCacheHit)
+	}
+}
+
+func (h *appContentDeck) queueContentLinkRequest(request contentlink.ResolutionRequest) {
+	h.pending[appContentResolutionKey{Root: request.Root, Candidate: request.Candidate}] = true
+	h.queued = append(h.queued, resolveAppContentLink(h.key, request))
+}
+
+func resolveAppContentLink(key string, request contentlink.ResolutionRequest) tea.Cmd {
 	return func() tea.Msg {
-		msg := appContentResolvedMsg{Key: key, Candidate: candidate}
-		switch candidate.Kind {
+		result := contentlink.ResolutionResult{Request: request}
+		switch request.Candidate.Kind {
 		case contentlink.KindFile:
-			rel, _, ok := terminallink.ResolveFile(root, candidate.Raw)
-			msg.Ref, msg.Found = contentlink.Ref{Kind: contentlink.KindFile, Value: rel}, ok
+			rel, _, ok := terminallink.ResolveFile(request.Root, request.Candidate.Raw)
+			result.Ref, result.Found = contentlink.Ref{Kind: contentlink.KindFile, Value: rel}, ok
 		case contentlink.KindDiff:
-			target, ok := workspacediff.ParseSpec(candidate.Raw)
+			target, ok := workspacediff.ParseSpec(request.Candidate.Raw)
 			if !ok {
-				return msg
+				return appContentResolvedMsg{Key: key, Result: result}
 			}
-			resolved, err := workspacediff.ResolveSpec(context.Background(), root, target)
-			msg.Ref, msg.Found = contentlink.Ref{Kind: contentlink.KindDiff, Value: resolved.Identity()}, err == nil
+			resolved, err := workspacediff.ResolveSpec(context.Background(), request.Root, target)
+			result.Ref, result.Found = contentlink.Ref{Kind: contentlink.KindDiff, Value: resolved.Identity()}, err == nil
 		}
-		return msg
+		return appContentResolvedMsg{Key: key, Result: result}
 	}
 }
 
@@ -1846,6 +1870,7 @@ func (p appContentCommandPlugin) Commands() []plugin.Command { return p.commands
 
 func (h *appContentDeck) SetResourceMatchers(matchers []contentlink.ResourceMatcher) {
 	h.resourceMatchers = append([]contentlink.ResourceMatcher(nil), matchers...)
+	h.matcherGeneration++
 }
 
 // SetResourceResolver rebinds this deck's Resource viewers and returns the load

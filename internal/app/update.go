@@ -272,8 +272,8 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case appContentResolvedMsg:
 		if h := m.contentDecks[msg.Key]; h != nil {
-			delete(h.pending, msg.Candidate)
-			if h.resolution.Put(msg.Candidate, msg.Ref, msg.Found) {
+			delete(h.pending, appContentResolutionKey{Root: msg.Result.Request.Root, Candidate: msg.Result.Request.Candidate})
+			if changed, accepted := h.resolution.Apply(msg.Result); changed && accepted {
 				h.generation++
 				h.links = nil
 			}

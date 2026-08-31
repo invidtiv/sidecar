@@ -60,6 +60,11 @@ func (m *Model) ClearSelection() {
 	if m == nil {
 		return
 	}
+	if m.selection.HasSelection() {
+		m.selection.Clear()
+		m.bumpVisualRevision()
+		return
+	}
 	m.selection.Clear()
 }
 
@@ -80,8 +85,13 @@ func (m *Model) AbandonSelection() textselect.Result {
 	if m == nil {
 		return textselect.Result{}
 	}
+	hadVisualState := m.selection.HasSelection() || m.scrollbarDrag.active || m.scrollbarHover
 	m.abandonScrollbarGesture()
-	return m.selection.Abandon()
+	result := m.selection.Abandon()
+	if hadVisualState || result.Changed {
+		m.bumpVisualRevision()
+	}
+	return result
 }
 
 // SelectionText is the selection as the user sees it: the visible rows, without
@@ -111,7 +121,11 @@ func (m *Model) HandleSelectionMouse(action mouse.MouseAction) textselect.Result
 	// The scrollbar column is answered here, before the selection engine can
 	// see it: a press on the bar must never arm a selection or resolve into a
 	// click-through. See scrollbar.go.
+	beforeScroll, beforeHover, beforeDrag := m.scroll, m.scrollbarHover, m.scrollbarDrag.active
 	if result, handled := m.handleScrollbarMouse(action); handled {
+		if result.Changed || m.scroll != beforeScroll || m.scrollbarHover != beforeHover || m.scrollbarDrag.active != beforeDrag {
+			m.bumpVisualRevision()
+		}
 		return result
 	}
 	result := m.selection.HandleMouse(action, selectionSource{m})
@@ -119,6 +133,9 @@ func (m *Model) HandleSelectionMouse(action mouse.MouseAction) textselect.Result
 		before := m.scroll
 		m.Scroll(result.AutoScroll)
 		result.AutoScroll = m.scroll - before
+	}
+	if result.Changed || m.scroll != beforeScroll || m.scrollbarHover != beforeHover || m.scrollbarDrag.active != beforeDrag {
+		m.bumpVisualRevision()
 	}
 	return result
 }
@@ -137,7 +154,11 @@ func (m *Model) HandleSelectionKey(msg tea.KeyMsg) textselect.Result {
 		m.ClearSelection()
 		return textselect.Result{Handled: true, Changed: true}
 	}
-	return m.selection.HandleKey(msg, selectionSource{m})
+	result := m.selection.HandleKey(msg, selectionSource{m})
+	if result.Changed {
+		m.bumpVisualRevision()
+	}
+	return result
 }
 
 // SelectionCopyCmd delivers the copy an engine result asked for, phrased by the
@@ -163,6 +184,11 @@ func (m *Model) expireSelection() {
 		return
 	}
 	m.selectionKey = key
+	if m.selection.HasSelection() {
+		m.selection.Clear()
+		m.bumpVisualRevision()
+		return
+	}
 	m.selection.Clear()
 }
 

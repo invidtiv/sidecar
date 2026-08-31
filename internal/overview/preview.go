@@ -120,7 +120,6 @@ type previewState struct {
 
 	docLinkHits       []previewDocLinkHit
 	docLinkResolution *contentlink.ResolutionIndex
-	docLinkPending    map[contentlink.Pending]bool
 }
 
 type previewPaneCache struct {

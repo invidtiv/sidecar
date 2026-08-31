@@ -162,29 +162,31 @@ func TestProjectActiveSessionPulseAttribution(t *testing.T) {
 		t.Fatal("reconstructed terminal leaf has no row analyzer")
 	}
 
+	_ = fixture.p.View(220, 58)
 	counters := &terminalperf.Counters{}
 	restore := terminalperf.Install(counters)
 	t.Cleanup(restore)
-	_ = fixture.p.View(220, 58)
-	fixture.p.activityAnimationFrame++
-	_ = fixture.p.View(220, 58)
+	for i := 0; i < 100; i++ {
+		fixture.p.activityAnimationFrame++
+		_ = fixture.p.View(220, 58)
+	}
 
 	snapshot := counters.Snapshot()
-	if snapshot.ProjectWorkspaceViewsRendered != 2 || snapshot.ProjectSidebarRendered != 2 ||
-		snapshot.ProjectPreviewComposes != 2 || snapshot.TerminalViewsRendered != 2 {
-		t.Fatalf("pulse attribution = %+v, want two complete project frames", snapshot)
+	if snapshot.ProjectWorkspaceViewsRendered != 100 || snapshot.ProjectSidebarRendered != 100 ||
+		snapshot.ProjectPreviewComposes != 100 || snapshot.TerminalViewsRendered != 100 {
+		t.Fatalf("pulse attribution = %+v, want 100 complete project frames before Slice 3", snapshot)
 	}
-	if snapshot.DocumentFramesBuilt != 2 || snapshot.DocumentLinkScans != 2 {
-		t.Fatalf("document attribution = %+v, want one frame and scan per pulse", snapshot)
+	if snapshot.DocumentFramesBuilt != 0 || snapshot.DocumentLinkScans != 0 || snapshot.DocumentFrameCacheHits != 100 {
+		t.Fatalf("document attribution = %+v, want 100 prepared-frame hits and no rebuild/scan", snapshot)
 	}
-	if snapshot.DocumentResolutionRequests == 0 {
-		t.Fatalf("document attribution = %+v, want initial file/diff resolution work", snapshot)
+	if snapshot.DocumentResolutionRequests != 0 {
+		t.Fatalf("document attribution = %+v, want no pulse-only resolution work", snapshot)
 	}
-	if snapshot.ProjectPreviewCacheHits != 0 || snapshot.DocumentFrameCacheHits != 0 {
-		t.Fatalf("pre-cache fixture unexpectedly reused prepared presentation: %+v", snapshot)
+	if snapshot.ProjectPreviewCacheHits != 0 {
+		t.Fatalf("pre-Slice-3 fixture unexpectedly reused the composed preview: %+v", snapshot)
 	}
-	if snapshot.RowAnalyzerBypasses != 0 || snapshot.RowCacheMisses == 0 || snapshot.RowCacheHits == 0 {
-		t.Fatalf("durable analyzer attribution = %+v, want reuse without bypass", snapshot)
+	if snapshot.RowAnalyzerBypasses != 0 || snapshot.RowCacheMisses != 0 || snapshot.RowCacheHits == 0 {
+		t.Fatalf("durable analyzer attribution = %+v, want warm hits without misses or bypass", snapshot)
 	}
 }
 
@@ -247,7 +249,7 @@ func BenchmarkProjectActiveSessionFrame(b *testing.B) {
 	benchmarkWarmProjectActiveSessionFrame(b, "document_resolution", root, terminal, func(_ testing.TB, fixture *projectActiveSessionFixture, iteration int) {
 		candidate := contentlink.Pending{Kind: contentlink.KindFile, Raw: "README.md"}
 		ref := contentlink.Ref{Kind: contentlink.KindFile, Value: "README.md"}
-		fixture.p.ensureDocLinkResolution().Put(candidate, ref, iteration%2 == 0)
+		fixture.p.ensureDocLinkResolution().PutForRoot(fixture.root, candidate, ref, iteration%2 == 0)
 	})
 	benchmarkWarmProjectActiveSessionFrame(b, "document_refresh", root, terminal, func(tb testing.TB, fixture *projectActiveSessionFixture, iteration int) {
 		body := activeSessionDocument + fmt.Sprintf("\nrefresh generation %d\n", iteration)

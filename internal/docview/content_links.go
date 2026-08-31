@@ -87,10 +87,17 @@ func (m *Model) ContentLinkRect() mouse.Rect {
 // text, then offset by ContentLinkRect so a host can register them after
 // chrome.
 func (m *Model) ScanContentLinks(body string, opts contentlink.FrameOptions) ContentLinkFrame {
+	return m.scanContentLinks(body, opts, false)
+}
+
+func (m *Model) scanContentLinksRelative(body string, opts contentlink.FrameOptions) ContentLinkFrame {
+	return m.scanContentLinks(body, opts, true)
+}
+
+func (m *Model) scanContentLinks(body string, opts contentlink.FrameOptions, relative bool) ContentLinkFrame {
 	if m == nil {
 		return ContentLinkFrame{Output: body}
 	}
-	terminalperf.Record(terminalperf.DocumentFrameBuilt)
 	terminalperf.Record(terminalperf.DocumentLinkScan)
 	if opts.AllowedKinds == nil {
 		opts.AllowedKinds = ContentLinkKinds()
@@ -102,10 +109,16 @@ func (m *Model) ScanContentLinks(body string, opts contentlink.FrameOptions) Con
 	// mode is the plain-wrap fallback over that same source.
 	opts.RendererOwned = m.rendered && markdown.RendersMarkdownAt(m.contentWidth())
 	rect := m.ContentLinkRect()
+	if relative {
+		rect = m.relativeContentLinkRect()
+	}
 	if rect.W <= 0 || rect.H <= 0 {
 		return ContentLinkFrame{Output: body}
 	}
-	relX := rect.X - m.originX
+	relX := rect.X
+	if !relative {
+		relX -= m.originX
+	}
 	if relX < 0 {
 		relX = 0
 	}

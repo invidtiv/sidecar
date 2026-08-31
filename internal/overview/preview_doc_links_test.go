@@ -24,12 +24,12 @@ func TestGlobalPreviewDocumentLinksRegisterAndActivateIssueFileAndDiff(t *testin
 	if err := os.WriteFile(filepath.Join(ws.Path, "links.txt"), []byte("README.md\ntd-196c42\nabcdef0\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	m.ensurePreviewDocLinkResolution().Put(
+	m.ensurePreviewDocLinkResolution().PutForRoot(ws.Path,
 		contentlink.Pending{Kind: contentlink.KindFile, Raw: "README.md"},
 		contentlink.Ref{Kind: contentlink.KindFile, Value: "README.md"},
 		true,
 	)
-	m.ensurePreviewDocLinkResolution().Put(
+	m.ensurePreviewDocLinkResolution().PutForRoot(ws.Path,
 		contentlink.Pending{Kind: contentlink.KindDiff, Raw: "abcdef0"},
 		contentlink.Ref{Kind: contentlink.KindDiff, Value: "c:abcdef0"},
 		true,
@@ -68,7 +68,7 @@ func TestGlobalPreviewDocumentLinksRegisterAndActivateIssueFileAndDiff(t *testin
 
 	run(t, m, m.openPreviewContent(contentlink.Ref{Kind: contentlink.KindFile, Value: "links.txt", Line: 1}, "Document"))
 	m.preview.doc.view().SetRendered(false)
-	m.ensurePreviewDocLinkResolution().Put(
+	m.ensurePreviewDocLinkResolution().PutForRoot(ws.Path,
 		contentlink.Pending{Kind: contentlink.KindDiff, Raw: "abcdef0"},
 		contentlink.Ref{Kind: contentlink.KindDiff, Value: "c:abcdef0"},
 		true,

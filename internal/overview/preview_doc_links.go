@@ -10,7 +10,6 @@ import (
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/terminallink"
-	"github.com/marcus/sidecar/internal/terminalperf"
 	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
@@ -23,9 +22,7 @@ type previewDocLinkHit struct {
 }
 
 type previewDocLinkResolvedMsg struct {
-	Candidate contentlink.Pending
-	Ref       contentlink.Ref
-	Found     bool
+	Result contentlink.ResolutionResult
 }
 
 func (m *Model) ensurePreviewDocLinkResolution() *contentlink.ResolutionIndex {
@@ -35,71 +32,67 @@ func (m *Model) ensurePreviewDocLinkResolution() *contentlink.ResolutionIndex {
 	return m.preview.docLinkResolution
 }
 
-func (m *Model) decoratePreviewDocBody(doc *previewDoc, body string) string {
-	if doc == nil || doc.editing() || doc.mode != nil {
-		return body
+func (m *Model) preparePreviewDocFrame(doc *previewDoc) tea.Cmd {
+	if doc == nil {
+		return nil
 	}
 	view := doc.view()
-	if view == nil || !view.ContentLinksSafe() {
-		return body
+	if view == nil {
+		return nil
 	}
-	frame := view.ScanContentLinks(body, contentlink.FrameOptions{
-		Ready:        m.ensurePreviewDocLinkResolution().Snapshot(),
-		Matchers:     m.resourceMatchers,
-		AllowedKinds: docview.ContentLinkKinds(),
-		Decorate:     true,
+	index := m.ensurePreviewDocLinkResolution()
+	frame := view.PrepareFrame(docview.PrepareOptions{
+		Root:              doc.root,
+		Resolution:        index.SnapshotForRoot(doc.root),
+		Matchers:          m.resourceMatchers,
+		MatcherGeneration: m.linkMatcherGeneration,
+		AllowedKinds:      docview.ContentLinkKinds(),
+		Decorate:          true,
+		Links:             !doc.editing() && doc.mode == nil,
 	})
-	m.preview.docLinkHits = append(m.preview.docLinkHits, frameHits(frame)...)
-	for _, candidate := range frame.Pending {
-		m.queuePreviewDocLinkResolve(doc.root, candidate)
-	}
-	return frame.Output
+	var cmds []tea.Cmd
+	docview.BeginResolutions(index, doc.root, frame, func(request contentlink.ResolutionRequest) {
+		cmds = append(cmds, resolvePreviewDocContentLink(request))
+	})
+	return tea.Batch(cmds...)
 }
 
-func frameHits(frame docview.ContentLinkFrame) []previewDocLinkHit {
-	hits := make([]previewDocLinkHit, 0, len(frame.Hits))
-	for _, hit := range frame.Hits {
-		hits = append(hits, previewDocLinkHit{Ref: hit.Ref, Rect: hit.Rect})
+func (m *Model) preparedPreviewDocBody(doc *previewDoc, originX, originY int) string {
+	if doc == nil || doc.view() == nil {
+		return ""
 	}
-	return hits
+	view := doc.view()
+	frame := view.PreparedFrame()
+	if !frame.Valid() {
+		return view.View()
+	}
+	frame.EachHitAt(originX, originY, func(hit docview.ContentLinkHit) {
+		m.preview.docLinkHits = append(m.preview.docLinkHits, previewDocLinkHit{Ref: hit.Ref, Rect: hit.Rect})
+	})
+	return frame.Output()
 }
 
-func (m *Model) queuePreviewDocLinkResolve(root string, candidate contentlink.Pending) {
-	if m.preview.docLinkPending == nil {
-		m.preview.docLinkPending = make(map[contentlink.Pending]bool)
-	}
-	if m.preview.docLinkPending[candidate] {
-		return
-	}
-	m.preview.docLinkPending[candidate] = true
-	terminalperf.Record(terminalperf.DocumentResolutionRequest)
-	m.queuePreviewCmd(resolvePreviewDocContentLink(root, candidate))
-}
-
-func resolvePreviewDocContentLink(root string, candidate contentlink.Pending) tea.Cmd {
+func resolvePreviewDocContentLink(request contentlink.ResolutionRequest) tea.Cmd {
 	return func() tea.Msg {
-		msg := previewDocLinkResolvedMsg{Candidate: candidate}
-		switch candidate.Kind {
+		result := contentlink.ResolutionResult{Request: request}
+		switch request.Candidate.Kind {
 		case contentlink.KindFile:
-			rel, _, ok := terminallink.ResolveFile(root, candidate.Raw)
-			msg.Ref, msg.Found = contentlink.Ref{Kind: contentlink.KindFile, Value: rel}, ok
+			rel, _, ok := terminallink.ResolveFile(request.Root, request.Candidate.Raw)
+			result.Ref, result.Found = contentlink.Ref{Kind: contentlink.KindFile, Value: rel}, ok
 		case contentlink.KindDiff:
-			target, ok := workspacediff.ParseSpec(candidate.Raw)
+			target, ok := workspacediff.ParseSpec(request.Candidate.Raw)
 			if !ok {
-				return msg
+				return previewDocLinkResolvedMsg{Result: result}
 			}
-			resolved, err := workspacediff.ResolveSpec(context.Background(), root, target)
-			msg.Ref, msg.Found = contentlink.Ref{Kind: contentlink.KindDiff, Value: resolved.Identity()}, err == nil
+			resolved, err := workspacediff.ResolveSpec(context.Background(), request.Root, target)
+			result.Ref, result.Found = contentlink.Ref{Kind: contentlink.KindDiff, Value: resolved.Identity()}, err == nil
 		}
-		return msg
+		return previewDocLinkResolvedMsg{Result: result}
 	}
 }
 
 func (m *Model) applyPreviewDocLinkResolved(msg previewDocLinkResolvedMsg) {
-	if m.preview.docLinkPending != nil {
-		delete(m.preview.docLinkPending, msg.Candidate)
-	}
-	m.ensurePreviewDocLinkResolution().Put(msg.Candidate, msg.Ref, msg.Found)
+	m.ensurePreviewDocLinkResolution().Apply(msg.Result)
 }
 
 func (m *Model) registerPreviewDocLinkHits(inner paneframe.Box) {
