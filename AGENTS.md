@@ -141,6 +141,12 @@ Version is set via ldflags at build time. Without it, sidecar shows git revision
 `make install` is an unmanaged `go install` into `GOBIN`; it does not alter
 Homebrew links or guarantee which `sidecar` wins PATH precedence.
 
+## Tmux compatibility
+
+Sidecar supports tmux 3.4 and newer and continuously tests the manifest roles `minimum` and `latest`. Versions, roles, and official archive checksums live only in `compat/tmux-versions.tsv`; local helpers and the GitHub Actions matrix consume that file. Run `./scripts/test-tmux-compat-manifest.sh`, build a role into an absolute temporary prefix with `./scripts/build-tmux-compat.sh ROLE PREFIX`, and prove it with `./scripts/test-tmux-compatibility.sh ROLE PREFIX/bin/tmux`. The full contract, latest-client/oldest-server skew command, build prerequisites, and future stable upgrade procedure are in `docs/guides/active/tmux-compatibility.md`.
+
+Prefer capability probes over tmux version branches. Every compatibility proof must use private sockets, and changing or upgrading a client never authorizes restarting the default server.
+
 ## Keyboard Shortcut Parity
 
 See .claude/skills/ui-features/SKILL.md

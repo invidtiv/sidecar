@@ -17,9 +17,7 @@ func TestMain(m *testing.M) {
 // format string on an isolated socket. The default tmux server is never
 // addressed: TestMain uses testenv.IsolateTmux.
 func TestListSessionsPIDFormatResolves(t *testing.T) {
-	if _, err := exec.LookPath("tmux"); err != nil {
-		t.Skip("tmux not installed")
-	}
+	testenv.RequireTmux(t)
 	session := "tmuxserver-pid-probe"
 	if out, err := exec.Command("tmux", "new-session", "-d", "-s", session).CombinedOutput(); err != nil {
 		t.Fatalf("new-session on isolated socket: %v (%s)", err, out)

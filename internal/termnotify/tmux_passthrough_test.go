@@ -107,9 +107,7 @@ type tmuxServer struct {
 // and registers its teardown.
 func startIsolatedTmux(t *testing.T) *tmuxServer {
 	t.Helper()
-	if _, err := exec.LookPath("tmux"); err != nil {
-		t.Skip("tmux is not installed")
-	}
+	testenv.RequireTmux(t)
 	// A short temp dir rather than t.TempDir: a unix socket path is capped at
 	// around a hundred bytes, and a path built from the test's own name is
 	// already over it on macOS. The name and socket layout are the ones

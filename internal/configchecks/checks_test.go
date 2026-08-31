@@ -56,11 +56,11 @@ func TestParseTmuxVersion(t *testing.T) {
 			t.Fatalf("%q: parsed %d.%d, want %d.%d", raw, got.Major, got.Minor, want.major, want.minor)
 		}
 	}
-	if v, _ := ParseTmuxVersion("tmux 3.0"); !v.AtLeast(3, 0) {
-		t.Fatal("3.0 does not meet the 3.0 minimum")
+	if v, _ := ParseTmuxVersion("tmux 3.4"); !v.AtLeast(3, 4) {
+		t.Fatal("3.4 does not meet the 3.4 minimum")
 	}
-	if v, _ := ParseTmuxVersion("tmux 2.9a"); v.AtLeast(3, 0) {
-		t.Fatal("2.9a claimed to meet the 3.0 minimum")
+	if v, _ := ParseTmuxVersion("tmux 3.3a"); v.AtLeast(3, 4) {
+		t.Fatal("3.3a claimed to meet the 3.4 minimum")
 	}
 }
 
@@ -72,7 +72,7 @@ func TestTmuxCheckStates(t *testing.T) {
 
 	old := checkTmux(Input{Env: fakeEnv(nil,
 		map[string]string{"tmux": "/usr/bin/tmux"},
-		map[string]string{"tmux -V": "tmux 2.8\n"})})
+		map[string]string{"tmux -V": "tmux 3.3a\n"})})
 	if old.OK || !strings.Contains(old.Summary, "older") {
 		t.Fatalf("old tmux = %#v", old)
 	}

@@ -10,6 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/testenv"
 	"github.com/marcus/sidecar/internal/tty"
 )
 
@@ -39,12 +40,7 @@ type liveTerminalPane struct {
 
 func startLiveTerminalPane(t *testing.T, width, height int) *liveTerminalPane {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("skipping tmux integration in short mode")
-	}
-	if _, err := exec.LookPath("tmux"); err != nil {
-		t.Skip("tmux not installed")
-	}
+	testenv.RequireTmux(t)
 	// These tests are the exception that wants a real tmux control transport:
 	// the whole point is to compare the tty.Model's view against tmux's own
 	// answers. Every other test gets an inert transport so it cannot spawn a

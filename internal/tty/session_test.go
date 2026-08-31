@@ -302,12 +302,7 @@ func TestResizeTmuxPaneRefusesTheHostingPane(t *testing.T) {
 }
 
 func TestPrepareServerAdvertisesTruecolor(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping tmux integration in short mode")
-	}
-	if _, err := exec.LookPath("tmux"); err != nil {
-		t.Skip("tmux not installed")
-	}
+	testenv.RequireTmux(t)
 	// A short directory, not t.TempDir(): the tmux socket path is this
 	// directory plus "tmux-$UID/default", and macOS test temp paths already
 	// carry the test name — past the ~104-character Unix socket limit.

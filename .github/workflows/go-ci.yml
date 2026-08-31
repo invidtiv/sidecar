@@ -11,6 +11,12 @@ on:
       - ".golangci.yml"
       - "Makefile"
       - ".github/workflows/go-ci.yml"
+      - "compat/**"
+      - "scripts/build-tmux-compat.sh"
+      - "scripts/test-tmux-compat-manifest.sh"
+      - "scripts/test-tmux-compat-prefix.sh"
+      - "scripts/test-tmux-compatibility.sh"
+      - "scripts/tmux-compat-lib.sh"
       # Bundled integration assets are shipped JavaScript that the Go suite
       # drives under node. A change to one of them changes what Sidecar
       # installs into a user's agent, and without this it triggered no CI run
@@ -26,6 +32,12 @@ on:
       - ".golangci.yml"
       - "Makefile"
       - ".github/workflows/go-ci.yml"
+      - "compat/**"
+      - "scripts/build-tmux-compat.sh"
+      - "scripts/test-tmux-compat-manifest.sh"
+      - "scripts/test-tmux-compat-prefix.sh"
+      - "scripts/test-tmux-compatibility.sh"
+      - "scripts/tmux-compat-lib.sh"
       - "internal/agentintegration/assets/**"
   # Releases gate on a Go CI run for the exact commit being tagged
   # (scripts/check-release-state.sh). A release head is often a docs-only
@@ -82,3 +94,59 @@ jobs:
         with:
           version: v2.13.1
           args: ./...
+
+  tmux-compatibility:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: minimum
+            build_roles: minimum
+            client_role: minimum
+            server_role: ""
+          - name: latest
+            build_roles: latest
+            client_role: latest
+            server_role: ""
+          # A Homebrew upgrade replaces the client binary but cannot replace a
+          # running server. Derive that real-world skew from the same two
+          # manifest roles rather than adding a third version source.
+          - name: latest-client-minimum-server
+            build_roles: minimum latest
+            client_role: latest
+            server_role: minimum
+    name: tmux compatibility (${{ matrix.name }})
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Install tmux build dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential libevent-dev libncurses-dev libutf8proc-dev bison pkg-config
+
+      - name: Validate compatibility manifest
+        run: ./scripts/test-tmux-compat-manifest.sh && ./scripts/test-tmux-compat-prefix.sh
+
+      - name: Build manifest releases
+        env:
+          BUILD_ROLES: ${{ matrix.build_roles }}
+        run: |
+          for role in $BUILD_ROLES; do
+            ./scripts/build-tmux-compat.sh "$role" "$RUNNER_TEMP/tmux-$role"
+          done
+
+      - name: Test compatibility contract
+        env:
+          CLIENT_ROLE: ${{ matrix.client_role }}
+          SERVER_ROLE: ${{ matrix.server_role }}
+        run: |
+          args=("$CLIENT_ROLE" "$RUNNER_TEMP/tmux-$CLIENT_ROLE/bin/tmux")
+          if [[ -n "$SERVER_ROLE" ]]; then
+            args+=(--server-role "$SERVER_ROLE" --server-tmux "$RUNNER_TEMP/tmux-$SERVER_ROLE/bin/tmux")
+          fi
+          ./scripts/test-tmux-compatibility.sh "${args[@]}"
