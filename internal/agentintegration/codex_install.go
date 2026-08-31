@@ -329,6 +329,77 @@ func codexOwnedTables(scan codexConfigScan, wantKey string) []tomlStateTable {
 	return out
 }
 
+// multilineStringOpener finds the first `"""` or `”'` that actually opens a
+// multi-line string, returning its 1-based line number.
+//
+// The previous rule was a substring search over the whole file, which refused
+// on any occurrence anywhere -- including inside a `#` comment and inside an
+// ordinary single-line string. That is not a cautious over-approximation of a
+// small risk: parseErr refuses install, refuses repair, AND refuses uninstall,
+// so a user whose config.toml merely mentions `"""` in a comment could neither
+// integrate Codex nor clean up an existing integration. The file has already
+// been proved valid TOML by the oracle above, so the only thing left to decide
+// is whether a delimiter is structural, and comment and single-line-string
+// state is exactly what tells us.
+//
+// The refusal itself is kept: a genuine multi-line string really does defeat a
+// line scanner. This narrows it to the case that warrants it.
+func multilineStringOpener(content string) (int, bool) {
+	for i, line := range strings.Split(content, "\n") {
+		if multilineOpenerInLine(line) {
+			return i + 1, true
+		}
+	}
+	return 0, false
+}
+
+// multilineOpenerInLine walks one line tracking basic-string, literal-string,
+// and comment state, and reports whether a triple delimiter survives outside
+// all three.
+//
+// A triple delimiter that opens and closes on the same line is still a
+// multi-line string syntactically, and TOML permits it; it is reported, because
+// the scanner's problem is the delimiter, not the newline.
+func multilineOpenerInLine(line string) bool {
+	const (
+		plain = iota
+		basic
+		literal
+	)
+	state := plain
+	for i := 0; i < len(line); i++ {
+		switch state {
+		case plain:
+			switch {
+			case strings.HasPrefix(line[i:], `"""`), strings.HasPrefix(line[i:], "'''"):
+				return true
+			case line[i] == '#':
+				// The rest of the line is a comment and has no structure.
+				return false
+			case line[i] == '"':
+				state = basic
+			case line[i] == '\'':
+				state = literal
+			}
+		case basic:
+			// Only a basic string honours backslash escapes, so only here can a
+			// quote be escaped rather than closing.
+			if line[i] == '\\' {
+				i++
+				continue
+			}
+			if line[i] == '"' {
+				state = plain
+			}
+		case literal:
+			if line[i] == '\'' {
+				state = plain
+			}
+		}
+	}
+	return false
+}
+
 // codexTrustVersion names the asset version a set of owned trust tables
 // records, or "" when none of them can be attributed to a version.
 //
@@ -934,11 +1005,11 @@ func scanCodexConfig(exists bool, b []byte) codexConfigScan {
 	}
 
 	content := string(b)
-	if strings.Contains(content, `"""`) || strings.Contains(content, "'''") {
-		// A multi-line string could contain text that looks exactly like a
-		// table header, and a line scanner cannot tell the difference. Refuse
-		// rather than guess.
-		s.parseErr = "the file contains multi-line strings, which this editor does not support"
+	if line, found := multilineStringOpener(content); found {
+		// Once a multi-line string opens, every following line's structure is
+		// unknowable to a line scanner: the body can contain text that looks
+		// exactly like a table header. Refuse rather than guess.
+		s.parseErr = "the file contains a multi-line string (line " + strconv.Itoa(line) + "), which this editor does not support"
 		return s
 	}
 	s.lines = strings.Split(content, "\n")
