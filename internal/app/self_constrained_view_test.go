@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -24,6 +25,26 @@ type constrainedOutputTestPlugin struct {
 }
 
 func (p *constrainedOutputTestPlugin) ViewIsSelfConstrained() bool { return p.constrained }
+
+type dimensionConstrainedTestPlugin struct {
+	nativeTestPlugin
+	width   int
+	height  int
+	content string
+}
+
+func (p *dimensionConstrainedTestPlugin) View(width, height int) string {
+	p.width, p.height = width, height
+	renderWidth := max(width, 3)
+	renderHeight := max(height, 4)
+	line := strings.Repeat("x", renderWidth)
+	p.content = strings.Repeat(line+"\n", renderHeight-1) + line
+	return p.content
+}
+
+func (p *dimensionConstrainedTestPlugin) ViewIsSelfConstrained() bool {
+	return p.width >= 3 && p.height >= 4
+}
 
 func TestRenderContentTrustsOnlyExplicitSelfConstrainedView(t *testing.T) {
 	t.Run("capable plugin returns its frame unchanged", func(t *testing.T) {
@@ -73,4 +94,52 @@ func TestRenderContentTrustsOnlyExplicitSelfConstrainedView(t *testing.T) {
 			t.Fatalf("declining capability rendered %d lines, want 2", len(lines))
 		}
 	})
+}
+
+func TestRenderContentFallsBackAtSelfConstrainedViewDimensionFloor(t *testing.T) {
+	tests := []struct {
+		name          string
+		width, height int
+		wantFastPath  bool
+	}{
+		{name: "height 1", width: 8, height: 1},
+		{name: "height 2", width: 8, height: 2},
+		{name: "height 3", width: 8, height: 3},
+		{name: "width 0", width: 0, height: 4},
+		{name: "width 1", width: 1, height: 4},
+		{name: "width 2", width: 2, height: 4},
+		{name: "accepted boundary", width: 3, height: 4, wantFastPath: true},
+		{name: "accepted larger", width: 8, height: 5, wantFastPath: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := &dimensionConstrainedTestPlugin{}
+			m := routerTestModel(t, p)
+			got := m.renderContent(tt.width, tt.height)
+			if p.content == "" {
+				t.Fatal("renderContent skipped View")
+			}
+
+			if tt.wantFastPath {
+				if got != p.content {
+					t.Fatalf("accepted dimensions changed capable output: got %q want %q", got, p.content)
+				}
+				return
+			}
+			want := ""
+			if tt.width > 0 && tt.height > 0 {
+				want = lipgloss.NewStyle().Width(tt.width).Height(tt.height).MaxHeight(tt.height).Render(p.content)
+			}
+			if got != want {
+				t.Fatalf("fallback output differs from defensive clamp: got %q want %q", got, want)
+			}
+			if renderedHeight := lipgloss.Height(got); renderedHeight > tt.height {
+				t.Fatalf("fallback used %d content rows, want <= %d so app chrome remains visible", renderedHeight, tt.height)
+			}
+			if renderedWidth := lipgloss.Width(got); renderedWidth > tt.width {
+				t.Fatalf("fallback used %d columns, want <= %d", renderedWidth, tt.width)
+			}
+		})
+	}
 }

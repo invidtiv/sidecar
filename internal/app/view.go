@@ -1170,7 +1170,7 @@ func (m *Model) renderContent(width, height int) string {
 	}
 
 	content := p.View(width, height)
-	if height == 0 {
+	if width <= 0 || height <= 0 {
 		return ""
 	}
 	if constrained, ok := p.(plugin.SelfConstrainedView); ok && constrained.ViewIsSelfConstrained() {

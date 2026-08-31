@@ -30,7 +30,9 @@ type Plugin interface {
 // Implementations must keep every rendered line within width, return no more
 // than height lines, and preserve the padding that the shell's Width/Height
 // wrapper would otherwise add. Plugins without this capability keep the
-// defensive wrapper.
+// defensive wrapper. The shell asks after View, so an implementation may use
+// the dimensions it just rendered to decline the capability at a size where
+// its normal layout floor exceeds the requested box.
 type SelfConstrainedView interface {
 	ViewIsSelfConstrained() bool
 }
