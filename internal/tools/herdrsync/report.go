@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -46,7 +47,7 @@ func (r *syncReport) summary() string {
 	return b.String()
 }
 
-func (r *syncReport) render() string {
+func (r *syncReport) render() (string, error) {
 	var b strings.Builder
 	lock := r.Lock
 
@@ -77,11 +78,13 @@ func (r *syncReport) render() string {
 	r.renderFileChanges(&b)
 	r.renderSourceChoices(&b)
 	r.renderRegex(&b)
-	r.renderAliases(&b)
+	if err := r.renderAliases(&b); err != nil {
+		return "", err
+	}
 	r.renderAuthority(&b)
 	r.renderIntegrationAssets(&b)
 	r.renderFixtureFlips(&b)
-	return b.String()
+	return b.String(), nil
 }
 
 func (r *syncReport) renderVersionChanges(b *strings.Builder) {
@@ -177,18 +180,21 @@ func (r *syncReport) renderRegex(b *strings.Builder) {
 	b.WriteString("\n\n")
 }
 
-func (r *syncReport) renderAliases(b *strings.Builder) {
+func (r *syncReport) renderAliases(b *strings.Builder) error {
 	b.WriteString("## Alias table\n\n")
 	if r.Aliases == nil {
 		b.WriteString("Alias extraction did not run.\n\n")
-		return
+		return nil
 	}
-	missing := sidecarAliasGaps(r.Aliases)
+	missing, err := sidecarAliasGaps(r.Aliases)
+	if err != nil {
+		return err
+	}
 	fmt.Fprintf(b, "%d agents in Herdr's `lookup_agent`; generic runtimes: %s (plus %s).\n\n",
 		len(r.Aliases.Agents), strings.Join(backtickAll(r.Aliases.GenericRuntimes), ", "), r.Aliases.PythonRuntimeRule)
 	if len(missing) == 0 {
 		b.WriteString("Every Herdr alias for a family Sidecar already claims appears literally in `internal/agentactivity/activity.go`.\n\n")
-		return
+		return nil
 	}
 	b.WriteString("Herdr aliases that do not appear literally in `internal/agentactivity/activity.go`. " +
 		"This is a text scan, not an evaluation: a prefix rule such as `grok-` covers several of these. " +
@@ -198,6 +204,7 @@ func (r *syncReport) renderAliases(b *strings.Builder) {
 		fmt.Fprintf(b, "| `%s` | `%s` |\n", gap.agent, gap.alias)
 	}
 	b.WriteString("\n")
+	return nil
 }
 
 type aliasGap struct{ agent, alias string }
@@ -206,10 +213,14 @@ type aliasGap struct{ agent, alias string }
 // alias as a literal. The tool cannot import internal/agentactivity without
 // creating the very dependency the package layout forbids, so this stays a text
 // scan and says so wherever it is rendered.
-func sidecarAliasGaps(aliases *manifests.Aliases) []aliasGap {
-	data, err := os.ReadFile(filepath.Join("internal", "agentactivity", "activity.go"))
+//
+// A read failure is an error, not an empty result: "every alias appears" and
+// "the file could not be read" look identical in the report, and the reassuring
+// one is the wrong default.
+func sidecarAliasGaps(aliases *manifests.Aliases) ([]aliasGap, error) {
+	data, err := sidecarRepoFile(path.Join("internal", "agentactivity", "activity.go"))
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("alias gap scan: %w", err)
 	}
 	source := string(data)
 	ids := make([]string, 0, len(aliases.Agents))
@@ -231,7 +242,53 @@ func sidecarAliasGaps(aliases *manifests.Aliases) []aliasGap {
 			}
 		}
 	}
-	return gaps
+	return gaps, nil
+}
+
+// sidecarModule is this repository's module path, used to find its root.
+const sidecarModule = "github.com/marcus/sidecar"
+
+// sidecarRepoFile reads a file from the Sidecar repository the tool runs in,
+// located by walking up from the working directory. The wrapper script runs the
+// tool from the repository root, but `go test` runs it three levels down, and a
+// path that only resolves from one directory is a check that quietly does
+// nothing everywhere else.
+func sidecarRepoFile(rel string) ([]byte, error) {
+	root, err := sidecarRepoRoot()
+	if err != nil {
+		return nil, err
+	}
+	return os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+}
+
+func sidecarRepoRoot() (string, error) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	for {
+		if isModuleRoot(dir) {
+			return dir, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", fmt.Errorf("no %s go.mod found at or above the working directory", sidecarModule)
+		}
+		dir = parent
+	}
+}
+
+func isModuleRoot(dir string) bool {
+	data, err := os.ReadFile(filepath.Join(dir, "go.mod"))
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "module "); ok {
+			return strings.TrimSpace(rest) == sidecarModule
+		}
+	}
+	return false
 }
 
 func (r *syncReport) renderAuthority(b *strings.Builder) {
@@ -290,7 +347,7 @@ func tierRank(tier string) int {
 }
 
 func sidecarTiers() map[string]string {
-	data, err := os.ReadFile(filepath.Join("internal", "agentlifecycle", "capabilities.json"))
+	data, err := sidecarRepoFile(path.Join("internal", "agentlifecycle", "capabilities.json"))
 	if err != nil {
 		return nil
 	}

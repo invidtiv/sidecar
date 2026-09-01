@@ -120,6 +120,37 @@ func TestSyncFromLocalCheckoutWritesTheExpectedTree(t *testing.T) {
 	}
 }
 
+// TestSyncPinsTheAttributionFiles: LICENSE and NOTICE carry the attribution the
+// whole vendored tree rests on, so the lock digests them exactly like a
+// manifest and an edit to either fails the manifests package test.
+func TestSyncPinsTheAttributionFiles(t *testing.T) {
+	out, lock, _ := syncIntoTemp(t)
+	for _, path := range []string{"upstream/LICENSE", "upstream/NOTICE"} {
+		entry, ok := lock.File(path)
+		if !ok {
+			t.Errorf("the lock does not pin %s", path)
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(out, filepath.FromSlash(path)))
+		if err != nil {
+			t.Errorf("read %s: %v", path, err)
+			continue
+		}
+		if entry.SHA256 != sha256Hex(data) {
+			t.Errorf("%s digest %s does not match the written bytes %s", path, entry.SHA256, sha256Hex(data))
+		}
+		if entry.Bytes != len(data) {
+			t.Errorf("%s is %d bytes, the lock says %d", path, len(data), entry.Bytes)
+		}
+		if entry.Origin == "" {
+			t.Errorf("%s records no origin", path)
+		}
+	}
+	if got := len(lock.Files); got != 2 {
+		t.Errorf("the lock pins %d non-manifest files, want 2", got)
+	}
+}
+
 // TestSyncReproducesTheCommittedSourceChoices is the plan's "published-versus-
 // bundled choice recorded in the lock matches what the tool decides" check.
 func TestSyncReproducesTheCommittedSourceChoices(t *testing.T) {
@@ -159,9 +190,133 @@ func TestSyncReproducesTheCommittedSourceChoices(t *testing.T) {
 	}
 }
 
+// TestDirSourceReadsBytesFromTheRequestedRef is the guard for the bug where the
+// lock could attest a commit whose bytes were never read: the tool read the
+// working tree while recording whatever --ref resolved to. Every read now goes
+// through `git show <commit>:<path>`, so the two can no longer disagree.
+func TestDirSourceReadsBytesFromTheRequestedRef(t *testing.T) {
+	dir := herdrSource(t)
+	head := revParse(t, dir, "HEAD")
+	prev, err := gitRevParse(dir, "HEAD~1")
+	if err != nil {
+		t.Skipf("no HEAD~1 in %s: %v", dir, err)
+	}
+	if head == prev {
+		t.Skip("HEAD and HEAD~1 are the same commit")
+	}
+
+	src, err := newDirSource(dir, prev)
+	if err != nil {
+		t.Fatalf("newDirSource at %s: %v", prev, err)
+	}
+	if src.commit() != prev {
+		t.Errorf("commit() = %s, want %s", src.commit(), prev)
+	}
+
+	// A file whose content differs between the two commits separates "read the
+	// requested ref" from "read whatever the checkout currently holds".
+	rel := fileChangedBetween(t, dir, prev, head)
+	got, err := src.read(rel)
+	if err != nil {
+		t.Fatalf("read %s at %s: %v", rel, prev, err)
+	}
+	wantPrev := showAt(t, dir, prev, rel)
+	if !bytes.Equal(got, wantPrev) {
+		t.Errorf("%s: dirSource returned %d bytes, %s holds %d", rel, len(got), prev, len(wantPrev))
+	}
+	if atHead := showAt(t, dir, head, rel); bytes.Equal(got, atHead) {
+		t.Errorf("%s: dirSource returned the bytes at HEAD although it was pinned to %s", rel, prev)
+	}
+	if working, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel))); err == nil && bytes.Equal(got, working) {
+		t.Errorf("%s: dirSource returned the working-tree bytes although it was pinned to %s", rel, prev)
+	}
+
+	// Listings must come from the same commit, or the file set and the bytes
+	// could still disagree.
+	names, err := src.list(bundledDir)
+	if err != nil {
+		t.Fatalf("list %s at %s: %v", bundledDir, prev, err)
+	}
+	if len(names) == 0 {
+		t.Errorf("list %s at %s returned nothing", bundledDir, prev)
+	}
+}
+
+func TestDirSourceRefusesARefTheCheckoutDoesNotHave(t *testing.T) {
+	dir := herdrSource(t)
+	if _, err := newDirSource(dir, "no-such-ref-0000000"); err == nil {
+		t.Fatal("newDirSource accepted a ref the checkout cannot resolve")
+	}
+	if _, err := sync(options{
+		ref:        "no-such-ref-0000000",
+		releaseTag: "v0.8.2",
+		catalogURL: defaultCatalogURL,
+		sourceDir:  dir,
+		offline:    true,
+		out:        t.TempDir(),
+	}); err == nil {
+		t.Fatal("sync vendored bytes for a ref the checkout cannot resolve")
+	}
+}
+
+func revParse(t *testing.T, dir, ref string) string {
+	t.Helper()
+	sha, err := gitRevParse(dir, ref)
+	if err != nil {
+		t.Fatalf("git rev-parse %s in %s: %v", ref, dir, err)
+	}
+	return sha
+}
+
+func showAt(t *testing.T, dir, ref, rel string) []byte {
+	t.Helper()
+	data, err := gitOutput(dir, "show", ref+":"+rel)
+	if err != nil {
+		t.Fatalf("git show %s:%s: %v", ref, rel, err)
+	}
+	return data
+}
+
+// fileChangedBetween names a path that exists at both commits with different
+// content.
+func fileChangedBetween(t *testing.T, dir, from, to string) string {
+	t.Helper()
+	out, err := gitOutput(dir, "diff", "--name-only", "--diff-filter=M", from, to)
+	if err != nil {
+		t.Fatalf("git diff %s %s: %v", from, to, err)
+	}
+	for _, name := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if name = strings.TrimSpace(name); name != "" {
+			return name
+		}
+	}
+	t.Skipf("no file was modified between %s and %s", from, to)
+	return ""
+}
+
 func TestSyncRefusesAnUnreadableSourceDir(t *testing.T) {
 	if _, err := sync(options{sourceDir: filepath.Join(t.TempDir(), "nope"), offline: true, out: t.TempDir()}); err == nil {
 		t.Fatal("sync accepted a source dir that does not exist")
+	}
+}
+
+// The alias gap scan reads Sidecar's own source. When it cannot, the sync fails:
+// "every alias appears" and "the file could not be read" render identically, and
+// the reassuring one is the wrong answer to publish in a report.
+func TestSyncFailsWhenSidecarSourceCannotBeRead(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if _, err := sidecarAliasGaps(&manifests.Aliases{Agents: map[string][]string{"claude": {"claude", "claude-code"}}}); err == nil {
+		t.Error("the alias gap scan reported no gaps although it could not read internal/agentactivity/activity.go")
+	}
+	if _, err := sync(options{
+		ref:        "e2b85c7",
+		releaseTag: "v0.8.2",
+		catalogURL: defaultCatalogURL,
+		sourceDir:  herdrCheckout,
+		offline:    true,
+		out:        t.TempDir(),
+	}); err == nil {
+		t.Error("sync wrote a report from a working directory outside the Sidecar repository")
 	}
 }
 
@@ -369,7 +524,10 @@ func TestExtractAuthorityFailsOnDisagreeingAssetVersions(t *testing.T) {
 
 func TestExtractorsRunAgainstTheRealHerdrSource(t *testing.T) {
 	dir := herdrSource(t)
-	src := &dirSource{dir: dir}
+	src, err := newDirSource(dir, "e2b85c7")
+	if err != nil {
+		t.Skipf("checkout at %s does not have e2b85c7: %v", dir, err)
+	}
 
 	aliases, err := extractAliases(src, "e2b85c7")
 	if err != nil {

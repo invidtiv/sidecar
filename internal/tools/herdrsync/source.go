@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -20,7 +22,8 @@ import (
 )
 
 // source reads files out of a Herdr checkout at a pinned ref, either from a
-// local directory or from GitHub.
+// local directory or from GitHub. Both implementations read the ref's own
+// bytes, so the digests in the lock always describe the commit it records.
 type source interface {
 	// read returns one file's bytes, capped at maxFetchBytes.
 	read(relPath string) ([]byte, error)
@@ -50,7 +53,7 @@ func openSource(opts options) (source, error) {
 		if err != nil || !info.IsDir() {
 			return nil, fmt.Errorf("--source-dir %s is not a directory", opts.sourceDir)
 		}
-		return &dirSource{dir: dir, sha: gitRevParse(dir, opts.ref)}, nil
+		return newDirSource(dir, opts.ref)
 	}
 	if opts.offline {
 		return nil, fmt.Errorf("--offline needs --source-dir; there is nothing to read without a checkout")
@@ -75,46 +78,77 @@ func expandPath(p string) (string, error) {
 
 // --- local checkout -----------------------------------------------------------
 
+// dirSource reads a Herdr checkout at one pinned commit. Every byte comes out
+// of the object database with `git show <commit>:<path>`, never out of the
+// working tree: the lock and the NOTICE attest the commit this source reports,
+// so reading anything else would attest bytes nobody vendored.
 type dirSource struct {
 	dir string
+	ref string
 	sha string
 }
 
+// newDirSource resolves ref inside the checkout and fails when it does not
+// resolve there, rather than recording an empty commit and vendoring whatever
+// the working tree holds.
+func newDirSource(dir, ref string) (*dirSource, error) {
+	if ref == "" {
+		ref = "HEAD"
+	}
+	sha, err := gitRevParse(dir, ref)
+	if err != nil {
+		return nil, fmt.Errorf("--source-dir %s cannot resolve ref %s: %w", dir, ref, err)
+	}
+	return &dirSource{dir: dir, ref: ref, sha: sha}, nil
+}
+
 func (s *dirSource) read(relPath string) ([]byte, error) {
-	full := filepath.Join(s.dir, filepath.FromSlash(relPath))
-	f, err := os.Open(full)
+	out, err := gitOutput(s.dir, "show", s.sha+":"+relPath)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = f.Close() }()
-	return readCapped(f, relPath)
+	return readCapped(bytes.NewReader(out), relPath)
 }
 
 func (s *dirSource) list(relPath string) ([]string, error) {
-	entries, err := os.ReadDir(filepath.Join(s.dir, filepath.FromSlash(relPath)))
-	if err != nil {
-		return nil, err
-	}
-	var names []string
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			names = append(names, entry.Name())
-		}
-	}
-	sort.Strings(names)
-	return names, nil
+	return s.treeEntries(relPath, "blob")
 }
 
 func (s *dirSource) listDirs(relPath string) ([]string, error) {
-	entries, err := os.ReadDir(filepath.Join(s.dir, filepath.FromSlash(relPath)))
+	return s.treeEntries(relPath, "tree")
+}
+
+// treeEntries lists one directory of the pinned commit. An absent directory is
+// an error, the way os.ReadDir treats one; a directory that simply holds no
+// entry of the requested kind is an empty list.
+func (s *dirSource) treeEntries(relPath, kind string) ([]string, error) {
+	out, err := gitOutput(s.dir, "ls-tree", "-z", "--full-tree", s.sha, strings.TrimSuffix(relPath, "/")+"/")
 	if err != nil {
 		return nil, err
 	}
+	records := strings.Split(strings.TrimSuffix(string(out), "\x00"), "\x00")
+	found := 0
 	var names []string
-	for _, entry := range entries {
-		if entry.IsDir() {
-			names = append(names, entry.Name())
+	for _, record := range records {
+		if record == "" {
+			continue
 		}
+		found++
+		meta, name, ok := strings.Cut(record, "\t")
+		if !ok {
+			return nil, fmt.Errorf("unexpected git ls-tree record %q in %s at %s", record, relPath, s.sha)
+		}
+		fields := strings.Fields(meta)
+		if len(fields) < 2 {
+			return nil, fmt.Errorf("unexpected git ls-tree record %q in %s at %s", record, relPath, s.sha)
+		}
+		if fields[1] != kind {
+			continue
+		}
+		names = append(names, path.Base(name))
+	}
+	if found == 0 {
+		return nil, fmt.Errorf("%s does not exist in %s at %s", relPath, s.dir, s.sha)
 	}
 	sort.Strings(names)
 	return names, nil
@@ -123,16 +157,34 @@ func (s *dirSource) listDirs(relPath string) ([]string, error) {
 func (s *dirSource) commit() string   { return s.sha }
 func (s *dirSource) localDir() string { return s.dir }
 
-func gitRevParse(dir, ref string) string {
-	if ref == "" {
-		ref = "HEAD"
+// gitRevParse resolves a ref to the commit it names. The ^{commit} peel makes
+// an annotated tag resolve to its commit and makes anything that is not a
+// commit fail, which is what `git show <commit>:<path>` needs.
+func gitRevParse(dir, ref string) (string, error) {
+	out, err := gitOutput(dir, "rev-parse", "--verify", "--end-of-options", ref+"^{commit}")
+	if err != nil {
+		return "", err
 	}
-	cmd := exec.Command("git", "-C", dir, "rev-parse", ref)
+	sha := strings.TrimSpace(string(out))
+	if sha == "" {
+		return "", fmt.Errorf("git rev-parse %s printed nothing", ref)
+	}
+	return sha, nil
+}
+
+func gitOutput(dir string, args ...string) ([]byte, error) {
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
 	out, err := cmd.Output()
 	if err != nil {
-		return ""
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			if stderr := strings.TrimSpace(string(exitErr.Stderr)); stderr != "" {
+				return nil, fmt.Errorf("git %s: %v: %s", strings.Join(args, " "), err, stderr)
+			}
+		}
+		return nil, fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
 	}
-	return strings.TrimSpace(string(out))
+	return out, nil
 }
 
 // --- GitHub -------------------------------------------------------------------

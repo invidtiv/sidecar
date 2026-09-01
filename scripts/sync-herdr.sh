@@ -9,6 +9,10 @@
 #   scripts/sync-herdr.sh --ref main                         # track main instead
 #   scripts/sync-herdr.sh --source-dir ~/code/herdr --offline # no network at all
 #
+# With --source-dir every file is read with `git show <ref>:<path>` inside that
+# checkout, never off its working tree, and the run fails when --ref does not
+# resolve there: the bytes vendored are the bytes of the commit the lock records.
+#
 # The tool writes only under internal/agentactivity/manifests and renders
 # report.md there for review. Vendored files are byte-for-byte upstream copies;
 # never edit one, put the change in an overlay under manifests/sidecar/.

@@ -1,6 +1,6 @@
 # Herdr detection sync report
 
-Generated 2026-09-01T20:20:04Z by `go run ./internal/tools/herdrsync`.
+Generated 2026-09-01T20:39:34Z by `go run ./internal/tools/herdrsync`.
 
 | Field | Value |
 | --- | --- |

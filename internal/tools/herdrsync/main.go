@@ -15,6 +15,10 @@
 //
 //	go run ./internal/tools/herdrsync --source-dir ~/code/herdr --ref e2b85c7
 //
+// A local checkout is read through `git show <ref>:<path>`, so the vendored
+// bytes and the commit recorded in the lock are always the same object; a ref
+// that does not resolve in that checkout fails the run.
+//
 // Steps 1 to 4 and 6 of the plan's sync design are implemented. Step 5,
 // vendoring src/integration/assets, is Phase 3 work and is marked TODO below.
 package main
@@ -106,6 +110,12 @@ func sync(opts options) (*syncReport, error) {
 	if opts.ref == "" {
 		opts.ref = opts.releaseTag
 	}
+	// The report compares upstream aliases against Sidecar's own source, so a
+	// working directory outside this repository is a failure worth catching
+	// before anything is written.
+	if _, err := sidecarRepoRoot(); err != nil {
+		return nil, err
+	}
 
 	src, err := openSource(opts)
 	if err != nil {
@@ -171,7 +181,10 @@ func sync(opts options) (*syncReport, error) {
 	report.Authority = authority
 	report.FinishedAt = time.Now().UTC()
 
-	body := report.render()
+	body, err := report.render()
+	if err != nil {
+		return nil, err
+	}
 	reportPath := filepath.Join(opts.out, "report.md")
 	if err := os.WriteFile(reportPath, []byte(body), 0o644); err != nil {
 		return nil, fmt.Errorf("write %s: %w", reportPath, err)
@@ -356,8 +369,25 @@ func writeTree(opts options, src source, catalog *catalogSet, choices []chosenMa
 	if err := os.WriteFile(filepath.Join(upstream, "LICENSE"), license, 0o644); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(filepath.Join(upstream, "NOTICE"), []byte(noticeText(lock)), 0o644); err != nil {
+	// The NOTICE is rendered from the lock, so it is pinned after the fields it
+	// quotes are set; nothing in it depends on the digests recorded here.
+	notice := []byte(noticeText(lock))
+	if err := os.WriteFile(filepath.Join(upstream, "NOTICE"), notice, 0o644); err != nil {
 		return nil, err
+	}
+	lock.Files = []manifests.LockFile{
+		{
+			Path:   "upstream/LICENSE",
+			SHA256: sha256Hex(license),
+			Bytes:  len(license),
+			Origin: licenseSource,
+		},
+		{
+			Path:   "upstream/NOTICE",
+			SHA256: sha256Hex(notice),
+			Bytes:  len(notice),
+			Origin: manifests.GeneratedNotice,
+		},
 	}
 
 	if !catalog.fetched {
