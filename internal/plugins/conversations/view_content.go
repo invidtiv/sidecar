@@ -184,6 +184,8 @@ func renderAdapterIcon(session adapter.Session) string {
 	case "grok":
 		// Grok silver / slate
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("#E2E8F0")).Render(icon)
+	case "muse":
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("#A78BFA")).Render(icon)
 	default:
 		return styles.Muted.Render(icon)
 	}
@@ -203,6 +205,8 @@ func adapterAbbrev(session adapter.Session) string {
 		return "AM"
 	case "grok":
 		return "GK"
+	case "muse":
+		return "MS"
 	default:
 		name := session.AdapterName
 		if name == "" {
@@ -241,6 +245,8 @@ func adapterShortName(session *adapter.Session) string {
 		return "amp"
 	case "grok":
 		return "grok"
+	case "muse":
+		return "muse"
 	default:
 		if session.AdapterName != "" {
 			return strings.ToLower(session.AdapterName)
@@ -303,10 +309,13 @@ func adapterFilterOptions(adapters map[string]adapter.Adapter) []adapterFilterOp
 	if a, ok := adapters["grok"]; ok {
 		addOption("grok", a.Name(), "k")
 	}
+	if a, ok := adapters["muse"]; ok {
+		addOption("muse", a.Name(), "m")
+	}
 
 	var extra []adapterFilterOption
 	for id, a := range adapters {
-		if id == "claude-code" || id == "codex" || id == "opencode" || id == "antigravity" || id == "grok" {
+		if id == "claude-code" || id == "codex" || id == "opencode" || id == "antigravity" || id == "grok" || id == "muse" {
 			continue
 		}
 		name := a.Name()

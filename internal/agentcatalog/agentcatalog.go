@@ -83,6 +83,8 @@ var families = []Family{
 		ResumeArgs: []string{"threads", "continue"}, ResumeKinds: []string{"id"}},
 	{ID: "grok", Name: "Grok", Short: "Grok", Command: "grok", SkipPermissionsArg: "--always-approve",
 		ResumeArgs: []string{"--resume"}, ResumeKinds: []string{"id"}},
+	{ID: "muse", Name: "Muse Spark", Short: "Muse", Command: "muse", SkipPermissionsArg: "--yolo",
+		ResumeArgs: []string{"resume"}, ResumeKinds: []string{"id"}},
 }
 
 // legacyLaunchFamilies remain launchable for persisted/configured creation
