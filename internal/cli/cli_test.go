@@ -31,6 +31,7 @@ func TestRunDispatch(t *testing.T) {
 		{"list help", []string{"shell", "list", "--help"}, true, 0, "List Sidecar-managed shell records"},
 		{"forget help", []string{"shell", "forget", "--help"}, true, 0, "Forget a Sidecar-managed shell record"},
 		{"restore help", []string{"shell", "restore", "--help"}, true, 0, "Restore a forgotten Sidecar-managed shell record"},
+		{"content help", []string{"content", "--help"}, true, 0, "internal transport endpoint"},
 		{"unknown", []string{"shell", "wat"}, true, 2, "unknown shell command"},
 		{"forget missing name", []string{"shell", "forget"}, true, 2, "exactly one tmux session name"},
 		{"restore extra args", []string{"shell", "restore", "one", "two"}, true, 2, "exactly one tmux session name"},

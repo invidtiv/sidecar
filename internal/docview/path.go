@@ -144,14 +144,45 @@ func (m *Model) YankSelectionOrContents() tea.Cmd {
 		return nil
 	}
 	if selected := m.SelectionText(); len(selected) > 0 {
-		return m.SelectionCopyCmd(textselect.Result{Copy: selected, CopyAsked: true}, func(notice textselect.CopyNotice) tea.Msg {
-			if notice.IsError {
-				return msg.ToastMsg{Message: notice.Message, Duration: notice.Duration, IsError: true}
-			}
-			return msg.FlashMsg{Text: notice.Message}
-		})
+		return m.yankSelection(selected)
 	}
 	return YankContents(m.Root(), m.Title())
+}
+
+// YankSelectionOrLoaded copies the visible selection, or the already loaded
+// body. It never opens a local path, so a remote document cannot yank this
+// machine's twin file.
+func (m *Model) YankSelectionOrLoaded() tea.Cmd {
+	if m == nil {
+		return nil
+	}
+	if selected := m.SelectionText(); len(selected) > 0 {
+		return m.yankSelection(selected)
+	}
+	return YankText(m.result.Content)
+}
+
+func (m *Model) yankSelection(selected []string) tea.Cmd {
+	return m.SelectionCopyCmd(textselect.Result{Copy: selected, CopyAsked: true}, func(notice textselect.CopyNotice) tea.Msg {
+		if notice.IsError {
+			return msg.ToastMsg{Message: notice.Message, Duration: notice.Duration, IsError: true}
+		}
+		return msg.FlashMsg{Text: notice.Message}
+	})
+}
+
+// YankText copies text that is already in memory.
+func YankText(text string) tea.Cmd {
+	if text == "" {
+		return func() tea.Msg { return msg.FlashMsg{Text: "No content to copy"} }
+	}
+	lines := strings.Count(text, "\n")
+	if !strings.HasSuffix(text, "\n") {
+		lines++
+	}
+	return clip.Copy(text, func(r clip.Result) tea.Msg {
+		return msg.FlashMsg{Text: r.Message(fmt.Sprintf("Copied %d lines", lines))}
+	})
 }
 
 // FetchGitInfo retrieves git status and last commit for a root-relative path.

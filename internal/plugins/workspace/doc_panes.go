@@ -1385,7 +1385,7 @@ func (p *Plugin) restorePaneLayout(layout *state.PaneLayoutJSON) tea.Cmd {
 		return nil
 	}
 	ctx := p.workspaceDeckContext(root, surface)
-	cfg := contentpanes.Config{Renderer: p.markdownRenderer, ResourceResolver: p.resolveResource, ConfigureViewer: p.configureDeckViewer}
+	cfg := p.workspaceDeckConfig()
 	deck := contentpanes.Decode(ctx, cfg, st)
 	// Deck owns every passive node ID. Host-only Shell leaves and the extra
 	// split nodes needed to carry them start above that namespace.

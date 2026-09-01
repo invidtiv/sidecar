@@ -177,12 +177,7 @@ func (v *View) Refresh(workdir, baseRef, workspaceID string, suppressed bool) te
 	// Deliberately not setting State to LoadStateLoading: the pane keeps showing
 	// the diff it has until a different one arrives. Flipping to a loading state
 	// here is what would make an unchanged refresh visible.
-	cmd := LoadSnapshotCmdAt(workdir, baseRef, workspaceID, v.Epoch, v.Target.Identity())
-	return func() tea.Msg {
-		msg, _ := cmd().(SnapshotMsg)
-		msg.Refresh = true
-		return msg
-	}
+	return v.LoadSnapshotCmd(baseRef, true)
 }
 
 // RefreshPending reports whether a re-read is owed but has not started.
@@ -203,10 +198,16 @@ func (v *View) applyRefresh(msg SnapshotMsg, workdir, workspaceID string) (tea.C
 		}
 	}()
 
+	if msg.Revision != "" {
+		v.Revision = msg.Revision
+	}
 	// A failed refresh keeps the diff already on screen. Losing a review to a
 	// transient git failure — an index.lock held by another command is the
 	// common one, and it happens constantly during a rebase — would be worse
 	// than being one refresh stale, and the next signal retries.
+	if msg.NotModified {
+		return nil, false
+	}
 	if msg.Err != nil || msg.Snapshot == nil {
 		return nil, false
 	}

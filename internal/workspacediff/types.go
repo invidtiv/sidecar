@@ -102,6 +102,7 @@ const (
 type Snapshot struct {
 	State                 LoadState
 	WorkingTree           string
+	Files                 []File
 	Commits               []CommitInfo
 	AggregateCommitted    string
 	AggregateUncommitted  string

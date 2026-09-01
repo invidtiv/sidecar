@@ -134,7 +134,7 @@ func currentHostHello() *hostproto.Hello {
 	return &hostproto.Hello{
 		Proto: hostproto.Version,
 		Capabilities: hostproto.Capabilities{
-			Verbs: hostproto.VerbCapabilities{CreateShellAgent: true},
+			Verbs: hostproto.VerbCapabilities{CreateShellAgent: true, ContentReadV1: true},
 		},
 	}
 }

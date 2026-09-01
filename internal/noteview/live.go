@@ -41,6 +41,10 @@ func (m *Model) Refresh(suppressed bool) tea.Cmd {
 		return nil
 	}
 
+	if m.loader != nil {
+		return m.refreshFrom(m.loader(m.workDir, m.noteID, m.epoch, m.revision))
+	}
+
 	m.requestGeneration++
 	generation := m.requestGeneration
 	modelID, epoch, noteID := m.modelID, m.epoch, m.noteID
@@ -52,6 +56,20 @@ func (m *Model) Refresh(suppressed bool) tea.Cmd {
 			NoteID: noteID, Data: msg.Data, Error: msg.Error,
 			Refresh: true,
 		}
+	}
+}
+
+func (m *Model) refreshFrom(load tea.Cmd) tea.Cmd {
+	m.requestGeneration++
+	generation := m.requestGeneration
+	modelID, epoch, noteID := m.modelID, m.epoch, m.noteID
+	return func() tea.Msg {
+		msg := adoptNoteMsg(load, LoadedMsg{
+			ModelID: modelID, RequestGeneration: generation, Epoch: epoch,
+			NoteID: noteID, Refresh: true,
+		})
+		msg.Refresh = true
+		return msg
 	}
 }
 
@@ -71,6 +89,9 @@ func (m *Model) applyRefresh(msg LoadedMsg) bool {
 		}
 	}()
 
+	if msg.NotModified {
+		return false
+	}
 	if msg.Error != nil || msg.Data == nil {
 		return false
 	}

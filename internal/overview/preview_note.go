@@ -1,8 +1,11 @@
 package overview
 
 import (
+	"errors"
+
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/contentlink"
+	"github.com/marcus/sidecar/internal/contentpanes"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/noteview"
 	"github.com/marcus/sidecar/internal/panelayout"
@@ -52,6 +55,9 @@ type previewNote struct {
 	// bar is the live scrollbar gesture on the active tab, armed by a press on
 	// one of this pane's bar regions and settled by release or lost-release.
 	bar previewNoteBar
+	// hostNotice is a connected-stale or verb-failure label for a remote
+	// note that is still showing its last good body.
+	hostNotice string
 }
 
 func (n *previewNote) view() *noteview.Model {
@@ -71,6 +77,22 @@ func (m *Model) openPreviewNote(noteID string) tea.Cmd {
 	noteID = noteview.NormalizeID(noteID)
 	if !ok || noteID == "" || workspace.Path == "" {
 		return nil
+	}
+	if workspace.Remote() {
+		ctx, ok := m.previewDeckContext()
+		if !ok {
+			return nil
+		}
+		ref, err := contentpanes.ResolveDocument(m.previewDeckConfig(ctx).Source, ctx.Source, contentlink.Pending{
+			Kind: contentlink.KindInternal, Raw: noteID,
+		})
+		if err != nil || ref.Value == "" {
+			if err == nil {
+				err = errors.New("note not found on " + ctx.Source.HostID)
+			}
+			return remoteContentErrorCmd(err)
+		}
+		noteID = ref.Value
 	}
 	return m.openPreviewContent(contentlink.Ref{Kind: contentlink.KindInternal, Namespace: "note", Value: noteID}, "Note")
 }
@@ -104,10 +126,24 @@ func (m *Model) applyPreviewNoteLoaded(msg previewNoteLoadedMsg) {
 		return
 	}
 	for _, item := range note.tabs.Items {
-		if item.Value == nil || item.Value.ModelID() != msg.ModelID {
+		if item.Value == nil {
 			continue
 		}
-		item.Value.SetResult(msg.LoadedMsg)
+		matched := item.Value.ResultMatches(msg.LoadedMsg)
+		if item.Value.SetResult(msg.LoadedMsg) {
+			note.hostNotice = ""
+			return
+		}
+		if !matched {
+			continue
+		}
+		if msg.NotModified {
+			note.hostNotice = ""
+			return
+		}
+		if msg.Refresh && msg.Error != nil {
+			note.hostNotice = remoteDocumentStaleNotice
+		}
 		return
 	}
 }
@@ -187,7 +223,7 @@ func (m *Model) renderPreviewNote(note *previewNote, box termpreview.Box) string
 		view.SetSize(box.W, contentHeight)
 		view.SetFocused(focused)
 	}
-	header := m.composePreviewHeader(noteview.LayoutTabStrip(note.tabs, m.reserveHeader(box.W, true).TabsWidth, focused).HoverClose(m.tabCloseHoverIn(panelayout.Note)).Row, box.W, panelayout.Note)
+	header := m.composePreviewHeader(m.previewHostHeaderTabs(noteview.LayoutTabStrip(note.tabs, m.reserveHeader(box.W, true).TabsWidth, focused).HoverClose(m.tabCloseHoverIn(panelayout.Note)).Row, note.hostNotice), box.W, panelayout.Note)
 	if contentHeight <= 0 {
 		return header
 	}

@@ -754,6 +754,145 @@ Usage: sidecar --agents
 sidecar --agents
 ```
 
+## `sidecar content`
+
+Read-only content contract a viewing Sidecar invokes on a host
+
+Resolve and read files, issues, notes, diffs, and resources for a viewing Sidecar over the existing host request seam.
+
+This is an internal transport endpoint, not a general file browser and not a public open-on-host surface.
+Every verb is non-interactive, read-only, and strictly enumerated.
+
+```
+Usage: sidecar content <command>
+```
+
+### `sidecar content describe`
+
+Describe this host's terminal resource providers
+
+Describe configured terminal resource providers on this machine and return validated ordered descriptors.
+
+The fingerprint is a deterministic hash of that wire content, never a process-local snapshot generation.
+--if-revision returns a small notModified object when the descriptors are unchanged.
+
+--json writes the machine contract.
+
+```
+Usage: sidecar content describe [--if-revision REV] [--json]
+```
+
+**Options:**
+
+- `--if-revision REV`: Skip the descriptors when they still have this fingerprint
+- `--json`: Write the structured result object to stdout (required for the machine contract)
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: described, or notModified
+- `1`: internal or load failure
+- `2`: usage error
+
+**Examples:**
+
+```bash
+sidecar content describe --json
+sidecar content describe --if-revision v1:abc --json
+```
+
+### `sidecar content read`
+
+Read bounded file, issue, note, diff, or resource content
+
+Read a file document, issue card, note, git diff operation, or resource document from a durable workspace identity on this machine.
+
+This is the read-only content contract a viewing Sidecar invokes on a host, not a general file browser.
+--if-revision returns a small notModified object when the content is unchanged, so a refresh is one round trip.
+The encoded JSON is capped under 768KiB; a payload that would blow that cap is truncated or returned as a structured oversize object rather than invalid JSON.
+Issue fallback candidates come from this host's configured projects.
+Diff operations are enumerated: working-tree, working-tree-file, commit, range, commit-file, full-file.
+Resource reads return the provider wire document; the viewer sanitizes again. --refresh bypasses the host manager cache.
+
+--json writes the machine contract.
+
+```
+Usage: sidecar content read --workspace ID --kind file|issue|note|diff|resource --operation OP --target VALUE [--provider ID --matcher ID] [--path PATH] [--parent HASH] [--offset N] [--limit N] [--if-revision REV] [--refresh] [--json]
+```
+
+**Options:**
+
+- `--workspace ID`: Unscoped durable workspace id (projectKey:shell:name or projectKey:worktree:path)
+- `--kind KIND`: Content kind (file, issue, note, diff, or resource)
+- `--operation OP`: Read operation (document, card, note, resource, working-tree, working-tree-file, commit, range, commit-file, or full-file)
+- `--target VALUE`: File path, issue/note id, git spec, or resource locator as resolved or as the viewer saw it
+- `--provider ID`: Resource provider instance id
+- `--matcher ID`: Resource matcher id
+- `--path PATH`: Diff file path for working-tree-file, commit-file, and full-file
+- `--parent HASH`: Merge parent hash for commit-file and full-file
+- `--offset N`: Full-file page offset in lines
+- `--limit N`: Full-file page size in lines
+- `--if-revision REV`: Skip the body when the content still has this revision
+- `--refresh`: Bypass the host resource cache
+- `--json`: Write the structured result object to stdout (required for the machine contract)
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: read, or notModified
+- `1`: internal or load failure
+- `2`: usage error or unknown kind
+- `5`: value rejected: unknown workspace, containment, or not found
+
+**Examples:**
+
+```bash
+sidecar content read --workspace /home/me/api:shell:sidecar-sh-1 --kind file --operation document --target README.md --json
+sidecar content read --workspace /home/me/api:shell:sidecar-sh-1 --kind file --operation document --target README.md --if-revision v1:abc --json
+```
+
+### `sidecar content resolve`
+
+Resolve a file, issue, note, diff, or resource target to identity and metadata
+
+Resolve a file, issue, note, git spec, or resource locator against a durable workspace identity on this machine.
+
+This is the read-only content contract a viewing Sidecar invokes on a host, not a general file browser.
+The workspace id is re-resolved to its authoritative root on every request; the target is a hint, never authority.
+Relative file paths cannot escape that root. Explicit absolute and ~/ targets keep local Sidecar's rule: a regular readable file outside the project is allowed.
+Issue and note targets are identity only: the id is normalized without consulting td.
+Diff targets are git specs: wt, a commit, or A..B / A...B. The host rev-parses commit and range specs.
+Resource targets need --provider and --matcher; resolve is identity only and does not invoke the provider.
+
+--json writes the machine contract.
+
+```
+Usage: sidecar content resolve --workspace ID --kind file|issue|note|diff|resource --target VALUE [--provider ID --matcher ID] [--json]
+```
+
+**Options:**
+
+- `--workspace ID`: Unscoped durable workspace id (projectKey:shell:name or projectKey:worktree:path)
+- `--kind KIND`: Content kind (file, issue, note, diff, or resource)
+- `--target VALUE`: File path, issue/note id, git spec, or resource locator as the viewer saw it
+- `--provider ID`: Resource provider instance id
+- `--matcher ID`: Resource matcher id
+- `--json`: Write the structured result object to stdout (required for the machine contract)
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: resolved
+- `1`: internal or load failure
+- `2`: usage error or unknown kind
+- `5`: value rejected: unknown workspace, containment, or not found
+
+**Examples:**
+
+```bash
+sidecar content resolve --workspace /home/me/api:shell:sidecar-sh-1 --kind file --target README.md --json
+```
+
 ## `sidecar create`
 
 Create a Sidecar-managed shell or worktree

@@ -13,6 +13,7 @@ import (
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/uirequest"
+	"github.com/marcus/sidecar/internal/workspacediff"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
@@ -110,9 +111,17 @@ func (m *Model) handleUIRequest(req uirequest.Request) tea.Cmd {
 			cmd = m.openPreviewNote(req.Target.Value)
 		case uirequest.TargetKindDiff:
 			retargeted = m.willRetargetPreviewPane(panelayout.Diff)
-			cmd = m.openPreviewDiff(uirequest.DiffTarget(targetWorkspace.Path, req.Target.Value))
+			if targetWorkspace.Remote() {
+				spec, ok := workspacediff.ParseSpec(req.Target.Value)
+				if !ok {
+					spec = workspacediff.WorkingTreeTarget()
+				}
+				cmd = m.openPreviewDiff(spec)
+			} else {
+				cmd = m.openPreviewDiff(uirequest.DiffTarget(targetWorkspace.Path, req.Target.Value))
+			}
 		case uirequest.TargetKindResource:
-			ref, refusal := resourceview.ReferenceForLocator(m.resourceMatchers, req.Target.Provider, req.Target.Value)
+			ref, refusal := resourceview.ReferenceForLocator(m.previewResourceMatchers(), req.Target.Provider, req.Target.Value)
 			if refusal != "" {
 				_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
 					Instance: hostInstanceID(), Host: uirequest.HostName(), PID: os.Getpid(),
@@ -543,13 +552,21 @@ func (m *Model) consumePendingView(tmuxName string) tea.Cmd {
 	case uirequest.TargetKindIssue:
 		return m.openPreviewIssue(pv.Target.Value)
 	case uirequest.TargetKindDiff:
+		selected, ok := m.SelectedWorkspace()
+		if ok && selected.Remote() {
+			spec, parsed := workspacediff.ParseSpec(pv.Target.Value)
+			if !parsed {
+				spec = workspacediff.WorkingTreeTarget()
+			}
+			return m.openPreviewDiff(spec)
+		}
 		root := ""
-		if selected, ok := m.SelectedWorkspace(); ok {
+		if ok {
 			root = selected.Path
 		}
 		return m.openPreviewDiff(uirequest.DiffTarget(root, pv.Target.Value))
 	case uirequest.TargetKindResource:
-		ref, refusal := resourceview.ReferenceForLocator(m.resourceMatchers, pv.Target.Provider, pv.Target.Value)
+		ref, refusal := resourceview.ReferenceForLocator(m.previewResourceMatchers(), pv.Target.Provider, pv.Target.Value)
 		if refusal != "" {
 			return nil
 		}

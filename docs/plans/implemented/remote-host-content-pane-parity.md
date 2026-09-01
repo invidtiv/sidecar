@@ -1,8 +1,8 @@
 # Remote host content-pane parity
 
-Status: **active, independently reviewed**, 2026-08-31
+Status: **implemented** on `pane-parity` (td-89c1cb, td-87358d, td-925cf9). Isolated unit and integration proof covers every PlanKind; the two-machine tmux-drive recipe is `docs/guides/active/remote-content-pane-proof.md` and was not executed against a live host in this work.
 
-Related: [Sidecar as its own remote host runtime](sidecar-remote-hosts.md) is the controlling transport plan; [Cross-project td issue links](cross-project-issue-links.md) defines local-first issue ownership and fallback semantics; [Terminal resource providers](../implemented/terminal-resource-providers.md) defines provider matching, safe documents, and lifecycle bounds.
+Related: [Sidecar as its own remote host runtime](../active/sidecar-remote-hosts.md) is the controlling transport plan; [The viewer owns the screen](../active/remote-host-viewer-screen.md) is the follow-on for relaying `sidecar open` / `layout` from a Sidecar-managed pane on the host onto the viewing Sessions preview; [Cross-project td issue links](../active/cross-project-issue-links.md) defines local-first issue ownership and fallback semantics; [Terminal resource providers](terminal-resource-providers.md) defines provider matching, safe documents, and lifecycle bounds.
 
 ## Decision first
 
@@ -26,7 +26,7 @@ host-qualified content context
 
 The viewer owns interaction, pane placement, focus, rendering, scroll state, and Sessions pane state. The remote host owns filesystem containment, git and td resolution, provider configuration and execution, content loading, and change observation. No remote path is passed to local filesystem, git, td, or provider code.
 
-This is a presentation capability over data owned by files, git, td, tmux, and external providers. It does not add a public `sidecar open --host` surface merely for parity. The internal host content command exists as a transport endpoint for Sidecar itself; agents continue to use the underlying tools over SSH.
+This is a presentation capability over data owned by files, git, td, tmux, and external providers. It does not add a public `sidecar open --host` surface merely for parity. The internal host content command exists as a transport endpoint for Sidecar itself. An agent that wants the bytes of a file or issue on that machine uses ordinary tools over SSH. An agent in a Sidecar-managed pane that wants that file *on the screen the user is looking at* is [The viewer owns the screen](../active/remote-host-viewer-screen.md), still without a `--host` flag.
 
 ## User contract
 
@@ -77,7 +77,7 @@ Out of scope:
 - Turning the Files, Git, Tasks, or td plugins into complete remote project browsers.
 - Remote file mutation or inline editing. The existing `e` path starts a local tmux editor against a local path; on a remote Document pane it must be unavailable with an actionable message rather than touching the viewer's filesystem. Host-aware inline editing is a separate capability and plan.
 - Remote Document pane file finding and project-wide search. `ctrl+p` and `f` currently walk `doc.root` locally and must be hidden or explicitly refused for a remote source in the file steel thread. In-document search remains available because it uses the already loaded body. Host-backed finder/search is a separate follow-on.
-- Relaying `sidecar open` requests issued by an arbitrary process on the remote host back to the viewer.
+- Relaying `sidecar open` from a process on the remote host back to the viewer. Sidecar-managed panes whose geometry lease is held by a connected viewer are [The viewer owns the screen](../active/remote-host-viewer-screen.md). Arbitrary processes (cron, a random SSH) stay out of scope there as well.
 - A persistent daemon, mounted filesystem, SSHFS dependency, or general-purpose remote command API.
 - Adding content payloads or viewer requests to the inventory stream.
 
@@ -220,25 +220,25 @@ Refusals are specific and actionable:
 
 ## Work sequence
 
-### Slice 0 — characterize and pin the regression
+### Slice 0 — characterize and pin the regression — **done** (td-650c7a)
 
 - Add a Sessions test with a remote row whose `Path` also exists locally but contains different content. Prove the current guard refuses rather than showing the local twin.
 - Pin all `targetactivation.PlanKindsFromSpans` against local and remote dispatch coverage.
 - Pin local content loads and local provider matching as negative controls.
 
-### Slice 1 — source identity and the Document seam
+### Slice 1 — source identity and the Document seam — **done** (td-fff4bc, td-b83111)
 
 - Add `SourceContext`, thread it through `contentpanes.SurfaceContext`, deck tabs, nested-link handlers, cached Sessions pane state, and live bindings.
 - Extract only Document resolve/load/refresh behind the source seam and bind the local adapter to today's functions.
 - Keep every remote kind refused. Focused Document tests must remain byte/behavior compatible before any wire code lands; issue, note, diff, and provider seams arrive only with their user-facing slices.
 
-### Slice 2 — the minimum content service for files
+### Slice 2 — the minimum content service for files — **done** (td-5c259b)
 
 - Extract the read-only file resolve/read application service with its strict Document DTO, encoded-size bounds, structured errors, and conditional revision contract.
 - Add only the `sidecar content resolve/read` operations needed by the file journey, `ContentReadV1` capability advertisement, and the `hosts.RunSidecar` Document source adapter. Do not front-load all-kind DTOs or loader refactors.
 - Add local/direct versus remote/JSON file-contract tests, `ValidRemoteResult`, contamination, encoded oversize, cancellation, timeout, nonzero exit, and old-host capability tests. Do not invoke a content verb before first frame or merely because a host is registered.
 
-### Slice 3 — file steel thread
+### Slice 3 — file steel thread — **done** (td-30e99a, td-9d8bd9)
 
 - Make remote file fresh-resolution and bounded loading use the remote adapter.
 - Remove the blanket remote refusal from `previewDeckContext` only for a compatible content source whose host is not disconnected, disabled, or unavailable; stale remains attemptable.
@@ -248,7 +248,7 @@ Refusals are specific and actionable:
 
 This is the first integrated proof: remote terminal text -> click -> host containment/bytes -> local shared Document pane -> remote edit on the host -> conditional change detection -> same pane refresh. No other content kind is required to land before this journey works end to end.
 
-### Slice 4 — td issues and notes
+### Slice 4 — td issues and notes — **done** (td-a4dd72)
 
 - Add issue/note methods and DTOs to the content service and source interface only in this slice.
 - Run issue/note loaders and td-store revision resolution on the host with the existing read-only td environment.
@@ -257,14 +257,14 @@ This is the first integrated proof: remote terminal text -> click -> host contai
 - Before admitting a remote Issue pane, hide or explicitly refuse `Open in td` and audit every Issue/Note action so none switches to or invokes a viewer-local tool against remote identity.
 - Prove conditional live refresh for visible issue/note panes without checking hidden tabs.
 
-### Slice 5 — git diffs
+### Slice 5 — git diffs — **done** (td-b11294, td-ea957f)
 
 - Add diff methods and bounded operation DTOs to the content service/source, then move git process execution behind that seam while keeping `workspacediff.View` as the only renderer/state machine.
 - Resolve specs and load working tree, commit, range, selected commit-file, full-file page, and cursor-driven detail operations on the host.
 - Audit every Diff action before enabling the remote source; any mutation or local-command path is hidden or explicitly refused in this slice.
 - Preserve current diff size and untracked-file bounds, add truthful per-operation truncation/paging, and refresh visible panes through conditional git revisions.
 
-### Slice 6 — remote resource providers
+### Slice 6 — remote resource providers — **done** (td-56c5d2, td-ccb1ad)
 
 - Add provider describe/resolve DTOs only in this slice. Describe returns a deterministic fingerprint of validated ordered descriptors, never a process-local generation. Publish a host-scoped matcher snapshot and conditionally re-describe on row selection, explicit reload, the bounded visible-row cadence, or host-incarnation replacement.
 - Resolve through the remote manager, preserving matcher precedence, timeouts, process-group cleanup, typed errors, safe Markdown, source URL validation, and freshness.
@@ -272,7 +272,7 @@ This is the first integrated proof: remote terminal text -> click -> host contai
 - Audit Resource actions before enabling the remote source; validated HTTP(S) source URLs still open locally, while no action may reuse a viewer-local provider instance.
 - Prove that a provider configured only locally never claims remote text and one configured only remotely does.
 
-### Slice 7 — session links, refusals, documentation, and full proof
+### Slice 7 — session links, refusals, documentation, and full proof — **done** (td-eaed0d)
 
 - Scope session-link attachment by source host.
 - Verify the per-kind action audits landed in the same slices that admitted those kinds. No action may launch a local command against remote identity.

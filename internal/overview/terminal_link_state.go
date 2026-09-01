@@ -5,6 +5,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/contentlink"
+	"github.com/marcus/sidecar/internal/contentpanes"
 	"github.com/marcus/sidecar/internal/targetactivation"
 	"github.com/marcus/sidecar/internal/termpreview"
 )
@@ -36,9 +37,8 @@ func (m *Model) PrepareTerminalLinks() {
 	}
 	window := m.previewWindow()
 	buffer := m.previewBuffer()
-	rawRoot := m.previewResolveRoot()
-	root := m.canonicalTerminalLinkRoot(rawRoot)
-	if !window.ok || buffer == nil || root == "" {
+	scope, allowed, ok := m.previewTerminalLinkScope("")
+	if !window.ok || buffer == nil || !ok {
 		m.previewTerminalLeaf().LinkState = termpreview.LinkState{}
 		return
 	}
@@ -51,17 +51,62 @@ func (m *Model) PrepareTerminalLinks() {
 		})
 	}
 	target := m.previewTerminalLeaf().Target.Session + "\x00" + m.previewTerminalLeaf().Target.Pane
-	allowed := m.terminalAllowedLinkKinds()
-	scope := termpreview.LinkScope{
-		Host: "overview", Surface: m.preview.workspaceID, Target: target,
-		Root: root, Buffer: buffer,
-		AllowedKinds:      termpreview.AllowedKindsKey(allowed),
-		MatcherGeneration: m.linkMatcherGeneration,
-	}
+	scope.Target = target
+	scope.Buffer = buffer
 	m.previewTerminalLeaf().LinkState = m.terminalLinks.Prepare(termpreview.LinkPrepare{
 		Scope: scope, Rows: rows, Allowed: allowed,
-		Matchers: m.resourceMatchers, Previous: m.previewTerminalLeaf().LinkState,
+		Matchers: m.previewResourceMatchers(), Previous: m.previewTerminalLeaf().LinkState,
 	})
+}
+
+// previewTerminalLinkScope is the source-aware identity a terminal row is
+// prepared under. Remote rows keep the host Path as a hint and never
+// EvalSymlinks it on this machine.
+func (m *Model) previewTerminalLinkScope(target string) (termpreview.LinkScope, contentlink.KindSet, bool) {
+	workspace, ok := m.SelectedWorkspace()
+	if !ok || workspace.Path == "" {
+		return termpreview.LinkScope{}, nil, false
+	}
+	root := workspace.Path
+	sourceHost := ""
+	if workspace.Remote() {
+		if !m.hostShows(workspace.HostID) {
+			return termpreview.LinkScope{}, nil, false
+		}
+		sourceHost = workspace.HostID
+	} else {
+		root = m.canonicalTerminalLinkRoot(workspace.Path)
+		if root == "" {
+			return termpreview.LinkScope{}, nil, false
+		}
+	}
+	allowed := m.terminalAllowedLinkKinds()
+	return termpreview.LinkScope{
+		Host: "overview", Surface: m.preview.workspaceID, Target: target,
+		Root: root, SourceHost: sourceHost, Buffer: m.previewBuffer(),
+		AllowedKinds:      termpreview.AllowedKindsKey(allowed),
+		MatcherGeneration: m.linkMatcherGeneration,
+	}, allowed, true
+}
+
+// ResolveRemoteTerminalLink is KindFile/KindDiff pending resolution for a
+// showing remote Sessions row. It must not touch this machine's twin path.
+func (m *Model) ResolveRemoteTerminalLink(hostID, root string, candidate contentlink.Pending) (contentlink.Ref, bool) {
+	if m == nil || hostID == "" || (candidate.Kind != contentlink.KindFile && candidate.Kind != contentlink.KindDiff) {
+		return contentlink.Ref{}, false
+	}
+	if !m.hostShows(hostID) {
+		return contentlink.Ref{}, false
+	}
+	ctx, ok := m.previewDeckContext()
+	if !ok || ctx.Source.HostID != hostID {
+		return contentlink.Ref{}, false
+	}
+	if root != "" && ctx.Source.Root != "" && ctx.Source.Root != root {
+		return contentlink.Ref{}, false
+	}
+	ref, err := contentpanes.ResolveDocument(m.documentSource(ctx), ctx.Source, candidate)
+	return ref, err == nil && ref.Value != ""
 }
 
 func (m *Model) canonicalTerminalLinkRoot(raw string) string {
@@ -101,7 +146,7 @@ func (m *Model) revalidatePreviewLink(span contentlink.Span) (tea.Cmd, bool) {
 	if raw == "" {
 		raw = span.Value
 	}
-	request := termpreview.FreshLinkRequest{Root: scope.Root, RawRoot: m.previewResolveRoot(), Candidate: contentlink.Pending{Kind: span.Kind, Raw: raw}}
+	request := termpreview.FreshLinkRequest{Root: scope.Root, RawRoot: m.previewResolveRoot(), HostID: scope.SourceHost, Candidate: contentlink.Pending{Kind: span.Kind, Raw: raw}}
 	generation, workspaceID := m.preview.generation, m.preview.workspaceID
 	cmd := m.terminalLinks.ResolveFresh(request, func(result termpreview.FreshLinkResult) tea.Msg {
 		return previewLinkRevalidatedMsg{Generation: generation, WorkspaceID: workspaceID, Scope: scope, Span: span, Result: result}
@@ -123,12 +168,22 @@ func (m *Model) applyPreviewLinkRevalidated(msg previewLinkRevalidatedMsg) tea.C
 		return nil
 	}
 	if plan.Kind == targetactivation.PlanOpenFile {
-		file, err := openPreviewFile(current.Root, plan.Path, plan.Path)
-		if err != nil {
+		workspace, ok := m.SelectedWorkspace()
+		if !ok || workspace.Remote() {
 			return nil
 		}
-		_ = file.Close()
-		cmd := m.openPreviewContent(contentlink.Ref{Kind: contentlink.KindFile, Value: plan.Path, Line: plan.Line}, "Document")
+		ctx, ok := m.previewDeckContext()
+		if !ok || ctx.Source.Remote() {
+			return nil
+		}
+		ref, err := contentpanes.ResolveDocument(m.previewDeckConfig(ctx).Source, ctx.Source, contentlink.Pending{
+			Kind: contentlink.KindFile, Raw: plan.Path,
+		})
+		if err != nil || ref.Value == "" {
+			return nil
+		}
+		ref.Line = plan.Line
+		cmd := m.openPreviewContent(ref, "Document")
 		if cmd != nil {
 			m.clearPreviewSelection()
 		}

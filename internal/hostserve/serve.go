@@ -566,6 +566,7 @@ func pollInterval(snapshot hostproto.Snapshot, opts Options) time.Duration {
 // change.
 var serveVerbCapabilities = hostproto.VerbCapabilities{
 	CreateShellAgent: true,
+	ContentReadV1:    true,
 }
 
 func buildHello(opts Options) *hostproto.Hello {

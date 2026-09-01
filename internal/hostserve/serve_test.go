@@ -620,4 +620,7 @@ func TestHelloAdvertisesVerbCapabilities(t *testing.T) {
 	if !hello.Capabilities.Verbs.CreateShellAgent {
 		t.Error("the host does not advertise `create shell --agent`, so no viewer will ever send it")
 	}
+	if !hello.Capabilities.Verbs.ContentReadV1 {
+		t.Error("the host does not advertise content read, so no viewer will ever send it")
+	}
 }

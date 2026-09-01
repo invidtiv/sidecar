@@ -147,13 +147,21 @@ type WorkspaceState struct {
 // Issue tabs are IssueTabs plus Active. Issue and Scroll are read-only legacy
 // and are not written after the first save.
 type PaneLayoutJSON struct {
-	Root      string             `json:"root,omitempty"`
-	Surface   string             `json:"surface,omitempty"`
-	Kind      string             `json:"kind,omitempty"`
-	Split     *PaneSplitJSON     `json:"split,omitempty"`
-	Tabs      []PaneDocTabJSON   `json:"tabs,omitempty"`
-	IssueTabs []PaneIssueTabJSON `json:"issueTabs,omitempty"`
-	DiffTabs  []PaneDiffTabJSON  `json:"diffTabs,omitempty"`
+	Root    string `json:"root,omitempty"`
+	Surface string `json:"surface,omitempty"`
+	// HostID and the remaining source-identity fields are non-authoritative
+	// hints for a later restore. HostIncarnation is never persisted.
+	HostID        string             `json:"hostId,omitempty"`
+	ProjectKey    string             `json:"projectKey,omitempty"`
+	ProjectRoot   string             `json:"projectRoot,omitempty"`
+	WorkspaceID   string             `json:"workspaceId,omitempty"`
+	WorkspaceKind string             `json:"workspaceKind,omitempty"`
+	WorkspaceKey  string             `json:"workspaceKey,omitempty"`
+	Kind          string             `json:"kind,omitempty"`
+	Split         *PaneSplitJSON     `json:"split,omitempty"`
+	Tabs          []PaneDocTabJSON   `json:"tabs,omitempty"`
+	IssueTabs     []PaneIssueTabJSON `json:"issueTabs,omitempty"`
+	DiffTabs      []PaneDiffTabJSON  `json:"diffTabs,omitempty"`
 	// ResourceTabs are external provider references. One list serves every
 	// provider, so a new integration adds no field here.
 	ResourceTabs []PaneResourceTabJSON `json:"resourceTabs,omitempty"`

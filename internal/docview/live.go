@@ -98,18 +98,55 @@ func (m *Model) Refresh(suppressed bool) tea.Cmd {
 		return nil
 	}
 
+	return m.refreshFrom(m.previewLoad(m.root, m.path, m.epoch, m.revision))
+}
+
+// RefreshFrom is Refresh with an injected command instead of filepreview.LoadPreview.
+func (m *Model) RefreshFrom(load tea.Cmd) tea.Cmd {
+	if m == nil || m.path == "" || (m.root == "" && !filepath.IsAbs(filepath.FromSlash(m.path))) {
+		return nil
+	}
+	if m.requestGeneration == 0 || m.loading {
+		return nil
+	}
+	if !m.live.Begin(false) {
+		return nil
+	}
+	return m.refreshFrom(load)
+}
+
+func (m *Model) refreshFrom(load tea.Cmd) tea.Cmd {
 	m.requestGeneration++
 	generation := m.requestGeneration
 	modelID, epoch, relPath := m.modelID, m.epoch, m.path
-	load := filepreview.LoadPreview(m.root, relPath, epoch)
 	return func() tea.Msg {
-		msg, ok := load().(filepreview.PreviewLoadedMsg)
-		if !ok {
+		if load == nil {
 			return nil
 		}
-		return LoadedMsg{
-			ModelID: modelID, RequestGeneration: generation, Epoch: epoch,
-			Path: relPath, Result: msg.Result, Refresh: true,
+		switch msg := load().(type) {
+		case filepreview.PreviewLoadedMsg:
+			return LoadedMsg{
+				ModelID: modelID, RequestGeneration: generation, Epoch: epoch,
+				Path: relPath, Result: msg.Result, Refresh: true,
+			}
+		case NotModified:
+			return LoadedMsg{
+				ModelID: modelID, RequestGeneration: generation, Epoch: epoch,
+				Path: relPath, Refresh: true, NotModified: true, Revision: msg.Revision,
+			}
+		case LoadedMsg:
+			msg.ModelID = modelID
+			msg.RequestGeneration = generation
+			msg.Refresh = true
+			if msg.Path == "" {
+				msg.Path = relPath
+			}
+			if msg.Epoch == 0 {
+				msg.Epoch = epoch
+			}
+			return msg
+		default:
+			return nil
 		}
 	}
 }
@@ -143,6 +180,9 @@ func (m *Model) applyRefresh(msg LoadedMsg) bool {
 		}
 	}()
 
+	if msg.NotModified {
+		return false
+	}
 	if msg.Result.Error != nil {
 		return false
 	}

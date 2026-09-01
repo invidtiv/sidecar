@@ -1,13 +1,14 @@
 package overview
 
 import (
+	"errors"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/contentlink"
+	"github.com/marcus/sidecar/internal/contentpanes"
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/inlineedit"
 	"github.com/marcus/sidecar/internal/markdown"
@@ -16,6 +17,7 @@ import (
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/panesearch"
 	"github.com/marcus/sidecar/internal/resourceview"
+	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/targetactivation"
 	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/termpreview"
@@ -23,6 +25,7 @@ import (
 	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspacediff"
+	"github.com/marcus/sidecar/internal/workspacelist"
 )
 
 const (
@@ -70,6 +73,9 @@ type previewDoc struct {
 	editW, editH int
 	// pendingEdit is the action an exit confirmation is holding.
 	pendingEdit func() tea.Cmd
+	// hostNotice is a connected-stale or verb-failure label for a remote
+	// document that is still showing its last good body.
+	hostNotice string
 }
 
 func (d *previewDoc) view() *docview.Model {
@@ -82,6 +88,18 @@ func (d *previewDoc) view() *docview.Model {
 func (d *previewDoc) allocID() int {
 	d.nextID++
 	return d.nextID
+}
+
+func (m *Model) previewRemoteHostID() string {
+	if m.preview.deck != nil {
+		if hostID := m.preview.deck.Context().Source.HostID; hostID != "" {
+			return hostID
+		}
+	}
+	if ws, ok := m.SelectedWorkspace(); ok {
+		return ws.HostID
+	}
+	return ""
 }
 
 type previewDocLoadedMsg struct {
@@ -129,6 +147,10 @@ func (m *Model) activatePreviewLinkAt(action mouse.MouseAction, modified bool) (
 		return nil, false
 	}
 	if plan.Kind == targetactivation.PlanOpenFile || plan.Kind == targetactivation.PlanOpenDiff {
+		workspace, ok := m.SelectedWorkspace()
+		if ok && workspace.Remote() {
+			return m.activatePreviewPlan(plan)
+		}
 		return m.revalidatePreviewLink(span)
 	}
 	return m.activatePreviewPlan(plan)
@@ -195,11 +217,20 @@ func previewHandlesPlanKind(kind targetactivation.PlanKind) bool {
 // decision (targetactivation), surface-local execution — the rule every kind
 // on these two surfaces already follows.
 //
+// The click carries the source host of the pane it came from. A name in a
+// remote pane matches only (that HostID, tmux session); a name in a local
+// pane matches a local row only. A same-named twin on the other side of the
+// host boundary is not attachable from this click.
+//
 // A session no row is running is not attachable, and the caller treats a nil
 // command as "this click did nothing", which is what an unknown session is.
 func (m *Model) attachPreviewSession(session string) tea.Cmd {
 	if strings.TrimSpace(session) == "" {
 		return nil
+	}
+	sourceHostID := ""
+	if ws, ok := m.SelectedWorkspace(); ok {
+		sourceHostID = ws.HostID
 	}
 	ids := make([]string, 0, len(m.catalog))
 	for id := range m.catalog {
@@ -207,8 +238,8 @@ func (m *Model) attachPreviewSession(session string) tea.Cmd {
 	}
 	sort.Strings(ids)
 	for _, id := range ids {
-		// A session name in a local pane's output names a local session.
-		if m.catalog[id].Remote() || m.catalog[id].TmuxName != session {
+		ws := m.catalog[id]
+		if ws.TmuxName != session || ws.HostID != sourceHostID {
 			continue
 		}
 		if !m.workspaces.SelectID(id) {
@@ -224,6 +255,26 @@ func (m *Model) activatePreviewDiff(raw string) tea.Cmd {
 	if !ok {
 		return nil
 	}
+	if workspace.Remote() {
+		ctx, ok := m.previewDeckContext()
+		if !ok {
+			return nil
+		}
+		ref, err := contentpanes.ResolveDocument(m.previewDeckConfig(ctx).Source, ctx.Source, contentlink.Pending{
+			Kind: contentlink.KindDiff, Raw: raw,
+		})
+		if err != nil || ref.Value == "" {
+			if err == nil {
+				err = errors.New("git object not found on " + ctx.Source.HostID)
+			}
+			return remoteContentErrorCmd(err)
+		}
+		target, ok := workspacediff.ParseSpec(ref.Value)
+		if !ok || (target.Kind != workspacediff.TargetCommit && target.Kind != workspacediff.TargetRange) {
+			return nil
+		}
+		return m.openPreviewDiff(target)
+	}
 	target := uirequest.DiffTarget(previewDiffPath(workspace), raw)
 	if target.Kind != workspacediff.TargetCommit && target.Kind != workspacediff.TargetRange {
 		return nil
@@ -233,23 +284,30 @@ func (m *Model) activatePreviewDiff(raw string) tea.Cmd {
 
 // openPreviewDocTarget opens a file target in the preview document pane. The
 // target's Value is the token as the text wrote it; it is re-resolved against
-// this surface's own root, so a target that names nothing here opens nothing.
+// this surface's content source, so a remote row never reads the viewer's twin.
 func (m *Model) openPreviewDocTarget(target uirequest.Target) tea.Cmd {
-	workspace, ok := m.SelectedWorkspace()
+	_, ok := m.SelectedWorkspace()
 	if !ok {
 		return nil
 	}
-	root := workspace.Path
-	display, abs, ok := terminallink.ResolveFile(root, target.Value)
+	ctx, ok := m.previewDeckContext()
 	if !ok {
 		return nil
 	}
-	file, err := openPreviewFile(root, display, abs)
-	if err != nil {
+	ref, err := contentpanes.ResolveDocument(m.previewDeckConfig(ctx).Source, ctx.Source, contentlink.Pending{
+		Kind: contentlink.KindFile, Raw: target.Value,
+	})
+	if err != nil || ref.Value == "" {
+		if ctx.Source.Remote() {
+			if err == nil {
+				err = errors.New("file not found on " + ctx.Source.HostID)
+			}
+			return remoteContentErrorCmd(err)
+		}
 		return nil
 	}
-	_ = file.Close()
-	return m.openPreviewContent(contentlink.Ref{Kind: contentlink.KindFile, Value: display, Line: target.Line}, "Document")
+	ref.Line = target.Line
+	return m.openPreviewContent(ref, "Document")
 }
 
 func (m *Model) selectPreviewDocTab(idx, line int, file *os.File) tea.Cmd {
@@ -340,13 +398,6 @@ func (m *Model) closePreviewDocTabAt(index int) tea.Cmd {
 	return m.finishPreviewDeckClose()
 }
 
-func openPreviewFile(root, display, abs string) (*os.File, error) {
-	if display != "" && !filepath.IsAbs(filepath.FromSlash(display)) {
-		return terminallink.OpenRegular(filepath.Join(root, filepath.FromSlash(display)))
-	}
-	return terminallink.OpenRegular(abs)
-}
-
 func wrapPreviewDocLoad(cmd tea.Cmd, workspaceID string) tea.Cmd {
 	if cmd == nil {
 		return nil
@@ -369,10 +420,46 @@ func (m *Model) applyPreviewDocLoaded(msg previewDocLoadedMsg) {
 		return
 	}
 	for _, item := range doc.tabs.Items {
-		if item.View != nil && item.View.SetResult(msg.LoadedMsg) {
+		if item.View == nil {
+			continue
+		}
+		matched := item.View.ResultMatches(msg.LoadedMsg)
+		if item.View.SetResult(msg.LoadedMsg) {
+			doc.hostNotice = ""
 			return
 		}
+		if !matched {
+			continue
+		}
+		if msg.NotModified {
+			doc.hostNotice = ""
+			return
+		}
+		if msg.Refresh && msg.Result.Error != nil {
+			doc.hostNotice = remoteDocumentStaleNotice
+		}
+		return
 	}
+}
+
+func (m *Model) previewDocHeaderTabs(row string) string {
+	notice := ""
+	if m.preview.doc != nil {
+		notice = m.preview.doc.hostNotice
+	}
+	return m.previewHostHeaderTabs(row, notice)
+}
+
+func (m *Model) previewHostHeaderTabs(row, notice string) string {
+	hostID := m.previewRemoteHostID()
+	if hostID == "" {
+		return row
+	}
+	label := workspacelist.HostGlyph + " " + hostID
+	if notice != "" {
+		label += " · " + notice
+	}
+	return row + " " + styles.Muted.Render(label)
 }
 
 func (m *Model) reloadPreviewDoc() tea.Cmd {
@@ -679,10 +766,19 @@ func (m *Model) previewDocKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 			}
 			return true, nil
 		case "e":
+			if hostID := m.previewRemoteHostID(); hostID != "" {
+				return true, remoteDocumentUnsupported(hostID, "Inline editing")
+			}
 			return true, m.enterPreviewDocEdit()
 		case "ctrl+p":
+			if hostID := m.previewRemoteHostID(); hostID != "" {
+				return true, remoteDocumentUnsupported(hostID, "File finding")
+			}
 			return true, m.openPreviewDocFinder()
 		case "f":
+			if hostID := m.previewRemoteHostID(); hostID != "" {
+				return true, remoteDocumentUnsupported(hostID, "Project search")
+			}
 			return true, m.openPreviewDocProjectSearch()
 		case "q", "esc":
 			return true, m.closePreviewDoc()
@@ -704,6 +800,9 @@ func (m *Model) previewDocKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 			return true, nil
 		case "y":
 			if view := m.preview.doc.view(); view != nil {
+				if m.previewRemoteHostID() != "" {
+					return true, view.YankSelectionOrLoaded()
+				}
 				return true, view.YankSelectionOrContents()
 			}
 			return true, nil
@@ -740,7 +839,7 @@ func (m *Model) renderPreviewDoc(doc *previewDoc, box termpreview.Box) string {
 		// holds, exactly as the project workspace does.
 		strip = docview.LayoutSearchTabStrip(doc.tabs, doc.mode.HeaderLabel(), tabsWidth, focused)
 	}
-	header := m.composePreviewHeader(strip.HoverClose(m.tabCloseHoverIn(panelayout.Document)).Row, box.W, panelayout.Document)
+	header := m.composePreviewHeader(m.previewDocHeaderTabs(strip.HoverClose(m.tabCloseHoverIn(panelayout.Document)).Row), box.W, panelayout.Document)
 	body := ""
 	if view != nil {
 		m.bindPreviewDocSelection(view, box)

@@ -24,6 +24,7 @@ type LinkScope struct {
 	Surface           string
 	Target            string
 	Root              string
+	SourceHost        string // registered remote host; empty means this machine
 	Buffer            *tty.OutputBuffer
 	AllowedKinds      string
 	MatcherGeneration uint64
@@ -113,14 +114,20 @@ func visibleLinkFingerprint(line string) uint64 {
 	return maphash.String(linkRowSeed, visible)
 }
 
-type LinkResolver interface {
-	Resolve(root string, candidate contentlink.Pending) (contentlink.Ref, bool)
+type LinkResolveRequest struct {
+	Root      string
+	HostID    string
+	Candidate contentlink.Pending
 }
 
-type LinkResolverFunc func(root string, candidate contentlink.Pending) (contentlink.Ref, bool)
+type LinkResolver interface {
+	Resolve(LinkResolveRequest) (contentlink.Ref, bool)
+}
 
-func (f LinkResolverFunc) Resolve(root string, candidate contentlink.Pending) (contentlink.Ref, bool) {
-	return f(root, candidate)
+type LinkResolverFunc func(LinkResolveRequest) (contentlink.Ref, bool)
+
+func (f LinkResolverFunc) Resolve(req LinkResolveRequest) (contentlink.Ref, bool) {
+	return f(req)
 }
 
 type LinkResultMsg struct{ Result contentlink.ResolutionResult }
@@ -128,6 +135,7 @@ type LinkResultMsg struct{ Result contentlink.ResolutionResult }
 type FreshLinkRequest struct {
 	Root      string // canonical root used when the span was prepared
 	RawRoot   string // host root re-canonicalized at activation
+	HostID    string // registered remote host; empty means this machine
 	Candidate contentlink.Pending
 }
 
@@ -165,7 +173,7 @@ func NewLinkCoordinatorWithIndex(resolver LinkResolver, index *contentlink.Resol
 }
 
 func (c *linkCoordinator) Prepare(in LinkPrepare) LinkState {
-	ready := c.index.SnapshotForRoot(in.Scope.Root)
+	ready := c.index.SnapshotForHost(in.Scope.Root, in.Scope.SourceHost)
 	state := LinkState{data: &linkStateData{scope: in.Scope, resolution: ready.Generation(), rows: make(map[int]preparedLinkRow, len(in.Rows))}}
 	previousCompatible := in.Previous.data != nil && in.Previous.data.scope == in.Scope && in.Previous.data.resolution == ready.Generation()
 	for _, row := range in.Rows {
@@ -190,7 +198,7 @@ func (c *linkCoordinator) Prepare(in LinkPrepare) LinkState {
 			spans:              spans,
 		}
 		for _, candidate := range result.Pending {
-			request, outcome := c.index.BeginClassified(in.Scope.Root, candidate)
+			request, outcome := c.index.BeginClassifiedFor(in.Scope.Root, in.Scope.SourceHost, candidate)
 			switch outcome {
 			case contentlink.BeginRequested:
 				c.mu.Lock()
@@ -221,6 +229,9 @@ func (c *linkCoordinator) TakeCmd() tea.Cmd {
 	// surfaces discover the same candidates in different update orders.
 	sort.SliceStable(requests, func(i, j int) bool {
 		a, b := requests[i], requests[j]
+		if a.HostID != b.HostID {
+			return a.HostID < b.HostID
+		}
 		if a.Root != b.Root {
 			return a.Root < b.Root
 		}
@@ -233,7 +244,7 @@ func (c *linkCoordinator) TakeCmd() tea.Cmd {
 	for _, request := range requests {
 		request := request
 		cmds = append(cmds, func() tea.Msg {
-			ref, found := c.resolver.Resolve(request.Root, request.Candidate)
+			ref, found := c.resolver.Resolve(LinkResolveRequest{Root: request.Root, HostID: request.HostID, Candidate: request.Candidate})
 			return LinkResultMsg{Result: contentlink.ResolutionResult{Request: request, Ref: ref, Found: found}}
 		})
 	}
@@ -252,7 +263,7 @@ func (c *linkCoordinator) ResolveFresh(request FreshLinkRequest, wrap func(Fresh
 		}); ok {
 			ref, found = fresh.ResolveFresh(request)
 		} else {
-			ref, found = c.resolver.Resolve(request.Root, request.Candidate)
+			ref, found = c.resolver.Resolve(LinkResolveRequest{Root: request.Root, HostID: request.HostID, Candidate: request.Candidate})
 		}
 		return wrap(FreshLinkResult{Request: request, Ref: ref, Found: found})
 	}

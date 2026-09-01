@@ -12,6 +12,7 @@ Complete reference for Sidecar's command-line interface, structured commands, fl
 | Command | Purpose |
 |---------|---------|
 | [`sidecar agent`](#sidecar-agent) | Inspect, prompt, control, and coordinate AI coding agents |
+| [`sidecar content`](#sidecar-content) | Internal host content transport (not `sidecar open --host`) |
 | [`sidecar create`](#sidecar-create) | Create managed shells, terminal splits, and git worktrees |
 | [`sidecar host`](#sidecar-host) | Register, configure, and probe remote hosts over SSH |
 | [`sidecar layout`](#sidecar-layout) | Inspect, apply, and reposition multi-pane window layouts |
@@ -67,6 +68,43 @@ Send raw keys or escape sequences to an agent shell.
 Manage provider lifecycle integration hooks.
 - `--dry-run`: Preview file changes before modifying configuration.
 - `--json`: Output structured JSON.
+
+---
+
+## `sidecar content`
+
+Internal read-only transport a viewing Sidecar invokes on a registered host to resolve and load files, issues, notes, diffs, and resource documents. This is not a public file browser and not `sidecar open --host`. Agents that want content on that machine use ordinary tools over SSH.
+
+The host must advertise `ContentReadV1`. See [Remote Hosts](./remote-hosts#clicks-in-a-remote-terminal) for the user-visible clicks this powers.
+
+```bash
+Usage: sidecar content <describe|resolve|read> --json
+```
+
+### Subcommands
+
+#### `sidecar content describe`
+Return this host's validated, ordered resource-provider descriptors and a deterministic fingerprint.
+- `--if-revision REV`: Return a small `notModified` object when the fingerprint is unchanged.
+- `--json`: Write the machine contract (required).
+
+#### `sidecar content resolve`
+Resolve a file, issue, note, git spec, or resource locator against a durable workspace identity on this machine. The workspace id is re-resolved to its authoritative root on every request; the target is a hint, never authority.
+- `--workspace ID`: Unscoped durable workspace id.
+- `--kind KIND`: `file`, `issue`, `note`, `diff`, or `resource`.
+- `--target VALUE`: Path, id, git spec, or resource locator.
+- `--json`: Write the machine contract (required).
+
+#### `sidecar content read`
+Read a bounded document, issue card, note, git diff operation, or resource document.
+- `--workspace ID`: Unscoped durable workspace id.
+- `--kind KIND`: `file`, `issue`, `note`, `diff`, or `resource`.
+- `--operation OP`: Kind-specific read (`document`, `card`, `note`, `resource`, `working-tree`, `commit`, …).
+- `--target VALUE`: Path, id, git spec, or resource locator.
+- `--if-revision REV`: Return a small `notModified` object when the content is unchanged.
+- `--json`: Write the machine contract (required).
+
+Full flags and exit codes: `sidecar content --help`.
 
 ---
 
@@ -199,7 +237,7 @@ Trigger a test notification.
 
 ## `sidecar open`
 
-Open files, tasks, diffs, notes, or resources in adjacent panes.
+Open files, tasks, diffs, notes, or resources in adjacent panes. There is no `--host` flag; remote Sessions clicks use the internal `sidecar content` transport instead.
 
 ```bash
 Usage: sidecar open TARGET [options]

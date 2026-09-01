@@ -37,6 +37,12 @@ func Fetch(workDir, noteID string) tea.Cmd {
 	}
 }
 
+// Lookup is the state-free note load the content service and injected
+// loaders share. It is Fetch without the Bubble Tea wrapper.
+func Lookup(workDir, noteID string) (*Data, error) {
+	return loadNote(workDir, noteID)
+}
+
 func loadNote(workDir, noteID string) (*Data, error) {
 	cmd := exec.Command("td", "-w", workDir, "--json", "note", "show", noteID)
 	configureReadOnlyTd(cmd)

@@ -155,6 +155,34 @@ func TestUnchangedRefreshDoesNotRepaint(t *testing.T) {
 	}
 }
 
+func TestNotModifiedRefreshDoesNotReplaceContent(t *testing.T) {
+	content := body(50)
+	m := loadedDoc(t, t.TempDir(), "doc.md", content)
+	m.Observe()
+	cmd := m.RefreshFrom(func() tea.Msg {
+		return NotModified{Path: "doc.md", Epoch: m.epoch, Revision: "r2"}
+	})
+	if cmd == nil {
+		t.Fatal("RefreshFrom() = nil after Observe")
+	}
+	msg, ok := cmd().(LoadedMsg)
+	if !ok {
+		t.Fatalf("RefreshFrom returned %T", cmd())
+	}
+	if !msg.NotModified || !msg.Refresh {
+		t.Fatalf("msg = %#v", msg)
+	}
+	if m.SetResult(msg) {
+		t.Fatal("NotModified refresh replaced content")
+	}
+	if m.result.Content != content {
+		t.Fatal("NotModified refresh dropped the document on screen")
+	}
+	if m.revision != "r2" {
+		t.Fatalf("revision = %q, want r2", m.revision)
+	}
+}
+
 // A file caught mid-write reads as empty or truncated. Flickering through
 // nothing is worse than holding the last good content for a moment.
 func TestFailedRefreshKeepsTheRenderedDocument(t *testing.T) {

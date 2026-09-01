@@ -24,6 +24,9 @@ import (
 type Config struct {
 	Renderer         *markdown.Renderer
 	ResourceResolver resourceview.Resolver
+	// Source loads Document identity and bytes. Nil uses today's local
+	// filepreview path so tests constructing Config{} keep working.
+	Source Source
 	// ConfigureViewer attaches host presentation behavior (for example issue
 	// navigation handlers or Diff paint state). It must remain free of I/O.
 	ConfigureViewer func(kind panelayout.Kind, model any)
@@ -44,13 +47,13 @@ func newViewer(cfg Config, kind panelayout.Kind) viewer {
 	var v viewer
 	switch kind {
 	case panelayout.Document:
-		v = &documentViewer{view: docview.New(cfg.Renderer)}
+		v = &documentViewer{view: docview.New(cfg.Renderer), source: cfg.documentSource()}
 	case panelayout.Issue:
-		v = &issueViewer{view: issueview.New(cfg.Renderer)}
+		v = &issueViewer{view: issueview.New(cfg.Renderer), source: cfg.documentSource()}
 	case panelayout.Note:
-		v = &noteViewer{view: noteview.New(cfg.Renderer)}
+		v = &noteViewer{view: noteview.New(cfg.Renderer), source: cfg.documentSource()}
 	case panelayout.Diff:
-		v = &diffViewer{view: &workspacediff.View{}}
+		v = &diffViewer{view: &workspacediff.View{}, source: cfg.documentSource()}
 	case panelayout.Resource:
 		v = &resourceViewer{view: resourceview.New(cfg.Renderer, cfg.ResourceResolver)}
 	default:
@@ -125,9 +128,29 @@ func normalizeRef(ctx SurfaceContext, ref contentlink.Ref) (contentlink.Ref, pan
 	}
 }
 
-type documentViewer struct{ view *docview.Model }
+type documentViewer struct {
+	view   *docview.Model
+	source Source
+}
 
 func (v *documentViewer) model() any { return v.view }
+
+func (v *documentViewer) bindLoader(ctx SurfaceContext, ref contentlink.Ref) {
+	if v.view == nil {
+		return
+	}
+	if v.source == nil {
+		v.view.SetLoader(nil)
+		return
+	}
+	src := v.source
+	v.view.SetLoader(func(_, path string, epoch uint64, ifRevision string) tea.Cmd {
+		req := ref
+		req.Value = path
+		return documentLoadCmd(src, ctx, req, ifRevision, epoch)
+	})
+}
+
 func (v *documentViewer) load(ctx SurfaceContext, ref contentlink.Ref, id int) tea.Cmd {
 	root := ctx.Root
 	// A resolved file reference may deliberately name a regular file outside
@@ -138,6 +161,7 @@ func (v *documentViewer) load(ctx SurfaceContext, ref contentlink.Ref, id int) t
 	if filepath.IsAbs(filepath.FromSlash(ref.Value)) {
 		root = ""
 	}
+	v.bindLoader(ctx, ref)
 	// Arm already applied persisted render/wrap. Load resets them; put the
 	// armed values back so restore does not turn a raw tab into rendered.
 	armed := v.view.Title() != "" && v.view.NeedsLoad()
@@ -154,23 +178,27 @@ func (v *documentViewer) load(ctx SurfaceContext, ref contentlink.Ref, id int) t
 	return cmd
 }
 func (v *documentViewer) loadFile(ctx SurfaceContext, ref contentlink.Ref, id int, file *os.File) tea.Cmd {
+	v.bindLoader(ctx, ref)
 	cmd := v.view.LoadFile(id, file, ref.Value, ref.Line, ctx.Epoch)
 	v.view.SetRendered(terminallink.Markdown(ref.Value) && ref.Line == 0)
 	return cmd
 }
 func (v *documentViewer) reload(ctx SurfaceContext, ref contentlink.Ref, id int) tea.Cmd {
+	v.bindLoader(ctx, ref)
 	if v.view.NeedsLoad() {
 		return v.load(ctx, ref, id)
 	}
 	return v.view.Reload()
 }
 func (v *documentViewer) arm(ctx SurfaceContext, ref contentlink.Ref, id int, state TabState) {
+	v.bindLoader(ctx, ref)
 	v.view.Arm(id, ref.Value, ctx.Epoch)
 	v.view.SetRendered(state.Rendered)
 	v.view.SetWrap(state.Wrap)
 	v.view.SetPendingScroll(state.Scroll)
 }
 func (v *documentViewer) focus(ctx SurfaceContext, ref contentlink.Ref, id int) tea.Cmd {
+	v.bindLoader(ctx, ref)
 	if v.view.NeedsLoad() {
 		return v.load(ctx, ref, id)
 	}
@@ -188,25 +216,49 @@ func (v *documentViewer) snapshot(ref contentlink.Ref) TabState {
 	return TabState{Ref: ref, Scroll: v.view.ScrollOffset(), Wrap: v.view.Wrap(), Rendered: v.view.Rendered()}
 }
 
-type issueViewer struct{ view *issueview.Model }
+type issueViewer struct {
+	view   *issueview.Model
+	source Source
+}
 
 func (v *issueViewer) model() any { return v.view }
+
+func (v *issueViewer) bindLoader(ctx SurfaceContext, ref contentlink.Ref) {
+	if v.view == nil {
+		return
+	}
+	if v.source == nil {
+		v.view.SetLoader(nil)
+		return
+	}
+	src := v.source
+	view := v.view
+	v.view.SetLoader(func(_, issueID string, epoch uint64, ifRevision string) tea.Cmd {
+		req := ref
+		req.Value = issueID
+		return issueLoadCmd(src, ctx, req, ifRevision, epoch, view)
+	})
+}
+
 func (v *issueViewer) load(ctx SurfaceContext, ref contentlink.Ref, id int) tea.Cmd {
 	root := ctx.Root
-	if name, adopted := v.view.Owner(); name != "" && adopted != "" {
+	if name, adopted := v.view.Owner(); name != "" && adopted != "" && !ctx.Source.Remote() {
 		root = adopted
 	}
+	v.bindLoader(ctx, ref)
 	return v.view.Load(id, root, ref.Value, ctx.Epoch)
 }
 func (v *issueViewer) reload(ctx SurfaceContext, ref contentlink.Ref, id int) tea.Cmd {
 	return v.load(ctx, ref, id)
 }
 func (v *issueViewer) arm(ctx SurfaceContext, ref contentlink.Ref, id int, state TabState) {
+	v.bindLoader(ctx, ref)
 	v.view.Arm(id, ref.Value, ctx.Epoch)
 	v.view.RestoreOwner(state.OwnerName, state.OwnerRoot)
 	v.view.SetPendingScroll(state.Scroll)
 }
 func (v *issueViewer) focus(ctx SurfaceContext, ref contentlink.Ref, id int) tea.Cmd {
+	v.bindLoader(ctx, ref)
 	if v.view.NeedsLoad() {
 		return v.load(ctx, ref, id)
 	}
@@ -227,20 +279,43 @@ func (v *issueViewer) snapshot(ref contentlink.Ref) TabState {
 	return out
 }
 
-type noteViewer struct{ view *noteview.Model }
+type noteViewer struct {
+	view   *noteview.Model
+	source Source
+}
 
 func (v *noteViewer) model() any { return v.view }
+
+func (v *noteViewer) bindLoader(ctx SurfaceContext, ref contentlink.Ref) {
+	if v.view == nil {
+		return
+	}
+	if v.source == nil {
+		v.view.SetLoader(nil)
+		return
+	}
+	src := v.source
+	v.view.SetLoader(func(_, noteID string, epoch uint64, ifRevision string) tea.Cmd {
+		req := ref
+		req.Value = noteID
+		return noteLoadCmd(src, ctx, req, ifRevision, epoch)
+	})
+}
+
 func (v *noteViewer) load(ctx SurfaceContext, ref contentlink.Ref, id int) tea.Cmd {
+	v.bindLoader(ctx, ref)
 	return v.view.Load(id, ctx.Root, ref.Value, ctx.Epoch)
 }
 func (v *noteViewer) reload(ctx SurfaceContext, ref contentlink.Ref, id int) tea.Cmd {
 	return v.load(ctx, ref, id)
 }
 func (v *noteViewer) arm(ctx SurfaceContext, ref contentlink.Ref, id int, state TabState) {
+	v.bindLoader(ctx, ref)
 	v.view.Arm(id, ref.Value, ctx.Epoch)
 	v.view.SetPendingScroll(state.Scroll)
 }
 func (v *noteViewer) focus(ctx SurfaceContext, ref contentlink.Ref, id int) tea.Cmd {
+	v.bindLoader(ctx, ref)
 	if v.view.NeedsLoad() {
 		return v.load(ctx, ref, id)
 	}
@@ -257,7 +332,10 @@ func (v *noteViewer) snapshot(ref contentlink.Ref) TabState {
 	return TabState{Ref: ref, Scroll: v.view.ScrollOffset()}
 }
 
-type diffViewer struct{ view *workspacediff.View }
+type diffViewer struct {
+	view   *workspacediff.View
+	source Source
+}
 
 func (v *diffViewer) model() any { return v.view }
 func diffRoot(ctx SurfaceContext) string {
@@ -265,6 +343,16 @@ func diffRoot(ctx SurfaceContext) string {
 		return ctx.DiffRoot
 	}
 	return ctx.Root
+}
+func (v *diffViewer) bindLoader(ctx SurfaceContext) {
+	if v.view == nil {
+		return
+	}
+	if v.source == nil {
+		v.view.Loader = nil
+		return
+	}
+	v.view.Loader = sourceDiffLoader{src: v.source, ctx: ctx}
 }
 func (v *diffViewer) load(ctx SurfaceContext, ref contentlink.Ref, id int) tea.Cmd {
 	target, ok := workspacediff.ParseSpec(ref.Value)
@@ -280,11 +368,12 @@ func (v *diffViewer) load(ctx SurfaceContext, ref contentlink.Ref, id int) tea.C
 		surface = ctx.Surface
 	}
 	root := diffRoot(ctx)
+	v.bindLoader(ctx)
 	v.view.BindGeneration(root, surface, ctx.Epoch, uint64(id))
 	v.view.State = workspacediff.LoadStateLoading
 	switch target.Kind {
 	case workspacediff.TargetWorkingTree:
-		return workspacediff.LoadSnapshotCmdBound(root, ctx.BaseRef, surface, ctx.Epoch, target.Identity(), uint64(id))
+		return v.view.LoadSnapshotCmd(ctx.BaseRef, false)
 	case workspacediff.TargetRange:
 		return v.view.LoadRange()
 	case workspacediff.TargetCommit:
@@ -298,6 +387,7 @@ func (v *diffViewer) reload(ctx SurfaceContext, ref contentlink.Ref, id int) tea
 }
 func (v *diffViewer) arm(ctx SurfaceContext, ref contentlink.Ref, id int, state TabState) {
 	target, _ := workspacediff.ParseSpec(ref.Value)
+	v.bindLoader(ctx)
 	v.view.Target = target
 	surface := ctx.DiffSurface
 	if surface == "" {
@@ -348,6 +438,11 @@ func (v *diffViewer) apply(ctx SurfaceContext, msg any) (tea.Cmd, bool) {
 			return nil, false
 		}
 		return v.view.ApplyCommitFileDiff(m), true
+	case workspacediff.WorkingTreeFileMsg:
+		if !accepts(m.Epoch, m.WorkspaceID, m.Identity) {
+			return nil, false
+		}
+		return v.view.ApplyWorkingTreeFile(m), true
 	default:
 		return nil, false
 	}

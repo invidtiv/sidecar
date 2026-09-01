@@ -175,7 +175,7 @@ func IsSharedDiffMessage(msg tea.Msg) bool {
 		return true
 	}
 	switch msg.(type) {
-	case workspacediff.SnapshotMsg, workspacediff.CommitDetailMsg,
+	case workspacediff.SnapshotMsg, workspacediff.CommitDetailMsg, workspacediff.WorkingTreeFileMsg,
 		workspacediff.RangeMsg, workspacediff.CommitFileDiffMsg:
 		return true
 	default:
@@ -273,6 +273,9 @@ type Model struct {
 	hostConfigured map[string]hosts.Host
 	hostHealth     map[string]hosts.Health
 	hostProjects   map[string][]Project
+	// contentSource, when set, is the Document adapter for remote rows. Tests
+	// inject a fake; production leaves it nil and documentSource builds one.
+	contentSource contentpanes.Source
 
 	// docFinderCaches holds one file list per pane root, so the file finder a
 	// document pane opens walks a tree once rather than once per ctrl+p.
@@ -284,6 +287,11 @@ type Model struct {
 	// instead of spinning. The app supplies both once a provider reports ready.
 	resourceMatchers []terminallink.ResourceMatcher
 	resolveResource  resourceview.Resolver
+	// remoteMatchers is the host-scoped describe cache. Local rows never
+	// read it; remote rows never read resourceMatchers.
+	remoteMatchers remoteMatcherCache
+	// remoteResources is the viewer-side remote resource document cache.
+	remoteResources remoteResourceCache
 
 	// Working/blocked markers breathe on their own clock, independent of the
 	// refresh poll. The generation lets a tick in flight be discarded.
@@ -743,6 +751,15 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 	if pulse := m.pulseCmd(); pulse != nil {
 		cmds = append(cmds, pulse)
 	}
+	if tick := m.remoteDocumentRefreshCmd(); tick != nil {
+		cmds = append(cmds, tick)
+	}
+	if tick := m.remoteResourceDescribeCmd(); tick != nil {
+		cmds = append(cmds, tick)
+	}
+	if describe := m.ensureRemoteResourceDescribe(); describe != nil {
+		cmds = append(cmds, describe)
+	}
 	if len(cmds) == 1 {
 		return cmd
 	}
@@ -897,6 +914,8 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 	case workspacediff.CommitFileDiffMsg:
 		cmd := m.diff.ApplyCommitFileDiff(msg)
 		return tea.Batch(cmd, m.applyPreviewDiffFile(msg))
+	case workspacediff.WorkingTreeFileMsg:
+		return m.applyPreviewDiffWorkingTreeFile(msg)
 	case renameShellDoneMsg:
 		m.applyRenameShell(msg)
 		return nil

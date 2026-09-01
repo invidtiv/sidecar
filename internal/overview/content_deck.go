@@ -1,12 +1,16 @@
 package overview
 
 import (
+	"context"
+	"errors"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/contentpanes"
+	"github.com/marcus/sidecar/internal/contentservice"
 	"github.com/marcus/sidecar/internal/docview"
+	"github.com/marcus/sidecar/internal/hosts"
 	"github.com/marcus/sidecar/internal/issueview"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/noteview"
@@ -14,38 +18,129 @@ import (
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/workspacediff"
+	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
 func (m *Model) previewDeckContext() (contentpanes.SurfaceContext, bool) {
 	workspace, ok := m.SelectedWorkspace()
-	// A remote workspace's Path names a directory on ANOTHER machine. Handing
-	// it to the content panes would run git, walk the file tree and read files
-	// here — and on a machine that has the same checkout, that succeeds, and
-	// shows this machine's diff labelled as the remote one's. Refusing is the
-	// only honest answer until Phase C can serve those reads over the host
-	// protocol.
-	if ok && workspace.Remote() {
-		return contentpanes.SurfaceContext{}, false
-	}
 	if !ok || workspace.ID == "" || workspace.Path == "" {
 		return contentpanes.SurfaceContext{}, false
 	}
+	// A remote Path names a directory on another machine. Documents, issues,
+	// notes, diffs, and resources are admitted only while the host still
+	// Shows(); disconnected/disabled/unavailable stay closed.
+	if workspace.Remote() && !m.hostShows(workspace.HostID) {
+		return contentpanes.SurfaceContext{}, false
+	}
+	return m.previewSurfaceContext(workspace), true
+}
+
+func (m *Model) previewSurfaceContext(workspace workspaceinventory.Workspace) contentpanes.SurfaceContext {
 	return contentpanes.SurfaceContext{
 		Root: workspace.Path, DiffRoot: previewDiffPath(workspace), Surface: workspace.ID, Epoch: m.preview.contentEpoch,
-	}, true
+		Source: sourceContextFromWorkspace(workspace, m.hostIncarnationFor(workspace.HostID)),
+	}
+}
+
+func (m *Model) hostShows(hostID string) bool {
+	if hostID == "" {
+		return true
+	}
+	health, ok := m.hostHealth[hostID]
+	return ok && health.State.Shows()
+}
+
+func (m *Model) documentSource(ctx contentpanes.SurfaceContext) contentpanes.Source {
+	if !ctx.Source.Remote() {
+		return contentpanes.LocalSource{}
+	}
+	if m.contentSource != nil {
+		return m.contentSource
+	}
+	hostID := ctx.Source.HostID
+	return contentpanes.NewRemoteSource(hostID, m.hostVerbs(hostID), func(c context.Context, id string, args []string, out any) error {
+		return runRemoteSidecar(c, m.hostRegistry, id, args, out)
+	})
+}
+
+func remoteContentErrorCmd(err error) tea.Cmd {
+	if err == nil {
+		return nil
+	}
+	var missing *contentservice.MissingCapabilityError
+	if errors.As(err, &missing) {
+		return appmsg.ShowToast(missing.Error(), 4*time.Second)
+	}
+	return appmsg.ShowToast(err.Error(), 4*time.Second)
+}
+
+func remoteDocumentUnsupported(hostID, action string) tea.Cmd {
+	if hostID == "" {
+		hostID = "that host"
+	}
+	return appmsg.ShowToast(action+" isn't available for files on "+hostID, 3*time.Second)
+}
+
+func remoteIssueUnsupported(hostID, action string) tea.Cmd {
+	if hostID == "" {
+		hostID = "that host"
+	}
+	return appmsg.ShowToast(action+" isn't available for issues on "+hostID, 3*time.Second)
+}
+
+func remoteContentKindAdmitted(ref contentlink.Ref) bool {
+	switch ref.Kind {
+	case contentlink.KindFile, contentlink.KindIssue, contentlink.KindDiff, contentlink.KindResource:
+		return true
+	case contentlink.KindInternal:
+		return ref.Namespace == "note"
+	default:
+		return false
+	}
+}
+
+func sourceContextFromWorkspace(ws workspaceinventory.Workspace, incarnation uint64) contentpanes.SourceContext {
+	src := contentpanes.SourceContext{
+		HostID:          ws.HostID,
+		HostIncarnation: incarnation,
+		ProjectKey:      ws.ProjectKey,
+		ProjectRoot:     ws.ProjectRoot,
+		WorkspaceID:     ws.ID,
+		WorkspaceKind:   ws.Kind,
+		WorkspaceKey:    ws.Key,
+		Root:            ws.Path,
+	}
+	if ws.HostID != "" {
+		if _, rest, ok := hosts.SplitScopedKey(ws.ID); ok {
+			src.WorkspaceID = rest
+		}
+		if _, rest, ok := hosts.SplitScopedKey(ws.ProjectKey); ok {
+			src.ProjectKey = rest
+		}
+	}
+	return src
 }
 
 func (m *Model) previewDeckConfig(ctx contentpanes.SurfaceContext) contentpanes.Config {
 	return contentpanes.Config{
+		Source:           m.documentSource(ctx),
 		ResourceResolver: m.previewResourceResolver(ctx.Surface, ctx.Epoch),
 		ConfigureViewer: func(kind panelayout.Kind, model any) {
 			switch view := model.(type) {
 			case *issueview.Model:
 				view.OpenHandler = func(id string) tea.Cmd { return m.openPreviewIssue(id) }
-				view.OpenInTDHandler = func(id string) tea.Cmd { return func() tea.Msg { return OpenIssueInTDMsg{IssueID: id} } }
-				// Same cross-project fallback as the other two hosts: the app-level
-				// config, read inside the fetch command.
-				view.FallbackRefs = m.issueFallbackRefs
+				if ctx.Source.Remote() {
+					hostID := ctx.Source.HostID
+					view.OpenInTDHandler = func(string) tea.Cmd {
+						return remoteIssueUnsupported(hostID, "Open in td")
+					}
+					view.FallbackRefs = nil
+				} else {
+					view.OpenInTDHandler = func(id string) tea.Cmd { return func() tea.Msg { return OpenIssueInTDMsg{IssueID: id} } }
+					// Same cross-project fallback as the other two hosts: the app-level
+					// config, read inside the fetch command.
+					view.FallbackRefs = m.issueFallbackRefs
+				}
 			case *workspacediff.View:
 				view.ViewMode = m.diff.ViewMode
 				if w := state.GetDiffTabFileListWidth(); w > 0 {
@@ -87,6 +182,13 @@ func (m *Model) previewDeckPlacement() (contentpanes.Placement, bool) {
 }
 
 func (m *Model) openPreviewContent(ref contentlink.Ref, name string) tea.Cmd {
+	ctx, ok := m.previewDeckContext()
+	if !ok {
+		return nil
+	}
+	if ctx.Source.Remote() && !remoteContentKindAdmitted(ref) {
+		return nil
+	}
 	deck, ctx, adopt, ok := m.ensurePreviewDeck()
 	if !ok {
 		return nil

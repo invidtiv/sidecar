@@ -54,6 +54,10 @@ type View struct {
 	Binding     uint64
 	WorkspaceID string
 	WorkDir     string
+	Revision    string
+
+	// Loader issues git operations. Nil uses local git in this process.
+	Loader Loader
 
 	width     int
 	height    int
@@ -145,7 +149,11 @@ func (v *View) ApplySnapshot() {
 		// Aggregate is rendered as two labelled raw sections.
 	default:
 		v.Content, v.Raw = v.Snapshot.WorkingTree, v.Snapshot.WorkingTree
-		v.Files = ParseFiles(v.Raw)
+		if len(v.Snapshot.Files) > 0 {
+			v.Files = append([]File(nil), v.Snapshot.Files...)
+		} else {
+			v.Files = ParseFiles(v.Raw)
+		}
 		v.Commits = append([]CommitInfo(nil), v.Snapshot.Commits...)
 	}
 	v.ClampScroll()
@@ -222,11 +230,12 @@ func (v *View) loadCommit(workdir, workspaceID, hash string) tea.Cmd {
 	}
 	epoch, binding, id, ident := v.Epoch, v.Binding, v.WorkspaceID, v.Target.Identity()
 	wd := v.WorkDir
+	loader := v.git()
 	return func() tea.Msg {
-		detail, err := LoadCommitDetail(context.Background(), wd, hash)
+		result, err := loader.LoadCommitDetail(context.Background(), wd, hash, "")
 		return CommitDetailMsg{
 			Epoch: epoch, Binding: binding, WorkspaceID: id, Identity: ident,
-			Hash: hash, Commit: detail, Err: err,
+			Hash: hash, Commit: result.Commit, Err: err, Revision: result.Revision, NotModified: result.NotModified,
 		}
 	}
 }
@@ -240,6 +249,8 @@ type CommitDetailMsg struct {
 	Hash        string
 	Commit      *CommitDetail
 	Err         error
+	Revision    string
+	NotModified bool
 }
 
 // ApplyCommitDetail installs a loaded commit if it is still the row under
@@ -324,7 +335,9 @@ type SnapshotMsg struct {
 	// Refresh marks a snapshot produced by View.Refresh rather than an explicit
 	// load: it preserves the selected file and scroll offset, and is discarded
 	// when the repository state came back unchanged. See live.go.
-	Refresh bool
+	Refresh     bool
+	Revision    string
+	NotModified bool
 }
 
 // LoadSnapshotCmd loads a snapshot for workdir and tags it with workspaceID.
@@ -339,16 +352,37 @@ func LoadSnapshotCmdAt(workdir, baseRef, workspaceID string, epoch uint64, ident
 
 // LoadSnapshotCmdBound is LoadSnapshotCmdAt with a per-view request identity.
 func LoadSnapshotCmdBound(workdir, baseRef, workspaceID string, epoch uint64, identity string, binding uint64) tea.Cmd {
+	return loadSnapshotCmdBound(nil, workdir, baseRef, workspaceID, epoch, identity, binding, false, "")
+}
+
+// LoadSnapshotCmd is this view's working-tree load, using Loader when set.
+func (v *View) LoadSnapshotCmd(baseRef string, refresh bool) tea.Cmd {
+	ifRevision := ""
+	if refresh {
+		ifRevision = v.Revision
+	}
+	return loadSnapshotCmdBound(v.git(), v.WorkDir, baseRef, v.WorkspaceID, v.Epoch, v.Target.Identity(), v.Binding, refresh, ifRevision)
+}
+
+func loadSnapshotCmdBound(loader Loader, workdir, baseRef, workspaceID string, epoch uint64, identity string, binding uint64, refresh bool, ifRevision string) tea.Cmd {
 	if identity == "" {
 		identity = IdentityWorkingTree
 	}
+	if loader == nil {
+		loader = localLoader{}
+	}
 	return func() tea.Msg {
-		snapshot, err := LoadSnapshot(context.Background(), workdir, baseRef)
+		result, err := loader.LoadSnapshot(context.Background(), workdir, baseRef, ifRevision)
 		if err != nil {
 			return SnapshotMsg{Epoch: epoch, Binding: binding, WorkspaceID: workspaceID, Identity: identity, Err: err,
-				Command: "git diff HEAD / git log <base>..HEAD / git diff <merge-base>..HEAD", BaseRef: baseRef}
+				Command: "git diff HEAD / git log <base>..HEAD / git diff <merge-base>..HEAD", BaseRef: baseRef,
+				Refresh: refresh, Revision: result.Revision}
 		}
-		return SnapshotMsg{Epoch: epoch, Binding: binding, WorkspaceID: workspaceID, Identity: identity, Snapshot: snapshot, BaseRef: baseRef}
+		return SnapshotMsg{
+			Epoch: epoch, Binding: binding, WorkspaceID: workspaceID, Identity: identity,
+			Snapshot: result.Snapshot, BaseRef: baseRef, Refresh: refresh,
+			Revision: result.Revision, NotModified: result.NotModified,
+		}
 	}
 }
 
@@ -358,6 +392,15 @@ func (v *View) ApplySnapshotMsg(msg SnapshotMsg, workdir, workspaceID string) te
 		return nil
 	}
 	if !v.accepts(msg.Epoch, msg.Binding, msg.WorkspaceID, msg.Identity) {
+		return nil
+	}
+	if msg.NotModified {
+		if msg.Revision != "" {
+			v.Revision = msg.Revision
+		}
+		if msg.Refresh {
+			_, _ = v.applyRefresh(msg, workdir, workspaceID)
+		}
 		return nil
 	}
 	if msg.Refresh {
@@ -371,6 +414,9 @@ func (v *View) ApplySnapshotMsg(msg SnapshotMsg, workdir, workspaceID string) te
 		v.Content, v.Raw = "", ""
 		v.Files, v.Commits = nil, nil
 		return nil
+	}
+	if msg.Revision != "" {
+		v.Revision = msg.Revision
 	}
 	return v.ApplyLoadedSnapshot(msg.Snapshot, workdir, workspaceID)
 }
@@ -389,7 +435,7 @@ func (v *View) ApplyLoadedSnapshot(snapshot *Snapshot, workdir, workspaceID stri
 	v.live.Reset()
 	v.live.Adopt(fingerprintSnapshot(snapshot))
 	v.ApplySnapshot()
-	return v.LoadSelectedCommit(workdir, workspaceID)
+	return tea.Batch(v.LoadSelectedCommit(workdir, workspaceID), v.LoadSelectedWorkingTreeFile())
 }
 
 // RangeMsg is the result of LoadRange for one A..B / A...B tab.
@@ -401,6 +447,8 @@ type RangeMsg struct {
 	Raw         string
 	Files       []File
 	Err         error
+	Revision    string
+	NotModified bool
 }
 
 // LoadRange fetches git diff --binary A..B or A...B for this tab.
@@ -408,35 +456,41 @@ func (v *View) LoadRange() tea.Cmd {
 	if v.Target.Kind != TargetRange || v.Target.A == "" || v.Target.B == "" {
 		return nil
 	}
-	return loadRangeCmdBound(v.WorkDir, v.Target, v.Epoch, v.WorkspaceID, v.Binding)
+	return loadRangeCmdBound(v.git(), v.WorkDir, v.Target, v.Epoch, v.WorkspaceID, v.Binding)
 }
 
 // LoadRangeCmd runs one git diff for a range target.
 func LoadRangeCmd(workdir string, t Target, epoch uint64, workspaceID string) tea.Cmd {
-	return loadRangeCmdBound(workdir, t, epoch, workspaceID, 0)
+	return loadRangeCmdBound(localLoader{}, workdir, t, epoch, workspaceID, 0)
 }
 
-func loadRangeCmdBound(workdir string, t Target, epoch uint64, workspaceID string, binding uint64) tea.Cmd {
+func loadRangeCmdBound(loader Loader, workdir string, t Target, epoch uint64, workspaceID string, binding uint64) tea.Cmd {
 	if t.Kind != TargetRange || t.A == "" || t.B == "" {
 		return nil
+	}
+	if loader == nil {
+		loader = localLoader{}
+	}
+	ident := t.Identity()
+	return func() tea.Msg {
+		result, err := loader.LoadRange(context.Background(), workdir, t, "")
+		if err != nil {
+			return RangeMsg{Epoch: epoch, Binding: binding, WorkspaceID: workspaceID, Identity: ident, Err: err}
+		}
+		return RangeMsg{Epoch: epoch, Binding: binding, WorkspaceID: workspaceID, Identity: ident, Raw: result.Raw, Files: result.Files, Revision: result.Revision, NotModified: result.NotModified}
+	}
+}
+
+// LoadRangeDiff runs git diff --binary for a range target.
+func LoadRangeDiff(ctx context.Context, workdir string, t Target) (string, error) {
+	if t.Kind != TargetRange || t.A == "" || t.B == "" {
+		return "", errors.New("not a range target")
 	}
 	dots := t.Dots
 	if dots != "..." {
 		dots = ".."
 	}
-	spec := t.A + dots + t.B
-	ident := t.Identity()
-	return func() tea.Msg {
-		raw, err := loadRangeDiff(context.Background(), workdir, spec)
-		if err != nil {
-			return RangeMsg{Epoch: epoch, Binding: binding, WorkspaceID: workspaceID, Identity: ident, Err: err}
-		}
-		return RangeMsg{Epoch: epoch, Binding: binding, WorkspaceID: workspaceID, Identity: ident, Raw: raw, Files: ParseFiles(raw)}
-	}
-}
-
-func loadRangeDiff(ctx context.Context, workdir, spec string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", "diff", "--binary", spec)
+	cmd := exec.CommandContext(ctx, "git", "diff", "--binary", t.A+dots+t.B)
 	cmd.Dir = workdir
 	out, err := cmd.Output()
 	if err != nil {
@@ -455,6 +509,15 @@ func (v *View) ApplyRangeMsg(msg RangeMsg) tea.Cmd {
 	}
 	if !v.accepts(msg.Epoch, msg.Binding, msg.WorkspaceID, msg.Identity) {
 		return nil
+	}
+	if msg.NotModified {
+		if msg.Revision != "" {
+			v.Revision = msg.Revision
+		}
+		return nil
+	}
+	if msg.Revision != "" {
+		v.Revision = msg.Revision
 	}
 	if msg.Err != nil {
 		v.State = LoadStateError
@@ -585,10 +648,11 @@ func (v *View) OnCursorChanged(oldCursor int) tea.Cmd {
 	v.ClampScroll()
 	if v.Cursor < v.FileCount() {
 		v.CommitDetail = nil
+		load := v.LoadSelectedWorkingTreeFile()
 		if v.ViewMode == ViewFullFile && v.LoadFullFile != nil {
-			return v.LoadFullFile()
+			return tea.Batch(load, v.LoadFullFile())
 		}
-		return nil
+		return load
 	}
 	return v.LoadSelectedCommit(v.WorkDir, v.WorkspaceID)
 }
@@ -692,8 +756,10 @@ func (v *View) LoadSelectedCommitFile() tea.Cmd {
 	}
 	hash := v.CommitDetail.Hash
 	workdir, epoch, binding, id, ident := v.WorkDir, v.Epoch, v.Binding, v.WorkspaceID, v.Target.Identity()
+	loader := v.git()
 	return func() tea.Msg {
-		raw, err := loadCommitFileDiff(workdir, hash, file.Path, parentHash)
+		result, err := loader.LoadCommitFile(context.Background(), workdir, hash, file.Path, parentHash, "")
+		raw := result.Raw
 		return CommitFileDiffMsg{
 			Epoch: epoch, Binding: binding, WorkspaceID: id, Identity: ident,
 			CommitHash: hash, FilePath: file.Path, Raw: raw, Err: err,
@@ -701,18 +767,75 @@ func (v *View) LoadSelectedCommitFile() tea.Cmd {
 	}
 }
 
-func loadCommitFileDiff(workdir, hash, path, parentHash string) (string, error) {
+// LoadCommitFileDiff loads one path's patch from a commit, diffing against
+// parentHash for merges so combined diffs do not come back empty.
+func LoadCommitFileDiff(ctx context.Context, workdir, hash, path, parentHash string) (string, error) {
 	args := []string{"show", hash, "--", path}
 	if parentHash != "" {
 		args = []string{"diff", parentHash, hash, "--", path}
 	}
-	cmd := exec.Command("git", args...)
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = workdir
 	out, err := cmd.Output()
 	if err != nil {
 		return "", err
 	}
 	return string(out), nil
+}
+
+// WorkingTreeFileMsg is a cursor-driven working-tree file patch load.
+type WorkingTreeFileMsg struct {
+	Epoch       uint64
+	Binding     uint64
+	WorkspaceID string
+	Identity    string
+	Path        string
+	Raw         string
+	Err         error
+}
+
+// LoadSelectedWorkingTreeFile loads a working-tree file whose patch was omitted.
+func (v *View) LoadSelectedWorkingTreeFile() tea.Cmd {
+	if v.Target.Kind != TargetWorkingTree || v.Loader == nil {
+		return nil
+	}
+	if v.Cursor < 0 || v.Cursor >= len(v.Files) {
+		return nil
+	}
+	file := v.Files[v.Cursor]
+	if file.Path == "" || file.Raw != "" {
+		return nil
+	}
+	workdir, epoch, binding, id, ident := v.WorkDir, v.Epoch, v.Binding, v.WorkspaceID, v.Target.Identity()
+	loader := v.git()
+	path := file.Path
+	return func() tea.Msg {
+		result, err := loader.LoadWorkingTreeFile(context.Background(), workdir, path, "")
+		return WorkingTreeFileMsg{
+			Epoch: epoch, Binding: binding, WorkspaceID: id, Identity: ident,
+			Path: path, Raw: result.Raw, Err: err,
+		}
+	}
+}
+
+// ApplyWorkingTreeFile installs a working-tree file patch if the cursor still matches.
+func (v *View) ApplyWorkingTreeFile(msg WorkingTreeFileMsg) tea.Cmd {
+	if !v.accepts(msg.Epoch, msg.Binding, msg.WorkspaceID, msg.Identity) {
+		return nil
+	}
+	if msg.Err != nil || msg.Path == "" {
+		return nil
+	}
+	for i := range v.Files {
+		if v.Files[i].Path == msg.Path {
+			v.Files[i].Raw = msg.Raw
+			adds, dels := countDiffStats(msg.Raw)
+			v.Files[i].Additions = adds
+			v.Files[i].Deletions = dels
+			break
+		}
+	}
+	return nil
 }
 
 // ContentMaxScroll returns the exact vertical bound for the content currently

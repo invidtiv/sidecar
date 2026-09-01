@@ -3,6 +3,7 @@ package workspacediff
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -82,6 +83,44 @@ func LoadSnapshotPinned(ctx context.Context, workdir, baseRef, baseOID, headOID 
 		BaseRef: baseRef, MergeBase: mergeBase, UntrackedShown: meta.Shown,
 		UntrackedOmitted: meta.Omitted, UntrackedBytesOmitted: meta.BytesOmitted,
 		Truncated: meta.Truncated}, nil
+}
+
+// LoadWorkingTreeFileDiff loads one working-tree path's patch: tracked diff
+// against HEAD, or an untracked-file synthetic diff.
+func LoadWorkingTreeFileDiff(ctx context.Context, workdir, path string) (string, error) {
+	if path == "" {
+		return "", fmt.Errorf("path is required")
+	}
+	tracked, err := gitDiffPath(ctx, workdir, path)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(tracked) != "" {
+		return tracked, nil
+	}
+	full := filepath.Join(workdir, filepath.FromSlash(path))
+	info, err := os.Lstat(full)
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("untracked path is not a regular file: %s", path)
+	}
+	diff, _, err := untrackedFileDiffBounded(workdir, path)
+	return diff, err
+}
+
+func gitDiffPath(ctx context.Context, dir, path string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", "diff", "--binary", "HEAD", "--", path)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) || exit.ExitCode() != 1 {
+			return "", fmt.Errorf("git diff HEAD -- %s: %w", path, err)
+		}
+	}
+	return string(out), nil
 }
 
 func gitOutputBytes(ctx context.Context, dir string, args ...string) ([]byte, error) {

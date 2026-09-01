@@ -112,37 +112,45 @@ func previewModel(t *testing.T) (*Model, *captureRecorder) {
 }
 
 type previewTestLinkResolver struct {
+	m    *Model
 	diff func(string, string) (string, bool)
 }
 
-func (r previewTestLinkResolver) Resolve(root string, candidate contentlink.Pending) (contentlink.Ref, bool) {
-	switch candidate.Kind {
+func (r previewTestLinkResolver) Resolve(req termpreview.LinkResolveRequest) (contentlink.Ref, bool) {
+	if req.HostID != "" {
+		if r.m == nil {
+			return contentlink.Ref{}, false
+		}
+		return r.m.ResolveRemoteTerminalLink(req.HostID, req.Root, req.Candidate)
+	}
+	switch req.Candidate.Kind {
 	case contentlink.KindFile:
-		display, _, ok := terminallink.ResolveFileFromCanonicalBase(root, candidate.Raw)
-		return contentlink.Ref{Kind: candidate.Kind, Value: display}, ok
+		display, _, ok := terminallink.ResolveFileFromCanonicalBase(req.Root, req.Candidate.Raw)
+		return contentlink.Ref{Kind: req.Candidate.Kind, Value: display}, ok
 	case contentlink.KindDiff:
 		if r.diff != nil {
-			value, ok := r.diff(root, candidate.Raw)
-			return contentlink.Ref{Kind: candidate.Kind, Value: value}, ok
+			value, ok := r.diff(req.Root, req.Candidate.Raw)
+			return contentlink.Ref{Kind: req.Candidate.Kind, Value: value}, ok
 		}
-		value, _, ok := terminallink.ResolveGitSpec(root, candidate.Raw)
-		return contentlink.Ref{Kind: candidate.Kind, Value: value}, ok
+		value, _, ok := terminallink.ResolveGitSpec(req.Root, req.Candidate.Raw)
+		return contentlink.Ref{Kind: req.Candidate.Kind, Value: value}, ok
 	default:
 		return contentlink.Ref{}, false
 	}
 }
 
 func installPreviewTestTerminalLinks(m *Model, diff func(string, string) (string, bool)) {
-	m.SetTerminalLinkCoordinator(termpreview.NewLinkCoordinator(previewTestLinkResolver{diff: diff}))
+	m.SetTerminalLinkCoordinator(termpreview.NewLinkCoordinator(previewTestLinkResolver{m: m, diff: diff}))
 }
 
 func preparedPreviewLineForTest(t *testing.T, m *Model, line string) termpreview.LinkState {
 	t.Helper()
-	root := m.canonicalTerminalLinkRoot(m.previewResolveRoot())
-	allowed := m.terminalAllowedLinkKinds()
+	scope, allowed, ok := m.previewTerminalLinkScope("test")
+	if !ok {
+		t.Fatal("no terminal link scope")
+	}
 	input := termpreview.LinkPrepare{
-		Scope: termpreview.LinkScope{Host: "overview", Surface: m.preview.workspaceID, Target: "test", Root: root, Buffer: m.previewBuffer(), AllowedKinds: termpreview.AllowedKindsKey(allowed), MatcherGeneration: m.linkMatcherGeneration},
-		Rows:  []termpreview.LinkRow{{AbsoluteLine: 0, Text: line}}, Allowed: allowed, Matchers: m.resourceMatchers,
+		Scope: scope, Rows: []termpreview.LinkRow{{AbsoluteLine: 0, Text: line}}, Allowed: allowed, Matchers: m.previewResourceMatchers(),
 	}
 	state := m.terminalLinks.Prepare(input)
 	deliverPreviewLinkResults(t, m, m.terminalLinks.TakeCmd())

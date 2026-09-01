@@ -284,7 +284,7 @@ func (h overviewLayoutHost) CommitMove(plan panelayout.MovePlan) (string, tea.Cm
 	return h.m.commitLayoutMove(plan)
 }
 func (h overviewLayoutHost) ResolveTargets(kind panelayout.Kind, spec uirequest.LayoutPane) ([]uirequest.Target, string) {
-	return layoutapply.ResolveTargets(kind, spec, h.root, h.m.resourceMatchers)
+	return layoutapply.ResolveTargets(kind, spec, h.root, h.m.previewResourceMatchers())
 }
 func (h overviewLayoutHost) CommitPassive(targets []uirequest.Target, plan panelayout.OpenPlan) (string, string, tea.Cmd) {
 	if len(targets) == 0 {
@@ -371,17 +371,12 @@ func (m *Model) restoreSpecPreviewLayout(layout *state.PaneLayoutJSON) tea.Cmd {
 	if !ok {
 		return nil
 	}
-	// A remote workspace's Path is a directory on another machine; restoring
-	// content panes against it would read this machine's files under the
-	// remote row's name. See previewDeckContext.
-	if ws.Remote() {
+	if ws.Remote() && !m.hostShows(ws.HostID) {
 		return nil
 	}
 	m.preview.contentEpoch++
-	ctx := contentpanes.SurfaceContext{
-		Root: ws.Path, DiffRoot: previewDiffPath(ws), Surface: ws.ID, Epoch: m.preview.contentEpoch,
-	}
-	st, live := panecodec.Decode(layout, panecodec.Options{AcceptTab: m.acceptRestoredPreviewTab(ws.Path)})
+	ctx := m.previewSurfaceContext(ws)
+	st, live := panecodec.Decode(layout, panecodec.Options{AcceptTab: m.acceptRestoredPreviewTab(ws)})
 	if previewLiveKindCount(live, panecodec.KindTerminal) != 1 {
 		m.resetActivePreviewPanes()
 		return nil

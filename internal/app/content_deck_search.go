@@ -189,7 +189,9 @@ func (m *Model) applyAppContentSearchOutcome(h *appContentDeck, out panesearch.O
 		return wrapper
 	case out.Open && out.Path != "":
 		h.closeAppContentSearch()
-		ctx := contentpanes.SurfaceContext{Root: h.workdir, DiffRoot: h.workdir, Surface: h.pluginID, Epoch: h.deck.Context().Epoch}
+		ctx := h.deck.Context()
+		ctx.Root, ctx.DiffRoot, ctx.Surface = h.workdir, h.workdir, h.pluginID
+		ctx.Source.Root = h.workdir
 		ref := contentlink.Ref{Kind: contentlink.KindFile, Value: out.Path, Line: out.Line}
 		var opened contentpanes.Outcome
 		if out.NewTab {

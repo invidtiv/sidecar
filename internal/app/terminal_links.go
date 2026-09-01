@@ -11,20 +11,28 @@ import (
 
 // terminalLinkResolver is the app-owned filesystem/Git adapter. Hosts supply
 // their bounded canonical surface roots, so a visible batch does not
-// EvalSymlinks the same base once per candidate.
+// EvalSymlinks the same base once per candidate. Remote KindFile pending
+// work is delegated; it must not ResolveFile the viewer's twin path.
 type terminalLinkResolver struct {
+	remoteFile func(hostID, root string, candidate contentlink.Pending) (contentlink.Ref, bool)
 }
 
-func newTerminalLinkCoordinator() termpreview.LinkCoordinator {
-	resolver := &terminalLinkResolver{}
+func newTerminalLinkCoordinator(remoteFile func(hostID, root string, candidate contentlink.Pending) (contentlink.Ref, bool)) termpreview.LinkCoordinator {
+	resolver := &terminalLinkResolver{remoteFile: remoteFile}
 	return termpreview.NewLinkCoordinator(resolver)
 }
 
-func (r *terminalLinkResolver) Resolve(root string, candidate contentlink.Pending) (contentlink.Ref, bool) {
-	return r.resolveCanonical(filepath.Clean(root), candidate)
+func (r *terminalLinkResolver) Resolve(req termpreview.LinkResolveRequest) (contentlink.Ref, bool) {
+	if req.HostID != "" {
+		return r.resolveRemote(req.HostID, req.Root, req.Candidate)
+	}
+	return r.resolveCanonical(filepath.Clean(req.Root), req.Candidate)
 }
 
 func (r *terminalLinkResolver) ResolveFresh(request termpreview.FreshLinkRequest) (contentlink.Ref, bool) {
+	if request.HostID != "" {
+		return r.resolveRemote(request.HostID, request.Root, request.Candidate)
+	}
 	raw := request.RawRoot
 	if raw == "" {
 		raw = request.Root
@@ -34,6 +42,13 @@ func (r *terminalLinkResolver) ResolveFresh(request termpreview.FreshLinkRequest
 		return contentlink.Ref{}, false
 	}
 	return r.resolveCanonical(filepath.Clean(canonical), request.Candidate)
+}
+
+func (r *terminalLinkResolver) resolveRemote(hostID, root string, candidate contentlink.Pending) (contentlink.Ref, bool) {
+	if r == nil || r.remoteFile == nil || (candidate.Kind != contentlink.KindFile && candidate.Kind != contentlink.KindDiff) {
+		return contentlink.Ref{}, false
+	}
+	return r.remoteFile(hostID, root, candidate)
 }
 
 func (r *terminalLinkResolver) resolveCanonical(root string, candidate contentlink.Pending) (contentlink.Ref, bool) {

@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	tea "charm.land/bubbletea/v2"
 )
 
 // td-312e4e: the issue card must follow the store instead of snapshotting it,
@@ -119,6 +121,67 @@ func TestRefreshSeesAStatusTransition(t *testing.T) {
 // The "refreshing flash": an unchanged re-read must not reach the view. The td
 // store's mtime moves whenever any issue anywhere changes, so an open card sees
 // signals constantly that have nothing to do with it.
+func TestNotModifiedRefreshDoesNotReplaceContent(t *testing.T) {
+	m := loadedCard(t, epic("a"))
+	m.SetLoader(func(string, string, uint64, string) tea.Cmd {
+		return func() tea.Msg {
+			return NotModified{IssueID: m.issueID, Epoch: m.epoch, Revision: "r2"}
+		}
+	})
+	m.Observe()
+	cmd := m.Refresh(false)
+	if cmd == nil {
+		t.Fatal("Refresh() = nil after Observe")
+	}
+	msg, ok := cmd().(LoadedMsg)
+	if !ok {
+		t.Fatalf("Refresh returned %T", cmd())
+	}
+	if !msg.NotModified || !msg.Refresh {
+		t.Fatalf("refresh msg = %#v", msg)
+	}
+	if m.SetResult(msg) {
+		t.Fatal("NotModified refresh replaced content")
+	}
+	if m.Data() == nil || len(m.Data().Children) != 1 {
+		t.Fatal("NotModified refresh dropped the issue on screen")
+	}
+}
+
+func TestRefreshSendsLastAdoptedRevision(t *testing.T) {
+	m := New(nil)
+	var lastIf string
+	m.SetLoader(func(_, id string, epoch uint64, ifRevision string) tea.Cmd {
+		lastIf = ifRevision
+		return func() tea.Msg {
+			return LoadedMsg{
+				IssueID: id, Epoch: epoch, Revision: "rev-1",
+				Data: epic("a"),
+			}
+		}
+	})
+	cmd := m.Load(1, t.TempDir(), "td-312e4e", 7)
+	if cmd == nil {
+		t.Fatal("Load() = nil")
+	}
+	msg := cmd().(LoadedMsg)
+	if !m.SetResult(msg) {
+		t.Fatal("SetResult() = false for the initial load")
+	}
+	if lastIf != "" {
+		t.Fatalf("first load IfRevision = %q, want empty", lastIf)
+	}
+	m.Observe()
+	refresh := m.Refresh(false)
+	if refresh == nil {
+		t.Fatal("Refresh() = nil after Observe")
+	}
+	_ = refresh()
+	if lastIf != "rev-1" {
+		t.Fatalf("refresh IfRevision = %q, want rev-1", lastIf)
+	}
+}
+
 func TestUnchangedRefreshDoesNotRepaint(t *testing.T) {
 	data := epic("a")
 	m := loadedCard(t, data)

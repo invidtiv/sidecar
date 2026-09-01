@@ -17,6 +17,7 @@ import (
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/workspacediff"
+	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
 func (p *Plugin) workspaceDeckContext(root, surface string) contentpanes.SurfaceContext {
@@ -27,6 +28,34 @@ func (p *Plugin) workspaceDeckContext(root, surface string) contentpanes.Surface
 	return contentpanes.SurfaceContext{
 		Root: root, DiffRoot: root, Surface: surface, DiffSurface: p.diffWorkspaceID(root, surface),
 		BaseRef: p.selectedDiffBaseRef(), Epoch: epoch,
+		Source: p.workspaceSourceContext(root, surface),
+	}
+}
+
+func (p *Plugin) workspaceSourceContext(root, surface string) contentpanes.SourceContext {
+	src := contentpanes.SourceContext{Root: root, WorkspaceID: surface}
+	if p.ctx != nil {
+		src.ProjectRoot = p.ctx.ProjectRoot
+		src.ProjectKey = workspaceinventory.CanonicalPath(p.ctx.ProjectRoot)
+	}
+	if p.selectingShell() {
+		src.WorkspaceKind = workspaceinventory.KindShell
+		if shell := p.getSelectedShell(); shell != nil {
+			src.WorkspaceKey = shell.TmuxName
+		}
+	} else if wt := p.selectedWorktree(); wt != nil {
+		src.WorkspaceKind = workspaceinventory.KindWorktree
+		src.WorkspaceKey = wt.Key
+	}
+	return src
+}
+
+func (p *Plugin) workspaceDeckConfig() contentpanes.Config {
+	return contentpanes.Config{
+		Renderer:         p.markdownRenderer,
+		ResourceResolver: p.resolveResource,
+		ConfigureViewer:  p.configureDeckViewer,
+		Source:           contentpanes.LocalSource{},
 	}
 }
 
@@ -57,7 +86,7 @@ func (p *Plugin) configureDeckViewer(kind panelayout.Kind, model any) {
 
 func (p *Plugin) ensureWorkspaceDeck(root, surface string) (*contentpanes.Deck, []tea.Cmd) {
 	ctx := p.workspaceDeckContext(root, surface)
-	cfg := contentpanes.Config{Renderer: p.markdownRenderer, ResourceResolver: p.resolveResource, ConfigureViewer: p.configureDeckViewer}
+	cfg := p.workspaceDeckConfig()
 	hidden := p.hiddenPaneLayout
 	if hidden != nil && hidden.Root == root && hidden.Surface == surface && paneLayoutHasRetainedTabs(hidden) {
 		// The host's hidden snapshot owns exact wire-compatible geometry. Re-adopt

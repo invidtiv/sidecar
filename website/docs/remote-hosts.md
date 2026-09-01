@@ -166,6 +166,35 @@ Three things are refused on a remote row. None of them is an arbitrary limit; ea
 
 These are refused up front rather than offered and then taken back: the footer does not advertise an action the confirmation would decline. Each becomes supported the day it gains a host-side CLI verb of its own, which is exactly how shell delete arrived.
 
+## Clicks in a remote terminal
+
+Selecting a remote Sessions row and clicking a reference in its live pane resolves that reference on the machine that owns the workspace, then renders it here in the same Document, Issue, Note, Diff, and Resource panes used for local work. A same-named file, issue, or tmux session on this machine is never opened in its place.
+
+The host must run a Sidecar that advertises the `ContentReadV1` capability. An older host still streams its terminals; the click names the host and asks you to update Sidecar on that machine. Version strings may appear for diagnosis, but the capability bit is what matters.
+
+| Clicked reference | What happens |
+| --- | --- |
+| Relative, absolute, or `~/` file | Opens a Document pane with that host's bytes, at the target line if one was given, and refreshes when the remote file changes |
+| `td-*` issue | Loads the issue from that host's td store, including its configured-project fallback and owner badge |
+| `sidecar://note/nt-*` | Loads the note from that host's td store |
+| Git commit, range, or revision | Opens a Diff pane against that host's checkout |
+| External resource key | Matches and resolves through that host's provider configuration, then sanitizes the document here |
+| Sidecar tmux session name (`sidecar-sh-*` / `sidecar-ws-*`) | Attaches only the matching session on that same host; a local twin with the same name is left alone |
+| HTTP(S) URL | Opens in this machine's browser after the same safety check a local URL uses |
+
+A link inside a remotely loaded pane stays on that host: a remote file that mentions `td-1234` opens the remote issue, not this project's. A click that cannot be resolved says why. It never silently no-ops, never opens a local lookalike, and never falls back from a failed remote read to this filesystem.
+
+What those panes will not do from a remote source, because the implementation would run here against a path that belongs somewhere else:
+
+- Inline edit (`e`)
+- File finder (`ctrl+p`)
+- Project-wide search (`f`)
+- Open in td (`O` on an issue card)
+
+In-document search (`/`) still works, because it searches the body already loaded. Host-backed editing, finding, and search are a separate capability.
+
+There is no `sidecar open --host`. The internal `sidecar content` verbs are the transport a viewing Sidecar uses over the SSH connection it already holds; they are not a public open-on-host surface. An agent that wants a file or issue on that machine uses ordinary tools over SSH (`cat`, `td show`, `git show`) rather than asking this Sidecar to proxy them.
+
 ## Health states and their fixes
 
 Every state names one thing to do about it. The Sessions row, the Configuration row and `sidecar host probe` all read the same fix line, so you are never matching two descriptions of one machine.
@@ -245,7 +274,7 @@ Structured log lines are the nastiest version of this, because a line of JSON ca
 
 **`protocol-mismatch`.** The two ends are different Sidecar builds. Update the older one; the probe output tells you which versions are in play.
 
-**Mixed Sidecar versions that do share a protocol number.** These are fine, and they are the normal state: nobody updates two machines at the same moment. Within one protocol, a host announces in its handshake what its own CLI accepts, and the viewer sends only what that host said it understands. Creating an agent shell on a host running an older Sidecar still works, for example; it simply starts the agent rather than also recording the agent family in that machine's manifest as it creates the shell, which is what the newer host-side flag adds.
+**Mixed Sidecar versions that do share a protocol number.** These are fine, and they are the normal state: nobody updates two machines at the same moment. Within one protocol, a host announces in its handshake what its own CLI accepts, and the viewer sends only what that host said it understands. Creating an agent shell on a host running an older Sidecar still works, for example; it simply starts the agent rather than also recording the agent family in that machine's manifest as it creates the shell, which is what the newer host-side flag adds. Opening a file or issue from that host's terminal needs `ContentReadV1` on the host; without it the terminal stays live and the click tells you to update Sidecar there.
 
 **Rows appear but never change.** Look for `stale` on the host. A connected but quiet host keeps showing its last-known rows, marked as such, because last-known state is more useful than a blank machine as long as it says so.
 

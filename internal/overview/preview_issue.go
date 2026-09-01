@@ -1,8 +1,11 @@
 package overview
 
 import (
+	"errors"
+
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/contentlink"
+	"github.com/marcus/sidecar/internal/contentpanes"
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/panelayout"
@@ -53,6 +56,9 @@ type previewIssue struct {
 	// wheel coalesces one flick over this pane, exactly as the terminal's own
 	// burst does for its surface; the pane dying drops any held delta with it.
 	wheel tty.WheelBurst
+	// hostNotice is a connected-stale or verb-failure label for a remote
+	// issue that is still showing its last good body.
+	hostNotice string
 }
 
 func (i *previewIssue) view() *issueview.Model {
@@ -81,6 +87,22 @@ func (m *Model) openPreviewIssue(issueID string) tea.Cmd {
 	issueID = issueview.NormalizeID(issueID)
 	if !ok || issueID == "" || workspace.Path == "" {
 		return nil
+	}
+	if workspace.Remote() {
+		ctx, ok := m.previewDeckContext()
+		if !ok {
+			return nil
+		}
+		ref, err := contentpanes.ResolveDocument(m.previewDeckConfig(ctx).Source, ctx.Source, contentlink.Pending{
+			Kind: contentlink.KindIssue, Raw: issueID,
+		})
+		if err != nil || ref.Value == "" {
+			if err == nil {
+				err = errors.New("issue not found on " + ctx.Source.HostID)
+			}
+			return remoteContentErrorCmd(err)
+		}
+		issueID = ref.Value
 	}
 	return m.openPreviewContent(contentlink.Ref{Kind: contentlink.KindIssue, Value: issueID}, "Issue")
 }
@@ -116,10 +138,24 @@ func (m *Model) applyPreviewIssueLoaded(msg previewIssueLoadedMsg) {
 		return
 	}
 	for _, item := range issue.tabs.Items {
-		if item.Value == nil || item.Value.ModelID() != msg.ModelID {
+		if item.Value == nil {
 			continue
 		}
-		item.Value.SetResult(msg.LoadedMsg)
+		matched := item.Value.ResultMatches(msg.LoadedMsg)
+		if item.Value.SetResult(msg.LoadedMsg) {
+			issue.hostNotice = ""
+			return
+		}
+		if !matched {
+			continue
+		}
+		if msg.NotModified {
+			issue.hostNotice = ""
+			return
+		}
+		if msg.Refresh && msg.Error != nil {
+			issue.hostNotice = remoteDocumentStaleNotice
+		}
 		return
 	}
 }
@@ -195,7 +231,7 @@ func (m *Model) renderPreviewIssue(issue *previewIssue, box termpreview.Box) str
 		view.SetSize(box.W, contentHeight)
 		view.SetFocused(focused)
 	}
-	header := m.composePreviewHeader(issueview.LayoutTabStrip(issue.tabs, m.reserveHeader(box.W, true).TabsWidth, focused).HoverClose(m.tabCloseHoverIn(panelayout.Issue)).Row, box.W, panelayout.Issue)
+	header := m.composePreviewHeader(m.previewHostHeaderTabs(issueview.LayoutTabStrip(issue.tabs, m.reserveHeader(box.W, true).TabsWidth, focused).HoverClose(m.tabCloseHoverIn(panelayout.Issue)).Row, issue.hostNotice), box.W, panelayout.Issue)
 	if contentHeight <= 0 {
 		return header
 	}
