@@ -1,6 +1,6 @@
 # Remote host content-pane parity
 
-Status: **active, independently reviewed**, 2026-08-31
+Status: **active**. File steel thread (slices 0–3) is implemented and independently reviewed on `pane-parity` (td-89c1cb). Paused for assessment before issues/notes, diffs, providers, and session links (slices 4–7).
 
 Related: [Sidecar as its own remote host runtime](sidecar-remote-hosts.md) is the controlling transport plan; [Cross-project td issue links](cross-project-issue-links.md) defines local-first issue ownership and fallback semantics; [Terminal resource providers](../implemented/terminal-resource-providers.md) defines provider matching, safe documents, and lifecycle bounds.
 
@@ -220,25 +220,25 @@ Refusals are specific and actionable:
 
 ## Work sequence
 
-### Slice 0 — characterize and pin the regression
+### Slice 0 — characterize and pin the regression — **done** (td-650c7a)
 
 - Add a Sessions test with a remote row whose `Path` also exists locally but contains different content. Prove the current guard refuses rather than showing the local twin.
 - Pin all `targetactivation.PlanKindsFromSpans` against local and remote dispatch coverage.
 - Pin local content loads and local provider matching as negative controls.
 
-### Slice 1 — source identity and the Document seam
+### Slice 1 — source identity and the Document seam — **done** (td-fff4bc, td-b83111)
 
 - Add `SourceContext`, thread it through `contentpanes.SurfaceContext`, deck tabs, nested-link handlers, cached Sessions pane state, and live bindings.
 - Extract only Document resolve/load/refresh behind the source seam and bind the local adapter to today's functions.
 - Keep every remote kind refused. Focused Document tests must remain byte/behavior compatible before any wire code lands; issue, note, diff, and provider seams arrive only with their user-facing slices.
 
-### Slice 2 — the minimum content service for files
+### Slice 2 — the minimum content service for files — **done** (td-5c259b)
 
 - Extract the read-only file resolve/read application service with its strict Document DTO, encoded-size bounds, structured errors, and conditional revision contract.
 - Add only the `sidecar content resolve/read` operations needed by the file journey, `ContentReadV1` capability advertisement, and the `hosts.RunSidecar` Document source adapter. Do not front-load all-kind DTOs or loader refactors.
 - Add local/direct versus remote/JSON file-contract tests, `ValidRemoteResult`, contamination, encoded oversize, cancellation, timeout, nonzero exit, and old-host capability tests. Do not invoke a content verb before first frame or merely because a host is registered.
 
-### Slice 3 — file steel thread
+### Slice 3 — file steel thread — **done** (td-30e99a, td-9d8bd9)
 
 - Make remote file fresh-resolution and bounded loading use the remote adapter.
 - Remove the blanket remote refusal from `previewDeckContext` only for a compatible content source whose host is not disconnected, disabled, or unavailable; stale remains attemptable.
