@@ -1,6 +1,6 @@
 # Herdr detection parity: run their manifests, sync automatically, keep our edge
 
-**Status:** draft for review, 2026-09-01. Nothing here is implemented. **Research baseline:** Sidecar `main` at the head of `claude/tui-lifecycle-herdr-parity-cu2d9t`; Herdr `e2b85c7` (`preview-2026-08-31`, ten commits past v0.8.2), the live catalog at `https://herdr.dev/agent-detection/index.toml`, and Herdr's Apache-2.0 `LICENSE`. **Open questions for the user are collected at the end; the phases are written so that Phases 0–3 do not depend on their answers.**
+**Status:** approved 2026-09-01 with the decisions recorded at the end; nothing is implemented yet. **Research baseline:** Sidecar `main` at the head of `claude/tui-lifecycle-herdr-parity-cu2d9t`; Herdr `e2b85c7` (`preview-2026-08-31`, ten commits past v0.8.2), the live catalog at `https://herdr.dev/agent-detection/index.toml`, and Herdr's Apache-2.0 `LICENSE`.
 
 Related plans:
 
@@ -27,13 +27,13 @@ The trend outside both projects points the same way. Prime Agent ships a built-i
 ## Decision first
 
 1. **Execute Herdr manifests verbatim.** Add a manifest engine in Go that implements Herdr's manifest grammar at engine version 3 with identical semantics, validates with the same limits, and produces an `explain` record with the same fields Herdr's does. It replaces the per-provider `Rule` tables as the screen-lane classifier. The engine is state-free; the `Tracker` (debounce, `done`, `IdleInferred`, skip retention cap) and the `agentlifecycle` resolver are untouched.
-2. **Vendor, do not fetch, by default.** Herdr's manifests are committed under a Sidecar path with a lock file recording upstream commit, catalog ETag, per-file digest, and manifest version. A sync tool refreshes them from both the Herdr repository and the live catalog. Runtime network fetch is not part of this plan's default behaviour.
+2. **Vendor by default, fetch on opt-in.** Herdr's manifests are committed under a Sidecar path with a lock file recording upstream commit, catalog ETag, per-file digest, and manifest version. A sync tool refreshes them from both the Herdr repository and the live catalog. Runtime fetch from the catalog is an opt-in setting (Phase 5), off unless the user turns it on.
 3. **Sidecar improvements are overlays in the same grammar.** Anything Sidecar knows that Herdr does not lives in `sidecar/<agent>.toml`, merged by rule id over the vendored manifest. An overlay can add rules, replace a rule, raise or lower a priority, or disable a rule. The vendored files are never edited, so a re-sync is a clean file replacement and the overlay's diff against upstream is the exact list of things we believe we do better.
 4. **The fixture corpus is the parity gate.** Sidecar has real, sanitized screen fixtures with expected verdicts for ten providers; Herdr deliberately keeps none (its `AGENTS.md` says to tune rules against live panes, not fixture suites). Every sync runs the corpus against the old and new manifests and the review shows only the verdict flips. That corpus, plus a differential run against a real Herdr binary, is what "parity" means here.
 5. **Measure the hooks lane against Herdr's authority table.** Herdr publishes which agents have lifecycle authority through hooks (Pi, OMP, Kimi, OpenCode, Kilo, MastraCode) and which are session-identity only (eleven more). Record that table beside `capabilities.json` as a *target*, and let a test list every provider where Sidecar's proved tier is below Herdr's. The existing plan's rule stands: a tier is earned by traces, never copied. The target only makes the gap visible.
 6. **Process identity stays code, tracked by extraction.** Like Herdr, adding a brand-new agent still needs a binary change for process names and labels. The sync tool extracts Herdr's alias table from `src/detect/mod.rs` and its generic-runtime list, and a test asserts Sidecar's `identifyProcessName` recognises every alias for every family Sidecar claims.
 
-What this plan does **not** do: it does not remove screen detection's role as the permanent fallback, does not change the hooks contract or the resolver, does not add a daemon or a listening socket, does not fetch from the network at runtime unless a later opt-in phase is approved, and does not copy Herdr's hook assets (they speak Herdr's socket API; ours speak `sidecar agent report`). It also does not adopt Herdr's positional pane ids, `done` semantics, or aggregate rollups; Sidecar's are already at or ahead of parity there.
+What this plan does **not** do: it does not remove screen detection's role as the permanent fallback, does not change the hooks contract or the resolver, does not add a daemon or a listening socket, does not fetch from the network at runtime unless the user opts in, does not copy Herdr's hook assets (they speak Herdr's socket API; ours speak `sidecar agent report`), and does not make a Sidecar shell claim to be Herdr through `HERDR_*` environment variables. It also does not adopt Herdr's positional pane ids, `done` semantics, or aggregate rollups; Sidecar's are already at or ahead of parity there.
 
 ## What Herdr actually has (research record)
 
@@ -87,9 +87,9 @@ We notice Claude's `AskUserQuestion` renders with a ☐ glyph Herdr does not gat
 
 A pane shows `idle` while Grok is clearly working. `sidecar agent explain --current --json` reports the screen lane's manifest source (`upstream grok 2026.07.16.2 + sidecar overlay`), every evaluated rule with the region text it saw, the matched rule or the fallback reason, and whether a hook source was consulted. `sidecar agent explain --file screen.txt --agent grok` reproduces it from a saved capture, which is also exactly how a new fixture is minted.
 
-### 4. Twelve more agents show a real state badge
+### 4. Ten more agents show a real state badge
 
-A user launches Gemini CLI in a Sidecar shell. `identifyProcessName` knows `gemini`; the engine loads the vendored `gemini.toml`; the pane shows working and blocked states with no Sidecar-specific code beyond the alias and a badge colour. Launch/resume support and a conversation adapter remain separate, optional work per the existing guide.
+A user launches Qwen Code in a Sidecar shell. `identifyProcessName` knows `qwen`; the engine loads the vendored `qwen.toml`; the pane shows working and blocked states with no Sidecar-specific code beyond the alias. Launch/resume support, a curated colour, and a conversation adapter remain separate, optional work per the existing guide.
 
 ### 5. Falling behind on hooks is a failing check, not a surprise
 
@@ -136,7 +136,7 @@ An overlay file has the same shape as a manifest with two additions per rule: `d
 
 `herdrsync` does one thing per invocation and writes only under `internal/agentactivity/manifests/`:
 
-1. Fetch `distribution/agent-detection/*.toml` and `src/detect/manifests/*.toml` at a pinned Herdr ref (default: the newest tag, override with `--ref`), and the live catalog `index.toml` plus every listed file from `herdr.dev` with its ETag. Cap at 256 KiB per file like Herdr does.
+1. Fetch `distribution/agent-detection/*.toml` and `src/detect/manifests/*.toml` at a pinned Herdr ref (default: the newest release tag, so the vendored files match the release binary the differential harness downloads; override with `--ref` to track `main`), and the live catalog `index.toml` plus every listed file from `herdr.dev` with its ETag. Cap at 256 KiB per file like Herdr does.
 2. Validate every file with the ported validator. Refuse the whole sync if any file fails.
 3. Per agent, choose the newer of bundled and published, exactly as a Herdr client would, and record which won and why. Where the two differ and the published one is older (the `grok` case), keep the bundled one and say so.
 4. Extract `lookup_agent` and `is_generic_runtime_or_shell` from `src/detect/mod.rs` into `aliases.upstream.json`, and the authority table from `agents.mdx` into `authority.upstream.json`. Extraction is a regex over stable Rust match-arm shapes; if the shape changes the tool fails loudly and the previous JSON stands.
@@ -147,11 +147,15 @@ A `TestVendoredManifestsMatchLock` test hashes the vendored files against the lo
 
 ### Workflow
 
-`.github/workflows/herdr-sync.yml` runs weekly and on dispatch, runs `herdrsync`, and if anything changed opens a pull request from `bot/herdr-sync` with `report.md` as the body. A second job in that workflow, not in ordinary CI, builds or downloads a Herdr binary and runs the differential harness (below). Ordinary Go CI never needs Rust or the network.
+`.github/workflows/herdr-sync.yml` runs weekly and on dispatch, runs `herdrsync`, and if anything changed opens a pull request from `bot/herdr-sync` with `report.md` as the body. A second job in that workflow, not in ordinary CI, downloads the Herdr release binary for the runner's platform (`herdr-linux-x86_64` from the GitHub release matching the pinned tag) and runs the differential harness (below). Ordinary Go CI never needs Rust, a Herdr binary, or the network.
 
 ### Differential harness
 
-For every fixture in `internal/agentactivity/testdata/**` with a `screen:` block, run `herdr agent explain --file <screen> --agent <agent> --json` and Sidecar's `sidecar agent explain --file <screen> --agent <agent> --json` against the *same* vendored manifest (Herdr's local override directory is pointed at our vendored copy so both engines read one file), and diff the `state`, `matched_rule.id`, and `fallback_reason`. Disagreements are engine bugs by definition and fail the sync workflow. Because it uses Herdr's own `--file` mode, no pane, tmux, or agent binary is needed.
+The harness exists to answer one question the unit tests cannot: does Sidecar's Go engine produce the same verdict as Herdr's Rust engine on *real* screens, not just on the synthetic cases in Herdr's test file? The ported conformance tests cover the grammar. They do not cover how the two engines count "non-empty lines" on a screen with trailing whitespace, where each finds the Codex prompt marker or the Claude prompt box on a wrapped screen, or how a horizontal rule made of a slightly different glyph is classified. Those are exactly the details that produce a wrong badge in a pane, and the only oracle for them is Herdr itself.
+
+Herdr makes that oracle cheap: `herdr agent explain --file screen.txt --agent codex --json` evaluates a saved screen through its engine with no pane, no tmux, and no agent running. So for every fixture in `internal/agentactivity/testdata/**` with a `screen:` block, the harness runs that command and Sidecar's `sidecar agent explain --file <screen> --agent <agent> --json` against the *same* vendored manifest (Herdr's local override directory is pointed at our vendored copy so both engines read one file), and diffs `state`, `matched_rule.id`, and `fallback_reason`. Disagreements are engine bugs by definition and fail the sync workflow.
+
+The binary is the release build, not a source build. That keeps the workflow free of a Rust toolchain and means the oracle is the engine Herdr's users actually run. The cost is that a manifest on Herdr's `main` may declare a `min_engine_version` the release cannot evaluate; the sync tool already rejects those at vendoring time and the report names them, so the vendored tree is always evaluable by the pinned release.
 
 ### Local overrides
 
@@ -199,16 +203,19 @@ When a Sidecar overlay fixes something Herdr also gets wrong, the preferred outc
 
 ### Phase 4 — Coverage expansion
 
-- Add a `DetectionOnly bool` to `agentcatalog.Family` (or a parallel `DetectionFamilies` list; decide during implementation, the vocabulary tests decide which is less invasive). A detection-only family needs an id, aliases, a display name, and a badge colour. It is not offered in creation pickers and has no resume or adapter.
-- Register Gemini, Cline, Devin, Droid, Kimi, Kiro, Kilo, Hermes, Qoder, Qwen, Maki as detection-only, each with its vendored manifest. OMP is hooks-only upstream and is out of scope until a Sidecar integration exists.
+- Add a `DetectionOnly bool` to `agentcatalog.Family` (or a parallel `DetectionFamilies` list; decide during implementation, the vocabulary tests decide which is less invasive). A detection-only family needs an id, aliases, and a display name. It is not offered in creation pickers and has no resume, adapter, or curated colour.
+- Register Cline, Devin, Droid, Kimi, Kiro, Kilo, Hermes, Qoder, Qwen, and Maki as detection-only, each with its vendored manifest. Gemini is not registered: Antigravity has replaced it and `agy` is already a full family. `gemini.toml` is still vendored because the sync mirrors the whole catalog, so registering it later is one alias line. OMP is hooks-only upstream, with no screen manifest, and is out of scope until a Sidecar integration exists.
+- **Scope check, since this is the phase that adds the most agents.** The expensive part of a full family today is presentation, not detection: a curated colour in all 20 curated themes plus the website palette, an icon that must match a conversations adapter, and the picker and skip-permissions tables. Detection-only families skip all of that on purpose. `styles.AgentColor` already returns `TextMuted` for an unregistered provider and `AgentIcon` returns the bare name, so a detection-only badge renders correctly with no theme work. The tests that pin full families (`TestAgentIconMatchesConversationsAdapters`, `TestAgentPickersFollowCatalog`, the curated-theme normalisation test) iterate full families only; `TestTheProcessNameVocabularyMatchesTheAgentCatalog` covers both, which is the one that matters for detection. Net per agent: one alias case, one vendored manifest already present, one family entry. Promoting any of them to a full family later is the existing seven-step guide and is independent work.
 - Update the "Adding new agent CLIs" guide: Step 2 becomes "sync or vendor the manifest, add the alias, add a fixture from `explain --file`". The seven-subsystem picture stays for full families.
 - Authority target test: `TestHerdrAuthorityGaps` lists providers where `authority.upstream.json` says lifecycle-through-hooks and `capabilities.json` says below `full`. It fails only if `authority.upstream.json` and the lock disagree, so the list is always current.
 - **Exit gate:** every agent in Herdr's `SCREEN_MANIFEST_AGENTS` (21) has a Sidecar identity and a manifest; a fresh fixture per new agent is not required for the cutover but the guide says how to mint one.
 
-### Phase 5 — Opt-in extensions (each gated on a user answer below)
+### Phase 5 — Opt-in runtime catalog fetch
 
-- **Runtime catalog fetch.** `detection.remoteManifests: "off" | "herdr.dev" | "<url>"` with Herdr's precedence rules, 256 KiB cap, cache under the state directory, and `explain` reporting the remote version. Off by default.
-- **Herdr reporter compatibility.** A `sidecar herdr-compat` shim and, in managed shells, `HERDR_ENV=1`, `HERDR_PANE_ID=<managed target>`, `HERDR_BIN_PATH=<shim>`, and a socket path the shim serves, translating `pane.report_agent` / `pane.report_agent_session` / `pane.release_agent` into `sidecar agent report` / `end` / `release` with source prefix `herdr-compat:`. Reports enter as `advisory` tier by the existing rules; nothing here grants authority. This would make agents that ship native Herdr reporters (Prime Agent today) light up in Sidecar, and would let Herdr's own hook assets work unmodified. It also means a Sidecar shell claims to be Herdr to any process that checks, which is wrong if the user runs Sidecar inside Herdr or vice versa. Default off; the shim refuses to start if a real `HERDR_SOCKET_PATH` is already in the environment.
+- `detection.remoteManifests: "off" | "herdr.dev" | "<url>"`, default `"off"`. When on, Sidecar fetches the catalog index and per-agent files with Herdr's own rules: 256 KiB cap per file, validate before use, ignore a file whose `min_engine_version` is newer than the engine, cache under the state directory, and take the newer of cached-remote and vendored per agent. Local overrides still win.
+- The fetch runs in a `tea.Cmd` after the first frame, never in `Init()`, and never more than once per day. A fetch failure is a diagnostic in `explain`, not a user-visible error.
+- `explain` reports the remote version, the vendored version, and which one is active, so a user with fetch on can always see whether they are ahead of the vendored tree. `sidecar agent manifests` (or a flag on `explain`) prints the same table for every agent.
+- The Herdr reporter compatibility shim considered during review is **not** pursued. The only agent found shipping a native Herdr reporter is Prime Agent; every other Herdr integration is a hook asset Herdr installs, which Sidecar's own `agentintegration` adapters already cover on Sidecar's terms. Claiming to be Herdr through `HERDR_*` variables buys one agent today and a real identity collision whenever Sidecar and Herdr are nested. Revisit only if a second agent ships a native reporter and a user asks for it.
 
 ## Test matrix
 
@@ -227,7 +234,7 @@ When a Sidecar overlay fixes something Herdr also gets wrong, the preferred outc
 - `git grep 'Rule{' internal/agentactivity/*.go` returns nothing.
 - `sidecar agent explain --file internal/agentactivity/testdata/claude/blocked.txt --agent claude --json` and the Herdr equivalent produce the same `state` and `matched_rule.id`.
 - A Claude Code 2.1.228 or newer pane shows `working` from its half-circle title spinner with no Sidecar rule authored for it.
-- A Gemini CLI pane shows `blocked` on its confirmation prompt with no Sidecar regex authored for it.
+- A Qwen Code pane shows `blocked` on its confirmation prompt with no Sidecar regex authored for it.
 
 ## Risks and how the plan bounds them
 
@@ -247,14 +254,16 @@ None publishes a machine-readable, versioned detection catalog the way Herdr doe
 - **claude-code-kanban**, **Claude-Code-Agent-Monitor**: hooks-only, Claude-only, web dashboards. Their "awaiting reason" tooltips (`Needs input`, `Turn done`, `At prompt`, `Interrupted`) are a nice presentation of the same four-state model.
 - **claude-squad**, **amux**, **dmux**, **repomon**, **thurbox**, **agterm**, **cmux**: worktree and session managers over tmux or a native terminal. They show attention state coarsely and do not publish rules.
 - **vibe-kanban**: drives agents through their non-interactive JSON/stream modes rather than reading TUIs, so it sidesteps the problem instead of solving it. Not applicable to embedded interactive panes.
-- **Prime Agent**: ships a built-in Herdr reporter that activates on `HERDR_ENV=1`. The first concrete sign that agents will report to whichever protocol is dominant, and the motivation for the Phase 5 compatibility question.
+- **Prime Agent**: ships a built-in Herdr reporter that activates on `HERDR_ENV=1`. The first concrete sign that agents will report to whichever protocol is dominant. It prompted the compatibility shim considered and dropped under Phase 5.
 
-## Open questions
+## Decisions (2026-09-01)
 
-1. **Authority of vendored manifests.** This plan makes Herdr's manifests the screen-lane classifier and demotes Sidecar's own rules to overlays. Confirm that is the intended trade: fewer hand-written rules and a review gate on every upstream change, in exchange for accepting upstream's judgement by default.
-2. **Runtime fetch.** Phase 5 proposes an opt-in remote catalog. Should the default stay "vendored only", or is opt-in-at-install acceptable so users get rule fixes between Sidecar releases the way Herdr users do?
-3. **Herdr reporter compatibility.** Pursue the `HERDR_*` compatibility shim so agents with native Herdr reporters (and Herdr's hook assets) work in Sidecar shells, accepting that a Sidecar pane then claims to be Herdr? Or leave it out and keep Sidecar's own env vocabulary only?
-4. **Which new agents deserve full families.** Detection-only covers all eleven cheaply. Which of Gemini, Cline, Devin, Droid, Kimi, Kiro, Kilo, Hermes, Qoder, Qwen, Maki do you actually launch, and so want in creation pickers with resume and a conversation adapter?
-5. **Sync cadence and PR automation.** Weekly with an automatic pull request needs the workflow token to open PRs. Acceptable, or should the workflow open an issue and a `td` task and leave the PR to a person?
-6. **Herdr binary in the differential harness.** Build from source in the weekly workflow (Rust toolchain, cacheable, slow the first time) or download their release binary? Either is fine; source tracks `main`, releases track what users run.
-7. **Hooks-lane targets.** Should Phase 4's authority-gap report become a tracked goal (trace Pi, Kimi, Kilo, MastraCode hooks to `full` per the lifecycle plan's rules), or stay informational until a user asks for one of those providers?
+Recorded from review so later phases do not reopen them.
+
+1. **Vendored Herdr manifests are the screen-lane authority.** Sidecar's own rules become overlays. Accepted.
+2. **Runtime fetch is opt-in.** Default off; Phase 5 as written.
+3. **No Herdr reporter compatibility shim.** Dropped; reasoning recorded under Phase 5.
+4. **Detection-only families for every Herdr screen-manifest agent except Gemini.** Cline, Devin, Droid, Kimi, Kiro, Kilo, Hermes, Qoder, Qwen, Maki. OMP stays out (hooks-only upstream). The scope note under Phase 4 records why this is cheap.
+5. **Weekly sync with an automatic pull request.** Accepted.
+6. **The differential harness uses Herdr's release binary**, and the sync pins vendored manifests to the matching release tag by default. The harness section records why a binary is needed at all.
+7. **The hooks authority gap stays informational.** The test-generated list of providers where Herdr has lifecycle authority through hooks and Sidecar does not (Pi, Kimi, Kilo, MastraCode, OMP today) is a standing pointer to where the next hooks work would pay off, not a commitment. Any promotion still follows the lifecycle plan's evidence rules: traces from a released provider version, never a copied tier.
