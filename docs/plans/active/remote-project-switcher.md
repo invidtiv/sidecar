@@ -1,6 +1,6 @@
 # Remote destinations in `@` and `W`
 
-Status: **active, proposed; decisions settled** **Created:** 2026-09-01 **Verified against the tree on 2026-09-01** (`remote-viewer-screen`; citations inline in [Current behavior](#current-behavior)) **Scope:** host-qualified rows in the project and worktree switchers; entering a remote project as `ScopeProject` with the laptop as its screen; async catalog so local listings do not wait on SSH. Plugin remoting beyond Workspaces and the existing content-pane source is phased.
+Status: **active; slices 0–2 implemented** **Created:** 2026-09-01 **Verified against the tree on 2026-09-01** (`remote-viewer-screen`; citations inline in [Current behavior](#current-behavior)) **Scope:** host-qualified rows in the project and worktree switchers; entering a remote project as `ScopeProject` with the laptop as its screen; async catalog so local listings do not wait on SSH. Plugin remoting beyond Workspaces and the existing content-pane source is phased. Slices 0–2 are on this branch (`dc5e3be0`, `cfb2fd89`+`6dd5b02d`, `813169a3`+`9844590d`). Remaining work is slice 3 (viewer-screen landing on the bound project), slice 4 (Files/Git/td/Tasks remoting), and slice 5 (docs and isolated proof).
 
 Related: [Sidecar as its own remote host runtime](sidecar-remote-hosts.md) is the transport and inventory stream. [The viewer owns the screen](../implemented/remote-host-viewer-screen.md), implemented in full on `remote-viewer-screen`, is the lease and `uirequest` announcement this binds a project workspace to. [Remote host content-pane parity](../implemented/remote-host-content-pane-parity.md) is the read path a remote-bound plugin must use; it already kept the source seam presentation-neutral “so a future remote project Workspace can reuse them.” [Agent-facing project CLI](agent-project-cli.md) is the local `sidecar project` surface; it does not grow `--host` in this plan.
 
@@ -187,19 +187,17 @@ A plugin that reads `ctx.WorkDir` without checking `HostID` is a bug this plan�
 
 ## Slices
 
-### Slice 0 — destination identity and labels
+### Slice 0 — destination identity and labels — implemented (`dc5e3be0`, td-823e94)
 
-`Destination` type, display function, tests for local, remote project, remote worktree, and filter. No modal behaviour change yet. Navbar/title helpers exist but are unwired. Includes the read-only accessor on `overview.Model` that hands the app host project rows, health, and incarnation, with the existing `projectSwitcherDestination` path unchanged when it returns nothing.
+`Destination` type, display function, tests for local, remote project, remote worktree, and filter. Navbar/title helpers exist. Read-only `overview.Model.HostCatalog()` hands the app host project rows, health, incarnation, and in-memory workspaces. Project keys are unscoped; persist/compare via `hosts.ScopedKey`.
 
-### Slice 1 — steel thread: `@` lists remotes, Enter binds Workspaces
+### Slice 1 — steel thread: `@` lists remotes, Enter binds Workspaces — implemented (`cfb2fd89`, refusal fix `6dd5b02d`, td-72a679)
 
-`@` paints local rows immediately, appends connected-host projects from snapshots, Enter on `[aerie] Sidecar` binds `ScopeProject`+`HostID`, workspace plugin shows that host’s shells, Files/Git/td refuse with the host named. Local `@` path byte-identical when no host is connected. Also in this slice because they are switcher-local and break on the first remote row: theme preview and cursor-on-current stop keying off `destination.Path`. Tests: twin local path is not Reinit’d; connecting snapshot inserts rows without moving a local cursor; disabled unreachable row; a remote row under the cursor does not resolve a remote path through `theme.ResolveTheme`.
+`@` paints local rows immediately, appends connected-host projects from snapshots, Enter on `[aerie] Sidecar` binds `ScopeProject`+`HostID`, workspace plugin shows that host’s shells via the existing control-mode proxy, Files/Git/td/Tasks refuse with the host named (Init/Start/View/Update). Local `@` path unchanged when no host is connected. Theme preview and cursor-on-current stop keying off `destination.Path`. Unreachable hosts keep last-known catalog rows for `@` only; Sessions still drops `hostResults` on `!Shows()`. Create shell/worktree from a bound project workspace is refused naming the host; Phase C Sessions create is unchanged.
 
-Depends on the slice 0 accessor. The connections themselves already exist and already run in project scope; what does not exist is any app-side read of them, and that is the work.
+### Slice 2 — `W` across hosts for the current project key — implemented (`813169a3`, W-Enter fix `9844590d`, td-90757e)
 
-### Slice 2 — `W` across hosts for the current project key
-
-Worktree switcher local-first, then `[aerie] Sidecar [[feature]]`, paired by project name per decision 10. Enter binds that worktree. Last-worktree memory is per `hosts.ScopedKey(HostID, ProjectKey)`, which is a new `state` accessor beside `GetLastWorktreePath` rather than a remote path written into the existing one.
+Worktree switcher local-first, then `[aerie] Sidecar [[feature]]` for linked worktrees of the same-named host project (decision 10). Host main checkout is not a W row. Enter binds through `bindRemoteDestination`. Last-worktree memory is per `hosts.ScopedKey(HostID, ProjectKey)` (`GetLastRemoteWorktree`); `@` Enter restores it when still in the catalog. W Enter is an explicit destination (`restoreLastWorktree=false`) so a local main pick after a remote bind does not follow `LastWorktreePath`.
 
 ### Slice 3 — viewer-screen lands on the bound project
 
@@ -227,5 +225,6 @@ Same bar as remote content panes: private tmux sockets and private Sidecar state
 
 ## Changelog
 
+- **2026-09-01** — Slices 0–2 implemented on `remote-viewer-screen` (td-f7855c). Remaining: slices 3–5.
 - **2026-09-01** — Reviewed against the tree. Corrections: the host registry is owned by `internal/overview`, so slice 1 needs an accessor and inherits the `cross_project_overview` dependency (decision 11); inventory `ProjectKey` is a path on the owning machine, so `W` pairs by project name and identity persists through `hosts.ScopedKey` (decision 10); `Destination` carries `HostIncarnation` to match `contentpanes.SourceContext`; binding must publish `HostID` on instance presence and on the workspace plugin's `AttentionOrigin`, neither of which carries one today; viewer-screen is implemented, and its landing gate is extended by one shared decider rather than copied; theme preview and cursor-on-current stop keying off a path.
 - **2026-09-01** — Created. `@`/`W` list host-qualified destinations asynchronously; entering one binds this TUI as that remote project’s screen; plugin remoting after Workspaces is sliced.
