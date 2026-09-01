@@ -67,7 +67,7 @@ The parent remote-host plan recorded this failure during Phase A and kept the fa
 In scope:
 
 - Terminal-link recognition, fresh resolution, pane opening, typed content loading, manual reload, conditional live refresh, and nested-link activation for every kind in `targetactivation.PlanKindsFromSpans`.
-- Global Sessions, which is the only surface that currently hosts registered remote workspaces. The source and viewer seams remain presentation-neutral so a future remote project Workspace can reuse them without another loader path.
+- Global Sessions, which is the only surface that currently hosts registered remote workspaces. The source and viewer seams remain presentation-neutral so a remote project Workspace can reuse them without another loader path; that bind is [Remote destinations in `@` and `W`](../active/remote-project-switcher.md).
 - Local/remote parity for content display, nested navigation, safe pane actions, and refresh in the existing Document, Issue, Note, Diff, and Resource panes.
 - Honest capability, version-skew, disconnected-host, stale-result, and unsupported-content states.
 - Bounded one-shot read-only content verbs on the remote host, invoked lazily over the existing SSH ControlMaster.

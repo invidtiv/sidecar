@@ -2,7 +2,7 @@
 
 Status: **active, proposed; decisions settled** **Created:** 2026-08-31 **Scope:** host→viewer relay of `sidecar open` / `layout get|apply|move` from a Sidecar-managed pane; mixed create-modal routing on a remote Sessions row; serve announcement of host `uirequest` files; no public `sidecar open --host`.
 
-Related: [Sidecar as its own remote host runtime](sidecar-remote-hosts.md) is the controlling transport plan. [Remote host content-pane parity](../implemented/remote-host-content-pane-parity.md) is the read path this lands on, and is the plan that deferred relaying `sidecar open` from the remote host. [Pane layout control](../implemented/pane-layout-control.md) owns the layout vocabulary, the never-queue rule, and (with [unified create](../implemented/unified-create-workspace-modal.md)) the `n` switcher this splits by ownership. [Agent-facing open CLI](../implemented/agent-open-in-split-cli.md) owns the `uirequest` bus.
+Related: [Sidecar as its own remote host runtime](sidecar-remote-hosts.md) is the controlling transport plan. [Remote host content-pane parity](../implemented/remote-host-content-pane-parity.md) is the read path this lands on, and is the plan that deferred relaying `sidecar open` from the remote host. [Remote destinations in `@` and `W`](remote-project-switcher.md) binds a remote project as `ScopeProject` so this announcement can land on the project workspace, not only Sessions. [Pane layout control](../implemented/pane-layout-control.md) owns the layout vocabulary, the never-queue rule, and (with [unified create](../implemented/unified-create-workspace-modal.md)) the `n` switcher this splits by ownership. [Agent-facing open CLI](../implemented/agent-open-in-split-cli.md) owns the `uirequest` bus.
 
 ## Decision first
 
@@ -237,4 +237,5 @@ Default tmux servers stay up. Installing this branch on a host does not authoriz
 
 ## Changelog
 
+- **2026-09-01** — Related: [Remote destinations in `@` and `W`](remote-project-switcher.md) is how a bound remote project becomes the announcement target instead of only Sessions.
 - **2026-08-31** — Created. Viewer owns the screen (lease holder); host owns workspace objects; serve announces host `uirequest` files and does not apply them; relayed open never queues; mixed `n` routing; no `--host` flag; steel thread is `sidecar open` of a file onto the Sessions preview.
