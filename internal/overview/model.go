@@ -134,7 +134,7 @@ func IsAsyncMessage(msg tea.Msg) bool {
 	case panesMsg, projectMsg, pollMsg, previewAutoScrollTickMsg, workspacePulseTickMsg,
 		sessionsSelectedTickMsg,
 		previewDocLoadedMsg, previewDocSearchMsg, previewIssueLoadedMsg, previewNoteLoadedMsg, previewResourceResolvedMsg, previewHistoryLoadedMsg, previewTerminalSearchLoadedMsg, contentpanes.Result,
-		renameShellDoneMsg, globalShellCreatedMsg, previewTerminalSplitCreatedMsg, previewSplitCloseProbeMsg, projectMutationRefreshMsg, globalCreateBranchesMsg, previewLinkRevalidatedMsg,
+		renameShellDoneMsg, globalShellCreatedMsg, previewTerminalSplitCreatedMsg, previewSplitSeedFailedMsg, previewSplitCloseProbeMsg, projectMutationRefreshMsg, globalCreateBranchesMsg, previewLinkRevalidatedMsg,
 		createPickerDataMsg, workspacecreate.FilesScannedMsg:
 		// creation is a multi-stage async workflow; every result must stay
 		// routed to the global host even while its modal owns focus.
@@ -392,6 +392,7 @@ type Model struct {
 	createModal        *modal.Modal
 	createModalWidth   int
 	createMouse        *mouse.Handler
+	pendingSplitSeed   *previewSplitSeed
 	pendingCreatedTmux string
 	createPlan         *workspaceops.WorktreePlan
 	createRecord       *workspaceops.WorktreeRecord
@@ -933,6 +934,11 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		return m.refreshProjectAfterMutation(msg.Project)
 	case previewTerminalSplitCreatedMsg:
 		return m.applyPreviewTerminalSplitCreated(msg)
+	case previewSplitSeedFailedMsg:
+		if msg.Err != nil {
+			m.setCreateError(msg.Err.Error())
+		}
+		return nil
 	case previewSplitCloseProbeMsg:
 		return m.applyPreviewSplitCloseProbe(msg)
 	case globalWorktreePlannedMsg:

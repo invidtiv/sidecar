@@ -180,8 +180,11 @@ func (m *Model) applyCreateRequest(req uirequest.Request) tea.Cmd {
 	if err != nil {
 		return nil
 	}
-	if strings.TrimSpace(req.Options.Split) != "" {
-		return nil
+	if split := strings.TrimSpace(req.Options.Split); split != "" {
+		if payload.Kind != uirequest.CreateKindShell {
+			return nil
+		}
+		return m.applyCreateShellSplit(req, payload, split)
 	}
 	project, key, ok := m.createRequestProject(req)
 	if !ok {
@@ -402,6 +405,17 @@ func (m *Model) ackCreate(req uirequest.Request, surface string) {
 		PID:      os.Getpid(),
 		Status:   uirequest.StatusOpened,
 		Surface:  surface,
+		At:       time.Now().UTC(),
+	})
+}
+
+func (m *Model) ackCreateDeclined(req uirequest.Request, reason string) {
+	_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
+		Instance: hostInstanceID(),
+		Host:     uirequest.HostName(),
+		PID:      os.Getpid(),
+		Status:   uirequest.StatusDeclined,
+		Reason:   reason,
 		At:       time.Now().UTC(),
 	})
 }

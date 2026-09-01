@@ -1,19 +1,112 @@
 package overview
 
 import (
+	"context"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/features"
+	"github.com/marcus/sidecar/internal/layoutapply"
 	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/panereposition"
 	"github.com/marcus/sidecar/internal/termpanes"
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/uirequest"
+	"github.com/marcus/sidecar/internal/workspaceinventory"
+	"github.com/marcus/sidecar/internal/workspaceops"
 )
 
+// previewSplitSeed is a --run/--type to send after the Sessions terminal
+// split's tmux session exists, matching the project plugin's termPanelSeed.
+type previewSplitSeed struct {
+	session string
+	run     string
+	typeCmd string
+}
+
 var ensurePreviewTerminalSession = termpanes.EnsureSession
+
+// applyCreateShellSplit is the Sessions half of `sidecar create shell --split`.
+// The project plugin writes `shell:<tmux>`; this surface is keyed by the
+// catalog row ID. When Sessions is hidden the request is left for the project
+// plugin; when it is showing, this is the surface the user is looking at.
+func (m *Model) applyCreateShellSplit(req uirequest.Request, payload uirequest.CreatePayload, placement string) tea.Cmd {
+	if !m.preview.visible {
+		if req.Origin.Sessions {
+			m.ackCreateDeclined(req, layoutapply.SessionsNotOnScreenReason)
+		}
+		return nil
+	}
+	ws, ok := m.resolveCreateSplitWorkspace(req)
+	if !ok {
+		m.ackCreateDeclined(req, "no Sessions row matches this shell")
+		return nil
+	}
+	if cmd := m.focusSessionsLayoutRow(ws.ID); cmd != nil {
+		_ = cmd
+	}
+	selected, has := m.SelectedWorkspace()
+	if !has || selected.ID != ws.ID {
+		m.ackCreateDeclined(req, "no Sessions row named "+ws.ID+" is on screen")
+		return nil
+	}
+	if !features.IsEnabled(features.WorkspaceTerminalPanel.Name) {
+		m.ackCreateDeclined(req, features.WorkspaceTerminalPanel.Name+" is off")
+		return nil
+	}
+	if panelayout.LiveCapReached(m.preview.paneRoot) {
+		m.ackCreateDeclined(req, termpanes.CapDisabledReason)
+		return nil
+	}
+	plan, planned := panelayout.PlanOpen(m.preview.paneRoot, panelayout.Shell, m.lastPreviewBoxes())
+	if !planned {
+		m.ackCreateDeclined(req, termpanes.CapDisabledReason)
+		return nil
+	}
+	plan = panelayout.ApplyAxisOverride(plan, placement)
+	trial, _ := panelayout.ApplyPlan(panelayout.Clone(m.preview.paneRoot), plan, &panelayout.Node{Kind: panelayout.Shell})
+	peer, placed := m.previewPeerBox()
+	if !placed {
+		m.ackCreateDeclined(req, "Terminal split needs a visible preview")
+		return nil
+	}
+	if _, _, fits := panelayout.LayoutPanes(trial, peer, previewPaneFloors()); !fits {
+		m.ackCreateDeclined(req, "the window is too small to split")
+		return nil
+	}
+	before := panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Shell)
+	session := termpanes.SessionName(selected.TmuxName)
+	if payload.Run != "" || payload.Type != "" {
+		m.pendingSplitSeed = &previewSplitSeed{session: session, run: payload.Run, typeCmd: payload.Type}
+	}
+	cmd := m.openPreviewTerminalSplit(payload.DisplayName, plan)
+	after := panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Shell)
+	if after == nil || after == before {
+		m.pendingSplitSeed = nil
+		m.ackCreateDeclined(req, "the window is too small to split")
+		return nil
+	}
+	m.ackCreate(req, selected.ID)
+	return cmd
+}
+
+func (m *Model) resolveCreateSplitWorkspace(req uirequest.Request) (workspaceinventory.Workspace, bool) {
+	session := strings.TrimSpace(req.Origin.TmuxSession)
+	if session == "" {
+		return m.SelectedWorkspace()
+	}
+	for _, ws := range m.catalog {
+		if ws.Remote() {
+			continue
+		}
+		if ws.TmuxName == session {
+			return ws, true
+		}
+	}
+	return workspaceinventory.Workspace{}, false
+}
 
 type previewTerminalSplitCreatedMsg struct {
 	WorkspaceID string
@@ -105,6 +198,9 @@ func (m *Model) openPreviewTerminalSplit(name string, plan panelayout.OpenPlan) 
 
 func (m *Model) applyPreviewTerminalSplitCreated(msg previewTerminalSplitCreatedMsg) tea.Cmd {
 	m.createBusy = false
+	if msg.Err != nil {
+		m.pendingSplitSeed = nil
+	}
 	leaf := m.preview.terminalPanes.Leaf(msg.LeafID)
 	current := msg.WorkspaceID == m.preview.workspaceID && leaf != nil && leaf.Session == msg.Session
 	if !current {
@@ -139,8 +235,35 @@ func (m *Model) applyPreviewTerminalSplitCreated(msg previewTerminalSplitCreated
 	leaf.Target.Session, leaf.Target.Pane = msg.Session, msg.PaneID
 	m.closeCreateShell()
 	m.persistSessionsLayout()
-	return tea.Batch(m.syncTerminalLeaf(msg.LeafID), m.syncTerminalGeometry())
+	return tea.Batch(m.syncTerminalLeaf(msg.LeafID), m.syncTerminalGeometry(), m.applyPendingSplitSeed(msg.Session))
 }
+
+func (m *Model) applyPendingSplitSeed(session string) tea.Cmd {
+	seed := m.pendingSplitSeed
+	if seed == nil || seed.session == "" || seed.session != session {
+		return nil
+	}
+	m.pendingSplitSeed = nil
+	run, typeCmd := seed.run, seed.typeCmd
+	if run == "" && typeCmd == "" {
+		return nil
+	}
+	return func() tea.Msg {
+		ctx := context.Background()
+		var err error
+		if run != "" {
+			err = workspaceops.StartAgentInShell(ctx, session, run)
+		} else {
+			err = workspaceops.TypeInShell(ctx, session, typeCmd)
+		}
+		if err != nil {
+			return previewSplitSeedFailedMsg{Err: err}
+		}
+		return nil
+	}
+}
+
+type previewSplitSeedFailedMsg struct{ Err error }
 
 func (m *Model) syncTerminalLeaf(id int) tea.Cmd {
 	leaf := m.terminalLeaf(id)

@@ -142,6 +142,41 @@ func TestUIRequests_InteractiveOpenAssertsPostSplitTerminalGeometryOnce(t *testi
 	}
 }
 
+func TestUIRequests_CreateShellSplitIgnoresSessionsOrigin(t *testing.T) {
+	enableWorkspaceFeature(t, features.WorkspaceTerminalPanel.Name)
+	stubTd(t)
+	p := docPaneTestPlugin(t, t.TempDir(), true)
+	p.sidebarVisible = false
+	p.View(p.width, p.height)
+
+	focus := true
+	payload, err := json.Marshal(uirequest.CreatePayload{
+		Kind: uirequest.CreateKindShell, DisplayName: "dev server", Focus: &focus,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := uirequest.Request{
+		ID: "req-split-sessions", Action: uirequest.ActionCreate, CreatedAt: time.Now().UTC(), TTLMs: 5000,
+		Origin:  uirequest.Origin{TmuxSession: "test-shell", Sessions: true},
+		Options: uirequest.Options{Split: "right"},
+		Payload: payload,
+	}
+	if cmd := p.handleUIRequest(req); cmd != nil {
+		t.Fatalf("project plugin stole a Sessions split: %T", cmd)
+	}
+	if p.shellLeaf() != nil {
+		t.Fatal("project plugin opened a shell leaf for a Sessions-origin split")
+	}
+	acks, err := uirequest.ReadAcks(config.StateDir(), req.ID, req.Action)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(acks) != 0 {
+		t.Fatalf("expected no project ack, got %+v", acks)
+	}
+}
+
 func TestUIRequests_CreateShellSplitPlacement(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
