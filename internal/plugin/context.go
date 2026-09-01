@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"time"
@@ -8,6 +9,7 @@ import (
 	"github.com/marcus/sidecar/internal/adapter"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/event"
+	"github.com/marcus/sidecar/internal/hostproto"
 	"github.com/marcus/sidecar/internal/tty"
 )
 
@@ -44,12 +46,21 @@ type Context struct {
 	// or nil when that host is not connected. Filled by the app from the
 	// Sessions spawner; not reset by Reinit.
 	RemoteControlSpawner func() tty.ControlSpawner
+	// RemoteRunner runs a sidecar command on a registered host (hosts.RunSidecar).
+	// The app fills it from the Sessions runner; the workspace plugin uses it
+	// for content reads and relayed uirequest acks. Not reset by Reinit.
+	RemoteRunner func(ctx context.Context, hostID string, args []string, out any) error
+	// HostVerbs is the bound host's advertised CLI verbs, or zero. Filled by
+	// the app from the Sessions hello; the workspace plugin builds RemoteSource
+	// from this plus RemoteRunner so this package does not import overview.
+	HostVerbs func() hostproto.VerbCapabilities
 }
 
 // HostWorkspace is one host-side shell or worktree as the bound workspace
 // plugin lists it. Fields match workspaceinventory.Workspace enough to
 // populate the sidebar and attach a live pane.
 type HostWorkspace struct {
+	ID         string
 	Kind       string
 	Name       string
 	Key        string

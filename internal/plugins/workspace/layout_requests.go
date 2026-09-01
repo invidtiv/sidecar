@@ -72,7 +72,11 @@ func (p *Plugin) answerLayout(req uirequest.Request, payload uirequest.LayoutPay
 }
 
 func (p *Plugin) ackLayout(req uirequest.Request, status uirequest.Status, reason string, items []uirequest.AckItem, layout json.RawMessage) tea.Cmd {
-	layoutapply.WriteAck(config.StateDir(), hostInstanceID(), req, status, reason, items, layout)
+	if req.Origin.HostID == "" {
+		layoutapply.WriteAck(config.StateDir(), hostInstanceID(), req, status, reason, items, layout)
+		return nil
+	}
+	p.ackRemote(req, status, reason, "", 0, layout, items)
 	return nil
 }
 

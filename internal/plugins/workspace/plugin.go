@@ -243,8 +243,12 @@ type Plugin struct {
 	// Preview pane tree state. A nil root retains the legacy path while the
 	// feature is disabled. Phase 1 intentionally creates only one terminal leaf;
 	// document registry and load-request state arrive with the open-doc journey.
-	paneRoot        *PaneNode
-	contentDeck     *contentpanes.Deck
+	paneRoot    *PaneNode
+	contentDeck *contentpanes.Deck
+	// contentSource, when set, is the Document adapter for bound remote
+	// workspaces. Tests inject a fake; production builds RemoteSource from
+	// ctx.RemoteRunner and ctx.HostVerbs.
+	contentSource   contentpanes.Source
 	paneFocus       int
 	paneNextID      int
 	paneDragSplitID int

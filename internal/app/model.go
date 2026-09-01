@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/gitinit"
+	"github.com/marcus/sidecar/internal/hostproto"
 	"github.com/marcus/sidecar/internal/hosts"
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/keymap"
@@ -649,28 +651,42 @@ func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentV
 	return m
 }
 
-func announceInstanceCmd(workDir, projectRoot string) tea.Cmd {
+func announceInstanceCmd(workDir, projectRoot, hostID string) tea.Cmd {
 	return func() tea.Msg {
 		inst := uirequest.Instance{
 			PID:       os.Getpid(),
 			Host:      uirequest.HostName(),
-			WorkDir:   workDir,
+			HostID:    hostID,
 			StartedAt: time.Now().UTC(),
 		}
-		if projectRoot != "" {
-			inst.Project = filepath.Base(projectRoot)
-			if dir, ok := projectdir.Lookup(projectRoot); ok {
-				inst.ProjectKey = filepath.Base(dir)
+		if hostID == "" {
+			inst.WorkDir = workDir
+			if projectRoot != "" {
+				inst.Project = filepath.Base(projectRoot)
+				if dir, ok := projectdir.Lookup(projectRoot); ok {
+					inst.ProjectKey = filepath.Base(dir)
+				}
+				if inst.WorkDir == "" {
+					inst.WorkDir = projectRoot
+				}
+			} else if workDir != "" {
+				inst.Project = filepath.Base(workDir)
 			}
-			if inst.WorkDir == "" {
-				inst.WorkDir = projectRoot
-			}
-		} else if workDir != "" {
-			inst.Project = filepath.Base(workDir)
 		}
 		_ = uirequest.Announce(config.StateDir(), inst)
 		return nil
 	}
+}
+
+func (m Model) announcePresenceCmd() tea.Cmd {
+	if m.boundDestination.HostID != "" {
+		return announceInstanceCmd("", "", m.boundDestination.HostID)
+	}
+	workDir, projectRoot := "", ""
+	if m.ui != nil {
+		workDir, projectRoot = m.ui.WorkDir, m.ui.ProjectRoot
+	}
+	return announceInstanceCmd(workDir, projectRoot, "")
 }
 
 func listenForUIRequests(ch <-chan tea.Msg) tea.Cmd {
@@ -691,7 +707,7 @@ func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		tickCmd(),
 		IntroTick(),
-		announceInstanceCmd(m.ui.WorkDir, m.ui.ProjectRoot),
+		m.announcePresenceCmd(),
 		func() tea.Msg { return attentionRefreshMsg{} },
 		func() tea.Msg {
 			return notify.SeedLaneTrackersMsg{Notifications: append([]notify.Notification(nil), m.notificationCache...)}
@@ -1251,12 +1267,13 @@ func (m *Model) bindRemoteDestination(dest Destination) tea.Cmd {
 	}
 	startCmds = append(startCmds, m.emitContentSize()...)
 	m.focusPluginByIDWithoutNotice(workspacePluginID)
+	m.claimBoundProjectLeases()
 
 	return tea.Batch(
 		tea.Batch(startCmds...),
 		m.refreshConfigContext(),
 		m.syncTerminalTitle(false),
-		announceInstanceCmd("", ""),
+		m.announcePresenceCmd(),
 		ShowFlash(fmt.Sprintf("Switched to %s", FormatDestination(dest))),
 	)
 }
@@ -1324,6 +1341,18 @@ func (m *Model) installPluginHostSeams() {
 		}
 		return m.overview.HostControlSpawner(ctx.HostID)
 	}
+	ctx.RemoteRunner = func(c context.Context, hostID string, args []string, out any) error {
+		if m.overview == nil {
+			return fmt.Errorf("no host registry")
+		}
+		return m.overview.RunHostSidecar(c, hostID, args, out)
+	}
+	ctx.HostVerbs = func() hostproto.VerbCapabilities {
+		if m.overview == nil || ctx.HostID == "" {
+			return hostproto.VerbCapabilities{}
+		}
+		return m.overview.HostVerbs(ctx.HostID)
+	}
 }
 
 func (m *Model) boundHostWorkspaces() []plugin.HostWorkspace {
@@ -1345,6 +1374,7 @@ func (m *Model) boundHostWorkspaces() []plugin.HostWorkspace {
 				out := make([]plugin.HostWorkspace, 0, len(project.Workspaces))
 				for _, ws := range project.Workspaces {
 					out = append(out, plugin.HostWorkspace{
+						ID:         unscopedHostWorkspaceID(ws.ID),
 						Kind:       string(ws.Kind),
 						Name:       ws.Name,
 						Key:        ws.Key,
@@ -1369,6 +1399,51 @@ func (m *Model) boundHostWorkspaces() []plugin.HostWorkspace {
 		}
 	}
 	return nil
+}
+
+func unscopedHostWorkspaceID(id string) string {
+	if _, rest, ok := hosts.SplitScopedKey(id); ok {
+		return rest
+	}
+	return id
+}
+
+// claimGeometryLease is the bind-time lease seam. Production claims through
+// tty; tests replace it so a bind can be proven without talking to tmux.
+var claimGeometryLease = tty.ClaimGeometryLease
+
+func (m *Model) claimBoundProjectLeases() {
+	for _, ws := range m.boundHostWorkspaces() {
+		if !ws.Live || ws.TmuxName == "" {
+			continue
+		}
+		claimGeometryLease(ws.TmuxName)
+	}
+}
+
+func (m *Model) syncBoundHostIncarnation() {
+	hostID := m.boundDestination.HostID
+	if hostID == "" || m.registry == nil {
+		return
+	}
+	var incarnation uint64
+	for _, entry := range m.currentHostCatalog() {
+		if entry.ID == hostID {
+			incarnation = entry.Incarnation
+			break
+		}
+	}
+	if incarnation == 0 {
+		return
+	}
+	if m.boundDestination.HostIncarnation == incarnation {
+		ctx := m.registry.Context()
+		if ctx != nil && ctx.HostIncarnation == incarnation {
+			return
+		}
+	}
+	m.boundDestination.HostIncarnation = incarnation
+	m.registry.SetHostIncarnation(incarnation)
 }
 
 func (m *Model) overviewProjects() []overview.Project {
@@ -1641,7 +1716,7 @@ func (m *Model) switchProjectWithSelection(projectPath string, inventory []Workt
 		m.refreshConfigContext(),
 		titleCmd,
 		inventoryRefresh,
-		announceInstanceCmd(m.ui.WorkDir, m.ui.ProjectRoot),
+		m.announcePresenceCmd(),
 		// Routine confirmation of a switch the user just made and can see:
 		// a flash, not a stored notification (audit row 18).
 		ShowFlash(fmt.Sprintf("Switched to %s", GetRepoName(targetPath))),

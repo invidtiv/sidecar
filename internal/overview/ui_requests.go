@@ -50,6 +50,11 @@ func (m *Model) handleUIRequest(req uirequest.Request) tea.Cmd {
 	if req.Action == uirequest.ActionCreate {
 		return m.applyCreateRequest(req)
 	}
+	if req.Origin.HostID != "" && (req.Action == uirequest.ActionLayout || req.Action == uirequest.ActionOpen) {
+		if m.RelayedLanding != nil && !m.RelayedLanding(req) {
+			return nil
+		}
+	}
 	if req.Action == uirequest.ActionLayout {
 		if req.Origin.HostID == "" && !req.Origin.Sessions && !tty.ThisInstanceOwnsSession(req.Origin.TmuxSession) {
 			return nil
@@ -328,6 +333,11 @@ func (m *Model) forwardHostUIRequests(update hosts.Update) tea.Cmd {
 		if req.Origin.HostID == "" {
 			req.Origin.HostID = update.HostID
 		}
+		if m.RelayedLanding != nil && !m.RelayedLanding(req) {
+			r := req
+			cmds = append(cmds, func() tea.Msg { return uirequest.RequestMsg{Request: r} })
+			continue
+		}
 		if cmd := m.handleUIRequest(req); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
@@ -336,6 +346,21 @@ func (m *Model) forwardHostUIRequests(update hosts.Update) tea.Cmd {
 		return nil
 	}
 	return tea.Batch(cmds...)
+}
+
+// RelayedRowOnScreen reports that the Sessions preview is showing the origin's
+// matching row — the existing landing gate, asked as a yes/no so the app-level
+// decider does not copy it.
+func (m *Model) RelayedRowOnScreen(req uirequest.Request) bool {
+	if m == nil || !m.preview.visible {
+		return false
+	}
+	bound, ok := m.bindOpenWorkspace(req)
+	if !ok {
+		return false
+	}
+	selected, has := m.SelectedWorkspace()
+	return has && selected.ID == bound.ID
 }
 
 func (m *Model) applyCreateRequest(req uirequest.Request) tea.Cmd {

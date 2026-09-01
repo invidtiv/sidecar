@@ -196,6 +196,11 @@ func (m *Model) remoteHostUnavailable(hostID string) string {
 	return hostID + " is disabled or not connected, so nothing can be changed there"
 }
 
+// HostVerbs is the bound-workspace injection of hostVerbs.
+func (m *Model) HostVerbs(hostID string) hostproto.VerbCapabilities {
+	return m.hostVerbs(hostID)
+}
+
 // hostVerbs is what a host said its CLI understands, read from the hello it
 // sent. The zero value — an unknown host, or one whose Sidecar predates the
 // field — means "assume nothing", which is what makes an older host degrade

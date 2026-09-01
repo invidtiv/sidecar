@@ -109,6 +109,15 @@ func (p *Plugin) selectedTerminalSurface() (root, identity string, ok bool) {
 		root = wt.Path
 		identity = workspaceSurfaceIdentity(wt)
 	}
+	if p.remoteBound() {
+		if identity == "" {
+			return "", "", false
+		}
+		if root != "" {
+			root = filepath.Clean(root)
+		}
+		return root, identity, true
+	}
 	resolved, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return "", "", false

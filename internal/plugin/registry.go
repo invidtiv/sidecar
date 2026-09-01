@@ -203,6 +203,16 @@ func (r *Registry) ReinitHost(newWorkDir, newProjectRoot, hostID string, hostInc
 	return cmds
 }
 
+// SetHostIncarnation updates the bound host's serve identity without a Reinit.
+// A bump while bound is a re-resolve, not a silent continuation.
+func (r *Registry) SetHostIncarnation(n uint64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.ctx != nil {
+		r.ctx.HostIncarnation = n
+	}
+}
+
 // Context returns the shared plugin context, or nil when the registry was
 // built without one. App-owned surfaces that are not registry plugins (the
 // global Tasks host) read it to inherit config, logger, and adapters without

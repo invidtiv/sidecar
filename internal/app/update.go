@@ -232,6 +232,13 @@ func (m Model) Update(msg tea.Msg) (result tea.Model, command tea.Cmd) {
 }
 
 func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.overview != nil {
+		// Rebound every Update so the landing check sees this copy's scope and
+		// bind, not the Model New captured.
+		m.overview.RelayedLanding = func(req uirequest.Request) bool {
+			return m.uiRequestLanding(req) != uiRequestLandingBoundWorkspace
+		}
+	}
 	// Remote-host stream messages reach the global browser whatever is on
 	// screen. See overview.IsHostMessage: each delivery is what schedules the
 	// next read of the update channel, so dropping one on a focus check would
@@ -258,6 +265,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.refreshOpenWorktreeSwitcher()
 		}
 		if m.boundDestination.HostID != "" && m.registry != nil {
+			m.syncBoundHostIncarnation()
 			for i, p := range m.registry.Plugins() {
 				if p.ID() != workspacePluginID {
 					continue
@@ -985,12 +993,14 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, cmd)
 			return m, tea.Batch(cmds...)
 		}
-		if m.overview != nil {
+		landing := m.uiRequestLanding(msg.Request)
+		relayed := msg.Request.Origin.HostID != ""
+		if m.overview != nil && (!relayed || landing != uiRequestLandingBoundWorkspace) {
 			if cmd := m.overview.Update(msg); cmd != nil {
 				cmds = append(cmds, cmd)
 			}
 		}
-		if m.sessionsOwnsCreateSplit(msg.Request) {
+		if m.sessionsOwnsCreateSplit(msg.Request) || (relayed && landing != uiRequestLandingBoundWorkspace) {
 			return m, tea.Batch(cmds...)
 		}
 	}

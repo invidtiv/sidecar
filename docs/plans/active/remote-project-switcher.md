@@ -1,8 +1,8 @@
 # Remote destinations in `@` and `W`
 
-Status: **active; slices 0–2.5 implemented** on `remote-viewer-screen` (td-f7855c: td-823e94, td-72a679, td-90757e; slice 2.5: td-11d3d3, td-761cea). Remaining: slice 3 (viewer-screen landing on the bound project), slice 4 (Files/Git/td/Tasks remoting), slice 5 (docs and isolated proof). **Created:** 2026-09-01 **Verified against the tree on 2026-09-01** after slice 2.5.
+Status: **active; slices 0–3 implemented** on `remote-viewer-screen` (td-f7855c: td-823e94, td-72a679, td-90757e; slice 2.5: td-11d3d3, td-761cea; slice 3: td-af932a). Remaining: slice 4 (Files/Git/td/Tasks remoting), slice 5 (docs and isolated proof). **Created:** 2026-09-01 **Verified against the tree on 2026-09-01** after slice 3.
 
-Related: [Sidecar as its own remote host runtime](sidecar-remote-hosts.md) is the transport and inventory stream. [The viewer owns the screen](../implemented/remote-host-viewer-screen.md) is the lease and `uirequest` announcement this bind must still grow onto the project workspace. [Remote host content-pane parity](../implemented/remote-host-content-pane-parity.md) is the read path a remote-bound plugin must use. [Agent-facing project CLI](agent-project-cli.md) is the local `sidecar project` surface; it does not grow `--host` in this plan.
+Related: [Sidecar as its own remote host runtime](sidecar-remote-hosts.md) is the transport and inventory stream. [The viewer owns the screen](../implemented/remote-host-viewer-screen.md) is the lease and `uirequest` announcement the bound project workspace now shares with Sessions. [Remote host content-pane parity](../implemented/remote-host-content-pane-parity.md) is the read path a remote-bound plugin uses. [Agent-facing project CLI](agent-project-cli.md) is the local `sidecar project` surface; it does not grow `--host` in this plan.
 
 ## Decision first
 
@@ -25,7 +25,7 @@ Sessions remains the fleet. `@` is how you go to work in a project, including on
                 +-- workspace plugin  --> host inventory (already on the wire)   [slices 0–2]
                 +-- live terminals    --> existing control-mode proxy             [slices 0–2]
                 +-- Files / Git / td  --> refuse until slice 4                    [slices 0–2]
-                +-- content panes     --> SourceContext with HostID               [remaining]
+                +-- content panes     --> SourceContext with HostID               [slice 3]
                 +-- lease + uirequest --> viewer-screen announcement, this TUI    [slice 3]
 ```
 
@@ -38,13 +38,13 @@ A same-named local checkout is a different destination. Reinit of `~/code/sideca
 | `@` with no remotes connected | Unchanged: Overview (if available) plus local `config.projects.list`. | Implemented |
 | `@` with aerie online | Local rows this frame. Then `[aerie] Sidecar`, `[aerie] td`, … as that host’s snapshot is present. Filter matches host id, project name, and path. | Implemented |
 | `@` with aerie connecting / stale / unreachable | Those rows still exist, disabled, with the same health reason Sessions already shows. They are not omitted, and they are not switchable. | Implemented (`hostLastKnown` for `@`; Sessions still drops `hostResults` on `!Shows()`) |
-| Enter on `[aerie] Sidecar` | Leave Sessions if you were there. Bind this TUI to that host project. Restore that host’s last worktree for that project if one was remembered. Navbar / title name the host. Toast: `Switched to [aerie] Sidecar`. | Implemented (bind, restore, navbar/title, toast). Lease claim and honest instance presence are slice 3. |
+| Enter on `[aerie] Sidecar` | Leave Sessions if you were there. Bind this TUI to that host project. Restore that host’s last worktree for that project if one was remembered. Navbar / title name the host. Toast: `Switched to [aerie] Sidecar`. | Implemented (bind, restore, navbar/title, toast, lease claim, instance `HostID`). |
 | `W` while in local Sidecar, aerie online | Local worktrees this frame. Then `[aerie] Sidecar [[feature]]` for linked worktrees of the project aerie registered under the same *name* (decision 10). | Implemented. Host main checkout is not a W row; it remains the `@` destination. |
 | `W` while already in `[aerie] Sidecar` | Aerie’s worktrees for that project, plus this machine’s worktrees of the same-named local project as unprefixed rows. | Implemented. Local rows come from the in-memory cache of that named config project; omitted rather than `git worktree list` on open. |
 | Enter on `[aerie] Sidecar [[feature]]` | Bind to that host worktree. Plugins reinit against the remote context, not against a local path of the same name. | Implemented via `bindRemoteDestination`. |
 | Files / Git / td / Tasks / Notes on a remote-bound project | Honest unavailable state naming the host, until that plugin’s remote slice. They must not walk this disk. | Implemented (Init/Start/View/Update/FocusContext). |
-| Workspaces on a remote-bound project | That host’s shells and worktrees for the project, live panes through the existing proxied control channel. | Listing and live attach implemented. Create shell/worktree from this surface is refused naming the host; Phase C Sessions create is unchanged. Content panes opened from this surface still build a local `SourceContext` (no `HostID`). |
-| Agent on aerie, `sidecar open README.md`, laptop bound to `[aerie] Sidecar` and holding the lease | Document pane on this project workspace (viewer-screen relay), not a Sessions-only landing and not aerie’s own TUI. | Remaining (slice 3). |
+| Workspaces on a remote-bound project | That host’s shells and worktrees for the project, live panes through the existing proxied control channel. | Listing and live attach implemented. Create shell/worktree from this surface is refused naming the host; Phase C Sessions create is unchanged. Content panes opened from this surface use `SourceContext` with `HostID` and `RemoteSource`. |
+| Agent on aerie, `sidecar open README.md`, laptop bound to `[aerie] Sidecar` and holding the lease | Document pane on this project workspace (viewer-screen relay), not a Sessions-only landing and not aerie’s own TUI. | Implemented (slice 3). |
 
 Label grammar, one line, no extra punctuation beyond the brackets:
 
@@ -65,15 +65,7 @@ Local destinations stay unprefixed (`Sidecar`, `Sidecar [[feature]]` if the work
 
 Remote rows require `sidecar_remote_hosts` and `cross_project_overview`: the registry still lives in `overview.Model`. `HostCatalog` is a copy; project keys are unscoped (`hosts.SplitScopedKey`) so later persist does not double-scope. Unreachable hosts keep last-known projects in `hostLastKnown` for `@`/`W` only; Sessions still deletes `hostResults`/`hostProjects` when `!Health.State.Shows()` and paints a health row.
 
-### What slice 3 still has to change
-
-These are the remaining seams the bind did not close:
-
-1. **Instance presence publishes no host.** `bindRemoteDestination` calls `announceInstanceCmd("", "")` (`internal/app/model.go`). `uirequest.Instance` has no `HostID` field; its `ProjectKey` is a local basename from `projectdir.Lookup`. Publishing empty identity while bound avoids advertising a remote project as this machine’s, but `sidecar project current` then reports nothing, and a local agent’s `sidecar open` cannot match the bound host. Slice 3 adds `HostID` to the record (same shape as `uirequest.Origin`) and publishes the bound host.
-2. **Workspace `AttentionOrigin` is still local.** `internal/plugins/workspace/agent_triggers.go` `AttentionOrigin()` does not set `HostID`. `attentionOriginTransport` already has the field. Without it, an aerie agent’s `sidecar open` cannot tell that this TUI is looking at its shell.
-3. **The landing gate is still Sessions-only.** `overview.handleUIRequest` / `relayedOpenNotOnScreenReason` refuse unless the Sessions preview is visible and the row is selected (`internal/overview/ui_requests.go`). Once bound, the same announcement must apply to this project workspace when the origin matches `(HostID, ProjectKey)` and this instance holds the lease. One shared decider over the two surfaces, in the shape of `sessionsOwnsCreateSplit` (`internal/app/scope.go`), not a second copy inside the workspace plugin.
-4. **Geometry leases are not claimed on bind.** Architecture §3 step 5 — claim leases for live sessions of that project as Sessions does on row select — is not in `bindRemoteDestination`.
-5. **Bound content panes are still local `SourceContext`.** `workspaceSourceContext` (`internal/plugins/workspace/content_deck.go`) sets `Root` / `ProjectRoot` from `ctx.ProjectRoot` (empty while bound) and does not set `HostID` / `HostIncarnation`. Nested links from a remote shell in the bound workspace would miss the content-pane source seam Sessions already has.
+Relayed `sidecar open` / `layout` (`Origin.HostID != ""`) land through one app-level decider (`uiRequestLanding` in `internal/app/scope.go`). Sessions wins when global Sessions is on screen and the matching row is selected with the preview visible. Otherwise the bound project workspace wins when `ScopeProject`, the bound destination matches origin `(HostID, ProjectKey)`, the origin shell is in that host inventory, this instance holds the lease, and Workspaces is the screen. Otherwise the request is declined and never queued. `overview.handleUIRequest` is extended with `RelayedLanding` so it does not ack-decline a request the bound workspace owns; the workspace plugin never queues a relayed request and never applies a request Sessions owns. `bindRemoteDestination` publishes `uirequest.Instance.HostID` of the bound host (no remote path in `WorkDir`), claims geometry leases for that project's live sessions, and the workspace plugin's `AttentionOrigin` carries `HostID`. Bound content panes use `workspaceSourceContext` with `HostID`/`HostIncarnation`/`ProjectKey` and `RemoteSource` from the Sessions adapter injected on `plugin.Context`; nested links follow the deck's Source. A `HostIncarnation` bump while bound is a re-resolve.
 
 ## Scope
 
@@ -90,8 +82,6 @@ Done in slices 0–2:
 
 Remaining in this plan:
 
-- Lease claim on bind, instance `HostID`, workspace `AttentionOrigin.HostID`, and one landing decider so relayed `sidecar open` / `layout` target the bound project workspace (slice 3).
-- Content-pane `SourceContext` on the bound project workspace (slice 3 or with it: the source seam already exists).
 - Files, Git, td, Tasks, Notes as remote-capable plugins (slice 4).
 - Create shell/worktree from the bound project workspace (today refused; Phase C Sessions create is the reuse target).
 - CLI/help and isolated two-machine proof (slice 5).
@@ -125,7 +115,7 @@ type Destination struct {
 }
 ```
 
-`HostIncarnation` matches `contentpanes.SourceContext`. A bump while bound is a re-resolve, not a silent continuation (slice 3 must honor this when wiring the source).
+`HostIncarnation` matches `contentpanes.SourceContext`. A bump while bound is a re-resolve, not a silent continuation (`syncBoundHostIncarnation` plus `Deck.SetContext`).
 
 `@` lists Overview, then one row per local configured project, then one row per `(HostID, ProjectKey)` from `HostCatalog`. `W` lists worktrees of the current project on this machine and its same-named counterpart on connected hosts. A remote worktree of a different project does not appear in `W`. Display is `FormatDestination`.
 
@@ -133,7 +123,7 @@ type Destination struct {
 
 `initProjectSwitcher` / `initWorktreeSwitcher` stay synchronous over data this process already has. Remote rows come from `overview.Model.HostCatalog()` (`internal/overview/host_catalog.go`): ID, Health, Incarnation, unscoped project Key/Name/Root, and copied workspaces. Nil when there is no registry. Host updates already arrive in project scope (`overview.IsHostMessage`); an open modal rebuilds remote rows, keeps the filter, and keeps the cursor on the previously highlighted destination identity.
 
-### 3. Entering a remote destination — bind implemented; presence and leases remaining
+### 3. Entering a remote destination — implemented
 
 `bindRemoteDestination` does **not** call `switchProject(path)`:
 
@@ -141,29 +131,33 @@ type Destination struct {
 2. Set `m.boundDestination`. `m.ui.WorkDir` does not become the remote root. Persist `{HostID, ProjectKey, WorktreeKey}` as `LastBoundLocation` and last worktree per `hosts.ScopedKey`. — done
 3. `plugin.Context` has `HostID` (empty for local). `Epoch` still increments. — done (`ReinitHost`)
 4. Plugins that need a real directory see an empty local workdir and a non-empty `HostID`. Files/Git/td/Tasks must not `os.Stat` the remote root. — done for those four
-5. Claim geometry leases for live sessions of that project as Sessions already does on row select. — remaining
+5. Claim geometry leases for live sessions of that project via `tty.ClaimGeometryLease` (the same unambiguous-local-action seam interactive attach uses). `@` Enter is that action. — done (`claimBoundProjectLeases`)
 6. Restore last worktree **on that host** for that project key, unless the user picked an explicit worktree destination. — done (`applyLastRemoteWorktree`)
-7. Republish presence honestly. Today: `announceInstanceCmd("", "")`. Remaining: add `HostID` to `uirequest.Instance` and publish the bound host, or keep publishing no project identity only as an explicit choice that `sidecar project current` documents. Getting this wrong is an agent-visible bug.
-8. Workspace `AttentionOrigin` must carry the bound `HostID`. — remaining
+7. Republish presence with `uirequest.Instance.HostID` of the bound host and empty `WorkDir`/`ProjectKey`, so a remote path is never advertised as this machine’s local identity. — done (`announcePresenceCmd`)
+8. Workspace `AttentionOrigin` carries the bound `HostID` from `p.ctx.HostID`. — done
 
 Returning to a local project is today’s `switchProject(path)` and clears `HostID`, the incarnation, and the bound destination (`clearBoundDestination` + `UseLocalControl`).
 
-### 4. The screen is this TUI — remaining (slice 3)
+### 4. The screen is this TUI — implemented (slice 3)
 
-Viewer-screen lands a relayed `sidecar open` on the Sessions preview of `(HostID, TmuxSession)`, and refuses when that preview is not visible or the row is not selected. Once this TUI is bound to that host project, the same announcement applies here: the origin shell’s project matches the bound `(HostID, ProjectKey)`, the lease owner is this instance, and the pane opens in the project workspace deck.
+`uiRequestLanding` is the one decider over the two surfaces, in the shape of `sessionsOwnsCreateSplit`. Relayed open/layout (`Origin.HostID != ""`) never queue.
 
-“Which surface is this request’s screen” is a decision with two possible answers, and it must be **one** decider that both surfaces call, in the shape of `sessionsOwnsCreateSplit` (`internal/app/scope.go`). A second landing rule is the same class of bug the pane-parity rule in `CLAUDE.md` exists to prevent.
+- If global Sessions is on screen and the matching row is selected with preview visible → Sessions is the screen (`overview.RelayedRowOnScreen`).
+- Else if `ScopeProject`, the bound destination matches origin `(HostID, ProjectKey)`, the origin shell is in that host inventory, this instance holds the lease, and the project workspace is the screen → bound workspace is the screen.
+- Else → decline, do not queue.
+
+`overview.handleUIRequest` is extended (`RelayedLanding`): when the bound workspace owns the request it returns without acking. Host-stream announcements that belong to the bound workspace are forwarded as `uirequest.RequestMsg` so the workspace plugin receives them. The workspace plugin never queues a relayed request and never applies a request Sessions owns.
 
 If the user is in a *different* local project while an aerie agent opens a file, the request is off-screen for this TUI (exit 4 on layout; relayed open does not queue). Sessions can still show the row; it is not the bound screen unless the user is in Sessions looking at it.
 
-Sitting at aerie’s own TUI still wins the lease by typing, per geometry_lease.go. This plan does not steal a screen the human at the host is using.
+Sitting at aerie’s own TUI still wins the lease by typing, per geometry_lease.go. This plan does not steal a screen the human at the host is using. `@` Enter is an unambiguous local action and claims live sessions of the bound project the way interactive attach does.
 
 ### 5. Plugins, in order
 
 | Plugin | Remote-bound behaviour now | Remaining |
 | --- | --- | --- |
-| Workspaces | Host inventory for that project; live terminals via `UseRemoteControl` + Sessions spawner. | Create shell/worktree from this surface (refused today). Content `SourceContext` with `HostID`. `AttentionOrigin.HostID`. |
-| Content panes | Sessions already loads remote files through `SourceContext`. Bound project workspace does not yet pass `HostID`. | Wire `workspaceSourceContext` from the bound destination. Nested links stay on that host. |
+| Workspaces | Host inventory for that project; live terminals via `UseRemoteControl` + Sessions spawner. Relayed open/layout land here when this workspace is the screen. `AttentionOrigin.HostID` is the bound host. | Create shell/worktree from this surface (refused today). |
+| Content panes | Sessions already loads remote files through `SourceContext`. Bound project workspace uses the same adapter: `workspaceSourceContext` carries `HostID`/`HostIncarnation`/`ProjectKey`; `workspaceDeckConfig` uses `RemoteSource`; nested links follow the deck's Source. | — |
 | Files | Unavailable view naming the host. No local tree of a twin path. | Slice 4 remoting. |
 | Git | Same. | Slice 4. |
 | td / Tasks | Same. | Slice 4, then host td store via content verbs and `RunSidecar`. |
@@ -217,11 +211,11 @@ Go tests in `internal/cli/agent_remote_loopback_test.go` install the same `scrip
 
 Journeys 2–3 (`@` then Enter on `[loopback] Loopback`) are runnable on this fixture and remain slice 5’s isolated proof. Out of this slice: sshd, ControlMaster, packet loss, a second physical machine.
 
-### Slice 3 — viewer-screen lands on the bound project
+### Slice 3 — viewer-screen lands on the bound project — implemented (td-af932a)
 
 Relayed `sidecar open` / `layout` from a host pane whose project matches the bound remote destination apply to this project workspace when this instance holds the lease. Off-screen remains exit 4. Sessions landing remains for when the user is in Sessions, not bound to that project.
 
-The work is one shared decider over the two surfaces plus the presence changes listed under [What slice 3 still has to change](#what-slice-3-still-has-to-change): instance `HostID`, workspace `AttentionOrigin.HostID`, lease claim on bind, and `workspaceSourceContext` carrying the bound host. The refusal reasons stay the ones viewer-screen already ships. Its landing gate lives in `overview.handleUIRequest` and must be extended, not duplicated.
+`uiRequestLanding` (`internal/app/scope.go`) is the one decider. `overview.handleUIRequest` is extended with `RelayedLanding` rather than copied into the workspace plugin. `uirequest.Instance` has `HostID` (same json as `Origin`); `bindRemoteDestination` publishes the bound host and does not write a remote path into `WorkDir`. Workspace `AttentionOrigin` sets `HostID` from `p.ctx.HostID`. Live session leases are claimed on bind through `tty.ClaimGeometryLease`. `workspaceSourceContext` carries `HostID`/`HostIncarnation`/`ProjectKey`; `workspaceDeckConfig` uses `RemoteSource` from the Sessions adapter injected on `plugin.Context` (`RemoteRunner` / `HostVerbs`); nested links follow the deck's Source. A `HostIncarnation` bump while bound re-resolves. Relayed requests never use the workspace plugin's local pending-view queue. The refusal reasons stay the ones viewer-screen already ships.
 
 ### Slice 4 — Files (then Git, td, Tasks) as remote-capable plugins
 
@@ -235,16 +229,17 @@ CLI/help: `@` and `W` name remote destinations, and help states the flag require
 
 Same bar as remote content panes: private tmux sockets and private Sidecar state on both machines, `SIDECAR_ISOLATED_STATE=1`, no default of a live workstation. A proof that Reinit’s a path under the viewer’s `$HOME` because the host reported that string has failed even if the tests are green.
 
-Slices 0–2 are covered by package tests (`go test ./internal/app ./internal/overview ./internal/plugin ./internal/plugins/workspace ./internal/plugins/filebrowser ./internal/plugins/gitstatus ./internal/plugins/tdmonitor ./internal/plugins/tasks ./internal/state`). Slice 2.5 is implemented as `scripts/loopback-remote.sh` plus `scripts/test-loopback-remote.sh`; slice 3–5 proofs use that fixture. Slice 5’s isolated proof runs on it by default.
+Slices 0–3 are covered by package tests (`go test ./internal/app ./internal/overview ./internal/plugin ./internal/plugins/workspace ./internal/plugins/filebrowser ./internal/plugins/gitstatus ./internal/plugins/tdmonitor ./internal/plugins/tasks ./internal/state ./internal/uirequest ./internal/contentpanes`). Slice 2.5 is implemented as `scripts/loopback-remote.sh` plus `scripts/test-loopback-remote.sh`; slice 4–5 proofs use that fixture. Slice 5’s isolated proof runs on it by default.
 
 ## Related plan updates
 
 - [sidecar-remote-hosts.md](sidecar-remote-hosts.md): complete remote Files/Git browsing is this plan’s slice 4, entered through `@`.
-- [remote-host-viewer-screen.md](../implemented/remote-host-viewer-screen.md): the bind exists (`ScopeProject` + `HostID`). Slice 3 extends the announcement target from Sessions-only to the bound project workspace.
-- [remote-host-content-pane-parity.md](../implemented/remote-host-content-pane-parity.md): Sessions remains the implemented remote content surface. The bound project Workspace lists host shells; its `SourceContext` still needs `HostID` (slice 3).
+- [remote-host-viewer-screen.md](../implemented/remote-host-viewer-screen.md): the bind exists (`ScopeProject` + `HostID`). Slice 3 extends the announcement target from Sessions-only to the bound project workspace via one shared landing decider.
+- [remote-host-content-pane-parity.md](../implemented/remote-host-content-pane-parity.md): Sessions remains the fleet remote content surface. The bound project Workspace lists host shells and loads through the same `SourceContext` + `RemoteSource` adapter.
 
 ## Changelog
 
+- **2026-09-01** — Slice 3 implemented (td-af932a): bound `@` destination is the screen for relayed open/layout. Instance `HostID`, workspace `AttentionOrigin.HostID`, lease claim on bind, shared `uiRequestLanding` decider, `workspaceSourceContext` + `RemoteSource`. Remaining: slices 4–5.
 - **2026-09-01** — Slice 2.5 implemented: `scripts/loopback-remote.sh` (`up`/`paths`/`status`/`down`, `--no-drive`, `--delay`), shared `scripts/loopback-ssh.sh`, `scripts/test-loopback-remote.sh`. `remote-spike.sh` requires `SPIKE_HOST`. Default proof path for later slices; real SSH stays opt-in with no workstation hostname default.
 - **2026-09-01** — Slice 2.5 added: portable loopback remote (extract existing `loopbackHost` + fake ssh, optional spawn delay, agent up/down). Default proof path for later slices; real SSH stays opt-in with no workstation hostname default.
 - **2026-09-01** — Slices 0–2 implemented on `remote-viewer-screen` (td-f7855c). Plan rewritten as current state: bind, catalog, `@`/`W`, Workspaces listing and live attach, Files/Git/td/Tasks refusals. Remaining: slices 3–5.

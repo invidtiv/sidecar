@@ -6,6 +6,8 @@ All notable changes to sidecar are documented here.
 
 ### Features
 
+- **A bound `@` destination is the screen for relayed `sidecar open` / `layout`.** Selecting `[host] Project` already bound this TUI as that host's project workspace; a host agent that runs `sidecar open` or `sidecar layout` now lands on that workspace when this instance holds the geometry lease, not only on Sessions and never on a same-named local twin. Sessions landing is unchanged when you are actually looking at that row. Off-screen still declines and never queues. (td-af932a)
+
 - **From a Sidecar-managed pane on a host you are viewing, `sidecar open` and `sidecar layout` land on this machine.** The geometry lease names the screen: if you are looking at that Sessions row from here, the pane opens here; if you walked over to the host's own Sidecar, the open stays there. Relayed open never queues — a row that is not on screen, or a lease holder that is disconnected or too old, exits 4 with the reason rather than applying later against whatever is selected. There is still no `sidecar open --host`; an agent on the host runs the same command it runs locally. (td-3d2e0d, td-4971ac, td-716ba6, td-15344e, td-4c955f)
 
 - **`n` on a remote Sessions row lists that host's files, diffs, issues, and notes, and a Terminal split creates the tmux session on the host.** Pickers stay empty until the host catalog arrives rather than filling from a same-named local twin. Resource rows come from the host's `content describe` matchers, not this machine's provider snapshot. `layout apply` of a new `kind: shell` pane uses the same host tmux path. (td-3fe778)

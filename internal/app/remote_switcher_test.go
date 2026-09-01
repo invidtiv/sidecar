@@ -17,6 +17,7 @@ import (
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
@@ -400,10 +401,74 @@ func TestHostCatalogWorkspacesReachBoundWorkspacePlugin(t *testing.T) {
 		}},
 	}}
 	m.installPluginHostSeams()
+	m.boundDestination = Destination{HostID: "aerie", ProjectKey: "/home/me/sidecar"}
 	ctx.HostID = "aerie"
 	ctx.ProjectKey = "/home/me/sidecar"
 	got := ctx.HostWorkspaces()
 	if len(got) != 1 || got[0].Name != "Claude pane" {
 		t.Fatalf("HostWorkspaces = %+v", got)
+	}
+}
+
+func TestBindRemoteDestinationClaimsLiveSessionLeases(t *testing.T) {
+	if err := state.InitWithDir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.Features.Flags[features.CrossProjectOverview.Name] = true
+	features.Init(cfg)
+	t.Cleanup(func() { features.Init(config.Default()) })
+
+	reg := plugin.NewRegistry(&plugin.Context{})
+	m := New(reg, keymap.NewRegistry(), cfg, "", "/tmp/one", "/tmp/one", "")
+	m.testHostCatalog = []overview.HostCatalogEntry{{
+		ID: "aerie",
+		Projects: []overview.HostCatalogProject{{
+			Key: "/home/me/sidecar",
+			Workspaces: []workspaceinventory.Workspace{
+				{Kind: workspaceinventory.KindShell, Name: "live", TmuxName: "sidecar-claude", Live: true},
+				{Kind: workspaceinventory.KindShell, Name: "dead", TmuxName: "sidecar-old", Live: false},
+			},
+		}},
+	}}
+	original := claimGeometryLease
+	t.Cleanup(func() { claimGeometryLease = original })
+	var claimed []string
+	claimGeometryLease = func(target string) { claimed = append(claimed, target) }
+
+	_ = m.bindRemoteDestination(Destination{HostID: "aerie", ProjectKey: "/home/me/sidecar", ProjectName: "Sidecar"})
+	if len(claimed) != 1 || claimed[0] != "sidecar-claude" {
+		t.Fatalf("claimed = %v, want [sidecar-claude]", claimed)
+	}
+}
+
+func TestBindRemoteDestinationAnnouncesHostIDWithoutRemotePath(t *testing.T) {
+	stateHome := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	t.Setenv("SIDECAR_ISOLATED_STATE", "1")
+	if err := state.InitWithDir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	m := switcherTestModel(t, "/tmp/one", []config.ProjectConfig{{Name: "one", Path: "/tmp/one"}})
+	dest := Destination{HostID: "aerie", ProjectName: "Sidecar", ProjectKey: "/home/me/sidecar", Root: "/home/me/sidecar"}
+	cmd := m.bindRemoteDestination(dest)
+	if cmd == nil {
+		t.Fatal("bind returned nil")
+	}
+	if m.ui.WorkDir != "" || m.ui.ProjectRoot != "" {
+		t.Fatalf("WorkDir/ProjectRoot = %q %q", m.ui.WorkDir, m.ui.ProjectRoot)
+	}
+	if msg := m.announcePresenceCmd()(); msg != nil {
+		t.Fatalf("announce returned %v", msg)
+	}
+	live, err := uirequest.ListInstances(config.StateDir())
+	if err != nil {
+		t.Fatalf("ListInstances: %v", err)
+	}
+	if len(live) != 1 || live[0].HostID != "aerie" {
+		t.Fatalf("instance = %+v", live)
+	}
+	if live[0].WorkDir != "" || live[0].ProjectKey != "" {
+		t.Fatalf("advertised remote path as local identity: %+v", live[0])
 	}
 }

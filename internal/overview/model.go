@@ -280,6 +280,11 @@ type Model struct {
 	// contentSource, when set, is the Document adapter for remote rows. Tests
 	// inject a fake; production leaves it nil and documentSource builds one.
 	contentSource contentpanes.Source
+	// RelayedLanding, when set, reports whether Sessions should handle a
+	// relayed open/layout (apply or decline). False means the bound project
+	// workspace owns it: handleUIRequest returns without acking. Nil means
+	// Sessions always considers itself the screen (existing package tests).
+	RelayedLanding func(uirequest.Request) bool
 
 	// docFinderCaches holds one file list per pane root, so the file finder a
 	// document pane opens walks a tree once rather than once per ctrl+p.

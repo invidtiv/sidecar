@@ -151,11 +151,21 @@ func (p *Plugin) laneContext(branch string) string {
 }
 
 func (p *Plugin) laneProjectKey() string {
+	if p.ctx != nil && p.ctx.HostID != "" && p.ctx.ProjectKey != "" {
+		return filepath.Base(p.ctx.ProjectKey)
+	}
 	root := p.laneProjectRoot()
 	if root == "" {
 		return ""
 	}
 	return filepath.Base(root)
+}
+
+func (p *Plugin) attentionHostID() string {
+	if p.ctx == nil {
+		return ""
+	}
+	return p.ctx.HostID
 }
 
 func (p *Plugin) laneProjectRoot() string {
@@ -190,14 +200,14 @@ func (p *Plugin) AttentionOrigin() (plugin.AttentionOrigin, bool) {
 		return plugin.AttentionOrigin{}, false
 	}
 	if shell := p.getSelectedShell(); shell != nil {
-		return plugin.AttentionOrigin{TmuxSession: shell.TmuxName, ProjectKey: p.laneProjectKey(), WorkDir: shell.WorkDir}, true
+		return plugin.AttentionOrigin{TmuxSession: shell.TmuxName, ProjectKey: p.laneProjectKey(), WorkDir: shell.WorkDir, HostID: p.attentionHostID()}, true
 	}
 	if wt := p.selectedWorktree(); wt != nil {
 		session := ""
 		if wt.Agent != nil {
 			session = wt.Agent.TmuxSession
 		}
-		return plugin.AttentionOrigin{TmuxSession: session, ProjectKey: p.laneProjectKey(), WorkDir: wt.Path}, true
+		return plugin.AttentionOrigin{TmuxSession: session, ProjectKey: p.laneProjectKey(), WorkDir: wt.Path, HostID: p.attentionHostID()}, true
 	}
 	return plugin.AttentionOrigin{}, false
 }

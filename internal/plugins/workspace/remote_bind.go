@@ -66,6 +66,7 @@ func hostWorkspaceToShell(ws plugin.HostWorkspace) *ShellSession {
 		Name:        ws.Name,
 		TmuxName:    session,
 		WorkDir:     ws.Path,
+		InventoryID: ws.ID,
 		CreatedAt:   ws.CreatedAt,
 		ChosenAgent: AgentType(ws.Provider),
 	}
@@ -153,5 +154,11 @@ func (p *Plugin) handleHostInventory() (plugin.Plugin, tea.Cmd) {
 		return p, nil
 	}
 	p.applyHostInventory()
-	return p, tea.Batch(p.reconcileTerminalModels()...)
+	cmds := p.reconcileTerminalModels()
+	if p.contentDeck != nil {
+		if root, surface, ok := p.selectedTerminalSurface(); ok {
+			cmds = append(cmds, p.contentDeck.SetContext(p.workspaceDeckContext(root, surface))...)
+		}
+	}
+	return p, tea.Batch(cmds...)
 }

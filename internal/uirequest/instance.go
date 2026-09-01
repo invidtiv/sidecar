@@ -17,12 +17,17 @@ import (
 // Instance is a live Sidecar TUI process, announced under the state dir so
 // `sidecar open` can address it from outside a project shell.
 type Instance struct {
-	PID        int       `json:"pid"`
-	Host       string    `json:"host"`
-	ProjectKey string    `json:"projectKey"`
-	Project    string    `json:"project"`
-	WorkDir    string    `json:"workDir"`
-	StartedAt  time.Time `json:"startedAt"`
+	PID        int    `json:"pid"`
+	Host       string `json:"host"`
+	ProjectKey string `json:"projectKey"`
+	Project    string `json:"project"`
+	WorkDir    string `json:"workDir"`
+	// HostID names the registered remote host this TUI is bound to. Empty
+	// means a local project. It is the same json field as Origin.HostID so a
+	// presence record can publish the bound host without advertising a remote
+	// path as this machine's WorkDir or ProjectKey.
+	HostID    string    `json:"hostId,omitempty"`
+	StartedAt time.Time `json:"startedAt"`
 }
 
 // InstancesDir returns and ensures the instance-presence directory.

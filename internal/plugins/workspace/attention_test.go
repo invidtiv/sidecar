@@ -37,3 +37,19 @@ func TestProjectWorkspaceAttentionOriginUsesSelectedSurface(t *testing.T) {
 		t.Fatal("hidden project workspace exposed a visible origin")
 	}
 }
+
+func TestProjectWorkspaceAttentionOriginIncludesBoundHostID(t *testing.T) {
+	p := &Plugin{
+		focused:          true,
+		ctx:              &plugin.Context{HostID: "aerie", ProjectKey: "/home/me/sidecar"},
+		shellSelected:    true,
+		selectedShellIdx: 0,
+		shells: []*ShellSession{{
+			Name: "Agent", TmuxName: "sidecar-sh-sidecar-1", WorkDir: "/home/me/sidecar",
+		}},
+	}
+	origin, ok := p.AttentionOrigin()
+	if !ok || origin.HostID != "aerie" || origin.TmuxSession != "sidecar-sh-sidecar-1" || origin.ProjectKey != "sidecar" {
+		t.Fatalf("bound origin = %+v, %v", origin, ok)
+	}
+}

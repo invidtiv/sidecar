@@ -54,13 +54,26 @@ func (m *Model) documentSource(ctx contentpanes.SurfaceContext) contentpanes.Sou
 	if !ctx.Source.Remote() {
 		return contentpanes.LocalSource{}
 	}
+	return m.HostContentSource(ctx.Source.HostID)
+}
+
+// HostContentSource is the Document adapter for hostID. Tests inject a fake
+// through contentSource; production builds RemoteSource from the Sessions
+// runner and the host's advertised verbs.
+func (m *Model) HostContentSource(hostID string) contentpanes.Source {
 	if m.contentSource != nil {
 		return m.contentSource
 	}
-	hostID := ctx.Source.HostID
-	return contentpanes.NewRemoteSource(hostID, m.hostVerbs(hostID), func(c context.Context, id string, args []string, out any) error {
-		return runRemoteSidecar(c, m.hostRegistry, id, args, out)
-	})
+	if hostID == "" {
+		return contentpanes.LocalSource{}
+	}
+	return contentpanes.NewRemoteSource(hostID, m.hostVerbs(hostID), m.RunHostSidecar)
+}
+
+// RunHostSidecar is the hosts.RunSidecar seam the bound workspace plugin
+// reuses for content reads and relayed acks.
+func (m *Model) RunHostSidecar(ctx context.Context, hostID string, args []string, out any) error {
+	return runRemoteSidecar(ctx, m.hostRegistry, hostID, args, out)
 }
 
 func remoteContentErrorCmd(err error) tea.Cmd {
