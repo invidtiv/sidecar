@@ -61,6 +61,12 @@ func (p *Plugin) loadInlineDiff(path string, staged bool, status FileStatus) tea
 // Also kicks off a separate total-commit-count load so a slow rev-list on a
 // huge monorepo cannot delay the commit list paint.
 func (p *Plugin) loadRecentCommits() tea.Cmd {
+	if p.ctx != nil && p.ctx.HostID != "" {
+		return nil
+	}
+	if p.repoRoot == "" {
+		return nil
+	}
 	if p.activeHistoryRequestID != 0 {
 		p.historyRefreshDirty = true
 		return nil

@@ -811,6 +811,9 @@ func (p *Plugin) reresolveFileOpTarget() {
 // inline editor was open is flushed here, once the message that closed it has
 // been handled.
 func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
+	if p.ctx != nil && p.ctx.HostID != "" {
+		return p, nil
+	}
 	updated, cmd := p.update(msg)
 	if p.pendingAutoRefresh && !p.autoRefreshBlocked() {
 		if refreshCmd := p.requestAutoRefresh(); refreshCmd != nil {

@@ -369,6 +369,9 @@ func (p *Plugin) Stop() {
 
 // Update handles messages.
 func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
+	if p.ctx != nil && p.ctx.HostID != "" {
+		return p, nil
+	}
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
 		if p.inNoRepoMode() {

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/plugin"
 )
 
@@ -32,4 +33,16 @@ func TestInitWithHostIDDoesNotOpenStore(t *testing.T) {
 	if !strings.Contains(view, "aerie") {
 		t.Errorf("view = %q, want the host named", view)
 	}
+}
+
+func TestUpdateWithHostIDDoesNotWalkOrPanic(t *testing.T) {
+	p := New()
+	if err := p.Init(&plugin.Context{WorkDir: t.TempDir(), HostID: "aerie"}); err != nil {
+		t.Fatal(err)
+	}
+	_, cmd := p.Update(plugin.PluginFocusedMsg{})
+	if cmd != nil {
+		t.Fatalf("PluginFocusedMsg returned %v", cmd)
+	}
+	_, _ = p.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
 }

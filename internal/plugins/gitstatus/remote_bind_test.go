@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/plugin"
 )
 
@@ -38,4 +40,36 @@ func TestInitWithHostIDDoesNotOpenLocalTree(t *testing.T) {
 	if p.inNoRepoMode() {
 		t.Fatal("remote bind must not present the local no-repo init path")
 	}
+}
+
+func TestUpdatePluginFocusedMsgWithHostIDDoesNotLoadCommits(t *testing.T) {
+	p := New()
+	if err := p.Init(&plugin.Context{WorkDir: t.TempDir(), HostID: "aerie"}); err != nil {
+		t.Fatal(err)
+	}
+	p.historyLoader = func(workDir string, limit int) ([]*Commit, *PushStatus, error) {
+		t.Errorf("git history loader ran against %q", workDir)
+		return []*Commit{{Hash: "deadbeef", Subject: "should not load"}}, &PushStatus{}, nil
+	}
+
+	_, cmd := p.Update(app.PluginFocusedMsg{})
+	if cmd != nil {
+		msg := cmd()
+		if loaded, ok := msg.(RecentCommitsLoadedMsg); ok && len(loaded.Commits) > 0 {
+			t.Fatalf("PluginFocusedMsg loaded commits: %+v", loaded.Commits)
+		}
+		t.Fatalf("PluginFocusedMsg returned cmd producing %#v", msg)
+	}
+	if p.recentCommits != nil {
+		t.Fatalf("recentCommits = %+v, want none", p.recentCommits)
+	}
+}
+
+func TestUpdateMovementKeyWithHostIDDoesNotPanic(t *testing.T) {
+	p := New()
+	if err := p.Init(&plugin.Context{WorkDir: t.TempDir(), HostID: "aerie"}); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = p.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
+	_, _ = p.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 }
