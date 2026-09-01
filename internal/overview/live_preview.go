@@ -196,6 +196,9 @@ func (m *Model) previewPaneVisible(kind panelayout.Kind) bool {
 // ---------------------------------------------------------------------------
 
 func (m *Model) previewIssueTargets() []livewatch.Target {
+	if m.preview.deck != nil && m.preview.deck.Context().Source.Remote() {
+		return nil
+	}
 	issue := m.preview.issue
 	if issue == nil || len(issue.tabs.Items) == 0 {
 		return nil
@@ -246,6 +249,9 @@ func (m *Model) previewIssueRoots() []string {
 }
 
 func (m *Model) resolvePreviewTDStore() tea.Cmd {
+	if m.preview.deck != nil && m.preview.deck.Context().Source.Remote() {
+		return nil
+	}
 	// Resolving walks parents and can shell out to git, so only roots behind
 	// panes actually on screen are queued.
 	var roots []string
@@ -280,6 +286,20 @@ func (m *Model) resolvePreviewTDStore() tea.Cmd {
 func (m *Model) refreshPreviewIssues() []tea.Cmd {
 	issue := m.preview.issue
 	if issue == nil {
+		return nil
+	}
+	if m.preview.deck != nil && m.preview.deck.Context().Source.Remote() {
+		if !m.previewPaneVisible(panelayout.Issue) {
+			return nil
+		}
+		view := issue.view()
+		if view == nil {
+			return nil
+		}
+		view.Observe()
+		if cmd := wrapPreviewIssueLoad(view.Refresh(false), issue.surface); cmd != nil {
+			return []tea.Cmd{cmd}
+		}
 		return nil
 	}
 	var cmds []tea.Cmd
@@ -360,8 +380,38 @@ func (m *Model) visibleRemoteDocument() bool {
 	return m.previewPaneVisible(panelayout.Document)
 }
 
+func (m *Model) visibleRemoteIssue() bool {
+	if m.preview.deck == nil || !m.preview.deck.Context().Source.Remote() {
+		return false
+	}
+	if m.preview.issue == nil || m.preview.issue.view() == nil {
+		return false
+	}
+	if !m.hostShows(m.preview.deck.Context().Source.HostID) {
+		return false
+	}
+	return m.previewPaneVisible(panelayout.Issue)
+}
+
+func (m *Model) visibleRemoteNote() bool {
+	if m.preview.deck == nil || !m.preview.deck.Context().Source.Remote() {
+		return false
+	}
+	if m.preview.note == nil || m.preview.note.view() == nil {
+		return false
+	}
+	if !m.hostShows(m.preview.deck.Context().Source.HostID) {
+		return false
+	}
+	return m.previewPaneVisible(panelayout.Note)
+}
+
+func (m *Model) visibleRemoteContent() bool {
+	return m.visibleRemoteDocument() || m.visibleRemoteIssue() || m.visibleRemoteNote()
+}
+
 func (m *Model) remoteDocumentRefreshCmd() tea.Cmd {
-	if m.preview.remoteDocTick || !m.visibleRemoteDocument() {
+	if m.preview.remoteDocTick || !m.visibleRemoteContent() {
 		return nil
 	}
 	src := m.preview.deck.Context().Source
@@ -388,11 +438,19 @@ func (m *Model) applyRemoteDocumentRefreshTick(msg remoteDocumentRefreshTickMsg)
 	if src.HostID != msg.HostID || src.HostIncarnation != msg.Incarnation || m.preview.contentEpoch != msg.Epoch {
 		return m.remoteDocumentRefreshCmd()
 	}
-	if !m.visibleRemoteDocument() {
+	if !m.visibleRemoteContent() {
 		return nil
 	}
 	var cmds []tea.Cmd
-	cmds = append(cmds, m.refreshPreviewDocs()...)
+	if m.visibleRemoteDocument() {
+		cmds = append(cmds, m.refreshPreviewDocs()...)
+	}
+	if m.visibleRemoteIssue() {
+		cmds = append(cmds, m.refreshPreviewIssues()...)
+	}
+	if m.visibleRemoteNote() {
+		cmds = append(cmds, m.refreshPreviewNotes()...)
+	}
 	if next := m.remoteDocumentRefreshCmd(); next != nil {
 		cmds = append(cmds, next)
 	}
@@ -501,6 +559,9 @@ func (m *Model) previewIssueRefreshOwed() bool {
 }
 
 func (m *Model) previewNoteTargets() []livewatch.Target {
+	if m.preview.deck != nil && m.preview.deck.Context().Source.Remote() {
+		return nil
+	}
 	note := m.preview.note
 	if note == nil || note.root == "" || len(note.tabs.Items) == 0 {
 		return nil
@@ -514,6 +575,20 @@ func (m *Model) previewNoteTargets() []livewatch.Target {
 func (m *Model) refreshPreviewNotes() []tea.Cmd {
 	note := m.preview.note
 	if note == nil {
+		return nil
+	}
+	if m.preview.deck != nil && m.preview.deck.Context().Source.Remote() {
+		if !m.previewPaneVisible(panelayout.Note) {
+			return nil
+		}
+		view := note.view()
+		if view == nil {
+			return nil
+		}
+		view.Observe()
+		if cmd := wrapPreviewNoteLoad(view.Refresh(false), note.surface); cmd != nil {
+			return []tea.Cmd{cmd}
+		}
 		return nil
 	}
 	var cmds []tea.Cmd

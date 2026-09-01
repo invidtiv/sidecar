@@ -48,7 +48,7 @@ func TestContentUsageErrors(t *testing.T) {
 		{[]string{"content", "nope"}, 2, "unknown content command"},
 		{[]string{"content", "resolve"}, 2, "--workspace is required"},
 		{[]string{"content", "resolve", "--workspace", "x:shell:y", "--kind", "file"}, 2, "--target is required"},
-		{[]string{"content", "resolve", "--workspace", "x:shell:y", "--kind", "issue", "--target", "a.md", "--json"}, 2, "unknown content kind"},
+		{[]string{"content", "resolve", "--workspace", "x:shell:y", "--kind", "diff", "--target", "a.md", "--json"}, 2, "unknown content kind"},
 		{[]string{"content", "read", "--workspace", "x:shell:y", "--kind", "file", "--operation", "exec", "--target", "a.md", "--json"}, 2, "unknown content operation"},
 	} {
 		t.Run(strings.Join(tt.args, " "), func(t *testing.T) {
@@ -110,6 +110,46 @@ func TestContentResolveReadJSON(t *testing.T) {
 	}
 	if !cached.NotModified || !cached.ValidRemoteResult() || cached.Revision != read.Revision {
 		t.Fatalf("notModified = %+v", cached)
+	}
+}
+
+func TestContentIssueNoteResolveJSON(t *testing.T) {
+	_, id, cfgPath := setupContentCLI(t)
+
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"-config", cfgPath, "content", "resolve", "--workspace", id, "--kind", "issue", "--target", "td-a4dd72", "--json"}, &out, &errOut)
+	if !handled || code != 0 {
+		t.Fatalf("issue resolve = %v %d stderr %q", handled, code, errOut.String())
+	}
+	var resolved contentservice.ResolveResult
+	if err := json.Unmarshal(out.Bytes(), &resolved); err != nil {
+		t.Fatal(err)
+	}
+	if !resolved.ValidRemoteResult() || resolved.Kind != contentservice.KindIssue || resolved.Target != "td-a4dd72" {
+		t.Fatalf("issue resolve = %+v", resolved)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	handled, code = Run([]string{"-config", cfgPath, "content", "resolve", "--workspace", id, "--kind", "note", "--target", "nt-host01", "--json"}, &out, &errOut)
+	if !handled || code != 0 {
+		t.Fatalf("note resolve = %v %d stderr %q", handled, code, errOut.String())
+	}
+	if err := json.Unmarshal(out.Bytes(), &resolved); err != nil {
+		t.Fatal(err)
+	}
+	if !resolved.ValidRemoteResult() || resolved.Kind != contentservice.KindNote || resolved.Target != "nt-host01" {
+		t.Fatalf("note resolve = %+v", resolved)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	handled, code = Run([]string{"-config", cfgPath, "content", "read", "--workspace", id, "--kind", "issue", "--operation", "document", "--target", "td-a4dd72", "--json"}, &out, &errOut)
+	if !handled || code != 2 {
+		t.Fatalf("wrong operation = %v %d %q", handled, code, errOut.String())
+	}
+	if !strings.Contains(out.String()+errOut.String(), "unknown content operation") {
+		t.Fatalf("wrong operation output %q", out.String()+errOut.String())
 	}
 }
 

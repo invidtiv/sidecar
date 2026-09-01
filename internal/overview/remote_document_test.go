@@ -2,6 +2,7 @@ package overview
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -79,6 +80,14 @@ func (f *fakeRemoteFileSource) LoadDocument(_ context.Context, _ contentpanes.So
 		Value:    filepreview.PreviewResult{Content: body, Lines: strings.Split(strings.TrimSuffix(body, "\n"), "\n")},
 		Revision: rev,
 	}, nil
+}
+
+func (f *fakeRemoteFileSource) LoadIssue(context.Context, contentpanes.SourceContext, contentpanes.IssueReadRequest) (contentpanes.IssueReadResult, error) {
+	return contentpanes.IssueReadResult{}, fmt.Errorf("fake file source does not load issues")
+}
+
+func (f *fakeRemoteFileSource) LoadNote(context.Context, contentpanes.SourceContext, contentpanes.NoteReadRequest) (contentpanes.NoteReadResult, error) {
+	return contentpanes.NoteReadResult{}, fmt.Errorf("fake file source does not load notes")
 }
 
 func (f *fakeRemoteFileSource) stats() (loads int, lastIfRev string) {
@@ -227,15 +236,13 @@ func TestRemoteSessionsMissingContentReadV1ToastsAndDoesNotOpen(t *testing.T) {
 	}
 }
 
-func TestRemoteSessionsIssueNoteDiffResourceStayRefusedOnShowingHost(t *testing.T) {
+func TestRemoteSessionsDiffResourceStayRefusedOnShowingHost(t *testing.T) {
 	m, fake, _ := showingRemoteTwinModel(t, nil)
 	resolver := &fakeResolver{}
 	m.SetResourceMatchers(jiraMatchers())
 	m.SetResourceResolver(resolver.resolve)
 
 	for _, plan := range []targetactivation.Plan{
-		{Kind: targetactivation.PlanOpenIssue, Issue: "td-196c42"},
-		{Kind: targetactivation.PlanOpenNote, Note: "nt-abc123"},
 		{Kind: targetactivation.PlanOpenDiff, Spec: "abc1234"},
 		{Kind: targetactivation.PlanOpenResource, Provider: "jira-work", Matcher: "project-key", Locator: "CASH-1245"},
 	} {
@@ -424,14 +431,8 @@ func TestRemoteRestoreDropsIssueAndDiffAndDoesNotReadLocalTwin(t *testing.T) {
 		view.SetSize(80, 8)
 	}
 	run(t, m, cmd)
-	if m.preview.issue != nil {
-		t.Fatalf("restore opened a remote issue against local I/O: %#v", m.preview.issue)
-	}
 	if m.preview.diff != nil {
 		t.Fatalf("restore opened a remote diff against local I/O: %#v", m.preview.diff)
-	}
-	if panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Issue) != nil {
-		t.Fatal("restore kept an Issue leaf")
 	}
 	if panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Diff) != nil {
 		t.Fatal("restore kept a Diff leaf")

@@ -91,6 +91,12 @@ func FetchWithFallbacks(workDir, issueID string, fallbacks []ProjectRef) tea.Cmd
 	}
 }
 
+// Lookup is the state-free issue load the content service and injected
+// loaders share. It is FetchWithFallbacks without the Bubble Tea wrapper.
+func Lookup(workDir, issueID string, fallbacks []ProjectRef) (*Data, *Owner, error) {
+	return loadIssue(workDir, issueID, fallbacks)
+}
+
 // loadIssue fetches an issue locally first. Only on a genuine "not found" —
 // never a corrupt store or another real td error — does it search the
 // fallbacks, so a broken local database cannot silently masquerade as a
@@ -122,6 +128,9 @@ func loadIssue(workDir, issueID string, fallbacks []ProjectRef) (*Data, *Owner, 
 func isNotFound(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "not found")
 }
+
+// IsNotFound is the exported form of isNotFound for the content service.
+func IsNotFound(err error) bool { return isNotFound(err) }
 
 func showIssue(workDir, issueID string) (*Data, error) {
 	return showIssueContext(context.Background(), workDir, issueID)

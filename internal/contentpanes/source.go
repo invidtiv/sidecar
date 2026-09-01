@@ -11,6 +11,8 @@ import (
 	"github.com/marcus/sidecar/internal/contentservice"
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/filepreview"
+	"github.com/marcus/sidecar/internal/issueview"
+	"github.com/marcus/sidecar/internal/noteview"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
@@ -48,11 +50,49 @@ type DocumentReadResult struct {
 	NotModified bool
 }
 
-// Source is the Document seam later slices extend with issue, note, diff, and
-// resource methods. Resolve returns identity only; it does not ship a body.
+// IssueReadRequest is one Issue resolve/load. Fallbacks are local-only;
+// a remote source ignores them and uses the host's config.
+type IssueReadRequest struct {
+	Ref        contentlink.Ref
+	IfRevision string
+	Fallbacks  []issueview.ProjectRef
+}
+
+// IssuePayload is the typed issue card a shared viewer consumes.
+type IssuePayload struct {
+	Data  *issueview.Data
+	Owner *issueview.Owner
+}
+
+// IssueReadResult is a typed Issue payload. NotModified completes an
+// in-flight refresh without replacing content.
+type IssueReadResult struct {
+	Value       IssuePayload
+	Revision    string
+	NotModified bool
+}
+
+// NoteReadRequest is one Note resolve/load.
+type NoteReadRequest struct {
+	Ref        contentlink.Ref
+	IfRevision string
+}
+
+// NoteReadResult is a typed Note payload. NotModified completes an
+// in-flight refresh without replacing content.
+type NoteReadResult struct {
+	Value       *noteview.Data
+	Revision    string
+	NotModified bool
+}
+
+// Source is the Document/Issue/Note seam. Resolve returns identity only; it
+// does not ship a body. Diff and resource methods arrive in later slices.
 type Source interface {
 	Resolve(context.Context, SourceContext, contentlink.Pending) (contentlink.Ref, error)
 	LoadDocument(context.Context, SourceContext, DocumentReadRequest) (DocumentReadResult, error)
+	LoadIssue(context.Context, SourceContext, IssueReadRequest) (IssueReadResult, error)
+	LoadNote(context.Context, SourceContext, NoteReadRequest) (NoteReadResult, error)
 }
 
 // LocalSource is the in-process Document adapter. It uses the same
@@ -61,19 +101,34 @@ type Source interface {
 // constructing Config{} stay valid.
 type LocalSource struct{}
 
-// Resolve maps a file token onto a regular file on this machine.
+// Resolve maps a token onto identity on this machine. Issue and note ids
+// are normalized without consulting td.
 func (LocalSource) Resolve(ctx context.Context, src SourceContext, pending contentlink.Pending) (contentlink.Ref, error) {
-	if pending.Kind != contentlink.KindFile {
-		return contentlink.Ref{}, fmt.Errorf("unsupported pending kind %q", pending.Kind)
-	}
 	if err := ctx.Err(); err != nil {
 		return contentlink.Ref{}, err
 	}
-	resolved, err := contentservice.ResolveFile(src.Root, pending.Raw)
-	if err != nil {
-		return contentlink.Ref{}, err
+	switch pending.Kind {
+	case contentlink.KindFile:
+		resolved, err := contentservice.ResolveFile(src.Root, pending.Raw)
+		if err != nil {
+			return contentlink.Ref{}, err
+		}
+		return contentlink.Ref{Kind: contentlink.KindFile, Value: resolved.Display}, nil
+	case contentlink.KindIssue:
+		id := issueview.NormalizeID(pending.Raw)
+		if id == "" {
+			return contentlink.Ref{}, fmt.Errorf("invalid issue id %q", pending.Raw)
+		}
+		return contentlink.Ref{Kind: contentlink.KindIssue, Value: id}, nil
+	case contentlink.KindInternal:
+		id := noteview.NormalizeID(pending.Raw)
+		if id == "" {
+			return contentlink.Ref{}, fmt.Errorf("invalid note id %q", pending.Raw)
+		}
+		return contentlink.Ref{Kind: contentlink.KindInternal, Namespace: "note", Value: id}, nil
+	default:
+		return contentlink.Ref{}, fmt.Errorf("unsupported pending kind %q", pending.Kind)
 	}
-	return contentlink.Ref{Kind: contentlink.KindFile, Value: resolved.Display}, nil
 }
 
 // LoadDocument reads through contentservice.ReadFile so local/direct and
@@ -93,6 +148,42 @@ func (LocalSource) LoadDocument(ctx context.Context, src SourceContext, req Docu
 	}
 	return DocumentReadResult{
 		Value:       previewFromDocument(doc),
+		Revision:    doc.Revision,
+		NotModified: doc.NotModified,
+	}, nil
+}
+
+// LoadIssue reads through contentservice.ReadIssue so local/direct and
+// remote/JSON share fallback search, revision, and notModified.
+func (LocalSource) LoadIssue(ctx context.Context, src SourceContext, req IssueReadRequest) (IssueReadResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	root := src.Root
+	id := req.Ref.Value
+	doc, err := contentservice.ReadIssue(ctx, root, id, req.IfRevision, req.Fallbacks)
+	if err != nil {
+		return IssueReadResult{}, err
+	}
+	return IssueReadResult{
+		Value:       IssuePayload{Data: doc.Data, Owner: doc.Owner},
+		Revision:    doc.Revision,
+		NotModified: doc.NotModified,
+	}, nil
+}
+
+// LoadNote reads through contentservice.ReadNote so local/direct and
+// remote/JSON share revision and notModified.
+func (LocalSource) LoadNote(ctx context.Context, src SourceContext, req NoteReadRequest) (NoteReadResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	doc, err := contentservice.ReadNote(ctx, src.Root, req.Ref.Value, req.IfRevision)
+	if err != nil {
+		return NoteReadResult{}, err
+	}
+	return NoteReadResult{
+		Value:       doc.Data,
 		Revision:    doc.Revision,
 		NotModified: doc.NotModified,
 	}, nil
@@ -173,6 +264,56 @@ func documentLoadCmd(src Source, ctx SurfaceContext, ref contentlink.Ref, ifRevi
 		}
 		return docview.LoadedMsg{
 			Epoch: epoch, Path: ref.Value, Result: result.Value, Revision: result.Revision,
+		}
+	}
+}
+
+func issueLoadCmd(src Source, ctx SurfaceContext, ref contentlink.Ref, ifRevision string, epoch uint64, view *issueview.Model) tea.Cmd {
+	if src == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		srcCtx := ctx.Source
+		if srcCtx.Root == "" {
+			srcCtx.Root = ctx.Root
+		}
+		req := IssueReadRequest{Ref: ref, IfRevision: ifRevision}
+		if !srcCtx.Remote() && view != nil && view.FallbackRefs != nil {
+			req.Fallbacks = view.FallbackRefs()
+		}
+		result, err := src.LoadIssue(context.Background(), srcCtx, req)
+		if err != nil {
+			return issueview.LoadedMsg{Epoch: epoch, IssueID: ref.Value, Error: err}
+		}
+		if result.NotModified {
+			return issueview.NotModified{IssueID: ref.Value, Epoch: epoch, Revision: result.Revision}
+		}
+		return issueview.LoadedMsg{
+			Epoch: epoch, IssueID: ref.Value,
+			Data: result.Value.Data, FoundIn: result.Value.Owner,
+			Revision: result.Revision,
+		}
+	}
+}
+
+func noteLoadCmd(src Source, ctx SurfaceContext, ref contentlink.Ref, ifRevision string, epoch uint64) tea.Cmd {
+	if src == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		srcCtx := ctx.Source
+		if srcCtx.Root == "" {
+			srcCtx.Root = ctx.Root
+		}
+		result, err := src.LoadNote(context.Background(), srcCtx, NoteReadRequest{Ref: ref, IfRevision: ifRevision})
+		if err != nil {
+			return noteview.LoadedMsg{Epoch: epoch, NoteID: ref.Value, Error: err}
+		}
+		if result.NotModified {
+			return noteview.NotModified{NoteID: ref.Value, Epoch: epoch, Revision: result.Revision}
+		}
+		return noteview.LoadedMsg{
+			Epoch: epoch, NoteID: ref.Value, Data: result.Value, Revision: result.Revision,
 		}
 	}
 }

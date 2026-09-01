@@ -417,13 +417,21 @@ func (m *Model) applyPreviewDocLoaded(msg previewDocLoadedMsg) {
 }
 
 func (m *Model) previewDocHeaderTabs(row string) string {
+	notice := ""
+	if m.preview.doc != nil {
+		notice = m.preview.doc.hostNotice
+	}
+	return m.previewHostHeaderTabs(row, notice)
+}
+
+func (m *Model) previewHostHeaderTabs(row, notice string) string {
 	hostID := m.previewRemoteHostID()
 	if hostID == "" {
 		return row
 	}
 	label := workspacelist.HostGlyph + " " + hostID
-	if m.preview.doc != nil && m.preview.doc.hostNotice != "" {
-		label += " · " + m.preview.doc.hostNotice
+	if notice != "" {
+		label += " · " + notice
 	}
 	return row + " " + styles.Muted.Render(label)
 }

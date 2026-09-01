@@ -49,9 +49,9 @@ func newViewer(cfg Config, kind panelayout.Kind) viewer {
 	case panelayout.Document:
 		v = &documentViewer{view: docview.New(cfg.Renderer), source: cfg.documentSource()}
 	case panelayout.Issue:
-		v = &issueViewer{view: issueview.New(cfg.Renderer)}
+		v = &issueViewer{view: issueview.New(cfg.Renderer), source: cfg.documentSource()}
 	case panelayout.Note:
-		v = &noteViewer{view: noteview.New(cfg.Renderer)}
+		v = &noteViewer{view: noteview.New(cfg.Renderer), source: cfg.documentSource()}
 	case panelayout.Diff:
 		v = &diffViewer{view: &workspacediff.View{}}
 	case panelayout.Resource:
@@ -216,25 +216,49 @@ func (v *documentViewer) snapshot(ref contentlink.Ref) TabState {
 	return TabState{Ref: ref, Scroll: v.view.ScrollOffset(), Wrap: v.view.Wrap(), Rendered: v.view.Rendered()}
 }
 
-type issueViewer struct{ view *issueview.Model }
+type issueViewer struct {
+	view   *issueview.Model
+	source Source
+}
 
 func (v *issueViewer) model() any { return v.view }
+
+func (v *issueViewer) bindLoader(ctx SurfaceContext, ref contentlink.Ref) {
+	if v.view == nil {
+		return
+	}
+	if v.source == nil {
+		v.view.SetLoader(nil)
+		return
+	}
+	src := v.source
+	view := v.view
+	v.view.SetLoader(func(_, issueID string, epoch uint64, ifRevision string) tea.Cmd {
+		req := ref
+		req.Value = issueID
+		return issueLoadCmd(src, ctx, req, ifRevision, epoch, view)
+	})
+}
+
 func (v *issueViewer) load(ctx SurfaceContext, ref contentlink.Ref, id int) tea.Cmd {
 	root := ctx.Root
-	if name, adopted := v.view.Owner(); name != "" && adopted != "" {
+	if name, adopted := v.view.Owner(); name != "" && adopted != "" && !ctx.Source.Remote() {
 		root = adopted
 	}
+	v.bindLoader(ctx, ref)
 	return v.view.Load(id, root, ref.Value, ctx.Epoch)
 }
 func (v *issueViewer) reload(ctx SurfaceContext, ref contentlink.Ref, id int) tea.Cmd {
 	return v.load(ctx, ref, id)
 }
 func (v *issueViewer) arm(ctx SurfaceContext, ref contentlink.Ref, id int, state TabState) {
+	v.bindLoader(ctx, ref)
 	v.view.Arm(id, ref.Value, ctx.Epoch)
 	v.view.RestoreOwner(state.OwnerName, state.OwnerRoot)
 	v.view.SetPendingScroll(state.Scroll)
 }
 func (v *issueViewer) focus(ctx SurfaceContext, ref contentlink.Ref, id int) tea.Cmd {
+	v.bindLoader(ctx, ref)
 	if v.view.NeedsLoad() {
 		return v.load(ctx, ref, id)
 	}
@@ -255,20 +279,43 @@ func (v *issueViewer) snapshot(ref contentlink.Ref) TabState {
 	return out
 }
 
-type noteViewer struct{ view *noteview.Model }
+type noteViewer struct {
+	view   *noteview.Model
+	source Source
+}
 
 func (v *noteViewer) model() any { return v.view }
+
+func (v *noteViewer) bindLoader(ctx SurfaceContext, ref contentlink.Ref) {
+	if v.view == nil {
+		return
+	}
+	if v.source == nil {
+		v.view.SetLoader(nil)
+		return
+	}
+	src := v.source
+	v.view.SetLoader(func(_, noteID string, epoch uint64, ifRevision string) tea.Cmd {
+		req := ref
+		req.Value = noteID
+		return noteLoadCmd(src, ctx, req, ifRevision, epoch)
+	})
+}
+
 func (v *noteViewer) load(ctx SurfaceContext, ref contentlink.Ref, id int) tea.Cmd {
+	v.bindLoader(ctx, ref)
 	return v.view.Load(id, ctx.Root, ref.Value, ctx.Epoch)
 }
 func (v *noteViewer) reload(ctx SurfaceContext, ref contentlink.Ref, id int) tea.Cmd {
 	return v.load(ctx, ref, id)
 }
 func (v *noteViewer) arm(ctx SurfaceContext, ref contentlink.Ref, id int, state TabState) {
+	v.bindLoader(ctx, ref)
 	v.view.Arm(id, ref.Value, ctx.Epoch)
 	v.view.SetPendingScroll(state.Scroll)
 }
 func (v *noteViewer) focus(ctx SurfaceContext, ref contentlink.Ref, id int) tea.Cmd {
+	v.bindLoader(ctx, ref)
 	if v.view.NeedsLoad() {
 		return v.load(ctx, ref, id)
 	}

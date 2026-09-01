@@ -1,6 +1,7 @@
 package issueview
 
 import (
+	"fmt"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -34,7 +35,23 @@ type LoadedMsg struct {
 	// an in-place re-read that must not disturb scroll, cursor or hover, and
 	// that is discarded entirely when it found nothing new. See live.go.
 	Refresh bool
+	// NotModified completes an in-flight refresh without replacing content.
+	NotModified bool
+	// Revision is the last adopted source revision, for a later conditional read.
+	Revision string
 }
+
+// NotModified is returned by an injected loader when a refresh found no change.
+type NotModified struct {
+	IssueID  string
+	Epoch    uint64
+	Revision string
+}
+
+// IssueLoader produces an issue load command. IfRevision is the last adopted
+// source revision and may be empty. The command should return FetchedMsg,
+// NotModified, or LoadedMsg.
+type IssueLoader func(workDir, issueID string, epoch uint64, ifRevision string) tea.Cmd
 
 // GetEpoch allows callers to apply the normal plugin epoch checks if desired.
 func (m LoadedMsg) GetEpoch() uint64 { return m.Epoch }
@@ -146,6 +163,17 @@ type Model struct {
 	// never on the update goroutine. Hosts without cross-project search leave
 	// it nil and behave exactly as before.
 	FallbackRefs func() []ProjectRef
+
+	loader   IssueLoader
+	revision string
+}
+
+// SetLoader replaces the default td fetch. Nil restores it.
+func (m *Model) SetLoader(loader IssueLoader) {
+	if m == nil {
+		return
+	}
+	m.loader = loader
 }
 
 // ActionHint is one key/label pair drawn in the card's ACTIONS row.
@@ -194,6 +222,7 @@ func (m *Model) Load(modelID int, workDir, issueID string, epoch uint64) tea.Cmd
 	m.loading = true
 	m.data = nil
 	m.err = nil
+	m.revision = ""
 	// A retarget invalidates the refresh gate: "unchanged since last time" is
 	// meaningless once the subject changed, and a re-read owed for the previous
 	// issue must not fire against this one.
@@ -201,15 +230,60 @@ func (m *Model) Load(modelID int, workDir, issueID string, epoch uint64) tea.Cmd
 	m.invalidateRender()
 
 	generation := m.requestGeneration
+	base := LoadedMsg{
+		ModelID: modelID, RequestGeneration: generation, Epoch: epoch, IssueID: issueID,
+	}
+	if m.loader != nil {
+		load := m.loader(workDir, issueID, epoch, "")
+		return func() tea.Msg { return adoptIssueMsg(load, base) }
+	}
 	fallbacks := m.fallbackRefs()
 	fetch := FetchWithFallbacks(workDir, issueID, fallbacks)
 	return func() tea.Msg {
 		msg, _ := fetch().(FetchedMsg)
-		return LoadedMsg{
-			ModelID: modelID, RequestGeneration: generation, Epoch: epoch,
-			IssueID: issueID, Data: msg.Data, Error: msg.Error,
-			FoundIn: msg.FoundIn,
+		base.Data, base.Error, base.FoundIn = msg.Data, msg.Error, msg.FoundIn
+		return base
+	}
+}
+
+func adoptIssueMsg(load tea.Cmd, base LoadedMsg) LoadedMsg {
+	if load == nil {
+		base.Error = fmt.Errorf("unexpected issue load result")
+		return base
+	}
+	switch msg := load().(type) {
+	case FetchedMsg:
+		base.Data = msg.Data
+		base.Error = msg.Error
+		base.FoundIn = msg.FoundIn
+		return base
+	case NotModified:
+		base.Refresh = true
+		base.NotModified = true
+		base.Revision = msg.Revision
+		if msg.IssueID != "" {
+			base.IssueID = msg.IssueID
 		}
+		if msg.Epoch != 0 {
+			base.Epoch = msg.Epoch
+		}
+		return base
+	case LoadedMsg:
+		msg.ModelID = base.ModelID
+		msg.RequestGeneration = base.RequestGeneration
+		if msg.Epoch == 0 {
+			msg.Epoch = base.Epoch
+		}
+		if msg.IssueID == "" {
+			msg.IssueID = base.IssueID
+		}
+		if base.Refresh {
+			msg.Refresh = true
+		}
+		return msg
+	default:
+		base.Error = fmt.Errorf("unexpected issue load result")
+		return base
 	}
 }
 
@@ -229,12 +303,29 @@ func (m *Model) fallbackRefs() []ProjectRef {
 // A result produced by [Model.Refresh] is applied in place instead: see
 // applyRefresh. It also returns false when the refresh found nothing new, so a
 // host can treat "false" uniformly as "nothing to repaint".
-func (m *Model) SetResult(msg LoadedMsg) bool {
-	if msg.ModelID != m.modelID ||
-		msg.RequestGeneration != m.requestGeneration ||
-		msg.Epoch != m.epoch ||
-		msg.IssueID != m.issueID {
+// ResultMatches reports whether msg belongs to this model's current load.
+func (m *Model) ResultMatches(msg LoadedMsg) bool {
+	if m == nil {
 		return false
+	}
+	return msg.ModelID == m.modelID &&
+		msg.RequestGeneration == m.requestGeneration &&
+		msg.Epoch == m.epoch &&
+		msg.IssueID == m.issueID
+}
+
+func (m *Model) SetResult(msg LoadedMsg) bool {
+	if !m.ResultMatches(msg) {
+		return false
+	}
+	if msg.Revision != "" {
+		m.revision = msg.Revision
+	}
+	if msg.NotModified {
+		if !msg.Refresh {
+			return false
+		}
+		return m.applyRefresh(msg)
 	}
 	if msg.Refresh {
 		return m.applyRefresh(msg)

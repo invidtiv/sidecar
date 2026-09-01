@@ -58,7 +58,7 @@ func EncodeReadResult(result ReadResult) ([]byte, error) {
 		}
 		if result.Content == "" {
 			oversize := ReadResult{
-				Kind:      KindFile,
+				Kind:      result.Kind,
 				Oversize:  true,
 				Truncated: true,
 				Revision:  result.Revision,

@@ -10,6 +10,7 @@ import (
 	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/contentservice"
 	"github.com/marcus/sidecar/internal/hostproto"
+	"github.com/marcus/sidecar/internal/hosts"
 )
 
 // RemoteRunner is the hosts.RunSidecar seam. Production binds
@@ -37,15 +38,33 @@ func (s RemoteSource) Resolve(ctx context.Context, src SourceContext, pending co
 	if err := s.ready(); err != nil {
 		return contentlink.Ref{}, err
 	}
-	if pending.Kind != contentlink.KindFile {
-		return contentlink.Ref{}, fmt.Errorf("unsupported pending kind %q", pending.Kind)
-	}
-	var result contentservice.ResolveResult
-	args := []string{"content", "resolve", "--workspace", src.WorkspaceID, "--kind", contentservice.KindFile, "--target", pending.Raw, "--json"}
-	if err := s.Run(ctx, s.HostID, args, &result); err != nil {
+	kind, refKind, namespace, err := remoteResolveKind(pending)
+	if err != nil {
 		return contentlink.Ref{}, err
 	}
-	return contentlink.Ref{Kind: contentlink.KindFile, Value: result.Display}, nil
+	var result contentservice.ResolveResult
+	args := []string{"content", "resolve", "--workspace", src.WorkspaceID, "--kind", kind, "--target", pending.Raw, "--json"}
+	if err := s.Run(ctx, s.HostID, args, &result); err != nil {
+		return contentlink.Ref{}, mapRemoteContentErr(s.HostID, kind, err)
+	}
+	value := result.Target
+	if value == "" {
+		value = result.Display
+	}
+	return contentlink.Ref{Kind: refKind, Namespace: namespace, Value: value}, nil
+}
+
+func remoteResolveKind(pending contentlink.Pending) (kind string, refKind contentlink.Kind, namespace string, err error) {
+	switch pending.Kind {
+	case contentlink.KindFile:
+		return contentservice.KindFile, contentlink.KindFile, "", nil
+	case contentlink.KindIssue:
+		return contentservice.KindIssue, contentlink.KindIssue, "", nil
+	case contentlink.KindInternal:
+		return contentservice.KindNote, contentlink.KindInternal, "note", nil
+	default:
+		return "", "", "", fmt.Errorf("unsupported pending kind %q", pending.Kind)
+	}
 }
 
 func (s RemoteSource) LoadDocument(ctx context.Context, src SourceContext, req DocumentReadRequest) (DocumentReadResult, error) {
@@ -74,6 +93,75 @@ func (s RemoteSource) LoadDocument(ctx context.Context, src SourceContext, req D
 		Value:    previewFromDocument(documentFromRead(result)),
 		Revision: result.Revision,
 	}, nil
+}
+
+func (s RemoteSource) LoadIssue(ctx context.Context, src SourceContext, req IssueReadRequest) (IssueReadResult, error) {
+	if err := s.ready(); err != nil {
+		return IssueReadResult{}, err
+	}
+	args := []string{
+		"content", "read",
+		"--workspace", src.WorkspaceID,
+		"--kind", contentservice.KindIssue,
+		"--operation", contentservice.OpCard,
+		"--target", req.Ref.Value,
+		"--json",
+	}
+	if req.IfRevision != "" {
+		args = append(args, "--if-revision", req.IfRevision)
+	}
+	var result contentservice.ReadResult
+	if err := s.Run(ctx, s.HostID, args, &result); err != nil {
+		return IssueReadResult{}, mapRemoteContentErr(s.HostID, contentservice.KindIssue, err)
+	}
+	if result.NotModified {
+		return IssueReadResult{NotModified: true, Revision: result.Revision}, nil
+	}
+	data, owner := contentservice.IssueFromDTO(result.Issue)
+	return IssueReadResult{
+		Value:    IssuePayload{Data: data, Owner: owner},
+		Revision: result.Revision,
+	}, nil
+}
+
+func (s RemoteSource) LoadNote(ctx context.Context, src SourceContext, req NoteReadRequest) (NoteReadResult, error) {
+	if err := s.ready(); err != nil {
+		return NoteReadResult{}, err
+	}
+	args := []string{
+		"content", "read",
+		"--workspace", src.WorkspaceID,
+		"--kind", contentservice.KindNote,
+		"--operation", contentservice.OpNote,
+		"--target", req.Ref.Value,
+		"--json",
+	}
+	if req.IfRevision != "" {
+		args = append(args, "--if-revision", req.IfRevision)
+	}
+	var result contentservice.ReadResult
+	if err := s.Run(ctx, s.HostID, args, &result); err != nil {
+		return NoteReadResult{}, mapRemoteContentErr(s.HostID, contentservice.KindNote, err)
+	}
+	if result.NotModified {
+		return NoteReadResult{NotModified: true, Revision: result.Revision}, nil
+	}
+	return NoteReadResult{
+		Value:    contentservice.NoteFromDTO(result.Note),
+		Revision: result.Revision,
+	}, nil
+}
+
+func mapRemoteContentErr(hostID, kind string, err error) error {
+	if err == nil {
+		return nil
+	}
+	if kind == contentservice.KindIssue || kind == contentservice.KindNote {
+		if hosts.RunFailure(err) == hosts.FailUnsupported {
+			return &contentservice.MissingCapabilityError{HostID: hostID}
+		}
+	}
+	return err
 }
 
 func (s RemoteSource) ready() error {

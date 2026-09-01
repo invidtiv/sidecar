@@ -28,7 +28,23 @@ type LoadedMsg struct {
 	Data              *Data
 	Error             error
 	Refresh           bool
+	// NotModified completes an in-flight refresh without replacing content.
+	NotModified bool
+	// Revision is the last adopted source revision, for a later conditional read.
+	Revision string
 }
+
+// NotModified is returned by an injected loader when a refresh found no change.
+type NotModified struct {
+	NoteID   string
+	Epoch    uint64
+	Revision string
+}
+
+// NoteLoader produces a note load command. IfRevision is the last adopted
+// source revision and may be empty. The command should return FetchedMsg,
+// NotModified, or LoadedMsg.
+type NoteLoader func(workDir, noteID string, epoch uint64, ifRevision string) tea.Cmd
 
 // GetEpoch allows callers to apply the normal plugin epoch checks if desired.
 func (m LoadedMsg) GetEpoch() uint64 { return m.Epoch }
@@ -59,10 +75,21 @@ type Model struct {
 	err     error
 	live    livewatch.Refresher
 
+	loader   NoteLoader
+	revision string
+
 	focused    bool
 	rows       []row
 	buildFor   int
 	buildStyle string
+}
+
+// SetLoader replaces the default td fetch. Nil restores it.
+func (m *Model) SetLoader(loader NoteLoader) {
+	if m == nil {
+		return
+	}
+	m.loader = loader
 }
 
 // New creates an empty note viewer.
@@ -95,27 +122,90 @@ func (m *Model) Load(modelID int, workDir, noteID string, epoch uint64) tea.Cmd 
 	m.loading = true
 	m.data = nil
 	m.err = nil
+	m.revision = ""
 	m.live.Reset()
 	m.invalidateRender()
 
 	generation := m.requestGeneration
+	base := LoadedMsg{
+		ModelID: modelID, RequestGeneration: generation, Epoch: epoch, NoteID: noteID,
+	}
+	if m.loader != nil {
+		load := m.loader(workDir, noteID, epoch, "")
+		return func() tea.Msg { return adoptNoteMsg(load, base) }
+	}
 	fetch := Fetch(workDir, noteID)
 	return func() tea.Msg {
 		msg, _ := fetch().(FetchedMsg)
-		return LoadedMsg{
-			ModelID: modelID, RequestGeneration: generation, Epoch: epoch,
-			NoteID: noteID, Data: msg.Data, Error: msg.Error,
-		}
+		base.Data, base.Error = msg.Data, msg.Error
+		return base
 	}
+}
+
+func adoptNoteMsg(load tea.Cmd, base LoadedMsg) LoadedMsg {
+	if load == nil {
+		base.Error = fmt.Errorf("unexpected note load result")
+		return base
+	}
+	switch msg := load().(type) {
+	case FetchedMsg:
+		base.Data = msg.Data
+		base.Error = msg.Error
+		return base
+	case NotModified:
+		base.Refresh = true
+		base.NotModified = true
+		base.Revision = msg.Revision
+		if msg.NoteID != "" {
+			base.NoteID = msg.NoteID
+		}
+		if msg.Epoch != 0 {
+			base.Epoch = msg.Epoch
+		}
+		return base
+	case LoadedMsg:
+		msg.ModelID = base.ModelID
+		msg.RequestGeneration = base.RequestGeneration
+		if msg.Epoch == 0 {
+			msg.Epoch = base.Epoch
+		}
+		if msg.NoteID == "" {
+			msg.NoteID = base.NoteID
+		}
+		if base.Refresh {
+			msg.Refresh = true
+		}
+		return msg
+	default:
+		base.Error = fmt.Errorf("unexpected note load result")
+		return base
+	}
+}
+
+// ResultMatches reports whether msg belongs to this model's current load.
+func (m *Model) ResultMatches(msg LoadedMsg) bool {
+	if m == nil {
+		return false
+	}
+	return msg.ModelID == m.modelID &&
+		msg.RequestGeneration == m.requestGeneration &&
+		msg.Epoch == m.epoch &&
+		msg.NoteID == m.noteID
 }
 
 // SetResult applies msg if it belongs to the current load.
 func (m *Model) SetResult(msg LoadedMsg) bool {
-	if msg.ModelID != m.modelID ||
-		msg.RequestGeneration != m.requestGeneration ||
-		msg.Epoch != m.epoch ||
-		msg.NoteID != m.noteID {
+	if !m.ResultMatches(msg) {
 		return false
+	}
+	if msg.Revision != "" {
+		m.revision = msg.Revision
+	}
+	if msg.NotModified {
+		if !msg.Refresh {
+			return false
+		}
+		return m.applyRefresh(msg)
 	}
 	if msg.Refresh {
 		return m.applyRefresh(msg)

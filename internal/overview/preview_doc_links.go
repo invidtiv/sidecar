@@ -130,10 +130,12 @@ func (m *Model) activatePreviewDocLink(ref contentlink.Ref) tea.Cmd {
 	case contentlink.KindFile:
 		return m.openPreviewContent(ref, "Document")
 	case contentlink.KindIssue:
-		if m.previewRemoteHostID() != "" {
-			return nil
+		return m.openPreviewIssue(ref.Value)
+	case contentlink.KindInternal:
+		if ref.Namespace == "note" {
+			return m.openPreviewNote(ref.Value)
 		}
-		return m.openPreviewContent(ref, "Issue")
+		return nil
 	case contentlink.KindDiff:
 		if m.previewRemoteHostID() != "" {
 			return nil

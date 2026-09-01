@@ -3,6 +3,7 @@ package contentpanes
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -100,6 +101,14 @@ func (f *fakeDocumentSource) LoadDocument(_ context.Context, _ SourceContext, re
 		Value:    filepreview.PreviewResult{Content: f.body, Lines: strings.Split(f.body, "\n")},
 		Revision: rev,
 	}, nil
+}
+
+func (f *fakeDocumentSource) LoadIssue(context.Context, SourceContext, IssueReadRequest) (IssueReadResult, error) {
+	return IssueReadResult{}, fmt.Errorf("fake document source does not load issues")
+}
+
+func (f *fakeDocumentSource) LoadNote(context.Context, SourceContext, NoteReadRequest) (NoteReadResult, error) {
+	return NoteReadResult{}, fmt.Errorf("fake document source does not load notes")
 }
 
 func TestDocumentSourceSuppliesContentWithoutTouchingPath(t *testing.T) {

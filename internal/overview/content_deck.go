@@ -82,6 +82,24 @@ func remoteDocumentUnsupported(hostID, action string) tea.Cmd {
 	return appmsg.ShowToast(action+" isn't available for files on "+hostID, 3*time.Second)
 }
 
+func remoteIssueUnsupported(hostID, action string) tea.Cmd {
+	if hostID == "" {
+		hostID = "that host"
+	}
+	return appmsg.ShowToast(action+" isn't available for issues on "+hostID, 3*time.Second)
+}
+
+func remoteContentKindAdmitted(ref contentlink.Ref) bool {
+	switch ref.Kind {
+	case contentlink.KindFile, contentlink.KindIssue:
+		return true
+	case contentlink.KindInternal:
+		return ref.Namespace == "note"
+	default:
+		return false
+	}
+}
+
 func sourceContextFromWorkspace(ws workspaceinventory.Workspace, incarnation uint64) contentpanes.SourceContext {
 	src := contentpanes.SourceContext{
 		HostID:          ws.HostID,
@@ -112,10 +130,18 @@ func (m *Model) previewDeckConfig(ctx contentpanes.SurfaceContext) contentpanes.
 			switch view := model.(type) {
 			case *issueview.Model:
 				view.OpenHandler = func(id string) tea.Cmd { return m.openPreviewIssue(id) }
-				view.OpenInTDHandler = func(id string) tea.Cmd { return func() tea.Msg { return OpenIssueInTDMsg{IssueID: id} } }
-				// Same cross-project fallback as the other two hosts: the app-level
-				// config, read inside the fetch command.
-				view.FallbackRefs = m.issueFallbackRefs
+				if ctx.Source.Remote() {
+					hostID := ctx.Source.HostID
+					view.OpenInTDHandler = func(string) tea.Cmd {
+						return remoteIssueUnsupported(hostID, "Open in td")
+					}
+					view.FallbackRefs = nil
+				} else {
+					view.OpenInTDHandler = func(id string) tea.Cmd { return func() tea.Msg { return OpenIssueInTDMsg{IssueID: id} } }
+					// Same cross-project fallback as the other two hosts: the app-level
+					// config, read inside the fetch command.
+					view.FallbackRefs = m.issueFallbackRefs
+				}
 			case *workspacediff.View:
 				view.ViewMode = m.diff.ViewMode
 				if w := state.GetDiffTabFileListWidth(); w > 0 {
@@ -161,7 +187,7 @@ func (m *Model) openPreviewContent(ref contentlink.Ref, name string) tea.Cmd {
 	if !ok {
 		return nil
 	}
-	if ctx.Source.Remote() && ref.Kind != contentlink.KindFile {
+	if ctx.Source.Remote() && !remoteContentKindAdmitted(ref) {
 		return nil
 	}
 	deck, ctx, adopt, ok := m.ensurePreviewDeck()

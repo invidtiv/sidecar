@@ -18,11 +18,19 @@ import (
 	"github.com/marcus/sidecar/internal/terminallink"
 )
 
-// KindFile is the only kind this slice serves.
-const KindFile = "file"
+const (
+	// KindFile, KindIssue, and KindNote are the content kinds this service serves.
+	KindFile  = "file"
+	KindIssue = "issue"
+	KindNote  = "note"
 
-// OpDocument is the file read operation: bounded document bytes + metadata.
-const OpDocument = "document"
+	// OpDocument is the file read operation: bounded document bytes + metadata.
+	OpDocument = "document"
+	// OpCard is the issue read operation: the card payload plus related rows.
+	OpCard = "card"
+	// OpNote is the note read operation: one td note body.
+	OpNote = "note"
+)
 
 // MaxLocatorBytes refuses a workspace id or file target larger than this.
 // PATH_MAX is typically 1024; this is a hostile-input bound, not a budget.
