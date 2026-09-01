@@ -96,12 +96,10 @@ func runOpen(env Env, args []string) int {
 			sessions = true
 			if strings.HasPrefix(arg, "--sessions=") {
 				sessionsRow = strings.TrimPrefix(arg, "--sessions=")
-				continue
 			}
-			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
-				i++
-				sessionsRow = args[i]
-			}
+			// Unlike layout, open requires a positional target. A following
+			// bare word is that target, not an optional ROW. Name the row
+			// with --sessions=ID.
 		case arg == "--line":
 			if i+1 >= len(args) {
 				cliErrf(env.Stderr, "--line requires a line number argument\n\n%s", openHelp)

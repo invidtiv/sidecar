@@ -153,7 +153,12 @@ func (m *Model) applyOpenOnPreview(req uirequest.Request, targetWorkspace worksp
 	switch req.Target.Kind {
 	case uirequest.TargetKindFile:
 		retargeted = m.willRetargetPreviewPane(panelayout.Document)
-		cmd = m.openPreviewDocTarget(req.Target)
+		var openErr error
+		cmd, openErr = m.openPreviewDocTargetResult(req.Target)
+		if openErr != nil {
+			m.ackOpen(req, uirequest.StatusDeclined, openErr.Error(), surface, 0)
+			return cmd
+		}
 	case uirequest.TargetKindIssue:
 		retargeted = m.willRetargetPreviewPane(panelayout.Issue)
 		cmd = m.openPreviewIssue(req.Target.Value)

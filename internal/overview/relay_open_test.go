@@ -1,6 +1,7 @@
 package overview
 
 import (
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -67,6 +68,32 @@ func TestRelayedKindUIRequestOpensHostFileNotLocalTwin(t *testing.T) {
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "--id req-relay-file") || !strings.Contains(joined, "--action open") || !strings.Contains(joined, "--status opened") {
 		t.Fatalf("ack argv missing fields: %v", args)
+	}
+}
+
+func TestRelayedOpenResolveFailureAcksDeclined(t *testing.T) {
+	m, fake, _ := showingRemoteTwinModel(t, nil)
+	stub := &remoteRunnerStub{}
+	stub.install(t)
+	fake.resolveErr = errors.New("host resolve boom")
+	selected, ok := m.SelectedWorkspace()
+	if !ok {
+		t.Fatal("no selected workspace")
+	}
+
+	cmd := m.handleUIRequest(requestFromAnnouncement(relayedFileAnnouncement(selected.TmuxName, "twin.txt", 0)))
+	if cmd == nil {
+		t.Fatal("resolve failure produced no toast command")
+	}
+	if m.preview.doc != nil {
+		t.Fatal("resolve failure opened a Document pane")
+	}
+	if len(stub.calls) != 1 {
+		t.Fatalf("ack invocations = %v", stub.calls)
+	}
+	joined := strings.Join(stub.argv(t, 0), " ")
+	if !strings.Contains(joined, "--status declined") || !strings.Contains(joined, "host resolve boom") {
+		t.Fatalf("decline ack = %s", joined)
 	}
 }
 

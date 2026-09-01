@@ -1854,9 +1854,10 @@ Show a file, a td issue, a note, a git diff, or a provider resource in a split p
 Show a file, a td issue, a td note, a git diff, or an external provider resource to the user as a
 split pane in a Sidecar workspace. From a Sidecar shell this targets that shell.
 Otherwise it targets the unique running instance, or a specific --shell / --project.
---sessions addresses the global Sessions surface of a running instance
-(optional ROW is a durable inventory ID, then a display name). It is
-mutually exclusive with --shell and --project.
+--sessions addresses the global Sessions surface of a running instance.
+Pass --sessions=ROW for a durable inventory ID or display name; a following
+bare word is the open target, not the row. Mutually exclusive with --shell
+and --project.
 --diff with no spec is the working tree. --provider names a configured terminal resource
 provider instance and is required for a resource: a bare locator is never guessed at.
 --split only overrides the split axis; it never halves a live terminal after content is open.
@@ -1884,7 +1885,7 @@ Usage: sidecar open [options] [<target>]
 - `--provider ID`: Open a locator through a configured terminal resource provider
 - `--shell NAME`: Target a registered shell by display name or tmux name
 - `--project NAME`: Target a project's Workspaces surface (slug, basename, or path)
-- `--sessions [ROW]`: Target the global Sessions surface (optional row by ID or display name)
+- `--sessions [=ROW]`: Target the global Sessions surface (optional row as --sessions=ID)
 - `--split auto|right|below`: Where to place a new pane (default auto)
 - `--at COL[.ROW]`: Place at an explicit grid cell (1-based); a requirement, mutually exclusive with --split
 - `--wait DURATION`: Time to wait for instances to acknowledge (default 1200ms; 0 = fire and forget)

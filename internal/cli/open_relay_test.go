@@ -32,6 +32,39 @@ func TestOpenSessionsFlagExclusiveWithShellAndProject(t *testing.T) {
 	}
 }
 
+func TestOpenSessionsBareWordIsTheFileNotTheRow(t *testing.T) {
+	_, stateDir := setupIsolatedCLI(t)
+	workDir := t.TempDir()
+	writeProjectMeta(t, stateDir, "sidecar", workDir)
+	writeProjectShell(t, stateDir, "sidecar", shellstate.Definition{
+		TmuxName: "sidecar-sh-sidecar-1", DisplayName: "active task",
+	})
+	if err := os.WriteFile(filepath.Join(workDir, "README.md"), []byte("x\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := uirequest.Announce(stateDir, uirequest.Instance{
+		PID: os.Getpid(), ProjectKey: "sidecar", Project: "sidecar", WorkDir: workDir,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"open", "--sessions", "README.md", "--wait", "0"}, &out, &errOut)
+	if !handled || code != 0 {
+		t.Fatalf("open --sessions README.md = handled %v code %d stderr %q", handled, code, errOut.String())
+	}
+	req := readWrittenRequest(t, stateDir)
+	if !req.Origin.Sessions {
+		t.Fatalf("origin.sessions = false: %+v", req.Origin)
+	}
+	if req.Origin.SessionsRow != "" {
+		t.Fatalf("SessionsRow = %q, want empty (README.md is the file)", req.Origin.SessionsRow)
+	}
+	if req.Target.Kind != uirequest.TargetKindFile || req.Target.Value != "README.md" {
+		t.Fatalf("target = %+v, want README.md", req.Target)
+	}
+}
+
 func TestOpenSessionsWritesSessionsOrigin(t *testing.T) {
 	_, stateDir := setupIsolatedCLI(t)
 	workDir := t.TempDir()
