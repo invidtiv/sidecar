@@ -3,11 +3,11 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/marcus/sidecar/internal/agentcontrol"
 	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/uirequest"
 )
@@ -57,7 +57,43 @@ func takeFlagArg(arg string, args []string, i int, name string) (value string, n
 	return args[i+1], i + 1, true
 }
 
-func applyCreateCommonFlag(arg string, args []string, i int, help string, stderr io.Writer, flags *createCommonFlags) (next int, handled bool, code int) {
+// usageReporter answers a usage refusal in the shape the caller asked for and
+// returns the exit code to leave with.
+//
+// A `create` verb used to print its reason and then the whole help text, and
+// did so under --json too — so a script doing `| tail` saw help and never the
+// reason (td-a658ed). With --json the refusal is the same envelope the agent
+// verbs use, `{"error":{"code":"usage",...}}`, on stderr; without it, the
+// reason and the help, as before. The flag is looked for before parsing
+// starts, because the refusal may be about an argument that precedes it.
+type usageReporter func(format string, a ...any) int
+
+func newUsageReporter(env Env, jsonOutput bool, help string) usageReporter {
+	return func(format string, a ...any) int {
+		msg := fmt.Sprintf(format, a...)
+		if jsonOutput {
+			return emitAgentError(env, true, &agentcontrol.Error{Code: agentcontrol.ErrUsage, Message: msg})
+		}
+		cliErrf(env.Stderr, "%s\n\n%s", msg, help)
+		return 2
+	}
+}
+
+// wantsJSON is the pre-parse answer to "will this run report in JSON": it
+// exists so a usage refusal raised while parsing can already be shaped.
+func wantsJSON(args []string) bool {
+	for _, arg := range args {
+		if arg == "--" {
+			return false
+		}
+		if arg == "--json" {
+			return true
+		}
+	}
+	return false
+}
+
+func applyCreateCommonFlag(arg string, args []string, i int, usage usageReporter, flags *createCommonFlags) (next int, handled bool, code int) {
 	switch {
 	case arg == "--json":
 		flags.jsonOutput = true
@@ -65,29 +101,25 @@ func applyCreateCommonFlag(arg string, args []string, i int, help string, stderr
 	case arg == "--shell" || strings.HasPrefix(arg, "--shell="):
 		val, next, ok := takeFlagArg(arg, args, i, "--shell")
 		if !ok || val == "" {
-			cliErrf(stderr, "--shell requires a shell name\n\n%s", help)
-			return i, true, 2
+			return i, true, usage("--shell requires a shell name")
 		}
 		flags.shellFlag = val
 		return next, true, 0
 	case arg == "--project" || strings.HasPrefix(arg, "--project="):
 		val, next, ok := takeFlagArg(arg, args, i, "--project")
 		if !ok || val == "" {
-			cliErrf(stderr, "--project requires a project name\n\n%s", help)
-			return i, true, 2
+			return i, true, usage("--project requires a project name")
 		}
 		flags.projectFlag = val
 		return next, true, 0
 	case arg == "--wait" || strings.HasPrefix(arg, "--wait="):
 		val, next, ok := takeFlagArg(arg, args, i, "--wait")
 		if !ok {
-			cliErrf(stderr, "--wait requires a duration argument\n\n%s", help)
-			return i, true, 2
+			return i, true, usage("--wait requires a duration argument")
 		}
 		d, err := parseWaitDuration(val)
 		if err != nil {
-			cliErrf(stderr, "invalid wait duration %q: %v\n\n%s", val, err, help)
-			return i, true, 2
+			return i, true, usage("invalid wait duration %q: %v", val, err)
 		}
 		flags.wait = d
 		return next, true, 0
@@ -107,8 +139,7 @@ func applyCreateCommonFlag(arg string, args []string, i int, help string, stderr
 			mode = strings.ToLower(args[next])
 		}
 		if mode != "auto" && mode != "right" && mode != "below" {
-			cliErrf(stderr, "invalid split option %q (must be auto, right, or below)\n\n%s", mode, help)
-			return i, true, 2
+			return i, true, usage("invalid split option %q (must be auto, right, or below)", mode)
 		}
 		flags.splitSet = true
 		flags.splitMode = mode
@@ -116,11 +147,6 @@ func applyCreateCommonFlag(arg string, args []string, i int, help string, stderr
 	default:
 		return i, false, 0
 	}
-}
-
-func refuseCreateSplit(env Env) int {
-	cliErrln(env.Stderr, createSplitWorktreeUnsupported)
-	return 2
 }
 
 func writeCreateRequest(env Env, dest openDestination, payload uirequest.CreatePayload, target uirequest.Target, opts uirequest.Options) (uirequest.Request, error) {

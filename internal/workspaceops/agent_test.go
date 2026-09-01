@@ -131,7 +131,7 @@ func TestResolveAgentCommandUsesConfiguredOverrideAndSkipFlag(t *testing.T) {
 }
 
 func TestResolveAgentLaunchArgvKeepsCatalogStructuredAndOverridesOpaque(t *testing.T) {
-	argv, opaque, err := ResolveAgentLaunchArgv(t.TempDir(), "codex", nil, true)
+	argv, opaque, err := ResolveAgentLaunchArgv(t.TempDir(), "codex", nil, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +140,7 @@ func TestResolveAgentLaunchArgvKeepsCatalogStructuredAndOverridesOpaque(t *testi
 		t.Fatalf("catalog launch = %#v opaque=%v, want %#v false", argv, opaque, want)
 	}
 
-	argv, opaque, err = ResolveAgentLaunchArgv(t.TempDir(), "codex", map[string]string{"codex": "codex-custom --profile fast"}, true)
+	argv, opaque, err = ResolveAgentLaunchArgv(t.TempDir(), "codex", map[string]string{"codex": "codex-custom --profile fast"}, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,8 +149,38 @@ func TestResolveAgentLaunchArgvKeepsCatalogStructuredAndOverridesOpaque(t *testi
 		t.Fatalf("override launch = %#v opaque=%v, want %#v true", argv, opaque, want)
 	}
 
-	if _, _, err := ResolveAgentLaunchArgv(t.TempDir(), "not-real", nil, false); err == nil {
+	if _, _, err := ResolveAgentLaunchArgv(t.TempDir(), "not-real", nil, false, nil); err == nil {
 		t.Fatal("unknown provider received a launch")
+	}
+}
+
+// Provider arguments follow the family's command on a catalog launch and are
+// appended one quoted shell word each to an opaque override, so a configured
+// command still runs and a value with a space stays one argument.
+func TestResolveAgentLaunchArgvAppendsProviderArguments(t *testing.T) {
+	argv, opaque, err := ResolveAgentLaunchArgv(t.TempDir(), "codex", nil, false, []string{"--model", "space value"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"codex", "--model", "space value"}
+	if opaque || !reflect.DeepEqual(argv, want) {
+		t.Fatalf("catalog launch = %#v opaque=%v, want %#v", argv, opaque, want)
+	}
+	argv, opaque, err = ResolveAgentLaunchArgv(t.TempDir(), "codex", map[string]string{"codex": "codex-custom --profile fast"}, true, []string{"--model", "space value"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = []string{"sh", "-lc", "codex-custom --profile fast --dangerously-bypass-approvals-and-sandbox '--model' 'space value'"}
+	if !opaque || !reflect.DeepEqual(argv, want) {
+		t.Fatalf("override launch = %#v opaque=%v, want %#v", argv, opaque, want)
+	}
+	if _, _, err := ResolveAgentLaunchArgv(t.TempDir(), "codex", map[string]string{"codex": "codex-custom"}, false, []string{"bad\x00"}); err == nil {
+		t.Fatal("a NUL in a provider argument reached the shell")
+	}
+	// Appended to a pipeline the arguments would reach tee, not the provider.
+	_, _, err = ResolveAgentLaunchArgv(t.TempDir(), "codex", map[string]string{"codex": "codex-custom 2>&1 | tee /tmp/agent.log"}, false, []string{"--model", "fable"})
+	if err == nil || !strings.Contains(err.Error(), "shell syntax") || !strings.Contains(err.Error(), "tee") {
+		t.Fatalf("pipeline override = %v, want a refusal naming the command", err)
 	}
 }
 

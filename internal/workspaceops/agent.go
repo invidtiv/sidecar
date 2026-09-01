@@ -86,6 +86,11 @@ func KnownAgentTypes(configured map[string]string) []string {
 
 var openCodeRunPrefix = regexp.MustCompile(`^(\S+)\s+run(\s+.*)?$`)
 
+// opaqueCommandSyntax is every character after which an appended argument
+// might belong to a different command than the provider: pipes, lists,
+// redirections, grouping, and command substitution.
+const opaqueCommandSyntax = "|&;<>()`\n"
+
 func ResolveAgentCommand(worktreePath, agentType string, configured map[string]string, skipPerms bool) string {
 	if strings.TrimSpace(agentType) == "" {
 		return ""
@@ -101,7 +106,17 @@ func ResolveAgentCommand(worktreePath, agentType string, configured map[string]s
 // argv. A .sidecar-agent-start or plugins.workspace.agentStart override stays
 // opaque and is evaluated once through sh -lc; it must never be persisted as
 // replayable structured provider metadata.
-func ResolveAgentLaunchArgv(worktreePath, agentType string, configured map[string]string, skipPerms bool) (argv []string, opaque bool, err error) {
+//
+// extra are provider arguments the caller supplied alongside the family. On a
+// catalog launch they are argv entries after the command. On an opaque
+// command they are appended quoted, one shell word each, so the configured
+// command still runs and a value with a space in it stays one argument — but
+// only when that command is a plain command line. One that contains shell
+// syntax (a pipe, a list, a redirection, a subshell) has no single place the
+// arguments belong: appended to `claude | tee log` they would reach tee, and
+// the provider would start without them and without a word said. That case
+// is refused, naming the command, so the caller puts the arguments in it.
+func ResolveAgentLaunchArgv(worktreePath, agentType string, configured map[string]string, skipPerms bool, extra []string) (argv []string, opaque bool, err error) {
 	family, ok := agentcatalog.FindLaunch(strings.TrimSpace(agentType))
 	if !ok {
 		return nil, false, fmt.Errorf("unknown agent kind %q", agentType)
@@ -115,10 +130,21 @@ func ResolveAgentLaunchArgv(worktreePath, agentType string, configured map[strin
 		}
 	}
 	if command == "" {
-		argv, err := family.LaunchArgv(nil, skipPerms)
+		argv, err := family.LaunchArgv(extra, skipPerms)
 		return argv, false, err
 	}
 	command = finishAgentCommand(command, agentType, skipPerms)
+	if len(extra) > 0 {
+		for _, arg := range extra {
+			if strings.IndexByte(arg, 0) >= 0 {
+				return nil, true, fmt.Errorf("provider argument contains NUL")
+			}
+		}
+		if strings.ContainsAny(command, opaqueCommandSyntax) {
+			return nil, true, fmt.Errorf("provider arguments cannot be appended to the configured launch command %q (.sidecar-agent-start or plugins.workspace.agentStart): it contains shell syntax, so put the arguments in that command instead", command)
+		}
+		command += " " + agentcatalog.ShellCommand(extra)
+	}
 	argv, err = agentcatalog.OpaqueLaunchArgv(command)
 	return argv, true, err
 }

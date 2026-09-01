@@ -29,6 +29,8 @@ sidecar agent list --json     # which of them have a live agent, and its status
 
 A target is a Sidecar-managed shell: its tmux session name, or its display name when that name is unique in the project. Inside a managed shell you may omit the target entirely and the command addresses `SIDECAR_SHELL`. Outside one, name the target.
 
+`agent list` reports each live pane once, under the project that owns it, however many registered projects can see its checkout. An explicit target is searched across every project; if the same name exists in several, the project your own shell belongs to breaks the tie, so a sibling worktree resolves from a managed shell without flags. Outside a managed shell the refusal lists the projects and names the fix: `--project NAME` (a slug, a path, or a worktree Sidecar created, by path or basename) or `--shell NAME`. The `project` field of a `create shell` / `create worktree --json` result is the value `--project` accepts.
+
 ### 2. Create the layout separately
 
 `agent start` never creates or moves a pane. Layout is `sidecar create shell`'s job, and keeping them apart is what makes it safe to start an agent without also rearranging the user's screen.
@@ -37,6 +39,8 @@ A target is a Sidecar-managed shell: its tmux session name, or its display name 
 created=$(sidecar create shell --split right --name reviewer --json)
 target=$(printf '%s\n' "$created" | jq -r '.shell.session')
 ```
+
+To start a catalog family with provider arguments in the same step, both `create shell` and `create worktree` take them after `--`, as `agent start` does, and still record the family: `sidecar create worktree orchestrate --agent claude --json -- --model fable`. Usage refusals under `--json` arrive as `{"error":{"code":"usage",...}}` on stderr, like every other refusal here.
 
 Creating a shell does not steal the user's focus. Do not rearrange panes the user set up, and never close a target you did not create.
 

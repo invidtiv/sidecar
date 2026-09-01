@@ -338,15 +338,27 @@ func RootCommand() *Command {
 			"when it is ready; otherwise it records the family and starts nothing, and --run\n" +
 			"(or `sidecar shell send --run` afterwards) owns the launch. Because only a\n" +
 			"workspace row carries the field, --agent places the shell there: it is refused\n" +
-			"with --split and overrides the beside-the-session default.",
+			"with --split and overrides the beside-the-session default.\n\n" +
+			"Provider arguments go after `--`, as `agent start` takes them: `--agent claude\n" +
+			"-- --model fable` starts the family's command with those arguments appended and\n" +
+			"still records the family. They need --agent and they need agent_control, since\n" +
+			"they describe a launch this command performs. They belong to --agent's launch,\n" +
+			"so with --run or --type they are refused: put them in your own command instead.\n" +
+			"A configured launch override (.sidecar-agent-start, plugins.workspace.agentStart)\n" +
+			"takes them appended, unless it contains shell syntax such as a pipe, in which\n" +
+			"case the start is refused and names the command to put them in.\n\n" +
+			"Usage refusals with --json are `{\"error\":{\"code\":\"usage\",...}}` on stderr,\n" +
+			"like the agent verbs; without --json they are the reason and the help text.\n" +
+			"The result carries `project`, the slug every other verb's --project accepts.",
 		Flags: []Flag{
 			{Name: "--name", Arg: "NAME", Summary: "Display name (default: the next Shell N)"},
 			{Name: "--agent", Arg: "TYPE", Summary: "Record the agent family (claude, codex, …), and start it when agent_control is on"},
+			{Name: "--", Arg: "ARGS", Summary: "Provider arguments appended to --agent's launch command"},
 			{Name: "--skip-permissions", Summary: "Pass the selected provider's auto-approve flag", Bool: true},
 			{Name: "--run", Arg: "COMMAND", Summary: "Execute COMMAND in the new shell"},
 			{Name: "--type", Arg: "COMMAND", Summary: "Type COMMAND without pressing Enter"},
 			{Name: "--shell", Arg: "NAME", Summary: "Resolve the project from a registered shell"},
-			{Name: "--project", Arg: "NAME", Summary: "Target project (slug, basename, or path)"},
+			{Name: "--project", Arg: "NAME", Summary: "Target project (slug, basename, or path; or a worktree it created, by path or basename)"},
 			{Name: "--split", Arg: "auto|right|below", Summary: "Place a live terminal beside the current shell"},
 			{Name: "--tab", Summary: "Open as a workspace shell instead of beside this session", Bool: true},
 			{Name: "--wait", Arg: "DURATION", Summary: "Time to wait for instances to acknowledge (default 1200ms; 0 = fire and forget)"},
@@ -360,18 +372,19 @@ func RootCommand() *Command {
 			{Code: 2, Summary: "usage error, or this directory is not in a registered project"},
 			{Code: 3, Summary: "no running instance (split mode)"},
 			{Code: 4, Summary: "instance declined (cap, too small, or feature off)"},
-			{Code: 5, Summary: "a value was rejected: --name, --agent, or an unknown --project / --shell"},
+			{Code: 5, Summary: "a value was rejected: --name, --agent, an unknown --project / --shell, or provider arguments with agent_control off"},
 		},
 		Examples: []Example{
 			{Command: "sidecar create shell --name reviewer --agent codex --json"},
 			{Command: "sidecar create shell --name \"dev server\" --run \"python3 -m http.server\""},
 			{Command: "sidecar create shell --agent claude --run claude", Description: "an agent shell the board knows is one"},
+			{Command: "sidecar create shell --tab --name orchestrator --agent claude -- --model fable", Description: "the catalog command with provider arguments"},
 			{Command: "sidecar create shell --split right --run \"python3 -m http.server 8765\""},
 			{Command: "sidecar create shell --json --wait 0"},
 			{Command: "sidecar create shell --type \"go test ./...\"", Description: "type a command for the user to review"},
 		},
 		Agent: AgentDoc{
-			Invocation: "sidecar create shell [--name NAME] [--agent TYPE] [--run COMMAND | --type COMMAND] [--split auto|right|below | --tab]",
+			Invocation: "sidecar create shell [--name NAME] [--agent TYPE [-- ARGS...]] [--run COMMAND | --type COMMAND] [--split auto|right|below | --tab]",
 			Summary:    "Create a shell beside the current session (default) or as a workspace tab (--tab)",
 		},
 		Mutates: true,
@@ -381,11 +394,20 @@ func RootCommand() *Command {
 	createWorktreeCmd := &Command{
 		Name:    "worktree",
 		Summary: "Create a Sidecar-managed git worktree",
-		Usage:   "sidecar create worktree [options] <name>",
+		Usage:   "sidecar create worktree [options] <name> [-- ARGS...]",
 		Long: "Create a git worktree with the same setup pipeline as the TUI create modal:\n" +
 			"plan, add, pending-creation journal, identity, and configured hook/env-file rules.\n" +
-			"--agent launches the worktree session (sidecar-ws-…). --no-launch skips that\n" +
-			"launch after the worktree and setup still complete.\n\n" +
+			"--agent records the agent family on the worktree and, with agent_control on,\n" +
+			"starts it in the worktree session (sidecar-ws-…) and returns when it is ready.\n" +
+			"Provider arguments go after `--`, as `agent start` takes them: `--agent claude\n" +
+			"-- --model fable` appends them to the family's command. --run COMMAND launches\n" +
+			"the session with your own command instead; given with --agent it still records\n" +
+			"the family and starts nothing else, the layering `create shell` has. --no-launch\n" +
+			"skips the launch after the worktree and setup still complete.\n\n" +
+			"The name comes before `--`. Because `--` also ends flag parsing, a name that\n" +
+			"starts with a dash may stand alone after it (`create worktree -- -fix`), but\n" +
+			"once provider arguments follow, or the lone value looks like a flag, the command\n" +
+			"is refused rather than guessing which value was meant as the name.\n\n" +
 			"--plan resolves the same plan and prints it without changing anything: no\n" +
 			"worktree is added, no directory is created, no journal is written. It answers\n" +
 			"the questions a confirmation has to ask — branch, path, source ref and OID,\n" +
@@ -398,17 +420,22 @@ func RootCommand() *Command {
 			"longer resolves to OID when this command runs, it is refused with exit 5 and a\n" +
 			"message naming both commits. A caller that showed a --plan result in a\n" +
 			"confirmation passes the plan's sourceOid back here, and gets the same\n" +
-			"source-moved guard the TUI's confirmation gets from executing its stored plan.",
+			"source-moved guard the TUI's confirmation gets from executing its stored plan.\n\n" +
+			"The result carries `project`, the slug the agent verbs' --project accepts, and\n" +
+			"those verbs also accept the worktree's path or basename as --project. Usage\n" +
+			"refusals with --json are `{\"error\":{\"code\":\"usage\",...}}` on stderr, like\n" +
+			"the agent verbs; without --json they are the reason and the help text.",
 		Flags: []Flag{
 			{Name: "--base", Arg: "REF", Summary: "Base ref (default HEAD)"},
 			{Name: "--plan", Summary: "Resolve and print the plan without creating anything", Bool: true},
 			{Name: "--expect-source-oid", Arg: "OID", Summary: "Refuse (exit 5) if the base ref no longer resolves to this commit"},
-			{Name: "--agent", Arg: "TYPE", Summary: "Launch this agent in the new worktree session"},
+			{Name: "--agent", Arg: "TYPE", Summary: "Record the agent family and, with agent_control on and no --run, start it in the worktree session"},
+			{Name: "--", Arg: "ARGS", Summary: "Provider arguments appended to --agent's launch command"},
 			{Name: "--skip-permissions", Summary: "Pass the agent's auto-approve flag", Bool: true},
 			{Name: "--run", Arg: "COMMAND", Summary: "Execute COMMAND in the new worktree session"},
 			{Name: "--no-launch", Summary: "Create the worktree without launching a session", Bool: true},
 			{Name: "--shell", Arg: "NAME", Summary: "Resolve the project from a registered shell"},
-			{Name: "--project", Arg: "NAME", Summary: "Target project (slug, basename, or path)"},
+			{Name: "--project", Arg: "NAME", Summary: "Target project (slug, basename, or path; or a worktree it created, by path or basename)"},
 			{Name: "--wait", Arg: "DURATION", Summary: "Time to wait for instances to acknowledge (default 1200ms; 0 = fire and forget)"},
 			{Name: "--json", Summary: "Write one structured result object to stdout", Bool: true},
 			{Name: "--help", Short: "-h", Summary: "Show this help", Bool: true},
@@ -422,11 +449,12 @@ func RootCommand() *Command {
 		},
 		Examples: []Example{
 			{Command: "sidecar create worktree fix-auth --base main --agent claude"},
+			{Command: "sidecar create worktree orchestrate --agent claude --json -- --model fable", Description: "the catalog command with provider arguments; the family is recorded"},
 			{Command: "sidecar create worktree scratch --no-launch --json"},
 			{Command: "sidecar create worktree fix-auth --base main --plan --json", Description: "what would be created, without creating it"},
 		},
 		Agent: AgentDoc{
-			Invocation: "sidecar create worktree <name> [--base REF] [--agent TYPE] [--no-launch | --plan]",
+			Invocation: "sidecar create worktree <name> [--base REF] [--agent TYPE [-- ARGS...] | --run COMMAND] [--no-launch | --plan]",
 			Summary:    "Create a Sidecar-visible git worktree with the same setup as the TUI",
 		},
 		Mutates: true,

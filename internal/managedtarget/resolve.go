@@ -56,9 +56,35 @@ func Resolve(candidates []Target, q Query) (Target, error) {
 		return matches[0], nil
 	}
 	if len(matches) > 1 {
-		return Target{}, &Error{Kind: Ambiguous, Message: fmt.Sprintf("managed target %q is ambiguous across %d Sidecar sessions", q.Value, len(matches))}
+		return Target{}, &Error{Kind: Ambiguous, Message: ambiguousMessage(q.Value, matches)}
 	}
 	return Target{}, &Error{Kind: NotFound, Message: fmt.Sprintf("no Sidecar-managed target named %q", strings.TrimSpace(q.Value))}
+}
+
+// ambiguousMessage names the projects a value matched in and the flag that
+// picks one. The count alone was the whole message once, and a caller reading
+// "ambiguous across 3 Sidecar sessions" had no way to tell which selector
+// would resolve it — the flag that did was named only by a later, different
+// refusal.
+func ambiguousMessage(value string, matches []Target) string {
+	projects := make([]string, 0, len(matches))
+	seen := make(map[string]bool, len(matches))
+	for _, m := range matches {
+		key := m.Project
+		if key == "" {
+			key = "(unknown project)"
+		}
+		if !seen[key] {
+			seen[key] = true
+			projects = append(projects, key)
+		}
+	}
+	if len(projects) > 1 {
+		return fmt.Sprintf("managed target %q is ambiguous across %d Sidecar projects (%s); pass --project NAME to pick one, or --shell NAME to resolve through that shell's project",
+			value, len(projects), strings.Join(projects, ", "))
+	}
+	return fmt.Sprintf("managed target %q matches %d Sidecar sessions in project %q; address it by tmux session name",
+		value, len(matches), projects[0])
 }
 
 // dedupeEquivalent applies registered/discovered precedence only to two

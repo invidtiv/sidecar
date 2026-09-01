@@ -23,12 +23,12 @@ import (
 var newAgentTerminal = func() agentcontrol.Terminal { return agentcontrol.NewLocalTerminal() }
 
 func agentCommand() *Command {
-	common := []Flag{{Name: "--project", Arg: "NAME", Summary: "Target project (slug, basename, or path)"}, {Name: "--shell", Arg: "NAME", Summary: "Resolve the project from a registered shell"}, {Name: "--host", Arg: "ID", Summary: "Run the verb on a registered remote host (requires an explicit TARGET)"}, {Name: "--json", Summary: "Write stable structured JSON", Bool: true}, {Name: "--help", Short: "-h", Summary: "Show this help", Bool: true}}
+	common := []Flag{{Name: "--project", Arg: "NAME", Summary: "Target project (slug, basename, or path; or a worktree it created, by path or basename)"}, {Name: "--shell", Arg: "NAME", Summary: "Resolve the project from a registered shell"}, {Name: "--host", Arg: "ID", Summary: "Run the verb on a registered remote host (requires an explicit TARGET)"}, {Name: "--json", Summary: "Write stable structured JSON", Bool: true}, {Name: "--help", Short: "-h", Summary: "Show this help", Bool: true}}
 	sessionRefFlag := Flag{Name: "--include-session-ref", Summary: "Include the bound conversation's value, not only its presence", Bool: true}
 	listFlags := append(append([]Flag{}, common...), sessionRefFlag)
 	list := &Command{Name: "list", Summary: "List live managed agents", Usage: "sidecar agent list [--project NAME] [--include-session-ref] [--json]", Flags: listFlags, ExitCodes: agentExitCodes(), Examples: []Example{{Command: "sidecar agent list --json"}}, Agent: AgentDoc{Invocation: "sidecar agent list --json", Summary: "List live managed agents and their current status"}, Run: runAgentList}
 	getFlags := append(append([]Flag{}, common...), sessionRefFlag)
-	get := &Command{Name: "get", Summary: "Get one managed agent", Usage: "sidecar agent get [TARGET] [--project NAME] [--include-session-ref] [--json]", Long: "TARGET is a managed tmux session name or unique display name. Inside a managed shell it may be omitted.\n\nsessionRef reports whether the shell is bound to an exact provider conversation. Its value is shown for your own shell, or with --include-session-ref; otherwise only the kind and whether an official integration reported it are returned, so ordinary output does not carry conversation identifiers into logs.", Flags: getFlags, Args: ArgSpec{Min: 0, Max: 1}, ExitCodes: agentExitCodes(), Examples: []Example{{Command: "sidecar agent get reviewer --json"}}, Agent: AgentDoc{Invocation: "sidecar agent get [TARGET] --json", Summary: "Read one managed agent's provider and lifecycle state"}, Run: runAgentGet}
+	get := &Command{Name: "get", Summary: "Get one managed agent", Usage: "sidecar agent get [TARGET] [--project NAME] [--include-session-ref] [--json]", Long: "TARGET is a managed tmux session name or unique display name. Inside a managed shell it may be omitted.\n\nAn explicit TARGET is searched across every registered project. When that finds the same name in several projects, the caller's own project — the one SIDECAR_SHELL belongs to — breaks the tie; outside a managed shell the refusal lists the projects, and --project NAME (a slug, path, or a worktree Sidecar created, by path or basename) or --shell NAME picks one. This rule is shared by get, start, prompt, wait, read, and send-keys.\n\nsessionRef reports whether the shell is bound to an exact provider conversation. Its value is shown for your own shell, or with --include-session-ref; otherwise only the kind and whether an official integration reported it are returned, so ordinary output does not carry conversation identifiers into logs.", Flags: getFlags, Args: ArgSpec{Min: 0, Max: 1}, ExitCodes: agentExitCodes(), Examples: []Example{{Command: "sidecar agent get reviewer --json"}}, Agent: AgentDoc{Invocation: "sidecar agent get [TARGET] --json", Summary: "Read one managed agent's provider and lifecycle state"}, Run: runAgentGet}
 	startFlags := append([]Flag{}, common...)
 	startFlags = append(startFlags, Flag{Name: "--kind", Arg: "KIND", Summary: "Catalog provider kind (required)"}, Flag{Name: "--timeout", Arg: "DURATION", Summary: "Bound the readiness wait (default 30s)"})
 	start := &Command{Name: "start", Summary: "Start a provider in an idle managed shell and wait for readiness", Usage: "sidecar agent start [TARGET] --kind KIND [--timeout DURATION] [-- AGENT_ARG ...]", Long: "Refuses commands, editors, copy mode, agents, ambiguous panes, and replacement processes. Provider arguments remain structured until the final shell boundary.", Flags: startFlags, Args: ArgSpec{Min: 0, Max: -1}, ExitCodes: agentExitCodes(), Examples: []Example{{Command: "sidecar agent start reviewer --kind codex --timeout 30s"}}, Agent: AgentDoc{Invocation: "sidecar agent start [TARGET] --kind KIND", Summary: "Start a known provider in a shell and return only when it is ready"}, Mutates: true, Run: runAgentStart}
@@ -612,24 +612,16 @@ func runAgentList(env Env, args []string) int {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	var projects []registeredProject
-	if f.shell != "" || f.project != "" {
-		dest, err := resolveCreateDestination(ctx, env.StateDir, f.shell, f.project, resolveProjectOnly)
-		if err != nil {
-			return emitAgentError(env, f.json, &agentcontrol.Error{Code: agentcontrol.ErrNotFound, Message: err.Error(), Err: err})
-		}
-		proj, err := registeredProjectForCreate(env.StateDir, dest)
-		if err != nil {
-			return emitAgentError(env, f.json, &agentcontrol.Error{Code: agentcontrol.ErrNotFound, Message: err.Error(), Err: err})
-		}
-		projects = []registeredProject{proj}
-	}
-	if len(projects) == 0 {
-		var err error
-		projects, err = loadRegisteredProjects(env.StateDir)
-		if err != nil {
+	// Unscoped, a list is global: every registered project, with each
+	// worktree root attributed to exactly one of them (see
+	// managedTargetCandidates), so a live pane is one row however many state
+	// directories can see its checkout.
+	projects, code, err := scanProjects(env, f.shell, f.project, true)
+	if err != nil {
+		if code == 1 {
 			return emitAgentError(env, f.json, err)
 		}
+		return emitAgentError(env, f.json, &agentcontrol.Error{Code: agentcontrol.ErrNotFound, Message: err.Error(), Err: err})
 	}
 	targets, err := managedTargetCandidates(env, projects)
 	if err != nil {
@@ -877,9 +869,13 @@ func targetFromShell(t shellTarget) agentcontrol.Target {
 	return agentcontrol.Target{Host: "local", Project: t.Project.Key, Session: t.Session, Name: t.DisplayName, Namespace: t.Namespace}
 }
 
-func startCreatedAgent(ctx context.Context, proj registeredProject, session, display, workDir, kind string, skipPerms bool) (agentcontrol.Agent, error) {
+// startCreatedAgent starts the provider for a shell or worktree session that
+// `create` just made, and returns when it is ready. extra are provider
+// arguments the caller wrote after `--`; they follow the family's command the
+// way `agent start -- ARGS` appends them.
+func startCreatedAgent(ctx context.Context, proj registeredProject, session, display, workDir, kind string, skipPerms bool, extra []string) (agentcontrol.Agent, error) {
 	cfg := loadCreateConfig()
-	argv, _, err := workspaceops.ResolveAgentLaunchArgv(workDir, kind, cfg.Plugins.Workspace.AgentStart, skipPerms)
+	argv, _, err := workspaceops.ResolveAgentLaunchArgv(workDir, kind, cfg.Plugins.Workspace.AgentStart, skipPerms, extra)
 	if err != nil {
 		return agentcontrol.Agent{}, &agentcontrol.Error{Code: agentcontrol.ErrNotReady, Message: err.Error(), Err: err}
 	}
@@ -927,7 +923,7 @@ func emitAgentError(env Env, jsonOutput bool, err error) int {
 		// host_unavailable joins the retryable failures: nothing was refused,
 		// the machine could not be reached, and trying again later is the fix.
 		return 1
-	case agentcontrol.ErrVersionSkew:
+	case agentcontrol.ErrVersionSkew, agentcontrol.ErrUsage:
 		// Exit 2 is what agentExitCodes has always documented as "usage error
 		// or version skew", and it is what the host itself exited with. A
 		// caller relaying a remote verb keeps the same status it would have
