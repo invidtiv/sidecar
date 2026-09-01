@@ -9,6 +9,7 @@ import (
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/contentservice"
 	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/termpanes"
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspacecreate"
@@ -42,6 +43,60 @@ func TestNTerminalSplitOnRemoteRowCreatesHostSession(t *testing.T) {
 		t.Fatal("terminal split was not placed in the viewer tree")
 	}
 	remote.assertCalled(t, "mac-mini", termpanes.SessionName(selected.TmuxName), root)
+}
+
+func TestRestoringRemoteTerminalSplitUsesHostEnsure(t *testing.T) {
+	m, _, root := showingRemoteTwinModel(t, nil)
+	refuseLocalTerminalSplit(t)
+	remote := installRemoteTerminalSplitStub(t)
+	selected, ok := m.SelectedWorkspace()
+	if !ok || !selected.Remote() {
+		t.Fatal("fixture did not select a remote row")
+	}
+	session := termpanes.SessionName(selected.TmuxName)
+	result := m.results[selected.ProjectKey]
+	for i, ws := range result.Workspaces {
+		if ws.ID != selected.ID {
+			continue
+		}
+		ws.Live = true
+		ws.PaneID = "%1"
+		result.Workspaces[i] = ws
+	}
+	m.results[selected.ProjectKey] = result
+	m.syncBoard()
+	if !m.workspaces.SelectID(selected.ID) {
+		t.Fatal("could not reselect the remote row")
+	}
+	loadSessionsPaneLayout = func(id string) *state.PaneLayoutJSON {
+		if id != selected.ID {
+			return nil
+		}
+		return &state.PaneLayoutJSON{
+			Root: selected.Path, Surface: selected.ID, Open: true, HostID: selected.HostID,
+			Split: &state.PaneSplitJSON{
+				Axis: "cols", Ratio: 50,
+				A: &state.PaneLayoutJSON{Kind: "terminal"},
+				B: &state.PaneLayoutJSON{Kind: "shell", Session: session, Name: "ghost"},
+			},
+		}
+	}
+	t.Cleanup(func() { loadSessionsPaneLayout = func(string) *state.PaneLayoutJSON { return nil } })
+
+	m.resetActivePreviewPanes()
+	m.preview.workspaceID = ""
+	m.preview.paneCache = nil
+	run(t, m, m.bindPreview(false))
+
+	shell := panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Shell)
+	if shell == nil {
+		t.Fatal("restored tree missing shell")
+	}
+	leaf := m.preview.terminalPanes.Leaf(shell.ID)
+	if leaf == nil || leaf.Target.Host != "mac-mini" {
+		t.Fatalf("restored leaf host = %+v, want mac-mini", leaf)
+	}
+	remote.assertCalled(t, "mac-mini", session, root)
 }
 
 func TestCreatePickersUseHostCatalogNotLocalTwin(t *testing.T) {
