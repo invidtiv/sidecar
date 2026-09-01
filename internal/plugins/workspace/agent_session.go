@@ -105,6 +105,8 @@ func detectAgentSessionStatus(agentType AgentType, worktreePath string) (Worktre
 		return detectPiSessionStatus(worktreePath)
 	case AgentAmp:
 		return detectAmpSessionStatus(worktreePath)
+	case AgentMuse:
+		return detectMuseSessionStatus(worktreePath)
 	default:
 		return 0, false
 	}
@@ -1022,6 +1024,144 @@ func findOpenCodeSession(storageDir, projectID string) (string, error) {
 	}
 
 	return mostRecent, nil
+}
+
+// detectMuseSessionStatus checks Muse Spark session files.
+//
+// Muse stores sessions under ~/.local/share/muse/sessions/YYYY/MM/DD/<uuid>/session.jsonl
+// and an SQLite index at ~/.local/share/muse/session-index.db. File-based
+// status is a secondary fallback: live activity detection owns the lane while
+// the pane is alive. This probe uses mtime on the session log to distinguish
+// recent activity from a stale idle, similar to Pi/Codex strategies.
+func detectMuseSessionStatus(worktreePath string) (WorktreeStatus, bool) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return 0, false
+	}
+	absPath, err := filepath.Abs(worktreePath)
+	if err != nil {
+		return 0, false
+	}
+	// Prefer SQLite index when available: find latest session for this workspace.
+	sessionsDir := filepath.Join(home, ".local", "share", "muse", "sessions")
+	// XDG_DATA_HOME override like other adapters.
+	if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
+		sessionsDir = filepath.Join(xdg, "muse", "sessions")
+	}
+	// Walk date hierarchy to find most recent session.jsonl whose metadata
+	// workspace_root matches the worktree. This is bounded: we only look at
+	// recent files (mtime) to avoid reading every historic session.
+	var bestPath string
+	var bestMod int64
+	_ = filepath.WalkDir(sessionsDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || filepath.Base(path) != "session.jsonl" {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		// Only consider files modified within 24h for fast path; stale files
+		// are handled by content fallback if needed.
+		if time.Since(info.ModTime()) > 24*time.Hour {
+			return nil
+		}
+		// Quick CWD check via first metadata lines (without full parse).
+		cwd, _ := getMuseSessionCWD(path)
+		if cwd == "" {
+			return nil
+		}
+		if !cwdMatches(cwd, absPath) {
+			return nil
+		}
+		if info.ModTime().UnixNano() > bestMod {
+			bestMod = info.ModTime().UnixNano()
+			bestPath = path
+		}
+		return nil
+	})
+	if bestPath == "" {
+		return 0, false
+	}
+	if isFileRecentlyModified(bestPath, sessionActivityThreshold) {
+		return StatusActive, true
+	}
+	// Fallback to JSONL content: user intent vs assistant idle.
+	return getMuseLastMessageStatus(bestPath)
+}
+
+// getMuseSessionCWD extracts workspace_root from a Muse session.jsonl metadata record.
+func getMuseSessionCWD(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = file.Close() }()
+	scanner := bufio.NewScanner(file)
+	buf := make([]byte, 64*1024)
+	scanner.Buffer(buf, 1024*1024)
+	for scanner.Scan() {
+		var rec struct {
+			PayloadType string `json:"payload_type"`
+			Payload     struct {
+				Kind   string `json:"kind"`
+				Record struct {
+					WorkspaceRoot string `json:"workspace_root"`
+				} `json:"record"`
+			} `json:"payload"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &rec); err != nil {
+			continue
+		}
+		if rec.PayloadType == "runtime.session.metadata" && rec.Payload.Record.WorkspaceRoot != "" {
+			return rec.Payload.Record.WorkspaceRoot, nil
+		}
+	}
+	return "", nil
+}
+
+// getMuseLastMessageStatus parses Muse JSONL tail to determine last significant role.
+func getMuseLastMessageStatus(path string) (WorktreeStatus, bool) {
+	lines, err := readTailLines(path, sessionStatusTailBytes)
+	if err != nil {
+		return 0, false
+	}
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		// Retained frames wrap events; skip them (they contain escaped JSON).
+		if strings.Contains(line, `"retained_frame"`) {
+			continue
+		}
+		var rec struct {
+			PayloadType string `json:"payload_type"`
+			Payload     struct {
+				Kind   string `json:"kind"`
+				Record struct {
+					Kind string `json:"kind"`
+				} `json:"record"`
+				Event struct {
+					Kind string `json:"kind"`
+				} `json:"event"`
+			} `json:"payload"`
+		}
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			continue
+		}
+		switch rec.PayloadType {
+		case "runtime.user_intent.accepted":
+			return StatusActive, true
+		case "tool_batch.effect.terminal":
+			// Tool completion alone does not indicate waiting; continue scanning.
+			continue
+		case "runtime.session":
+			// run.terminal etc. could indicate completion, but encrypted.
+			continue
+		}
+	}
+	return 0, false
 }
 
 // getOpenCodeLastMessageStatus finds last message role in OpenCode session.

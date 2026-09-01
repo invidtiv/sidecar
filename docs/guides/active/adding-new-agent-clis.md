@@ -57,14 +57,14 @@ Add the new CLI family entry to `families` in `internal/agentcatalog/agentcatalo
 ```go
 {
     ID:                 "muse",
-    Name:               "Meta Muse",
+    Name:               "Muse Spark",       // Display name is Muse Spark (CLI binary is `muse`, product is Muse Code)
     Short:              "Muse",
     Command:            "muse",
-    SkipPermissionsArg: "--always-approve", // or "--yes", "--dangerously-skip-permissions", etc.
+    SkipPermissionsArg: "--yolo",            // Muse Code: --yolo disables approval + sandbox (also --disable-approval, --trust-workspace)
     Aliases:            []string{"muse-cli"},
     AdapterID:          "muse",            // ID of the conversation history adapter
-    ResumeArgs:         []string{"resume"}, // e.g. ["resume"], ["--resume"], ["--session"], ["threads", "continue"]
-    ResumeKinds:        []string{"id"},    // "id" or "path"
+    ResumeArgs:         []string{"resume"}, // muse resume <id> | muse resume --last (picker when no arg on TTY)
+    ResumeKinds:        []string{"id"},    // "id" only; Muse does not resume from path
 },
 ```
 
@@ -116,7 +116,7 @@ Adding a family to `internal/agentcatalog` automatically wires:
 
 ### 2.2 Create Provider Detection Rules in `internal/agentactivity/<provider>.go`
 
-Create `internal/agentactivity/muse.go`:
+Create `internal/agentactivity/muse.go` (harvested from Muse Code 1.0.1 live tmux, 2026-08-31, darwin/arm64, echo provider with `--echo-delay-ms` to expose `◈ Thinking`):
 
 ```go
 package agentactivity
@@ -126,29 +126,29 @@ import (
 	"strings"
 )
 
-// Spinners are provider-owned: never share regexes across providers as glyph
-// sets and framing drift independently.
+// Muse Spark: braille title spinner `⠹ sidecar-muse-spark-adapter` while working,
+// screen `◈ Thinking (0s · esc to interrupt)` / `Working…`, idle `⟩` prompt.
+// Voice input separator `── Voice input ──` is permanent chrome, not an overlay.
 var (
 	museTitleWorking = regexp.MustCompile(`^[\x{2800}-\x{28FF}]\s`)
 	museRules        = []Rule{
-		// 1. Blocked/approval rules (permission requests, interactive confirmations)
 		{
 			ID:     "muse.screen.blocked",
 			State:  StateBlocked,
 			Region: RegionCurrent,
 			LastN:  24,
-			Regexp: regexp.MustCompile(`(?im)(Do you want to proceed\?|Allow command\?|Yes, allow|Enter to confirm.*Esc to cancel)`),
+			Regexp: regexp.MustCompile(`(?im)(Do you want to proceed\?|Allow command\?|Would you like to run|Proceed\?|Yes.*No|Enter to confirm.*Esc to cancel|Allow.*\?|approve)`),
 		},
-		// 2. Overlays & modals (retain prior state, prevent false state transitions)
 		{
 			ID:     "muse.overlay.retain",
 			State:  StateUnknown,
 			Region: RegionLastLines,
 			LastN:  24,
-			Regexp: regexp.MustCompile(`(?im)(esc to close|model picker)`),
+			Regexp: regexp.MustCompile(`(?im)(esc to close|model picker|select.*model)`),
 			Skip:   true,
 		},
-		// 3. Working/busy rules (title spinners, thinking phrases, progress bars)
+		// Note: do NOT add a Voice input skip — `── Voice input (⌥ + v to start) ──`
+		// is permanent chrome on idle screens and would suppress the idle rule.
 		{
 			ID:     "muse.title.working",
 			State:  StateWorking,
@@ -158,17 +158,30 @@ var (
 		{
 			ID:     "muse.screen.working",
 			State:  StateWorking,
-			Region: RegionLastLines,
+			Region: RegionCurrent,
 			LastN:  16,
-			Regexp: regexp.MustCompile(`(?im)(Thinking…|Working…|esc to interrupt)`),
+			Regexp: regexp.MustCompile(`(?i)Thinking|Working`),
 		},
-		// 4. Explicit idle / ready for prompt
+		{
+			ID:     "muse.screen.cancel-working",
+			State:  StateWorking,
+			Region: RegionCurrent,
+			LastN:  16,
+			Regexp: regexp.MustCompile(`(?i)esc to interrupt`),
+		},
+		{
+			ID:     "muse.screen.thinking-glyph",
+			State:  StateWorking,
+			Region: RegionCurrent,
+			LastN:  16,
+			Regexp: regexp.MustCompile(`◈\s*Thinking`),
+		},
 		{
 			ID:     "muse.screen.idle",
 			State:  StateIdle,
 			Region: RegionLastLines,
 			LastN:  12,
-			Regexp: regexp.MustCompile(`(?m)^❯(?:\s| |$)`),
+			Regexp: regexp.MustCompile(`(?m)^⟩(?:\s| |$)`), // U+27E9, not ❯
 			Not:    []string{"esc to interrupt"},
 		},
 	}
@@ -186,7 +199,7 @@ func DetectMuse(ob Observation) Result {
 }
 
 func museProcess(command string) bool {
-	return command == "muse" || strings.HasPrefix(command, "muse-")
+	return command == "muse" || strings.HasPrefix(command, "muse-") // also muse-bin-1.0.1-*
 }
 ```
 
@@ -204,7 +217,7 @@ While new code queries `internal/agentcatalog`, the workspace plugin maintains s
 
 1. **Add `AgentType` constant** in `internal/plugins/workspace/types.go`:
    ```go
-   AgentMuse AgentType = "muse" // Meta Muse
+   AgentMuse AgentType = "muse" // Muse Spark (Muse Code)
    ```
 2. **Add to `buildSkipPermissionsFlags()`** in `internal/plugins/workspace/types.go`:
    ```go
@@ -226,51 +239,51 @@ When an agent CLI supports telemetry/lifecycle hooks, Sidecar can track exact se
 
 ### 4.1 Record Capability in `internal/agentlifecycle/capabilities.json`
 
-Add an entry to `internal/agentlifecycle/capabilities.json`:
+Add an entry to `internal/agentlifecycle/capabilities.json`. Muse Spark 1.0.1 has **no published lifecycle hook** (extension surface is skills/MCP/MSP wire, not `hooks.json`); set `screen-fallback` until hooks are shipped:
 
 ```json
 {
   "schemaVersion": 1,
   "provider": "muse",
-  "source": "sidecar.muse.hooks",
-  "assetVersion": "1",
-  "tier": "session-identity",
-  "evidence": "real-trace",
-  "minProviderVersion": "1.0.0",
-  "testedProviderRange": "1.0.0 - 1.0.5",
-  "covered": [
-    "session_identity",
-    "work_start",
-    "turn_complete"
-  ],
+  "source": "",
+  "assetVersion": "",
+  "tier": "screen-fallback",
+  "evidence": "none",
+  "minProviderVersion": "",
+  "testedProviderRange": "",
+  "covered": [],
   "knownGaps": [
-    "Describe any unobserved transitions or quirks here."
+    "No Sidecar integration is built, so nothing is claimed and screen detection remains the sole authority.",
+    "Muse Spark 1.0.1 traced locally (darwin/arm64, echo provider) but hooks are not shipped: Muse Code's extension surface is skills, MCP servers, and the MSP wire schema, not lifecycle hooks. No published hook contract like Claude Code's hooks or Codex's hooks.json was found in the binary or docs at https://dev.meta.ai/docs/muse-code/.",
+    "The session log (JSONL at ~/.local/share/muse/sessions/YYYY/MM/DD/<uuid>/session.jsonl) and SQLite index at ~/.local/share/muse/session-index.db are the durable stores; reasoning text is encrypted (encrypted_content) and tool call/result shapes are visible but not hook-authored.",
+    "Screen detection is therefore the sole lane authority; the capability entry exists so the provider appears in the matrix and can be promoted when and if Muse ships lifecycle hooks."
   ],
   "orderingGuaranteed": false,
-  "sourceDoc": "https://example.com/muse/docs",
-  "sourceVersionNote": "Traced on darwin/arm64, 2026-08-31."
+  "sourceDoc": "https://dev.meta.ai/docs/muse-code/",
+  "sourceVersionNote": "muse 1.0.1 on darwin/arm64, inspected 2026-08-31. No hook contract found; session storage verified via local JSONL and SQLite traces, and live TUI captured via private tmux socket (braille title spinner U+2800-FF, ◈ Thinking + esc to interrupt chrome, ⟩ prompt idle)."
 }
 ```
 
+When Muse ships hooks, promote to `session-identity` / `advisory` / `full` with real traces as for `claude`/`codex`/`pi`.
+
 ### 4.2 Approved Store Roots in `internal/agentsession/trust.go`
 
-1. Register official source in `OfficialSources()` and `OfficialSourceFor(kind)` in `internal/agentsession/trust.go`:
+No official source is registered for Muse Spark yet (screen-fallback). `OfficialSources()` / `OfficialSourceFor` stay empty; add them only when a `sidecar.muse.hooks` source is shipped.
+
+Define approved storage roots in `Roots.For(kind)` in `internal/agentsession/trust.go` (supports `XDG_DATA_HOME` and `MUSE_HOME` overrides — Muse stores sessions under `~/.local/share/muse/sessions` by default, not `~/.muse`):
    ```go
    case "muse":
-       return "sidecar.muse.hooks"
-   ```
-2. Define approved storage roots in `Roots.For(kind)` in `internal/agentsession/trust.go`:
-   ```go
-   case "muse":
-       base := r.env("MUSE_HOME")
+       base := r.env("XDG_DATA_HOME")
        if base == "" {
            if r.Home == "" {
                return nil
            }
-           base = filepath.Join(r.Home, ".muse")
+           base = filepath.Join(r.Home, ".local", "share")
        }
-       return []string{filepath.Join(base, "sessions")}
+       return []string{filepath.Join(base, "muse", "sessions")}
+       // Also check MUSE_HOME when set: if r.env("MUSE_HOME") != "" { base = r.env("MUSE_HOME") }
    ```
+The actual implementation checks `MUSE_HOME` first, then `XDG_DATA_HOME`, then `~/.local/share/muse/sessions` — keep `WithinRoots` symlink-aware as for `codex`/`opencode`.
 
 ### 4.3 Automated Integration Installer (Optional)
 
@@ -339,9 +352,14 @@ In `internal/plugins/conversations/view_content.go`:
      ```
    - Add icon glyph to `defaultAgentIcons` (must match `Adapter.Icon()`):
      ```go
-     "muse": "✦",
+     "muse": "◈", // not ✦ (Grok) — verified via Muse adapter
      ```
-2. **Website & Theme Palette**: In `website/src/data/themes.json`, add `"muse": "#..."` under `AgentColors` for themes.
+2. **Per-theme palettes** (missing seam — guide previously omitted these):
+   - `internal/styles/themes.go`: add `"muse": "#A78BFA"` to `DefaultTheme.Colors.AgentColors` (Sidecar Modern).
+   - `internal/styles/curated_themes.go`: add `"muse"` to **every** theme's `AgentColors` map. Values must already pass `EnsureContrastOn(..., surface, 4.5)` or `TestCatppuccinMochaPassesNormalizationUnchanged` fails. For example catppuccin-mocha `#A78BFA` → `#ae94fa` on `#393947`; use the normalized value per theme (run `TestDebugMuse` helper to derive).
+3. **Website & Theme Palette**: In `website/src/data/themes.json`, add `"muse": "#A78BFA"` (or the per-theme normalized value) under `AgentColors` for all 21 themes.
+
+Why this matters: `NormalizePalette` rewrites any `AgentColors` entry that fails contrast against `SurfaceRaised`. A single `#A78BFA` for every curated theme would be rewritten for most dark themes (catppuccin, tokyonight, etc.) and break the “passes unchanged” test. Store the post-normalization value.
 
 ---
 
@@ -386,10 +404,10 @@ SIDECAR_BIN=$HOME/go/bin/sidecar ./scripts/tmux-drive.sh start 200 50
 
 ## Summary Checklist for Adding a New CLI
 
-- [ ] **Step 1 (`internal/agentcatalog`)**: Add `Family` entry with launch/resume args and skip-permissions flag.
-- [ ] **Step 2 (`internal/agentactivity`)**: Add process name to `identifyProcessName()`, dispatch in `Detect()`, and create `internal/agentactivity/<name>.go` with spinner and state rules.
-- [ ] **Step 3 (`internal/plugins/workspace`)**: Add `AgentType` constant, append to `buildSkipPermissionsFlags()`, and set optional system prompt / print mode flags.
-- [ ] **Step 4 (`internal/agentlifecycle` & `agentsession`)**: Add capability to `capabilities.json`, register official source, and configure approved store roots.
-- [ ] **Step 5 (`internal/adapter`)**: Implement conversation adapter, register constructor, and add blank import in `cmd/sidecar/main.go`.
-- [ ] **Step 6 (`internal/styles` & themes)**: Add default hex color and icon to `defaultAgentColors`/`defaultAgentIcons` in `internal/styles/overview.go` and update `themes.json`.
-- [ ] **Step 7 (Tests)**: Pass vocabulary parity tests, adapter unit tests, and live matrix tests.
+- [ ] **Step 1 (`internal/agentcatalog`)**: Add `Family` entry with launch/resume args and skip-permissions flag (`--yolo` for Muse).
+- [ ] **Step 2 (`internal/agentactivity`)**: Add process name to `identifyProcessName()`, dispatch in `Detect()`, and create `internal/agentactivity/<name>.go` with spinner and state rules (idle `⟩` for Muse, not `❯`).
+- [ ] **Step 3 (`internal/plugins/workspace`)**: Add `AgentType` constant, append to `buildSkipPermissionsFlags()`, and set optional system prompt / print mode flags; add `AgentMuse` case to `detectAgentSessionStatus` if file-based status is supported.
+- [ ] **Step 4 (`internal/agentlifecycle` & `agentsession`)**: Add capability to `capabilities.json` (use `screen-fallback`/`none` if no hooks as for Muse), register official source only when a hook is shipped, and configure approved store roots (`XDG_DATA_HOME/muse/sessions` for Muse).
+- [ ] **Step 5 (`internal/adapter`)**: Implement conversation adapter (`adapter.go`, `types.go`, `watcher.go`, `register.go`), register constructor, and add blank import in `cmd/sidecar/main.go`.
+- [ ] **Step 6 (`internal/styles` & themes)**: Add default hex color and icon (`◈` for Muse) to `defaultAgentColors`/`defaultAgentIcons` in `internal/styles/overview.go`, add to `internal/styles/themes.go` and **every** entry in `internal/styles/curated_themes.go` (pre-normalized), and update `website/src/data/themes.json` for all themes.
+- [ ] **Step 7 (Tests)**: Pass vocabulary parity tests (`TestTheProcessNameVocabularyMatchesTheAgentCatalog`), icon tests (`TestAgentIconMatchesConversationsAdapters`), workspace picker tests (`TestAgentPickersFollowCatalog`), and live matrix tests (`SIDECAR_LIVE_AGENT_MATRIX=muse`).

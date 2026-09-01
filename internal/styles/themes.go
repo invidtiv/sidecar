@@ -245,6 +245,7 @@ var (
 				"antigravity": "#4f9999",
 				"gemini":      "#4d90d6",
 				"cursor":      "#a57fb9",
+				"muse":        "#A78BFA",
 			},
 			LaneWorking: "#5b8f63",
 			LaneBlocked: "#c0982f",

@@ -392,6 +392,28 @@ func TestResolveWorktreePanesIgnoresChromeAndPrefersWorkspaceSession(t *testing.
 			},
 			wantIDs: []string{"%1", "%2"},
 		},
+		{
+			name: "sidecar TUI is chrome, not a live worktree pane",
+			panes: []Pane{
+				{ID: "%1", Session: "mosh-host", Path: root, Command: "sidecar"},
+			},
+		},
+		{
+			name: "sidecar TUI does not rival a worktree session",
+			panes: []Pane{
+				{ID: "%1", Session: "mosh-host", Path: root, Command: "/opt/homebrew/bin/sidecar"},
+				{ID: "%2", Session: "sidecar-ws-repo", Path: root, Command: "zsh"},
+			},
+			wantIDs: []string{"%2"},
+		},
+		{
+			name: "sidecar TUI does not rival an unmanaged shell",
+			panes: []Pane{
+				{ID: "%1", Session: "mosh-host", Path: root, Command: "sidecar"},
+				{ID: "%2", Session: "scratch", Path: root, Command: "zsh"},
+			},
+			wantIDs: []string{"%2"},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1140,5 +1162,44 @@ func TestWorktreeRowDoesNotCorrelateToTheHostingPane(t *testing.T) {
 	}
 	if main.Live || main.PaneID != "" || main.Ambiguous {
 		t.Fatalf("main workspace correlated to the hosting pane: %#v", main)
+	}
+}
+
+func TestWorktreeRowDoesNotCorrelateToASidecarTUI(t *testing.T) {
+	root := t.TempDir()
+	runner := &fakeRunner{
+		tmux: strings.Join([]string{"%1", "mosh-host", root, "sidecar", "", "0"}, "\t"),
+		git:  map[string]string{root: "worktree " + root + "\nbranch refs/heads/main\n"},
+	}
+	// Command is in the listing; HostPane is empty the way host serve's is —
+	// serve is an SSH child, so TMUX_PANE cannot exclude the host's TUI.
+	collector := Collector{Runner: runner, Capture: func(string, int) (string, tty.PaneState, error) {
+		return "$ ", tty.PaneState{}, nil
+	}}
+
+	inventory := collector.CollectProjectInventory(context.Background(), "sidecar", root)
+	if inventory.Err != nil {
+		t.Fatal(inventory.Err)
+	}
+	panes, err := collector.ListPanes(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(panes) != 1 || panes[0].Command != "sidecar" {
+		t.Fatalf("panes = %#v, want the sidecar TUI listed", panes)
+	}
+	result := collector.RefreshProjectStatus(context.Background(), inventory, []string{root}, panes)
+
+	var main *Workspace
+	for i := range result.Workspaces {
+		if result.Workspaces[i].IsMain {
+			main = &result.Workspaces[i]
+		}
+	}
+	if main == nil {
+		t.Fatalf("no main workspace in %#v", result.Workspaces)
+	}
+	if main.Live || main.PaneID != "" || main.Ambiguous {
+		t.Fatalf("main workspace correlated to the sidecar TUI: %#v", main)
 	}
 }
