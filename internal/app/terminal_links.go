@@ -45,7 +45,7 @@ func (r *terminalLinkResolver) ResolveFresh(request termpreview.FreshLinkRequest
 }
 
 func (r *terminalLinkResolver) resolveRemote(hostID, root string, candidate contentlink.Pending) (contentlink.Ref, bool) {
-	if r == nil || r.remoteFile == nil || candidate.Kind != contentlink.KindFile {
+	if r == nil || r.remoteFile == nil || (candidate.Kind != contentlink.KindFile && candidate.Kind != contentlink.KindDiff) {
 		return contentlink.Ref{}, false
 	}
 	return r.remoteFile(hostID, root, candidate)

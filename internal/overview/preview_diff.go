@@ -1,9 +1,12 @@
 package overview
 
 import (
+	"errors"
+
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/clip"
 	"github.com/marcus/sidecar/internal/contentlink"
+	"github.com/marcus/sidecar/internal/contentpanes"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
@@ -30,6 +33,9 @@ type previewDiff struct {
 	root    string
 	surface string
 	focused bool
+	// hostNotice is a connected-stale or verb-failure label for a remote
+	// Diff that is still showing its last good body.
+	hostNotice string
 }
 
 func (d *previewDiff) view() *workspacediff.View {
@@ -41,7 +47,7 @@ func (d *previewDiff) view() *workspacediff.View {
 
 func (m *Model) openPreviewDiff(target workspacediff.Target) tea.Cmd {
 	workspace, ok := m.SelectedWorkspace()
-	if !ok || workspace.Remote() {
+	if !ok {
 		return nil
 	}
 	if target.Identity() == "" {
@@ -49,6 +55,26 @@ func (m *Model) openPreviewDiff(target workspacediff.Target) tea.Cmd {
 	}
 	if !features.IsEnabled(features.WorkspaceDocPanes.Name) {
 		return appmsg.ShowFlash(features.WorkspaceDocPanesDisabledDiff)
+	}
+	if workspace.Remote() {
+		ctx, ok := m.previewDeckContext()
+		if !ok {
+			return nil
+		}
+		raw := target.Identity()
+		if raw == "" {
+			raw = workspacediff.IdentityWorkingTree
+		}
+		ref, err := contentpanes.ResolveDocument(m.previewDeckConfig(ctx).Source, ctx.Source, contentlink.Pending{
+			Kind: contentlink.KindDiff, Raw: raw,
+		})
+		if err != nil || ref.Value == "" {
+			if err == nil {
+				err = errors.New("git object not found on " + ctx.Source.HostID)
+			}
+			return remoteContentErrorCmd(err)
+		}
+		return m.openPreviewContent(ref, "Diff")
 	}
 	return m.openPreviewContent(contentlink.Ref{Kind: contentlink.KindDiff, Value: target.Identity()}, "Diff")
 }
@@ -60,8 +86,19 @@ func (m *Model) applyPreviewDiffSnapshot(msg workspacediff.SnapshotMsg) tea.Cmd 
 			return
 		}
 		for _, item := range diff.tabs.Items {
-			if item.Value != nil {
-				cmds = append(cmds, item.Value.ApplySnapshotMsg(msg, item.Value.WorkDir, item.Value.WorkspaceID))
+			if item.Value == nil {
+				continue
+			}
+			before := item.Value.Revision
+			cmds = append(cmds, item.Value.ApplySnapshotMsg(msg, item.Value.WorkDir, item.Value.WorkspaceID))
+			if msg.Refresh {
+				if msg.NotModified || (msg.Err == nil && msg.Snapshot != nil) {
+					diff.hostNotice = ""
+				} else if msg.Err != nil && item.Value.Revision == before {
+					diff.hostNotice = remoteDocumentStaleNotice
+				}
+			} else if msg.Err == nil {
+				diff.hostNotice = ""
 			}
 		}
 	}
@@ -100,6 +137,25 @@ func (m *Model) applyPreviewDiffCommit(msg workspacediff.CommitDetailMsg) tea.Cm
 		for _, item := range diff.tabs.Items {
 			if item.Value != nil {
 				cmds = append(cmds, item.Value.ApplyCommitDetail(msg))
+			}
+		}
+	}
+	apply(m.preview.diff)
+	if cached, ok := m.preview.paneCache[msg.WorkspaceID]; ok {
+		apply(cached.diff)
+	}
+	return tea.Batch(cmds...)
+}
+
+func (m *Model) applyPreviewDiffWorkingTreeFile(msg workspacediff.WorkingTreeFileMsg) tea.Cmd {
+	var cmds []tea.Cmd
+	apply := func(diff *previewDiff) {
+		if diff == nil {
+			return
+		}
+		for _, item := range diff.tabs.Items {
+			if item.Value != nil {
+				cmds = append(cmds, item.Value.ApplyWorkingTreeFile(msg))
 			}
 		}
 	}
@@ -203,7 +259,7 @@ func (m *Model) renderPreviewDiff(diff *previewDiff, box termpreview.Box) string
 	if view != nil {
 		view.SetSize(box.W, contentHeight)
 	}
-	header := m.composePreviewHeader(layoutPreviewDiffStrip(diff.tabs, m.reserveHeader(box.W, true).TabsWidth, focused).HoverClose(m.tabCloseHoverIn(panelayout.Diff)).Row, box.W, panelayout.Diff)
+	header := m.composePreviewHeader(m.previewHostHeaderTabs(layoutPreviewDiffStrip(diff.tabs, m.reserveHeader(box.W, true).TabsWidth, focused).HoverClose(m.tabCloseHoverIn(panelayout.Diff)).Row, diff.hostNotice), box.W, panelayout.Diff)
 	if contentHeight <= 0 {
 		return header
 	}

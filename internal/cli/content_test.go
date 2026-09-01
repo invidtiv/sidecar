@@ -48,7 +48,8 @@ func TestContentUsageErrors(t *testing.T) {
 		{[]string{"content", "nope"}, 2, "unknown content command"},
 		{[]string{"content", "resolve"}, 2, "--workspace is required"},
 		{[]string{"content", "resolve", "--workspace", "x:shell:y", "--kind", "file"}, 2, "--target is required"},
-		{[]string{"content", "resolve", "--workspace", "x:shell:y", "--kind", "diff", "--target", "a.md", "--json"}, 2, "unknown content kind"},
+		{[]string{"content", "resolve", "--workspace", "x:shell:y", "--kind", "resource", "--target", "a.md", "--json"}, 2, "unknown content kind"},
+		{[]string{"content", "read", "--workspace", "x:shell:y", "--kind", "diff", "--operation", "exec", "--target", "wt", "--json"}, 2, "unknown content operation"},
 		{[]string{"content", "read", "--workspace", "x:shell:y", "--kind", "file", "--operation", "exec", "--target", "a.md", "--json"}, 2, "unknown content operation"},
 	} {
 		t.Run(strings.Join(tt.args, " "), func(t *testing.T) {
@@ -150,6 +151,58 @@ func TestContentIssueNoteResolveJSON(t *testing.T) {
 	}
 	if !strings.Contains(out.String()+errOut.String(), "unknown content operation") {
 		t.Fatalf("wrong operation output %q", out.String()+errOut.String())
+	}
+}
+
+func TestContentDiffResolveReadJSON(t *testing.T) {
+	repo, id, cfgPath := setupContentCLI(t)
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %s: %v", args, out, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", "tracked.txt")
+	run("commit", "-m", "base")
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\nhost\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"-config", cfgPath, "content", "resolve", "--workspace", id, "--kind", "diff", "--target", "wt", "--json"}, &out, &errOut)
+	if !handled || code != 0 {
+		t.Fatalf("resolve = %v %d stderr %q", handled, code, errOut.String())
+	}
+	var resolved contentservice.ResolveResult
+	if err := json.Unmarshal(out.Bytes(), &resolved); err != nil {
+		t.Fatal(err)
+	}
+	if !resolved.ValidRemoteResult() || resolved.Target != "wt" {
+		t.Fatalf("resolve = %+v", resolved)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	handled, code = Run([]string{"-config", cfgPath, "content", "read", "--workspace", id, "--kind", "diff", "--operation", "working-tree", "--target", "wt", "--json"}, &out, &errOut)
+	if !handled || code != 0 {
+		t.Fatalf("read = %v %d stderr %q", handled, code, errOut.String())
+	}
+	var read contentservice.ReadResult
+	if err := json.Unmarshal(out.Bytes(), &read); err != nil {
+		t.Fatalf("read json: %v (%q)", err, out.String())
+	}
+	if !read.ValidRemoteResult() || read.Diff == nil || read.Diff.Snapshot == nil {
+		t.Fatalf("read = %+v", read)
+	}
+	if !strings.Contains(read.Diff.Snapshot.WorkingTree, "host") {
+		t.Fatalf("working-tree missing host change: %+v", read.Diff.Snapshot)
 	}
 }
 

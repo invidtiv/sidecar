@@ -758,7 +758,7 @@ sidecar --agents
 
 Read-only content contract a viewing Sidecar invokes on a host
 
-Resolve and read files, issues, and notes for a viewing Sidecar over the existing host request seam.
+Resolve and read files, issues, notes, and diffs for a viewing Sidecar over the existing host request seam.
 
 This is an internal transport endpoint, not a general file browser and not a public open-on-host surface.
 Every verb is non-interactive, read-only, and strictly enumerated.
@@ -769,28 +769,33 @@ Usage: sidecar content <command>
 
 ### `sidecar content read`
 
-Read bounded file, issue, or note content
+Read bounded file, issue, note, or diff content
 
-Read a file document, issue card, or note from a durable workspace identity on this machine.
+Read a file document, issue card, note, or git diff operation from a durable workspace identity on this machine.
 
 This is the read-only content contract a viewing Sidecar invokes on a host, not a general file browser.
 --if-revision returns a small notModified object when the content is unchanged, so a refresh is one round trip.
 The encoded JSON is capped under 768KiB; a payload that would blow that cap is truncated or returned as a structured oversize object rather than invalid JSON.
 Issue fallback candidates come from this host's configured projects.
+Diff operations are enumerated: working-tree, working-tree-file, commit, range, commit-file, full-file.
 
 --json writes the machine contract.
 
 ```
-Usage: sidecar content read --workspace ID --kind file|issue|note --operation document|card|note --target VALUE [--if-revision REV] [--json]
+Usage: sidecar content read --workspace ID --kind file|issue|note|diff --operation OP --target VALUE [--path PATH] [--parent HASH] [--offset N] [--limit N] [--if-revision REV] [--json]
 ```
 
 **Options:**
 
 - `--workspace ID`: Unscoped durable workspace id (projectKey:shell:name or projectKey:worktree:path)
-- `--kind KIND`: Content kind (file, issue, or note)
-- `--operation OP`: Read operation (document, card, or note)
-- `--target VALUE`: File path or issue/note id as resolved or as the viewer saw it
-- `--if-revision REV`: Skip the body when the file still has this revision
+- `--kind KIND`: Content kind (file, issue, note, or diff)
+- `--operation OP`: Read operation (document, card, note, working-tree, working-tree-file, commit, range, commit-file, or full-file)
+- `--target VALUE`: File path, issue/note id, or git spec as resolved or as the viewer saw it
+- `--path PATH`: Diff file path for working-tree-file, commit-file, and full-file
+- `--parent HASH`: Merge parent hash for commit-file and full-file
+- `--offset N`: Full-file page offset in lines
+- `--limit N`: Full-file page size in lines
+- `--if-revision REV`: Skip the body when the content still has this revision
 - `--json`: Write the structured result object to stdout (required for the machine contract)
 - `-h, --help`: Show this help
 
@@ -810,26 +815,27 @@ sidecar content read --workspace /home/me/api:shell:sidecar-sh-1 --kind file --o
 
 ### `sidecar content resolve`
 
-Resolve a file, issue, or note target to identity and metadata
+Resolve a file, issue, note, or diff target to identity and metadata
 
-Resolve a file, issue, or note against a durable workspace identity on this machine.
+Resolve a file, issue, note, or git spec against a durable workspace identity on this machine.
 
 This is the read-only content contract a viewing Sidecar invokes on a host, not a general file browser.
 The workspace id is re-resolved to its authoritative root on every request; the target is a hint, never authority.
 Relative file paths cannot escape that root. Explicit absolute and ~/ targets keep local Sidecar's rule: a regular readable file outside the project is allowed.
 Issue and note targets are identity only: the id is normalized without consulting td.
+Diff targets are git specs: wt, a commit, or A..B / A...B. The host rev-parses commit and range specs.
 
 --json writes the machine contract.
 
 ```
-Usage: sidecar content resolve --workspace ID --kind file|issue|note --target VALUE [--json]
+Usage: sidecar content resolve --workspace ID --kind file|issue|note|diff --target VALUE [--json]
 ```
 
 **Options:**
 
 - `--workspace ID`: Unscoped durable workspace id (projectKey:shell:name or projectKey:worktree:path)
-- `--kind KIND`: Content kind (file, issue, or note)
-- `--target VALUE`: File path or issue/note id as the viewer saw it
+- `--kind KIND`: Content kind (file, issue, note, or diff)
+- `--target VALUE`: File path, issue/note id, or git spec as the viewer saw it
 - `--json`: Write the structured result object to stdout (required for the machine contract)
 - `-h, --help`: Show this help
 

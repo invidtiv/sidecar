@@ -19,10 +19,11 @@ import (
 )
 
 const (
-	// KindFile, KindIssue, and KindNote are the content kinds this service serves.
+	// KindFile, KindIssue, KindNote, and KindDiff are the content kinds this service serves.
 	KindFile  = "file"
 	KindIssue = "issue"
 	KindNote  = "note"
+	KindDiff  = "diff"
 
 	// OpDocument is the file read operation: bounded document bytes + metadata.
 	OpDocument = "document"
@@ -30,6 +31,15 @@ const (
 	OpCard = "card"
 	// OpNote is the note read operation: one td note body.
 	OpNote = "note"
+
+	// Diff operations. There is no universal snapshot: each call is one
+	// bounded read with truthful truncation or paging.
+	OpWorkingTree     = "working-tree"
+	OpWorkingTreeFile = "working-tree-file"
+	OpCommit          = "commit"
+	OpRange           = "range"
+	OpCommitFile      = "commit-file"
+	OpFullFile        = "full-file"
 )
 
 // MaxLocatorBytes refuses a workspace id or file target larger than this.

@@ -26,10 +26,10 @@ func (m *Model) previewDeckContext() (contentpanes.SurfaceContext, bool) {
 	if !ok || workspace.ID == "" || workspace.Path == "" {
 		return contentpanes.SurfaceContext{}, false
 	}
-	// A remote Path names a directory on another machine. Issue/note/diff/
-	// resource still refuse that path (they would otherwise git/td/provider
-	// against this machine's twin). Documents are admitted only while the
-	// host still Shows(); disconnected/disabled/unavailable stay closed.
+	// A remote Path names a directory on another machine. Resource still
+	// refuses that path (it would otherwise run a viewer-local provider).
+	// Documents, issues, notes, and diffs are admitted only while the host
+	// still Shows(); disconnected/disabled/unavailable stay closed.
 	if workspace.Remote() && !m.hostShows(workspace.HostID) {
 		return contentpanes.SurfaceContext{}, false
 	}
@@ -91,7 +91,7 @@ func remoteIssueUnsupported(hostID, action string) tea.Cmd {
 
 func remoteContentKindAdmitted(ref contentlink.Ref) bool {
 	switch ref.Kind {
-	case contentlink.KindFile, contentlink.KindIssue:
+	case contentlink.KindFile, contentlink.KindIssue, contentlink.KindDiff:
 		return true
 	case contentlink.KindInternal:
 		return ref.Namespace == "note"

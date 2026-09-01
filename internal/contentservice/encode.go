@@ -56,36 +56,112 @@ func EncodeReadResult(result ReadResult) ([]byte, error) {
 		if len(raw) <= MaxEncodedBytes {
 			return raw, nil
 		}
-		if result.Content == "" {
-			oversize := ReadResult{
-				Kind:      result.Kind,
-				Oversize:  true,
-				Truncated: true,
-				Revision:  result.Revision,
-				TotalSize: result.TotalSize,
-				Workspace: result.Workspace,
-				Display:   result.Display,
-			}
-			raw, err = marshalJSON(oversize)
-			if err != nil {
-				return nil, Internal("encode oversize result", err)
-			}
-			if len(raw) > MaxEncodedBytes {
-				return nil, Rejected("encoded read result exceeds %d bytes", MaxEncodedBytes)
-			}
-			return raw, nil
-		}
 		overflow := len(raw) - MaxEncodedBytes
-		cut := len(result.Content) - overflow - 64
-		if cut >= len(result.Content) {
-			cut = len(result.Content) / 2
+		if result.Content != "" {
+			cut := len(result.Content) - overflow - 64
+			if cut >= len(result.Content) {
+				cut = len(result.Content) / 2
+			}
+			if cut < 0 {
+				cut = 0
+			}
+			result.Content = shrinkUTF8(result.Content, cut)
+			result.Truncated = true
+			continue
 		}
-		if cut < 0 {
-			cut = 0
+		if shrinkDiffDTO(result.Diff, overflow) {
+			result.Truncated = true
+			if result.Diff != nil {
+				result.Diff.Truncated = true
+			}
+			continue
 		}
-		result.Content = shrinkUTF8(result.Content, cut)
-		result.Truncated = true
+		oversize := ReadResult{
+			Kind:      result.Kind,
+			Oversize:  true,
+			Truncated: true,
+			Revision:  result.Revision,
+			TotalSize: result.TotalSize,
+			Workspace: result.Workspace,
+			Display:   result.Display,
+		}
+		raw, err = marshalJSON(oversize)
+		if err != nil {
+			return nil, Internal("encode oversize result", err)
+		}
+		if len(raw) > MaxEncodedBytes {
+			return nil, Rejected("encoded read result exceeds %d bytes", MaxEncodedBytes)
+		}
+		return raw, nil
 	}
+}
+
+func shrinkDiffDTO(d *DiffDTO, overflow int) bool {
+	if d == nil {
+		return false
+	}
+	cut := func(s *string) bool {
+		if s == nil || *s == "" {
+			return false
+		}
+		n := len(*s) - overflow - 64
+		if n >= len(*s) {
+			n = len(*s) / 2
+		}
+		if n < 0 {
+			n = 0
+		}
+		*s = shrinkUTF8(*s, n)
+		return true
+	}
+	if d.Snapshot != nil {
+		if cut(&d.Snapshot.WorkingTree) {
+			d.Snapshot.Truncated = true
+			return true
+		}
+		if cut(&d.Snapshot.AggregateCommitted) {
+			d.Snapshot.Truncated = true
+			return true
+		}
+		if cut(&d.Snapshot.AggregateUncommitted) {
+			d.Snapshot.Truncated = true
+			return true
+		}
+		for i := range d.Snapshot.Files {
+			if cut(&d.Snapshot.Files[i].Raw) {
+				d.Snapshot.Truncated = true
+				return true
+			}
+		}
+	}
+	if d.Range != nil {
+		if cut(&d.Range.Raw) {
+			return true
+		}
+		for i := range d.Range.Files {
+			if cut(&d.Range.Files[i].Raw) {
+				return true
+			}
+		}
+	}
+	if d.File != nil && cut(&d.File.Raw) {
+		return true
+	}
+	if d.FullFile != nil {
+		if cut(&d.FullFile.RawDiff) {
+			d.FullFile.Truncated = true
+			return true
+		}
+		if cut(&d.FullFile.OldContent) {
+			d.FullFile.Truncated = true
+			return true
+		}
+		if cut(&d.FullFile.NewContent) {
+			d.FullFile.Truncated = true
+			return true
+		}
+	}
+	return false
 }
 
 func shrinkUTF8(s string, n int) string {

@@ -175,7 +175,7 @@ func IsSharedDiffMessage(msg tea.Msg) bool {
 		return true
 	}
 	switch msg.(type) {
-	case workspacediff.SnapshotMsg, workspacediff.CommitDetailMsg,
+	case workspacediff.SnapshotMsg, workspacediff.CommitDetailMsg, workspacediff.WorkingTreeFileMsg,
 		workspacediff.RangeMsg, workspacediff.CommitFileDiffMsg:
 		return true
 	default:
@@ -896,6 +896,8 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 	case workspacediff.CommitFileDiffMsg:
 		cmd := m.diff.ApplyCommitFileDiff(msg)
 		return tea.Batch(cmd, m.applyPreviewDiffFile(msg))
+	case workspacediff.WorkingTreeFileMsg:
+		return m.applyPreviewDiffWorkingTreeFile(msg)
 	case renameShellDoneMsg:
 		m.applyRenameShell(msg)
 		return nil

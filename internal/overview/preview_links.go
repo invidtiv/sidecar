@@ -246,8 +246,28 @@ func (m *Model) attachPreviewSession(session string) tea.Cmd {
 
 func (m *Model) activatePreviewDiff(raw string) tea.Cmd {
 	workspace, ok := m.SelectedWorkspace()
-	if !ok || workspace.Remote() {
+	if !ok {
 		return nil
+	}
+	if workspace.Remote() {
+		ctx, ok := m.previewDeckContext()
+		if !ok {
+			return nil
+		}
+		ref, err := contentpanes.ResolveDocument(m.previewDeckConfig(ctx).Source, ctx.Source, contentlink.Pending{
+			Kind: contentlink.KindDiff, Raw: raw,
+		})
+		if err != nil || ref.Value == "" {
+			if err == nil {
+				err = errors.New("git object not found on " + ctx.Source.HostID)
+			}
+			return remoteContentErrorCmd(err)
+		}
+		target, ok := workspacediff.ParseSpec(ref.Value)
+		if !ok || (target.Kind != workspacediff.TargetCommit && target.Kind != workspacediff.TargetRange) {
+			return nil
+		}
+		return m.openPreviewDiff(target)
 	}
 	target := uirequest.DiffTarget(previewDiffPath(workspace), raw)
 	if target.Kind != workspacediff.TargetCommit && target.Kind != workspacediff.TargetRange {

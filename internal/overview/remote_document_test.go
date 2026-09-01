@@ -90,6 +90,10 @@ func (f *fakeRemoteFileSource) LoadNote(context.Context, contentpanes.SourceCont
 	return contentpanes.NoteReadResult{}, fmt.Errorf("fake file source does not load notes")
 }
 
+func (f *fakeRemoteFileSource) LoadDiff(context.Context, contentpanes.SourceContext, contentpanes.DiffReadRequest) (contentpanes.DiffReadResult, error) {
+	return contentpanes.DiffReadResult{}, fmt.Errorf("fake file source does not load diffs")
+}
+
 func (f *fakeRemoteFileSource) stats() (loads int, lastIfRev string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -243,7 +247,6 @@ func TestRemoteSessionsDiffResourceStayRefusedOnShowingHost(t *testing.T) {
 	m.SetResourceResolver(resolver.resolve)
 
 	for _, plan := range []targetactivation.Plan{
-		{Kind: targetactivation.PlanOpenDiff, Spec: "abc1234"},
 		{Kind: targetactivation.PlanOpenResource, Provider: "jira-work", Matcher: "project-key", Locator: "CASH-1245"},
 	} {
 		cmd, handled := m.activatePreviewPlan(plan)
@@ -418,11 +421,7 @@ func TestRemoteRestoreDropsIssueAndDiffAndDoesNotReadLocalTwin(t *testing.T) {
 			B: &state.PaneLayoutJSON{Split: &state.PaneSplitJSON{
 				Axis: "rows", Ratio: 50,
 				A: &state.PaneLayoutJSON{Kind: "doc", Tabs: []state.PaneDocTabJSON{{Path: "twin.txt"}}},
-				B: &state.PaneLayoutJSON{Split: &state.PaneSplitJSON{
-					Axis: "cols", Ratio: 50,
-					A: &state.PaneLayoutJSON{Kind: "issue", IssueTabs: []state.PaneIssueTabJSON{{Issue: "td-196c42"}}},
-					B: &state.PaneLayoutJSON{Kind: "diff", DiffTabs: []state.PaneDiffTabJSON{{Spec: "HEAD"}}},
-				}},
+				B: &state.PaneLayoutJSON{Kind: "issue", IssueTabs: []state.PaneIssueTabJSON{{Issue: "td-196c42"}}},
 			}},
 		},
 	}
@@ -431,12 +430,6 @@ func TestRemoteRestoreDropsIssueAndDiffAndDoesNotReadLocalTwin(t *testing.T) {
 		view.SetSize(80, 8)
 	}
 	run(t, m, cmd)
-	if m.preview.diff != nil {
-		t.Fatalf("restore opened a remote diff against local I/O: %#v", m.preview.diff)
-	}
-	if panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Diff) != nil {
-		t.Fatal("restore kept a Diff leaf")
-	}
 	if m.preview.doc == nil {
 		t.Fatal("restore dropped the remote Document tab")
 	}

@@ -2,6 +2,7 @@ package overview
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -13,7 +14,6 @@ import (
 	"github.com/marcus/sidecar/internal/hostproto"
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/noteview"
-	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/targetactivation"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
@@ -77,6 +77,10 @@ func (f *fakeRemoteContentSource) LoadIssue(_ context.Context, _ contentpanes.So
 		Value:    contentpanes.IssuePayload{Data: f.issue, Owner: f.issueOwner},
 		Revision: rev,
 	}, nil
+}
+
+func (f *fakeRemoteContentSource) LoadDiff(context.Context, contentpanes.SourceContext, contentpanes.DiffReadRequest) (contentpanes.DiffReadResult, error) {
+	return contentpanes.DiffReadResult{}, fmt.Errorf("fake content source does not load diffs")
 }
 
 func (f *fakeRemoteContentSource) LoadNote(_ context.Context, _ contentpanes.SourceContext, req contentpanes.NoteReadRequest) (contentpanes.NoteReadResult, error) {
@@ -421,7 +425,7 @@ func TestRemoteRestoreAdmitsIssueAndNoteWithoutLocalTd(t *testing.T) {
 	}
 }
 
-func TestRemoteRestoreStillDropsDiffAndResource(t *testing.T) {
+func TestRemoteRestoreStillDropsResource(t *testing.T) {
 	m, _, root := showingRemoteTwinModel(t, nil)
 	ws, ok := m.SelectedWorkspace()
 	if !ok {
@@ -432,22 +436,12 @@ func TestRemoteRestoreStillDropsDiffAndResource(t *testing.T) {
 		Split: &state.PaneSplitJSON{
 			Axis: "cols", Ratio: 50,
 			A: &state.PaneLayoutJSON{Kind: "terminal"},
-			B: &state.PaneLayoutJSON{Split: &state.PaneSplitJSON{
-				Axis: "rows", Ratio: 50,
-				A: &state.PaneLayoutJSON{Kind: "diff", DiffTabs: []state.PaneDiffTabJSON{{Spec: "HEAD"}}},
-				B: &state.PaneLayoutJSON{Kind: "resource"},
-			}},
+			B: &state.PaneLayoutJSON{Kind: "resource"},
 		},
 	}
 	run(t, m, m.restoreSpecPreviewLayout(layout))
-	if m.preview.diff != nil {
-		t.Fatalf("restore opened a remote diff: %#v", m.preview.diff)
-	}
 	if m.preview.resource != nil {
 		t.Fatalf("restore opened a remote resource: %#v", m.preview.resource)
-	}
-	if panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Diff) != nil {
-		t.Fatal("restore kept a Diff leaf")
 	}
 }
 

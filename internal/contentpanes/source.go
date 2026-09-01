@@ -14,6 +14,7 @@ import (
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/noteview"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/workspacediff"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
@@ -86,13 +87,44 @@ type NoteReadResult struct {
 	NotModified bool
 }
 
-// Source is the Document/Issue/Note seam. Resolve returns identity only; it
-// does not ship a body. Diff and resource methods arrive in later slices.
+// DiffReadRequest is one Diff resolve/load. Operation is a contentservice
+// diff op; Path/ParentHash/Offset/Limit are operation-specific locators.
+type DiffReadRequest struct {
+	Ref        contentlink.Ref
+	Operation  string
+	IfRevision string
+	BaseRef    string
+	Path       string
+	ParentHash string
+	Offset     int
+	Limit      int
+}
+
+// DiffPayload is the typed diff body a shared viewer consumes.
+type DiffPayload struct {
+	Snapshot *workspacediff.Snapshot
+	Commit   *workspacediff.CommitDetail
+	RangeRaw string
+	FileRaw  string
+	FilePath string
+}
+
+// DiffReadResult is a typed Diff payload. NotModified completes an
+// in-flight refresh without replacing content.
+type DiffReadResult struct {
+	Value       DiffPayload
+	Revision    string
+	NotModified bool
+}
+
+// Source is the Document/Issue/Note/Diff seam. Resolve returns identity only; it
+// does not ship a body. Resource methods arrive in a later slice.
 type Source interface {
 	Resolve(context.Context, SourceContext, contentlink.Pending) (contentlink.Ref, error)
 	LoadDocument(context.Context, SourceContext, DocumentReadRequest) (DocumentReadResult, error)
 	LoadIssue(context.Context, SourceContext, IssueReadRequest) (IssueReadResult, error)
 	LoadNote(context.Context, SourceContext, NoteReadRequest) (NoteReadResult, error)
+	LoadDiff(context.Context, SourceContext, DiffReadRequest) (DiffReadResult, error)
 }
 
 // LocalSource is the in-process Document adapter. It uses the same
@@ -126,6 +158,12 @@ func (LocalSource) Resolve(ctx context.Context, src SourceContext, pending conte
 			return contentlink.Ref{}, fmt.Errorf("invalid note id %q", pending.Raw)
 		}
 		return contentlink.Ref{Kind: contentlink.KindInternal, Namespace: "note", Value: id}, nil
+	case contentlink.KindDiff:
+		resolved, err := contentservice.ResolveDiff(ctx, src.Root, pending.Raw)
+		if err != nil {
+			return contentlink.Ref{}, err
+		}
+		return contentlink.Ref{Kind: contentlink.KindDiff, Value: resolved.Identity()}, nil
 	default:
 		return contentlink.Ref{}, fmt.Errorf("unsupported pending kind %q", pending.Kind)
 	}
@@ -187,6 +225,73 @@ func (LocalSource) LoadNote(ctx context.Context, src SourceContext, req NoteRead
 		Revision:    doc.Revision,
 		NotModified: doc.NotModified,
 	}, nil
+}
+
+// LoadDiff reads through contentservice so local/direct and remote/JSON
+// share git execution, revision, and notModified.
+func (LocalSource) LoadDiff(ctx context.Context, src SourceContext, req DiffReadRequest) (DiffReadResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	target := req.Ref.Value
+	if target == "" {
+		target = workspacediff.IdentityWorkingTree
+	}
+	op := req.Operation
+	if op == "" {
+		op = diffOperationFor(target)
+	}
+	doc, err := contentservice.ReadDiff(ctx, src.Root, contentservice.ReadParams{
+		Operation:  op,
+		Target:     target,
+		IfRevision: req.IfRevision,
+		Path:       req.Path,
+		Parent:     req.ParentHash,
+		Offset:     req.Offset,
+		Limit:      req.Limit,
+	})
+	if err != nil {
+		return DiffReadResult{}, err
+	}
+	if doc.Snapshot == nil && doc.DTO != nil && doc.DTO.Snapshot != nil {
+		doc.Snapshot = contentservice.SnapshotFromDTO(doc.DTO.Snapshot)
+	}
+	if doc.Commit == nil && doc.DTO != nil && doc.DTO.Commit != nil {
+		doc.Commit = contentservice.CommitFromDTO(doc.DTO.Commit)
+	}
+	if doc.RangeRaw == "" && doc.DTO != nil && doc.DTO.Range != nil {
+		doc.RangeRaw = doc.DTO.Range.Raw
+	}
+	if doc.FileRaw == "" && doc.DTO != nil && doc.DTO.File != nil {
+		doc.FileRaw = doc.DTO.File.Raw
+		doc.FilePath = doc.DTO.File.Path
+	}
+	return DiffReadResult{
+		Value: DiffPayload{
+			Snapshot: doc.Snapshot,
+			Commit:   doc.Commit,
+			RangeRaw: doc.RangeRaw,
+			FileRaw:  doc.FileRaw,
+			FilePath: doc.FilePath,
+		},
+		Revision:    doc.Revision,
+		NotModified: doc.NotModified,
+	}, nil
+}
+
+func diffOperationFor(target string) string {
+	t, ok := workspacediff.ParseSpec(target)
+	if !ok {
+		return contentservice.OpWorkingTree
+	}
+	switch t.Kind {
+	case workspacediff.TargetCommit:
+		return contentservice.OpCommit
+	case workspacediff.TargetRange:
+		return contentservice.OpRange
+	default:
+		return contentservice.OpWorkingTree
+	}
 }
 
 func previewFromDocument(doc contentservice.Document) filepreview.PreviewResult {
@@ -294,6 +399,92 @@ func issueLoadCmd(src Source, ctx SurfaceContext, ref contentlink.Ref, ifRevisio
 			Revision: result.Revision,
 		}
 	}
+}
+
+type sourceDiffLoader struct {
+	src Source
+	ctx SurfaceContext
+}
+
+func (l sourceDiffLoader) LoadSnapshot(ctx context.Context, workdir, baseRef, ifRevision string) (workspacediff.SnapshotResult, error) {
+	srcCtx := l.sourceContext(workdir)
+	result, err := l.src.LoadDiff(ctx, srcCtx, DiffReadRequest{
+		Ref:        contentlink.Ref{Kind: contentlink.KindDiff, Value: workspacediff.IdentityWorkingTree},
+		Operation:  contentservice.OpWorkingTree,
+		IfRevision: ifRevision,
+		BaseRef:    baseRef,
+	})
+	if err != nil {
+		return workspacediff.SnapshotResult{}, err
+	}
+	return workspacediff.SnapshotResult{Snapshot: result.Value.Snapshot, Revision: result.Revision, NotModified: result.NotModified}, nil
+}
+
+func (l sourceDiffLoader) LoadCommitDetail(ctx context.Context, workdir, hash, ifRevision string) (workspacediff.CommitResult, error) {
+	srcCtx := l.sourceContext(workdir)
+	result, err := l.src.LoadDiff(ctx, srcCtx, DiffReadRequest{
+		Ref:        contentlink.Ref{Kind: contentlink.KindDiff, Value: hash},
+		Operation:  contentservice.OpCommit,
+		IfRevision: ifRevision,
+	})
+	if err != nil {
+		return workspacediff.CommitResult{}, err
+	}
+	return workspacediff.CommitResult{Commit: result.Value.Commit, Revision: result.Revision, NotModified: result.NotModified}, nil
+}
+
+func (l sourceDiffLoader) LoadRange(ctx context.Context, workdir string, t workspacediff.Target, ifRevision string) (workspacediff.RangeResult, error) {
+	srcCtx := l.sourceContext(workdir)
+	result, err := l.src.LoadDiff(ctx, srcCtx, DiffReadRequest{
+		Ref:        contentlink.Ref{Kind: contentlink.KindDiff, Value: t.Identity()},
+		Operation:  contentservice.OpRange,
+		IfRevision: ifRevision,
+	})
+	if err != nil {
+		return workspacediff.RangeResult{}, err
+	}
+	files := workspacediff.ParseFiles(result.Value.RangeRaw)
+	return workspacediff.RangeResult{Raw: result.Value.RangeRaw, Files: files, Revision: result.Revision, NotModified: result.NotModified}, nil
+}
+
+func (l sourceDiffLoader) LoadCommitFile(ctx context.Context, workdir, hash, path, parentHash, ifRevision string) (workspacediff.FileResult, error) {
+	srcCtx := l.sourceContext(workdir)
+	result, err := l.src.LoadDiff(ctx, srcCtx, DiffReadRequest{
+		Ref:        contentlink.Ref{Kind: contentlink.KindDiff, Value: "c:" + hash},
+		Operation:  contentservice.OpCommitFile,
+		IfRevision: ifRevision,
+		Path:       path,
+		ParentHash: parentHash,
+	})
+	if err != nil {
+		return workspacediff.FileResult{}, err
+	}
+	return workspacediff.FileResult{Path: path, Raw: result.Value.FileRaw, Revision: result.Revision, NotModified: result.NotModified}, nil
+}
+
+func (l sourceDiffLoader) LoadWorkingTreeFile(ctx context.Context, workdir, path, ifRevision string) (workspacediff.FileResult, error) {
+	srcCtx := l.sourceContext(workdir)
+	result, err := l.src.LoadDiff(ctx, srcCtx, DiffReadRequest{
+		Ref:        contentlink.Ref{Kind: contentlink.KindDiff, Value: workspacediff.IdentityWorkingTree},
+		Operation:  contentservice.OpWorkingTreeFile,
+		IfRevision: ifRevision,
+		Path:       path,
+	})
+	if err != nil {
+		return workspacediff.FileResult{}, err
+	}
+	return workspacediff.FileResult{Path: path, Raw: result.Value.FileRaw, Revision: result.Revision, NotModified: result.NotModified}, nil
+}
+
+func (l sourceDiffLoader) sourceContext(workdir string) SourceContext {
+	srcCtx := l.ctx.Source
+	if srcCtx.Root == "" {
+		srcCtx.Root = workdir
+	}
+	if srcCtx.Root == "" {
+		srcCtx.Root = l.ctx.Root
+	}
+	return srcCtx
 }
 
 func noteLoadCmd(src Source, ctx SurfaceContext, ref contentlink.Ref, ifRevision string, epoch uint64) tea.Cmd {

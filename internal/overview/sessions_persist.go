@@ -391,7 +391,9 @@ func (m *Model) acceptRestoredPreviewTab(ws workspaceinventory.Workspace) func(s
 				return tab.Ref.Kind == contentlink.KindIssue && strings.TrimSpace(tab.Ref.Value) != ""
 			case panecodec.KindNote:
 				return tab.Ref.Namespace == "note" && strings.TrimSpace(tab.Ref.Value) != ""
-			case panecodec.KindDiff, panecodec.KindResource:
+			case panecodec.KindDiff:
+				return tab.Ref.Kind == contentlink.KindDiff && strings.TrimSpace(tab.Ref.Value) != ""
+			case panecodec.KindResource:
 				return false
 			default:
 				return true

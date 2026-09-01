@@ -53,7 +53,7 @@ func newViewer(cfg Config, kind panelayout.Kind) viewer {
 	case panelayout.Note:
 		v = &noteViewer{view: noteview.New(cfg.Renderer), source: cfg.documentSource()}
 	case panelayout.Diff:
-		v = &diffViewer{view: &workspacediff.View{}}
+		v = &diffViewer{view: &workspacediff.View{}, source: cfg.documentSource()}
 	case panelayout.Resource:
 		v = &resourceViewer{view: resourceview.New(cfg.Renderer, cfg.ResourceResolver)}
 	default:
@@ -332,7 +332,10 @@ func (v *noteViewer) snapshot(ref contentlink.Ref) TabState {
 	return TabState{Ref: ref, Scroll: v.view.ScrollOffset()}
 }
 
-type diffViewer struct{ view *workspacediff.View }
+type diffViewer struct {
+	view   *workspacediff.View
+	source Source
+}
 
 func (v *diffViewer) model() any { return v.view }
 func diffRoot(ctx SurfaceContext) string {
@@ -340,6 +343,16 @@ func diffRoot(ctx SurfaceContext) string {
 		return ctx.DiffRoot
 	}
 	return ctx.Root
+}
+func (v *diffViewer) bindLoader(ctx SurfaceContext) {
+	if v.view == nil {
+		return
+	}
+	if v.source == nil {
+		v.view.Loader = nil
+		return
+	}
+	v.view.Loader = sourceDiffLoader{src: v.source, ctx: ctx}
 }
 func (v *diffViewer) load(ctx SurfaceContext, ref contentlink.Ref, id int) tea.Cmd {
 	target, ok := workspacediff.ParseSpec(ref.Value)
@@ -355,11 +368,12 @@ func (v *diffViewer) load(ctx SurfaceContext, ref contentlink.Ref, id int) tea.C
 		surface = ctx.Surface
 	}
 	root := diffRoot(ctx)
+	v.bindLoader(ctx)
 	v.view.BindGeneration(root, surface, ctx.Epoch, uint64(id))
 	v.view.State = workspacediff.LoadStateLoading
 	switch target.Kind {
 	case workspacediff.TargetWorkingTree:
-		return workspacediff.LoadSnapshotCmdBound(root, ctx.BaseRef, surface, ctx.Epoch, target.Identity(), uint64(id))
+		return v.view.LoadSnapshotCmd(ctx.BaseRef, false)
 	case workspacediff.TargetRange:
 		return v.view.LoadRange()
 	case workspacediff.TargetCommit:
@@ -373,6 +387,7 @@ func (v *diffViewer) reload(ctx SurfaceContext, ref contentlink.Ref, id int) tea
 }
 func (v *diffViewer) arm(ctx SurfaceContext, ref contentlink.Ref, id int, state TabState) {
 	target, _ := workspacediff.ParseSpec(ref.Value)
+	v.bindLoader(ctx)
 	v.view.Target = target
 	surface := ctx.DiffSurface
 	if surface == "" {
@@ -423,6 +438,11 @@ func (v *diffViewer) apply(ctx SurfaceContext, msg any) (tea.Cmd, bool) {
 			return nil, false
 		}
 		return v.view.ApplyCommitFileDiff(m), true
+	case workspacediff.WorkingTreeFileMsg:
+		if !accepts(m.Epoch, m.WorkspaceID, m.Identity) {
+			return nil, false
+		}
+		return v.view.ApplyWorkingTreeFile(m), true
 	default:
 		return nil, false
 	}

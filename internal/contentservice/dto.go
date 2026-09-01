@@ -30,7 +30,7 @@ func (r ResolveResult) ValidRemoteResult() bool {
 		return strings.TrimSpace(r.Display) != "" &&
 			strings.TrimSpace(r.Path) != "" &&
 			strings.TrimSpace(r.Revision) != ""
-	case KindIssue, KindNote:
+	case KindIssue, KindNote, KindDiff:
 		return strings.TrimSpace(r.Target) != ""
 	default:
 		return false
@@ -61,6 +61,7 @@ type ReadResult struct {
 	Mode        string    `json:"mode,omitempty"`
 	Issue       *IssueDTO `json:"issue,omitempty"`
 	Note        *NoteDTO  `json:"note,omitempty"`
+	Diff        *DiffDTO  `json:"diff,omitempty"`
 }
 
 // ValidRemoteResult reports whether a decoded object is this verb's answer.
@@ -71,7 +72,7 @@ type ReadResult struct {
 // none of them.
 func (r ReadResult) ValidRemoteResult() bool {
 	switch r.Kind {
-	case KindFile, KindIssue, KindNote:
+	case KindFile, KindIssue, KindNote, KindDiff:
 	default:
 		return false
 	}
@@ -94,6 +95,8 @@ func (r ReadResult) ValidRemoteResult() bool {
 		return r.Operation == OpCard && r.Issue != nil && strings.TrimSpace(r.Issue.ID) != ""
 	case KindNote:
 		return r.Operation == OpNote && r.Note != nil && strings.TrimSpace(r.Note.ID) != ""
+	case KindDiff:
+		return validDiffOperation(r.Operation) && r.Diff != nil && strings.TrimSpace(r.Diff.Target) != ""
 	default:
 		return false
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/marcus/sidecar/internal/contentservice"
@@ -18,18 +19,19 @@ func contentCommand() *Command {
 
 	resolveCmd := &Command{
 		Name:    "resolve",
-		Summary: "Resolve a file, issue, or note target to identity and metadata",
-		Usage:   "sidecar content resolve --workspace ID --kind file|issue|note --target VALUE [--json]",
-		Long: "Resolve a file, issue, or note against a durable workspace identity on this machine.\n\n" +
+		Summary: "Resolve a file, issue, note, or diff target to identity and metadata",
+		Usage:   "sidecar content resolve --workspace ID --kind file|issue|note|diff --target VALUE [--json]",
+		Long: "Resolve a file, issue, note, or git spec against a durable workspace identity on this machine.\n\n" +
 			"This is the read-only content contract a viewing Sidecar invokes on a host, not a general file browser.\n" +
 			"The workspace id is re-resolved to its authoritative root on every request; the target is a hint, never authority.\n" +
 			"Relative file paths cannot escape that root. Explicit absolute and ~/ targets keep local Sidecar's rule: a regular readable file outside the project is allowed.\n" +
-			"Issue and note targets are identity only: the id is normalized without consulting td.\n\n" +
+			"Issue and note targets are identity only: the id is normalized without consulting td.\n" +
+			"Diff targets are git specs: wt, a commit, or A..B / A...B. The host rev-parses commit and range specs.\n\n" +
 			"--json writes the machine contract.",
 		Flags: []Flag{
 			{Name: "--workspace", Arg: "ID", Summary: "Unscoped durable workspace id (projectKey:shell:name or projectKey:worktree:path)"},
-			{Name: "--kind", Arg: "KIND", Summary: "Content kind (file, issue, or note)"},
-			{Name: "--target", Arg: "VALUE", Summary: "File path or issue/note id as the viewer saw it"},
+			{Name: "--kind", Arg: "KIND", Summary: "Content kind (file, issue, note, or diff)"},
+			{Name: "--target", Arg: "VALUE", Summary: "File path, issue/note id, or git spec as the viewer saw it"},
 			jsonFlag,
 			helpFlag,
 		},
@@ -48,20 +50,25 @@ func contentCommand() *Command {
 
 	readCmd := &Command{
 		Name:    "read",
-		Summary: "Read bounded file, issue, or note content",
-		Usage:   "sidecar content read --workspace ID --kind file|issue|note --operation document|card|note --target VALUE [--if-revision REV] [--json]",
-		Long: "Read a file document, issue card, or note from a durable workspace identity on this machine.\n\n" +
+		Summary: "Read bounded file, issue, note, or diff content",
+		Usage:   "sidecar content read --workspace ID --kind file|issue|note|diff --operation OP --target VALUE [--path PATH] [--parent HASH] [--offset N] [--limit N] [--if-revision REV] [--json]",
+		Long: "Read a file document, issue card, note, or git diff operation from a durable workspace identity on this machine.\n\n" +
 			"This is the read-only content contract a viewing Sidecar invokes on a host, not a general file browser.\n" +
 			"--if-revision returns a small notModified object when the content is unchanged, so a refresh is one round trip.\n" +
 			"The encoded JSON is capped under 768KiB; a payload that would blow that cap is truncated or returned as a structured oversize object rather than invalid JSON.\n" +
-			"Issue fallback candidates come from this host's configured projects.\n\n" +
+			"Issue fallback candidates come from this host's configured projects.\n" +
+			"Diff operations are enumerated: working-tree, working-tree-file, commit, range, commit-file, full-file.\n\n" +
 			"--json writes the machine contract.",
 		Flags: []Flag{
 			{Name: "--workspace", Arg: "ID", Summary: "Unscoped durable workspace id (projectKey:shell:name or projectKey:worktree:path)"},
-			{Name: "--kind", Arg: "KIND", Summary: "Content kind (file, issue, or note)"},
-			{Name: "--operation", Arg: "OP", Summary: "Read operation (document, card, or note)"},
-			{Name: "--target", Arg: "VALUE", Summary: "File path or issue/note id as resolved or as the viewer saw it"},
-			{Name: "--if-revision", Arg: "REV", Summary: "Skip the body when the file still has this revision"},
+			{Name: "--kind", Arg: "KIND", Summary: "Content kind (file, issue, note, or diff)"},
+			{Name: "--operation", Arg: "OP", Summary: "Read operation (document, card, note, working-tree, working-tree-file, commit, range, commit-file, or full-file)"},
+			{Name: "--target", Arg: "VALUE", Summary: "File path, issue/note id, or git spec as resolved or as the viewer saw it"},
+			{Name: "--path", Arg: "PATH", Summary: "Diff file path for working-tree-file, commit-file, and full-file"},
+			{Name: "--parent", Arg: "HASH", Summary: "Merge parent hash for commit-file and full-file"},
+			{Name: "--offset", Arg: "N", Summary: "Full-file page offset in lines"},
+			{Name: "--limit", Arg: "N", Summary: "Full-file page size in lines"},
+			{Name: "--if-revision", Arg: "REV", Summary: "Skip the body when the content still has this revision"},
 			jsonFlag,
 			helpFlag,
 		},
@@ -83,7 +90,7 @@ func contentCommand() *Command {
 		Name:    "content",
 		Summary: "Read-only content contract a viewing Sidecar invokes on a host",
 		Usage:   "sidecar content <command>",
-		Long: "Resolve and read files, issues, and notes for a viewing Sidecar over the existing host request seam.\n\n" +
+		Long: "Resolve and read files, issues, notes, and diffs for a viewing Sidecar over the existing host request seam.\n\n" +
 			"This is an internal transport endpoint, not a general file browser and not a public open-on-host surface.\n" +
 			"Every verb is non-interactive, read-only, and strictly enumerated.",
 		Sub: []*Command{readCmd, resolveCmd},
@@ -111,6 +118,10 @@ type contentFlags struct {
 	target     string
 	operation  string
 	ifRevision string
+	path       string
+	parent     string
+	offset     int
+	limit      int
 	json       bool
 }
 
@@ -163,6 +174,48 @@ func parseContentFlags(env Env, help string, args []string, allowRead bool) (con
 				return flags, 2, false
 			}
 			flags.ifRevision = val
+			i = next
+		case allowRead && (arg == "--path" || strings.HasPrefix(arg, "--path=")):
+			val, next, ok := takeFlagArg(arg, args, i, "--path")
+			if !ok || val == "" {
+				cliErrf(env.Stderr, "--path requires a path\n\n%s", help)
+				return flags, 2, false
+			}
+			flags.path = val
+			i = next
+		case allowRead && (arg == "--parent" || strings.HasPrefix(arg, "--parent=")):
+			val, next, ok := takeFlagArg(arg, args, i, "--parent")
+			if !ok || val == "" {
+				cliErrf(env.Stderr, "--parent requires a hash\n\n%s", help)
+				return flags, 2, false
+			}
+			flags.parent = val
+			i = next
+		case allowRead && (arg == "--offset" || strings.HasPrefix(arg, "--offset=")):
+			val, next, ok := takeFlagArg(arg, args, i, "--offset")
+			if !ok || val == "" {
+				cliErrf(env.Stderr, "--offset requires a number\n\n%s", help)
+				return flags, 2, false
+			}
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				cliErrf(env.Stderr, "--offset must be an integer\n\n%s", help)
+				return flags, 2, false
+			}
+			flags.offset = n
+			i = next
+		case allowRead && (arg == "--limit" || strings.HasPrefix(arg, "--limit=")):
+			val, next, ok := takeFlagArg(arg, args, i, "--limit")
+			if !ok || val == "" {
+				cliErrf(env.Stderr, "--limit requires a number\n\n%s", help)
+				return flags, 2, false
+			}
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				cliErrf(env.Stderr, "--limit must be an integer\n\n%s", help)
+				return flags, 2, false
+			}
+			flags.limit = n
 			i = next
 		case strings.HasPrefix(arg, "-"):
 			cliErrf(env.Stderr, "unknown option %q\n\n%s", arg, help)
@@ -243,7 +296,11 @@ func runContentRead(env Env, args []string) int {
 	if !ok {
 		return code
 	}
-	result, err := contentservice.Default().Read(contentCtx(env), flags.workspace, flags.kind, flags.operation, flags.target, flags.ifRevision)
+	result, err := contentservice.Default().ReadParams(contentCtx(env), contentservice.ReadParams{
+		WorkspaceID: flags.workspace, Kind: flags.kind, Operation: flags.operation,
+		Target: flags.target, IfRevision: flags.ifRevision, Path: flags.path, Parent: flags.parent,
+		Offset: flags.offset, Limit: flags.limit,
+	})
 	if err != nil {
 		return contentExit(env, err)
 	}

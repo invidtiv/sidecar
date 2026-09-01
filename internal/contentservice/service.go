@@ -49,6 +49,8 @@ func (s *Service) Resolve(ctx context.Context, workspaceID, kind, target string)
 		return s.resolveIssue(ctx, workspaceID, target)
 	case KindNote:
 		return s.resolveNote(ctx, workspaceID, target)
+	case KindDiff:
+		return s.resolveDiff(ctx, workspaceID, target)
 	}
 	ws, err := s.lookupWorkspace(ctx, workspaceID)
 	if err != nil {
@@ -62,36 +64,49 @@ func (s *Service) Resolve(ctx context.Context, workspaceID, kind, target string)
 }
 
 // Read loads a typed payload, honoring ifRevision for a small notModified
-// answer. operation is kind-specific: document, card, or note.
+// answer. operation is kind-specific: document, card, note, or a diff op.
 func (s *Service) Read(ctx context.Context, workspaceID, kind, operation, target, ifRevision string) (ReadResult, error) {
+	return s.ReadParams(ctx, ReadParams{
+		WorkspaceID: workspaceID, Kind: kind, Operation: operation, Target: target, IfRevision: ifRevision,
+	})
+}
+
+// ReadParams is Read with optional diff locators (path, parent, paging).
+func (s *Service) ReadParams(ctx context.Context, params ReadParams) (ReadResult, error) {
 	if err := ctx.Err(); err != nil {
 		return ReadResult{}, err
 	}
-	if err := requireKind(kind); err != nil {
+	if err := requireKind(params.Kind); err != nil {
 		return ReadResult{}, err
 	}
-	if err := requireOperation(kind, operation); err != nil {
+	if err := requireOperation(params.Kind, params.Operation); err != nil {
 		return ReadResult{}, err
 	}
-	ws, err := s.lookupWorkspace(ctx, workspaceID)
+	ws, err := s.lookupWorkspace(ctx, params.WorkspaceID)
 	if err != nil {
 		return ReadResult{}, err
 	}
-	switch kind {
+	switch params.Kind {
 	case KindIssue:
-		doc, err := s.readIssueAt(ctx, ws.Root, target, ifRevision, s.issueFallbacks())
+		doc, err := s.readIssueAt(ctx, ws.Root, params.Target, params.IfRevision, s.issueFallbacks())
 		if err != nil {
 			return ReadResult{}, err
 		}
 		return issueReadResultFrom(ws.ID, doc), nil
 	case KindNote:
-		doc, err := s.readNoteAt(ctx, ws.Root, target, ifRevision)
+		doc, err := s.readNoteAt(ctx, ws.Root, params.Target, params.IfRevision)
 		if err != nil {
 			return ReadResult{}, err
 		}
 		return noteReadResultFrom(ws.ID, doc), nil
+	case KindDiff:
+		doc, err := s.readDiffAt(ctx, ws.Root, params)
+		if err != nil {
+			return ReadResult{}, err
+		}
+		return diffReadResultFrom(ws.ID, doc, params.Operation), nil
 	default:
-		doc, err := ReadFile(ctx, ws.Root, target, ifRevision)
+		doc, err := ReadFile(ctx, ws.Root, params.Target, params.IfRevision)
 		if err != nil {
 			return ReadResult{}, err
 		}
@@ -103,7 +118,7 @@ func requireKind(kind string) error {
 	switch kind {
 	case "":
 		return Usage("kind is required")
-	case KindFile, KindIssue, KindNote:
+	case KindFile, KindIssue, KindNote, KindDiff:
 		return nil
 	default:
 		return UnknownKind(kind)
@@ -114,17 +129,23 @@ func requireOperation(kind, operation string) error {
 	if operation == "" {
 		return Usage("operation is required")
 	}
-	want := ""
 	switch kind {
 	case KindFile:
-		want = OpDocument
+		if operation != OpDocument {
+			return Usage("unknown content operation %q", operation)
+		}
 	case KindIssue:
-		want = OpCard
+		if operation != OpCard {
+			return Usage("unknown content operation %q", operation)
+		}
 	case KindNote:
-		want = OpNote
-	}
-	if want != "" && operation != want {
-		return Usage("unknown content operation %q", operation)
+		if operation != OpNote {
+			return Usage("unknown content operation %q", operation)
+		}
+	case KindDiff:
+		if !validDiffOperation(operation) {
+			return Usage("unknown content operation %q", operation)
+		}
 	}
 	return nil
 }

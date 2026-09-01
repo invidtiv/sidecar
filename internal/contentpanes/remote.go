@@ -62,6 +62,8 @@ func remoteResolveKind(pending contentlink.Pending) (kind string, refKind conten
 		return contentservice.KindIssue, contentlink.KindIssue, "", nil
 	case contentlink.KindInternal:
 		return contentservice.KindNote, contentlink.KindInternal, "note", nil
+	case contentlink.KindDiff:
+		return contentservice.KindDiff, contentlink.KindDiff, "", nil
 	default:
 		return "", "", "", fmt.Errorf("unsupported pending kind %q", pending.Kind)
 	}
@@ -152,11 +154,84 @@ func (s RemoteSource) LoadNote(ctx context.Context, src SourceContext, req NoteR
 	}, nil
 }
 
+func (s RemoteSource) LoadDiff(ctx context.Context, src SourceContext, req DiffReadRequest) (DiffReadResult, error) {
+	if err := s.ready(); err != nil {
+		return DiffReadResult{}, err
+	}
+	op := req.Operation
+	if op == "" {
+		op = diffOperationFor(req.Ref.Value)
+	}
+	target := req.Ref.Value
+	if target == "" {
+		target = workspacediffIdentityWorkingTree()
+	}
+	args := []string{
+		"content", "read",
+		"--workspace", src.WorkspaceID,
+		"--kind", contentservice.KindDiff,
+		"--operation", op,
+		"--target", target,
+		"--json",
+	}
+	if req.IfRevision != "" {
+		args = append(args, "--if-revision", req.IfRevision)
+	}
+	if req.Path != "" {
+		args = append(args, "--path", req.Path)
+	}
+	if req.ParentHash != "" {
+		args = append(args, "--parent", req.ParentHash)
+	}
+	if req.Offset > 0 {
+		args = append(args, "--offset", strconv.Itoa(req.Offset))
+	}
+	if req.Limit > 0 {
+		args = append(args, "--limit", strconv.Itoa(req.Limit))
+	}
+	var result contentservice.ReadResult
+	if err := s.Run(ctx, s.HostID, args, &result); err != nil {
+		return DiffReadResult{}, mapRemoteContentErr(s.HostID, contentservice.KindDiff, err)
+	}
+	if result.NotModified {
+		return DiffReadResult{NotModified: true, Revision: result.Revision}, nil
+	}
+	return DiffReadResult{
+		Value:    diffPayloadFromRead(result),
+		Revision: result.Revision,
+	}, nil
+}
+
+func workspacediffIdentityWorkingTree() string {
+	return "wt"
+}
+
+func diffPayloadFromRead(result contentservice.ReadResult) DiffPayload {
+	payload := DiffPayload{}
+	if result.Diff == nil {
+		return payload
+	}
+	if result.Diff.Snapshot != nil {
+		payload.Snapshot = contentservice.SnapshotFromDTO(result.Diff.Snapshot)
+	}
+	if result.Diff.Commit != nil {
+		payload.Commit = contentservice.CommitFromDTO(result.Diff.Commit)
+	}
+	if result.Diff.Range != nil {
+		payload.RangeRaw = result.Diff.Range.Raw
+	}
+	if result.Diff.File != nil {
+		payload.FileRaw = result.Diff.File.Raw
+		payload.FilePath = result.Diff.File.Path
+	}
+	return payload
+}
+
 func mapRemoteContentErr(hostID, kind string, err error) error {
 	if err == nil {
 		return nil
 	}
-	if kind == contentservice.KindIssue || kind == contentservice.KindNote {
+	if kind == contentservice.KindIssue || kind == contentservice.KindNote || kind == contentservice.KindDiff {
 		if hosts.RunFailure(err) == hosts.FailUnsupported {
 			return &contentservice.MissingCapabilityError{HostID: hostID}
 		}

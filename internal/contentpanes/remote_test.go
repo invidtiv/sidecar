@@ -174,6 +174,67 @@ func TestRemoteSourceUnsupportedIssueKindIsMissingCapability(t *testing.T) {
 	}
 }
 
+func TestRemoteSourceDiffArgvAndNotModified(t *testing.T) {
+	t.Parallel()
+	var calls [][]string
+	src := NewRemoteSource("mac-mini", hostproto.VerbCapabilities{ContentReadV1: true}, func(_ context.Context, _ string, args []string, out any) error {
+		calls = append(calls, append([]string(nil), args...))
+		switch args[1] {
+		case "resolve":
+			*(out.(*contentservice.ResolveResult)) = contentservice.ResolveResult{
+				Kind: contentservice.KindDiff, Workspace: "p:shell:s1", Target: "c:aabbcc1", Display: "aabbcc1",
+			}
+		case "read":
+			for i, a := range args {
+				if a == "--if-revision" && i+1 < len(args) && args[i+1] == "v1:diff" {
+					*(out.(*contentservice.ReadResult)) = contentservice.ReadResult{
+						Kind: contentservice.KindDiff, NotModified: true, Revision: "v1:diff",
+					}
+					return nil
+				}
+			}
+			*(out.(*contentservice.ReadResult)) = contentservice.ReadResult{
+				Kind: contentservice.KindDiff, Operation: contentservice.OpWorkingTree, Workspace: "p:shell:s1",
+				Revision: "v1:diff", Diff: &contentservice.DiffDTO{Target: "wt", Snapshot: &contentservice.DiffSnapshotDTO{WorkingTree: "HOST-ONLY-DIFF\n"}},
+			}
+		}
+		return nil
+	})
+	ctx := SourceContext{WorkspaceID: "p:shell:s1"}
+	ref, err := src.Resolve(context.Background(), ctx, contentlink.Pending{Kind: contentlink.KindDiff, Raw: "aabbcc1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref.Kind != contentlink.KindDiff || ref.Value != "c:aabbcc1" {
+		t.Fatalf("ref = %+v", ref)
+	}
+	got, err := src.LoadDiff(context.Background(), ctx, DiffReadRequest{
+		Ref: contentlink.Ref{Kind: contentlink.KindDiff, Value: "wt"}, Operation: contentservice.OpWorkingTree, IfRevision: "v1:old",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Value.Snapshot == nil || !strings.Contains(got.Value.Snapshot.WorkingTree, "HOST-ONLY-DIFF") {
+		t.Fatalf("load diff = %+v", got)
+	}
+	again, err := src.LoadDiff(context.Background(), ctx, DiffReadRequest{
+		Ref: contentlink.Ref{Kind: contentlink.KindDiff, Value: "wt"}, Operation: contentservice.OpWorkingTree, IfRevision: "v1:diff",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !again.NotModified {
+		t.Fatalf("notModified = %+v", again)
+	}
+	if strings.Join(calls[0], " ") != "content resolve --workspace p:shell:s1 --kind diff --target aabbcc1 --json" {
+		t.Fatalf("resolve argv = %v", calls[0])
+	}
+	want := "content read --workspace p:shell:s1 --kind diff --operation working-tree --target wt --json --if-revision v1:old"
+	if strings.Join(calls[1], " ") != want {
+		t.Fatalf("read argv = %v", calls[1])
+	}
+}
+
 func TestRemoteSourceNotModified(t *testing.T) {
 	t.Parallel()
 	src := NewRemoteSource("mac-mini", hostproto.VerbCapabilities{ContentReadV1: true}, func(_ context.Context, _ string, _ []string, out any) error {

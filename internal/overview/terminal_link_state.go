@@ -89,11 +89,10 @@ func (m *Model) previewTerminalLinkScope(target string) (termpreview.LinkScope, 
 	}, allowed, true
 }
 
-// ResolveRemoteTerminalLink is KindFile pending resolution for a showing
-// remote Sessions row. Diffs are refused. It must not touch this machine's
-// twin path.
+// ResolveRemoteTerminalLink is KindFile/KindDiff pending resolution for a
+// showing remote Sessions row. It must not touch this machine's twin path.
 func (m *Model) ResolveRemoteTerminalLink(hostID, root string, candidate contentlink.Pending) (contentlink.Ref, bool) {
-	if m == nil || hostID == "" || candidate.Kind != contentlink.KindFile {
+	if m == nil || hostID == "" || (candidate.Kind != contentlink.KindFile && candidate.Kind != contentlink.KindDiff) {
 		return contentlink.Ref{}, false
 	}
 	if !m.hostShows(hostID) {

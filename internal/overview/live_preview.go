@@ -406,8 +406,21 @@ func (m *Model) visibleRemoteNote() bool {
 	return m.previewPaneVisible(panelayout.Note)
 }
 
+func (m *Model) visibleRemoteDiff() bool {
+	if m.preview.deck == nil || !m.preview.deck.Context().Source.Remote() {
+		return false
+	}
+	if m.preview.diff == nil || m.preview.diff.view() == nil {
+		return false
+	}
+	if !m.hostShows(m.preview.deck.Context().Source.HostID) {
+		return false
+	}
+	return m.previewPaneVisible(panelayout.Diff)
+}
+
 func (m *Model) visibleRemoteContent() bool {
-	return m.visibleRemoteDocument() || m.visibleRemoteIssue() || m.visibleRemoteNote()
+	return m.visibleRemoteDocument() || m.visibleRemoteIssue() || m.visibleRemoteNote() || m.visibleRemoteDiff()
 }
 
 func (m *Model) remoteDocumentRefreshCmd() tea.Cmd {
@@ -451,6 +464,9 @@ func (m *Model) applyRemoteDocumentRefreshTick(msg remoteDocumentRefreshTickMsg)
 	if m.visibleRemoteNote() {
 		cmds = append(cmds, m.refreshPreviewNotes()...)
 	}
+	if m.visibleRemoteDiff() {
+		cmds = append(cmds, m.refreshPreviewDiffs()...)
+	}
 	if next := m.remoteDocumentRefreshCmd(); next != nil {
 		cmds = append(cmds, next)
 	}
@@ -476,6 +492,9 @@ func isPreviewEditorScratchPath(path string) bool {
 // ---------------------------------------------------------------------------
 
 func (m *Model) previewDiffTargets() []livewatch.Target {
+	if m.preview.deck != nil && m.preview.deck.Context().Source.Remote() {
+		return nil
+	}
 	diff := m.preview.diff
 	if diff == nil || diff.root == "" || len(diff.tabs.Items) == 0 {
 		return nil
@@ -491,6 +510,9 @@ func (m *Model) previewDiffTargets() []livewatch.Target {
 }
 
 func (m *Model) resolvePreviewDiffAdmin() tea.Cmd {
+	if m.preview.deck != nil && m.preview.deck.Context().Source.Remote() {
+		return nil
+	}
 	diff := m.preview.diff
 	if diff == nil || diff.root == "" || len(diff.tabs.Items) == 0 {
 		return nil
@@ -515,6 +537,20 @@ func (m *Model) resolvePreviewDiffAdmin() tea.Cmd {
 func (m *Model) refreshPreviewDiffs() []tea.Cmd {
 	diff := m.preview.diff
 	if diff == nil {
+		return nil
+	}
+	if m.preview.deck != nil && m.preview.deck.Context().Source.Remote() {
+		if !m.previewPaneVisible(panelayout.Diff) {
+			return nil
+		}
+		view := diff.view()
+		if view == nil {
+			return nil
+		}
+		view.Observe()
+		if cmd := view.Refresh(diff.root, "", view.WorkspaceID, false); cmd != nil {
+			return []tea.Cmd{cmd}
+		}
 		return nil
 	}
 	var cmds []tea.Cmd

@@ -13,6 +13,7 @@ import (
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspacecreate"
+	"github.com/marcus/sidecar/internal/workspacediff"
 	"github.com/marcus/sidecar/internal/workspaceops"
 )
 
@@ -186,8 +187,17 @@ func (m *Model) openPreviewTarget(target uirequest.Target) (tea.Cmd, bool) {
 		cmd = m.openPreviewNote(target.Value)
 		return cmd, onScreen(panelayout.Note)
 	case uirequest.TargetKindDiff:
+		selected, ok := m.SelectedWorkspace()
+		if ok && selected.Remote() {
+			spec, parsed := workspacediff.ParseSpec(target.Value)
+			if !parsed {
+				spec = workspacediff.WorkingTreeTarget()
+			}
+			cmd = m.openPreviewDiff(spec)
+			return cmd, onScreen(panelayout.Diff)
+		}
 		root := ""
-		if selected, ok := m.SelectedWorkspace(); ok {
+		if ok {
 			root = selected.Path
 		}
 		cmd = m.openPreviewDiff(uirequest.DiffTarget(root, target.Value))

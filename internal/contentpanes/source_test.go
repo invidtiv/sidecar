@@ -111,6 +111,10 @@ func (f *fakeDocumentSource) LoadNote(context.Context, SourceContext, NoteReadRe
 	return NoteReadResult{}, fmt.Errorf("fake document source does not load notes")
 }
 
+func (f *fakeDocumentSource) LoadDiff(context.Context, SourceContext, DiffReadRequest) (DiffReadResult, error) {
+	return DiffReadResult{}, fmt.Errorf("fake document source does not load diffs")
+}
+
 func TestDocumentSourceSuppliesContentWithoutTouchingPath(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
