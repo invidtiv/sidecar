@@ -156,6 +156,9 @@ func (p *Plugin) createRequestApplies(req uirequest.Request) bool {
 
 func (p *Plugin) applyCreateShellRequest(req uirequest.Request, payload uirequest.CreatePayload) tea.Cmd {
 	if split := strings.TrimSpace(req.Options.Split); split != "" {
+		if req.Origin.Sessions {
+			return nil
+		}
 		return p.applyCreateShellSplit(req, payload, split)
 	}
 	if payload.Session == "" {

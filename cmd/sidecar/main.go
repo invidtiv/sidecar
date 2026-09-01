@@ -23,6 +23,7 @@ import (
 	_ "github.com/marcus/sidecar/internal/adapter/cursor"
 	_ "github.com/marcus/sidecar/internal/adapter/grok"
 	_ "github.com/marcus/sidecar/internal/adapter/kiro"
+	_ "github.com/marcus/sidecar/internal/adapter/muse"
 	_ "github.com/marcus/sidecar/internal/adapter/omp"
 	_ "github.com/marcus/sidecar/internal/adapter/opencode"
 	_ "github.com/marcus/sidecar/internal/adapter/pi"

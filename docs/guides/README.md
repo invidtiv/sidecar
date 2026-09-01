@@ -4,6 +4,7 @@ Documentation and guides for Sidecar are organized into skills and active operat
 
 - **Skills (`.agents/skills/` & `.claude/skills/`)**: Interactive agent skill modules for plugin creation, modals, adapters, multi-agent coordination, drag-pane interactions, and keyboard shortcuts.
 - **Active Guides (`docs/guides/active/`)**: Operational, performance, architecture, and feature guides:
+  - [`adding-new-agent-clis.md`](active/adding-new-agent-clis.md) — Step-by-step developer and agent guide to adding new AI agent CLIs.
   - [`pane-layout-automation.md`](active/pane-layout-automation.md) — Multi-pane layout composition and automation via CLI.
   - [`notifications-and-alerting.md`](active/notifications-and-alerting.md) — Toast alerts, sound cues, quiet hours, and notification targets.
   - [`remote-agent-control.md`](active/remote-agent-control.md) — Coordinating and controlling agents on remote hosts over SSH.

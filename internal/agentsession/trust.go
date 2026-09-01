@@ -122,6 +122,15 @@ func (r Roots) For(kind string) []string {
 			base = filepath.Join(r.Home, ".local", "share")
 		}
 		return []string{filepath.Join(base, "opencode")}
+	case "muse":
+		base := r.env("XDG_DATA_HOME")
+		if base == "" {
+			if r.Home == "" {
+				return nil
+			}
+			base = filepath.Join(r.Home, ".local", "share")
+		}
+		return []string{filepath.Join(base, "muse", "sessions")}
 	default:
 		return nil
 	}

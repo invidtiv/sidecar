@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/uirequest"
@@ -135,6 +136,48 @@ func TestOverview_ShellRenameRepaintsSharedCatalog(t *testing.T) {
 	}
 	if got := m.catalog[workspace.ID].Name; got != "active task context" {
 		t.Fatalf("catalog name = %q", got)
+	}
+}
+
+func TestOverview_CreateShellSplitOnVisibleSessionsAcksWorkspaceID(t *testing.T) {
+	m, _ := layoutSessionsModel(t)
+	original := ensurePreviewTerminalSession
+	ensurePreviewTerminalSession = func(session, workDir string) (string, error) {
+		return "%peer", nil
+	}
+	t.Cleanup(func() { ensurePreviewTerminalSession = original })
+
+	before := panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Shell)
+	catalogBefore := len(m.results["sidecar"].Workspaces)
+	focus := true
+	payload, err := json.Marshal(uirequest.CreatePayload{
+		Kind: uirequest.CreateKindShell, DisplayName: "dev server", Focus: &focus,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := uirequest.Request{
+		ID: "req-create-split-sessions", Action: uirequest.ActionCreate, CreatedAt: time.Now().UTC(), TTLMs: 5000,
+		Origin:  uirequest.Origin{TmuxSession: "sc-alpha", WorkDir: m.catalog["a"].Path},
+		Options: uirequest.Options{Split: "right"},
+		Payload: payload,
+	}
+	if cmd := m.handleUIRequest(req); cmd == nil {
+		t.Fatal("visible Sessions split create produced no command")
+	}
+	after := panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Shell)
+	if after == nil || after == before {
+		t.Fatal("Sessions preview did not gain a shell leaf")
+	}
+	if got := len(m.results["sidecar"].Workspaces); got != catalogBefore {
+		t.Fatalf("split create grew the catalog %d -> %d", catalogBefore, got)
+	}
+	acks, err := uirequest.ReadAcks(config.StateDir(), req.ID, req.Action)
+	if err != nil || len(acks) != 1 || acks[0].Status != uirequest.StatusOpened {
+		t.Fatalf("acks = %+v err=%v", acks, err)
+	}
+	if acks[0].Surface != "a" {
+		t.Fatalf("surface = %q, want the Sessions row ID, not shell:<tmux>", acks[0].Surface)
 	}
 }
 

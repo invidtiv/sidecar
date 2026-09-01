@@ -27,6 +27,7 @@ var defaultAgentColors = map[string]string{
 	"antigravity": "#5EEAD4",
 	"gemini":      "#60A5FA",
 	"cursor":      "#C4B5FD",
+	"muse":        "#A78BFA",
 }
 
 // Populated by ApplyThemeColors, guarded by themeMu like the rest of the
@@ -109,6 +110,7 @@ var defaultAgentIcons = map[string]string{
 	"kiro":        "\u03ba", // κ
 	"warp":        "»",
 	"grok":        "✦",
+	"muse":        "◈",
 }
 
 // AgentIcon returns the conversations-style glyph for a provider, case-

@@ -143,6 +143,7 @@ const (
 	AgentPi          AgentType = "pi"          // Pi Agent
 	AgentAmp         AgentType = "amp"         // Amp
 	AgentGrok        AgentType = "grok"        // Grok Build
+	AgentMuse        AgentType = "muse"        // Muse Spark
 	AgentCustom      AgentType = "custom"      // Custom command
 	AgentShell       AgentType = "shell"       // Project shell (not an AI agent)
 )
@@ -155,7 +156,7 @@ var SkipPermissionsFlags = buildSkipPermissionsFlags()
 func buildSkipPermissionsFlags() map[AgentType]string {
 	agents := []AgentType{
 		AgentClaude, AgentCodex, AgentCopilot, AgentAider, AgentAntigravity,
-		AgentCursor, AgentOpenCode, AgentPi, AgentAmp, AgentGrok,
+		AgentCursor, AgentOpenCode, AgentPi, AgentAmp, AgentGrok, AgentMuse,
 	}
 	flags := make(map[AgentType]string, len(agents))
 	for _, agent := range agents {

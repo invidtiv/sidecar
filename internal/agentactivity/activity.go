@@ -161,6 +161,8 @@ func identifyProcessName(command string) string {
 		return "opencode"
 	case oneOf(command, "amp", "amp-local"):
 		return "amp"
+	case command == "muse" || strings.HasPrefix(command, "muse-"):
+		return "muse"
 	case oneOf(command, "sh", "bash", "zsh", "fish", "nu", "pwsh"):
 		return "shell"
 	default:
@@ -228,6 +230,8 @@ func Detect(ob Observation) Result {
 		return DetectOpenCode(ob)
 	case "amp":
 		return DetectAmp(ob)
+	case "muse":
+		return DetectMuse(ob)
 	default:
 		return Result{State: StateUnknown, Evidence: "unsupported-agent"}
 	}
@@ -236,7 +240,7 @@ func Detect(ob Observation) Result {
 // Supports reports whether Sidecar has provider-owned activity evidence rules.
 func Supports(agent string) bool {
 	switch agent {
-	case "codex", "claude", "grok", "antigravity", "pi", "copilot", "cursor", "opencode", "amp":
+	case "codex", "claude", "grok", "antigravity", "pi", "copilot", "cursor", "opencode", "amp", "muse":
 		return true
 	default:
 		return false

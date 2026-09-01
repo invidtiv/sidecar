@@ -59,7 +59,8 @@
     "grok": "#cfd3d6",
     "antigravity": "#4f9999",
     "gemini": "#4d90d6",
-    "cursor": "#a57fb9"
+    "cursor": "#a57fb9",
+    "muse": "#A78BFA"
    }
   }
  },
@@ -123,7 +124,8 @@
     "grok": "#cdd6f4",
     "antigravity": "#94e2d5",
     "gemini": "#89b4fa",
-    "cursor": "#f5c2e7"
+    "cursor": "#f5c2e7",
+    "muse": "#A78BFA"
    }
   }
  },
@@ -187,7 +189,8 @@
     "grok": "#c0caf5",
     "antigravity": "#7dcfff",
     "gemini": "#7aa2f7",
-    "cursor": "#bb9af7"
+    "cursor": "#bb9af7",
+    "muse": "#A78BFA"
    }
   }
  },
@@ -251,7 +254,8 @@
     "grok": "#ebdbb2",
     "antigravity": "#84af85",
     "gemini": "#fabd2f",
-    "cursor": "#cb96ae"
+    "cursor": "#cb96ae",
+    "muse": "#A78BFA"
    }
   }
  },
@@ -315,7 +319,8 @@
     "grok": "#f8f8f2",
     "antigravity": "#8be9fd",
     "gemini": "#ff79c6",
-    "cursor": "#ff79c6"
+    "cursor": "#ff79c6",
+    "muse": "#A78BFA"
    }
   }
  },
@@ -379,7 +384,8 @@
     "grok": "#d8dee9",
     "antigravity": "#88c0d0",
     "gemini": "#9db6d0",
-    "cursor": "#c5a8bf"
+    "cursor": "#c5a8bf",
+    "muse": "#A78BFA"
    }
   }
  },
@@ -443,7 +449,8 @@
     "grok": "#abb2bf",
     "antigravity": "#56b6c2",
     "gemini": "#61afef",
-    "cursor": "#cc85e1"
+    "cursor": "#cc85e1",
+    "muse": "#A78BFA"
    }
   }
  },
@@ -507,7 +514,8 @@
     "grok": "#dcd7ba",
     "antigravity": "#7fa49a",
     "gemini": "#7e9cd8",
-    "cursor": "#a491c2"
+    "cursor": "#a491c2",
+    "muse": "#A78BFA"
    }
   }
  },
@@ -571,7 +579,8 @@
     "grok": "#e0def4",
     "antigravity": "#ebbcba",
     "gemini": "#eb6f92",
-    "cursor": "#c4a7e7"
+    "cursor": "#c4a7e7",
+    "muse": "#A78BFA"
    }
   }
  },
@@ -635,7 +644,8 @@
     "grok": "#d3c6aa",
     "antigravity": "#dbbc7f",
     "gemini": "#a7c080",
-    "cursor": "#d699b6"
+    "cursor": "#d699b6",
+    "muse": "#A78BFA"
    }
   }
  },
@@ -699,7 +709,8 @@
     "grok": "#9cc2c3",
     "antigravity": "#44a197",
     "gemini": "#b69034",
-    "cursor": "#db70a5"
+    "cursor": "#db70a5",
+    "muse": "#A78BFA"
    }
   }
  },
@@ -763,7 +774,8 @@
     "grok": "#fcfcfa",
     "antigravity": "#a9dc76",
     "gemini": "#ffd866",
-    "cursor": "#ab9df2"
+    "cursor": "#ab9df2",
+    "muse": "#A78BFA"
    }
   }
  },
@@ -827,7 +839,8 @@
     "grok": "#d6deeb",
     "antigravity": "#21c7a8",
     "gemini": "#82aaff",
-    "cursor": "#c792ea"
+    "cursor": "#c792ea",
+    "muse": "#A78BFA"
    }
   }
  },
@@ -891,7 +904,8 @@
     "grok": "#cccac2",
     "antigravity": "#90e1c6",
     "gemini": "#6dcbfa",
-    "cursor": "#dabafa"
+    "cursor": "#dabafa",
+    "muse": "#A78BFA"
    }
   }
  },
@@ -955,7 +969,8 @@
     "grok": "#e6edf3",
     "antigravity": "#39c5cf",
     "gemini": "#58a6ff",
-    "cursor": "#bc8cff"
+    "cursor": "#bc8cff",
+    "muse": "#A78BFA"
    }
   }
  },
@@ -1019,7 +1034,8 @@
     "grok": "#dad9c7",
     "antigravity": "#19cde6",
     "gemini": "#f97137",
-    "cursor": "#f85a21"
+    "cursor": "#f85a21",
+    "muse": "#A78BFA"
    }
   }
  },
@@ -1083,7 +1099,8 @@
     "grok": "#ffffff",
     "antigravity": "#73a0e4",
     "gemini": "#ffe50a",
-    "cursor": "#ff6ea3"
+    "cursor": "#ff6ea3",
+    "muse": "#A78BFA"
    }
   }
  },
@@ -1147,7 +1164,8 @@
     "grok": "#d5d8da",
     "antigravity": "#59e1e3",
     "gemini": "#ed718e",
-    "cursor": "#ef6cb0"
+    "cursor": "#ef6cb0",
+    "muse": "#A78BFA"
    }
   }
  },
@@ -1211,7 +1229,8 @@
     "grok": "#ffffff",
     "antigravity": "#79e8fb",
     "gemini": "#ff77ff",
-    "cursor": "#ff6496"
+    "cursor": "#ff6496",
+    "muse": "#A78BFA"
    }
   }
  },
@@ -1275,7 +1294,8 @@
     "grok": "#bdbaae",
     "antigravity": "#57c2c1",
     "gemini": "#7ba1cf",
-    "cursor": "#c289c4"
+    "cursor": "#c289c4",
+    "muse": "#A78BFA"
    }
   }
  },
@@ -1339,7 +1359,8 @@
     "grok": "#dcdccc",
     "antigravity": "#f0dfaf",
     "gemini": "#90cbae",
-    "cursor": "#e6aed5"
+    "cursor": "#e6aed5",
+    "muse": "#A78BFA"
    }
   }
  }

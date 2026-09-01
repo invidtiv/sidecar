@@ -216,5 +216,25 @@
     "orderingGuaranteed": false,
     "sourceDoc": "https://antigravity.google/docs",
     "sourceVersionNote": "agy 1.1.22. The thinnest hook surface in the catalog: exactly five events -- PreToolUse, PostToolUse, PreInvocation, PostInvocation and Stop -- carrying a conversationId. An advisory candidate at best."
+  },
+  {
+    "schemaVersion": 1,
+    "provider": "muse",
+    "source": "",
+    "assetVersion": "",
+    "tier": "screen-fallback",
+    "evidence": "none",
+    "minProviderVersion": "",
+    "testedProviderRange": "",
+    "covered": [],
+    "knownGaps": [
+      "No Sidecar integration is built, so nothing is claimed and screen detection remains the sole authority.",
+      "Muse Spark 1.0.1 traced locally (darwin/arm64, echo provider) but hooks are not shipped: Muse Code's extension surface is skills, MCP servers, and the MSP wire schema, not lifecycle hooks. No published hook contract like Claude Code's hooks or Codex's hooks.json was found in the binary or docs at https://dev.meta.ai/docs/muse-code/.",
+      "The session log (JSONL at ~/.local/share/muse/sessions/YYYY/MM/DD/<uuid>/session.jsonl) and SQLite index at ~/.local/share/muse/session-index.db are the durable stores; reasoning text is encrypted (encrypted_content) and tool call/result shapes are visible but not hook-authored.",
+      "Screen detection is therefore the sole lane authority; the capability entry exists so the provider appears in the matrix and can be promoted when and if Muse ships lifecycle hooks."
+    ],
+    "orderingGuaranteed": false,
+    "sourceDoc": "https://dev.meta.ai/docs/muse-code/",
+    "sourceVersionNote": "muse 1.0.1 on darwin/arm64, inspected 2026-08-31. No hook contract found; session storage verified via local JSONL and SQLite traces, and live TUI captured via private tmux socket (braille title spinner U+2800-FF, ◈ Thinking + esc to interrupt chrome, ⟩ prompt idle)."
   }
 ]
