@@ -623,4 +623,7 @@ func TestHelloAdvertisesVerbCapabilities(t *testing.T) {
 	if !hello.Capabilities.Verbs.ContentReadV1 {
 		t.Error("the host does not advertise content read, so no viewer will ever send it")
 	}
+	if !hello.Capabilities.Verbs.UIRequestRelayV1 {
+		t.Error("the host does not advertise ui request relay, so no viewer will expect announcements")
+	}
 }

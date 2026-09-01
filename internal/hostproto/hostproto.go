@@ -69,6 +69,13 @@ const (
 	// deriving one from state, is exactly how a reconnect would replay an old
 	// prompt onto someone's desktop.
 	KindNotify Kind = "notify"
+	// KindUIRequest is one host-side open/layout request file the connected
+	// viewer may apply. It is not a protocol bump: a v2 decoder that does not
+	// know the kind still parses the rest of the stream, and an old viewer
+	// never writes a presence file, so the host CLI fast-refuses rather than
+	// claiming success. It is not KindNotify: that payload is a toast the user
+	// can ignore, while this is a command the agent is blocked on.
+	KindUIRequest Kind = "uirequest"
 )
 
 // Message is the envelope. Exactly one of the payload pointers is set, chosen
@@ -79,11 +86,12 @@ type Message struct {
 	Seq   uint64    `json:"seq"`
 	At    time.Time `json:"at"`
 
-	Hello    *Hello       `json:"hello,omitempty"`
-	Snapshot *Snapshot    `json:"snapshot,omitempty"`
-	Event    *Event       `json:"event,omitempty"`
-	Error    *Error       `json:"error,omitempty"`
-	Notify   *NotifyEvent `json:"notify,omitempty"`
+	Hello     *Hello       `json:"hello,omitempty"`
+	Snapshot  *Snapshot    `json:"snapshot,omitempty"`
+	Event     *Event       `json:"event,omitempty"`
+	Error     *Error       `json:"error,omitempty"`
+	Notify    *NotifyEvent `json:"notify,omitempty"`
+	UIRequest *UIRequest   `json:"uiRequest,omitempty"`
 }
 
 // Hello is the first message on every connection. A viewer that does not
@@ -173,6 +181,12 @@ type VerbCapabilities struct {
 	// that predates the verbs is read as false; the viewer must refuse rather
 	// than guess, and must not infer ordering from version strings.
 	ContentReadV1 bool `json:"contentReadV1,omitempty"`
+
+	// UIRequestRelayV1 is serve observing host `uirequest` files and announcing
+	// them as KindUIRequest. A host that predates it is read as false; the
+	// viewer must not expect announcements. Serve still does not apply the
+	// request or write an ack.
+	UIRequestRelayV1 bool `json:"uiRequestRelayV1,omitempty"`
 }
 
 // Snapshot is the complete observable state of the host at one instant. Serve
@@ -432,11 +446,17 @@ var ErrInvalid = errors.New("hostproto: invalid message")
 // Validate checks a decoded message against the parts of the contract JSON
 // cannot express. It runs on every decoded line, on both ends.
 func (m Message) Validate() error {
-	if m.Kind == KindNotify {
+	switch m.Kind {
+	case KindNotify:
 		if m.Notify == nil {
 			return fmt.Errorf("%w: notify message carried no payload", ErrInvalid)
 		}
 		return m.Notify.validate()
+	case KindUIRequest:
+		if m.UIRequest == nil {
+			return fmt.Errorf("%w: ui request message carried no payload", ErrInvalid)
+		}
+		return m.UIRequest.validate()
 	}
 	return nil
 }

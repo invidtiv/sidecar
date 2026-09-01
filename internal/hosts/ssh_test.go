@@ -4,6 +4,8 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+
+	"github.com/marcus/sidecar/internal/tty"
 )
 
 func newTestTransport(t *testing.T, host Host) *Transport {
@@ -75,6 +77,36 @@ func TestRemoteShellUsesLoginDashC(t *testing.T) {
 // TestSidecarCommandUsesALoginShell guards the other half of the same problem:
 // a non-login ssh shell has no /opt/homebrew/bin on PATH, so a plainly
 // installed tmux is reported as missing.
+func TestServeCommandSetsViewerInstance(t *testing.T) {
+	command := newTestTransport(t, Host{ID: "h", Target: "h"}).ServeCommand()
+	if !strings.Contains(command, tty.ViewerInstanceEnv+"=") {
+		t.Errorf("serve spawn is missing %s: %s", tty.ViewerInstanceEnv, command)
+	}
+	if !strings.Contains(command, tty.InstanceID()) {
+		t.Errorf("serve spawn is missing this instance id: %s", command)
+	}
+}
+
+func TestServeCommandKeepsExplicitViewerInstance(t *testing.T) {
+	command := newTestTransport(t, Host{
+		ID: "h", Target: "h",
+		Env: []string{tty.ViewerInstanceEnv + "=other-1"},
+	}).ServeCommand()
+	if !strings.Contains(command, tty.ViewerInstanceEnv+"=other-1") {
+		t.Errorf("explicit viewer instance was dropped: %s", command)
+	}
+	if strings.Count(command, tty.ViewerInstanceEnv+"=") != 1 {
+		t.Errorf("viewer instance was set twice: %s", command)
+	}
+}
+
+func TestSidecarCommandDoesNotSetViewerInstance(t *testing.T) {
+	command := newTestTransport(t, Host{ID: "h", Target: "h"}).SidecarCommand("content", "read")
+	if strings.Contains(command, tty.ViewerInstanceEnv) {
+		t.Errorf("one-shot verb inherited viewer instance: %s", command)
+	}
+}
+
 func TestSidecarCommandUsesALoginShell(t *testing.T) {
 	command := newTestTransport(t, Host{ID: "h", Target: "h"}).ServeCommand()
 	if !strings.Contains(command, "$SHELL -l -c") {

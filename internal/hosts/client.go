@@ -476,6 +476,9 @@ func (c *Client) session(ctx context.Context) (State, string) {
 		case hostproto.KindNotify:
 			sawData = true
 			c.applyNotify(msg.Notify)
+		case hostproto.KindUIRequest:
+			// Slice 0 only announces. Applying is a later slice; folding this
+			// into snapshot state would replay it on reconnect.
 		case hostproto.KindError:
 			if msg.Error != nil && msg.Error.Fatal {
 				return stateForErrorCode(msg.Error.Code), msg.Error.Message

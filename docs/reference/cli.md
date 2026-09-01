@@ -1246,13 +1246,14 @@ versioned JSONL snapshot plus status transitions to stdout.
 This is not a daemon. It is spawned per connection over an SSH stdio pipe
 and exits when that pipe closes.
 
-It has exactly one write, and it is the same one a local Sidecar makes: a
-shell record whose tmux session is confirmed gone is reaped — tombstoned
-through the flocked, conditional writer the Sessions browser uses, so
-`sidecar shell restore` still brings it back. Without it a row for a shell
-the user had already exited stayed on the viewer's screen until somebody
-opened Sidecar on this machine. Nothing else is written: no geometry lease,
-no pane resize, no mutating tmux command at all.
+It has two writes besides observation: a shell record whose tmux session is
+confirmed gone is reaped — tombstoned through the flocked, conditional writer
+the Sessions browser uses, so `sidecar shell restore` still brings it back —
+and, when SIDECAR_VIEWER_INSTANCE is set, an ephemeral presence file under
+stateDir/viewers/. Without the reap, a row for a shell the user had already
+exited stayed on the viewer's screen until somebody opened Sidecar on this
+machine. Serve does not write request acks, take a geometry lease, resize a
+pane, or issue any mutating tmux command.
 
 Nothing is bound to a network. SSH is the entire transport and the entire
 trust boundary.

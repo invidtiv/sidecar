@@ -72,6 +72,21 @@ import (
 
 const leaseOptionName = "@sidecar-owner"
 
+// ViewerInstanceEnv is the serve-spawn environment variable carrying this
+// viewer's geometry-lease instance ID (hostname-pid). Old serve ignores it.
+const ViewerInstanceEnv = "SIDECAR_VIEWER_INSTANCE"
+
+// InstanceID is this process's geometry-lease identity: hostname-pid.
+func InstanceID() string {
+	host, pid := hostAndPID()
+	return fmt.Sprintf("%s-%d", host, pid)
+}
+
+// LeaseOwnerID is the instance ID encoded in a @sidecar-owner token.
+func LeaseOwnerID(token string) string {
+	return leaseOwner(token)
+}
+
 // LeasePolicy is the budget arbitration runs on. Ticks are the reader's own
 // local ticks; they carry no cross-machine meaning. Durations are elapsed
 // measurements, never timestamps, so they do carry across machines.

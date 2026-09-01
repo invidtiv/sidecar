@@ -19,6 +19,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/marcus/sidecar/internal/tty"
 )
 
 // Host is a registered remote machine.
@@ -190,7 +192,23 @@ func (t *Transport) SidecarCommand(args ...string) string {
 // ServeCommand is the channel-2 invocation: a headless, ephemeral, read-only
 // serve process that dies with the connection.
 func (t *Transport) ServeCommand() string {
-	return t.SidecarCommand("host", "serve", "--stdio")
+	clone := *t
+	clone.host = withViewerInstance(t.host)
+	return clone.SidecarCommand("host", "serve", "--stdio")
+}
+
+// withViewerInstance sets SIDECAR_VIEWER_INSTANCE to this process's geometry
+// lease identity unless the host registration already names one. Old serve
+// ignores the variable.
+func withViewerInstance(host Host) Host {
+	prefix := tty.ViewerInstanceEnv + "="
+	for _, entry := range host.Env {
+		if strings.HasPrefix(entry, prefix) {
+			return host
+		}
+	}
+	host.Env = append(append([]string(nil), host.Env...), prefix+tty.InstanceID())
+	return host
 }
 
 // ControlCommand is the channel-1 invocation: the remote tmux's own control

@@ -42,6 +42,32 @@ func collectUpdates(t *testing.T, client *Client, want int) []Update {
 	return updates
 }
 
+func TestClientIgnoresUIRequestWithoutCrashing(t *testing.T) {
+	event := hostproto.UIRequest{
+		ID: "req-1", Action: hostproto.UIRequestActionOpen, TTLMs: 1200,
+		Origin: hostproto.UIRequestOrigin{TmuxSession: "proj-claude", HostID: "mac-mini"},
+		Target: hostproto.UIRequestTarget{Kind: "file", Value: "README.md"},
+	}
+	stream := encodeStream(t,
+		helloMessage(),
+		snapshotMessage(agentItem("a", "working")),
+		hostproto.Message{Kind: hostproto.KindUIRequest, UIRequest: &event},
+	)
+	dial, _ := scriptedDial(t, stream, "")
+	client := NewClient(Host{ID: "mac-mini", Target: "mac-mini"}, ClientOptions{Dial: dial, MinBackoff: time.Hour})
+	runUntil(t, client, func() bool {
+		_, ok := client.Snapshot()
+		return ok
+	})
+	if got := client.Health().State; got != StateOnline {
+		t.Fatalf("health = %s after a ui request; the client switch must ignore unknown product kinds", got)
+	}
+	snapshot, ok := client.Snapshot()
+	if !ok || len(snapshot.Projects) != 1 || len(snapshot.Projects[0].Items) != 1 {
+		t.Fatalf("snapshot was disturbed: %+v", snapshot)
+	}
+}
+
 func TestClientExposesForwardedNotifications(t *testing.T) {
 	stream := encodeStream(t, helloMessage(), snapshotMessage(agentItem("a", "blocked")), notifyMessage("event-key-1"))
 	dial, _ := scriptedDial(t, stream, "")
