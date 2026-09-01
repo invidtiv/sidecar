@@ -633,6 +633,13 @@ func (p *Plugin) StartAgentWithOptions(wt *Worktree, agentType AgentType, skipPe
 		if ctx == nil {
 			ctx = context.Background()
 		}
+		// Starting later must establish the same durable agent choice as
+		// choosing an agent during worktree creation. Persist it before launch
+		// so a failed start remains an explicit, retryable selection rather than
+		// silently forgetting what the user chose.
+		if err := saveAgentTypeContext(ctx, mainRoot, path, agentType); err != nil {
+			return AgentStartedMsg{Epoch: epoch, WorktreeKey: key, WorkspaceName: name, AgentType: agentType, Err: fmt.Errorf("save agent choice: %w", err)}
+		}
 		result, err := launchWorkspaceSession(ctx, workspaceops.AgentLaunchSpec{
 			SessionName: sessionName, WorkDir: path, TaskID: taskID,
 			Env: envOverrides, StartAgent: false,
