@@ -2,10 +2,13 @@ package overview
 
 import (
 	"encoding/json"
+	"fmt"
+	"strconv"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/contentpanes"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/layoutapply"
@@ -15,8 +18,13 @@ import (
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/termpanes"
 	"github.com/marcus/sidecar/internal/uirequest"
+	"github.com/marcus/sidecar/internal/workspacediff"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
+
+// remoteNewShellReason declines creating a tmux session on this machine for a
+// remote row. Carry a live terminal by session, or wait for host tmux splits.
+const remoteNewShellReason = "a new shell pane on a remote row cannot be created here yet; carry an existing live terminal with its session from layout get"
 
 func (m *Model) applyLayoutRequest(req uirequest.Request) tea.Cmd {
 	relayed := req.Origin.HostID != ""
@@ -26,10 +34,6 @@ func (m *Model) applyLayoutRequest(req uirequest.Request) tea.Cmd {
 	payload, err := uirequest.DecodeLayoutPayload(req.Payload)
 	if err != nil {
 		return m.ackLayout(req, uirequest.StatusDeclined, "invalid layout payload: "+err.Error(), nil, nil)
-	}
-	// Relayed apply/move is a later slice; get must not compose the tree.
-	if relayed && !req.Origin.Sessions && payload.Mode != uirequest.LayoutModeGet {
-		return nil
 	}
 	if !m.preview.visible {
 		return m.ackLayout(req, uirequest.StatusDeclined, layoutapply.SessionsNotOnScreenReason, nil, nil)
@@ -239,7 +243,7 @@ func (m *Model) ackLayout(req uirequest.Request, status uirequest.Status, reason
 		layoutapply.WriteAck(config.StateDir(), hostInstanceID(), req, status, reason, items, layout)
 		return nil
 	}
-	m.ackRemote(req, status, reason, "", 0, layout)
+	m.ackRemote(req, status, reason, "", 0, layout, items)
 	return nil
 }
 
@@ -267,9 +271,15 @@ func (h overviewLayoutHost) DeckTree() *panelayout.Node {
 	return h.m.preview.deck.Tree()
 }
 func (h overviewLayoutHost) TerminalEnabled() bool {
+	if h.remoteSelected() {
+		return false
+	}
 	return features.IsEnabled(features.WorkspaceTerminalPanel.Name)
 }
 func (h overviewLayoutHost) TerminalOffReason() string {
+	if h.remoteSelected() {
+		return remoteNewShellReason
+	}
 	return features.WorkspaceTerminalPanel.Name + " is off"
 }
 func (h overviewLayoutHost) ShellCapMessage() string { return termpanes.CapMessage }
@@ -304,6 +314,9 @@ func (h overviewLayoutHost) CommitMove(plan panelayout.MovePlan) (string, tea.Cm
 	return h.m.commitLayoutMove(plan)
 }
 func (h overviewLayoutHost) ResolveTargets(kind panelayout.Kind, spec uirequest.LayoutPane) ([]uirequest.Target, string) {
+	if h.remoteSelected() {
+		return h.m.resolveRemoteLayoutTargets(kind, spec)
+	}
 	return layoutapply.ResolveTargets(kind, spec, h.root, h.m.previewResourceMatchers())
 }
 func (h overviewLayoutHost) CommitPassive(targets []uirequest.Target, plan panelayout.OpenPlan) (string, string, tea.Cmd) {
@@ -334,6 +347,9 @@ func (h overviewLayoutHost) CommitPassive(targets []uirequest.Target, plan panel
 	return uirequest.ItemVerdictOpened, "", cmd
 }
 func (h overviewLayoutHost) CommitShell(spec uirequest.LayoutPane, plan panelayout.OpenPlan) (string, string, tea.Cmd) {
+	if h.remoteSelected() {
+		return uirequest.ItemVerdictDeclined, remoteNewShellReason, nil
+	}
 	if !h.TerminalEnabled() {
 		return uirequest.ItemVerdictDeclined, h.TerminalOffReason(), nil
 	}
@@ -350,6 +366,9 @@ func (h overviewLayoutHost) RestoreSpec(layout *state.PaneLayoutJSON) tea.Cmd {
 	return h.m.restoreSpecPreviewLayout(layout)
 }
 func (h overviewLayoutHost) AdoptSpecShell(spec uirequest.LayoutPane) (string, string, tea.Cmd) {
+	if h.remoteSelected() {
+		return uirequest.ItemVerdictDeclined, remoteNewShellReason, nil
+	}
 	ws, ok := h.m.SelectedWorkspace()
 	if !ok {
 		return uirequest.ItemVerdictDeclined, layoutapply.SpecOriginRequired, nil
@@ -384,6 +403,124 @@ func (h overviewLayoutHost) LandedLeaf(kind panelayout.Kind) int {
 }
 func (h overviewLayoutHost) Ack(req uirequest.Request, status uirequest.Status, reason string, items []uirequest.AckItem, layout json.RawMessage) {
 	h.m.ackLayout(req, status, reason, items, layout)
+}
+
+func (h overviewLayoutHost) remoteSelected() bool {
+	ws, ok := h.m.SelectedWorkspace()
+	return ok && ws.Remote()
+}
+
+// resolveRemoteLayoutTargets classifies a descriptor against the host Source
+// rather than this machine's filesystem. A failed resolve is a refusal, not a
+// silent skip: apply is all-or-nothing.
+func (m *Model) resolveRemoteLayoutTargets(kind panelayout.Kind, spec uirequest.LayoutPane) ([]uirequest.Target, string) {
+	if kind == panelayout.Resource {
+		return layoutapply.ResolveTargets(kind, spec, "", m.previewResourceMatchers())
+	}
+	if len(spec.Targets) == 0 {
+		if kind == panelayout.Diff {
+			spec.Targets = []string{workspacediff.IdentityWorkingTree}
+		} else {
+			return nil, "a " + kind.Name() + " pane needs at least one target"
+		}
+	}
+	want, ok := layoutapply.WireKind(kind)
+	if !ok {
+		return nil, "unsupported pane kind " + kind.Name()
+	}
+	pendingKind, ok := remoteLayoutPendingKind(kind)
+	if !ok {
+		return nil, "unsupported pane kind " + kind.Name()
+	}
+	ctx, ok := m.previewDeckContext()
+	if !ok {
+		return nil, "that host is not available for content"
+	}
+	src := m.previewDeckConfig(ctx).Source
+	targets := make([]uirequest.Target, 0, len(spec.Targets))
+	for _, raw := range spec.Targets {
+		raw = strings.TrimSpace(raw)
+		line := 0
+		if kind == panelayout.Document {
+			raw, line = splitLayoutFileLine(raw)
+		}
+		if kind == panelayout.Note {
+			raw = noteLayoutTarget(raw)
+		}
+		if kind == panelayout.Diff && raw == "" {
+			raw = workspacediff.IdentityWorkingTree
+		}
+		ref, err := contentpanes.ResolveDocument(src, ctx.Source, contentlink.Pending{Kind: pendingKind, Raw: raw})
+		if err != nil {
+			return nil, fmt.Sprintf("target %q: %v", raw, err)
+		}
+		if ref.Value == "" {
+			host := ctx.Source.HostID
+			if host == "" {
+				host = "that host"
+			}
+			return nil, fmt.Sprintf("target %q: not found on %s", raw, host)
+		}
+		tgt := targetFromResolvedRef(ref, line)
+		if tgt.Kind != want {
+			got := string(tgt.Kind)
+			if mapped, ok := panelayout.KindByName(got); ok {
+				got = mapped.Name()
+			}
+			return nil, fmt.Sprintf("target %q resolves to a %s pane, want %s", raw, got, kind.Name())
+		}
+		targets = append(targets, tgt)
+	}
+	return targets, ""
+}
+
+func remoteLayoutPendingKind(kind panelayout.Kind) (contentlink.Kind, bool) {
+	switch kind {
+	case panelayout.Document:
+		return contentlink.KindFile, true
+	case panelayout.Issue:
+		return contentlink.KindIssue, true
+	case panelayout.Note:
+		return contentlink.KindInternal, true
+	case panelayout.Diff:
+		return contentlink.KindDiff, true
+	default:
+		return "", false
+	}
+}
+
+func targetFromResolvedRef(ref contentlink.Ref, line int) uirequest.Target {
+	switch ref.Kind {
+	case contentlink.KindFile:
+		return uirequest.Target{Kind: uirequest.TargetKindFile, Value: ref.Value, Line: line}
+	case contentlink.KindIssue:
+		return uirequest.Target{Kind: uirequest.TargetKindIssue, Value: ref.Value}
+	case contentlink.KindInternal:
+		if ref.Namespace == "note" {
+			return uirequest.Target{Kind: uirequest.TargetKindNote, Value: ref.Value}
+		}
+	case contentlink.KindDiff:
+		return uirequest.Target{Kind: uirequest.TargetKindDiff, Value: ref.Value}
+	case contentlink.KindResource:
+		return uirequest.Target{Kind: uirequest.TargetKindResource, Value: ref.Value, Provider: ref.Provider, Matcher: ref.Matcher}
+	}
+	return uirequest.Target{}
+}
+
+func splitLayoutFileLine(raw string) (string, int) {
+	if colonIdx := strings.LastIndex(raw, ":"); colonIdx > 0 && colonIdx < len(raw)-1 {
+		if n, err := strconv.Atoi(raw[colonIdx+1:]); err == nil && n > 0 {
+			return raw[:colonIdx], n
+		}
+	}
+	return raw, 0
+}
+
+func noteLayoutTarget(raw string) string {
+	if parsed, err := contentlink.ParseInternalURI(raw); err == nil && parsed.Ref.Namespace == "note" && parsed.Ref.Value != "" {
+		return parsed.Ref.Value
+	}
+	return raw
 }
 
 func (m *Model) restoreSpecPreviewLayout(layout *state.PaneLayoutJSON) tea.Cmd {

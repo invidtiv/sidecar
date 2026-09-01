@@ -496,13 +496,15 @@ type Request struct {
 
 // AckResult is the machine contract for `sidecar request ack --json`.
 type AckResult struct {
-	ID      string          `json:"id"`
-	Action  Action          `json:"action"`
-	Status  Status          `json:"status"`
-	Reason  string          `json:"reason,omitempty"`
-	Surface string          `json:"surface,omitempty"`
-	Pane    int             `json:"pane,omitempty"`
-	Layout  json.RawMessage `json:"layout,omitempty"`
+	ID           string          `json:"id"`
+	Action       Action          `json:"action"`
+	Status       Status          `json:"status"`
+	Reason       string          `json:"reason,omitempty"`
+	Surface      string          `json:"surface,omitempty"`
+	Pane         int             `json:"pane,omitempty"`
+	ItemsVersion int             `json:"itemsVersion,omitempty"`
+	Items        []AckItem       `json:"items,omitempty"`
+	Layout       json.RawMessage `json:"layout,omitempty"`
 }
 
 // ValidRemoteResult reports whether a decoded object is this verb's answer.

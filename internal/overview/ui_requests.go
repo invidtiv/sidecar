@@ -259,10 +259,10 @@ func (m *Model) ackOpen(req uirequest.Request, status uirequest.Status, reason, 
 		})
 		return
 	}
-	m.ackRemote(req, status, reason, surface, pane, nil)
+	m.ackRemote(req, status, reason, surface, pane, nil, nil)
 }
 
-func (m *Model) ackRemote(req uirequest.Request, status uirequest.Status, reason, surface string, pane int, layout json.RawMessage) {
+func (m *Model) ackRemote(req uirequest.Request, status uirequest.Status, reason, surface string, pane int, layout json.RawMessage, items []uirequest.AckItem) {
 	args := []string{"request", "ack", "--id", req.ID, "--action", string(req.Action), "--status", string(status), "--json"}
 	if reason != "" {
 		args = append(args, "--reason", reason)
@@ -275,6 +275,11 @@ func (m *Model) ackRemote(req uirequest.Request, status uirequest.Status, reason
 	}
 	if len(layout) > 0 {
 		args = append(args, "--layout", string(layout))
+	}
+	if len(items) > 0 {
+		if raw, err := json.Marshal(items); err == nil {
+			args = append(args, "--items", string(raw))
+		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), remoteQuickTimeout)
 	defer cancel()

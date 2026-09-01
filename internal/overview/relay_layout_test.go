@@ -15,16 +15,60 @@ import (
 )
 
 func relayedLayoutGetAnnouncement(session string) hostproto.UIRequest {
-	payload, err := json.Marshal(uirequest.LayoutPayload{Mode: uirequest.LayoutModeGet})
+	return relayedLayoutAnnouncement("req-relay-layout-get", session, uirequest.LayoutPayload{Mode: uirequest.LayoutModeGet})
+}
+
+func relayedLayoutAnnouncement(id, session string, payload uirequest.LayoutPayload) hostproto.UIRequest {
+	raw, err := json.Marshal(payload)
 	if err != nil {
 		panic(err)
 	}
 	return hostproto.UIRequest{
-		ID: "req-relay-layout-get", Action: hostproto.UIRequestActionLayout, TTLMs: 5000,
+		ID: id, Action: hostproto.UIRequestActionLayout, TTLMs: 5000,
 		CreatedAt: time.Now().UTC(),
 		Origin:    hostproto.UIRequestOrigin{TmuxSession: session, HostID: "mac-mini"},
-		Payload:   payload,
+		Payload:   raw,
 	}
+}
+
+func relayedLayoutApplyPanes(session string, panes ...uirequest.LayoutPane) hostproto.UIRequest {
+	return relayedLayoutAnnouncement("req-relay-layout-apply", session, uirequest.LayoutPayload{
+		Mode: uirequest.LayoutModeApply, Panes: panes,
+	})
+}
+
+func relayedLayoutApplySpec(session string, columns []uirequest.LayoutSpecColumn) hostproto.UIRequest {
+	raw, err := json.Marshal(columns)
+	if err != nil {
+		panic(err)
+	}
+	return relayedLayoutAnnouncement("req-relay-layout-spec", session, uirequest.LayoutPayload{
+		Mode: uirequest.LayoutModeApply, Columns: raw,
+	})
+}
+
+func relayedLayoutMove(session string, move uirequest.LayoutMove) hostproto.UIRequest {
+	return relayedLayoutAnnouncement("req-relay-layout-move", session, uirequest.LayoutPayload{
+		Mode: uirequest.LayoutModeMove, Move: &move,
+	})
+}
+
+func refuseLocalTerminalSplit(t *testing.T) {
+	t.Helper()
+	original := ensurePreviewTerminalSession
+	ensurePreviewTerminalSession = func(session, workDir string) (string, error) {
+		t.Errorf("created a local tmux session %q in %q for a remote row", session, workDir)
+		return "", nil
+	}
+	t.Cleanup(func() { ensurePreviewTerminalSession = original })
+}
+
+func previewLayoutSnapshot(m *Model) string {
+	raw, err := json.Marshal(m.sessionsPaneLayoutJSON())
+	if err != nil {
+		return "<marshal error>"
+	}
+	return string(raw)
 }
 
 func layoutJSONFromAckArgs(t *testing.T, args []string) json.RawMessage {

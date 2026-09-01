@@ -212,6 +212,34 @@ func TestRequestAckWritesLayout(t *testing.T) {
 	}
 }
 
+func TestRequestAckWritesItems(t *testing.T) {
+	_, stateDir := setupIsolatedCLI(t)
+	req := uirequest.Request{ID: "req-ack-items", Action: uirequest.ActionLayout, CreatedAt: time.Now().UTC(), TTLMs: 5000}
+	if _, err := uirequest.WriteRequest(stateDir, req); err != nil {
+		t.Fatal(err)
+	}
+	items := `[{"index":0,"verdict":"opened","cell":"2.1","surface":"a"}]`
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"request", "ack", "--id", req.ID, "--action", "layout", "--status", "opened", "--items", items, "--json"}, &out, &errOut)
+	if !handled || code != 0 {
+		t.Fatalf("request ack = handled %v code %d stderr %q", handled, code, errOut.String())
+	}
+	var result uirequest.AckResult
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("json: %v (%s)", err, out.String())
+	}
+	if result.ItemsVersion != 1 || len(result.Items) != 1 || result.Items[0].Verdict != uirequest.ItemVerdictOpened || result.Items[0].Cell != "2.1" {
+		t.Fatalf("result items = %+v", result.Items)
+	}
+	acks, err := uirequest.ReadAcks(stateDir, req.ID, req.Action)
+	if err != nil || len(acks) != 1 {
+		t.Fatalf("acks = %+v err=%v", acks, err)
+	}
+	if acks[0].ItemsVersion != 1 || len(acks[0].Items) != 1 || acks[0].Items[0].Cell != "2.1" {
+		t.Fatalf("ack items = %+v", acks[0].Items)
+	}
+}
+
 func jsonEqual(t *testing.T, a, b json.RawMessage) bool {
 	t.Helper()
 	var left, right any
