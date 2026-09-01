@@ -408,12 +408,13 @@ func (m *Model) projectSwitcherInputSection() modal.Section {
 // projectSwitcherCountSection renders the project count.
 func (m *Model) projectSwitcherCountSection() modal.Section {
 	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
-		allProjects := m.cfg.Projects.List
+		all := m.projectSwitcherDestinations("")
+		filtered := m.projectSwitcherFiltered
 		var countText string
 		if m.projectSwitcherInput.Value() != "" {
-			countText = fmt.Sprintf("%d of %d projects", len(filterProjects(allProjects, m.projectSwitcherInput.Value())), len(allProjects))
-		} else if len(allProjects) > 0 {
-			countText = fmt.Sprintf("%d projects", len(allProjects))
+			countText = fmt.Sprintf("%d of %d projects", len(filtered), len(all))
+		} else if len(all) > 0 {
+			countText = fmt.Sprintf("%d projects", len(all))
 		}
 		return modal.RenderedSection{Content: styles.Muted.Render(countText)}
 	}, nil)
@@ -428,7 +429,7 @@ func (m *Model) projectSwitcherListSection() modal.Section {
 		var b strings.Builder
 
 		// No projects configured
-		if len(allProjects) == 0 && !m.globalScopeAvailable() {
+		if len(projects) == 0 && len(allProjects) == 0 && !m.globalScopeAvailable() {
 			b.WriteString(styles.Muted.Render("No projects configured"))
 			b.WriteString("\n")
 			b.WriteString(styles.Muted.Render("Sidecar Setup walks through adding one."))
@@ -463,7 +464,8 @@ func (m *Model) projectSwitcherListSection() modal.Section {
 			destination := projects[entryIdx]
 			isCursor := entryIdx == m.projectSwitcherCursor
 			isOverview := destination.Kind == destinationOverview
-			isCurrent := (!isOverview && (destination.Path == m.ui.WorkDir || destination.Path == m.ui.ProjectRoot)) || (isOverview && m.inGlobalScope())
+			isCurrent := m.isCurrentSwitcherDestination(destination)
+			disabled := destination.DisabledReason != ""
 			itemID := projectSwitcherItemID(entryIdx)
 			isHovered := itemID == hoverID
 
@@ -475,7 +477,9 @@ func (m *Model) projectSwitcherListSection() modal.Section {
 			}
 
 			var nameStyle lipgloss.Style
-			if isCurrent {
+			if disabled {
+				nameStyle = styles.Muted
+			} else if isCurrent {
 				if isCursor || isHovered {
 					nameStyle = nameCurrentSelectedStyle
 				} else {
@@ -500,6 +504,10 @@ func (m *Model) projectSwitcherListSection() modal.Section {
 			pathDisplay := destination.Path
 			if isOverview {
 				pathDisplay = "All configured projects"
+			} else if destination.DisabledReason != "" {
+				pathDisplay = destination.DisabledReason
+			} else if destination.isRemote() {
+				pathDisplay = destination.Destination.Root
 			}
 			pathDisplay = shortenHomePath(pathDisplay)
 
@@ -826,12 +834,14 @@ func (m Model) headerGeometry() headerLayout {
 		if name := m.activeDestinationName(); name != "" {
 			selectorLabel = name
 		}
-		if wt := m.currentWorktreeInfo(); wt != nil && !wt.IsMain {
-			branch := wt.Branch
-			if branch == "" {
-				branch = "worktree"
+		if m.boundDestination.HostID == "" {
+			if wt := m.currentWorktreeInfo(); wt != nil && !wt.IsMain {
+				branch := wt.Branch
+				if branch == "" {
+					branch = "worktree"
+				}
+				selectorLabel += " [" + branch + "]"
 			}
-			selectorLabel += " [" + branch + "]"
 		}
 	}
 	renderSelector := func(label string, budget int) string {
@@ -1379,6 +1389,9 @@ func (m Model) footerHints() []footerHint {
 func (m Model) activeDestinationName() string {
 	if m.inGlobalScope() {
 		return "Overview"
+	}
+	if m.boundDestination.HostID != "" {
+		return BoundDestinationNavbarLabel(m.boundDestination)
 	}
 	return m.intro.RepoName
 }

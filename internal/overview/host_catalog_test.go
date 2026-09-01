@@ -88,6 +88,47 @@ func TestHostCatalogOnlineHost(t *testing.T) {
 	}
 }
 
+func TestHostCatalogUnreachableKeepsLastKnownProjects(t *testing.T) {
+	m := hostModel(t, "aerie", hosts.Health{State: hosts.StateOnline}, catalogSnapshot())
+	attachCatalogRegistry(t, m)
+	m.hostRegistered = map[string]bool{"aerie": true}
+	m.hostLastKnown = map[string][]workspaceinventory.ProjectResult{
+		"aerie": copyProjectResults(m.hostResults["aerie"]),
+	}
+
+	m.handleHostUpdate(hostUpdateMsg{Update: hosts.Update{
+		HostID: "aerie",
+		Health: hosts.Health{State: hosts.StateUnreachable, Detail: "ssh failed"},
+	}})
+
+	if _, live := m.hostResults["aerie"]; live {
+		t.Fatal("Sessions must still drop hostResults when !Shows()")
+	}
+	if _, live := m.hostProjects["aerie"]; live {
+		t.Fatal("Sessions must still drop hostProjects when !Shows()")
+	}
+
+	got := m.HostCatalog()
+	if len(got) != 1 || got[0].Health.State != hosts.StateUnreachable {
+		t.Fatalf("catalog = %+v, want unreachable host", got)
+	}
+	if len(got[0].Projects) != 1 || got[0].Projects[0].Name != "Sidecar" {
+		t.Fatalf("last-known projects dropped: %+v", got[0].Projects)
+	}
+	if got[0].Projects[0].Key != "/home/me/sidecar" {
+		t.Errorf("ProjectKey = %q, want unscoped", got[0].Projects[0].Key)
+	}
+}
+
+func TestHostCatalogNeverConnectedHasNoProjects(t *testing.T) {
+	m := hostModel(t, "aerie", hosts.Health{State: hosts.StateConnecting}, nil)
+	attachCatalogRegistry(t, m)
+	got := m.HostCatalog()
+	if len(got) != 1 || len(got[0].Projects) != 0 {
+		t.Fatalf("never-connected catalog = %+v, want host with no projects", got)
+	}
+}
+
 func TestHostCatalogDisconnectedAndStaleStillYieldRows(t *testing.T) {
 	t.Run("stale", func(t *testing.T) {
 		m := hostModel(t, "aerie", hosts.Health{State: hosts.StateStale, Detail: "quiet"}, catalogSnapshot())

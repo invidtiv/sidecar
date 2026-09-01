@@ -247,7 +247,27 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.configOpen() {
 			m.config.SetRemoteHosts(m.configRemoteHosts())
 		}
-		return m, cmd
+		var cmds []tea.Cmd
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		if m.showProjectSwitcher {
+			m.refreshOpenProjectSwitcher()
+		}
+		if m.boundDestination.HostID != "" && m.registry != nil {
+			for i, p := range m.registry.Plugins() {
+				if p.ID() != workspacePluginID {
+					continue
+				}
+				updated, extra := p.Update(plugin.HostInventoryMsg{})
+				m.registry.Replace(i, updated)
+				if extra != nil {
+					cmds = append(cmds, extra)
+				}
+				break
+			}
+		}
+		return m, tea.Batch(cmds...)
 	}
 	var cmds []tea.Cmd
 	// A terminal-default cell belongs to the terminal hosting Sidecar, not to

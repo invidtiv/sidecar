@@ -294,7 +294,7 @@ func resolveGitRoot(dir string) (string, error) {
 }
 
 func (p *Plugin) inNoRepoMode() bool {
-	return p.ctx != nil && !p.hasRepo
+	return p.ctx != nil && p.ctx.HostID == "" && !p.hasRepo
 }
 
 func (p *Plugin) activateRepo(root string) {
@@ -327,6 +327,9 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 
 	// Set up context and repo
 	p.ctx = ctx
+	if ctx != nil && ctx.HostID != "" {
+		return nil
+	}
 	p.tree = NewFileTree(ctx.WorkDir)
 
 	// Load user preferences from state
@@ -349,6 +352,9 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 
 // Start begins plugin operation.
 func (p *Plugin) Start() tea.Cmd {
+	if p.ctx != nil && p.ctx.HostID != "" {
+		return nil
+	}
 	// Repository discovery invokes Git, so it must remain inside the command.
 	// Existing repositories are never mutated merely by opening Sidecar.
 	return p.detectRepo()
@@ -1079,7 +1085,9 @@ func (p *Plugin) View(width, height int) string {
 	p.height = height
 
 	var content string
-	if p.inNoRepoMode() {
+	if p.ctx != nil && p.ctx.HostID != "" {
+		content = styles.Title.Render(pluginName) + "\n\n" + styles.Muted.Render(plugin.FormatRemoteUnavailable(pluginName, p.ctx.HostID))
+	} else if p.inNoRepoMode() {
 		content = p.renderNoRepoView()
 	} else {
 		switch p.viewMode {
@@ -1135,6 +1143,9 @@ func (p *Plugin) SetFocused(f bool) { p.focused = f }
 
 // Commands returns the available commands.
 func (p *Plugin) Commands() []plugin.Command {
+	if p.ctx != nil && p.ctx.HostID != "" {
+		return nil
+	}
 	commands := []plugin.Command{
 		// git-no-repo context
 		{ID: "init-repo", Name: "Init", Description: "Initialize a git repository on main", Category: plugin.CategoryGit, Context: "git-no-repo", Priority: 1},

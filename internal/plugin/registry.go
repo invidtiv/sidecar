@@ -154,18 +154,32 @@ func (r *Registry) Unavailable() map[string]string {
 
 // Reinit stops all plugins, updates the context with a new WorkDir and ProjectRoot,
 // and reinitializes all plugins. Returns the start commands for all plugins.
+// Local callers pass empty host identity; HostID/HostIncarnation/ProjectKey are
+// cleared in the same lock so a remote bind cannot race Context() mutation.
 func (r *Registry) Reinit(newWorkDir, newProjectRoot string) []tea.Cmd {
+	return r.ReinitHost(newWorkDir, newProjectRoot, "", 0, "")
+}
+
+// ReinitHost is Reinit with host identity set in the same lock as WorkDir.
+func (r *Registry) ReinitHost(newWorkDir, newProjectRoot, hostID string, hostIncarnation uint64, projectKey string) []tea.Cmd {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	if r.ctx == nil {
+		return nil
+	}
 
 	// Stop all plugins in reverse order
 	for i := len(r.plugins) - 1; i >= 0; i-- {
 		r.safeStop(r.plugins[i])
 	}
 
-	// Update context with new working directory and project root
+	// Update context with new working directory, project root, and host bind.
 	r.ctx.WorkDir = newWorkDir
 	r.ctx.ProjectRoot = newProjectRoot
+	r.ctx.HostID = hostID
+	r.ctx.HostIncarnation = hostIncarnation
+	r.ctx.ProjectKey = projectKey
 
 	// Increment epoch to invalidate all pending async messages from previous project
 	r.ctx.Epoch++

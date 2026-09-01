@@ -41,12 +41,29 @@ func (m *Model) HostCatalog() []HostCatalogEntry {
 	}
 	out := make([]HostCatalogEntry, 0, len(order))
 	for _, id := range order {
+		results := m.hostResults[id]
+		projects := m.hostProjects[id]
+		if len(results) == 0 && len(projects) == 0 {
+			results = m.hostLastKnown[id]
+		}
 		out = append(out, HostCatalogEntry{
 			ID:          id,
 			Health:      m.hostHealth[id],
 			Incarnation: hostIncarnation(m, id),
-			Projects:    copyHostProjects(m.hostResults[id], m.hostProjects[id]),
+			Projects:    copyHostProjects(results, projects),
 		})
+	}
+	return out
+}
+
+func copyProjectResults(results []workspaceinventory.ProjectResult) []workspaceinventory.ProjectResult {
+	if len(results) == 0 {
+		return nil
+	}
+	out := make([]workspaceinventory.ProjectResult, len(results))
+	for i, result := range results {
+		result.Workspaces = append([]workspaceinventory.Workspace(nil), result.Workspaces...)
+		out[i] = result
 	}
 	return out
 }

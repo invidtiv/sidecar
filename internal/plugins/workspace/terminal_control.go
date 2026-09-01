@@ -198,6 +198,8 @@ func (p *Plugin) resetTerminalModels() {
 	}
 	p.primaryTermPane().Terminal = p.newWorkspaceTerminal(workspaceTerminalPrimary)
 	p.requireShellTermPane().Terminal = p.newWorkspaceTerminal(workspaceTerminalPanel)
+	p.applyTerminalControl(p.primaryTermPane().Terminal)
+	p.applyTerminalControl(p.requireShellTermPane().Terminal)
 	p.primaryTermPane().Target = workspaceTerminalTarget{}
 	p.requireShellTermPane().Target = workspaceTerminalTarget{}
 }
@@ -437,6 +439,11 @@ func (p *Plugin) reconcileTerminalModel(role workspaceTerminalRole, desired work
 		current.Pane == desired.Pane && current.Source == desired.Source && current.SourceID == desired.SourceID
 	if !sameTarget {
 		model.Close()
+		p.applyTerminalControl(model)
+		if p.remoteBound() && !p.remoteControlReady() {
+			p.setTerminalTarget(role, workspaceTerminalTarget{})
+			return nil
+		}
 		model.Width, model.Height = desired.Width, desired.Height
 		p.setTerminalTarget(role, desired)
 		cmd := model.Open(tty.Target{Session: desired.Session, Pane: desired.Pane})

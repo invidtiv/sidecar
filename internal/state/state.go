@@ -44,6 +44,11 @@ type State struct {
 	// Worktree state: maps main repo path -> last active worktree path
 	LastWorktreePath map[string]string `json:"lastWorktreePath,omitempty"`
 
+	// LastBoundLocation is the last host-qualified destination this TUI bound.
+	// It is never a remote filesystem path: restoring LastWorktreePath as a
+	// local checkout would follow a remote Root that happens to exist here.
+	LastBoundLocation *BoundLocation `json:"lastBoundLocation,omitempty"`
+
 	// Last selected global tab ("agents", "workspaces", or "tasks").
 	LastGlobalTab string `json:"lastGlobalTab,omitempty"`
 
@@ -810,6 +815,50 @@ func SetActivePlugin(workdir, pluginID string) error {
 		current.ActivePlugin = make(map[string]string)
 	}
 	current.ActivePlugin[workdir] = pluginID
+	mu.Unlock()
+	return Save()
+}
+
+// BoundLocation is a host-qualified last location. Empty HostID is unused;
+// local last-worktree memory stays on LastWorktreePath.
+type BoundLocation struct {
+	HostID      string `json:"hostId,omitempty"`
+	ProjectKey  string `json:"projectKey,omitempty"`
+	WorktreeKey string `json:"worktreeKey,omitempty"`
+}
+
+// GetLastBoundLocation returns the last host-qualified destination, or false
+// when none is stored.
+func GetLastBoundLocation() (BoundLocation, bool) {
+	mu.RLock()
+	defer mu.RUnlock()
+	if current == nil || current.LastBoundLocation == nil {
+		return BoundLocation{}, false
+	}
+	return *current.LastBoundLocation, true
+}
+
+// SetLastBoundLocation persists a host-qualified destination. It never writes
+// a remote path into LastWorktreePath.
+func SetLastBoundLocation(loc BoundLocation) error {
+	mu.Lock()
+	if current == nil {
+		current = &State{}
+	}
+	copied := loc
+	current.LastBoundLocation = &copied
+	mu.Unlock()
+	return Save()
+}
+
+// ClearLastBoundLocation drops the stored host-qualified destination.
+func ClearLastBoundLocation() error {
+	mu.Lock()
+	if current == nil {
+		mu.Unlock()
+		return nil
+	}
+	current.LastBoundLocation = nil
 	mu.Unlock()
 	return Save()
 }

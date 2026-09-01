@@ -98,6 +98,7 @@ func (m *Model) startHosts() tea.Cmd {
 			m.hostResults = nil
 			m.hostHealth = nil
 			m.hostProjects = nil
+			m.hostLastKnown = nil
 		}
 		m.hostRegistered = make(map[string]bool)
 		m.hostIncarnations = make(map[string]uint64)
@@ -112,6 +113,7 @@ func (m *Model) startHosts() tea.Cmd {
 		m.hostResults = make(map[string][]workspaceinventory.ProjectResult)
 		m.hostHealth = make(map[string]hosts.Health)
 		m.hostProjects = make(map[string][]Project)
+		m.hostLastKnown = make(map[string][]workspaceinventory.ProjectResult)
 	}
 	m.hostRegistered = make(map[string]bool, len(registered)+len(disabled))
 	for _, host := range registered {
@@ -149,6 +151,7 @@ func (m *Model) startHosts() tea.Cmd {
 			delete(m.hostHealth, id)
 			delete(m.hostResults, id)
 			delete(m.hostProjects, id)
+			delete(m.hostLastKnown, id)
 		}
 	}
 	m.syncBoard()
@@ -247,10 +250,15 @@ func (m *Model) handleHostUpdate(msg hostUpdateMsg) tea.Cmd {
 			})
 		}
 		m.hostProjects[update.HostID] = projects
+		if m.hostLastKnown == nil {
+			m.hostLastKnown = make(map[string][]workspaceinventory.ProjectResult)
+		}
+		m.hostLastKnown[update.HostID] = copyProjectResults(results)
 	}
 	if !update.Health.State.Shows() {
 		// A host that cannot show rows must not leave its last ones on screen
-		// looking current. Its health row says what happened instead.
+		// looking current. Its health row says what happened instead. Last-known
+		// is kept for the catalog/switcher so `@` can still list them disabled.
 		delete(m.hostResults, update.HostID)
 		delete(m.hostProjects, update.HostID)
 	}
@@ -380,6 +388,13 @@ func firstLine(s string) string {
 		return strings.TrimSpace(s[:index])
 	}
 	return s
+}
+
+// HostControlSpawner is the control-mode proxy Sessions already uses for a
+// remote row. The project workspace reuses it rather than forking a second
+// ssh/tmux channel.
+func (m *Model) HostControlSpawner(hostID string) tty.ControlSpawner {
+	return m.hostControlSpawner(hostID)
 }
 
 // hostControlSpawner builds the channel-1 spawner for one host: the ssh

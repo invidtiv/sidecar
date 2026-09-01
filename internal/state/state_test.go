@@ -829,6 +829,48 @@ func TestSetLastWorktreePath(t *testing.T) {
 	}
 }
 
+func TestLastBoundLocation_DoesNotTouchLastWorktreePath(t *testing.T) {
+	tmpDir := t.TempDir()
+	originalPath := path
+	originalCurrent := current
+	defer func() {
+		path = originalPath
+		current = originalCurrent
+	}()
+
+	path = filepath.Join(tmpDir, "state.json")
+	current = &State{}
+
+	loc := BoundLocation{HostID: "aerie", ProjectKey: "/home/me/sidecar", WorktreeKey: "/home/me/sidecar-feature"}
+	if err := SetLastBoundLocation(loc); err != nil {
+		t.Fatalf("SetLastBoundLocation() failed: %v", err)
+	}
+	got, ok := GetLastBoundLocation()
+	if !ok || got != loc {
+		t.Fatalf("GetLastBoundLocation() = %+v ok=%v, want %+v", got, ok, loc)
+	}
+	if len(current.LastWorktreePath) != 0 {
+		t.Errorf("LastWorktreePath = %v, want empty", current.LastWorktreePath)
+	}
+
+	data, _ := os.ReadFile(path)
+	var loaded State
+	_ = json.Unmarshal(data, &loaded)
+	if loaded.LastBoundLocation == nil || *loaded.LastBoundLocation != loc {
+		t.Errorf("persisted LastBoundLocation = %+v", loaded.LastBoundLocation)
+	}
+	if strings.Contains(string(data), "/home/me/sidecar") && loaded.LastWorktreePath["/home/me/sidecar"] != "" {
+		t.Error("remote path leaked into LastWorktreePath")
+	}
+
+	if err := ClearLastBoundLocation(); err != nil {
+		t.Fatalf("ClearLastBoundLocation() failed: %v", err)
+	}
+	if _, ok := GetLastBoundLocation(); ok {
+		t.Fatal("GetLastBoundLocation() ok after clear")
+	}
+}
+
 func TestGetLastGlobalTab_Default(t *testing.T) {
 	originalCurrent := current
 	defer func() { current = originalCurrent }()

@@ -531,6 +531,9 @@ type shellCreateOpts struct {
 // command reports the outcome as a ShellCreatedMsg; the update handler owns all
 // state bookkeeping (manifest, selection, polling).
 func (p *Plugin) createShell(opts shellCreateOpts) tea.Cmd {
+	if p.remoteBound() {
+		return p.refuseRemoteCreate("shell")
+	}
 	if !isTmuxInstalled() {
 		return func() tea.Msg {
 			return ShellCreatedMsg{Err: fmt.Errorf("tmux not installed: %s", getTmuxInstallInstructions())}
@@ -609,6 +612,10 @@ func (p *Plugin) resolveShellAgentType() AgentType {
 // message). The check is only consumed once it actually runs while focused, so a
 // background workspaces tab never spawns a session.
 func (p *Plugin) maybeAutoCreateShell() tea.Cmd {
+	if p.remoteBound() {
+		p.autoShellChecked = true
+		return nil
+	}
 	if p.shellStartupLoading || p.autoShellChecked || !p.focused {
 		return nil
 	}

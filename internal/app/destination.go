@@ -7,8 +7,7 @@ import "strings"
 // is two destinations; persist and compare ProjectKey only as
 // hosts.ScopedKey(HostID, ProjectKey).
 //
-// Slice 0 introduces the type and its display helpers. The project switcher
-// modal still uses projectSwitcherDestination and is not rewired here.
+// Slice 1 wires this into `@` listing, Enter bind, navbar, and toasts.
 type Destination struct {
 	HostID          string // empty = this machine
 	HostIncarnation uint64 // 0 when local
@@ -50,15 +49,13 @@ func DestinationMatches(d Destination, query string) bool {
 }
 
 // BoundDestinationNavbarLabel is the project-selector text for a bound
-// destination, including the host. Unwired: renderHeader still uses
-// intro.RepoName and currentWorktreeInfo.
+// destination, including the host.
 func BoundDestinationNavbarLabel(d Destination) string {
 	return FormatDestination(d)
 }
 
 // BoundDestinationTitleProject is the {project} value a bound destination
-// would feed the terminal-title template, including the host. Unwired:
-// terminalTitle still uses intro.RepoName.
+// feeds the terminal-title template, including the host.
 func BoundDestinationTitleProject(d Destination) string {
 	if d.HostID == "" {
 		return d.ProjectName
@@ -67,8 +64,7 @@ func BoundDestinationTitleProject(d Destination) string {
 }
 
 // BoundDestinationTitleWorktree is the {worktree} value a bound destination
-// would feed the terminal-title template. Empty on the main checkout.
-// Unwired: terminalTitle still uses currentWorktreeInfo.
+// feeds the terminal-title template. Empty on the main checkout.
 func BoundDestinationTitleWorktree(d Destination) string {
 	if d.WorktreeKey == "" {
 		return ""

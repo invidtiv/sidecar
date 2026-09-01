@@ -130,7 +130,7 @@ func TestBoundDestinationNavbarAndTitleHelpers(t *testing.T) {
 }
 
 // Local `@` with no hosts still paints Overview (when available) plus
-// config.projects.list only. Remote rows are a later slice.
+// config.projects.list only.
 func TestProjectSwitcherDestinationsWithoutHosts(t *testing.T) {
 	cfg := config.Default()
 	cfg.Features.Flags[features.CrossProjectOverview.Name] = true
@@ -161,6 +161,37 @@ func TestProjectSwitcherDestinationsWithoutHosts(t *testing.T) {
 	for _, d := range destinations {
 		if d.Path != "" && d.Path != "/tmp/one" && d.Path != "/tmp/two" {
 			t.Fatalf("unexpected path in local-only listing: %#v", d)
+		}
+		if d.isRemote() {
+			t.Fatalf("local-only listing included a remote row: %#v", d)
+		}
+	}
+}
+
+func TestProjectSwitcherDestinationsOverviewNil(t *testing.T) {
+	cfg := config.Default()
+	cfg.Features.Flags[features.CrossProjectOverview.Name] = false
+	features.Init(cfg)
+	t.Cleanup(func() { features.Init(config.Default()) })
+	cfg.Projects.List = []config.ProjectConfig{
+		{Name: "one", Path: "/tmp/one"},
+		{Name: "two", Path: "/tmp/two"},
+	}
+
+	m := New(plugin.NewRegistry(nil), keymap.NewRegistry(), cfg, "", "/tmp/one", "/tmp/one", "")
+	if m.overview != nil {
+		t.Fatal("Overview should be nil when the feature is off")
+	}
+	destinations := m.projectSwitcherDestinations("")
+	if len(destinations) != 2 {
+		t.Fatalf("destinations = %#v, want the two local projects", destinations)
+	}
+	if destinations[0].Name != "one" || destinations[1].Name != "two" {
+		t.Fatalf("destinations = %#v", destinations)
+	}
+	for _, d := range destinations {
+		if d.isRemote() {
+			t.Fatalf("overview-nil listing included a remote row: %#v", d)
 		}
 	}
 }

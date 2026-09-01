@@ -260,6 +260,10 @@ type Model struct {
 	hostCtx      context.Context
 	hostCancel   context.CancelFunc
 	hostResults  map[string][]workspaceinventory.ProjectResult
+	// hostLastKnown retains the last snapshot that actually showed, so `@`
+	// can list unreachable hosts as disabled rows. Sessions still drops
+	// hostResults when !Shows() and paints a health row instead.
+	hostLastKnown map[string][]workspaceinventory.ProjectResult
 	// hostRegistered is the set of host IDs config currently names, so a final
 	// update from a client that has just been stopped cannot resurrect a
 	// de-registered machine as a permanent error row.

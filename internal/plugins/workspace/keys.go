@@ -1071,6 +1071,9 @@ func (p *Plugin) handleCreateKeys(msg tea.KeyPressMsg) tea.Cmd {
 }
 
 func (p *Plugin) validateAndCreateWorktree() tea.Cmd {
+	if p.remoteBound() {
+		return p.refuseRemoteCreate("worktree")
+	}
 	if p.createBusyStep != "" || p.createPlan != nil {
 		return nil
 	}

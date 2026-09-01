@@ -406,6 +406,19 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	}
 	p.edit.Host = p
 	p.ctx = ctx
+	if ctx != nil && ctx.HostID != "" {
+		p.tree = nil
+		p.stateRestored = false
+		p.stopped = false
+		p.pendingAutoRefresh = false
+		p.searchScrollOff = -1
+		p.clearDragState()
+		p.quickOpen.Reset()
+		p.dirCache.Reset()
+		p.quickOpenMode = false
+		p.closeProjectSearch()
+		return nil
+	}
 	p.tree = NewFileTree(ctx.WorkDir)
 
 	// Reset state flags for reinit support (project switching)
@@ -441,6 +454,9 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 
 // Start begins plugin operation.
 func (p *Plugin) Start() tea.Cmd {
+	if p.ctx != nil && p.ctx.HostID != "" {
+		return nil
+	}
 	return tea.Batch(
 		p.refresh(),
 		p.startWatcher(),
@@ -674,7 +690,7 @@ func (p *Plugin) requestAutoRefresh() tea.Cmd {
 // swapped in when TreeBuiltMsg is handled; p.tree is never mutated in the
 // background.
 func (p *Plugin) refresh() tea.Cmd {
-	if p.tree == nil {
+	if p.tree == nil || (p.ctx != nil && p.ctx.HostID != "") {
 		return nil
 	}
 
@@ -1290,6 +1306,9 @@ func (p *Plugin) SetFocused(f bool) {
 
 // Commands returns the available commands.
 func (p *Plugin) Commands() []plugin.Command {
+	if p.ctx != nil && p.ctx.HostID != "" {
+		return nil
+	}
 	return []plugin.Command{
 		// Tree pane commands
 		{ID: "quick-open", Name: "Find", Description: "Find a file by name", Category: plugin.CategorySearch, Context: "file-browser-tree", Priority: 1},

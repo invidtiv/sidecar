@@ -253,4 +253,33 @@ func TestRegistry_Reinit(t *testing.T) {
 	if len(cmds) == 0 {
 		t.Error("Reinit should return start commands")
 	}
+	if r.ctx.HostID != "" {
+		t.Errorf("local Reinit left HostID = %q", r.ctx.HostID)
+	}
+}
+
+func TestRegistry_ReinitHostSetsIdentityInSameLock(t *testing.T) {
+	ctx := &Context{WorkDir: "/original/path", ProjectRoot: "/original/path"}
+	r := NewRegistry(ctx)
+	p := &mockPluginWithInit{mockPlugin: mockPlugin{id: "p1"}}
+	_ = r.Register(p)
+
+	cmds := r.ReinitHost("", "", "aerie", 7, "/home/me/sidecar")
+	if len(cmds) == 0 {
+		t.Error("ReinitHost should return start commands")
+	}
+	if r.ctx.WorkDir != "" || r.ctx.ProjectRoot != "" {
+		t.Errorf("remote ReinitHost WorkDir/ProjectRoot = %q %q, want empty", r.ctx.WorkDir, r.ctx.ProjectRoot)
+	}
+	if r.ctx.HostID != "aerie" || r.ctx.HostIncarnation != 7 || r.ctx.ProjectKey != "/home/me/sidecar" {
+		t.Errorf("host identity = %q inc=%d key=%q", r.ctx.HostID, r.ctx.HostIncarnation, r.ctx.ProjectKey)
+	}
+	if p.lastCtx == nil || p.lastCtx.HostID != "aerie" || p.lastCtx.WorkDir != "" {
+		t.Errorf("plugin saw WorkDir=%q HostID=%q", p.lastCtx.WorkDir, p.lastCtx.HostID)
+	}
+
+	_ = r.Reinit("/local", "/local")
+	if r.ctx.HostID != "" || r.ctx.HostIncarnation != 0 || r.ctx.ProjectKey != "" {
+		t.Errorf("local Reinit did not clear host identity: %+v", r.ctx)
+	}
 }

@@ -1119,6 +1119,10 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 
 // Start begins async operations.
 func (p *Plugin) Start() tea.Cmd {
+	if p.remoteBound() {
+		p.applyHostInventory()
+		return tea.Batch(p.reconcileTerminalModels()...)
+	}
 	// Refresh worktrees - reconnectAgents will be called after worktrees are loaded
 	return tea.Batch(
 		p.refreshWorktrees(),
