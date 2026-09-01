@@ -256,8 +256,8 @@ type Model struct {
 	worktreeSwitcherCursor       int
 	worktreeSwitcherScroll       int
 	worktreeSwitcherInput        textinput.Model
-	worktreeSwitcherFiltered     []WorktreeInfo
-	worktreeSwitcherAll          []WorktreeInfo
+	worktreeSwitcherFiltered     []worktreeSwitcherRow
+	worktreeSwitcherAll          []worktreeSwitcherRow
 	worktreeSwitcherModal        *modal.Modal
 	worktreeSwitcherModalWidth   int
 	worktreeSwitcherMouseHandler *mouse.Handler
@@ -268,6 +268,10 @@ type Model struct {
 	// Worktree info cache (avoids git subprocess forks on every View render)
 	cachedWorktreeInfo      *WorktreeInfo
 	cachedWorktreeInventory []WorktreeInfo
+	// localWorktreeCache is last-captured local inventory keyed by normalized
+	// main path and by project name. W while bound remotely reads this instead
+	// of spawning git worktree list.
+	localWorktreeCache map[string][]WorktreeInfo
 
 	// Open In modal
 	showOpenIn         bool
@@ -1198,6 +1202,11 @@ func (m *Model) bindRemoteDestination(dest Destination) tea.Cmd {
 	if dest.HostID == "" {
 		return nil
 	}
+	if dest.WorktreeKey == "" {
+		dest = m.applyLastRemoteWorktree(dest)
+	} else {
+		_ = state.SetLastRemoteWorktree(dest.HostID, dest.ProjectKey, dest.WorktreeKey)
+	}
 	m.leaveOverview(false)
 
 	if m.ui != nil && m.ui.WorkDir != "" {
@@ -1255,6 +1264,47 @@ func (m *Model) bindRemoteDestination(dest Destination) tea.Cmd {
 func (m *Model) clearBoundDestination() {
 	m.boundDestination = Destination{}
 	_ = state.ClearLastBoundLocation()
+}
+
+func (m *Model) applyLastRemoteWorktree(dest Destination) Destination {
+	saved := state.GetLastRemoteWorktree(dest.HostID, dest.ProjectKey)
+	if saved == "" {
+		return dest
+	}
+	name, ok := m.catalogLinkedWorktreeName(dest.HostID, dest.ProjectKey, saved)
+	if !ok {
+		return dest
+	}
+	dest.WorktreeKey = saved
+	dest.WorktreeName = name
+	return dest
+}
+
+func (m *Model) catalogLinkedWorktreeName(hostID, projectKey, worktreeKey string) (string, bool) {
+	for _, entry := range m.currentHostCatalog() {
+		if entry.ID != hostID {
+			continue
+		}
+		for _, project := range entry.Projects {
+			if project.Key != projectKey {
+				continue
+			}
+			for _, ws := range project.Workspaces {
+				if ws.Kind != workspaceinventory.KindWorktree {
+					continue
+				}
+				key := unscopedWorktreeKey(ws)
+				if key != worktreeKey {
+					continue
+				}
+				if ws.IsMain || key == project.Key || (project.Root != "" && key == project.Root) {
+					return "", false
+				}
+				return catalogWorktreeDisplayName(ws), true
+			}
+		}
+	}
+	return "", false
 }
 
 func (m *Model) installPluginHostSeams() {
@@ -1980,14 +2030,7 @@ func (m *Model) runHostCommand(id string) (tea.Cmd, bool) {
 		m.activeContext = "project-switcher"
 		return nil, true
 	case "switch-worktree":
-		worktrees := m.worktreeInventory()
-		if len(worktrees) > 1 {
-			m.showWorktreeSwitcher = true
-			m.initWorktreeSwitcher()
-			m.activeContext = "worktree-switcher"
-			return nil, true
-		}
-		return ShowFlash("No worktrees found"), true
+		return m.openWorktreeSwitcher(), true
 	case "switch-theme":
 		m.showThemeSwitcher = true
 		m.initThemeSwitcher()

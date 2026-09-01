@@ -40,12 +40,18 @@ func DestinationMatches(d Destination, query string) bool {
 		return true
 	}
 	q := strings.ToLower(query)
-	for _, field := range []string{d.HostID, d.ProjectName, d.Root, d.WorktreeName} {
+	for _, field := range []string{d.HostID, d.ProjectName, d.Root, d.WorktreeName, d.WorktreeKey} {
 		if strings.Contains(strings.ToLower(field), q) {
 			return true
 		}
 	}
 	return false
+}
+
+// projectNamesMatch is the W pairing rule (decision 10): names join across
+// machines, keys never do. Trimmed, case-insensitive.
+func projectNamesMatch(a, b string) bool {
+	return strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(b))
 }
 
 // BoundDestinationNavbarLabel is the project-selector text for a bound

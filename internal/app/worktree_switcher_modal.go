@@ -9,10 +9,12 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/marcus/sidecar/internal/hosts"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/ui"
+	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
 const (
@@ -21,6 +23,28 @@ const (
 )
 
 var listWorktreesForSwitcher = GetWorktrees
+
+const localWorktreeNameCachePrefix = "name\x1f"
+
+// worktreeSwitcherRow is one W entry: a local WorktreeInfo or a remote
+// Destination. Local display stays branch + [main]; remote display uses
+// FormatDestination.
+type worktreeSwitcherRow struct {
+	Local          WorktreeInfo
+	Destination    Destination
+	DisabledReason string
+}
+
+func (r worktreeSwitcherRow) isRemote() bool {
+	return r.Destination.HostID != ""
+}
+
+func (r worktreeSwitcherRow) identityKey() string {
+	if r.isRemote() {
+		return "host\x1f" + r.Destination.HostID + "\x1f" + r.Destination.ProjectKey + "\x1f" + r.Destination.WorktreeKey
+	}
+	return "local\x1f" + r.Local.Path
+}
 
 // worktreeSwitcherItemID returns the ID for a worktree item at the given index.
 func worktreeSwitcherItemID(idx int) string {
@@ -40,20 +64,231 @@ func (m *Model) initWorktreeSwitcher() {
 
 	// Reuse the immutable inventory already captured for the current repository.
 	// Opening the switcher must not synchronously list worktrees a second time.
-	m.worktreeSwitcherAll = m.worktreeInventory()
+	m.worktreeSwitcherAll = m.worktreeSwitcherRows()
 	m.worktreeSwitcherFiltered = m.worktreeSwitcherAll
 	m.worktreeSwitcherCursor = 0
 	m.worktreeSwitcherScroll = 0
 
-	// Set cursor to current worktree if found
-	for i, wt := range m.worktreeSwitcherFiltered {
-		normalizedPath, _ := normalizePath(wt.Path)
-		normalizedWorkDir, _ := normalizePath(m.ui.WorkDir)
-		if normalizedPath == normalizedWorkDir {
+	for i, row := range m.worktreeSwitcherFiltered {
+		if m.isCurrentWorktreeRow(row) {
 			m.worktreeSwitcherCursor = i
 			break
 		}
 	}
+}
+
+func (m *Model) openWorktreeSwitcher() tea.Cmd {
+	if !m.worktreeSwitcherHasChoices() {
+		return ShowFlash("No worktrees found")
+	}
+	m.showWorktreeSwitcher = true
+	m.initWorktreeSwitcher()
+	m.activeContext = "worktree-switcher"
+	return nil
+}
+
+func (m *Model) worktreeSwitcherHasChoices() bool {
+	var local, remote int
+	for _, row := range m.worktreeSwitcherRows() {
+		if row.isRemote() {
+			remote++
+		} else {
+			local++
+		}
+	}
+	if remote > 0 {
+		return true
+	}
+	return local > 1
+}
+
+func (m *Model) worktreeSwitcherRows() []worktreeSwitcherRow {
+	rows := m.localWorktreeSwitcherRows()
+	return append(rows, m.remoteWorktreeSwitcherRows()...)
+}
+
+func (m *Model) localWorktreeSwitcherRows() []worktreeSwitcherRow {
+	var inventory []WorktreeInfo
+	if m.boundDestination.HostID == "" {
+		inventory = m.worktreeInventory()
+	} else {
+		inventory = m.localInventoryForBoundProject()
+	}
+	if len(inventory) == 0 {
+		return nil
+	}
+	rows := make([]worktreeSwitcherRow, 0, len(inventory))
+	for _, wt := range inventory {
+		rows = append(rows, worktreeSwitcherRow{Local: wt})
+	}
+	return rows
+}
+
+func (m *Model) localInventoryForBoundProject() []WorktreeInfo {
+	if m.localWorktreeCache == nil {
+		return nil
+	}
+	name := m.boundDestination.ProjectName
+	if inv := m.localWorktreeCache[localWorktreeNameCachePrefix+strings.ToLower(strings.TrimSpace(name))]; len(inv) > 0 {
+		return append([]WorktreeInfo(nil), inv...)
+	}
+	if m.cfg == nil {
+		return nil
+	}
+	for _, p := range m.cfg.Projects.List {
+		if !projectNamesMatch(p.Name, name) {
+			continue
+		}
+		path, _ := normalizePath(p.Path)
+		if inv := m.localWorktreeCache[path]; len(inv) > 0 {
+			return append([]WorktreeInfo(nil), inv...)
+		}
+	}
+	return nil
+}
+
+func (m *Model) remoteWorktreeSwitcherRows() []worktreeSwitcherRow {
+	name := m.currentProjectNameForSwitcher()
+	if name == "" {
+		return nil
+	}
+	catalog := m.currentHostCatalog()
+	if len(catalog) == 0 {
+		return nil
+	}
+	var rows []worktreeSwitcherRow
+	for _, entry := range catalog {
+		reason := destinationDisabledReason(entry.Health)
+		for _, project := range entry.Projects {
+			if !projectNamesMatch(project.Name, name) {
+				continue
+			}
+			for _, ws := range project.Workspaces {
+				if ws.Kind != workspaceinventory.KindWorktree {
+					continue
+				}
+				key := unscopedWorktreeKey(ws)
+				if key == "" {
+					continue
+				}
+				if ws.IsMain || key == project.Key || (project.Root != "" && key == project.Root) {
+					continue
+				}
+				dest := Destination{
+					HostID:          entry.ID,
+					HostIncarnation: entry.Incarnation,
+					ProjectKey:      project.Key,
+					ProjectName:     project.Name,
+					WorktreeKey:     key,
+					WorktreeName:    catalogWorktreeDisplayName(ws),
+					Root:            project.Root,
+				}
+				rows = append(rows, worktreeSwitcherRow{
+					Destination:    dest,
+					DisabledReason: reason,
+				})
+			}
+		}
+	}
+	return rows
+}
+
+func (m *Model) currentProjectNameForSwitcher() string {
+	if m.boundDestination.HostID != "" {
+		return m.boundDestination.ProjectName
+	}
+	if m.cfg != nil && m.ui != nil {
+		workDir, _ := normalizePath(m.ui.WorkDir)
+		projectRoot, _ := normalizePath(m.ui.ProjectRoot)
+		for _, p := range m.cfg.Projects.List {
+			path, _ := normalizePath(p.Path)
+			if path != "" && (path == workDir || path == projectRoot) {
+				return p.Name
+			}
+		}
+	}
+	return m.intro.RepoName
+}
+
+func unscopedWorktreeKey(ws workspaceinventory.Workspace) string {
+	key := ws.Key
+	if key == "" {
+		key = ws.Path
+	}
+	if _, rest, ok := hosts.SplitScopedKey(key); ok {
+		return rest
+	}
+	return key
+}
+
+func catalogWorktreeDisplayName(ws workspaceinventory.Workspace) string {
+	if name := strings.TrimSpace(ws.Branch); name != "" {
+		return name
+	}
+	if name := strings.TrimSpace(ws.Name); name != "" {
+		return name
+	}
+	return filepath.Base(unscopedWorktreeKey(ws))
+}
+
+func (m *Model) isCurrentWorktreeRow(row worktreeSwitcherRow) bool {
+	if row.isRemote() {
+		return m.boundDestination.HostID == row.Destination.HostID &&
+			m.boundDestination.ProjectKey == row.Destination.ProjectKey &&
+			m.boundDestination.WorktreeKey == row.Destination.WorktreeKey
+	}
+	if m.boundDestination.HostID != "" {
+		return false
+	}
+	if m.ui == nil {
+		return false
+	}
+	normalizedPath, _ := normalizePath(row.Local.Path)
+	normalizedWorkDir, _ := normalizePath(m.ui.WorkDir)
+	return normalizedPath != "" && normalizedPath == normalizedWorkDir
+}
+
+func (m *Model) refreshOpenWorktreeSwitcher() {
+	if !m.showWorktreeSwitcher {
+		return
+	}
+	var highlighted worktreeSwitcherRow
+	if m.worktreeSwitcherCursor >= 0 && m.worktreeSwitcherCursor < len(m.worktreeSwitcherFiltered) {
+		highlighted = m.worktreeSwitcherFiltered[m.worktreeSwitcherCursor]
+	}
+	m.worktreeSwitcherAll = m.worktreeSwitcherRows()
+	m.worktreeSwitcherFiltered = filterWorktreeRows(m.worktreeSwitcherAll, m.worktreeSwitcherInput.Value())
+	m.worktreeSwitcherCursor = indexOfWorktreeRow(m.worktreeSwitcherFiltered, highlighted)
+	if m.worktreeSwitcherCursor < 0 {
+		m.worktreeSwitcherCursor = 0
+	}
+	m.worktreeSwitcherScroll = worktreeSwitcherEnsureCursorVisible(m.worktreeSwitcherCursor, m.worktreeSwitcherScroll, 8)
+	m.clearWorktreeSwitcherModal()
+}
+
+func indexOfWorktreeRow(rows []worktreeSwitcherRow, target worktreeSwitcherRow) int {
+	if target.identityKey() == "local\x1f" && !target.isRemote() && target.Local.Path == "" {
+		return 0
+	}
+	key := target.identityKey()
+	for i, row := range rows {
+		if row.identityKey() == key {
+			return i
+		}
+	}
+	return 0
+}
+
+func (m *Model) activateWorktreeSwitcherRow(row worktreeSwitcherRow) tea.Cmd {
+	if row.DisabledReason != "" {
+		return func() tea.Msg {
+			return ToastMsg{Message: row.DisabledReason, Duration: 4 * time.Second, IsError: true}
+		}
+	}
+	if row.isRemote() {
+		return m.bindRemoteDestination(row.Destination)
+	}
+	return m.switchWorktree(row.Local.Path)
 }
 
 // resetWorktreeSwitcher resets the worktree switcher modal state.
@@ -90,6 +325,28 @@ func filterWorktrees(all []WorktreeInfo, query string) []WorktreeInfo {
 		if strings.Contains(strings.ToLower(wt.Branch), q) ||
 			strings.Contains(strings.ToLower(filepath.Base(wt.Path)), q) {
 			matches = append(matches, wt)
+		}
+	}
+	return matches
+}
+
+func filterWorktreeRows(all []worktreeSwitcherRow, query string) []worktreeSwitcherRow {
+	if query == "" {
+		return all
+	}
+	q := strings.ToLower(query)
+	var matches []worktreeSwitcherRow
+	for _, row := range all {
+		if row.isRemote() {
+			if DestinationMatches(row.Destination, query) {
+				matches = append(matches, row)
+			}
+			continue
+		}
+		wt := row.Local
+		if strings.Contains(strings.ToLower(wt.Branch), q) ||
+			strings.Contains(strings.ToLower(filepath.Base(wt.Path)), q) {
+			matches = append(matches, row)
 		}
 	}
 	return matches
@@ -167,9 +424,6 @@ func (m *Model) worktreeSwitcherListSection() modal.Section {
 		nameCurrentSelectedStyle := lipgloss.NewStyle().Foreground(styles.Success).Bold(true)
 		mainBadgeStyle := lipgloss.NewStyle().Foreground(styles.Warning)
 
-		// Determine current worktree
-		normalizedWorkDir, _ := normalizePath(m.ui.WorkDir)
-
 		maxVisible := 8
 		visibleCount := len(worktrees)
 		if visibleCount > maxVisible {
@@ -183,13 +437,12 @@ func (m *Model) worktreeSwitcherListSection() modal.Section {
 
 		for i := 0; i < visibleCount; i++ {
 			entryIdx := scrollOffset + i
-			wt := worktrees[entryIdx]
+			row := worktrees[entryIdx]
 			isCursor := entryIdx == m.worktreeSwitcherCursor
 			itemID := worktreeSwitcherItemID(entryIdx)
 			isHovered := itemID == hoverID
-
-			normalizedPath, _ := normalizePath(wt.Path)
-			isCurrent := normalizedPath == normalizedWorkDir
+			isCurrent := m.isCurrentWorktreeRow(row)
+			disabled := row.DisabledReason != ""
 
 			var nameRow strings.Builder
 			// Cursor indicator
@@ -199,15 +452,20 @@ func (m *Model) worktreeSwitcherListSection() modal.Section {
 				nameRow.WriteString("  ")
 			}
 
-			// Determine display name (branch name for worktrees, "main" badge for main repo)
-			displayName := wt.Branch
-			if displayName == "" {
-				displayName = filepath.Base(wt.Path)
+			displayName := row.Local.Branch
+			isMain := row.Local.IsMain
+			if row.isRemote() {
+				displayName = FormatDestination(row.Destination)
+				isMain = false
+			} else if displayName == "" {
+				displayName = filepath.Base(row.Local.Path)
 			}
 
 			// Name styling
 			var nameStyle lipgloss.Style
-			if isCurrent {
+			if disabled {
+				nameStyle = styles.Muted
+			} else if isCurrent {
 				if isCursor || isHovered {
 					nameStyle = nameCurrentSelectedStyle
 				} else {
@@ -221,8 +479,8 @@ func (m *Model) worktreeSwitcherListSection() modal.Section {
 
 			nameRow.WriteString(nameStyle.Render(displayName))
 
-			// Main badge
-			if wt.IsMain {
+			// Main badge (local rows only)
+			if isMain {
 				nameRow.WriteString(" ")
 				nameRow.WriteString(mainBadgeStyle.Render("[main]"))
 			}
@@ -239,8 +497,16 @@ func (m *Model) worktreeSwitcherListSection() modal.Section {
 			}
 			lines = append(lines, line1)
 
-			// Show path (truncated if needed)
-			pathDisplay := wt.Path
+			pathDisplay := row.Local.Path
+			if row.isRemote() {
+				if row.DisabledReason != "" {
+					pathDisplay = row.DisabledReason
+				} else if row.Destination.WorktreeKey != "" {
+					pathDisplay = row.Destination.WorktreeKey
+				} else {
+					pathDisplay = row.Destination.Root
+				}
+			}
 			maxPathLen := rowWidth - 4
 			if maxPathLen < 4 {
 				maxPathLen = 4
@@ -396,10 +662,10 @@ func (m *Model) handleWorktreeSwitcherMouse(msg tea.MouseMsg) (tea.Model, tea.Cm
 		if _, err := fmt.Sscanf(action, worktreeSwitcherItemPrefix+"%d", &idx); err == nil {
 			worktrees := m.worktreeSwitcherFiltered
 			if idx >= 0 && idx < len(worktrees) {
-				selectedPath := worktrees[idx].Path
+				selected := worktrees[idx]
 				m.resetWorktreeSwitcher()
 				m.updateContext()
-				return m, m.switchWorktree(selectedPath)
+				return m, m.activateWorktreeSwitcherRow(selected)
 			}
 		}
 		return m, nil
@@ -413,10 +679,10 @@ func (m *Model) handleWorktreeSwitcherMouse(msg tea.MouseMsg) (tea.Model, tea.Cm
 	case "select":
 		worktrees := m.worktreeSwitcherFiltered
 		if m.worktreeSwitcherCursor >= 0 && m.worktreeSwitcherCursor < len(worktrees) {
-			selectedPath := worktrees[m.worktreeSwitcherCursor].Path
+			selected := worktrees[m.worktreeSwitcherCursor]
 			m.resetWorktreeSwitcher()
 			m.updateContext()
-			return m, m.switchWorktree(selectedPath)
+			return m, m.activateWorktreeSwitcherRow(selected)
 		}
 		return m, nil
 	}
@@ -447,6 +713,9 @@ func (m *Model) switchWorktree(worktreePath string) tea.Cmd {
 
 // refreshWorktreeCache calls GetWorktrees and caches the result for the current WorkDir.
 func (m *Model) refreshWorktreeCache() {
+	if m.ui == nil || m.ui.WorkDir == "" {
+		return
+	}
 	worktrees := listWorktreesForSwitcher(m.ui.WorkDir)
 	m.setWorktreeInventory(worktrees, m.ui.WorkDir)
 }
@@ -455,6 +724,9 @@ func (m *Model) setWorktreeInventory(worktrees []WorktreeInfo, workDir string) {
 	m.cachedWorktreeInventory = append([]WorktreeInfo(nil), worktrees...)
 	normalizedWorkDir, _ := normalizePath(workDir)
 	m.cachedWorktreeInfo = nil
+	if workDir != "" && len(worktrees) > 0 {
+		m.rememberLocalWorktreeInventory(worktrees, workDir)
+	}
 	for i, wt := range m.cachedWorktreeInventory {
 		normalizedPath, _ := normalizePath(wt.Path)
 		if normalizedPath == normalizedWorkDir {
@@ -464,8 +736,45 @@ func (m *Model) setWorktreeInventory(worktrees []WorktreeInfo, workDir string) {
 	}
 }
 
+func (m *Model) rememberLocalWorktreeInventory(worktrees []WorktreeInfo, workDir string) {
+	if workDir == "" || len(worktrees) == 0 {
+		return
+	}
+	if m.localWorktreeCache == nil {
+		m.localWorktreeCache = make(map[string][]WorktreeInfo)
+	}
+	copy := append([]WorktreeInfo(nil), worktrees...)
+	main := mainWorktreePath(worktrees)
+	if main == "" {
+		main = workDir
+	}
+	if normalized, err := normalizePath(main); err == nil && normalized != "" {
+		m.localWorktreeCache[normalized] = copy
+	}
+	if name := m.localProjectNameForPath(workDir, main); name != "" {
+		m.localWorktreeCache[localWorktreeNameCachePrefix+strings.ToLower(strings.TrimSpace(name))] = copy
+	}
+}
+
+func (m *Model) localProjectNameForPath(workDir, main string) string {
+	if m.cfg != nil {
+		wd, _ := normalizePath(workDir)
+		mn, _ := normalizePath(main)
+		for _, p := range m.cfg.Projects.List {
+			path, _ := normalizePath(p.Path)
+			if path != "" && (path == wd || path == mn) {
+				return p.Name
+			}
+		}
+	}
+	return m.intro.RepoName
+}
+
 func (m *Model) worktreeInventory() []WorktreeInfo {
 	if len(m.cachedWorktreeInventory) == 0 {
+		if m.ui == nil || m.ui.WorkDir == "" {
+			return nil
+		}
 		m.refreshWorktreeCache()
 	}
 	return append([]WorktreeInfo(nil), m.cachedWorktreeInventory...)

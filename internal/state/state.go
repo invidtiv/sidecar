@@ -44,6 +44,12 @@ type State struct {
 	// Worktree state: maps main repo path -> last active worktree path
 	LastWorktreePath map[string]string `json:"lastWorktreePath,omitempty"`
 
+	// LastRemoteWorktree maps hosts.ScopedKey(HostID, ProjectKey) to the
+	// host-side WorktreeKey last entered on that project. GetLastWorktreePath
+	// never reads this map: a remote path stored there would be treated as a
+	// local restore.
+	LastRemoteWorktree map[string]string `json:"lastRemoteWorktree,omitempty"`
+
 	// LastBoundLocation is the last host-qualified destination this TUI bound.
 	// It is never a remote filesystem path: restoring LastWorktreePath as a
 	// local checkout would follow a remote Root that happens to exist here.
@@ -883,6 +889,42 @@ func SetLastWorktreePath(mainRepoPath, worktreePath string) error {
 		current.LastWorktreePath = make(map[string]string)
 	}
 	current.LastWorktreePath[mainRepoPath] = worktreePath
+	mu.Unlock()
+	return Save()
+}
+
+// lastRemoteWorktreeKey is hosts.ScopedKey(HostID, ProjectKey), inlined so
+// this package does not import hosts.
+func lastRemoteWorktreeKey(hostID, projectKey string) string {
+	return hostID + "\x1f" + projectKey
+}
+
+// GetLastRemoteWorktree returns the host-side WorktreeKey last bound for
+// (hostID, projectKey). Empty when none is stored. It is not visible to
+// GetLastWorktreePath.
+func GetLastRemoteWorktree(hostID, projectKey string) string {
+	mu.RLock()
+	defer mu.RUnlock()
+	if current == nil || current.LastRemoteWorktree == nil {
+		return ""
+	}
+	return current.LastRemoteWorktree[lastRemoteWorktreeKey(hostID, projectKey)]
+}
+
+// SetLastRemoteWorktree stores a host-side WorktreeKey for (hostID, projectKey).
+// Empty keys are ignored. It never writes into LastWorktreePath.
+func SetLastRemoteWorktree(hostID, projectKey, worktreeKey string) error {
+	if hostID == "" || projectKey == "" || worktreeKey == "" {
+		return nil
+	}
+	mu.Lock()
+	if current == nil {
+		current = &State{}
+	}
+	if current.LastRemoteWorktree == nil {
+		current.LastRemoteWorktree = make(map[string]string)
+	}
+	current.LastRemoteWorktree[lastRemoteWorktreeKey(hostID, projectKey)] = worktreeKey
 	mu.Unlock()
 	return Save()
 }

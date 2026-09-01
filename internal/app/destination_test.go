@@ -93,11 +93,30 @@ func TestDestinationMatches(t *testing.T) {
 			t.Error("worktree name should match")
 		}
 	})
+	t.Run("worktree key/path", func(t *testing.T) {
+		keyed := d
+		keyed.WorktreeKey = "/home/me/sidecar-feature"
+		if !DestinationMatches(keyed, "sidecar-feature") {
+			t.Error("WorktreeKey should match")
+		}
+	})
 	t.Run("no field matches", func(t *testing.T) {
 		if DestinationMatches(d, "td") {
 			t.Error("unrelated query should not match")
 		}
 	})
+}
+
+func TestProjectNamesMatch(t *testing.T) {
+	if !projectNamesMatch("Sidecar", "sidecar") {
+		t.Error("case-insensitive match failed")
+	}
+	if !projectNamesMatch("  Sidecar  ", "Sidecar") {
+		t.Error("trimmed match failed")
+	}
+	if projectNamesMatch("Sidecar", "td") {
+		t.Error("different names should not match")
+	}
 }
 
 func TestBoundDestinationNavbarAndTitleHelpers(t *testing.T) {
