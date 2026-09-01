@@ -23,18 +23,18 @@
 # on the host. The host's own installed sidecar is never invoked, never
 # replaced, and never on the PATH this script uses.
 #
-#   ./scripts/remote-spike.sh paths                 - print every isolated root, local and remote
-#   ./scripts/remote-spike.sh deploy                - build here, copy the binary to the host run root
-#   ./scripts/remote-spike.sh fixture               - create the private remote tmux server + agent panes
-#   ./scripts/remote-spike.sh serve [ARGS...]       - run serve on the host, JSONL to stdout
-#   ./scripts/remote-spike.sh probe [ARGS...]       - run the local probe against the host
-#   ./scripts/remote-spike.sh control <SESSION>     - raw proxied control-mode attach (prints tmux control protocol)
-#   ./scripts/remote-spike.sh remote-tui            - run a full sidecar TUI on the host against the SAME isolated tree
-#   ./scripts/remote-spike.sh ssh <CMD...>          - run a command on the host through the master connection
-#   ./scripts/remote-spike.sh teardown              - kill ONLY the private remote server and remove the run root
+#   SPIKE_HOST=proof-box ./scripts/remote-spike.sh paths      - print every isolated root, local and remote
+#   SPIKE_HOST=proof-box ./scripts/remote-spike.sh deploy     - build here, copy the binary to the host run root
+#   SPIKE_HOST=proof-box ./scripts/remote-spike.sh fixture    - create the private remote tmux server + agent panes
+#   SPIKE_HOST=proof-box ./scripts/remote-spike.sh serve [ARGS...]
+#   SPIKE_HOST=proof-box ./scripts/remote-spike.sh probe [ARGS...]
+#   SPIKE_HOST=proof-box ./scripts/remote-spike.sh control <SESSION>
+#   SPIKE_HOST=proof-box ./scripts/remote-spike.sh remote-tui
+#   SPIKE_HOST=proof-box ./scripts/remote-spike.sh ssh <CMD...>
+#   SPIKE_HOST=proof-box ./scripts/remote-spike.sh teardown   - kill ONLY the private remote server and remove the run root
 #
 # Environment:
-#   SPIKE_HOST      ssh target (default: marcusbook)
+#   SPIKE_HOST      ssh target (required; no default)
 #   SPIKE_RUN_DIR   remote run root (default: /tmp/sidecar-spike-$USER)
 
 set -euo pipefail
@@ -42,7 +42,13 @@ set -euo pipefail
 # Never let an attached tmux client select a server implicitly.
 unset TMUX
 
-HOST="${SPIKE_HOST:-marcusbook}"
+require_host() {
+    if [ -z "${SPIKE_HOST:-}" ]; then
+        echo "SPIKE_HOST is required (no default). Do not point this at a live workstation Sidecar or its real state tree." >&2
+        exit 2
+    fi
+}
+
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 RUN_DIR="${SPIKE_RUN_DIR:-/tmp/sidecar-spike-$(id -un)}"
 
@@ -420,16 +426,16 @@ cmd_teardown() {
 }
 
 case "${1:-}" in
-    paths)      shift; cmd_paths "$@" ;;
-    deploy)     shift; cmd_deploy "$@" ;;
-    fixture)    shift; cmd_fixture "$@" ;;
-    replay)     shift; cmd_replay "$@" ;;
-    tmux)       shift; rtmux "$@" ;;
-    serve)      shift; cmd_serve "$@" ;;
-    probe)      shift; cmd_probe "$@" ;;
-    control)    shift; cmd_control "$@" ;;
-    remote-tui) shift; cmd_remote_tui "$@" ;;
-    ssh)        shift; cmd_ssh "$@" ;;
-    teardown)   shift; cmd_teardown "$@" ;;
-    *) sed -n '2,40p' "$0"; exit 2 ;;
+    paths)      require_host; HOST="$SPIKE_HOST"; shift; cmd_paths "$@" ;;
+    deploy)     require_host; HOST="$SPIKE_HOST"; shift; cmd_deploy "$@" ;;
+    fixture)    require_host; HOST="$SPIKE_HOST"; shift; cmd_fixture "$@" ;;
+    replay)     require_host; HOST="$SPIKE_HOST"; shift; cmd_replay "$@" ;;
+    tmux)       require_host; HOST="$SPIKE_HOST"; shift; rtmux "$@" ;;
+    serve)      require_host; HOST="$SPIKE_HOST"; shift; cmd_serve "$@" ;;
+    probe)      require_host; HOST="$SPIKE_HOST"; shift; cmd_probe "$@" ;;
+    control)    require_host; HOST="$SPIKE_HOST"; shift; cmd_control "$@" ;;
+    remote-tui) require_host; HOST="$SPIKE_HOST"; shift; cmd_remote_tui "$@" ;;
+    ssh)        require_host; HOST="$SPIKE_HOST"; shift; cmd_ssh "$@" ;;
+    teardown)   require_host; HOST="$SPIKE_HOST"; shift; cmd_teardown "$@" ;;
+    *) sed -n '2,38p' "$0"; exit 2 ;;
 esac

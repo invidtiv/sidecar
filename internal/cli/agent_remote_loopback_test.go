@@ -5,11 +5,11 @@ package cli
 // WHAT THIS HARNESS IS, EXACTLY
 //
 // There is no second machine and no sshd. `fakeSSHExecutingTheRenderedCommand`
-// puts a script named `ssh` ahead of the real one on PATH; it ignores every -o
-// option and the target, takes the LAST argument — which is the remote word
-// internal/hosts rendered, `$SHELL -l -c '<quoted command>'` — and runs it
-// locally by substituting a concrete shell for $SHELL and letting /bin/sh
-// re-parse the quoting. So what is genuinely exercised is:
+// installs scripts/loopback-ssh.sh as `ssh` ahead of the real one on PATH; it
+// ignores every -o option and the target, takes the LAST argument — which is
+// the remote word internal/hosts rendered, `$SHELL -l -c '<quoted command>'` —
+// and runs it locally by substituting a concrete shell for $SHELL and letting
+// /bin/sh re-parse the quoting. So what is genuinely exercised is:
 //
 //   - hosts.Transport's argv rendering and its allow-list shell quoting, unwound
 //     by a real shell rather than compared as a string;
@@ -39,6 +39,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -414,37 +415,51 @@ func evalSymlinks(t *testing.T, path string) string {
 	return resolved
 }
 
-// fakeSSHExecutingTheRenderedCommand installs the loopback ssh. See the file
-// comment for what it does and does not stand in for.
+// fakeSSHExecutingTheRenderedCommand installs the shared loopback ssh from
+// scripts/loopback-ssh.sh as `ssh` on PATH. See that file for what it does
+// and does not stand in for.
 //
-// exitOverride, when non-zero, makes the script refuse without running anything
-// — which is how an older host that does not know a verb is simulated.
+// exitOverride, when non-zero, sets SIDECAR_LOOPBACK_SSH_EXIT so the script
+// refuses without running anything — which is how an older host that does not
+// know a verb is simulated.
 func fakeSSHExecutingTheRenderedCommand(t *testing.T, dir string, exitOverride int) {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	body := "#!/bin/sh\n" +
-		"# A login profile that prints on both pipes is the first thing a real\n" +
-		"# host does, and it is what the banner-tolerant decoder and the stderr\n" +
-		"# envelope recovery exist for. Emit one on each, every time.\n" +
-		"printf 'Welcome to loopback -- stdout banner\\n'\n" +
-		"printf 'Last login: Tue -- stderr banner\\n' >&2\n"
-	if exitOverride != 0 {
-		body += fmt.Sprintf("printf 'unknown flag \"--json\"\\n' >&2\nexit %d\n", exitOverride)
-	} else {
-		body += "last=\n" +
-			"for arg in \"$@\"; do last=$arg; done\n" +
-			"# The remote word is `$SHELL -l -c '<quoted command>'`. Strip the\n" +
-			"# wrapper literally and let this shell re-parse the quoting, so the\n" +
-			"# allow-list quoter is unwound by a shell rather than by a regexp.\n" +
-			"inner=${last#* -l -c }\n" +
-			"eval \"exec /bin/sh -c $inner\"\n"
+	src := loopbackSSHScript(t)
+	body, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatalf("read shared loopback ssh: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "ssh"), []byte(body), 0o700); err != nil { //nolint:gosec // test fixture
+	dest := filepath.Join(dir, "ssh")
+	if err := os.WriteFile(dest, body, 0o700); err != nil { //nolint:gosec // test fixture
 		t.Fatal(err)
 	}
+	if exitOverride != 0 {
+		t.Setenv("SIDECAR_LOOPBACK_SSH_EXIT", strconv.Itoa(exitOverride))
+	} else {
+		t.Setenv("SIDECAR_LOOPBACK_SSH_EXIT", "")
+	}
+	t.Setenv("SIDECAR_LOOPBACK_SSH_DELAY", "")
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func loopbackSSHScript(t *testing.T) string {
+	t.Helper()
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("cannot locate the test source")
+	}
+	src := filepath.Join(filepath.Dir(thisFile), "..", "..", "scripts", "loopback-ssh.sh")
+	resolved, err := filepath.Abs(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(resolved); err != nil {
+		t.Fatalf("shared loopback ssh missing: %v", err)
+	}
+	return resolved
 }
 
 func decodeAgent(t *testing.T, out string) agentcontrol.Agent {
