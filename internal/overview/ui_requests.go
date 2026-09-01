@@ -331,9 +331,14 @@ func (m *Model) applyCreateWorktreeRequest(req uirequest.Request, payload uirequ
 		Path:        path,
 		Branch:      payload.Branch,
 		TmuxName:    payload.Session,
+		// Optimistic: the CLI sends a session name even for --no-launch, so
+		// Session is not liveness. Inventory refresh replaces this row.
+		Plain: true,
 	}
 	ws.ID = ws.ProjectKey + ":worktree:" + ws.Key
-	m.showIdleWorktrees = true
+	// Show this worktree only. Flipping showIdleWorktrees would dump every
+	// idle checkout across every project into Sessions.
+	m.revealIdleWorktree(path, "")
 	m.upsertCreateWorkspace(key, ws)
 	if payload.ShouldFocus() {
 		m.pendingCreatedPath = path

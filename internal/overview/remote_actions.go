@@ -337,7 +337,7 @@ func (m *Model) applyRemoteWorktreeCreated(msg globalWorktreeCreatedMsg) tea.Cmd
 	m.pendingCreatedHost = msg.HostID
 	m.pendingCreatedPath = msg.RemotePath
 	m.pendingCreatedTmux = ""
-	m.showIdleWorktrees = true
+	m.revealIdleWorktree(msg.RemotePath, msg.HostID)
 	m.closeCreateShell()
 	return nil
 }

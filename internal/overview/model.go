@@ -331,13 +331,19 @@ type Model struct {
 	workspaceListThemeRevision uint64
 
 	// showIdleWorktrees is the global-list visibility flag. Off by default;
-	// the sort/filter fly-out is the only control that turns it on.
+	// the sort/filter fly-out is the only control that turns it on. Creating
+	// or targeting one worktree must not flip this — that floods OLDER with
+	// every idle checkout. Those paths use revealedIdleWorktrees instead.
 	showIdleWorktrees bool
-	viewFlyout        *modal.Modal
-	viewFlyoutOpen    bool
-	viewFlyoutWidth   int
-	viewFlyoutSortIdx int
-	viewFlyoutMouse   *mouse.Handler
+	// revealedIdleWorktrees are host-scoped paths the list shows even while
+	// showIdleWorktrees is off. One created or targeted worktree, not the
+	// whole idle set.
+	revealedIdleWorktrees map[string]struct{}
+	viewFlyout            *modal.Modal
+	viewFlyoutOpen        bool
+	viewFlyoutWidth       int
+	viewFlyoutSortIdx     int
+	viewFlyoutMouse       *mouse.Handler
 
 	pendingViews map[string]*pendingView
 	// openSplit is the request-scoped --split axis override ("right"/"below").
@@ -998,7 +1004,7 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		// and it was obeyed on one activation path in four — a browser that had
 		// created remotely once then failed to select anything it created here.
 		m.pendingCreatedHost = ""
-		m.showIdleWorktrees = true
+		m.revealIdleWorktree(msg.Record.Path, "")
 		m.closeCreateShell()
 		return m.refreshProjectAfterMutation(msg.Project)
 	case globalWorktreeDeletedMsg:
