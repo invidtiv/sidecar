@@ -10,8 +10,10 @@ import (
 	"testing"
 
 	"github.com/marcus/sidecar/internal/contentlink"
+	"github.com/marcus/sidecar/internal/contentservice"
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/filepreview"
+	"github.com/marcus/sidecar/internal/resource"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
@@ -113,6 +115,14 @@ func (f *fakeDocumentSource) LoadNote(context.Context, SourceContext, NoteReadRe
 
 func (f *fakeDocumentSource) LoadDiff(context.Context, SourceContext, DiffReadRequest) (DiffReadResult, error) {
 	return DiffReadResult{}, fmt.Errorf("fake document source does not load diffs")
+}
+
+func (f *fakeDocumentSource) Describe(context.Context, string) (contentservice.DescribeResult, error) {
+	return contentservice.DescribeResult{Fingerprint: contentservice.FingerprintDescriptors(nil)}, nil
+}
+
+func (f *fakeDocumentSource) ResolveResource(context.Context, SourceContext, resource.Reference, bool) (resource.Document, error) {
+	return resource.Document{}, fmt.Errorf("fake document source does not resolve resources")
 }
 
 func TestDocumentSourceSuppliesContentWithoutTouchingPath(t *testing.T) {

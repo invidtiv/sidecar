@@ -19,11 +19,13 @@ import (
 )
 
 const (
-	// KindFile, KindIssue, KindNote, and KindDiff are the content kinds this service serves.
-	KindFile  = "file"
-	KindIssue = "issue"
-	KindNote  = "note"
-	KindDiff  = "diff"
+	// KindFile, KindIssue, KindNote, KindDiff, and KindResource are the content
+	// kinds this service serves.
+	KindFile     = "file"
+	KindIssue    = "issue"
+	KindNote     = "note"
+	KindDiff     = "diff"
+	KindResource = "resource"
 
 	// OpDocument is the file read operation: bounded document bytes + metadata.
 	OpDocument = "document"
@@ -31,6 +33,8 @@ const (
 	OpCard = "card"
 	// OpNote is the note read operation: one td note body.
 	OpNote = "note"
+	// OpResource is the resource read operation: a provider wire document.
+	OpResource = "resource"
 
 	// Diff operations. There is no universal snapshot: each call is one
 	// bounded read with truthful truncation or paging.

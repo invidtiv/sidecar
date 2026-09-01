@@ -4,6 +4,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/marcus/sidecar/internal/contentlink"
+	"github.com/marcus/sidecar/internal/contentservice"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/resourceview"
@@ -183,8 +184,16 @@ func (m *Model) OpenPreviewResource(ref resourceview.Ref) tea.Cmd {
 
 func (m *Model) openPreviewResourceRef(ref resourceview.Ref, fromTerminal bool) tea.Cmd {
 	workspace, ok := m.SelectedWorkspace()
-	if !ok || !ref.Valid() || workspace.Remote() {
+	if !ok || !ref.Valid() {
 		return nil
+	}
+	if workspace.Remote() {
+		if !m.hostShows(workspace.HostID) {
+			return nil
+		}
+		if !m.hostVerbs(workspace.HostID).ContentReadV1 {
+			return remoteContentErrorCmd(&contentservice.MissingCapabilityError{HostID: workspace.HostID})
+		}
 	}
 	if fromTerminal {
 		m.clearPreviewSelection()
@@ -201,6 +210,10 @@ func (m *Model) previewResourceResolver(workspaceID string, epoch uint64) resour
 	// workspace row captured when the resolver was built, which is what a row
 	// switch invalidates.
 	return func(modelID int, generation, _ uint64, ref resourceview.Ref, refresh bool) tea.Cmd {
+		ctx, ok := m.previewDeckContext()
+		if ok && ctx.Source.Remote() {
+			return m.remoteResourceResolveCmd(ctx, workspaceID, epoch, modelID, generation, ref, refresh)
+		}
 		resolve := m.resolveResource
 		if resolve == nil {
 			// Starting nothing is the honest answer: the app has not published

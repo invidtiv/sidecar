@@ -11,6 +11,7 @@ import (
 	"github.com/marcus/sidecar/internal/contentservice"
 	"github.com/marcus/sidecar/internal/hostproto"
 	"github.com/marcus/sidecar/internal/hosts"
+	"github.com/marcus/sidecar/internal/resource"
 )
 
 // RemoteRunner is the hosts.RunSidecar seam. Production binds
@@ -67,6 +68,57 @@ func remoteResolveKind(pending contentlink.Pending) (kind string, refKind conten
 	default:
 		return "", "", "", fmt.Errorf("unsupported pending kind %q", pending.Kind)
 	}
+}
+
+func (s RemoteSource) Describe(ctx context.Context, ifRevision string) (contentservice.DescribeResult, error) {
+	if err := s.ready(); err != nil {
+		return contentservice.DescribeResult{}, err
+	}
+	args := []string{"content", "describe", "--json"}
+	if ifRevision != "" {
+		args = append(args, "--if-revision", ifRevision)
+	}
+	var result contentservice.DescribeResult
+	if err := s.Run(ctx, s.HostID, args, &result); err != nil {
+		return contentservice.DescribeResult{}, mapRemoteContentErr(s.HostID, contentservice.KindResource, err)
+	}
+	if result.NotModified {
+		return result, nil
+	}
+	if got := contentservice.FingerprintDescriptors(result.Descriptors); got != result.Fingerprint {
+		return contentservice.DescribeResult{}, fmt.Errorf("content describe: fingerprint did not match descriptors")
+	}
+	return result, nil
+}
+
+func (s RemoteSource) ResolveResource(ctx context.Context, src SourceContext, ref resource.Reference, refresh bool) (resource.Document, error) {
+	if err := s.ready(); err != nil {
+		return resource.Document{}, err
+	}
+	if !ref.Valid() {
+		return resource.Document{}, fmt.Errorf("resource reference is empty or exceeds its bounds")
+	}
+	args := []string{
+		"content", "read",
+		"--workspace", src.WorkspaceID,
+		"--kind", contentservice.KindResource,
+		"--operation", contentservice.OpResource,
+		"--target", ref.Locator,
+		"--provider", ref.Instance,
+		"--matcher", ref.Matcher,
+		"--json",
+	}
+	if refresh {
+		args = append(args, "--refresh")
+	}
+	var result contentservice.ReadResult
+	if err := s.Run(ctx, s.HostID, args, &result); err != nil {
+		return resource.Document{}, mapRemoteContentErr(s.HostID, contentservice.KindResource, err)
+	}
+	if result.ResourceError != nil {
+		return resource.Document{}, contentservice.ResourceErrorFromWire(result.ResourceError)
+	}
+	return contentservice.SanitizeWireDocument(result.Resource)
 }
 
 func (s RemoteSource) LoadDocument(ctx context.Context, src SourceContext, req DocumentReadRequest) (DocumentReadResult, error) {
@@ -231,7 +283,7 @@ func mapRemoteContentErr(hostID, kind string, err error) error {
 	if err == nil {
 		return nil
 	}
-	if kind == contentservice.KindIssue || kind == contentservice.KindNote || kind == contentservice.KindDiff {
+	if kind == contentservice.KindIssue || kind == contentservice.KindNote || kind == contentservice.KindDiff || kind == contentservice.KindResource {
 		if hosts.RunFailure(err) == hosts.FailUnsupported {
 			return &contentservice.MissingCapabilityError{HostID: hostID}
 		}

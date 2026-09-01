@@ -287,6 +287,11 @@ type Model struct {
 	// instead of spinning. The app supplies both once a provider reports ready.
 	resourceMatchers []terminallink.ResourceMatcher
 	resolveResource  resourceview.Resolver
+	// remoteMatchers is the host-scoped describe cache. Local rows never
+	// read it; remote rows never read resourceMatchers.
+	remoteMatchers remoteMatcherCache
+	// remoteResources is the viewer-side remote resource document cache.
+	remoteResources remoteResourceCache
 
 	// Working/blocked markers breathe on their own clock, independent of the
 	// refresh poll. The generation lets a tick in flight be discarded.
@@ -748,6 +753,12 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 	}
 	if tick := m.remoteDocumentRefreshCmd(); tick != nil {
 		cmds = append(cmds, tick)
+	}
+	if tick := m.remoteResourceDescribeCmd(); tick != nil {
+		cmds = append(cmds, tick)
+	}
+	if describe := m.ensureRemoteResourceDescribe(); describe != nil {
+		cmds = append(cmds, describe)
 	}
 	if len(cmds) == 1 {
 		return cmd

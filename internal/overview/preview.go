@@ -371,7 +371,10 @@ func (m *Model) bindPreview(keepContent bool) tea.Cmd {
 	if cmd := m.consumePendingView(workspace.TmuxName); cmd != nil {
 		pendingCmd = cmd
 	}
-	return tea.Batch(restoreCmd, m.syncPreviewTerminals(), pendingCmd, m.armSessionsSelected(workspace.ID))
+	if workspace.Remote() {
+		m.markRemoteDescribeImmediate(workspace.HostID)
+	}
+	return tea.Batch(restoreCmd, m.syncPreviewTerminals(), pendingCmd, m.armSessionsSelected(workspace.ID), m.ensureRemoteResourceDescribe())
 }
 
 // previewUnavailable explains, in the user's terms, why an item has no live

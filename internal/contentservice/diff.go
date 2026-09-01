@@ -129,6 +129,9 @@ type ReadParams struct {
 	Parent      string
 	Offset      int
 	Limit       int
+	Provider    string
+	Matcher     string
+	Refresh     bool
 }
 
 func validDiffOperation(op string) bool {

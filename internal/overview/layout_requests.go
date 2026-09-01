@@ -284,7 +284,7 @@ func (h overviewLayoutHost) CommitMove(plan panelayout.MovePlan) (string, tea.Cm
 	return h.m.commitLayoutMove(plan)
 }
 func (h overviewLayoutHost) ResolveTargets(kind panelayout.Kind, spec uirequest.LayoutPane) ([]uirequest.Target, string) {
-	return layoutapply.ResolveTargets(kind, spec, h.root, h.m.resourceMatchers)
+	return layoutapply.ResolveTargets(kind, spec, h.root, h.m.previewResourceMatchers())
 }
 func (h overviewLayoutHost) CommitPassive(targets []uirequest.Target, plan panelayout.OpenPlan) (string, string, tea.Cmd) {
 	if len(targets) == 0 {

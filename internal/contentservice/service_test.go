@@ -116,7 +116,7 @@ func TestServiceRefusesUnconfiguredAndReplacedIdentity(t *testing.T) {
 func TestServiceRefusesUnknownKind(t *testing.T) {
 	t.Parallel()
 	svc := testService(t, t.TempDir(), nil, nil)
-	_, err := svc.Resolve(context.Background(), "x:shell:y", "resource", "a.md")
+	_, err := svc.Resolve(context.Background(), "x:shell:y", "widget", "a.md")
 	var coded *Error
 	if !errors.As(err, &coded) || coded.Code != CodeUnknownKind {
 		t.Fatalf("kind = %v", err)

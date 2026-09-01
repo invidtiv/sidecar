@@ -2,6 +2,7 @@ package overview
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/marcus/sidecar/internal/contentpanes"
 	"github.com/marcus/sidecar/internal/contentservice"
 	"github.com/marcus/sidecar/internal/hostproto"
+	"github.com/marcus/sidecar/internal/resource"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/targetactivation"
 	"github.com/marcus/sidecar/internal/terminallink"
@@ -99,6 +101,14 @@ func (f *fakeRemoteDiffSource) LoadDiff(_ context.Context, _ contentpanes.Source
 		payload.Snapshot = nil
 	}
 	return contentpanes.DiffReadResult{Value: payload, Revision: rev}, nil
+}
+
+func (f *fakeRemoteDiffSource) Describe(context.Context, string) (contentservice.DescribeResult, error) {
+	return contentservice.DescribeResult{Fingerprint: contentservice.FingerprintDescriptors(nil)}, nil
+}
+
+func (f *fakeRemoteDiffSource) ResolveResource(context.Context, contentpanes.SourceContext, resource.Reference, bool) (resource.Document, error) {
+	return resource.Document{}, fmt.Errorf("fake diff source does not resolve resources")
 }
 
 func hostDiffSnapshot() *workspacediff.Snapshot {
@@ -360,20 +370,6 @@ func TestRemoteDiffDoesNotLivewatchLocalPath(t *testing.T) {
 	}
 	if cmd := m.resolvePreviewDiffAdmin(); cmd != nil {
 		t.Fatal("remote diff queued a local git admin resolve")
-	}
-}
-
-func TestRemoteResourceStillRefused(t *testing.T) {
-	m, _ := showingRemoteDiffModel(t)
-	cmd, handled := m.activatePreviewPlan(targetactivation.Plan{
-		Kind: targetactivation.PlanOpenResource, Provider: "jira-work", Matcher: "project-key", Locator: "CASH-1245",
-	})
-	run(t, m, cmd)
-	if handled || cmd != nil {
-		t.Fatalf("resource: handled=%v cmd=%v", handled, cmd != nil)
-	}
-	if m.preview.resource != nil {
-		t.Fatalf("opened a resource pane: %#v", m.preview.resource)
 	}
 }
 

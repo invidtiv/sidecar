@@ -10,6 +10,7 @@ import (
 	"github.com/marcus/sidecar/internal/contentservice"
 	"github.com/marcus/sidecar/internal/hostproto"
 	"github.com/marcus/sidecar/internal/hosts"
+	"github.com/marcus/sidecar/internal/resource"
 )
 
 func TestRemoteSourceRefusesMissingContentReadV1(t *testing.T) {
@@ -249,5 +250,83 @@ func TestRemoteSourceNotModified(t *testing.T) {
 	}
 	if !got.NotModified || got.Revision != "v1:abc" || got.Value.Content != "" {
 		t.Fatalf("notModified = %+v", got)
+	}
+}
+
+func TestRemoteSourceDescribeArgvAndFingerprint(t *testing.T) {
+	t.Parallel()
+	descriptors := []contentservice.ProviderDescriptor{{
+		Instance: "jira-work", Order: 0,
+		Matchers: []contentservice.ResourceMatcherDTO{{ID: "issue-key", Pattern: `CASH-\d+`}},
+	}}
+	fp := contentservice.FingerprintDescriptors(descriptors)
+	var calls [][]string
+	src := NewRemoteSource("mac-mini", hostproto.VerbCapabilities{ContentReadV1: true}, func(_ context.Context, _ string, args []string, out any) error {
+		calls = append(calls, append([]string(nil), args...))
+		for i, a := range args {
+			if a == "--if-revision" && i+1 < len(args) && args[i+1] == fp {
+				*(out.(*contentservice.DescribeResult)) = contentservice.DescribeResult{Fingerprint: fp, NotModified: true}
+				return nil
+			}
+		}
+		*(out.(*contentservice.DescribeResult)) = contentservice.DescribeResult{Fingerprint: fp, Descriptors: descriptors}
+		return nil
+	})
+	got, err := src.Describe(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Fingerprint != fp || len(got.Descriptors) != 1 {
+		t.Fatalf("describe = %+v", got)
+	}
+	cached, err := src.Describe(context.Background(), fp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cached.NotModified {
+		t.Fatalf("notModified = %+v", cached)
+	}
+	if strings.Join(calls[0], " ") != "content describe --json" {
+		t.Fatalf("describe argv = %v", calls[0])
+	}
+	if strings.Join(calls[1], " ") != "content describe --json --if-revision "+fp {
+		t.Fatalf("if-revision argv = %v", calls[1])
+	}
+}
+
+func TestRemoteSourceResolveResourceSanitizesWireAndRefusesUnsafe(t *testing.T) {
+	t.Parallel()
+	var calls [][]string
+	src := NewRemoteSource("mac-mini", hostproto.VerbCapabilities{ContentReadV1: true}, func(_ context.Context, _ string, args []string, out any) error {
+		calls = append(calls, append([]string(nil), args...))
+		if len(calls) == 1 {
+			*(out.(*contentservice.ReadResult)) = contentservice.ReadResult{
+				Kind: contentservice.KindResource, Operation: contentservice.OpResource,
+				Workspace: "p:shell:s1", Revision: "v1:res",
+				Resource: &resource.WireDocument{Identity: "CASH-1245", Title: "Host ticket", Body: &resource.WireBody{Text: "ok"}},
+			}
+			return nil
+		}
+		*(out.(*contentservice.ReadResult)) = contentservice.ReadResult{
+			Kind: contentservice.KindResource, Operation: contentservice.OpResource,
+			Workspace: "p:shell:s1", Revision: "v1:bad",
+			Resource: &resource.WireDocument{Title: "no identity"},
+		}
+		return nil
+	})
+	ctx := SourceContext{WorkspaceID: "p:shell:s1"}
+	ref := resource.Reference{Instance: "jira-work", Matcher: "issue-key", Locator: "CASH-1245"}
+	got, err := src.ResolveResource(context.Background(), ctx, ref, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Title != "Host ticket" || got.Identity != "CASH-1245" {
+		t.Fatalf("doc = %+v", got)
+	}
+	if strings.Join(calls[0], " ") != "content read --workspace p:shell:s1 --kind resource --operation resource --target CASH-1245 --provider jira-work --matcher issue-key --json --refresh" {
+		t.Fatalf("read argv = %v", calls[0])
+	}
+	if _, err := src.ResolveResource(context.Background(), ctx, ref, false); err == nil {
+		t.Fatal("unsafe wire body was adopted")
 	}
 }

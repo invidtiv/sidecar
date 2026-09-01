@@ -15,10 +15,12 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/contentpanes"
+	"github.com/marcus/sidecar/internal/contentservice"
 	"github.com/marcus/sidecar/internal/filepreview"
 	"github.com/marcus/sidecar/internal/hostproto"
 	"github.com/marcus/sidecar/internal/hosts"
 	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/resource"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/targetactivation"
 	"github.com/marcus/sidecar/internal/terminallink"
@@ -92,6 +94,14 @@ func (f *fakeRemoteFileSource) LoadNote(context.Context, contentpanes.SourceCont
 
 func (f *fakeRemoteFileSource) LoadDiff(context.Context, contentpanes.SourceContext, contentpanes.DiffReadRequest) (contentpanes.DiffReadResult, error) {
 	return contentpanes.DiffReadResult{}, fmt.Errorf("fake file source does not load diffs")
+}
+
+func (f *fakeRemoteFileSource) Describe(context.Context, string) (contentservice.DescribeResult, error) {
+	return contentservice.DescribeResult{Fingerprint: contentservice.FingerprintDescriptors(nil)}, nil
+}
+
+func (f *fakeRemoteFileSource) ResolveResource(context.Context, contentpanes.SourceContext, resource.Reference, bool) (resource.Document, error) {
+	return resource.Document{}, fmt.Errorf("fake file source does not resolve resources")
 }
 
 func (f *fakeRemoteFileSource) stats() (loads int, lastIfRev string) {
@@ -237,32 +247,6 @@ func TestRemoteSessionsMissingContentReadV1ToastsAndDoesNotOpen(t *testing.T) {
 	}
 	if len(stub.calls) != 0 {
 		t.Fatalf("host without ContentReadV1 was invoked: %v", stub.calls)
-	}
-}
-
-func TestRemoteSessionsDiffResourceStayRefusedOnShowingHost(t *testing.T) {
-	m, fake, _ := showingRemoteTwinModel(t, nil)
-	resolver := &fakeResolver{}
-	m.SetResourceMatchers(jiraMatchers())
-	m.SetResourceResolver(resolver.resolve)
-
-	for _, plan := range []targetactivation.Plan{
-		{Kind: targetactivation.PlanOpenResource, Provider: "jira-work", Matcher: "project-key", Locator: "CASH-1245"},
-	} {
-		cmd, handled := m.activatePreviewPlan(plan)
-		run(t, m, cmd)
-		if handled || cmd != nil {
-			t.Fatalf("%s: handled=%v cmd=%v on a showing remote row", plan.Kind, handled, cmd != nil)
-		}
-		if m.preview.issue != nil || m.preview.note != nil || m.preview.diff != nil || m.preview.resource != nil {
-			t.Fatalf("%s opened a non-document pane", plan.Kind)
-		}
-	}
-	if refs := resolver.refs(); len(refs) != 0 {
-		t.Fatalf("remote resource activation asked the local resolver: %v", refs)
-	}
-	if fake.loads != 0 {
-		t.Fatalf("non-file plans loaded a document: loads=%d", fake.loads)
 	}
 }
 

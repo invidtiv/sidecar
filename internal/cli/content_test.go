@@ -48,7 +48,8 @@ func TestContentUsageErrors(t *testing.T) {
 		{[]string{"content", "nope"}, 2, "unknown content command"},
 		{[]string{"content", "resolve"}, 2, "--workspace is required"},
 		{[]string{"content", "resolve", "--workspace", "x:shell:y", "--kind", "file"}, 2, "--target is required"},
-		{[]string{"content", "resolve", "--workspace", "x:shell:y", "--kind", "resource", "--target", "a.md", "--json"}, 2, "unknown content kind"},
+		{[]string{"content", "resolve", "--workspace", "x:shell:y", "--kind", "nope", "--target", "a.md", "--json"}, 2, "unknown content kind"},
+		{[]string{"content", "resolve", "--workspace", "x:shell:y", "--kind", "resource", "--target", "CASH-1", "--json"}, 2, "--provider is required"},
 		{[]string{"content", "read", "--workspace", "x:shell:y", "--kind", "diff", "--operation", "exec", "--target", "wt", "--json"}, 2, "unknown content operation"},
 		{[]string{"content", "read", "--workspace", "x:shell:y", "--kind", "file", "--operation", "exec", "--target", "a.md", "--json"}, 2, "unknown content operation"},
 	} {
@@ -203,6 +204,55 @@ func TestContentDiffResolveReadJSON(t *testing.T) {
 	}
 	if !strings.Contains(read.Diff.Snapshot.WorkingTree, "host") {
 		t.Fatalf("working-tree missing host change: %+v", read.Diff.Snapshot)
+	}
+}
+
+func TestContentDescribeJSON(t *testing.T) {
+	_, _, cfgPath := setupContentCLI(t)
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"-config", cfgPath, "content", "describe", "--json"}, &out, &errOut)
+	if !handled || code != 0 {
+		t.Fatalf("describe = %v %d stderr %q", handled, code, errOut.String())
+	}
+	var described contentservice.DescribeResult
+	if err := json.Unmarshal(out.Bytes(), &described); err != nil {
+		t.Fatalf("describe json: %v (%q)", err, out.String())
+	}
+	if !described.ValidRemoteResult() || described.Fingerprint == "" {
+		t.Fatalf("describe = %+v", described)
+	}
+	if described.Fingerprint != contentservice.FingerprintDescriptors(described.Descriptors) {
+		t.Fatalf("fingerprint did not match descriptors: %+v", described)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	handled, code = Run([]string{"-config", cfgPath, "content", "describe", "--if-revision", described.Fingerprint, "--json"}, &out, &errOut)
+	if !handled || code != 0 {
+		t.Fatalf("notModified = %v %d %q", handled, code, errOut.String())
+	}
+	var cached contentservice.DescribeResult
+	if err := json.Unmarshal(out.Bytes(), &cached); err != nil {
+		t.Fatal(err)
+	}
+	if !cached.NotModified || !cached.ValidRemoteResult() || cached.Fingerprint != described.Fingerprint {
+		t.Fatalf("notModified = %+v", cached)
+	}
+}
+
+func TestContentResourceResolveRequiresProvider(t *testing.T) {
+	_, id, cfgPath := setupContentCLI(t)
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"-config", cfgPath, "content", "resolve", "--workspace", id, "--kind", "resource", "--target", "CASH-1245", "--provider", "jira-work", "--matcher", "issue-key", "--json"}, &out, &errOut)
+	if !handled || code != 0 {
+		t.Fatalf("resolve = %v %d %q", handled, code, errOut.String())
+	}
+	var resolved contentservice.ResolveResult
+	if err := json.Unmarshal(out.Bytes(), &resolved); err != nil {
+		t.Fatal(err)
+	}
+	if !resolved.ValidRemoteResult() || resolved.Kind != contentservice.KindResource || resolved.Provider != "jira-work" {
+		t.Fatalf("resolve = %+v", resolved)
 	}
 }
 

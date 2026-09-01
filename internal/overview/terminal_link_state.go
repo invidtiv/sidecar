@@ -55,7 +55,7 @@ func (m *Model) PrepareTerminalLinks() {
 	scope.Buffer = buffer
 	m.previewTerminalLeaf().LinkState = m.terminalLinks.Prepare(termpreview.LinkPrepare{
 		Scope: scope, Rows: rows, Allowed: allowed,
-		Matchers: m.resourceMatchers, Previous: m.previewTerminalLeaf().LinkState,
+		Matchers: m.previewResourceMatchers(), Previous: m.previewTerminalLeaf().LinkState,
 	})
 }
 

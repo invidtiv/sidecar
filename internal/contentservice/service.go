@@ -7,6 +7,8 @@ import (
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/noteview"
+	"github.com/marcus/sidecar/internal/resource"
+	"github.com/marcus/sidecar/internal/resourceprovider"
 	"github.com/marcus/sidecar/internal/shellstate"
 )
 
@@ -16,11 +18,12 @@ import (
 // via projectdir, git worktree list, issueview/noteview lookup). Tests inject
 // fakes so a fixture does not have to be a real Sidecar state tree.
 type Service struct {
-	LoadConfig  func() (*config.Config, error)
-	ListShells  func(projectRoot string) ([]shellstate.Definition, error)
-	Git         func(ctx context.Context, dir string, args ...string) ([]byte, error)
-	LookupIssue func(ctx context.Context, workDir, issueID string, fallbacks []issueview.ProjectRef) (*issueview.Data, *issueview.Owner, error)
-	LookupNote  func(ctx context.Context, workDir, noteID string) (*noteview.Data, error)
+	LoadConfig         func() (*config.Config, error)
+	ListShells         func(projectRoot string) ([]shellstate.Definition, error)
+	Git                func(ctx context.Context, dir string, args ...string) ([]byte, error)
+	LookupIssue        func(ctx context.Context, workDir, issueID string, fallbacks []issueview.ProjectRef) (*issueview.Data, *issueview.Owner, error)
+	LookupNote         func(ctx context.Context, workDir, noteID string) (*noteview.Data, error)
+	NewResourceManager func() (*resourceprovider.Manager, error)
 }
 
 // Default returns a Service bound to this process's config and state.
@@ -34,29 +37,47 @@ func defaultGit(ctx context.Context, dir string, args ...string) ([]byte, error)
 
 func defaultLoadConfig() (*config.Config, error) { return config.Load() }
 
+// ResolveParams is one content resolve, including resource identity.
+type ResolveParams struct {
+	WorkspaceID string
+	Kind        string
+	Target      string
+	Provider    string
+	Matcher     string
+}
+
 // Resolve maps a workspace + target onto identity and metadata. It does
 // not ship a body. Issue and note resolve is identity only: the id is
 // normalized and the workspace is re-validated, without consulting td.
 func (s *Service) Resolve(ctx context.Context, workspaceID, kind, target string) (ResolveResult, error) {
+	return s.ResolveParams(ctx, ResolveParams{WorkspaceID: workspaceID, Kind: kind, Target: target})
+}
+
+// ResolveParams is Resolve with resource provider/matcher identity.
+func (s *Service) ResolveParams(ctx context.Context, params ResolveParams) (ResolveResult, error) {
 	if err := ctx.Err(); err != nil {
 		return ResolveResult{}, err
 	}
-	if err := requireKind(kind); err != nil {
+	if err := requireKind(params.Kind); err != nil {
 		return ResolveResult{}, err
 	}
-	switch kind {
+	switch params.Kind {
 	case KindIssue:
-		return s.resolveIssue(ctx, workspaceID, target)
+		return s.resolveIssue(ctx, params.WorkspaceID, params.Target)
 	case KindNote:
-		return s.resolveNote(ctx, workspaceID, target)
+		return s.resolveNote(ctx, params.WorkspaceID, params.Target)
 	case KindDiff:
-		return s.resolveDiff(ctx, workspaceID, target)
+		return s.resolveDiff(ctx, params.WorkspaceID, params.Target)
+	case KindResource:
+		return s.ResolveResourceRef(ctx, params.WorkspaceID, resource.Reference{
+			Instance: params.Provider, Matcher: params.Matcher, Locator: params.Target,
+		})
 	}
-	ws, err := s.lookupWorkspace(ctx, workspaceID)
+	ws, err := s.lookupWorkspace(ctx, params.WorkspaceID)
 	if err != nil {
 		return ResolveResult{}, err
 	}
-	doc, err := ReadFile(ctx, ws.Root, target, "")
+	doc, err := ReadFile(ctx, ws.Root, params.Target, "")
 	if err != nil {
 		return ResolveResult{}, err
 	}
@@ -105,6 +126,10 @@ func (s *Service) ReadParams(ctx context.Context, params ReadParams) (ReadResult
 			return ReadResult{}, err
 		}
 		return diffReadResultFrom(ws.ID, doc, params.Operation), nil
+	case KindResource:
+		return s.ReadResource(ctx, params.WorkspaceID, resource.Reference{
+			Instance: params.Provider, Matcher: params.Matcher, Locator: params.Target,
+		}, params.Refresh)
 	default:
 		doc, err := ReadFile(ctx, ws.Root, params.Target, params.IfRevision)
 		if err != nil {
@@ -118,7 +143,7 @@ func requireKind(kind string) error {
 	switch kind {
 	case "":
 		return Usage("kind is required")
-	case KindFile, KindIssue, KindNote, KindDiff:
+	case KindFile, KindIssue, KindNote, KindDiff, KindResource:
 		return nil
 	default:
 		return UnknownKind(kind)
@@ -144,6 +169,10 @@ func requireOperation(kind, operation string) error {
 		}
 	case KindDiff:
 		if !validDiffOperation(operation) {
+			return Usage("unknown content operation %q", operation)
+		}
+	case KindResource:
+		if operation != OpResource {
 			return Usage("unknown content operation %q", operation)
 		}
 	}

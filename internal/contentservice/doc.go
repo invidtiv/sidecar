@@ -5,6 +5,7 @@
 // so containment, revision, and typed refusals cannot drift by surface. It is
 // not a generic remote executor: kind and operation are strictly enumerated,
 // every verb is non-interactive, and nothing here writes, talks to tmux, or
-// runs an arbitrary shell. Files, issues, and notes are served; diffs and
-// resources are not.
+// runs an arbitrary shell. Files, issues, notes, diffs, and resources are
+// served. Provider describe fingerprints validated ordered descriptors, never
+// a process-local snapshot generation.
 package contentservice

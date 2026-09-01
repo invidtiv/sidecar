@@ -13,6 +13,7 @@ import (
 	"github.com/marcus/sidecar/internal/filepreview"
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/noteview"
+	"github.com/marcus/sidecar/internal/resource"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/workspacediff"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
@@ -117,14 +118,18 @@ type DiffReadResult struct {
 	NotModified bool
 }
 
-// Source is the Document/Issue/Note/Diff seam. Resolve returns identity only; it
-// does not ship a body. Resource methods arrive in a later slice.
+// Source is the Document/Issue/Note/Diff/Resource seam. Resolve returns
+// identity only; it does not ship a body. Describe is host-level provider
+// metadata. Local rows do not call Describe: the app manager is the matcher
+// snapshot.
 type Source interface {
 	Resolve(context.Context, SourceContext, contentlink.Pending) (contentlink.Ref, error)
 	LoadDocument(context.Context, SourceContext, DocumentReadRequest) (DocumentReadResult, error)
 	LoadIssue(context.Context, SourceContext, IssueReadRequest) (IssueReadResult, error)
 	LoadNote(context.Context, SourceContext, NoteReadRequest) (NoteReadResult, error)
 	LoadDiff(context.Context, SourceContext, DiffReadRequest) (DiffReadResult, error)
+	Describe(ctx context.Context, ifRevision string) (contentservice.DescribeResult, error)
+	ResolveResource(ctx context.Context, src SourceContext, ref resource.Reference, refresh bool) (resource.Document, error)
 }
 
 // LocalSource is the in-process Document adapter. It uses the same
@@ -277,6 +282,29 @@ func (LocalSource) LoadDiff(ctx context.Context, src SourceContext, req DiffRead
 		Revision:    doc.Revision,
 		NotModified: doc.NotModified,
 	}, nil
+}
+
+// Describe is a no-op on the local adapter: Overview never asks a local row
+// to spawn content describe. The empty fingerprint is stable.
+func (LocalSource) Describe(context.Context, string) (contentservice.DescribeResult, error) {
+	fp := contentservice.FingerprintDescriptors(nil)
+	return contentservice.DescribeResult{Fingerprint: fp, Descriptors: []contentservice.ProviderDescriptor{}}, nil
+}
+
+// ResolveResource uses the host-side manager bound to this process's config.
+// Overview local rows keep the app-injected resolver instead of this path.
+func (LocalSource) ResolveResource(ctx context.Context, src SourceContext, ref resource.Reference, refresh bool) (resource.Document, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	result, err := contentservice.Default().ReadResource(ctx, src.WorkspaceID, ref, refresh)
+	if err != nil {
+		return resource.Document{}, err
+	}
+	if result.ResourceError != nil {
+		return resource.Document{}, contentservice.ResourceErrorFromWire(result.ResourceError)
+	}
+	return contentservice.SanitizeWireDocument(result.Resource)
 }
 
 func diffOperationFor(target string) string {

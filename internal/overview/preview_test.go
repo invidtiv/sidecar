@@ -150,7 +150,7 @@ func preparedPreviewLineForTest(t *testing.T, m *Model, line string) termpreview
 		t.Fatal("no terminal link scope")
 	}
 	input := termpreview.LinkPrepare{
-		Scope: scope, Rows: []termpreview.LinkRow{{AbsoluteLine: 0, Text: line}}, Allowed: allowed, Matchers: m.resourceMatchers,
+		Scope: scope, Rows: []termpreview.LinkRow{{AbsoluteLine: 0, Text: line}}, Allowed: allowed, Matchers: m.previewResourceMatchers(),
 	}
 	state := m.terminalLinks.Prepare(input)
 	deliverPreviewLinkResults(t, m, m.terminalLinks.TakeCmd())

@@ -11,9 +11,11 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/contentpanes"
+	"github.com/marcus/sidecar/internal/contentservice"
 	"github.com/marcus/sidecar/internal/hostproto"
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/noteview"
+	"github.com/marcus/sidecar/internal/resource"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/targetactivation"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
@@ -81,6 +83,14 @@ func (f *fakeRemoteContentSource) LoadIssue(_ context.Context, _ contentpanes.So
 
 func (f *fakeRemoteContentSource) LoadDiff(context.Context, contentpanes.SourceContext, contentpanes.DiffReadRequest) (contentpanes.DiffReadResult, error) {
 	return contentpanes.DiffReadResult{}, fmt.Errorf("fake content source does not load diffs")
+}
+
+func (f *fakeRemoteContentSource) Describe(context.Context, string) (contentservice.DescribeResult, error) {
+	return contentservice.DescribeResult{Fingerprint: contentservice.FingerprintDescriptors(nil)}, nil
+}
+
+func (f *fakeRemoteContentSource) ResolveResource(context.Context, contentpanes.SourceContext, resource.Reference, bool) (resource.Document, error) {
+	return resource.Document{}, fmt.Errorf("fake content source does not resolve resources")
 }
 
 func (f *fakeRemoteContentSource) LoadNote(_ context.Context, _ contentpanes.SourceContext, req contentpanes.NoteReadRequest) (contentpanes.NoteReadResult, error) {

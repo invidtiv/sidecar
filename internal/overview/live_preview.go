@@ -66,7 +66,7 @@ type previewTDStoreResolvedMsg struct {
 // the visible surface, exactly like the shell probes above them.
 func isLiveWatchMessage(msg tea.Msg) bool {
 	switch msg.(type) {
-	case previewTDStoreResolvedMsg, workspacediff.AdminTargetsMsg, remoteDocumentRefreshTickMsg:
+	case previewTDStoreResolvedMsg, workspacediff.AdminTargetsMsg, remoteDocumentRefreshTickMsg, remoteResourceDescribeTickMsg, remoteDescribeMsg:
 		return true
 	}
 	return livepanes.Owns(livePreviewOwner, msg)
@@ -116,6 +116,10 @@ func (m *Model) handleLiveWatchMsg(msg tea.Msg) (tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case remoteDocumentRefreshTickMsg:
 		return m.applyRemoteDocumentRefreshTick(msg), true
+	case remoteDescribeMsg:
+		return m.applyRemoteDescribe(msg), true
+	case remoteResourceDescribeTickMsg:
+		return m.applyRemoteResourceDescribeTick(msg), true
 	case previewTDStoreResolvedMsg:
 		if m.preview.tdStoreTargets == nil {
 			m.preview.tdStoreTargets = make(map[string][]livewatch.Target)

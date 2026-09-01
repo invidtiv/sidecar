@@ -45,7 +45,7 @@ func (m *Model) preparePreviewDocFrame(doc *previewDoc) tea.Cmd {
 	frame := view.PrepareFrame(docview.PrepareOptions{
 		Root:              doc.root,
 		Resolution:        index.SnapshotForRoot(doc.root),
-		Matchers:          m.resourceMatchers,
+		Matchers:          m.previewResourceMatchers(),
 		MatcherGeneration: m.linkMatcherGeneration,
 		AllowedKinds:      docview.ContentLinkKinds(),
 		Decorate:          true,
@@ -144,9 +144,6 @@ func (m *Model) activatePreviewDocLink(ref contentlink.Ref) tea.Cmd {
 	case contentlink.KindDiff:
 		return m.openPreviewContent(ref, "Diff")
 	case contentlink.KindResource:
-		if m.previewRemoteHostID() != "" {
-			return nil
-		}
 		return m.openPreviewContent(ref, "Resource")
 	default:
 		return nil

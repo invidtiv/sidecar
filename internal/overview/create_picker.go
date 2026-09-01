@@ -203,7 +203,7 @@ func (m *Model) openPreviewTarget(target uirequest.Target) (tea.Cmd, bool) {
 		cmd = m.openPreviewDiff(uirequest.DiffTarget(root, target.Value))
 		return cmd, onScreen(panelayout.Diff)
 	case uirequest.TargetKindResource:
-		ref, refusal := resourceview.ReferenceForLocator(m.resourceMatchers, target.Provider, target.Value)
+		ref, refusal := resourceview.ReferenceForLocator(m.previewResourceMatchers(), target.Provider, target.Value)
 		if refusal != "" {
 			return nil, false
 		}

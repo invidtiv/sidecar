@@ -76,6 +76,18 @@ func EncodeReadResult(result ReadResult) ([]byte, error) {
 			}
 			continue
 		}
+		if result.Resource != nil && result.Resource.Body != nil && result.Resource.Body.Text != "" {
+			cut := len(result.Resource.Body.Text) - overflow - 64
+			if cut >= len(result.Resource.Body.Text) {
+				cut = len(result.Resource.Body.Text) / 2
+			}
+			if cut < 0 {
+				cut = 0
+			}
+			result.Resource.Body.Text = shrinkUTF8(result.Resource.Body.Text, cut)
+			result.Truncated = true
+			continue
+		}
 		oversize := ReadResult{
 			Kind:      result.Kind,
 			Oversize:  true,
