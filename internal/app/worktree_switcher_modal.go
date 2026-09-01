@@ -707,8 +707,10 @@ func (m *Model) switchWorktree(worktreePath string) tea.Cmd {
 		}
 	}
 
-	// Use the same switchProject mechanism - it handles reinit, state save/restore
-	return m.switchProjectWithInventory(worktreePath, append([]WorktreeInfo(nil), m.cachedWorktreeInventory...))
+	// W is an explicit destination: do not restore LastWorktreePath. After a
+	// remote bind WorkDir is empty, so the oldWorkDir coincidence that used to
+	// skip restore on local main no longer holds.
+	return m.switchProjectWithSelection(worktreePath, append([]WorktreeInfo(nil), m.cachedWorktreeInventory...), nil, false)
 }
 
 // refreshWorktreeCache calls GetWorktrees and caches the result for the current WorkDir.

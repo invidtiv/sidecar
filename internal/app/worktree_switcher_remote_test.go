@@ -2,6 +2,7 @@ package app
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -447,5 +448,57 @@ func TestWorktreeSwitcherFilterMatchesHostProjectWorktreeAndPath(t *testing.T) {
 	}
 	if got := filterWorktreeRows(m.worktreeSwitcherAll, "/home/me/sidecar-feature"); len(got) != 1 || !got[0].isRemote() {
 		t.Fatalf("path filter = %+v", got)
+	}
+}
+
+func TestWorktreeSwitcherLocalMainAfterRemoteBindDoesNotRestoreLastWorktree(t *testing.T) {
+	main := newOverviewGitRepo(t, "main")
+	if out, err := exec.Command("git", "-C", main, "commit", "-q", "--allow-empty", "-m", "root").CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v: %s", err, out)
+	}
+	feature := filepath.Join(t.TempDir(), "feature")
+	if out, err := exec.Command("git", "-C", main, "worktree", "add", "-q", "-b", "feature", feature).CombinedOutput(); err != nil {
+		t.Fatalf("git worktree add: %v: %s", err, out)
+	}
+	normalizedMain, _ := normalizePath(main)
+	normalizedFeature, _ := normalizePath(feature)
+
+	m := switcherTestModel(t, main, []config.ProjectConfig{
+		{Name: "Sidecar", Path: main},
+	})
+	if err := state.SetLastWorktreePath(normalizedMain, normalizedFeature); err != nil {
+		t.Fatal(err)
+	}
+	m.boundDestination = Destination{HostID: "aerie", ProjectName: "Sidecar", ProjectKey: "/home/me/sidecar"}
+	m.ui.WorkDir = ""
+	m.cachedWorktreeInventory = nil
+
+	_ = m.activateWorktreeSwitcherRow(worktreeSwitcherRow{
+		Local: WorktreeInfo{Path: main, Branch: "main", IsMain: true},
+	})
+	if got, _ := normalizePath(m.ui.WorkDir); got != normalizedMain {
+		t.Fatalf("WorkDir = %q, want the chosen main %q", m.ui.WorkDir, normalizedMain)
+	}
+	if m.boundDestination.HostID != "" {
+		t.Fatalf("HostID = %q, want cleared", m.boundDestination.HostID)
+	}
+
+	m2 := switcherTestModel(t, main, []config.ProjectConfig{
+		{Name: "Sidecar", Path: main},
+	})
+	if err := state.SetLastWorktreePath(normalizedMain, normalizedFeature); err != nil {
+		t.Fatal(err)
+	}
+	m2.boundDestination = Destination{HostID: "aerie", ProjectName: "Sidecar", ProjectKey: "/home/me/sidecar"}
+	m2.ui.WorkDir = ""
+	m2.cachedWorktreeInventory = nil
+	_ = m2.activateWorktreeSwitcherRow(worktreeSwitcherRow{
+		Local: WorktreeInfo{Path: feature, Branch: "feature"},
+	})
+	if got, _ := normalizePath(m2.ui.WorkDir); got != normalizedFeature {
+		t.Fatalf("feature WorkDir = %q, want %q", m2.ui.WorkDir, normalizedFeature)
+	}
+	if m2.boundDestination.HostID != "" {
+		t.Fatalf("feature HostID = %q, want cleared", m2.boundDestination.HostID)
 	}
 }
