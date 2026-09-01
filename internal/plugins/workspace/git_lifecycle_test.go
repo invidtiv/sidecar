@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/plugin"
 )
 
@@ -736,6 +737,71 @@ func TestCommandsHideUnsafeActionsAndExposeRecovery(t *testing.T) {
 	ids = commandIDs(p.Commands())
 	if !ids["retry-push"] || ids["continue-merge"] || ids["abort-merge"] {
 		t.Fatalf("push recovery commands = %v", ids)
+	}
+}
+
+func TestCommandsTrustInventoryButKeyPressRevalidatesMissingPath(t *testing.T) {
+	path := t.TempDir()
+	wt := &Worktree{Name: "feature", Path: path, Branch: "feature"}
+	p := &Plugin{worktrees: []*Worktree{wt}, selectedIdx: 0, viewMode: ViewModeList}
+
+	for _, id := range []string{"delete-workspace", "push", "merge-workflow"} {
+		if !commandIDs(p.Commands())[id] {
+			t.Fatalf("live inventory did not advertise %q", id)
+		}
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	// Commands are presentation-only and intentionally remain stale until the
+	// next inventory refresh. This path must not perform another os.Stat.
+	if !commandIDs(p.Commands())["delete-workspace"] {
+		t.Fatal("stale inventory hint disappeared before refresh")
+	}
+
+	for _, key := range []rune{'D', 'p', 'm'} {
+		cmd := p.handleListKeys(tea.KeyPressMsg{Code: key, Text: string(key)})
+		if cmd == nil {
+			t.Fatalf("key %q did not return a refusal", key)
+		}
+		post, ok := cmd().(notify.PostMsg)
+		if !ok || !strings.Contains(strings.ToLower(post.Notification.Title), "missing") {
+			t.Fatalf("key %q result = %#v, want missing-path refusal", key, post)
+		}
+		if p.viewMode != ViewModeList {
+			t.Fatalf("key %q opened mode %v for a missing path", key, p.viewMode)
+		}
+	}
+}
+
+func TestInventoryMissingAndRefreshRemoveWorktreeActionHints(t *testing.T) {
+	path := t.TempDir()
+	wt := &Worktree{Name: "feature", Path: path, Branch: "feature", IsMissing: true}
+	p := &Plugin{
+		ctx:                &plugin.Context{Epoch: 7, WorkDir: path, ProjectRoot: path},
+		worktrees:          []*Worktree{wt},
+		selectedIdx:        0,
+		viewMode:           ViewModeList,
+		refreshOperationID: "refresh-7",
+		stateRestored:      true,
+	}
+	for _, id := range []string{"delete-workspace", "push", "merge-workflow"} {
+		if commandIDs(p.Commands())[id] {
+			t.Fatalf("missing inventory advertised %q", id)
+		}
+	}
+
+	p.update(RefreshDoneMsg{
+		OperationScope: OperationScope{Epoch: 7, OperationID: "refresh-7"},
+		Worktrees:      nil,
+	})
+	if len(p.worktrees) != 0 || p.selectedWorktree() != nil {
+		t.Fatalf("refresh retained removed worktree: worktrees=%#v selected=%#v", p.worktrees, p.selectedWorktree())
+	}
+	for _, id := range []string{"delete-workspace", "push", "merge-workflow"} {
+		if commandIDs(p.Commands())[id] {
+			t.Fatalf("post-refresh commands advertised %q", id)
+		}
 	}
 }
 

@@ -53,7 +53,7 @@ If a tmux server has died, managed shell records survive it — a server death m
 
 ## Coordinating another agent
 
-Sidecar can start and drive a second agent in a shell it owns, behind the default-off `agent_control` feature flag. See `.claude/skills/coordinate-agents/SKILL.md` for the full contract; the sequence it exists to protect is:
+Sidecar can start and drive a second agent in a shell it owns, behind the default-off `agent_control` feature flag. See `.agents/skills/coordinate-agents/SKILL.md` (or `.claude/skills/coordinate-agents/SKILL.md`) for the full contract; the sequence it exists to protect is:
 
 discover (`sidecar agent list --json`) → create the layout separately (`sidecar create shell`, never `agent start`) → start the provider (`sidecar agent start TARGET --kind KIND`, which returns only at ready) → `sidecar agent prompt TARGET TEXT --wait --timeout ...` → **read before you send keys** (`sidecar agent read TARGET --source recent-unwrapped`) → answer with `sidecar agent send-keys TARGET ...`.
 
@@ -135,7 +135,7 @@ make use-homebrew
 BUMP=minor make release
 ```
 
-See `docs/guides/active/releasing.md` and `.claude/skills/release-sidecar/SKILL.md`.
+See `docs/guides/active/releasing.md` and `.agents/skills/release-sidecar/SKILL.md`.
 Version is set via ldflags at build time. Without it, sidecar shows git revision info.
 `make install-dev` is a compatibility alias for `make install-local`. Plain
 `make install` is an unmanaged `go install` into `GOBIN`; it does not alter
@@ -149,7 +149,7 @@ Prefer capability probes over tmux version branches. Every compatibility proof m
 
 ## Keyboard Shortcut Parity
 
-See .claude/skills/ui-features/SKILL.md
+See .agents/skills/ui-features/SKILL.md
 
 ## Project and global workspace parity
 
@@ -173,7 +173,7 @@ Each surface binds to the frame in exactly one file — `pane_host.go` — which
 answers only what is in its own leaves. When adding anything to do with panes,
 splits, handles, borders, focus chrome, or pane hit regions, put it in
 `paneframe` and let both surfaces inherit it. Do not add a second compositor,
-border rule, or divider renderer. See `.claude/skills/drag-pane/SKILL.md`.
+border rule, or divider renderer. See `.agents/skills/drag-pane/SKILL.md`.
 
 Live refresh binds in exactly one file per surface too —
 `internal/plugins/workspace/live_panes.go` and

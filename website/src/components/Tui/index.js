@@ -1,4 +1,4 @@
-import React, {createContext, useContext, useMemo} from 'react';
+import React, {createContext, useCallback, useContext, useMemo, useRef, useState} from 'react';
 import clsx from 'clsx';
 import styles from './Tui.module.css';
 import {DEFAULT_THEME, findTheme, themeVars} from './theme';
@@ -17,33 +17,40 @@ export function useTuiTheme() {
 
 export function TuiWindow({
   theme = DEFAULT_THEME,
-  titlebar,
+  titlebar = true,
   children,
   className,
   style,
   ...rest
 }) {
   const vars = useMemo(() => themeVars(findTheme(theme)), [theme]);
+  const titlebarProps =
+    titlebar === true
+      ? {label: 'sidecar'}
+      : typeof titlebar === 'object' && titlebar !== null
+      ? {label: 'sidecar', ...titlebar}
+      : null;
+
   return (
     <ThemeCtx.Provider value={theme}>
       <div
         className={clsx(styles.window, className)}
         style={{...vars, ...style}}
         {...rest}>
-        {titlebar ? <TitleBar {...titlebar} /> : null}
+        {titlebarProps ? <TitleBar {...titlebarProps} /> : null}
         {children}
       </div>
     </ThemeCtx.Provider>
   );
 }
 
-function TitleBar({label, right}) {
+function TitleBar({label = 'sidecar', right}) {
   return (
     <div className={styles.titlebar}>
       <span className={styles.dot} style={{background: '#e05c52'}} />
       <span className={styles.dot} style={{background: '#dfae3c'}} />
       <span className={styles.dot} style={{background: '#3fa858'}} />
-      <span className={styles.titlebarLabel}>{label}</span>
+      {label ? <span className={styles.titlebarLabel}>{label}</span> : null}
       {right ? <span className={styles.titlebarRight}>{right}</span> : null}
     </div>
   );
@@ -90,12 +97,85 @@ export function TuiHeader({
   );
 }
 
-export function TuiPanes({children}) {
-  return <div className={styles.panes}>{children}</div>;
+export function usePaneResize(initialPercent = 30, min = 15, max = 75) {
+  const [percent, setPercent] = useState(initialPercent);
+  const containerRef = useRef(null);
+
+  const onHandleResize = useCallback(
+    (_deltaX, currentX) => {
+      if (!containerRef.current) return;
+      const rect = containerRef.current.getBoundingClientRect();
+      if (!rect.width) return;
+      const pct = ((currentX - rect.left) / rect.width) * 100;
+      setPercent(Math.max(min, Math.min(max, pct)));
+    },
+    [min, max],
+  );
+
+  return {percent, containerRef, onHandleResize, setPercent};
 }
 
-export function TuiHandle() {
-  return <div className={styles.handle} aria-hidden="true" />;
+export function TuiPanes({children, className, style, innerRef, ...rest}) {
+  return (
+    <div
+      ref={innerRef}
+      className={clsx(styles.panes, className)}
+      style={style}
+      {...rest}>
+      {children}
+    </div>
+  );
+}
+
+export function TuiHandle({onResize, horizontal = false, className, style, ...rest}) {
+  const [isDragging, setIsDragging] = useState(false);
+
+  const handlePointerDown = useCallback(
+    (e) => {
+      if (!onResize) return;
+      e.preventDefault();
+      setIsDragging(true);
+      const startPos = horizontal ? e.clientY : e.clientX;
+      const handleEl = e.currentTarget;
+      try {
+        handleEl.setPointerCapture?.(e.pointerId);
+      } catch (_) {}
+
+      const onPointerMove = (moveEv) => {
+        const currentPos = horizontal ? moveEv.clientY : moveEv.clientX;
+        const delta = currentPos - startPos;
+        onResize(delta, currentPos);
+      };
+
+      const onPointerUp = (upEv) => {
+        setIsDragging(false);
+        try {
+          handleEl.releasePointerCapture?.(upEv.pointerId);
+        } catch (_) {}
+        window.removeEventListener('pointermove', onPointerMove);
+        window.removeEventListener('pointerup', onPointerUp);
+      };
+
+      window.addEventListener('pointermove', onPointerMove);
+      window.addEventListener('pointerup', onPointerUp);
+    },
+    [onResize, horizontal],
+  );
+
+  return (
+    <div
+      className={clsx(
+        horizontal ? styles.handleHorizontal : styles.handle,
+        isDragging && styles.handleActive,
+        onResize && styles.handleInteractive,
+        className,
+      )}
+      onPointerDown={handlePointerDown}
+      style={style}
+      aria-hidden="true"
+      {...rest}
+    />
+  );
 }
 
 export function TuiPane({

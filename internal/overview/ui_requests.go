@@ -189,8 +189,11 @@ func (m *Model) applyCreateRequest(req uirequest.Request) tea.Cmd {
 	if err != nil {
 		return nil
 	}
-	if strings.TrimSpace(req.Options.Split) != "" {
-		return nil
+	if split := strings.TrimSpace(req.Options.Split); split != "" {
+		if payload.Kind != uirequest.CreateKindShell {
+			return nil
+		}
+		return m.applyCreateShellSplit(req, payload, split)
 	}
 	project, key, ok := m.createRequestProject(req)
 	if !ok {
@@ -340,9 +343,14 @@ func (m *Model) applyCreateWorktreeRequest(req uirequest.Request, payload uirequ
 		Path:        path,
 		Branch:      payload.Branch,
 		TmuxName:    payload.Session,
+		// Optimistic: the CLI sends a session name even for --no-launch, so
+		// Session is not liveness. Inventory refresh replaces this row.
+		Plain: true,
 	}
 	ws.ID = ws.ProjectKey + ":worktree:" + ws.Key
-	m.showIdleWorktrees = true
+	// Show this worktree only. Flipping showIdleWorktrees would dump every
+	// idle checkout across every project into Sessions.
+	m.revealIdleWorktree(path, "")
 	m.upsertCreateWorkspace(key, ws)
 	if payload.ShouldFocus() {
 		m.pendingCreatedPath = path
@@ -406,6 +414,17 @@ func (m *Model) ackCreate(req uirequest.Request, surface string) {
 		PID:      os.Getpid(),
 		Status:   uirequest.StatusOpened,
 		Surface:  surface,
+		At:       time.Now().UTC(),
+	})
+}
+
+func (m *Model) ackCreateDeclined(req uirequest.Request, reason string) {
+	_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
+		Instance: hostInstanceID(),
+		Host:     uirequest.HostName(),
+		PID:      os.Getpid(),
+		Status:   uirequest.StatusDeclined,
+		Reason:   reason,
 		At:       time.Now().UTC(),
 	})
 }

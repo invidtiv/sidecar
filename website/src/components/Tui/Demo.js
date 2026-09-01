@@ -60,7 +60,7 @@ const ORDER = [...GLOBAL_TABS, ...PROJECT_TABS].map((t) => t.id);
 
 const CAPTIONS = {
   sessions:
-    'Every agent you have running, in every repo, on one screen. This is where most days start.',
+    'Every agent you have running, across every repo and remote host, in one unified terminal.',
   activity:
     'The same fleet as a board. Blocked means an agent is waiting on you — that lane is the whole point.',
   tasks:
@@ -74,14 +74,12 @@ const CAPTIONS = {
 
 export default function SidecarDemo({theme = 'sidecar-modern', clock = '21:02'}) {
   const [active, setActive] = useState('sessions');
-  const [touched, setTouched] = useState(false);
   const ref = useRef(null);
   const screen = SCREENS[active];
   const Screen = screen.render;
 
   const select = useCallback((id) => {
     setActive(id);
-    setTouched(true);
   }, []);
 
   // Arrow keys walk the tab strip once the demo has focus, the same left-to-
@@ -97,40 +95,12 @@ export default function SidecarDemo({theme = 'sidecar-modern', clock = '21:02'})
     [active, select],
   );
 
-  // Before anyone touches it the demo shows that it is live by walking one
-  // step from Sessions to Activity, then stops and waits.
-  useEffect(() => {
-    if (touched) return undefined;
-    const el = ref.current;
-    if (!el || typeof IntersectionObserver === 'undefined') return undefined;
-    let timer;
-    const io = new IntersectionObserver(
-      ([entry]) => {
-        if (!entry.isIntersecting || timer) return;
-        timer = setTimeout(() => {
-          setActive((cur) => (cur === 'sessions' ? 'activity' : cur));
-        }, 2600);
-      },
-      {threshold: 0.5},
-    );
-    io.observe(el);
-    return () => {
-      io.disconnect();
-      clearTimeout(timer);
-    };
-  }, [touched]);
-
   return (
     <figure className={demo.figure} ref={ref}>
       <div className={demo.pan}>
         <TuiWindow
           theme={theme}
-          titlebar={{
-            label: 'sidecar — ~/code/sidecar',
-            right: (
-              <span>{screen.scope === 'global' ? 'global' : 'sidecar'}</span>
-            ),
-          }}
+          titlebar={{label: 'sidecar'}}
           style={{height: 'clamp(400px, 42vw, 520px)'}}
           onKeyDown={onKeyDown}>
           <TuiHeader
@@ -166,7 +136,7 @@ export function SidecarStill({
   const entry = SCREENS[screen];
   const Screen = entry.render;
   return (
-    <TuiWindow theme={theme} style={{height}}>
+    <TuiWindow theme={theme} titlebar={{label: 'sidecar'}} style={{height}}>
       <TuiHeader
         globalTabs={GLOBAL_TABS}
         projectTabs={PROJECT_TABS}

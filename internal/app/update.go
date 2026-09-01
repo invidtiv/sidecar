@@ -965,6 +965,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, cmd)
 			}
 		}
+		if m.sessionsOwnsCreateSplit(msg.Request) {
+			return m, tea.Batch(cmds...)
+		}
 	}
 
 	// Unparsed terminal input (CSI u / modifyOtherKeys sequences) is keyboard

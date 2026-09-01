@@ -75,7 +75,7 @@ func (m *Model) syncWorkspaces() {
 			if badge := m.paneRowBadge(workspace); badge != "" {
 				item.NameMeta = append(item.NameMeta, workspacelist.RowField{Text: " " + badge, Rendered: styles.Muted.Render(" " + badge)})
 			}
-			if !m.showIdleWorktrees && item.Group == workspacelist.GroupNoSession {
+			if m.hideIdleWorkspace(item, workspace) {
 				continue
 			}
 			items = append(items, item)
@@ -89,7 +89,7 @@ func (m *Model) syncWorkspaces() {
 	m.eachHostWorkspace(func(order int, label string, workspace workspaceinventory.Workspace, stale bool) {
 		m.catalog[workspace.ID] = workspace
 		item := listItem(workspace.Item(), label, remoteBase+order, stale)
-		if !m.showIdleWorktrees && item.Group == workspacelist.GroupNoSession {
+		if m.hideIdleWorkspace(item, workspace) {
 			return
 		}
 		items = append(items, item)
@@ -109,6 +109,38 @@ func (m *Model) syncWorkspaces() {
 	m.workspaces.SetFailures(failures)
 	m.workspaces.SetLoading(m.loading)
 	m.applyWorkspacesEmptyState(0)
+}
+
+func idleRevealKey(hostID, path string) string {
+	return hostID + "\x00" + workspaceinventory.CanonicalPath(path)
+}
+
+// revealIdleWorktree lets one no-session worktree appear without turning on
+// the global idle-worktrees toggle. Create uses this so the new row is
+// visible without flooding OLDER with every idle checkout.
+func (m *Model) revealIdleWorktree(path, hostID string) {
+	if path == "" {
+		return
+	}
+	if m.revealedIdleWorktrees == nil {
+		m.revealedIdleWorktrees = make(map[string]struct{})
+	}
+	m.revealedIdleWorktrees[idleRevealKey(hostID, path)] = struct{}{}
+}
+
+func (m *Model) idleWorktreeRevealed(ws workspaceinventory.Workspace) bool {
+	if len(m.revealedIdleWorktrees) == 0 {
+		return false
+	}
+	if ws.Kind != workspaceinventory.KindWorktree || ws.Path == "" {
+		return false
+	}
+	_, ok := m.revealedIdleWorktrees[idleRevealKey(ws.HostID, ws.Path)]
+	return ok
+}
+
+func (m *Model) hideIdleWorkspace(item workspacelist.Item, ws workspaceinventory.Workspace) bool {
+	return !m.showIdleWorktrees && item.Group == workspacelist.GroupNoSession && !m.idleWorktreeRevealed(ws)
 }
 
 func (m *Model) syncCreateActions() {

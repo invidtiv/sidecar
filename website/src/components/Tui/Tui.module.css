@@ -24,6 +24,8 @@
   font-feature-settings: 'liga' 0, 'calt' 0;
   -webkit-font-smoothing: antialiased;
   border: 1px solid var(--tui-chrome-edge);
+  border-radius: 12px;
+  box-shadow: 0 28px 70px -15px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.05);
   overflow: hidden;
   container-type: inline-size;
 }
@@ -37,7 +39,6 @@
   height: 30px;
   padding: 0 12px;
   background: var(--tui-titlebar);
-  border-bottom: 1px solid var(--tui-chrome-edge);
   flex: none;
 }
 
@@ -74,6 +75,7 @@
   flex: none;
   white-space: nowrap;
   overflow: hidden;
+  padding: 0 4px;
 }
 
 .brand {
@@ -174,25 +176,27 @@
   flex: 1;
   min-height: 0;
   background: var(--tui-bg);
-  padding: 0 1px 0 0;
+  padding: 6px 8px;
+  gap: 6px;
 }
 
-/* A terminal draws its border as a row of box-drawing glyphs; on the web a 1px
-   gradient hairline reads the same and stays crisp at any zoom. */
+/* A terminal draws its border around the whole pane card. */
 .pane {
   position: relative;
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  border-radius: 5px;
-  padding: 1px;
-  background: linear-gradient(30deg, var(--pane-edge-a), var(--pane-edge-b));
+  background: var(--tui-bg);
+  border: 1px solid var(--tui-border-a);
+  border-radius: 6px;
+  overflow: hidden;
   --pane-edge-a: var(--tui-border-a);
   --pane-edge-b: var(--tui-border-b);
 }
 
 .paneFocused {
+  border-color: var(--tui-border-active-a);
   --pane-edge-a: var(--tui-border-active-a);
   --pane-edge-b: var(--tui-border-active-b);
 }
@@ -202,18 +206,21 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  border-radius: 4px;
   background: var(--tui-bg);
   overflow: hidden;
+  padding: 4px 0;
 }
 
+/* Top line of the pane in the terminal — pane title and chips */
 .paneHeader {
   display: flex;
   align-items: center;
   gap: 1ch;
+  height: calc(var(--row) * 1em);
   padding: 0 1ch;
   flex: none;
   white-space: nowrap;
+  background: transparent;
 }
 
 .paneTitle {
@@ -255,6 +262,9 @@
   justify-content: center;
   cursor: col-resize;
   color: var(--tui-border-a);
+  user-select: none;
+  touch-action: none;
+  z-index: 2;
 }
 
 .handle::before {
@@ -263,12 +273,65 @@
   height: 42%;
   background: currentColor;
   border-radius: 1px;
-  transition: background 150ms ease, height 150ms ease;
+  transition: background 150ms ease, height 150ms ease, width 150ms ease;
 }
 
-.handle:hover::before {
+.handle:hover::before,
+.handleActive::before {
   background: var(--tui-primary);
-  height: 62%;
+  height: 75%;
+  width: 2px;
+}
+
+.handleActive {
+  color: var(--tui-primary);
+}
+
+/* The horizontal drag handle Sidecar puts between vertically split panes. */
+.handleHorizontal {
+  flex: none;
+  height: 7px;
+  width: 100%;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: row-resize;
+  color: var(--tui-border-a);
+  user-select: none;
+  touch-action: none;
+  z-index: 2;
+}
+
+.handleHorizontal::before {
+  content: '';
+  height: 1px;
+  width: 42%;
+  background: currentColor;
+  border-radius: 1px;
+  transition: background 150ms ease, width 150ms ease, height 150ms ease;
+}
+
+.handleHorizontal:hover::before,
+.handleHorizontal.handleActive::before {
+  background: var(--tui-primary);
+  width: 75%;
+  height: 2px;
+}
+
+.stageFade {
+  animation: stageFadeIn 260ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@keyframes stageFadeIn {
+  from {
+    opacity: 0.2;
+    transform: scale(0.995);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 /* ------------------------------------------------------------------ footer */

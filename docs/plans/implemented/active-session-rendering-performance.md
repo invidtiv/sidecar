@@ -1,20 +1,34 @@
 # Plan: Active-session steady-state rendering performance
 
-**Task:** `td-e32598` — Plan active-session steady-state rendering performance
+**Epic:** `td-a82318` — Active-session steady-state rendering performance
 
-**Status:** Active
+**Status:** Implemented on 2026-08-31 at reviewed candidate `a2eb12d4`
 
-**Related implemented plan:** [Visible terminal rendering performance](../implemented/visible-terminal-rendering-performance.md)
+**Related implemented plan:** [Visible terminal rendering performance](visible-terminal-rendering-performance.md)
+
+## Accepted result
+
+The reviewed implementation meets the active-session budget without reducing terminal publication, the 175 ms activity animation, document refresh, pointer regions, or action validation. On the isolated 220×58 active terminal-plus-rendered-document fixture, three counter-disabled 15-second profiles measured 11.83%, 13.34%, and 12.56% CPU. The independently reviewed sorted median is 12.56%, below the 15% target and 51.93% below the identical approved post-Slice-3 fixture median of 26.13%.
+
+The separate counter-enabled pass recorded 568 application/Workspace/sidebar views, 466 terminal-driven preview composes, 102 activity-only preview-cache hits, 466 document-frame cache hits with zero document builds or scans, 23,366 row-cache hits, 1,332 misses on genuinely changing rows, zero analyzer bypasses, and 34 ms output-to-frame p95. Private tmux, state, config, fixture, processes, socket, and pprof listener were cleaned; retained numeric/profile evidence is under `/private/tmp/sidecar-post-slice4-gate.KwJrFY`.
+
+| Slice | Reviewed commits | Accepted evidence |
+| --- | --- | --- |
+| Attribution | `f4ca5cea` | Exact terminal-plus-document fixture and privacy-safe redraw counters reproduce the amplification. |
+| Durable row analysis | `d898fa52` | Warm unchanged terminal draws report row hits, zero misses, and zero analyzer bypasses. |
+| Prepared document frames | `d8425133`, `d251fac8`, `cb1e90d9` | Pulse redraws reuse prepared bodies and relative link hits across Workspace, Sessions, and app content decks with no rescans. |
+| Stable project preview | `915c6899`, `4222ba38` | One hundred activity-only frames retain byte-distinct markers and current regions while performing zero preview, terminal, document, or row work. |
+| App-shell fast path | `8985dbd3`, `a2eb12d4` | Workspace skips redundant post-constraint work at safe dimensions; footer presentation uses trusted inventory while D/p/m actions retain fresh refusal validation. |
 
 ## Decision first
 
-Make stable pane bodies survive unrelated application redraws. Restore the row analyzer as an invariant of every live terminal leaf, prepare and cache document content-link frames by explicit visual identity, then cache the project Workspace preview composition while replaying current hit regions. Preserve the 175 ms activity pulse, terminal publication cadence, document live refresh, links, selection, pane chrome, and input latency; the work removes repeated computation rather than making the interface update less often.
+Stable pane bodies survive unrelated application redraws. Every live terminal leaf owns its row analyzer, document content-link frames are prepared by explicit visual identity, and project Workspace reuses stable preview composition while replaying current hit regions. The 175 ms activity pulse, terminal publication cadence, document live refresh, links, selection, pane chrome, and input latency remain unchanged; the implementation removes repeated computation rather than making the interface update less often.
 
 Do not reopen the terminal transport or globally lower Bubble Tea's frame rate. The current control actor already reduced 1,143 model-frame builds to 31 published frames during the measured 30-second window. The regression is downstream: those 31 publications coincided with 301 terminal renders because activity animation and other ordinary messages redraw the focused Workspace. A stable terminal and document pane should be cheap to project again.
 
 ## User journey and outcome
 
-Marcus can keep an agent working in a visible terminal with a rendered Markdown document open beside it and retain the current smooth activity marker, terminal output, selection, live document refresh, and clickable links without Sidecar sitting around 27–35% CPU.
+Marcus can keep an agent working in a visible terminal with a rendered Markdown document open beside it and retain the current smooth activity marker, terminal output, selection, live document refresh, and clickable links without the repeated rendering work that motivated the original 27–35% live observation. The accepted numeric budget is proven by the isolated deterministic fixture; it is not presented as a replay of that original live process.
 
 The controlling journey is the exact live layout profiled on 2026-08-31:
 
@@ -141,7 +155,7 @@ Add fixed counters for application views, project Workspace views, project sideb
 
 Re-profile after the direct slices. The current profile contains smaller work in `tdmonitor.Update`, Tasks update/timezone construction, header/footer layout, and general string/canvas composition, but none outranks the measured pane work. Only if the CPU budget is still missed should a follow-up isolate unrelated plugin messages or add a top-level plugin-frame cache. Do not preemptively route messages or add a global frame cap from this baseline.
 
-## Implementation sequence
+## Completed implementation sequence
 
 ### Slice 0 — Exact fixture and attribution counters
 
@@ -209,7 +223,7 @@ Use current package paths if Go rejects a redundant `...`; the boundary coverage
 
 ## Performance and UX acceptance budgets
 
-All CPU comparisons use the same process build, dimensions, pane tree, document, activity fixture, terminal workload, and 30-second duration. Run at least three candidate pairs and report the median. Use one counter-enabled pass for behavioral rates and counter-disabled passes for CPU.
+The accepted CPU comparison uses the same process build, dimensions, pane tree, document, activity fixture, terminal workload, and 15-second duration for three independent candidate profiles, then compares the sorted median with the approved same-fixture post-Slice-3 median. A separate counter-enabled pass supplies behavioral rates; counter-disabled profiles supply CPU evidence.
 
 - Median CPU for the exact active terminal-plus-document journey is at most 15%, or at least 50% below the 27.11% diagnostic baseline if machine/background variance makes the absolute number incomparable.
 - After warmup, unchanged terminal draws report at least 95% row-cache hits and zero analyzer bypasses. A pulse-only interval reports zero row misses.

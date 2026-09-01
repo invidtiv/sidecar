@@ -726,6 +726,17 @@ func (p *Plugin) Name() string { return pluginName }
 // Icon returns the plugin icon.
 func (p *Plugin) Icon() string { return pluginIcon }
 
+// ViewIsSelfConstrained reports the View contract the workspace already
+// enforces for its panels, boards, and overlays. The list renderer deliberately
+// raises smaller heights to its four-row panel floor, and widths below three do
+// not have enough columns for its final frame, so those dimensions retain the
+// app shell's defensive clamp.
+func (p *Plugin) ViewIsSelfConstrained() bool {
+	return p.width >= 3 && p.height >= 4
+}
+
+var _ plugin.SelfConstrainedView = (*Plugin)(nil)
+
 // IsFocused returns whether the plugin is focused.
 func (p *Plugin) IsFocused() bool { return p.focused }
 

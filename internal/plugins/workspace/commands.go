@@ -389,13 +389,13 @@ func (p *Plugin) Commands() []plugin.Command {
 				}
 			}
 			// Only advertise mutating actions that are safe for this worktree.
-			if WorktreeActionRefusal(wt, WorktreeActionDelete) == "" {
+			if worktreeActionPresentationRefusal(wt, WorktreeActionDelete) == "" {
 				cmds = append(cmds, plugin.Command{ID: "delete-workspace", Name: "Delete", Description: "Delete selected workspace", Context: "workspace-list", Priority: 5})
 			}
-			if WorktreeActionRefusal(wt, WorktreeActionPush) == "" {
+			if worktreeActionPresentationRefusal(wt, WorktreeActionPush) == "" {
 				cmds = append(cmds, plugin.Command{ID: "push", Name: "Push", Description: "Push branch to remote", Context: "workspace-list", Priority: 6})
 			}
-			if WorktreeActionRefusal(wt, WorktreeActionMerge) == "" {
+			if worktreeActionPresentationRefusal(wt, WorktreeActionMerge) == "" {
 				cmds = append(cmds, plugin.Command{ID: "merge-workflow", Name: "Merge", Description: "Start merge workflow", Context: "workspace-list", Priority: 7})
 			}
 			cmds = append(cmds, plugin.Command{ID: "rename-worktree", Name: "Rename", Description: "Rename worktree", Context: "workspace-list", Priority: 12})

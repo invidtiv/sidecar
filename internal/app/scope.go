@@ -1,10 +1,13 @@
 package app
 
 import (
+	"strings"
+
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/plugins/tasks"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/uirequest"
 )
 
 // AppScope is the space the user is currently in. Sidecar has exactly two: the
@@ -413,6 +416,14 @@ func (m *Model) startVisibleGlobalTab() tea.Cmd {
 // owns the screen, and therefore its own keys and mouse events.
 func (m Model) globalWorkspacesVisible() bool {
 	return m.inGlobalScope() && m.globalTab == GlobalSessions && m.overview != nil
+}
+
+// sessionsOwnsCreateSplit reports that a create --split request belongs to the
+// Sessions preview, not the project workspace plugin. Both surfaces receive
+// every uirequest; without this the plugin writes shell:<tmux> while the user
+// is looking at the path-prefixed Sessions surface.
+func (m Model) sessionsOwnsCreateSplit(req uirequest.Request) bool {
+	return m.globalWorkspacesVisible() && req.Action == uirequest.ActionCreate && strings.TrimSpace(req.Options.Split) != ""
 }
 
 // globalWorkspacesFilterFocused reports that the browser's inline filter is

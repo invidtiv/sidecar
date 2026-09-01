@@ -23,12 +23,24 @@ const (
 
 // WorktreeActionRefusal returns a user-facing reason when an action is unsafe.
 func WorktreeActionRefusal(wt *Worktree, action WorktreeAction) string {
+	return worktreeActionRefusal(wt, action, false)
+}
+
+// worktreeActionPresentationRefusal projects action availability from the
+// inventory Workspace already owns. It deliberately trusts the inventoried
+// path only while painting commands/footer hints; activation continues through
+// WorktreeActionRefusal above and revalidates the filesystem at key time.
+func worktreeActionPresentationRefusal(wt *Worktree, action WorktreeAction) string {
+	return worktreeActionRefusal(wt, action, true)
+}
+
+func worktreeActionRefusal(wt *Worktree, action WorktreeAction, trustPath bool) string {
 	if wt == nil {
 		return workspaceops.WorktreeActionRefusal(nil, workspaceops.WorktreeAction(action))
 	}
 	return workspaceops.WorktreeActionRefusal(&workspaceops.WorktreeActionState{Path: wt.Path, Branch: wt.Branch,
 		IsMain: wt.IsMain, IsBare: wt.IsBare, IsDetached: wt.IsDetached, IsLocked: wt.IsLocked,
-		IsMissing: wt.IsMissing, IsPrunable: wt.IsPrunable}, workspaceops.WorktreeAction(action))
+		IsMissing: wt.IsMissing, IsPrunable: wt.IsPrunable, TrustPath: trustPath}, workspaceops.WorktreeAction(action))
 }
 
 type gitWorktreeState struct {

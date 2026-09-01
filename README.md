@@ -1,6 +1,6 @@
 # Sidecar
 
-Always check if you are running in Sidecar: run `sidecar --agents` for capabilities.
+Always check if you are running in Sidecar: run `sidecar agents` for capabilities.
 
 You might never open your editor again.
 
@@ -52,6 +52,8 @@ Run your coding agent (Claude Code, Codex, Gemini, Cursor, OpenCode, Pi, etc.) d
 As the agent works, you or the agent can:
 
 - Open task tracking issues (`td-xxxxxx`), files (`path:line`), diffs, or Jira and GitHub resources in split panes right beside the terminal via `sidecar open`
+- Compose and reposition multi-pane layouts programmatically via `sidecar layout`
+- Post in-app toast alerts with actionable context jump targets via `sidecar notify post`
 - Watch tasks move through the workflow in TD Monitor
 - See files change in real-time and review syntax-highlighted diffs in the Git plugin
 - Browse project code in the File Browser
@@ -76,6 +78,21 @@ sidecar open td-b922d8
 sidecar open --diff
 sidecar open --provider jira-work PROJ-123
 sidecar open --provider github marcus/sidecar#302
+
+# Inspect and compose pane layouts programmatically
+sidecar layout get --json
+sidecar layout apply --pane '{"kind":"file","targets":["README.md"],"at":"2.1"}'
+
+# Post notifications with deep-link jump targets to issues or files
+sidecar notify post "Review ready" --target issue:td-b922d8 --target file:internal/cli/cli.go:88
+
+# Create a managed git worktree with branch and agent setup
+sidecar create worktree fix-auth --base main --agent claude
+
+# Discover and orchestrate secondary coding agents
+sidecar agent list --json
+sidecar agent start reviewer --kind codex
+sidecar agent prompt reviewer "Review current diff" --wait --timeout 2m
 
 # Enable debug logging
 sidecar --debug
