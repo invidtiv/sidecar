@@ -210,8 +210,13 @@ func (m *Model) previewResourceResolver(workspaceID string, epoch uint64) resour
 	// workspace row captured when the resolver was built, which is what a row
 	// switch invalidates.
 	return func(modelID int, generation, _ uint64, ref resourceview.Ref, refresh bool) tea.Cmd {
-		ctx, ok := m.previewDeckContext()
-		if ok && ctx.Source.Remote() {
+		// A remote pane never falls through to the viewer-local manager, even
+		// when previewDeckContext fails because the host no longer Shows().
+		if m.resourceWorkspaceRemote(workspaceID) {
+			ctx, ok := m.previewDeckContext()
+			if !ok || !ctx.Source.Remote() || ctx.Surface != workspaceID {
+				return m.remoteResourceUnavailableCmd(workspaceID, epoch, modelID, generation, ref, refresh)
+			}
 			return m.remoteResourceResolveCmd(ctx, workspaceID, epoch, modelID, generation, ref, refresh)
 		}
 		resolve := m.resolveResource

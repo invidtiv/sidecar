@@ -314,6 +314,26 @@ func TestRemoteResourceCacheHitRefreshBypassAndInvalidation(t *testing.T) {
 	if _, got, _, _ := src.stats(); got != 4 {
 		t.Fatalf("incarnation change did not invalidate cache: resolves=%d", got)
 	}
+
+	now := m.now()
+	until := contentservice.DocumentFreshUntil(resource.Document{FreshFor: 10 * time.Second}, now)
+	if !until.Equal(now.Add(10 * time.Second)) {
+		t.Fatalf("DocumentFreshUntil = %v, want %v", until, now.Add(10*time.Second))
+	}
+	key := m.remoteResourceCacheKey(ctx.Source, ref)
+	m.remoteResources.mu.Lock()
+	entry, ok := m.remoteResources.entries[key]
+	if !ok {
+		m.remoteResources.mu.Unlock()
+		t.Fatal("expected a cache entry after resolve")
+	}
+	entry.expires = m.now().Add(-time.Second)
+	m.remoteResources.entries[key] = entry
+	m.remoteResources.mu.Unlock()
+	run(t, m, m.remoteResourceResolveCmd(ctx, m.preview.workspaceID, m.preview.contentEpoch, 5, 5, ref, false))
+	if _, got, _, _ := src.stats(); got != 5 {
+		t.Fatalf("expired cache was reused: resolves=%d", got)
+	}
 }
 
 func TestRemoteResourceDescribeCadenceSelectionAndHiddenSilence(t *testing.T) {
@@ -441,5 +461,38 @@ func TestRemoteResourceSourceURLOpensLocally(t *testing.T) {
 func TestRemoteResourceDescribeIntervalIsNamed(t *testing.T) {
 	if remoteResourceDescribeInterval != 5*time.Second {
 		t.Fatalf("cadence = %s", remoteResourceDescribeInterval)
+	}
+}
+
+func TestRemoteResourceRefreshDoesNotUseLocalResolverWhenHostHidden(t *testing.T) {
+	m, _ := showingRemoteResourceModel(t)
+	resolver := &fakeResolver{}
+	m.SetResourceResolver(resolver.resolve)
+	runRemoteDescribe(t, m)
+	resourceSpansOn(t, m, resourceLine)
+	m.WorkspacesView(previewWide, previewTall)
+	cmd, claimed := m.activatePreviewLinkAt(previewNeedleAction(t, m, "CASH-1245"), false)
+	if !claimed || cmd == nil {
+		t.Fatal("click was not claimed")
+	}
+	run(t, m, cmd)
+	doc, ok := m.preview.resource.view().Document()
+	if !ok || doc.Title != hostResourceTitle {
+		t.Fatalf("setup document = %+v", doc)
+	}
+	if refs := resolver.refs(); len(refs) != 0 {
+		t.Fatalf("open asked local resolver: %v", refs)
+	}
+
+	delete(m.hostHealth, "mac-mini")
+	run(t, m, m.preview.resource.pane.Refresh())
+	if refs := resolver.refs(); len(refs) != 0 {
+		t.Fatalf("hidden host asked the local resolver: %v", refs)
+	}
+	if d, ok := m.preview.resource.view().Document(); !ok || d.Title != hostResourceTitle {
+		t.Fatalf("lost host document after host hid: %+v ok=%v", d, ok)
+	}
+	if d, ok := m.preview.resource.view().Document(); ok && strings.Contains(d.Title, "Ticket CASH") {
+		t.Fatalf("adopted local document after host hid: %+v", d)
 	}
 }

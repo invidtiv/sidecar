@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/contentpanes"
 	"github.com/marcus/sidecar/internal/contentservice"
+	"github.com/marcus/sidecar/internal/hosts"
 	"github.com/marcus/sidecar/internal/resource"
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/terminallink"
@@ -332,6 +333,42 @@ func (m *Model) storeRemoteResource(key remoteResourceKey, doc resource.Document
 		m.remoteResources.entries = map[remoteResourceKey]remoteResourceEntry{}
 	}
 	m.remoteResources.entries[key] = remoteResourceEntry{doc: doc, expires: contentservice.DocumentFreshUntil(doc, m.now())}
+}
+
+func (m *Model) resourceWorkspaceRemote(workspaceID string) bool {
+	if workspaceID == "" {
+		return false
+	}
+	if ws, ok := m.catalog[workspaceID]; ok {
+		return ws.Remote()
+	}
+	if m.preview.deck != nil {
+		ctx := m.preview.deck.Context()
+		if ctx.Surface == workspaceID && ctx.Source.Remote() {
+			return true
+		}
+	}
+	if cached, ok := m.preview.paneCache[workspaceID]; ok && cached.deck != nil && cached.deck.Context().Source.Remote() {
+		return true
+	}
+	if ws, ok := m.SelectedWorkspace(); ok && ws.ID == workspaceID {
+		return ws.Remote()
+	}
+	_, _, scoped := hosts.SplitScopedKey(workspaceID)
+	return scoped
+}
+
+func (m *Model) remoteResourceUnavailableCmd(workspaceID string, epoch uint64, modelID int, generation uint64, ref resourceview.Ref, refresh bool) tea.Cmd {
+	return func() tea.Msg {
+		return previewResourceResolvedMsg{
+			ResolvedMsg: resourceview.ResolvedMsg{
+				ModelID: modelID, Generation: generation, Epoch: epoch,
+				Ref: ref, Refresh: refresh,
+				Err: resource.Errorf(resource.CodeUnavailable, "that host is not available"),
+			},
+			WorkspaceID: workspaceID,
+		}
+	}
 }
 
 func (m *Model) remoteResourceResolveCmd(ctx contentpanes.SurfaceContext, workspaceID string, epoch uint64, modelID int, generation uint64, ref resourceview.Ref, refresh bool) tea.Cmd {
