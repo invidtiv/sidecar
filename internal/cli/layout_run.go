@@ -51,6 +51,10 @@ func runLayout(env Env, payload uirequest.LayoutPayload, jsonOutput bool, destFl
 		cliErrln(env.Stderr, err)
 		return destExitCode(err)
 	}
+	if err := refuseRelayIfUnavailable(env.StateDir, dest.Origin); err != nil {
+		cliErrln(env.Stderr, err)
+		return destExitCode(err)
+	}
 
 	encoded, err := json.Marshal(payload)
 	if err != nil {
