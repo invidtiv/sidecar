@@ -19,18 +19,23 @@ import (
 )
 
 func (m *Model) applyLayoutRequest(req uirequest.Request) tea.Cmd {
-	if !req.Origin.Sessions {
+	relayed := req.Origin.HostID != ""
+	if !req.Origin.Sessions && !relayed {
 		return nil
 	}
 	payload, err := uirequest.DecodeLayoutPayload(req.Payload)
 	if err != nil {
 		return m.ackLayout(req, uirequest.StatusDeclined, "invalid layout payload: "+err.Error(), nil, nil)
 	}
+	// Relayed apply/move is a later slice; get must not compose the tree.
+	if relayed && !req.Origin.Sessions && payload.Mode != uirequest.LayoutModeGet {
+		return nil
+	}
 	if !m.preview.visible {
 		return m.ackLayout(req, uirequest.StatusDeclined, layoutapply.SessionsNotOnScreenReason, nil, nil)
 	}
 
-	rowID, ws, ok, reason := m.resolveSessionsLayoutRow(req)
+	rowID, ws, ok, reason := m.resolveLayoutRequestRow(req)
 	if !ok {
 		return m.ackLayout(req, uirequest.StatusDeclined, reason, nil, nil)
 	}
@@ -51,6 +56,17 @@ func (m *Model) applyLayoutRequest(req uirequest.Request) tea.Cmd {
 	root := selected.Path
 	surface := selected.ID
 	return layoutapply.Apply(overviewLayoutHost{m: m, req: req, root: root, surface: surface}, req, payload, root, surface)
+}
+
+func (m *Model) resolveLayoutRequestRow(req uirequest.Request) (string, workspaceinventory.Workspace, bool, string) {
+	if req.Origin.HostID != "" && !req.Origin.Sessions {
+		bound, ok := m.bindOpenWorkspace(req)
+		if !ok {
+			return "", workspaceinventory.Workspace{}, false, "no Sessions row matches that origin"
+		}
+		return bound.ID, *bound, true, ""
+	}
+	return m.resolveSessionsLayoutRow(req)
 }
 
 func (m *Model) resolveSessionsLayoutRow(req uirequest.Request) (string, workspaceinventory.Workspace, bool, string) {
@@ -219,7 +235,11 @@ func persistNode(n *state.PaneLayoutJSON, next *int) *panelayout.Node {
 }
 
 func (m *Model) ackLayout(req uirequest.Request, status uirequest.Status, reason string, items []uirequest.AckItem, layout json.RawMessage) tea.Cmd {
-	layoutapply.WriteAck(config.StateDir(), hostInstanceID(), req, status, reason, items, layout)
+	if req.Origin.HostID == "" {
+		layoutapply.WriteAck(config.StateDir(), hostInstanceID(), req, status, reason, items, layout)
+		return nil
+	}
+	m.ackRemote(req, status, reason, "", 0, layout)
 	return nil
 }
 

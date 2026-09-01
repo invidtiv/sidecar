@@ -35,6 +35,7 @@ type fakeRemoteDiffSource struct {
 	revision    string
 	notModified bool
 	loadErr     error
+	resolveErr  error
 	loads       int
 	resolves    int
 	lastIfRev   string
@@ -47,6 +48,9 @@ func (f *fakeRemoteDiffSource) Resolve(_ context.Context, _ contentpanes.SourceC
 	defer f.mu.Unlock()
 	f.resolves++
 	f.lastTarget = pending.Raw
+	if f.resolveErr != nil {
+		return contentlink.Ref{}, f.resolveErr
+	}
 	switch pending.Kind {
 	case contentlink.KindFile:
 		return contentlink.Ref{Kind: contentlink.KindFile, Value: pending.Raw}, nil

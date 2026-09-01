@@ -18,7 +18,7 @@ func requestCommand() *Command {
 	ackCmd := &Command{
 		Name:    "ack",
 		Summary: "Write one acknowledgement into a host request's *.acks directory",
-		Usage:   "sidecar request ack --id ID --action open|layout --status STATUS [--reason TEXT] [--surface TEXT] [--pane N] --json",
+		Usage:   "sidecar request ack --id ID --action open|layout --status STATUS [--reason TEXT] [--surface TEXT] [--pane N] [--layout JSON] --json",
 		Long: "Write an acknowledgement for a UI request file this machine already holds.\n\n" +
 			"This is the mutation seam a viewing Sidecar uses to ack a relayed open or layout\n" +
 			"request into the host *.acks directory. It is not a public targeting flag and not\n" +
@@ -31,6 +31,7 @@ func requestCommand() *Command {
 			{Name: "--reason", Arg: "TEXT", Summary: "Decline or no-op reason"},
 			{Name: "--surface", Arg: "TEXT", Summary: "Surface that handled the request"},
 			{Name: "--pane", Arg: "N", Summary: "Pane id that received the open, when any"},
+			{Name: "--layout", Arg: "JSON", Summary: "Layout get report to store on the ack"},
 			jsonFlag,
 			helpFlag,
 		},
@@ -78,6 +79,7 @@ func runRequestAck(env Env, args []string) int {
 	var (
 		id, action, status, reason, surface string
 		pane                                int
+		layout                              json.RawMessage
 		jsonOutput                          bool
 		paneSet                             bool
 	)
@@ -143,6 +145,18 @@ func runRequestAck(env Env, args []string) int {
 			pane = n
 			paneSet = true
 			i = next
+		case arg == "--layout" || strings.HasPrefix(arg, "--layout="):
+			val, next, ok := takeFlagArg(arg, args, i, "--layout")
+			if !ok || val == "" {
+				cliErrf(env.Stderr, "--layout requires a JSON object\n\n%s", help)
+				return 2
+			}
+			if !json.Valid([]byte(val)) {
+				cliErrf(env.Stderr, "invalid --layout JSON\n\n%s", help)
+				return 2
+			}
+			layout = json.RawMessage(val)
+			i = next
 		case strings.HasPrefix(arg, "-"):
 			cliErrf(env.Stderr, "unknown option %q\n\n%s", arg, help)
 			return 2
@@ -180,11 +194,14 @@ func runRequestAck(env Env, args []string) int {
 	if paneSet {
 		ack.Pane = pane
 	}
+	if len(layout) > 0 {
+		ack.Layout = layout
+	}
 	if err := uirequest.WriteAck(env.StateDir, id, uirequest.Action(action), ack); err != nil {
 		cliErrln(env.Stderr, err)
 		return 1
 	}
-	result := uirequest.AckResult{ID: id, Action: uirequest.Action(action), Status: ack.Status, Reason: reason, Surface: surface, Pane: ack.Pane}
+	result := uirequest.AckResult{ID: id, Action: uirequest.Action(action), Status: ack.Status, Reason: reason, Surface: surface, Pane: ack.Pane, Layout: ack.Layout}
 	if err := json.NewEncoder(env.Stdout).Encode(result); err != nil {
 		cliErrln(env.Stderr, err)
 		return 1

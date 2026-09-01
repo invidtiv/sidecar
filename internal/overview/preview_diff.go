@@ -46,20 +46,25 @@ func (d *previewDiff) view() *workspacediff.View {
 }
 
 func (m *Model) openPreviewDiff(target workspacediff.Target) tea.Cmd {
+	cmd, _ := m.openPreviewDiffResult(target)
+	return cmd
+}
+
+func (m *Model) openPreviewDiffResult(target workspacediff.Target) (tea.Cmd, error) {
 	workspace, ok := m.SelectedWorkspace()
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	if target.Identity() == "" {
 		target = workspacediff.WorkingTreeTarget()
 	}
 	if !features.IsEnabled(features.WorkspaceDocPanes.Name) {
-		return appmsg.ShowFlash(features.WorkspaceDocPanesDisabledDiff)
+		return appmsg.ShowFlash(features.WorkspaceDocPanesDisabledDiff), errors.New(features.WorkspaceDocPanesDisabledDiff)
 	}
 	if workspace.Remote() {
 		ctx, ok := m.previewDeckContext()
 		if !ok {
-			return nil
+			return nil, nil
 		}
 		raw := target.Identity()
 		if raw == "" {
@@ -72,11 +77,11 @@ func (m *Model) openPreviewDiff(target workspacediff.Target) tea.Cmd {
 			if err == nil {
 				err = errors.New("git object not found on " + ctx.Source.HostID)
 			}
-			return remoteContentErrorCmd(err)
+			return remoteContentErrorCmd(err), err
 		}
-		return m.openPreviewContent(ref, "Diff")
+		return m.openPreviewContent(ref, "Diff"), nil
 	}
-	return m.openPreviewContent(contentlink.Ref{Kind: contentlink.KindDiff, Value: target.Identity()}, "Diff")
+	return m.openPreviewContent(contentlink.Ref{Kind: contentlink.KindDiff, Value: target.Identity()}, "Diff"), nil
 }
 
 func (m *Model) applyPreviewDiffSnapshot(msg workspacediff.SnapshotMsg) tea.Cmd {

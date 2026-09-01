@@ -13,14 +13,35 @@ import (
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/uirequest"
+	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
 func relayedFileAnnouncement(session, path string, line int) hostproto.UIRequest {
+	event := relayedOpenAnnouncement("req-relay-file", session, "file", path, "")
+	event.Target.Line = line
+	return event
+}
+
+func relayedOpenAnnouncement(id, session, kind, value, provider string) hostproto.UIRequest {
 	return hostproto.UIRequest{
-		ID: "req-relay-file", Action: hostproto.UIRequestActionOpen, TTLMs: 5000,
+		ID: id, Action: hostproto.UIRequestActionOpen, TTLMs: 5000,
 		CreatedAt: time.Now().UTC(),
 		Origin:    hostproto.UIRequestOrigin{TmuxSession: session, HostID: "mac-mini"},
-		Target:    hostproto.UIRequestTarget{Kind: "file", Value: path, Line: line},
+		Target:    hostproto.UIRequestTarget{Kind: kind, Value: value, Provider: provider},
+	}
+}
+
+func assertRemoteAck(t *testing.T, stub *remoteRunnerStub, wantStatus, wantSubstr string) {
+	t.Helper()
+	if len(stub.calls) != 1 {
+		t.Fatalf("ack invocations = %v", stub.calls)
+	}
+	joined := strings.Join(stub.argv(t, 0), " ")
+	if !strings.Contains(joined, "--status "+wantStatus) {
+		t.Fatalf("ack = %s, want status %s", joined, wantStatus)
+	}
+	if wantSubstr != "" && !strings.Contains(joined, wantSubstr) {
+		t.Fatalf("ack = %s, want %q", joined, wantSubstr)
 	}
 }
 
@@ -267,4 +288,198 @@ func TestHostTUISkipsActionOpenWhenLeaseIsForeign(t *testing.T) {
 	if m.preview.doc != nil {
 		t.Fatal("foreign-lease open opened a document")
 	}
+}
+
+func TestRelayedKindUIRequestOpensHostIssueNotLocalTwin(t *testing.T) {
+	m, src := showingRemoteIssueNoteModel(t)
+	stub := &remoteRunnerStub{}
+	stub.install(t)
+	selected, ok := m.SelectedWorkspace()
+	if !ok {
+		t.Fatal("no selected workspace")
+	}
+
+	cmd := m.handleUIRequest(requestFromAnnouncement(relayedOpenAnnouncement(
+		"req-relay-issue", selected.TmuxName, "issue", "td-a4dd72", "")))
+	if cmd == nil {
+		t.Fatal("relayed issue open produced no command")
+	}
+	run(t, m, cmd)
+	if m.preview.issue == nil || m.preview.issue.view() == nil {
+		t.Fatal("relayed open opened no Issue pane")
+	}
+	view := m.preview.issue.view()
+	view.SetSize(80, 16)
+	got := ansi.Strip(view.View())
+	if !strings.Contains(got, remoteIssueTitle) {
+		t.Fatalf("issue missing host title: %q", got)
+	}
+	if src.issueLoads == 0 {
+		t.Fatal("issue did not load through the remote source")
+	}
+	assertRemoteAck(t, stub, "opened", "--id req-relay-issue")
+}
+
+func TestRelayedKindUIRequestOpensHostNoteNotLocalTwin(t *testing.T) {
+	m, src := showingRemoteIssueNoteModel(t)
+	stub := &remoteRunnerStub{}
+	stub.install(t)
+	selected, ok := m.SelectedWorkspace()
+	if !ok {
+		t.Fatal("no selected workspace")
+	}
+
+	cmd := m.handleUIRequest(requestFromAnnouncement(relayedOpenAnnouncement(
+		"req-relay-note", selected.TmuxName, "note", "nt-host01", "")))
+	if cmd == nil {
+		t.Fatal("relayed note open produced no command")
+	}
+	run(t, m, cmd)
+	if m.preview.note == nil || m.preview.note.view() == nil {
+		t.Fatal("relayed open opened no Note pane")
+	}
+	view := m.preview.note.view()
+	view.SetSize(80, 12)
+	got := ansi.Strip(view.View())
+	if !strings.Contains(got, remoteNoteTitle) {
+		t.Fatalf("note missing host title: %q", got)
+	}
+	if src.noteLoads == 0 {
+		t.Fatal("note did not load through the remote source")
+	}
+	assertRemoteAck(t, stub, "opened", "--id req-relay-note")
+}
+
+func TestRelayedKindUIRequestOpensHostDiffNotLocalTwin(t *testing.T) {
+	m, src := showingRemoteDiffModel(t)
+	stub := &remoteRunnerStub{}
+	stub.install(t)
+	selected, ok := m.SelectedWorkspace()
+	if !ok {
+		t.Fatal("no selected workspace")
+	}
+
+	cmd := m.handleUIRequest(requestFromAnnouncement(relayedOpenAnnouncement(
+		"req-relay-diff", selected.TmuxName, "diff", hostOnlyHash, "")))
+	if cmd == nil {
+		t.Fatal("relayed diff open produced no command")
+	}
+	run(t, m, cmd)
+	if m.preview.diff == nil || m.preview.diff.view() == nil {
+		t.Fatal("relayed open opened no Diff pane")
+	}
+	view := m.preview.diff.view()
+	view.SetSize(80, 16)
+	got := ansi.Strip(view.Render(80, 16, workspacediff.RenderOpts{}))
+	if !strings.Contains(got, hostOnlyDiffMarker) && (view.CommitDetail == nil || view.CommitDetail.ShortHash != hostOnlyHash) {
+		t.Fatalf("diff missing host data: view=%q detail=%#v", got, view.CommitDetail)
+	}
+	if src.loads == 0 {
+		t.Fatal("diff did not load through the remote source")
+	}
+	assertRemoteAck(t, stub, "opened", "--id req-relay-diff")
+}
+
+func TestRelayedKindUIRequestOpensHostResourceNotViewerSnapshot(t *testing.T) {
+	m, src := showingRemoteResourceModel(t)
+	stub := &remoteRunnerStub{}
+	stub.install(t)
+	resolver := &fakeResolver{}
+	m.SetResourceMatchers(jiraMatchers())
+	m.SetResourceResolver(resolver.resolve)
+	runRemoteDescribe(t, m)
+	selected, ok := m.SelectedWorkspace()
+	if !ok {
+		t.Fatal("no selected workspace")
+	}
+
+	cmd := m.handleUIRequest(requestFromAnnouncement(relayedOpenAnnouncement(
+		"req-relay-resource", selected.TmuxName, "resource", "CASH-1245", "jira-work")))
+	if cmd == nil {
+		t.Fatal("relayed resource open produced no command")
+	}
+	run(t, m, cmd)
+	if m.preview.resource == nil || m.preview.resource.view() == nil {
+		t.Fatal("relayed open opened no Resource pane")
+	}
+	doc, ok := m.preview.resource.view().Document()
+	if !ok || doc.Title != hostResourceTitle {
+		t.Fatalf("document = %+v, want host title", doc)
+	}
+	if refs := resolver.refs(); len(refs) != 0 {
+		t.Fatalf("relayed open asked the viewer snapshot resolver: %v", refs)
+	}
+	if _, resolves, _, _ := src.stats(); resolves == 0 {
+		t.Fatal("did not resolve through the remote source")
+	}
+	assertRemoteAck(t, stub, "opened", "--id req-relay-resource")
+}
+
+func TestRelayedResourceOpenWithoutHostMatchersDeclines(t *testing.T) {
+	m, _ := showingRemoteResourceModel(t)
+	stub := &remoteRunnerStub{}
+	stub.install(t)
+	resolver := &fakeResolver{}
+	m.SetResourceMatchers(jiraMatchers())
+	m.SetResourceResolver(resolver.resolve)
+	selected, ok := m.SelectedWorkspace()
+	if !ok {
+		t.Fatal("no selected workspace")
+	}
+
+	if cmd := m.handleUIRequest(requestFromAnnouncement(relayedOpenAnnouncement(
+		"req-relay-resource-empty", selected.TmuxName, "resource", "CASH-1245", "jira-work"))); cmd != nil {
+		t.Fatalf("empty host matcher cache returned cmd %v", cmd)
+	}
+	if m.preview.resource != nil {
+		t.Fatal("viewer snapshot matchers opened a Resource pane")
+	}
+	if refs := resolver.refs(); len(refs) != 0 {
+		t.Fatalf("empty host cache asked the viewer resolver: %v", refs)
+	}
+	assertRemoteAck(t, stub, "declined", "no live matchers")
+}
+
+func TestRelayedIssueResolveFailureAcksDeclined(t *testing.T) {
+	m, src := showingRemoteIssueNoteModel(t)
+	stub := &remoteRunnerStub{}
+	stub.install(t)
+	src.resolveErr = errors.New("host issue boom")
+	selected, ok := m.SelectedWorkspace()
+	if !ok {
+		t.Fatal("no selected workspace")
+	}
+
+	cmd := m.handleUIRequest(requestFromAnnouncement(relayedOpenAnnouncement(
+		"req-relay-issue-fail", selected.TmuxName, "issue", "td-a4dd72", "")))
+	if cmd == nil {
+		t.Fatal("resolve failure produced no toast command")
+	}
+	if m.preview.issue != nil {
+		t.Fatal("resolve failure opened an Issue pane")
+	}
+	assertRemoteAck(t, stub, "declined", "host issue boom")
+}
+
+func TestForwardHostUIRequestOpensIssueThroughAnnouncement(t *testing.T) {
+	m, src := showingRemoteIssueNoteModel(t)
+	stub := &remoteRunnerStub{}
+	stub.install(t)
+	selected, ok := m.SelectedWorkspace()
+	if !ok {
+		t.Fatal("no selected workspace")
+	}
+	event := relayedOpenAnnouncement("req-relay-issue-fwd", selected.TmuxName, "issue", "td-a4dd72", "")
+	cmd := m.forwardHostUIRequests(hosts.Update{HostID: "mac-mini", UIRequest: []hostproto.UIRequest{event}})
+	if cmd == nil {
+		t.Fatal("forwarded announcement produced no command")
+	}
+	run(t, m, cmd)
+	if m.preview.issue == nil || m.preview.issue.view() == nil {
+		t.Fatal("forwarded issue open opened no pane")
+	}
+	if src.issueLoads == 0 {
+		t.Fatal("issue did not load through the remote source")
+	}
+	assertRemoteAck(t, stub, "opened", "--id req-relay-issue-fwd")
 }

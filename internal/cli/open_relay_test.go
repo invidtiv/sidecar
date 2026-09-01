@@ -184,6 +184,66 @@ func TestRequestAckWritesAckFile(t *testing.T) {
 	}
 }
 
+func TestRequestAckWritesLayout(t *testing.T) {
+	_, stateDir := setupIsolatedCLI(t)
+	req := uirequest.Request{ID: "req-ack-layout", Action: uirequest.ActionLayout, CreatedAt: time.Now().UTC(), TTLMs: 5000}
+	if _, err := uirequest.WriteRequest(stateDir, req); err != nil {
+		t.Fatal(err)
+	}
+	layout := `{"version":1,"surface":"a","grid":null}`
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"request", "ack", "--id", req.ID, "--action", "layout", "--status", "opened", "--layout", layout, "--json"}, &out, &errOut)
+	if !handled || code != 0 {
+		t.Fatalf("request ack = handled %v code %d stderr %q", handled, code, errOut.String())
+	}
+	var result uirequest.AckResult
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("json: %v (%s)", err, out.String())
+	}
+	if !jsonEqual(t, result.Layout, json.RawMessage(layout)) {
+		t.Fatalf("result.Layout = %s, want %s", result.Layout, layout)
+	}
+	acks, err := uirequest.ReadAcks(stateDir, req.ID, req.Action)
+	if err != nil || len(acks) != 1 {
+		t.Fatalf("acks = %+v err=%v", acks, err)
+	}
+	if !jsonEqual(t, acks[0].Layout, json.RawMessage(layout)) {
+		t.Fatalf("ack.Layout = %s, want %s", acks[0].Layout, layout)
+	}
+}
+
+func jsonEqual(t *testing.T, a, b json.RawMessage) bool {
+	t.Helper()
+	var left, right any
+	if err := json.Unmarshal(a, &left); err != nil {
+		t.Fatalf("unmarshal left: %v (%s)", err, a)
+	}
+	if err := json.Unmarshal(b, &right); err != nil {
+		t.Fatalf("unmarshal right: %v (%s)", err, b)
+	}
+	got, err := json.Marshal(left)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := json.Marshal(right)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(got) == string(want)
+}
+
+func TestRequestAckRejectsInvalidLayout(t *testing.T) {
+	_, _ = setupIsolatedCLI(t)
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"request", "ack", "--id", "req-1", "--action", "layout", "--status", "opened", "--layout", "not-json", "--json"}, &out, &errOut)
+	if !handled || code != 2 {
+		t.Fatalf("invalid layout = handled %v code %d stderr %q", handled, code, errOut.String())
+	}
+	if !strings.Contains(errOut.String(), "--layout") {
+		t.Fatalf("stderr = %q", errOut.String())
+	}
+}
+
 func writeLiveViewerPresence(t *testing.T, stateDir, instance string) {
 	t.Helper()
 	got, ok := hostserve.LookupLiveViewer(stateDir, instance, time.Now())

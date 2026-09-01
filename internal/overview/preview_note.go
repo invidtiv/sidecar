@@ -73,15 +73,20 @@ type previewNoteLoadedMsg struct {
 }
 
 func (m *Model) openPreviewNote(noteID string) tea.Cmd {
+	cmd, _ := m.openPreviewNoteResult(noteID)
+	return cmd
+}
+
+func (m *Model) openPreviewNoteResult(noteID string) (tea.Cmd, error) {
 	workspace, ok := m.SelectedWorkspace()
 	noteID = noteview.NormalizeID(noteID)
 	if !ok || noteID == "" || workspace.Path == "" {
-		return nil
+		return nil, nil
 	}
 	if workspace.Remote() {
 		ctx, ok := m.previewDeckContext()
 		if !ok {
-			return nil
+			return nil, nil
 		}
 		ref, err := contentpanes.ResolveDocument(m.previewDeckConfig(ctx).Source, ctx.Source, contentlink.Pending{
 			Kind: contentlink.KindInternal, Raw: noteID,
@@ -90,11 +95,11 @@ func (m *Model) openPreviewNote(noteID string) tea.Cmd {
 			if err == nil {
 				err = errors.New("note not found on " + ctx.Source.HostID)
 			}
-			return remoteContentErrorCmd(err)
+			return remoteContentErrorCmd(err), err
 		}
 		noteID = ref.Value
 	}
-	return m.openPreviewContent(contentlink.Ref{Kind: contentlink.KindInternal, Namespace: "note", Value: noteID}, "Note")
+	return m.openPreviewContent(contentlink.Ref{Kind: contentlink.KindInternal, Namespace: "note", Value: noteID}, "Note"), nil
 }
 
 func wrapPreviewNoteLoad(cmd tea.Cmd, workspaceID string) tea.Cmd {

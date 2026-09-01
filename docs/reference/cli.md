@@ -1955,7 +1955,7 @@ a serve write: serve still does not write acks or apply requests.
 --json writes the machine contract.
 
 ```
-Usage: sidecar request ack --id ID --action open|layout --status STATUS [--reason TEXT] [--surface TEXT] [--pane N] --json
+Usage: sidecar request ack --id ID --action open|layout --status STATUS [--reason TEXT] [--surface TEXT] [--pane N] [--layout JSON] --json
 ```
 
 **Options:**
@@ -1966,6 +1966,7 @@ Usage: sidecar request ack --id ID --action open|layout --status STATUS [--reaso
 - `--reason TEXT`: Decline or no-op reason
 - `--surface TEXT`: Surface that handled the request
 - `--pane N`: Pane id that received the open, when any
+- `--layout JSON`: Layout get report to store on the ack
 - `--json`: Write the structured result object to stdout (required for the machine contract)
 - `-h, --help`: Show this help
 

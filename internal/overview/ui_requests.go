@@ -2,6 +2,7 @@ package overview
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -100,9 +101,6 @@ func (m *Model) handleUIRequest(req uirequest.Request) tea.Cmd {
 			m.ackOpen(req, uirequest.StatusDeclined, relayedOpenNotOnScreenReason, openAckSurface(*targetWorkspace), 0)
 			return nil
 		}
-		if req.Origin.HostID != "" && req.Target.Kind != uirequest.TargetKindFile {
-			return nil
-		}
 		return m.applyOpenOnPreview(req, *targetWorkspace)
 	}
 
@@ -147,24 +145,20 @@ func (m *Model) applyOpenOnPreview(req uirequest.Request, targetWorkspace worksp
 	}
 
 	var cmd tea.Cmd
+	var openErr error
 	// Asked before the open, because afterwards the pane exists either way:
 	// the planner is what decides between a new split and an existing pane.
 	retargeted := false
 	switch req.Target.Kind {
 	case uirequest.TargetKindFile:
 		retargeted = m.willRetargetPreviewPane(panelayout.Document)
-		var openErr error
 		cmd, openErr = m.openPreviewDocTargetResult(req.Target)
-		if openErr != nil {
-			m.ackOpen(req, uirequest.StatusDeclined, openErr.Error(), surface, 0)
-			return cmd
-		}
 	case uirequest.TargetKindIssue:
 		retargeted = m.willRetargetPreviewPane(panelayout.Issue)
-		cmd = m.openPreviewIssue(req.Target.Value)
+		cmd, openErr = m.openPreviewIssueResult(req.Target.Value)
 	case uirequest.TargetKindNote:
 		retargeted = m.willRetargetPreviewPane(panelayout.Note)
-		cmd = m.openPreviewNote(req.Target.Value)
+		cmd, openErr = m.openPreviewNoteResult(req.Target.Value)
 	case uirequest.TargetKindDiff:
 		retargeted = m.willRetargetPreviewPane(panelayout.Diff)
 		if targetWorkspace.Remote() {
@@ -172,9 +166,9 @@ func (m *Model) applyOpenOnPreview(req uirequest.Request, targetWorkspace worksp
 			if !ok {
 				spec = workspacediff.WorkingTreeTarget()
 			}
-			cmd = m.openPreviewDiff(spec)
+			cmd, openErr = m.openPreviewDiffResult(spec)
 		} else {
-			cmd = m.openPreviewDiff(uirequest.DiffTarget(targetWorkspace.Path, req.Target.Value))
+			cmd, openErr = m.openPreviewDiffResult(uirequest.DiffTarget(targetWorkspace.Path, req.Target.Value))
 		}
 	case uirequest.TargetKindResource:
 		ref, refusal := resourceview.ReferenceForLocator(m.previewResourceMatchers(), req.Target.Provider, req.Target.Value)
@@ -183,7 +177,11 @@ func (m *Model) applyOpenOnPreview(req uirequest.Request, targetWorkspace worksp
 			return nil
 		}
 		retargeted = m.willRetargetPreviewPane(panelayout.Resource)
-		cmd = m.OpenPreviewResource(ref)
+		cmd, openErr = m.openPreviewResourceRefResult(ref, false)
+	}
+	if openErr != nil {
+		m.ackOpen(req, uirequest.StatusDeclined, openErr.Error(), surface, 0)
+		return cmd
 	}
 
 	if cmd == nil {
@@ -261,6 +259,10 @@ func (m *Model) ackOpen(req uirequest.Request, status uirequest.Status, reason, 
 		})
 		return
 	}
+	m.ackRemote(req, status, reason, surface, pane, nil)
+}
+
+func (m *Model) ackRemote(req uirequest.Request, status uirequest.Status, reason, surface string, pane int, layout json.RawMessage) {
 	args := []string{"request", "ack", "--id", req.ID, "--action", string(req.Action), "--status", string(status), "--json"}
 	if reason != "" {
 		args = append(args, "--reason", reason)
@@ -270,6 +272,9 @@ func (m *Model) ackOpen(req uirequest.Request, status uirequest.Status, reason, 
 	}
 	if pane != 0 {
 		args = append(args, "--pane", strconv.Itoa(pane))
+	}
+	if len(layout) > 0 {
+		args = append(args, "--layout", string(layout))
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), remoteQuickTimeout)
 	defer cancel()
