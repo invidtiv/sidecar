@@ -102,14 +102,14 @@ func (w Workspace) Remote() bool { return w.HostID != "" }
 func (i Item) Remote() bool { return i.HostID != "" }
 
 // HasAgent reports durable or detected agent evidence. A worktree earns it
-// from its recorded `agent` file; a shell earns it from a configured agent
-// type or from live identification, which is why an unidentified shell can
-// still become an agent on a later status poll. Everything else is plain.
+// from its recorded `agent` file or from positive live identification; a shell
+// earns it from a configured agent type or from the same live identification.
+// Everything else is plain.
 func (w Workspace) HasAgent() bool {
 	if w.Kind == KindShell {
 		return strings.TrimSpace(w.Provider) != ""
 	}
-	return !w.Plain
+	return strings.TrimSpace(w.Provider) != "" || !w.Plain
 }
 
 // Item is the read-only catalog row shared by the Agents board and the global
@@ -293,8 +293,9 @@ type MetricsSnapshot struct {
 }
 
 type trackerStore struct {
-	mu     sync.Mutex
-	values map[string]agentactivity.Tracker
+	mu      sync.Mutex
+	values  map[string]agentactivity.Tracker
+	cleared map[string]struct{}
 }
 
 func (c Collector) defaults() Collector {
@@ -378,7 +379,7 @@ func (c Collector) ForRefresh(maxCaptures int, claims ...ShellClaims) Collector 
 		localTrackers[key] = tracker
 	}
 	c.trackers.mu.Unlock()
-	c.trackers = &trackerStore{values: localTrackers}
+	c.trackers = &trackerStore{values: localTrackers, cleared: make(map[string]struct{})}
 	if len(claims) > 0 {
 		c.reservedSessions = claims[0].Sessions
 		c.shellOwners = claims[0].Owners
@@ -397,8 +398,15 @@ func (c Collector) CommitTrackers() {
 	for key, tracker := range c.trackers.values {
 		values[key] = tracker
 	}
+	cleared := make([]string, 0, len(c.trackers.cleared))
+	for key := range c.trackers.cleared {
+		cleared = append(cleared, key)
+	}
 	c.trackers.mu.Unlock()
 	c.trackerBase.mu.Lock()
+	for _, key := range cleared {
+		delete(c.trackerBase.values, key)
+	}
 	for key, tracker := range values {
 		c.trackerBase.values[key] = tracker
 	}
@@ -641,11 +649,20 @@ func (c Collector) observeContext(ctx context.Context, workspace *Workspace, mat
 		workspace.PaneID, workspace.TmuxName = matches[0].ID, matches[0].Session
 		workspace.Live = !matches[0].Dead
 	}
-	// A worktree with no recorded agent is a plain workspace. It gets pane
-	// correlation — that is what "live" means — but no capture and no
-	// agentstatus value: fabricating one would put a fake semantic state on the
-	// board and in the list.
-	if workspace.Kind == KindWorktree && workspace.Plain {
+	// Plain is durable inventory: it says no agent was selected when this
+	// worktree was created. Provider, by contrast, may be transient live
+	// evidence. Clear the prior poll's observation before deciding whether the
+	// one uniquely matched live pane positively identifies an agent now.
+	plainWorktree := workspace.Kind == KindWorktree && workspace.Plain
+	if plainWorktree {
+		workspace.Provider = ""
+		workspace.Presentation = agentstatus.Presentation{}
+	}
+	// Capturing every idle/plain checkout would turn the cheap live-status poll
+	// back into a global terminal scan. Only one live pane can promote a plain
+	// worktree; absent, dead, and ambiguous matches remain ordinary workspaces.
+	if plainWorktree && (len(matches) != 1 || matches[0].Dead) {
+		c.clearTracker(workspace.ID)
 		return
 	}
 	input := agentstatus.Input{ProviderSupported: supported(workspace.Provider), CapturedAt: now, Now: now, StaleAfter: time.Minute, DoneTTL: c.DoneTTL}
@@ -659,6 +676,10 @@ func (c Collector) observeContext(ctx context.Context, workspace *Workspace, mat
 		if pane.Dead {
 			input.Orphaned = true
 		} else if output, _, err := c.capturePane(ctx, pane.ID, 80); err != nil {
+			if plainWorktree {
+				c.clearTracker(workspace.ID)
+				return
+			}
 			input.Err = true
 		} else {
 			select {
@@ -685,6 +706,14 @@ func (c Collector) observeContext(ctx context.Context, workspace *Workspace, mat
 					input.ProviderSupported = supported(identified)
 				}
 			}
+			// A plain worktree is promoted only by a supported provider positively
+			// identified in its live pane. Empty/shell/unsupported observations are
+			// not semantic evidence and must not fabricate an Agent row.
+			if plainWorktree && !input.ProviderSupported {
+				workspace.Provider = ""
+				c.clearTracker(workspace.ID)
+				return
+			}
 			c.trackers.mu.Lock()
 			select {
 			case <-ctx.Done():
@@ -710,6 +739,18 @@ func (c Collector) observeContext(ctx context.Context, workspace *Workspace, mat
 		}
 	}
 	workspace.Presentation = agentstatus.Resolve(input)
+}
+
+// clearTracker ends a transiently detected agent episode. Without this reset,
+// a plain worktree that later starts the same provider again would inherit the
+// old episode's ChangedAt and remain incorrectly sorted as old.
+func (c Collector) clearTracker(workspaceID string) {
+	c.trackers.mu.Lock()
+	delete(c.trackers.values, workspaceID)
+	if c.trackers.cleared != nil {
+		c.trackers.cleared[workspaceID] = struct{}{}
+	}
+	c.trackers.mu.Unlock()
 }
 
 func (c Collector) capturePane(ctx context.Context, paneID string, lines int) (string, tty.PaneState, error) {

@@ -214,32 +214,103 @@ func TestObservePaneCorrelationDecidesHealth(t *testing.T) {
 	}
 }
 
-// TestObserveGivesAPlainWorktreeNoPresentation pins the early exit. A worktree
-// with no recorded agent still earns pane correlation, because that is what
-// "live" means, but it is never captured and never given an agentstatus value:
-// fabricating one would put a semantic state on the board for a workspace that
-// has no agent.
-func TestObserveGivesAPlainWorktreeNoPresentation(t *testing.T) {
+// TestObservePromotesAPlainWorktreeFromPositiveLiveIdentity pins the transient
+// upgrade. A worktree with no recorded agent stays plain until its one live
+// pane positively identifies a supported provider; that observation does not
+// become durable and disappears when the live evidence does.
+func TestObservePromotesAPlainWorktreeFromPositiveLiveIdentity(t *testing.T) {
 	captures := 0
 	collector := compatCollector("• Working (1s • esc to interrupt)", &captures)
 
 	plain := Workspace{ID: "proj:worktree:/repos/proj", Kind: KindWorktree, Plain: true, Path: "/repos/proj"}
-	collector.observe(&plain, []Pane{{ID: "%1", Session: "sidecar-ws-1", Command: "codex"}}, compatNow)
+	first := collector.ForRefresh(1)
+	first.observe(&plain, []Pane{{ID: "%1", Session: "sidecar-ws-1", Command: "codex"}}, compatNow)
+	first.CommitTrackers()
 	if !plain.Live || plain.PaneID != "%1" || plain.TmuxName != "sidecar-ws-1" {
 		t.Fatalf("plain worktree lost pane correlation: %#v", plain)
 	}
-	if plain.Presentation != (agentstatus.Presentation{}) {
-		t.Fatalf("plain worktree got a presentation: %#v", plain.Presentation)
+	if plain.Provider != "codex" || !plain.HasAgent() {
+		t.Fatalf("plain worktree was not promoted by live identity: %#v", plain)
 	}
-	if captures != 0 {
-		t.Fatalf("plain worktree captured %d panes", captures)
+	if plain.Presentation.Lane != agentstatus.LaneWorking || plain.Presentation.Evidence != "codex.screen.working" {
+		t.Fatalf("plain worktree presentation = %#v", plain.Presentation)
+	}
+	if !plain.Presentation.ChangedAt.Equal(compatNow) || plain.Item().Agent == nil {
+		t.Fatalf("plain worktree did not project live activity time: %#v", plain)
+	}
+	if captures != 1 {
+		t.Fatalf("plain live worktree captured %d panes, want 1", captures)
 	}
 
-	// The same worktree with a recorded agent is captured and resolved.
-	agentBacked := Workspace{ID: "proj:worktree:/repos/proj", Kind: KindWorktree, Path: "/repos/proj", Provider: "codex"}
-	collector.observe(&agentBacked, []Pane{{ID: "%1", Session: "sidecar-ws-1", Command: "codex"}}, compatNow)
-	if agentBacked.Presentation.Lane != agentstatus.LaneWorking || captures != 1 {
-		t.Fatalf("agent worktree = %#v after %d captures", agentBacked.Presentation, captures)
+	second := collector.ForRefresh(1)
+	second.observe(&plain, nil, compatNow.Add(time.Minute))
+	second.CommitTrackers()
+	if plain.Provider != "" || plain.HasAgent() || plain.Presentation != (agentstatus.Presentation{}) {
+		t.Fatalf("transient promotion survived missing live evidence: %#v", plain)
+	}
+
+	restartedAt := compatNow.Add(2 * time.Minute)
+	third := collector.ForRefresh(1)
+	third.observe(&plain, []Pane{{ID: "%1", Session: "sidecar-ws-1", Command: "codex"}}, restartedAt)
+	if !plain.Presentation.ChangedAt.Equal(restartedAt) {
+		t.Fatalf("restarted transient episode changed at %v, want %v", plain.Presentation.ChangedAt, restartedAt)
+	}
+	if captures != 2 {
+		t.Fatalf("plain worktree captured %d panes across two live episodes, want 2", captures)
+	}
+}
+
+func TestObserveLeavesUnidentifiedPlainWorktreePlain(t *testing.T) {
+	captures := 0
+	collector := compatCollector("$ ", &captures)
+	plain := Workspace{ID: "proj:worktree:/repos/proj", Kind: KindWorktree, Plain: true, Path: "/repos/proj"}
+
+	collector.observe(&plain, []Pane{{ID: "%1", Session: "sidecar-ws-1", Command: "zsh"}}, compatNow)
+	if !plain.Live || plain.Provider != "" || plain.HasAgent() || plain.Presentation != (agentstatus.Presentation{}) {
+		t.Fatalf("unidentified plain worktree was promoted: %#v", plain)
+	}
+	if captures != 1 {
+		t.Fatalf("plain live worktree captured %d panes, want 1", captures)
+	}
+}
+
+func TestObserveRequiresOneCapturableLivePaneToPromoteAPlainWorktree(t *testing.T) {
+	tests := []struct {
+		name         string
+		matches      []Pane
+		captureErr   bool
+		wantLive     bool
+		wantAmbig    bool
+		wantCaptures int
+	}{
+		{name: "no pane", matches: nil},
+		{name: "ambiguous panes", matches: []Pane{{ID: "%1", Command: "codex"}, {ID: "%2", Command: "codex"}}, wantAmbig: true},
+		{name: "dead pane", matches: []Pane{{ID: "%1", Command: "codex", Dead: true}}},
+		{name: "capture failure", matches: []Pane{{ID: "%1", Command: "codex"}}, captureErr: true, wantLive: true, wantCaptures: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			captures := 0
+			collector := Collector{Capture: func(string, int) (string, tty.PaneState, error) {
+				captures++
+				if tt.captureErr {
+					return "", tty.PaneState{}, fmt.Errorf("capture refused")
+				}
+				return "• Working (1s • esc to interrupt)", tty.PaneState{}, nil
+			}}.WithDefaults()
+			plain := Workspace{ID: "proj:worktree:/repos/proj", Kind: KindWorktree, Plain: true, Path: "/repos/proj"}
+
+			collector.observe(&plain, tt.matches, compatNow)
+			if plain.Live != tt.wantLive || plain.Ambiguous != tt.wantAmbig {
+				t.Fatalf("live/ambiguous = %v/%v, want %v/%v", plain.Live, plain.Ambiguous, tt.wantLive, tt.wantAmbig)
+			}
+			if plain.Provider != "" || plain.HasAgent() || plain.Presentation != (agentstatus.Presentation{}) {
+				t.Fatalf("plain worktree was promoted without usable live evidence: %#v", plain)
+			}
+			if captures != tt.wantCaptures {
+				t.Fatalf("captures = %d, want %d", captures, tt.wantCaptures)
+			}
+		})
 	}
 }
 
