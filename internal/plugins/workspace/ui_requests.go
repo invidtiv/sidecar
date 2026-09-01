@@ -111,17 +111,40 @@ func (p *Plugin) handleUIRequest(req uirequest.Request) tea.Cmd {
 }
 
 func (p *Plugin) handleRelayedUIRequest(req uirequest.Request) tea.Cmd {
-	if req.Origin.Sessions || !p.ownsRelayedOrigin(req) {
+	if req.Origin.Sessions {
 		return nil
 	}
-	switch req.Action {
-	case uirequest.ActionLayout:
+	if !p.remoteBound() || p.ctx.HostID != req.Origin.HostID {
+		return nil
+	}
+	// Bound to this host: always ack. Returning nil with no ack while the app
+	// has already skipped Sessions is a dropped request the host CLI waits on.
+	if req.Action != uirequest.ActionLayout && req.Action != uirequest.ActionOpen {
+		return p.ackRelayedDeclined(req, "unsupported relayed action")
+	}
+	if !p.ownsRelayedOrigin(req) {
+		reason := relayedOpenNotOnScreenReason
+		if req.Action == uirequest.ActionLayout {
+			reason = layoutapply.NotOnScreenReason
+		}
+		return p.ackRelayedDeclined(req, reason)
+	}
+	if req.Action == uirequest.ActionLayout {
 		return p.applyRelayedLayoutRequest(req)
-	case uirequest.ActionOpen:
-		return p.applyRelayedOpenRequest(req)
-	default:
-		return nil
 	}
+	return p.applyRelayedOpenRequest(req)
+}
+
+func (p *Plugin) ackRelayedDeclined(req uirequest.Request, reason string) tea.Cmd {
+	if req.Action == uirequest.ActionLayout {
+		return p.ackLayout(req, uirequest.StatusDeclined, reason, nil, nil)
+	}
+	surface := ""
+	if req.Origin.TmuxSession != "" {
+		surface = "shell:" + req.Origin.TmuxSession
+	}
+	p.ackOpen(req, uirequest.StatusDeclined, reason, surface, 0)
+	return nil
 }
 
 func (p *Plugin) ownsRelayedOrigin(req uirequest.Request) bool {

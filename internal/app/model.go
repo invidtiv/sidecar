@@ -1237,6 +1237,7 @@ func (m *Model) bindRemoteDestination(dest Destination) tea.Cmd {
 	}
 
 	m.boundDestination = dest
+	m.installPluginHostSeams()
 	_ = state.SetLastBoundLocation(state.BoundLocation{
 		HostID:      dest.HostID,
 		ProjectKey:  dest.ProjectKey,
@@ -1352,6 +1353,11 @@ func (m *Model) installPluginHostSeams() {
 			return hostproto.VerbCapabilities{}
 		}
 		return m.overview.HostVerbs(ctx.HostID)
+	}
+	if m.overview != nil {
+		m.overview.RelayedLanding = func(req uirequest.Request) bool {
+			return m.uiRequestLanding(req) != uiRequestLandingBoundWorkspace
+		}
 	}
 }
 

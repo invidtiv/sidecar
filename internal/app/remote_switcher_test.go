@@ -379,6 +379,28 @@ func TestRemoteBindToastUsesFormatDestination(t *testing.T) {
 	}
 }
 
+type relayAckPlugin struct {
+	recordingInitPlugin
+}
+
+func (p *relayAckPlugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
+	reqMsg, ok := msg.(uirequest.RequestMsg)
+	if !ok {
+		return p, nil
+	}
+	req := reqMsg.Request
+	if req.Origin.HostID == "" {
+		return p, nil
+	}
+	_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
+		Instance: "workspace-test",
+		Status:   uirequest.StatusDeclined,
+		Reason:   "test-plugin-bound",
+		At:       time.Now().UTC(),
+	})
+	return p, nil
+}
+
 func TestHostCatalogWorkspacesReachBoundWorkspacePlugin(t *testing.T) {
 	if err := state.InitWithDir(t.TempDir()); err != nil {
 		t.Fatal(err)
@@ -390,23 +412,69 @@ func TestHostCatalogWorkspacesReachBoundWorkspacePlugin(t *testing.T) {
 
 	ctx := &plugin.Context{}
 	reg := plugin.NewRegistry(ctx)
-	m := New(reg, keymap.NewRegistry(), cfg, "", "/tmp/one", "/tmp/one", "")
+	if err := reg.Register(&recordingInitPlugin{id: workspacePluginID}); err != nil {
+		t.Fatal(err)
+	}
+	m := New(reg, keymap.NewRegistry(), cfg, "", "/tmp/one", "/tmp/one", workspacePluginID)
 	m.testHostCatalog = []overview.HostCatalogEntry{{
 		ID: "aerie",
 		Projects: []overview.HostCatalogProject{{
 			Key: "/home/me/sidecar",
 			Workspaces: []workspaceinventory.Workspace{{
-				Kind: workspaceinventory.KindShell, Name: "Claude pane", TmuxName: "sidecar-claude",
+				Kind: workspaceinventory.KindShell, Name: "Claude pane", TmuxName: "sidecar-claude", Live: true,
 			}},
 		}},
 	}}
-	m.installPluginHostSeams()
-	m.boundDestination = Destination{HostID: "aerie", ProjectKey: "/home/me/sidecar"}
-	ctx.HostID = "aerie"
-	ctx.ProjectKey = "/home/me/sidecar"
-	got := ctx.HostWorkspaces()
+	_ = m.bindRemoteDestination(Destination{HostID: "aerie", ProjectKey: "/home/me/sidecar", ProjectName: "Sidecar"})
+	got := m.registry.Context().HostWorkspaces()
 	if len(got) != 1 || got[0].Name != "Claude pane" {
-		t.Fatalf("HostWorkspaces = %+v", got)
+		t.Fatalf("HostWorkspaces after bind without re-install = %+v", got)
+	}
+}
+
+func TestRelayedOpenAfterBindAcksNotSilence(t *testing.T) {
+	stateHome := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	t.Setenv("SIDECAR_ISOLATED_STATE", "1")
+	config.SetTestStateDir(filepath.Join(stateHome, "sidecar"))
+	t.Cleanup(config.ResetTestStateDir)
+	if err := state.InitWithDir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.Features.Flags[features.CrossProjectOverview.Name] = true
+	features.Init(cfg)
+	t.Cleanup(func() { features.Init(config.Default()) })
+
+	ackPlugin := &relayAckPlugin{recordingInitPlugin: recordingInitPlugin{id: workspacePluginID}}
+	reg := plugin.NewRegistry(&plugin.Context{})
+	if err := reg.Register(ackPlugin); err != nil {
+		t.Fatal(err)
+	}
+	m := New(reg, keymap.NewRegistry(), cfg, "", "/tmp/one", "/tmp/one", workspacePluginID)
+	m.testHostCatalog = []overview.HostCatalogEntry{{
+		ID: "aerie",
+		Projects: []overview.HostCatalogProject{{
+			Key: "/home/me/sidecar",
+			Workspaces: []workspaceinventory.Workspace{{
+				Kind: workspaceinventory.KindShell, Name: "Claude pane", TmuxName: "sidecar-claude", Live: true,
+			}},
+		}},
+	}}
+	_ = m.bindRemoteDestination(Destination{HostID: "aerie", ProjectKey: "/home/me/sidecar", ProjectName: "Sidecar"})
+	if got := m.registry.Context().HostWorkspaces(); len(got) != 1 || got[0].TmuxName != "sidecar-claude" {
+		t.Fatalf("HostWorkspaces after bind = %+v", got)
+	}
+
+	req := uirequest.Request{
+		ID: "req-after-bind", Action: uirequest.ActionOpen, CreatedAt: time.Now().UTC(), TTLMs: 5000,
+		Origin: uirequest.Origin{HostID: "aerie", TmuxSession: "sidecar-claude", ProjectKey: "/home/me/sidecar"},
+		Target: uirequest.Target{Kind: uirequest.TargetKindFile, Value: "twin.txt"},
+	}
+	_, _ = m.Update(uirequest.RequestMsg{Request: req})
+	acks, err := uirequest.ReadAcks(config.StateDir(), req.ID, req.Action)
+	if err != nil || len(acks) == 0 {
+		t.Fatalf("silence after bind: acks=%+v err=%v", acks, err)
 	}
 }
 

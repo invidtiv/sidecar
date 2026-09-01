@@ -232,13 +232,10 @@ func (m Model) Update(msg tea.Msg) (result tea.Model, command tea.Cmd) {
 }
 
 func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if m.overview != nil {
-		// Rebound every Update so the landing check sees this copy's scope and
-		// bind, not the Model New captured.
-		m.overview.RelayedLanding = func(req uirequest.Request) bool {
-			return m.uiRequestLanding(req) != uiRequestLandingBoundWorkspace
-		}
-	}
+	// Rebound every Update so HostWorkspaces / RelayedLanding see this copy's
+	// bind and scope, not the Model New captured. boundDestination is a value
+	// field; Update is a value receiver.
+	m.installPluginHostSeams()
 	// Remote-host stream messages reach the global browser whatever is on
 	// screen. See overview.IsHostMessage: each delivery is what schedules the
 	// next read of the update channel, so dropping one on a focus check would

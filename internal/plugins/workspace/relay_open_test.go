@@ -17,6 +17,7 @@ import (
 	"github.com/marcus/sidecar/internal/filepreview"
 	"github.com/marcus/sidecar/internal/hostproto"
 	"github.com/marcus/sidecar/internal/layoutapply"
+	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/resource"
 	"github.com/marcus/sidecar/internal/uirequest"
@@ -285,5 +286,133 @@ func TestRelayedOpenIgnoresUnboundWorkspace(t *testing.T) {
 	}
 	if len(runner.calls) != 0 {
 		t.Fatalf("unbound plugin acked: %v", runner.calls)
+	}
+}
+
+func TestRelayedOpenBoundHostUnknownShellDeclinesNotSilence(t *testing.T) {
+	p, _, runner := boundWorkspacePlugin(t)
+	req := relayedFileReq("req-unknown-shell", "not-a-shell", "twin.txt")
+	if cmd := p.handleUIRequest(req); cmd != nil {
+		t.Fatalf("unknown-shell relayed open returned cmd %v", cmd)
+	}
+	if p.pendingViews["not-a-shell"] != nil {
+		t.Fatal("relayed open queued")
+	}
+	if len(runner.calls) != 1 || !strings.Contains(strings.Join(runner.calls[0], " "), "--status declined") {
+		t.Fatalf("silence for a request this TUI is bound to: %v", runner.calls)
+	}
+}
+
+func TestRelayedLayoutApplyOpensHostFileNotLocalTwin(t *testing.T) {
+	p, fake, runner := boundWorkspacePlugin(t)
+	raw, err := json.Marshal(uirequest.LayoutPayload{
+		Mode:  uirequest.LayoutModeApply,
+		Panes: []uirequest.LayoutPane{{Kind: "file", Targets: []string{"twin.txt"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := uirequest.Request{
+		ID: "req-relay-layout-apply", Action: uirequest.ActionLayout, CreatedAt: time.Now().UTC(), TTLMs: 5000,
+		Origin:  uirequest.Origin{HostID: "mac-mini", TmuxSession: "test-shell", ProjectKey: "/home/me/sidecar"},
+		Payload: raw,
+	}
+	cmd := p.handleUIRequest(req)
+	applyDocOpen(t, p, cmd)
+	doc, _ := p.activeDocPane()
+	if doc == nil || doc.view() == nil {
+		t.Fatal("relayed layout apply opened no Document pane")
+	}
+	doc.view().SetSize(80, 6)
+	got := ansi.Strip(doc.view().View())
+	if !strings.Contains(got, workspaceRemoteMarker) {
+		t.Fatalf("document missing remote bytes: %q", got)
+	}
+	if strings.Contains(got, workspaceLocalTwinMarker) {
+		t.Fatalf("document showed this machine's twin: %q", got)
+	}
+	if fake.lastTarget != "twin.txt" || fake.loads == 0 {
+		t.Fatalf("source target=%q loads=%d", fake.lastTarget, fake.loads)
+	}
+	if len(runner.calls) != 1 || !strings.Contains(strings.Join(runner.calls[0], " "), "--status opened") {
+		t.Fatalf("ack calls = %v", runner.calls)
+	}
+}
+
+func TestRelayedLayoutMoveMutatesBoundTree(t *testing.T) {
+	p, _, runner := boundWorkspacePlugin(t)
+	raw, err := json.Marshal(uirequest.LayoutPayload{
+		Mode:  uirequest.LayoutModeApply,
+		Panes: []uirequest.LayoutPane{{Kind: "file", Targets: []string{"twin.txt"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	applyReq := uirequest.Request{
+		ID: "req-relay-layout-apply-for-move", Action: uirequest.ActionLayout, CreatedAt: time.Now().UTC(), TTLMs: 5000,
+		Origin:  uirequest.Origin{HostID: "mac-mini", TmuxSession: "test-shell", ProjectKey: "/home/me/sidecar"},
+		Payload: raw,
+	}
+	applyDocOpen(t, p, p.handleUIRequest(applyReq))
+	p.View(p.width, p.height)
+	doc := panelayout.FirstOfKind(p.paneRoot, panelayout.Document)
+	if doc == nil || len(moveGrid(p.paneRoot)) != 2 {
+		t.Fatalf("fixture grid = %v, want a document beside the primary", moveGrid(p.paneRoot))
+	}
+	before := moveGrid(p.paneRoot)
+
+	moveRaw, err := json.Marshal(uirequest.LayoutPayload{
+		Mode: uirequest.LayoutModeMove, Move: &uirequest.LayoutMove{From: "2.1", To: "left"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	moveReq := uirequest.Request{
+		ID: "req-relay-layout-move", Action: uirequest.ActionLayout, CreatedAt: time.Now().UTC(), TTLMs: 5000,
+		Origin:  uirequest.Origin{HostID: "mac-mini", TmuxSession: "test-shell", ProjectKey: "/home/me/sidecar"},
+		Payload: moveRaw,
+	}
+	_ = p.handleUIRequest(moveReq)
+	after := moveGrid(p.paneRoot)
+	if fmt.Sprint(after) == fmt.Sprint(before) {
+		t.Fatalf("move left the tree unchanged: %v", after)
+	}
+	if panelayout.Find(p.paneRoot, doc.ID) != doc {
+		t.Fatal("the move rebuilt the document leaf instead of grafting it")
+	}
+	joined := strings.Join(runner.calls[len(runner.calls)-1], " ")
+	if !strings.Contains(joined, "--status moved") && !strings.Contains(joined, "--status opened") && !strings.Contains(joined, "--status unchanged") {
+		t.Fatalf("move ack = %s", joined)
+	}
+}
+
+func TestRelayedLayoutApplyOffScreenDeclinesWithoutQueue(t *testing.T) {
+	p, _, runner := boundWorkspacePlugin(t)
+	p.shells = append(p.shells, &ShellSession{Name: "other", TmuxName: "sidecar-other"})
+	raw, err := json.Marshal(uirequest.LayoutPayload{
+		Mode:  uirequest.LayoutModeApply,
+		Panes: []uirequest.LayoutPane{{Kind: "file", Targets: []string{"twin.txt"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := uirequest.Request{
+		ID: "req-relay-layout-apply-off", Action: uirequest.ActionLayout, CreatedAt: time.Now().UTC(), TTLMs: 5000,
+		Origin:  uirequest.Origin{HostID: "mac-mini", TmuxSession: "sidecar-other", ProjectKey: "/home/me/sidecar"},
+		Payload: raw,
+	}
+	if cmd := p.handleUIRequest(req); cmd != nil {
+		t.Fatalf("off-screen relayed apply returned cmd %v", cmd)
+	}
+	if p.pendingViews["sidecar-other"] != nil {
+		t.Fatal("relayed apply queued")
+	}
+	doc, _ := p.activeDocPane()
+	if doc != nil {
+		t.Fatal("off-screen apply opened a document")
+	}
+	joined := strings.Join(runner.calls[0], " ")
+	if !strings.Contains(joined, "--status declined") || !strings.Contains(joined, layoutapply.NotOnScreenReason) {
+		t.Fatalf("decline ack = %s", joined)
 	}
 }
