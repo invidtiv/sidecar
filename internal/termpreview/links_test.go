@@ -16,10 +16,10 @@ type recordingLinkResolver struct {
 	fresh []FreshLinkRequest
 }
 
-func (r *recordingLinkResolver) Resolve(root string, candidate contentlink.Pending) (contentlink.Ref, bool) {
+func (r *recordingLinkResolver) Resolve(req LinkResolveRequest) (contentlink.Ref, bool) {
 	r.calls++
-	if candidate.Kind == contentlink.KindFile && candidate.Raw == "README.md" {
-		return contentlink.Ref{Kind: contentlink.KindFile, Value: root + "/README.md"}, true
+	if req.Candidate.Kind == contentlink.KindFile && req.Candidate.Raw == "README.md" {
+		return contentlink.Ref{Kind: contentlink.KindFile, Value: req.Root + "/README.md"}, true
 	}
 	return contentlink.Ref{}, false
 }
@@ -137,11 +137,11 @@ func TestLinkCoordinatorFreshResolutionUsesActivationRequest(t *testing.T) {
 func TestLinkCoordinatorNegativeExpiryMakesNewFileLinkable(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	exists := false
-	resolver := LinkResolverFunc(func(root string, candidate contentlink.Pending) (contentlink.Ref, bool) {
+	resolver := LinkResolverFunc(func(req LinkResolveRequest) (contentlink.Ref, bool) {
 		if !exists {
 			return contentlink.Ref{}, false
 		}
-		return contentlink.Ref{Kind: candidate.Kind, Value: root + "/" + candidate.Raw}, true
+		return contentlink.Ref{Kind: req.Candidate.Kind, Value: req.Root + "/" + req.Candidate.Raw}, true
 	})
 	index := contentlink.NewResolutionIndexWithClock(8, func() time.Time { return now })
 	coordinator := NewLinkCoordinatorWithIndex(resolver, index)
@@ -193,5 +193,31 @@ func TestLinkCoordinatorDoesNotCountInFlightDedupeAsCacheHit(t *testing.T) {
 	after := counters.Snapshot()
 	if after.ContentLinkResolutionRequests != 1 || after.ContentLinkResolutionCacheHits != 1 {
 		t.Fatalf("after result counters = %+v, want 1 request and 1 hit", after)
+	}
+}
+
+func TestLinkCoordinatorPassesSourceHostToResolver(t *testing.T) {
+	var got []LinkResolveRequest
+	resolver := LinkResolverFunc(func(req LinkResolveRequest) (contentlink.Ref, bool) {
+		got = append(got, req)
+		if req.HostID != "mac-mini" || req.Candidate.Raw != "only-on-host.go" {
+			return contentlink.Ref{}, false
+		}
+		return contentlink.Ref{Kind: contentlink.KindFile, Value: "only-on-host.go"}, true
+	})
+	coordinator := NewLinkCoordinator(resolver)
+	input := LinkPrepare{
+		Scope: LinkScope{Host: "test", Surface: "primary", Target: "pane", Root: "/home/me/api", SourceHost: "mac-mini", AllowedKinds: "*"},
+		Rows:  []LinkRow{{AbsoluteLine: 0, Text: "see only-on-host.go"}},
+	}
+	input.Previous = coordinator.Prepare(input)
+	runLinkCoordinatorCmd(t, coordinator)
+	if len(got) != 1 || got[0].HostID != "mac-mini" || got[0].Root != "/home/me/api" {
+		t.Fatalf("resolve requests = %+v", got)
+	}
+	ready := coordinator.Prepare(input)
+	span, ok := ready.SpanAt("see only-on-host.go", 0, len("see "))
+	if !ok || span.Kind != contentlink.KindFile || span.Value != "only-on-host.go" {
+		t.Fatalf("remote file span = (%+v, %v)", span, ok)
 	}
 }

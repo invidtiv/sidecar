@@ -434,6 +434,33 @@ func TestResolutionIndexTTLsDedupeAndRejectsStaleTokens(t *testing.T) {
 	}
 }
 
+func TestResolutionIndexIsolatesEqualRootsOnDifferentHosts(t *testing.T) {
+	index := NewResolutionIndex(8)
+	file := Pending{Kind: KindFile, Raw: "twin.txt"}
+	index.PutForHost("/home/me/api", "", file, Ref{Kind: KindFile, Value: "LOCAL-TWIN"}, true)
+	index.PutForHost("/home/me/api", "mac-mini", file, Ref{Kind: KindFile, Value: "REMOTE-MARKER"}, true)
+
+	local, found, ready := index.SnapshotForHost("/home/me/api", "").Lookup(file.Kind, file.Raw)
+	if !ready || !found || local.Value != "LOCAL-TWIN" {
+		t.Fatalf("local snapshot = (%+v, found=%v ready=%v)", local, found, ready)
+	}
+	remote, found, ready := index.SnapshotForHost("/home/me/api", "mac-mini").Lookup(file.Kind, file.Raw)
+	if !ready || !found || remote.Value != "REMOTE-MARKER" {
+		t.Fatalf("remote snapshot = (%+v, found=%v ready=%v)", remote, found, ready)
+	}
+
+	localReq, ok := index.BeginClassifiedFor("/home/me/api", "", file)
+	if ok == BeginRequested {
+		t.Fatal("local ready answer was requeued")
+	}
+	remoteReq, ok := index.BeginClassifiedFor("/home/me/api", "mac-mini", file)
+	if ok == BeginRequested {
+		t.Fatal("remote ready answer was requeued")
+	}
+	_ = localReq
+	_ = remoteReq
+}
+
 func TestScanFrameBoundsRowsResourcesAndPending(t *testing.T) {
 	matcher := ResourceMatcher{Provider: "p", ID: "m", Re: regexp.MustCompile(`K-[0-9]+`)}
 	line := strings.TrimSpace(strings.Repeat("K-1 ", MaxResourceMatchesPerLine+10))

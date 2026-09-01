@@ -2,6 +2,8 @@ package overview
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,7 +20,9 @@ import (
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/targetactivation"
+	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/uirequest"
+	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
 const remoteMarker = "REMOTE-MARKER"
@@ -456,5 +460,99 @@ func TestRemoteDeckContextRefusesDisconnectedHost(t *testing.T) {
 	cmd := m.openPreviewDocTarget(uirequest.Target{Kind: uirequest.TargetKindFile, Value: "twin.txt"})
 	if cmd != nil || m.preview.doc != nil {
 		t.Fatal("a disconnected host opened a document")
+	}
+}
+
+func TestRemoteSessionsPrepareMakesHostOnlyFileClickable(t *testing.T) {
+	fake := &fakeRemoteFileSource{body: remoteMarker + "\nhost-only file\n", revision: "v1:1"}
+	m, fake, root := showingRemoteTwinModel(t, fake)
+	if _, err := os.Stat(filepath.Join(root, "only-on-host.go")); !os.IsNotExist(err) {
+		t.Fatalf("only-on-host.go must not exist locally: %v", err)
+	}
+	if _, _, ok := terminallink.ResolveFile(root, "only-on-host.go"); ok {
+		t.Fatal("local ResolveFile found only-on-host.go; the span would not prove remote resolution")
+	}
+	const line = "see only-on-host.go and twin.txt"
+	state := preparedPreviewLineForTest(t, m, line)
+	var hostOnly, twin bool
+	for _, span := range state.Spans(line, 0) {
+		if span.Kind != contentlink.KindFile {
+			continue
+		}
+		switch span.Value {
+		case "only-on-host.go":
+			hostOnly = true
+		case "twin.txt":
+			twin = true
+		}
+	}
+	if !hostOnly {
+		t.Fatalf("only-on-host.go was not a file span: %+v", state.Spans(line, 0))
+	}
+	if !twin {
+		t.Fatalf("twin.txt was not a file span: %+v", state.Spans(line, 0))
+	}
+
+	span, ok := state.SpanAt(line, 0, strings.Index(line, "only-on-host.go"))
+	if !ok {
+		t.Fatal("no span at only-on-host.go")
+	}
+	plan, err := targetactivation.PlanForSpan(span)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd, handled := m.activatePreviewPlan(plan)
+	if !handled || cmd == nil {
+		t.Fatalf("click handled=%v cmd=%v", handled, cmd != nil)
+	}
+	if view := m.preview.doc.view(); view != nil {
+		view.SetSize(80, 6)
+	}
+	run(t, m, cmd)
+	if m.preview.doc == nil {
+		t.Fatal("click opened no Document pane")
+	}
+	got := ansi.Strip(m.preview.doc.view().View())
+	if !strings.Contains(got, remoteMarker) {
+		t.Fatalf("document missing host bytes: %q", got)
+	}
+	if strings.Contains(got, localTwinMarker) {
+		t.Fatalf("document showed this machine's twin: %q", got)
+	}
+	if fake.lastTarget != "only-on-host.go" {
+		t.Fatalf("resolved %q, want only-on-host.go", fake.lastTarget)
+	}
+}
+
+func TestLocalSessionsFileLinkPrepareStartsNoRemoteContentCommand(t *testing.T) {
+	stub := &remoteRunnerStub{}
+	stub.install(t)
+	fake := &fakeRemoteFileSource{body: remoteMarker + "\n"}
+	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
+	m.contentSource = fake
+	state := preparedPreviewLineForTest(t, m, "see README.md")
+	span, ok := state.SpanAt("see README.md", 0, strings.Index("see README.md", "README.md"))
+	if !ok || span.Kind != contentlink.KindFile {
+		t.Fatalf("local file span = (%+v, %v)", span, ok)
+	}
+	if fake.resolves != 0 {
+		t.Fatalf("local prepare resolved through the remote source: %d", fake.resolves)
+	}
+	if len(stub.calls) != 0 {
+		t.Fatalf("local prepare invoked sidecar: %v", stub.calls)
+	}
+}
+
+func TestRemoteSessionsDiffTokenIsNotDecoratedFromLocalGit(t *testing.T) {
+	m, fake, _ := showingRemoteTwinModel(t, nil)
+	const line = "review abc1234"
+	state := preparedPreviewLineForTest(t, m, line)
+	for _, span := range state.Spans(line, 0) {
+		if span.Kind == contentlink.KindDiff {
+			t.Fatalf("remote diff token was decorated: %+v", span)
+		}
+	}
+	if fake.loads != 0 {
+		t.Fatalf("remote diff prepare loaded a document: %d", fake.loads)
 	}
 }

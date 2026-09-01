@@ -13,6 +13,7 @@ import (
 	"github.com/marcus/sidecar/internal/clip"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/configui"
+	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/gitinit"
 	"github.com/marcus/sidecar/internal/issueview"
@@ -548,7 +549,12 @@ func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentV
 		intro:              NewIntroModel(repoName),
 		currentVersion:     currentVersion,
 	}
-	m.terminalLinks = newTerminalLinkCoordinator()
+	m.terminalLinks = newTerminalLinkCoordinator(func(hostID, root string, candidate contentlink.Pending) (contentlink.Ref, bool) {
+		if m.overview == nil {
+			return contentlink.Ref{}, false
+		}
+		return m.overview.ResolveRemoteTerminalLink(hostID, root, candidate)
+	})
 	m.injectTerminalLinkCoordinator()
 	if watcher, err := uirequest.NewWatcher(config.StateDir()); err == nil {
 		m.uiRequestWatcher = watcher

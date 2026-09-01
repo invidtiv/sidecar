@@ -311,18 +311,21 @@ type testTerminalLinkResolver struct {
 	diff func(string, string) (string, bool)
 }
 
-func (r testTerminalLinkResolver) Resolve(root string, candidate contentlink.Pending) (contentlink.Ref, bool) {
-	switch candidate.Kind {
+func (r testTerminalLinkResolver) Resolve(req termpreview.LinkResolveRequest) (contentlink.Ref, bool) {
+	if req.HostID != "" {
+		return contentlink.Ref{}, false
+	}
+	switch req.Candidate.Kind {
 	case contentlink.KindFile:
-		display, _, ok := terminallink.ResolveFileFromCanonicalBase(root, candidate.Raw)
-		return contentlink.Ref{Kind: candidate.Kind, Value: display}, ok
+		display, _, ok := terminallink.ResolveFileFromCanonicalBase(req.Root, req.Candidate.Raw)
+		return contentlink.Ref{Kind: req.Candidate.Kind, Value: display}, ok
 	case contentlink.KindDiff:
 		if r.diff != nil {
-			value, ok := r.diff(root, candidate.Raw)
-			return contentlink.Ref{Kind: candidate.Kind, Value: value}, ok
+			value, ok := r.diff(req.Root, req.Candidate.Raw)
+			return contentlink.Ref{Kind: req.Candidate.Kind, Value: value}, ok
 		}
-		value, _, ok := terminallink.ResolveGitSpec(root, candidate.Raw)
-		return contentlink.Ref{Kind: candidate.Kind, Value: value}, ok
+		value, _, ok := terminallink.ResolveGitSpec(req.Root, req.Candidate.Raw)
+		return contentlink.Ref{Kind: req.Candidate.Kind, Value: value}, ok
 	default:
 		return contentlink.Ref{}, false
 	}
@@ -366,6 +369,9 @@ func preparedStandaloneLineForTest(line string, allowed contentlink.KindSet, mat
 }
 
 func (r testTerminalLinkResolver) ResolveFresh(request termpreview.FreshLinkRequest) (contentlink.Ref, bool) {
+	if request.HostID != "" {
+		return contentlink.Ref{}, false
+	}
 	rawRoot := request.RawRoot
 	if rawRoot == "" {
 		rawRoot = request.Root
@@ -374,7 +380,7 @@ func (r testTerminalLinkResolver) ResolveFresh(request termpreview.FreshLinkRequ
 	if err != nil || filepath.Clean(root) != filepath.Clean(request.Root) {
 		return contentlink.Ref{}, false
 	}
-	return r.Resolve(filepath.Clean(root), request.Candidate)
+	return r.Resolve(termpreview.LinkResolveRequest{Root: filepath.Clean(root), Candidate: request.Candidate})
 }
 
 func deliverTerminalLinkResolutions(t *testing.T, p *Plugin, cmd tea.Cmd) {

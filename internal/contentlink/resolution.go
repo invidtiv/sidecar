@@ -23,8 +23,11 @@ type Pending struct {
 
 // ResolutionRequest is the root-aware identity carried through asynchronous
 // resolution. Token is never reused and lets Apply reject stale results.
+// HostID is empty on this machine; equal roots on two hosts do not share an
+// answer.
 type ResolutionRequest struct {
 	Root      string
+	HostID    string
 	Candidate Pending
 	Token     uint64
 }
@@ -50,8 +53,18 @@ type resolution struct {
 }
 
 type resolutionKey struct {
-	root string
+	root   string
+	hostID string
 	Pending
+}
+
+type resolutionScope struct {
+	root   string
+	hostID string
+}
+
+func (k resolutionKey) scope() resolutionScope {
+	return resolutionScope{root: k.root, hostID: k.hostID}
 }
 
 type resolutionEntry struct {
@@ -85,7 +98,7 @@ type ResolutionIndex struct {
 	entries  map[resolutionKey]*resolutionEntry
 	lru      *list.List
 	inflight map[resolutionKey]uint64
-	versions map[string]uint64
+	versions map[resolutionScope]uint64
 	next     uint64
 }
 
@@ -100,7 +113,7 @@ func NewResolutionIndexWithClock(limit int, now func() time.Time) *ResolutionInd
 	if now == nil {
 		now = time.Now
 	}
-	return &ResolutionIndex{limit: limit, now: now, entries: make(map[resolutionKey]*resolutionEntry), lru: list.New(), inflight: make(map[resolutionKey]uint64), versions: make(map[string]uint64)}
+	return &ResolutionIndex{limit: limit, now: now, entries: make(map[resolutionKey]*resolutionEntry), lru: list.New(), inflight: make(map[resolutionKey]uint64), versions: make(map[resolutionScope]uint64)}
 }
 
 func normalizeResolutionRoot(root string) string {
@@ -115,12 +128,16 @@ func (i *ResolutionIndex) Put(candidate Pending, ref Ref, found bool) bool {
 }
 
 func (i *ResolutionIndex) PutForRoot(root string, candidate Pending, ref Ref, found bool) bool {
+	return i.PutForHost(root, "", candidate, ref, found)
+}
+
+func (i *ResolutionIndex) PutForHost(root, hostID string, candidate Pending, ref Ref, found bool) bool {
 	if i == nil || !validResolution(candidate, ref, found) {
 		return false
 	}
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	return i.putLocked(resolutionKey{root: normalizeResolutionRoot(root), Pending: candidate}, ref, found)
+	return i.putLocked(resolutionKey{root: normalizeResolutionRoot(root), hostID: hostID, Pending: candidate}, ref, found)
 }
 
 func (i *ResolutionIndex) putLocked(key resolutionKey, ref Ref, found bool) bool {
@@ -131,7 +148,7 @@ func (i *ResolutionIndex) putLocked(key resolutionKey, ref Ref, found bool) bool
 		entry.expires = i.now().Add(resolutionTTL(key.Kind, found))
 		i.lru.MoveToFront(entry.lru)
 		if changed {
-			i.versions[key.root]++
+			i.versions[key.scope()]++
 		}
 		return changed
 	}
@@ -140,7 +157,7 @@ func (i *ResolutionIndex) putLocked(key resolutionKey, ref Ref, found bool) bool
 	}
 	elem := i.lru.PushFront(key)
 	i.entries[key] = &resolutionEntry{result: result, expires: i.now().Add(resolutionTTL(key.Kind, found)), lru: elem}
-	i.versions[key.root]++
+	i.versions[key.scope()]++
 	return true
 }
 
@@ -161,12 +178,16 @@ func (i *ResolutionIndex) Begin(root string, candidate Pending) (ResolutionReque
 // flight. Callers use that distinction for truthful cache-hit diagnostics
 // without weakening request deduplication.
 func (i *ResolutionIndex) BeginClassified(root string, candidate Pending) (ResolutionRequest, BeginOutcome) {
+	return i.BeginClassifiedFor(root, "", candidate)
+}
+
+func (i *ResolutionIndex) BeginClassifiedFor(root, hostID string, candidate Pending) (ResolutionRequest, BeginOutcome) {
 	if i == nil || !validCandidate(candidate) {
 		return ResolutionRequest{}, BeginRejected
 	}
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	key := resolutionKey{root: normalizeResolutionRoot(root), Pending: candidate}
+	key := resolutionKey{root: normalizeResolutionRoot(root), hostID: hostID, Pending: candidate}
 	if i.readyLocked(key, i.now()) {
 		return ResolutionRequest{}, BeginReady
 	}
@@ -178,7 +199,7 @@ func (i *ResolutionIndex) BeginClassified(root string, candidate Pending) (Resol
 		i.next++
 	}
 	i.inflight[key] = i.next
-	return ResolutionRequest{Root: key.root, Candidate: candidate, Token: i.next}, BeginRequested
+	return ResolutionRequest{Root: key.root, HostID: hostID, Candidate: candidate, Token: i.next}, BeginRequested
 }
 
 // Apply accepts only the current token. changed reports whether the effective
@@ -189,7 +210,7 @@ func (i *ResolutionIndex) Apply(result ResolutionResult) (changed, accepted bool
 	}
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	key := resolutionKey{root: normalizeResolutionRoot(result.Request.Root), Pending: result.Request.Candidate}
+	key := resolutionKey{root: normalizeResolutionRoot(result.Request.Root), hostID: result.Request.HostID, Pending: result.Request.Candidate}
 	if i.inflight[key] != result.Request.Token {
 		return false, false
 	}
@@ -204,12 +225,16 @@ func validResolution(candidate Pending, ref Ref, found bool) bool {
 func (i *ResolutionIndex) Snapshot() ResolutionSnapshot { return i.SnapshotForRoot("") }
 
 func (i *ResolutionIndex) SnapshotForRoot(root string) ResolutionSnapshot {
+	return i.SnapshotForHost(root, "")
+}
+
+func (i *ResolutionIndex) SnapshotForHost(root, hostID string) ResolutionSnapshot {
 	if i == nil {
 		return ResolutionSnapshot{entries: map[Pending]resolution{}}
 	}
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	root = normalizeResolutionRoot(root)
+	scope := resolutionScope{root: normalizeResolutionRoot(root), hostID: hostID}
 	now := i.now()
 	entries := make(map[Pending]resolution)
 	var touched []*list.Element
@@ -219,7 +244,7 @@ func (i *ResolutionIndex) SnapshotForRoot(root string) ResolutionSnapshot {
 		entry := i.entries[key]
 		if !entry.expires.After(now) {
 			i.removeLocked(elem)
-		} else if key.root == root {
+		} else if key.scope() == scope {
 			entries[key.Pending] = entry.result
 			touched = append(touched, elem)
 		}
@@ -228,7 +253,7 @@ func (i *ResolutionIndex) SnapshotForRoot(root string) ResolutionSnapshot {
 	for _, elem := range touched {
 		i.lru.MoveToFront(elem)
 	}
-	return ResolutionSnapshot{entries: entries, generation: i.versions[root]}
+	return ResolutionSnapshot{entries: entries, generation: i.versions[scope]}
 }
 
 func (i *ResolutionIndex) readyLocked(key resolutionKey, now time.Time) bool {
@@ -248,8 +273,9 @@ func (i *ResolutionIndex) removeLocked(elem *list.Element) {
 	if elem == nil {
 		return
 	}
-	delete(i.entries, elem.Value.(resolutionKey))
-	i.versions[elem.Value.(resolutionKey).root]++
+	key := elem.Value.(resolutionKey)
+	delete(i.entries, key)
+	i.versions[key.scope()]++
 	i.lru.Remove(elem)
 }
 
@@ -261,7 +287,7 @@ func (i *ResolutionIndex) Reset() {
 	defer i.mu.Unlock()
 	i.entries = make(map[resolutionKey]*resolutionEntry)
 	i.inflight = make(map[resolutionKey]uint64)
-	i.versions = make(map[string]uint64)
+	i.versions = make(map[resolutionScope]uint64)
 	i.lru.Init()
 }
 
