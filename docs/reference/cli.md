@@ -767,6 +767,44 @@ Every verb is non-interactive, read-only, and strictly enumerated.
 Usage: sidecar content <command>
 ```
 
+### `sidecar content catalog`
+
+List file, diff, issue, and note picker candidates for a workspace
+
+List the bounded picker catalogs a viewing Sidecar offers for File, Diff, Issue, and Note on this machine.
+
+This is the read-only catalog a viewing Sidecar invokes on a host, not a general file browser.
+The workspace id is re-resolved to its authoritative root on every request.
+--kind restricts the list to one picker kind; omitting it returns every kind together.
+Resource rows come from content describe, not this verb.
+
+--json writes the machine contract.
+
+```
+Usage: sidecar content catalog --workspace ID [--kind file|issue|note|diff] [--json]
+```
+
+**Options:**
+
+- `--workspace ID`: Unscoped durable workspace id (projectKey:shell:name or projectKey:worktree:path)
+- `--kind KIND`: Picker kind (file, issue, note, or diff); omit to list all
+- `--json`: Write the structured result object to stdout (required for the machine contract)
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: listed
+- `1`: internal or load failure
+- `2`: usage error or unknown kind
+- `5`: value rejected: unknown workspace
+
+**Examples:**
+
+```bash
+sidecar content catalog --workspace /home/me/api:shell:sidecar-sh-1 --json
+sidecar content catalog --workspace /home/me/api:shell:sidecar-sh-1 --kind file --json
+```
+
 ### `sidecar content describe`
 
 Describe this host's terminal resource providers
@@ -1246,13 +1284,14 @@ versioned JSONL snapshot plus status transitions to stdout.
 This is not a daemon. It is spawned per connection over an SSH stdio pipe
 and exits when that pipe closes.
 
-It has exactly one write, and it is the same one a local Sidecar makes: a
-shell record whose tmux session is confirmed gone is reaped — tombstoned
-through the flocked, conditional writer the Sessions browser uses, so
-`sidecar shell restore` still brings it back. Without it a row for a shell
-the user had already exited stayed on the viewer's screen until somebody
-opened Sidecar on this machine. Nothing else is written: no geometry lease,
-no pane resize, no mutating tmux command at all.
+It has two writes besides observation: a shell record whose tmux session is
+confirmed gone is reaped — tombstoned through the flocked, conditional writer
+the Sessions browser uses, so `sidecar shell restore` still brings it back —
+and, when SIDECAR_VIEWER_INSTANCE is set, an ephemeral presence file under
+stateDir/viewers/. Without the reap, a row for a shell the user had already
+exited stayed on the viewer's screen until somebody opened Sidecar on this
+machine. Serve does not write request acks, take a geometry lease, resize a
+pane, or issue any mutating tmux command.
 
 Nothing is bound to a network. SSH is the entire transport and the entire
 trust boundary.
@@ -1340,6 +1379,11 @@ open (`layout move`). All three act on the surface showing this Sidecar
 shell — or, with --sessions, the global Sessions surface — and never queue:
 a request whose destination is off screen declines with the reason.
 
+From a Sidecar-managed pane whose geometry lease is held by a connected
+viewer, these verbs read and mutate that viewer's screen, not a host TUI.
+There is no --host flag. If the lease holder cannot receive pane requests,
+the command declines (exit 4).
+
 ```
 Usage: sidecar layout <command>
 ```
@@ -1389,7 +1433,8 @@ happens, or nothing changes and the decline names the first violation.
 The ack's items array lists EVERY requested pane with verdict opened,
 retargeted, carried (a live leaf the spec kept rather than created), or
 declined, plus its landed cell — so one round trip shows everything wrong
-with a refused spec. Like get, apply never queues.
+with a refused spec. Like get, apply never queues: off-screen, or a lease
+holder that cannot receive pane requests, is exit 4.
 
 ```
 Usage: sidecar layout apply (--spec '<json>' | --pane '<json>' [--pane '<json>' ...]) [--sessions [ROW]]
@@ -1412,7 +1457,7 @@ Usage: sidecar layout apply (--spec '<json>' | --pane '<json>' [--pane '<json>' 
 - `1`: state failure
 - `2`: usage or validation error
 - `3`: no running instance
-- `4`: declined host-side; the reason names the first violation
+- `4`: declined host-side; the reason names the first violation (off-screen, unfit, or the lease holder cannot receive pane requests)
 - `5`: an unknown --project or --shell
 
 **Examples:**
@@ -1450,6 +1495,9 @@ Unlike open, a layout request never queues: when this shell is not on
 screen the request declines instead (exit 4), because a stale answer is
 worse than a refusal.
 
+From a Sidecar-managed pane on a host you are viewing, the JSON is that
+viewer's grid for the matching Sessions row.
+
 ```
 Usage: sidecar layout get [--json] [--sessions [ROW]]
 ```
@@ -1469,7 +1517,7 @@ Usage: sidecar layout get [--json] [--sessions [ROW]]
 - `1`: state failure
 - `2`: usage error
 - `3`: no running instance
-- `4`: declined: the origin shell is not on screen
+- `4`: declined: the origin shell is not on screen, or the lease holder cannot receive pane requests
 - `5`: an unknown --project or --shell
 
 **Examples:**
@@ -1517,7 +1565,8 @@ never as moved and never as a refusal.
 With --sessions this changes the pane tree of the Sessions viewer on THIS
 machine, including for a row whose workspace lives on another one: no
 layout mutation is sent to the remote host. The acknowledgement names the
-surface it changed. Like get and apply, move never queues.
+surface it changed. Like get and apply, move never queues: off-screen,
+or a lease holder that cannot receive pane requests, is exit 4.
 
 ```
 Usage: sidecar layout move (CELL | --focused) --to (CELL | COLUMN | left|right|up|down) [--sessions [ROW]]
@@ -1540,7 +1589,7 @@ Usage: sidecar layout move (CELL | --focused) --to (CELL | COLUMN | left|right|u
 - `1`: state failure
 - `2`: usage error
 - `3`: no running instance
-- `4`: declined host-side; the reason names the refusal
+- `4`: declined host-side; the reason names the refusal (off-screen, unfit, or the lease holder cannot receive pane requests)
 - `5`: an unknown --project or --shell
 
 **Examples:**
@@ -1853,12 +1902,22 @@ Show a file, a td issue, a note, a git diff, or a provider resource in a split p
 Show a file, a td issue, a td note, a git diff, or an external provider resource to the user as a
 split pane in a Sidecar workspace. From a Sidecar shell this targets that shell.
 Otherwise it targets the unique running instance, or a specific --shell / --project.
+--sessions addresses the global Sessions surface of a running instance.
+Pass --sessions=ROW for a durable inventory ID or display name; a following
+bare word is the open target, not the row. Mutually exclusive with --shell
+and --project.
 --diff with no spec is the working tree. --provider names a configured terminal resource
 provider instance and is required for a resource: a bare locator is never guessed at.
 --split only overrides the split axis; it never halves a live terminal after content is open.
 --at places the pane at an explicit grid cell and is a requirement: a kind whose open
 would retarget an existing pane, or any cell that cannot be honored exactly, declines
 rather than land elsewhere (--split expresses a preference; --at, a demand).
+
+From a Sidecar-managed pane whose geometry lease is held by a connected viewer,
+the open lands on that viewer's screen — not on a host TUI that may not be running.
+There is no --host flag: routing is the lease. A relayed open never queues: if that
+row is not on the viewer's screen, or the lease holder cannot receive pane requests
+(disconnected, too old, or presence expired), the command declines (exit 4).
 
 ```
 Usage: sidecar open [options] [<target>]
@@ -1880,6 +1939,7 @@ Usage: sidecar open [options] [<target>]
 - `--provider ID`: Open a locator through a configured terminal resource provider
 - `--shell NAME`: Target a registered shell by display name or tmux name
 - `--project NAME`: Target a project's Workspaces surface (slug, basename, or path)
+- `--sessions [=ROW]`: Target the global Sessions surface (optional row as --sessions=ID)
 - `--split auto|right|below`: Where to place a new pane (default auto)
 - `--at COL[.ROW]`: Place at an explicit grid cell (1-based); a requirement, mutually exclusive with --split
 - `--wait DURATION`: Time to wait for instances to acknowledge (default 1200ms; 0 = fire and forget)
@@ -1892,7 +1952,7 @@ Usage: sidecar open [options] [<target>]
 - `1`: state failure
 - `2`: usage or validation error
 - `3`: no running instance, or several running with no target
-- `4`: an instance declined (e.g. the window is too small to split)
+- `4`: an instance declined (too small to split, row not on screen, or the lease holder cannot receive pane requests)
 - `5`: an unknown --project or --shell
 
 **Examples:**
@@ -1920,6 +1980,61 @@ sidecar open --json --split below README.md
 sidecar open README.md --at 2.1
 # from any terminal, that project's Workspaces surface
 sidecar open --project sidecar README.md
+# the selected row on the global Sessions surface
+sidecar open --sessions README.md
+```
+
+## `sidecar request`
+
+Host-side UI request bus verbs a viewing Sidecar invokes
+
+Acknowledge UI requests into this machine's request bus.
+
+This is an internal transport endpoint, not a public open-on-host surface.
+
+```
+Usage: sidecar request <command>
+```
+
+### `sidecar request ack`
+
+Write one acknowledgement into a host request's *.acks directory
+
+Write an acknowledgement for a UI request file this machine already holds.
+
+This is the mutation seam a viewing Sidecar uses to ack a relayed open or layout
+request into the host *.acks directory. It is not a public targeting flag and not
+a serve write: serve still does not write acks or apply requests.
+
+--json writes the machine contract.
+
+```
+Usage: sidecar request ack --id ID --action open|layout --status STATUS [--reason TEXT] [--surface TEXT] [--pane N] [--layout JSON] [--items JSON] --json
+```
+
+**Options:**
+
+- `--id ID`: Request id to acknowledge
+- `--action ACTION`: Request action (open or layout)
+- `--status STATUS`: Ack status (opened, declined, retargeted, queued, moved, unchanged)
+- `--reason TEXT`: Decline or no-op reason
+- `--surface TEXT`: Surface that handled the request
+- `--pane N`: Pane id that received the open, when any
+- `--layout JSON`: Layout get report to store on the ack
+- `--items JSON`: Layout apply/move per-pane verdicts to store on the ack
+- `--json`: Write the structured result object to stdout (required for the machine contract)
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: acknowledged
+- `1`: state failure
+- `2`: usage error
+
+**Examples:**
+
+```bash
+sidecar request ack --id req-1 --action open --status opened --json
 ```
 
 ## `sidecar session`

@@ -449,12 +449,21 @@ func RootCommand() *Command {
 		Long: "Show a file, a td issue, a td note, a git diff, or an external provider resource to the user as a\n" +
 			"split pane in a Sidecar workspace. From a Sidecar shell this targets that shell.\n" +
 			"Otherwise it targets the unique running instance, or a specific --shell / --project.\n" +
+			"--sessions addresses the global Sessions surface of a running instance.\n" +
+			"Pass --sessions=ROW for a durable inventory ID or display name; a following\n" +
+			"bare word is the open target, not the row. Mutually exclusive with --shell\n" +
+			"and --project.\n" +
 			"--diff with no spec is the working tree. --provider names a configured terminal resource\n" +
 			"provider instance and is required for a resource: a bare locator is never guessed at.\n" +
 			"--split only overrides the split axis; it never halves a live terminal after content is open.\n" +
 			"--at places the pane at an explicit grid cell and is a requirement: a kind whose open\n" +
 			"would retarget an existing pane, or any cell that cannot be honored exactly, declines\n" +
-			"rather than land elsewhere (--split expresses a preference; --at, a demand).",
+			"rather than land elsewhere (--split expresses a preference; --at, a demand).\n\n" +
+			"From a Sidecar-managed pane whose geometry lease is held by a connected viewer,\n" +
+			"the open lands on that viewer's screen — not on a host TUI that may not be running.\n" +
+			"There is no --host flag: routing is the lease. A relayed open never queues: if that\n" +
+			"row is not on the viewer's screen, or the lease holder cannot receive pane requests\n" +
+			"(disconnected, too old, or presence expired), the command declines (exit 4).",
 		Targets: []TargetDoc{
 			{Target: "path", Summary: "A file inside the target workspace, optionally \"path:line\""},
 			{Target: "td-xxxxxx", Summary: "A td issue id"},
@@ -469,6 +478,7 @@ func RootCommand() *Command {
 			{Name: "--provider", Arg: "ID", Summary: "Open a locator through a configured terminal resource provider"},
 			{Name: "--shell", Arg: "NAME", Summary: "Target a registered shell by display name or tmux name"},
 			{Name: "--project", Arg: "NAME", Summary: "Target a project's Workspaces surface (slug, basename, or path)"},
+			{Name: "--sessions", Arg: "[=ROW]", Summary: "Target the global Sessions surface (optional row as --sessions=ID)"},
 			{Name: "--split", Arg: "auto|right|below", Summary: "Where to place a new pane (default auto)"},
 			{Name: "--at", Arg: "COL[.ROW]", Summary: "Place at an explicit grid cell (1-based); a requirement, mutually exclusive with --split"},
 			{Name: "--wait", Arg: "DURATION", Summary: "Time to wait for instances to acknowledge (default 1200ms; 0 = fire and forget)"},
@@ -481,7 +491,7 @@ func RootCommand() *Command {
 			{Code: 1, Summary: "state failure"},
 			{Code: 2, Summary: "usage or validation error"},
 			{Code: 3, Summary: "no running instance, or several running with no target"},
-			{Code: 4, Summary: "an instance declined (e.g. the window is too small to split)"},
+			{Code: 4, Summary: "an instance declined (too small to split, row not on screen, or the lease holder cannot receive pane requests)"},
 			{Code: 5, Summary: "an unknown --project or --shell"},
 		},
 		Examples: []Example{
@@ -496,10 +506,11 @@ func RootCommand() *Command {
 			{Command: "sidecar open --json --split below README.md", Description: "structured result for the agent"},
 			{Command: "sidecar open README.md --at 2.1", Description: "explicit cell: second column, top row"},
 			{Command: "sidecar open --project sidecar README.md", Description: "from any terminal, that project's Workspaces surface"},
+			{Command: "sidecar open --sessions README.md", Description: "the selected row on the global Sessions surface"},
 		},
 		Agent: AgentDoc{
 			Invocation: "sidecar open <path>[:line] | td-xxxxxx | sidecar://note/nt-xxxx | --diff [spec] | --provider ID <locator> [--split right|below] [--at COL[.ROW]]",
-			Summary:    "Put a file, a td issue, a td note, a git diff, or a provider resource in front of the user",
+			Summary:    "Put a file, issue, note, diff, or resource in front of the user on the lease holder's screen",
 		},
 		Mutates: true,
 		Run:     runOpen,
@@ -557,7 +568,7 @@ func RootCommand() *Command {
 		Launch: runSetupLaunch,
 	}
 
-	root.Sub = []*Command{agentCommand(), agentsCmd, contentCommand(), createCmd, helpCmd, hostCommand(), layoutCommand(), notifyCommand(), openCmd, sessionCommand(), setupCmd, shellCmd, terminalLinksCommand()}
+	root.Sub = []*Command{agentCommand(), agentsCmd, contentCommand(), createCmd, helpCmd, hostCommand(), layoutCommand(), notifyCommand(), openCmd, requestCommand(), sessionCommand(), setupCmd, shellCmd, terminalLinksCommand()}
 	return root
 }
 

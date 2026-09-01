@@ -172,33 +172,41 @@ func (m *Model) SetResourceMatchers(matchers []terminallink.ResourceMatcher) {
 // scanner produced becomes a reference, and the shared Pane owns everything
 // after that.
 func (m *Model) activatePreviewResource(ref resourceview.Ref) tea.Cmd {
-	return m.openPreviewResourceRef(ref, true)
+	cmd, _ := m.openPreviewResourceRefResult(ref, true)
+	return cmd
 }
 
 // OpenPreviewResource opens or focuses a resource tab without the terminal
 // ritual. It is the `sidecar open --provider` path: nothing was clicked in
 // terminal output, so there is no selection to clear.
 func (m *Model) OpenPreviewResource(ref resourceview.Ref) tea.Cmd {
-	return m.openPreviewResourceRef(ref, false)
+	cmd, _ := m.openPreviewResourceRefResult(ref, false)
+	return cmd
 }
 
 func (m *Model) openPreviewResourceRef(ref resourceview.Ref, fromTerminal bool) tea.Cmd {
+	cmd, _ := m.openPreviewResourceRefResult(ref, fromTerminal)
+	return cmd
+}
+
+func (m *Model) openPreviewResourceRefResult(ref resourceview.Ref, fromTerminal bool) (tea.Cmd, error) {
 	workspace, ok := m.SelectedWorkspace()
 	if !ok || !ref.Valid() {
-		return nil
+		return nil, nil
 	}
 	if workspace.Remote() {
 		if !m.hostShows(workspace.HostID) {
-			return nil
+			return nil, nil
 		}
 		if !m.hostVerbs(workspace.HostID).ContentReadV1 {
-			return remoteContentErrorCmd(&contentservice.MissingCapabilityError{HostID: workspace.HostID})
+			err := &contentservice.MissingCapabilityError{HostID: workspace.HostID}
+			return remoteContentErrorCmd(err), err
 		}
 	}
 	if fromTerminal {
 		m.clearPreviewSelection()
 	}
-	return m.openPreviewContent(contentlink.Ref{Kind: contentlink.KindResource, Provider: ref.Instance, Matcher: ref.Matcher, Value: ref.Locator}, "Resource")
+	return m.openPreviewContent(contentlink.Ref{Kind: contentlink.KindResource, Provider: ref.Instance, Matcher: ref.Matcher, Value: ref.Locator}, "Resource"), nil
 }
 
 // previewResourceResolver wraps the host-supplied resolver so every answer

@@ -321,6 +321,39 @@ func TestLayoutGetHelpMentionsSessions(t *testing.T) {
 	}
 }
 
+func TestLayoutGetFastRefusesMissingViewerPresence(t *testing.T) {
+	_, stateDir := setupIsolatedCLI(t)
+	workDir := t.TempDir()
+	writeProjectMeta(t, stateDir, "sidecar", workDir)
+	writeProjectShell(t, stateDir, "sidecar", shellstate.Definition{
+		TmuxName: "sidecar-sh-sidecar-1", DisplayName: "active task", Namespace: "/tmp/sock", WorkDir: workDir,
+	})
+	original := sessionLeaseOwner
+	t.Cleanup(func() { sessionLeaseOwner = original })
+	sessionLeaseOwner = func(string) string { return "laptop-99" }
+
+	started := time.Now()
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"layout", "get", "--shell", "active task", "--wait", "5s", "--json"}, &out, &errOut)
+	elapsed := time.Since(started)
+	if !handled || code != 4 {
+		t.Fatalf("missing presence = handled %v code %d stderr %q", handled, code, errOut.String())
+	}
+	if elapsed > time.Second {
+		t.Fatalf("fast-refuse waited %s", elapsed)
+	}
+	combined := out.String() + errOut.String()
+	if !strings.Contains(combined, "laptop-99") || !strings.Contains(combined, "cannot receive pane requests") {
+		t.Fatalf("refusal = %q", combined)
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, "requests")); !os.IsNotExist(err) {
+		entries, _ := os.ReadDir(filepath.Join(stateDir, "requests"))
+		if len(entries) != 0 {
+			t.Fatalf("fast-refuse still wrote a request: %v", entries)
+		}
+	}
+}
+
 func TestLayoutSessionsFlagExclusiveWithShellAndProject(t *testing.T) {
 	for _, args := range [][]string{
 		{"layout", "get", "--sessions", "--shell", "x"},

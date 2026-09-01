@@ -261,6 +261,7 @@ func RenderAgents(root *Command) string {
 
 	buf.WriteString("\nAdd --json to any of them for a structured result.\n")
 	buf.WriteString("Pane layout is readable and writable: layout get prints the grid, layout apply composes panes onto it, and layout move repositions one pane that is already open.\n")
+	buf.WriteString("From a Sidecar-managed pane whose geometry lease is held by a connected viewer, sidecar open and layout land on that viewer's screen; there is no sidecar open --host.\n")
 	buf.WriteString("If td is installed, td note list / td note show find notes and sidecar open sidecar://note/<id> puts one in a pane.\n")
 	buf.WriteString("Run \"sidecar help <command>\" for options and exit codes.\n")
 	return buf.String()

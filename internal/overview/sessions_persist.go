@@ -346,6 +346,7 @@ func (m *Model) attachRestoredPreviewShell(ws workspaceinventory.Workspace, live
 	leaf.Session = sh.Session
 	leaf.Target.Source = "shell"
 	leaf.Target.SourceID = ws.ID
+	leaf.Target.Host = ws.HostID
 }
 
 func (m *Model) ensureRestoredPreviewShell(ws workspaceinventory.Workspace) tea.Cmd {
@@ -358,8 +359,11 @@ func (m *Model) ensureRestoredPreviewShell(ws workspaceinventory.Workspace) tea.
 		return nil
 	}
 	workspaceID, leafID, session, workDir := ws.ID, leaf.ID, leaf.Session, ws.Path
+	hostID := ws.HostID
+	registry := m.hostRegistry
+	ctx := m.hostContext()
 	return func() tea.Msg {
-		paneID, err := ensurePreviewTerminalSession(session, workDir)
+		paneID, err := ensureSplitSession(ctx, registry, hostID, session, workDir)
 		return previewTerminalSplitCreatedMsg{WorkspaceID: workspaceID, LeafID: leafID, Session: session, PaneID: paneID, Err: err}
 	}
 }

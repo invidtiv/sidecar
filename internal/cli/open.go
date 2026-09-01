@@ -27,6 +27,8 @@ func runOpen(env Env, args []string) int {
 	shellFlag := ""
 	projectFlag := ""
 	providerFlag := ""
+	sessions := false
+	sessionsRow := ""
 	var positional []string
 
 	for i := 0; i < len(args); i++ {
@@ -90,6 +92,14 @@ func runOpen(env Env, args []string) int {
 				cliErrf(env.Stderr, "--project requires a project name\n\n%s", openHelp)
 				return 2
 			}
+		case arg == "--sessions" || strings.HasPrefix(arg, "--sessions="):
+			sessions = true
+			if strings.HasPrefix(arg, "--sessions=") {
+				sessionsRow = strings.TrimPrefix(arg, "--sessions=")
+			}
+			// Unlike layout, open requires a positional target. A following
+			// bare word is that target, not an optional ROW. Name the row
+			// with --sessions=ID.
 		case arg == "--line":
 			if i+1 >= len(args) {
 				cliErrf(env.Stderr, "--line requires a line number argument\n\n%s", openHelp)
@@ -169,6 +179,10 @@ func runOpen(env Env, args []string) int {
 		}
 	}
 
+	if sessions && (shellFlag != "" || projectFlag != "") {
+		cliErrf(env.Stderr, "--sessions cannot be combined with --shell or --project\n\n%s", openHelp)
+		return 2
+	}
 	if providerFlag != "" && wantDiff {
 		cliErrf(env.Stderr, "--provider and --diff name different kinds of target\n\n%s", openHelp)
 		return 2
@@ -213,8 +227,18 @@ func runOpen(env Env, args []string) int {
 	// onto the bus for a running instance — so it resolves without creating
 	// one. It is still a mutating verb for the isolation gate: the request bus
 	// is state outside this process.
-	dest, err := resolveOpenDestination(ctx, env.StateDir, shellFlag, projectFlag, resolveProjectOnly)
+	var dest openDestination
+	var err error
+	if sessions {
+		dest, err = resolveSessionsDestination(ctx, env.StateDir, sessionsRow)
+	} else {
+		dest, err = resolveOpenDestination(ctx, env.StateDir, shellFlag, projectFlag, resolveProjectOnly)
+	}
 	if err != nil {
+		cliErrln(env.Stderr, err)
+		return destExitCode(err)
+	}
+	if err := refuseRelayIfUnavailable(env.StateDir, dest.Origin); err != nil {
 		cliErrln(env.Stderr, err)
 		return destExitCode(err)
 	}

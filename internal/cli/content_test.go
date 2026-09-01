@@ -52,6 +52,8 @@ func TestContentUsageErrors(t *testing.T) {
 		{[]string{"content", "resolve", "--workspace", "x:shell:y", "--kind", "resource", "--target", "CASH-1", "--json"}, 2, "--provider is required"},
 		{[]string{"content", "read", "--workspace", "x:shell:y", "--kind", "diff", "--operation", "exec", "--target", "wt", "--json"}, 2, "unknown content operation"},
 		{[]string{"content", "read", "--workspace", "x:shell:y", "--kind", "file", "--operation", "exec", "--target", "a.md", "--json"}, 2, "unknown content operation"},
+		{[]string{"content", "catalog"}, 2, "--workspace is required"},
+		{[]string{"content", "catalog", "--workspace", "x:shell:y", "--kind", "resource", "--json"}, 2, "unknown content kind"},
 	} {
 		t.Run(strings.Join(tt.args, " "), func(t *testing.T) {
 			var out, errOut bytes.Buffer
@@ -204,6 +206,36 @@ func TestContentDiffResolveReadJSON(t *testing.T) {
 	}
 	if !strings.Contains(read.Diff.Snapshot.WorkingTree, "host") {
 		t.Fatalf("working-tree missing host change: %+v", read.Diff.Snapshot)
+	}
+}
+
+func TestContentCatalogJSON(t *testing.T) {
+	repo, id, cfgPath := setupContentCLI(t)
+	if err := os.WriteFile(filepath.Join(repo, "HOST-ONLY.md"), []byte("host\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"-config", cfgPath, "content", "catalog", "--workspace", id, "--kind", "file", "--json"}, &out, &errOut)
+	if !handled || code != 0 {
+		t.Fatalf("catalog = %v %d stderr %q", handled, code, errOut.String())
+	}
+	var catalog contentservice.CatalogResult
+	if err := json.Unmarshal(out.Bytes(), &catalog); err != nil {
+		t.Fatalf("catalog json: %v (%q)", err, out.String())
+	}
+	if !catalog.ValidRemoteResult() || catalog.KindFilter != contentservice.KindFile {
+		t.Fatalf("catalog = %+v", catalog)
+	}
+	found := false
+	for _, path := range catalog.Files {
+		if path == "HOST-ONLY.md" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("files = %v, want HOST-ONLY.md", catalog.Files)
 	}
 }
 

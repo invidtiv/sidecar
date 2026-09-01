@@ -286,13 +286,18 @@ func (m *Model) activatePreviewDiff(raw string) tea.Cmd {
 // target's Value is the token as the text wrote it; it is re-resolved against
 // this surface's content source, so a remote row never reads the viewer's twin.
 func (m *Model) openPreviewDocTarget(target uirequest.Target) tea.Cmd {
+	cmd, _ := m.openPreviewDocTargetResult(target)
+	return cmd
+}
+
+func (m *Model) openPreviewDocTargetResult(target uirequest.Target) (tea.Cmd, error) {
 	_, ok := m.SelectedWorkspace()
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	ctx, ok := m.previewDeckContext()
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	ref, err := contentpanes.ResolveDocument(m.previewDeckConfig(ctx).Source, ctx.Source, contentlink.Pending{
 		Kind: contentlink.KindFile, Raw: target.Value,
@@ -302,12 +307,12 @@ func (m *Model) openPreviewDocTarget(target uirequest.Target) tea.Cmd {
 			if err == nil {
 				err = errors.New("file not found on " + ctx.Source.HostID)
 			}
-			return remoteContentErrorCmd(err)
+			return remoteContentErrorCmd(err), err
 		}
-		return nil
+		return nil, nil
 	}
 	ref.Line = target.Line
-	return m.openPreviewContent(ref, "Document")
+	return m.openPreviewContent(ref, "Document"), nil
 }
 
 func (m *Model) selectPreviewDocTab(idx, line int, file *os.File) tea.Cmd {

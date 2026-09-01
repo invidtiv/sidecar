@@ -193,7 +193,13 @@ What those panes will not do from a remote source, because the implementation wo
 
 In-document search (`/`) still works, because it searches the body already loaded. Host-backed editing, finding, and search are a separate capability.
 
-There is no `sidecar open --host`. The internal `sidecar content` verbs are the transport a viewing Sidecar uses over the SSH connection it already holds; they are not a public open-on-host surface. An agent that wants a file or issue on that machine uses ordinary tools over SSH (`cat`, `td show`, `git show`) rather than asking this Sidecar to proxy them.
+The internal `sidecar content` verbs are the transport a viewing Sidecar uses over the SSH connection it already holds; they are not a public open-on-host surface. There is no `sidecar open --host`. An agent in a Sidecar-managed pane puts a file on the screen with `sidecar open` — see [Agent open and layout from a host pane](#agent-open-and-layout-from-a-host-pane).
+
+## Agent open and layout from a host pane
+
+An agent in a Sidecar-managed pane on a registered host runs `sidecar open` and `sidecar layout get|apply|move` the same way it would locally. Routing is the geometry lease, not a flag: if this machine holds the lease for that tmux session and is viewing that Sessions row, the pane lands here. If the host's own Sidecar TUI holds the lease (you walked over to that machine), the open stays local. If nobody holds a live lease, or the lease holder is disconnected or too old to receive pane requests, the command refuses rather than queueing. A relayed open never queues: a row that is not on this screen is exit 4 with the reason.
+
+A process that is not a Sidecar-managed pane — cron, a random SSH — still uses ordinary tools over SSH (`cat`, `td show`, `git show`). Sidecar does not grow a relay for arbitrary host processes.
 
 ## Health states and their fixes
 
@@ -217,7 +223,7 @@ Selecting an unhealthy host's row shows the state, whatever the host or ssh actu
 
 ### What the host writes
 
-`sidecar host serve` has exactly one write, and it is the same one a local Sidecar makes: a shell record whose tmux session is confirmed gone is reaped. Reaping is a tombstone through the same flocked, conditional writer the Sessions browser uses, so `sidecar shell restore` on the host still brings the record back. Nothing else is written: no geometry lease, no pane resize, no mutating tmux command at all.
+`sidecar host serve` has two writes besides observation. A shell record whose tmux session is confirmed gone is reaped — a tombstone through the same flocked, conditional writer the Sessions browser uses, so `sidecar shell restore` on the host still brings the record back. When a viewer sets `SIDECAR_VIEWER_INSTANCE`, serve also refreshes an ephemeral presence file under that host's `stateDir/viewers/`, which is how a host agent knows the lease holder can receive pane requests. Serve does not write request acks, take a geometry lease, resize a pane, or issue any mutating tmux command.
 
 That reap is why a row for a shell you exited leaves the viewer's screen within a poll instead of waiting until somebody opens Sidecar on that machine. It carries every guard the local reap has, including the one that matters most: an empty tmux pane listing is never acted on, because `tmux kill-server` does not unlink its socket and a dead server is otherwise indistinguishable from a server with no sessions.
 

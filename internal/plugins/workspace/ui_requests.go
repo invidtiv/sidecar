@@ -15,6 +15,7 @@ import (
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/resourceview"
+	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspacediff"
 	"github.com/marcus/sidecar/internal/workspaceops"
@@ -44,9 +45,18 @@ func (p *Plugin) handleUIRequest(req uirequest.Request) tea.Cmd {
 		return p.applyCreateRequest(req)
 	}
 	if req.Action == uirequest.ActionLayout {
+		if req.Origin.Sessions || !tty.ThisInstanceOwnsSession(req.Origin.TmuxSession) {
+			return nil
+		}
 		return p.applyLayoutRequest(req)
 	}
 	if req.Action != uirequest.ActionOpen {
+		return nil
+	}
+	if req.Origin.Sessions {
+		return nil
+	}
+	if !tty.ThisInstanceOwnsSession(req.Origin.TmuxSession) {
 		return nil
 	}
 

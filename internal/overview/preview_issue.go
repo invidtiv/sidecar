@@ -83,15 +83,20 @@ func (m *Model) issueFallbackRefs() []issueview.ProjectRef {
 }
 
 func (m *Model) openPreviewIssue(issueID string) tea.Cmd {
+	cmd, _ := m.openPreviewIssueResult(issueID)
+	return cmd
+}
+
+func (m *Model) openPreviewIssueResult(issueID string) (tea.Cmd, error) {
 	workspace, ok := m.SelectedWorkspace()
 	issueID = issueview.NormalizeID(issueID)
 	if !ok || issueID == "" || workspace.Path == "" {
-		return nil
+		return nil, nil
 	}
 	if workspace.Remote() {
 		ctx, ok := m.previewDeckContext()
 		if !ok {
-			return nil
+			return nil, nil
 		}
 		ref, err := contentpanes.ResolveDocument(m.previewDeckConfig(ctx).Source, ctx.Source, contentlink.Pending{
 			Kind: contentlink.KindIssue, Raw: issueID,
@@ -100,11 +105,11 @@ func (m *Model) openPreviewIssue(issueID string) tea.Cmd {
 			if err == nil {
 				err = errors.New("issue not found on " + ctx.Source.HostID)
 			}
-			return remoteContentErrorCmd(err)
+			return remoteContentErrorCmd(err), err
 		}
 		issueID = ref.Value
 	}
-	return m.openPreviewContent(contentlink.Ref{Kind: contentlink.KindIssue, Value: issueID}, "Issue")
+	return m.openPreviewContent(contentlink.Ref{Kind: contentlink.KindIssue, Value: issueID}, "Issue"), nil
 }
 
 func wrapPreviewIssueLoad(cmd tea.Cmd, workspaceID string) tea.Cmd {

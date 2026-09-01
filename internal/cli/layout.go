@@ -29,7 +29,9 @@ func layoutCommand() *Command {
 			"--json passes the payload through unchanged, which is the contract.\n\n" +
 			"Unlike open, a layout request never queues: when this shell is not on\n" +
 			"screen the request declines instead (exit 4), because a stale answer is\n" +
-			"worse than a refusal.",
+			"worse than a refusal.\n\n" +
+			"From a Sidecar-managed pane on a host you are viewing, the JSON is that\n" +
+			"viewer's grid for the matching Sessions row.",
 		Flags: []Flag{
 			{Name: "--shell", Arg: "NAME", Summary: "Target a registered shell by display name or tmux name"},
 			{Name: "--project", Arg: "NAME", Summary: "Target a project's Workspaces surface (slug, basename, or path)"},
@@ -44,7 +46,7 @@ func layoutCommand() *Command {
 			{Code: 1, Summary: "state failure"},
 			{Code: 2, Summary: "usage error"},
 			{Code: 3, Summary: "no running instance"},
-			{Code: 4, Summary: "declined: the origin shell is not on screen"},
+			{Code: 4, Summary: "declined: the origin shell is not on screen, or the lease holder cannot receive pane requests"},
 			{Code: 5, Summary: "an unknown --project or --shell"},
 		},
 		Examples: []Example{
@@ -54,7 +56,7 @@ func layoutCommand() *Command {
 		},
 		Agent: AgentDoc{
 			Invocation: "sidecar layout get --json",
-			Summary:    "Read the user's current pane layout before composing onto it",
+			Summary:    "Read the lease holder's current pane layout before composing onto it",
 		},
 		Run: runLayoutGet,
 	}
@@ -67,7 +69,11 @@ func layoutCommand() *Command {
 			"one atomic call (`layout apply`), or reposition one pane that is already\n" +
 			"open (`layout move`). All three act on the surface showing this Sidecar\n" +
 			"shell — or, with --sessions, the global Sessions surface — and never queue:\n" +
-			"a request whose destination is off screen declines with the reason.",
+			"a request whose destination is off screen declines with the reason.\n\n" +
+			"From a Sidecar-managed pane whose geometry lease is held by a connected\n" +
+			"viewer, these verbs read and mutate that viewer's screen, not a host TUI.\n" +
+			"There is no --host flag. If the lease holder cannot receive pane requests,\n" +
+			"the command declines (exit 4).",
 		Sub: []*Command{applyLayoutSubcommand(), getCmd, moveLayoutSubcommand()},
 		Run: func(env Env, args []string) int {
 			layoutRoot := RootCommand().FindSubcommand("layout")
@@ -126,7 +132,8 @@ func applyLayoutSubcommand() *Command {
 			"The ack's items array lists EVERY requested pane with verdict opened,\n" +
 			"retargeted, carried (a live leaf the spec kept rather than created), or\n" +
 			"declined, plus its landed cell — so one round trip shows everything wrong\n" +
-			"with a refused spec. Like get, apply never queues.",
+			"with a refused spec. Like get, apply never queues: off-screen, or a lease\n" +
+			"holder that cannot receive pane requests, is exit 4.",
 		Flags: []Flag{
 			{Name: "--spec", Arg: "JSON", Summary: "A full layout replacing the screen: columns of stacked panes (- reads stdin)"},
 			{Name: "--pane", Arg: "JSON", Summary: "One pane descriptor to add (repeatable); see above for the object shape"},
@@ -143,7 +150,7 @@ func applyLayoutSubcommand() *Command {
 			{Code: 1, Summary: "state failure"},
 			{Code: 2, Summary: "usage or validation error"},
 			{Code: 3, Summary: "no running instance"},
-			{Code: 4, Summary: "declined host-side; the reason names the first violation"},
+			{Code: 4, Summary: "declined host-side; the reason names the first violation (off-screen, unfit, or the lease holder cannot receive pane requests)"},
 			{Code: 5, Summary: "an unknown --project or --shell"},
 		},
 		Examples: []Example{
@@ -198,7 +205,8 @@ func moveLayoutSubcommand() *Command {
 			"With --sessions this changes the pane tree of the Sessions viewer on THIS\n" +
 			"machine, including for a row whose workspace lives on another one: no\n" +
 			"layout mutation is sent to the remote host. The acknowledgement names the\n" +
-			"surface it changed. Like get and apply, move never queues.",
+			"surface it changed. Like get and apply, move never queues: off-screen,\n" +
+			"or a lease holder that cannot receive pane requests, is exit 4.",
 		Flags: []Flag{
 			{Name: "--focused", Summary: "Move the surface's focused pane instead of naming a cell", Bool: true},
 			{Name: "--to", Arg: "DEST", Summary: "Destination: a cell (1.2), a column (3), or left|right|up|down"},
@@ -215,7 +223,7 @@ func moveLayoutSubcommand() *Command {
 			{Code: 1, Summary: "state failure"},
 			{Code: 2, Summary: "usage error"},
 			{Code: 3, Summary: "no running instance"},
-			{Code: 4, Summary: "declined host-side; the reason names the refusal"},
+			{Code: 4, Summary: "declined host-side; the reason names the refusal (off-screen, unfit, or the lease holder cannot receive pane requests)"},
 			{Code: 5, Summary: "an unknown --project or --shell"},
 		},
 		Examples: []Example{

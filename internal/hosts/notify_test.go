@@ -42,6 +42,45 @@ func collectUpdates(t *testing.T, client *Client, want int) []Update {
 	return updates
 }
 
+func TestClientExposesUIRequestWithoutFoldingIntoSnapshot(t *testing.T) {
+	event := hostproto.UIRequest{
+		ID: "req-1", Action: hostproto.UIRequestActionOpen, TTLMs: 1200,
+		Origin: hostproto.UIRequestOrigin{TmuxSession: "proj-claude", HostID: "mac-mini"},
+		Target: hostproto.UIRequestTarget{Kind: "file", Value: "README.md"},
+	}
+	stream := encodeStream(t,
+		helloMessage(),
+		snapshotMessage(agentItem("a", "working")),
+		hostproto.Message{Kind: hostproto.KindUIRequest, UIRequest: &event},
+	)
+	dial, _ := scriptedDial(t, stream, "")
+	client := NewClient(Host{ID: "mac-mini", Target: "mac-mini"}, ClientOptions{Dial: dial, MinBackoff: time.Hour})
+	var got []hostproto.UIRequest
+	runUntil(t, client, func() bool {
+		for {
+			select {
+			case update, ok := <-client.Updates():
+				if !ok {
+					return true
+				}
+				got = append(got, update.UIRequest...)
+			default:
+				return len(got) >= 1
+			}
+		}
+	})
+	if len(got) != 1 || got[0].ID != "req-1" || got[0].Origin.HostID != "mac-mini" {
+		t.Fatalf("ui requests = %+v", got)
+	}
+	if got := client.Health().State; got != StateOnline {
+		t.Fatalf("health = %s after a ui request", got)
+	}
+	snapshot, ok := client.Snapshot()
+	if !ok || len(snapshot.Projects) != 1 || len(snapshot.Projects[0].Items) != 1 {
+		t.Fatalf("snapshot was disturbed: %+v", snapshot)
+	}
+}
+
 func TestClientExposesForwardedNotifications(t *testing.T) {
 	stream := encodeStream(t, helloMessage(), snapshotMessage(agentItem("a", "blocked")), notifyMessage("event-key-1"))
 	dial, _ := scriptedDial(t, stream, "")

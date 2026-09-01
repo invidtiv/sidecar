@@ -2,7 +2,7 @@
 
 This is the two-machine (or loopback) recipe for [remote host content-pane parity](../../plans/implemented/remote-host-content-pane-parity.md) slice 7. It proves that a click in a remote Sessions terminal loads that host's file, issue, note, diff, resource, or tmux session, and never this machine's same-named twin.
 
-The helper is [`scripts/remote-content-proof.sh`](../../../scripts/remote-content-proof.sh). It wraps [`scripts/remote-spike.sh`](../../../scripts/remote-spike.sh) for the host and [`scripts/tmux-drive.sh`](../../../scripts/tmux-drive.sh) for the viewer. Both axes are isolated on both ends: private tmux sockets and private Sidecar state/config/cache trees, with `SIDECAR_ISOLATED_STATE=1`. The default tmux server and `~/.local/state/sidecar` are not in the run.
+The helper is [`scripts/remote-content-proof.sh`](../../../scripts/remote-content-proof.sh). It wraps [`scripts/remote-spike.sh`](../../../scripts/remote-spike.sh) for the host and [`scripts/tmux-drive.sh`](../../../scripts/tmux-drive.sh) for the viewer. Both axes are isolated on both ends: private tmux sockets and private Sidecar state/config/cache trees, with `SIDECAR_ISOLATED_STATE=1`. The default tmux server and `~/.local/state/sidecar` are not in the run. The same helper is the isolation wrapper for [the viewer-screen open/layout recipe](./remote-viewer-screen-proof.md).
 
 `SPIKE_HOST` has no default here. Point it at a disposable proof target, not a live workstation Sidecar or its real state tree.
 

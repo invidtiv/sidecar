@@ -36,13 +36,14 @@ func hostCommand() *Command {
 			"versioned JSONL snapshot plus status transitions to stdout.\n\n" +
 			"This is not a daemon. It is spawned per connection over an SSH stdio pipe\n" +
 			"and exits when that pipe closes.\n\n" +
-			"It has exactly one write, and it is the same one a local Sidecar makes: a\n" +
-			"shell record whose tmux session is confirmed gone is reaped — tombstoned\n" +
-			"through the flocked, conditional writer the Sessions browser uses, so\n" +
-			"`sidecar shell restore` still brings it back. Without it a row for a shell\n" +
-			"the user had already exited stayed on the viewer's screen until somebody\n" +
-			"opened Sidecar on this machine. Nothing else is written: no geometry lease,\n" +
-			"no pane resize, no mutating tmux command at all.\n\n" +
+			"It has two writes besides observation: a shell record whose tmux session is\n" +
+			"confirmed gone is reaped — tombstoned through the flocked, conditional writer\n" +
+			"the Sessions browser uses, so `sidecar shell restore` still brings it back —\n" +
+			"and, when SIDECAR_VIEWER_INSTANCE is set, an ephemeral presence file under\n" +
+			"stateDir/viewers/. Without the reap, a row for a shell the user had already\n" +
+			"exited stayed on the viewer's screen until somebody opened Sidecar on this\n" +
+			"machine. Serve does not write request acks, take a geometry lease, resize a\n" +
+			"pane, or issue any mutating tmux command.\n\n" +
 			"Nothing is bound to a network. SSH is the entire transport and the entire\n" +
 			"trust boundary.",
 		Flags: []Flag{

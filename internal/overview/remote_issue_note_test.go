@@ -34,6 +34,7 @@ type fakeRemoteContentSource struct {
 	noteRev     string
 	notModified bool
 	loadErr     error
+	resolveErr  error
 	issueLoads  int
 	noteLoads   int
 	lastIfRev   string
@@ -43,6 +44,9 @@ type fakeRemoteContentSource struct {
 func (f *fakeRemoteContentSource) Resolve(_ context.Context, _ contentpanes.SourceContext, pending contentlink.Pending) (contentlink.Ref, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.resolveErr != nil {
+		return contentlink.Ref{}, f.resolveErr
+	}
 	switch pending.Kind {
 	case contentlink.KindFile:
 		return contentlink.Ref{Kind: contentlink.KindFile, Value: pending.Raw}, nil

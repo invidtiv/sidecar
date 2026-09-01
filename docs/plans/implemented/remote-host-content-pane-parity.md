@@ -2,7 +2,7 @@
 
 Status: **implemented** on `pane-parity` (td-89c1cb, td-87358d, td-925cf9). Isolated unit and integration proof covers every PlanKind; the two-machine tmux-drive recipe is `docs/guides/active/remote-content-pane-proof.md` and was not executed against a live host in this work.
 
-Related: [Sidecar as its own remote host runtime](../active/sidecar-remote-hosts.md) is the controlling transport plan; [The viewer owns the screen](../active/remote-host-viewer-screen.md) is the follow-on for relaying `sidecar open` / `layout` from a Sidecar-managed pane on the host onto the viewing Sessions preview; [Cross-project td issue links](../active/cross-project-issue-links.md) defines local-first issue ownership and fallback semantics; [Terminal resource providers](terminal-resource-providers.md) defines provider matching, safe documents, and lifecycle bounds.
+Related: [Sidecar as its own remote host runtime](../active/sidecar-remote-hosts.md) is the controlling transport plan; [The viewer owns the screen](remote-host-viewer-screen.md) is the follow-on for relaying `sidecar open` / `layout` from a Sidecar-managed pane on the host onto the viewing Sessions preview; [Cross-project td issue links](../active/cross-project-issue-links.md) defines local-first issue ownership and fallback semantics; [Terminal resource providers](terminal-resource-providers.md) defines provider matching, safe documents, and lifecycle bounds.
 
 ## Decision first
 
@@ -26,7 +26,7 @@ host-qualified content context
 
 The viewer owns interaction, pane placement, focus, rendering, scroll state, and Sessions pane state. The remote host owns filesystem containment, git and td resolution, provider configuration and execution, content loading, and change observation. No remote path is passed to local filesystem, git, td, or provider code.
 
-This is a presentation capability over data owned by files, git, td, tmux, and external providers. It does not add a public `sidecar open --host` surface merely for parity. The internal host content command exists as a transport endpoint for Sidecar itself. An agent that wants the bytes of a file or issue on that machine uses ordinary tools over SSH. An agent in a Sidecar-managed pane that wants that file *on the screen the user is looking at* is [The viewer owns the screen](../active/remote-host-viewer-screen.md), still without a `--host` flag.
+This is a presentation capability over data owned by files, git, td, tmux, and external providers. It does not add a public `sidecar open --host` surface merely for parity. The internal host content command exists as a transport endpoint for Sidecar itself. An agent that wants the bytes of a file or issue on that machine uses ordinary tools over SSH. An agent in a Sidecar-managed pane that wants that file *on the screen the user is looking at* is [The viewer owns the screen](remote-host-viewer-screen.md), still without a `--host` flag.
 
 ## User contract
 
@@ -67,7 +67,7 @@ The parent remote-host plan recorded this failure during Phase A and kept the fa
 In scope:
 
 - Terminal-link recognition, fresh resolution, pane opening, typed content loading, manual reload, conditional live refresh, and nested-link activation for every kind in `targetactivation.PlanKindsFromSpans`.
-- Global Sessions, which is the only surface that currently hosts registered remote workspaces. The source and viewer seams remain presentation-neutral so a future remote project Workspace can reuse them without another loader path.
+- Global Sessions, which is the only surface that currently hosts registered remote workspaces. The source and viewer seams remain presentation-neutral so a remote project Workspace can reuse them without another loader path; that bind is [Remote destinations in `@` and `W`](../active/remote-project-switcher.md).
 - Local/remote parity for content display, nested navigation, safe pane actions, and refresh in the existing Document, Issue, Note, Diff, and Resource panes.
 - Honest capability, version-skew, disconnected-host, stale-result, and unsupported-content states.
 - Bounded one-shot read-only content verbs on the remote host, invoked lazily over the existing SSH ControlMaster.
@@ -77,7 +77,7 @@ Out of scope:
 - Turning the Files, Git, Tasks, or td plugins into complete remote project browsers.
 - Remote file mutation or inline editing. The existing `e` path starts a local tmux editor against a local path; on a remote Document pane it must be unavailable with an actionable message rather than touching the viewer's filesystem. Host-aware inline editing is a separate capability and plan.
 - Remote Document pane file finding and project-wide search. `ctrl+p` and `f` currently walk `doc.root` locally and must be hidden or explicitly refused for a remote source in the file steel thread. In-document search remains available because it uses the already loaded body. Host-backed finder/search is a separate follow-on.
-- Relaying `sidecar open` from a process on the remote host back to the viewer. Sidecar-managed panes whose geometry lease is held by a connected viewer are [The viewer owns the screen](../active/remote-host-viewer-screen.md). Arbitrary processes (cron, a random SSH) stay out of scope there as well.
+- Relaying `sidecar open` from a process on the remote host back to the viewer. Sidecar-managed panes whose geometry lease is held by a connected viewer are [The viewer owns the screen](remote-host-viewer-screen.md). Arbitrary processes (cron, a random SSH) stay out of scope there as well.
 - A persistent daemon, mounted filesystem, SSHFS dependency, or general-purpose remote command API.
 - Adding content payloads or viewer requests to the inventory stream.
 

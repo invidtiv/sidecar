@@ -177,6 +177,9 @@ func TestOlderHostHelloReadsAsNoVerbCapabilities(t *testing.T) {
 	if msg.Hello.Capabilities.Verbs.ContentReadV1 {
 		t.Error("a host that never wrote the field was read as supporting content read")
 	}
+	if msg.Hello.Capabilities.Verbs.UIRequestRelayV1 {
+		t.Error("a host that never wrote the field was read as supporting ui request relay")
+	}
 	if !msg.Hello.Capabilities.ProcessIdentity {
 		t.Error("the capabilities that were present stopped decoding")
 	}
@@ -188,7 +191,7 @@ func TestVerbCapabilitiesSurviveTheWire(t *testing.T) {
 	encoder := NewEncoder(&buffer)
 	if err := encoder.Encode(Message{Kind: KindHello, Hello: &Hello{
 		Proto:        Version,
-		Capabilities: Capabilities{Verbs: VerbCapabilities{CreateShellAgent: true, ContentReadV1: true}},
+		Capabilities: Capabilities{Verbs: VerbCapabilities{CreateShellAgent: true, ContentReadV1: true, UIRequestRelayV1: true}},
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -201,5 +204,8 @@ func TestVerbCapabilitiesSurviveTheWire(t *testing.T) {
 	}
 	if !msg.Hello.Capabilities.Verbs.ContentReadV1 {
 		t.Fatalf("ContentReadV1 did not survive the wire: %s", buffer.String())
+	}
+	if !msg.Hello.Capabilities.Verbs.UIRequestRelayV1 {
+		t.Fatalf("UIRequestRelayV1 did not survive the wire: %s", buffer.String())
 	}
 }

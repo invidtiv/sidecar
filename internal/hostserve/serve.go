@@ -13,12 +13,16 @@
 // # What serve is allowed to touch
 //
 // Serve does not take a geometry lease, does not resize a pane, and issues no
-// mutating tmux command at all. It has exactly one write: the shell reap, which
-// tombstones a manifest record whose tmux session is confirmed gone. That write
-// goes through workspaceops/shellstate — the same flocked, conditional,
-// tombstoning writer the Sessions browser calls — and its whole decision is
+// mutating tmux command at all. It has two writes besides observation: the
+// shell reap, which tombstones a manifest record whose tmux session is
+// confirmed gone, and — when SIDECAR_VIEWER_INSTANCE is set — an ephemeral
+// presence file under stateDir/viewers/. The reap goes through
+// workspaceops/shellstate — the same flocked, conditional, tombstoning writer
+// the Sessions browser calls — and its whole decision is
 // shellliveness.PlanReap/ConfirmReap/ReapShell, shared with the browser rather
-// than restated here. See reap.go.
+// than restated here. See reap.go. Presence files are isolation-gated and are
+// not shells.json. Serve does not write ack files and does not apply a UI
+// request.
 //
 // Be precise about what kind of guarantee the rest is, because overstating it
 // is how it quietly stops being true. It is NOT "the package links in no
@@ -33,7 +37,7 @@
 // issued, which is the level the guarantee actually holds at. Anyone adding a
 // call into tty from this package is responsible for keeping it true; the
 // shells-wipe incident (td-8d18de) is what the care is for, and it is why the
-// one write serve does have carries none of its own logic.
+// reap write serve does have carries none of its own logic.
 //
 // The one place that discipline needs care is the capture path, because a
 // capture is an observation that can have a side effect: the Overview's
@@ -152,6 +156,10 @@ type Options struct {
 	ProbeShell  shellliveness.ProbeFunc
 	ForgetShell shellliveness.ForgetFunc
 
+	// LeaseOwner returns the geometry-lease instance ID for a tmux session,
+	// or "". Tests inject it; production reads @sidecar-owner via tmux.
+	LeaseOwner func(session string) string
+
 	// Hostname, TmuxPath and TmuxVersion feed the hello. Injectable for the
 	// same reason.
 	Hostname    func() string
@@ -215,6 +223,12 @@ func (o Options) withDefaults() Options {
 	}
 	if o.ForgetShell == nil {
 		o.ForgetShell = workspaceops.ReapManagedShellFunc
+	}
+	if o.LeaseOwner == nil {
+		runner := o.Runner
+		o.LeaseOwner = func(session string) string {
+			return readSessionLeaseOwner(runner, session)
+		}
 	}
 	if o.Hostname == nil {
 		o.Hostname = func() string {
@@ -324,6 +338,16 @@ func Serve(ctx context.Context, opts Options) error {
 	// watch.
 	watch := startManifestWatch(opts.Projects)
 	defer watch.stop()
+
+	viewerInstance := strings.TrimSpace(os.Getenv(tty.ViewerInstanceEnv))
+	var reqWatch *requestWatch
+	if viewerInstance != "" {
+		reqWatch = startRequestWatch()
+		defer reqWatch.stop()
+		if err := refreshViewerPresence(config.StateDir(), viewerInstance, opts.Now(), presenceTTL(opts)); err != nil {
+			return err
+		}
+	}
 
 	// The watch's condition is reported whenever it CHANGES, not once at the
 	// start. A cold host — one where Sidecar has never been opened, so no project
@@ -513,6 +537,18 @@ func Serve(ctx context.Context, opts Options) error {
 			}
 		}
 
+		if viewerInstance != "" {
+			if err := refreshViewerPresence(config.StateDir(), viewerInstance, now, presenceTTL(opts)); err != nil {
+				return err
+			}
+			for _, event := range reqWatch.drain(now, opts.HostID, viewerInstance, opts.LeaseOwner) {
+				payload := event
+				if err := encoder.Encode(hostproto.Message{Kind: hostproto.KindUIRequest, UIRequest: &payload}); err != nil {
+					return err
+				}
+			}
+		}
+
 		if opts.OnCycle != nil {
 			opts.OnCycle(generation, opts.Now().Sub(cycleStart), refresh.Metrics().Captures)
 		}
@@ -529,6 +565,7 @@ func Serve(ctx context.Context, opts Options) error {
 			return nil
 		case <-watch.signals():
 			manifestChanged = true
+		case <-reqWatch.signals():
 		case <-time.After(pollInterval(snapshot, opts)):
 		}
 	}
@@ -567,6 +604,7 @@ func pollInterval(snapshot hostproto.Snapshot, opts Options) time.Duration {
 var serveVerbCapabilities = hostproto.VerbCapabilities{
 	CreateShellAgent: true,
 	ContentReadV1:    true,
+	UIRequestRelayV1: true,
 }
 
 func buildHello(opts Options) *hostproto.Hello {

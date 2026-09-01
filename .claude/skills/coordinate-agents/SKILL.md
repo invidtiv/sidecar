@@ -122,6 +122,10 @@ Every verb takes `--json`. Success writes one object on stdout; failure writes `
 
 The `target` in every result carries the pin: host, project, tmux session, pane id, pane pid, and tmux server pid. Two shells with the same display name on different hosts cannot collide.
 
+## Remote host panes
+
+From a Sidecar-managed pane whose geometry lease is held by a connected viewer, `sidecar open` and `sidecar layout` are that viewer's screen — not a TUI that may not be running on the host. There is no `sidecar open --host`. Off-screen, or a disconnected or too-old lease holder, refuses (exit 4) rather than queue.
+
 ## What this is not
 
 Sidecar owns provider identity, readiness, and its refusal rules. It does not own raw terminal control. If you want to run a command in a pane and read its output, that is `tmux`'s job — `sidecar shell list --json` gives you the session names. Do not reach for `agent send-keys` to drive a shell.

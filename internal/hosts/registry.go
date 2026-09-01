@@ -2,6 +2,7 @@ package hosts
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"sort"
 	"strings"
@@ -248,12 +249,17 @@ func (r *Registry) forward(client *Client, incarnation uint64) {
 	// Forwarded notifications survive a dropped update the same way they do one
 	// hop earlier, and for the same reason: a superseded snapshot is worth
 	// losing, an alert is not. One goroutine per client owns this slice.
-	var pending []hostproto.NotifyEvent
+	var pendingNotify []hostproto.NotifyEvent
+	var pendingUIRequest []hostproto.UIRequest
 	for update := range client.Updates() {
 		update.Incarnation = incarnation
-		if len(pending) > 0 {
-			update.Notify = append(pending, update.Notify...)
-			pending = nil
+		if len(pendingNotify) > 0 {
+			update.Notify = append(pendingNotify, update.Notify...)
+			pendingNotify = nil
+		}
+		if len(pendingUIRequest) > 0 {
+			update.UIRequest = append(pendingUIRequest, update.UIRequest...)
+			pendingUIRequest = nil
 		}
 		r.forwardMu.RLock()
 		if !r.updatesClosed {
@@ -262,8 +268,9 @@ func (r *Registry) forward(client *Client, incarnation uint64) {
 			default:
 				// Dropped rather than blocked: the newest state is what
 				// matters, and a stalled forward would freeze that host's
-				// reader loop.
-				pending = boundPendingNotify(update.Notify)
+				// reader loop. Alerts and UI requests ride the next update.
+				pendingNotify = boundPendingNotify(update.Notify)
+				pendingUIRequest = boundPendingUIRequest(update.UIRequest)
 			}
 		}
 		r.forwardMu.RUnlock()
@@ -271,6 +278,13 @@ func (r *Registry) forward(client *Client, incarnation uint64) {
 }
 
 func boundPendingNotify(events []hostproto.NotifyEvent) []hostproto.NotifyEvent {
+	if extra := len(events) - maxPendingNotify; extra > 0 {
+		return events[extra:]
+	}
+	return events
+}
+
+func boundPendingUIRequest(events []hostproto.UIRequest) []hostproto.UIRequest {
 	if extra := len(events) - maxPendingNotify; extra > 0 {
 		return events[extra:]
 	}
@@ -318,6 +332,15 @@ func (r *Registry) RunSidecar(ctx context.Context, hostID string, args []string,
 		}
 	}
 	return client.RunSidecar(ctx, args, out)
+}
+
+// RunTmux runs a one-shot tmux argv on one registered host.
+func (r *Registry) RunTmux(ctx context.Context, hostID string, args []string) ([]byte, error) {
+	client, ok := r.Client(hostID)
+	if !ok {
+		return nil, fmt.Errorf("host %s: no host is registered as %s", hostID, hostID)
+	}
+	return client.RunTmux(ctx, args)
 }
 
 // MarkStaleIfQuiet ages every connected host, returning true if any moved.

@@ -1081,3 +1081,61 @@ func paneTreeShape(n *PaneNode) string {
 		return "?"
 	}
 }
+
+func TestUIRequests_ForeignLeaseDoesNotApplyOpen(t *testing.T) {
+	stateHome := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	t.Setenv("SIDECAR_ISOLATED_STATE", "1")
+
+	original := tty.SessionOwner
+	t.Cleanup(func() { tty.SessionOwner = original })
+	tty.SessionOwner = func(string) string { return "laptop-99" }
+
+	workDir := t.TempDir()
+	p := &Plugin{
+		ctx: &plugin.Context{WorkDir: workDir},
+		shells: []*ShellSession{
+			{TmuxName: "sidecar-sh-sidecar-1", Name: "Shell 1", WorkDir: workDir},
+		},
+		selectedShellIdx: 0,
+		shellSelected:    true,
+	}
+	req := uirequest.Request{
+		ID: "req-foreign-lease", Action: uirequest.ActionOpen,
+		CreatedAt: time.Now().UTC(), TTLMs: 5000,
+		Origin: uirequest.Origin{TmuxSession: "sidecar-sh-sidecar-1"},
+		Target: uirequest.Target{Kind: uirequest.TargetKindFile, Value: "README.md"},
+	}
+	if cmd := p.handleUIRequest(req); cmd != nil {
+		t.Fatalf("host TUI applied an open it does not own: %v", cmd)
+	}
+	acks, err := uirequest.ReadAcks(filepath.Join(stateHome, "sidecar"), req.ID, req.Action)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(acks) != 0 {
+		t.Fatalf("foreign-lease open acked: %+v", acks)
+	}
+}
+
+func TestUIRequests_SessionsOriginIsIgnored(t *testing.T) {
+	stateHome := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	t.Setenv("SIDECAR_ISOLATED_STATE", "1")
+	workDir := t.TempDir()
+	p := &Plugin{
+		ctx:              &plugin.Context{WorkDir: workDir, ProjectRoot: workDir},
+		selectedShellIdx: 0,
+		shellSelected:    true,
+		shells:           []*ShellSession{{TmuxName: "sidecar-sh-sidecar-1", Name: "Shell 1", WorkDir: workDir}},
+	}
+	req := uirequest.Request{
+		ID: "req-sessions-open", Action: uirequest.ActionOpen,
+		CreatedAt: time.Now().UTC(), TTLMs: 5000,
+		Origin: uirequest.Origin{Sessions: true, ProjectKey: "sidecar", WorkDir: workDir},
+		Target: uirequest.Target{Kind: uirequest.TargetKindFile, Value: "README.md"},
+	}
+	if cmd := p.handleUIRequest(req); cmd != nil {
+		t.Fatalf("workspace applied a Sessions open: %v", cmd)
+	}
+}

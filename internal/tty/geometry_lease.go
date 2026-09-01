@@ -72,6 +72,83 @@ import (
 
 const leaseOptionName = "@sidecar-owner"
 
+// ViewerInstanceEnv is the serve-spawn environment variable carrying this
+// viewer's geometry-lease instance ID (hostname-pid). Old serve ignores it.
+const ViewerInstanceEnv = "SIDECAR_VIEWER_INSTANCE"
+
+// InstanceID is this process's geometry-lease identity: hostname-pid.
+func InstanceID() string {
+	host, pid := hostAndPID()
+	return fmt.Sprintf("%s-%d", host, pid)
+}
+
+// LeaseOwnerID is the instance ID encoded in a @sidecar-owner token.
+func LeaseOwnerID(token string) string {
+	return leaseOwner(token)
+}
+
+// ValidInstanceID reports whether s is a hostname-pid lease identity.
+func ValidInstanceID(s string) bool {
+	_, _, ok := splitInstanceID(s)
+	return ok
+}
+
+// InstanceHost is the hostname encoded in a hostname-pid identity, or "".
+func InstanceHost(id string) string {
+	host, _, ok := splitInstanceID(id)
+	if !ok {
+		return ""
+	}
+	return host
+}
+
+// InstancePID is the pid encoded in a hostname-pid identity, or 0.
+func InstancePID(id string) int {
+	_, pid, ok := splitInstanceID(id)
+	if !ok {
+		return 0
+	}
+	return pid
+}
+
+// SessionOwner, when set, returns the geometry-lease instance ID for a tmux
+// session. Nil means unknown: ThisInstanceOwnsSession then returns true so
+// local apply stays today's path (no live lease). Production TUI sets this
+// after TMUX is unset. Tests that need a foreign lease set it.
+var SessionOwner func(session string) string
+
+// ThisInstanceOwnsSession reports whether this process holds the origin
+// session's geometry lease. An empty owner is treated as no live lease, which
+// is today's local path.
+func ThisInstanceOwnsSession(session string) bool {
+	if session == "" || SessionOwner == nil {
+		return true
+	}
+	owner := SessionOwner(session)
+	if owner == "" {
+		return true
+	}
+	return owner == InstanceID()
+}
+
+// ReadTmuxSessionOwner reads @sidecar-owner for session via tmux. A token that
+// is not a hostname-pid identity is treated as unset, so a stub tmux that
+// prints something else cannot be mistaken for a live foreign holder.
+func ReadTmuxSessionOwner(session string) string {
+	if session == "" {
+		return ""
+	}
+	out, err := exec.Command("tmux", "display-message", "-t", session, "-p", "#{"+leaseOptionName+"}").Output()
+	if err != nil {
+		return ""
+	}
+	owner := LeaseOwnerID(strings.TrimSpace(string(out)))
+	if !ValidInstanceID(owner) {
+		return ""
+	}
+	return owner
+}
+
 // LeasePolicy is the budget arbitration runs on. Ticks are the reader's own
 // local ticks; they carry no cross-machine meaning. Durations are elapsed
 // measurements, never timestamps, so they do carry across machines.
