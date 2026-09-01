@@ -65,18 +65,25 @@ Explain which evidence authored a pane's lifecycle state
 
 Reports the effective state, which evidence authored it, the source's exercisable tier, the last valid report, and — when lifecycle evidence did not win — exactly why not.
 
+With --file it runs the screen lane alone over a saved capture: no tmux, no lifecycle store, no running agent. That is how a wrong badge is reproduced from a fixture, and how a new fixture is minted.
+
 Every diagnostic fact the Configuration surface shows is available here, so a pane that is not being driven by its integration always has an actionable reason rather than silence.
 
 This command is read-only. It never locks, compacts, repairs, or creates the lifecycle log.
 
 ```
-Usage: sidecar agent explain [--current | --shell TARGET] [--json]
+Usage: sidecar agent explain [--current | --shell TARGET | --file PATH --agent KIND] [--json]
 ```
 
 **Options:**
 
 - `--current`: Explain the pane this command is running in (the default)
 - `--shell TARGET`: Explain a managed shell by name
+- `--file PATH`: Explain a saved capture offline, with no tmux and no lifecycle store
+- `--agent KIND`: Which agent's manifest to evaluate --file against (required with --file)
+- `--title TEXT`: Pane title for --file when the capture carries no header
+- `--rows N`: Pane height for --file; the detection read window. Defaults to the fixture header, else 24
+- `--print-window`: With --file, print the detection read window instead of a verdict
 - `--json`: Write stable structured JSON
 - `-h, --help`: Show this help
 
@@ -91,6 +98,7 @@ Usage: sidecar agent explain [--current | --shell TARGET] [--json]
 
 ```bash
 sidecar agent explain --current --json
+sidecar agent explain --file internal/agentactivity/testdata/claude/blocked.txt --agent claude --json
 ```
 
 ### `sidecar agent get`

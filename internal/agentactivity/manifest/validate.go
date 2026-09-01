@@ -2,6 +2,7 @@ package manifest
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -61,6 +62,18 @@ func ValidateWith(m *Manifest, opts ValidateOptions) error {
 	if len(m.Rules) > MaxRulesPerManifest {
 		return fmt.Errorf("manifest contains %d rules, max is %d", len(m.Rules), MaxRulesPerManifest)
 	}
+	// Herdr types version as Option<ManifestVersion>, so a malformed version
+	// fails while deserializing and never reaches validate_manifest. Parse
+	// carries that check; it is repeated here so a Manifest built in Go rather
+	// than decoded from TOML is held to the same rule.
+	if strings.TrimSpace(m.Version) != "" {
+		if _, err := ValidateVersion(m.Version); err != nil {
+			return err
+		}
+	}
+	if m.MinEngineVersion != nil && (*m.MinEngineVersion < 0 || *m.MinEngineVersion > math.MaxUint32) {
+		return fmt.Errorf("min_engine_version %d does not fit Herdr's u32 min_engine_version", *m.MinEngineVersion)
+	}
 
 	c := complexity{opts: opts}
 	for i := range m.Rules {
@@ -76,12 +89,12 @@ func ValidateWith(m *Manifest, opts ValidateOptions) error {
 				return fmt.Errorf("rule %s uses skip_state_update with visible state evidence", rule.ID)
 			}
 		}
-		region, err := ParseRegion(rule.Region)
+		region, err := ParseRegion(rule.RegionName())
 		if err != nil {
 			return fmt.Errorf("rule %s uses invalid region: %w", rule.ID, err)
 		}
 		rule.region = region
-		if strings.HasPrefix(strings.TrimSpace(rule.Region), "top_non_empty_lines(") &&
+		if strings.HasPrefix(strings.TrimSpace(rule.RegionName()), "top_non_empty_lines(") &&
 			m.MinEngineVersion != nil && *m.MinEngineVersion < TopNonEmptyLinesEngineVersion {
 			return fmt.Errorf("rule %s uses top_non_empty_lines but min_engine_version is below %d",
 				rule.ID, TopNonEmptyLinesEngineVersion)
@@ -121,7 +134,7 @@ func ValidateDistribution(m *Manifest) error {
 	}
 	for i := range m.Rules {
 		rule := &m.Rules[i]
-		region := strings.TrimSpace(rule.Region)
+		region := strings.TrimSpace(rule.RegionName())
 		if err := validateDistributionRegion(region); err != nil {
 			return fmt.Errorf("rule %s has invalid region %q: %w", rule.ID, region, err)
 		}

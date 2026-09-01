@@ -13,7 +13,7 @@ var ampRules = []Rule{
 }
 
 func DetectAmp(ob Observation) Result {
-	if ob.Agent != "amp" || !oneOf(ob.CurrentCommand, "amp", "amp-local") {
+	if ob.Agent != "amp" || !ampProcess(ob.CurrentCommand) {
 		return Result{State: StateUnknown, Evidence: "amp.process-mismatch"}
 	}
 	result := Evaluate(ob, ampRules)
@@ -31,3 +31,6 @@ func oneOf(value string, candidates ...string) bool {
 	}
 	return false
 }
+
+// ampProcess is the process gate for Amp. Named for the reason on piProcess.
+func ampProcess(command string) bool { return oneOf(command, "amp", "amp-local") }

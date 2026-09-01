@@ -171,6 +171,14 @@ func regionCount(spec, name string) (int, bool) {
 	if !ok {
 		return 0, false
 	}
+	// Rust parses the count with usize::from_str, which accepts one optional
+	// leading '+'. ParseUint does not, so bottom_lines(+5) would be rejected
+	// here and accepted upstream — a file Herdr loads and Sidecar refuses,
+	// which is the one direction a port must never diverge in.
+	// top_non_empty_lines is deliberately not given the same latitude: its own
+	// parser (topRegionCount) requires every byte to be an ASCII digit, and
+	// Herdr's own test asserts that "+1" is rejected there.
+	rest = strings.TrimPrefix(rest, "+")
 	count, err := strconv.ParseUint(rest, 10, 64)
 	if err != nil || count > uint64(maxInt) {
 		return 0, false

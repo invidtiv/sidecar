@@ -9,7 +9,7 @@ var copilotRules = []Rule{
 }
 
 func DetectCopilot(ob Observation) Result {
-	if ob.Agent != "copilot" || !oneOf(ob.CurrentCommand, "copilot", "github-copilot", "ghcs") {
+	if ob.Agent != "copilot" || !copilotProcess(ob.CurrentCommand) {
 		return Result{State: StateUnknown, Evidence: "copilot.process-mismatch"}
 	}
 	result := Evaluate(ob, copilotRules)
@@ -17,4 +17,10 @@ func DetectCopilot(ob Observation) Result {
 		return Result{State: StateIdle, Evidence: "copilot.known-live-fallback", FallbackIdle: true}
 	}
 	return result
+}
+
+// copilotProcess is the process gate for Copilot. Named for the reason on
+// piProcess.
+func copilotProcess(command string) bool {
+	return oneOf(command, "copilot", "github-copilot", "ghcs")
 }

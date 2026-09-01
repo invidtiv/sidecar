@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
@@ -83,10 +84,17 @@ type Gate struct {
 // separate here for the same reason: the TOML shape differs even though the
 // semantics do not.
 type Rule struct {
-	ID       string `toml:"id"`
-	State    *State `toml:"state"`
-	Priority int    `toml:"priority"`
-	Region   string `toml:"region"`
+	ID    string `toml:"id"`
+	State *State `toml:"state"`
+	// Priority is i32 in Herdr's ManifestRule, so a value outside that range
+	// is a file Herdr would refuse to deserialize and Parse refuses too.
+	Priority int `toml:"priority"`
+	// Region is a pointer because Herdr's serde default fires only when the
+	// key is *absent*. An explicit region = "" is not defaulted, it is an
+	// invalid region name and validate_region_name rejects it. Collapsing the
+	// two would silently evaluate a typo'd rule against the whole screen. Read
+	// it through RegionName, never directly.
+	Region *string `toml:"region"`
 
 	// Herdr's key names, verbatim: visible_idle, visible_blocker,
 	// visible_working. Note "blocker", not "blocked".
@@ -95,6 +103,13 @@ type Rule struct {
 	VisibleWorking bool `toml:"visible_working"`
 
 	SkipStateUpdate bool `toml:"skip_state_update"`
+
+	// Disable is overlay-only: `disable = true` on an upstream rule id removes
+	// that rule from the merged manifest. A plain manifest carrying it is
+	// rejected, because a vendored file that could disable its own rules would
+	// make the sync diff mean something different from what upstream wrote. It
+	// is a pointer so "absent" and "explicitly false" stay distinguishable.
+	Disable *bool `toml:"disable"`
 
 	All       []Gate   `toml:"all"`
 	Any       []Gate   `toml:"any"`
@@ -108,9 +123,21 @@ type Rule struct {
 	region Region
 }
 
+// RegionName is the rule's region spec as Herdr sees it: the declared value,
+// or "whole_recent" when the key was absent.
+func (r *Rule) RegionName() string {
+	if r.Region == nil {
+		return DefaultRegion
+	}
+	return *r.Region
+}
+
 // RegionSpec returns the parsed region for the rule. It is meaningful only
 // after Parse (or ParseAndValidate) has populated it.
 func (r *Rule) RegionSpec() Region { return r.region }
+
+// Disabled reports whether an overlay rule removes its upstream namesake.
+func (r *Rule) Disabled() bool { return r.Disable != nil && *r.Disable }
 
 // RootGate returns the rule's matcher tree as a Gate, mirroring Herdr's
 // manifest_gate_from_rule. Validation and evaluation both work through it, so
@@ -174,25 +201,45 @@ func AsEngineTooNew(err error) (*EngineTooNewError, bool) {
 // unknown rule keys, and unknown gate keys all reject the file, as Herdr's
 // serde(deny_unknown_fields) does. Parse does not validate limits; use
 // ParseAndValidate or Validate for that.
-func Parse(data []byte) (*Manifest, error) {
+func Parse(data []byte) (*Manifest, error) { return parse(data, false) }
+
+// parse is Parse with the overlay-only keys optionally allowed.
+func parse(data []byte, overlay bool) (*Manifest, error) {
 	var m Manifest
 	decoder := toml.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&m); err != nil {
 		return nil, fmt.Errorf("manifest is not valid TOML: %w", err)
 	}
+	// Herdr types version as Option<ManifestVersion> and min_engine_version as
+	// Option<u32>, so both are checked while *deserializing*: a file with
+	// version = "abc" or min_engine_version = -1 never reaches its validator.
+	// Go's decoder is happy with either, so the checks live here to keep the
+	// set of files the two engines accept identical.
+	if strings.TrimSpace(m.Version) != "" {
+		if _, err := ValidateVersion(m.Version); err != nil {
+			return nil, err
+		}
+	}
+	if m.MinEngineVersion != nil && (*m.MinEngineVersion < 0 || *m.MinEngineVersion > math.MaxUint32) {
+		return nil, fmt.Errorf("min_engine_version %d does not fit Herdr's u32 min_engine_version", *m.MinEngineVersion)
+	}
 	for i := range m.Rules {
 		rule := &m.Rules[i]
+		if rule.Disable != nil && !overlay {
+			return nil, fmt.Errorf("rule %s uses disable, which is only valid in a Sidecar overlay", rule.ID)
+		}
 		if rule.State != nil && !rule.State.Valid() {
 			return nil, fmt.Errorf("rule %s has unknown state %q, expected one of idle, working, blocked, unknown",
 				rule.ID, *rule.State)
 		}
-		if strings.TrimSpace(rule.Region) == "" {
-			rule.Region = DefaultRegion
+		if rule.Priority < math.MinInt32 || rule.Priority > math.MaxInt32 {
+			return nil, fmt.Errorf("rule %s has priority %d, which does not fit Herdr's i32 priority",
+				rule.ID, rule.Priority)
 		}
 		// A parse failure here is reported by Validate with Herdr's wording;
 		// leaving the zero Region until then keeps Parse free of policy.
-		if region, err := ParseRegion(rule.Region); err == nil {
+		if region, err := ParseRegion(rule.RegionName()); err == nil {
 			rule.region = region
 		}
 	}

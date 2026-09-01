@@ -10,6 +10,7 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/agentactivity"
 	"github.com/marcus/sidecar/internal/clip"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/configui"
@@ -587,6 +588,14 @@ func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentV
 		km.RegisterPluginBinding(terminal.ExitKey, "exit-interactive", "global-workspaces-terminal")
 		km.RegisterPluginBinding(terminal.CopyKey, "copy-selection", "global-workspaces-terminal")
 		km.RegisterPluginBinding(terminal.PasteKey, "paste", "global-workspaces-terminal")
+	}
+	if features.IsEnabled(features.ManifestDetection.Name) {
+		// Shadow mode for the screen lane. Installing the sink is the whole
+		// activation: agentactivity runs the manifest engine only while one is
+		// set, so this costs nothing when the flag is off. It is here rather
+		// than in a plugin Init because Init runs before the first frame and
+		// this decides a package-level variable the polling surfaces share.
+		agentactivity.SetShadowSink(agentactivity.NewShadowLog(config.StateDir()))
 	}
 	if features.IsEnabled(features.TasksPlugin.Name) {
 		// Tasks is a global tab, so its host is built here rather than

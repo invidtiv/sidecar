@@ -47,7 +47,15 @@ type Observation struct {
 	// process group and argv[0]. It disambiguates shared runtimes such as Node
 	// without promoting phrases from another agent's transcript.
 	ProcessIdentity string
-	CapturedAt      time.Time
+	// PaneHeight is the pane's own row count (tmux #{pane_height}). It is the
+	// manifest engine's read window: Herdr reads the tail of the buffer N rows
+	// deep where N is the pane's height, so a capture carrying scrollback has to
+	// be bounded to the same N or a resolved historical prompt wins a rule it
+	// should never have seen. Zero means the height was not available and the
+	// engine falls back to 24, Herdr's own DEFAULT_DETECTION_ROWS. See
+	// docs/reference/herdr-detection-parity.md ("Read window").
+	PaneHeight int
+	CapturedAt time.Time
 }
 
 type Result struct {
@@ -264,7 +272,23 @@ type Rule struct {
 // Detect dispatches an observation to the expected provider probe. Keeping
 // dispatch here lets the workspace poll remain product-neutral while each
 // provider owns its evidence table.
+//
+// While shadow mode is on (features.manifest_detection, off by default) the
+// vendored Herdr manifests classify the same observation and disagreements are
+// logged. The verdict Detect returns is the Go rule tables' either way; see
+// shadow.go.
 func Detect(ob Observation) Result {
+	result := detect(ob)
+	shadowMu.RLock()
+	sink := shadowSink
+	shadowMu.RUnlock()
+	if sink != nil {
+		compareInShadow(ob, result, sink)
+	}
+	return result
+}
+
+func detect(ob Observation) Result {
 	switch ob.Agent {
 	case "codex":
 		return DetectCodex(ob)

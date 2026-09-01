@@ -93,3 +93,40 @@ Upstream `lookup_agent` (`src/detect/mod.rs:193-222`) normalises before lookup: 
 | codex, grok, pi, copilot, cursor, amp, muse | as upstream | none needed; Sidecar is a superset for codex (`codex-cli`), grok (`grok-*`), muse (`muse-*`) |
 
 Generic runtimes: Herdr's list is `sh bash zsh fish tmux node bun cmd powershell pwsh python[N[.N]]`. Sidecar returns `shell` for `sh bash zsh fish nu pwsh` and `""` for the rest; nothing on Herdr's list resolves to a Sidecar family (`TestHerdrGenericRuntimesNeverResolveToAProvider`). Sidecar's `shell` bucket is a launch-readiness gate, not Herdr's process-scoring predicate, so it is deliberately not widened to `node`, `tmux`, or `python`; a separate generic-runtime predicate belongs with the argv-unwrapping work in Phase 4.
+
+## Engine (Phase 1)
+
+`internal/agentactivity/manifest` executes the vendored manifests at engine version 3: `ReadWindow` builds the detection window measured above, `resolve.go` implements all fifteen regions with a citation to the Herdr line each helper ports, `compile.go` compiles every regex once (after `TranslateRustRegex`) and marks an uncompilable rule as never matching with a `regex_incompatible` note in its explain evidence, `evaluate.go` runs every rule and keeps the highest priority with ties to the earlier rule, and `merge.go` applies a `sidecar/<agent>.toml` overlay by rule id. `internal/agentactivity/manifests.Load` compiles upstream plus overlay once per agent behind a `sync.Once`; a broken overlay becomes a diagnostic on the returned `Source` and upstream is used alone.
+
+`conformance_test.go` ports 36 of Herdr's 45 inline manifest tests under their Rust names. The nine not ported exercise Herdr's remote-manifest cache and override loader (six, no Sidecar equivalent until Phase 5), duplicate cases covered elsewhere (two), and one loader-failure test whose analogue is `TestOverlayFailureFallsBackToUpstream`.
+
+Four overlays exist today, one per `\p{Alphabetic}` rule (antigravity, cursor, kiro, qodercli), each replacing the upstream rule id with `[\p{L}\p{Nl}]`; `TestOverlaysMakeEveryRuleCompilable` proves no merged manifest carries a dead rule.
+
+`sidecar agent explain --file PATH --agent KIND [--title T] [--rows N] [--print-window] [--json]` evaluates a saved screen (testdata header format or raw text) with no tmux and no store, printing Herdr's text layout or the JSON explain record. `--print-window` prints the exact window the engine saw, which is Herdr's `agent read --source detection` offline.
+
+### Differential harness
+
+`scripts/herdr-diff.sh` runs every fixture with a `screen:` block through `herdr agent explain --file --json` (the 0.8.2 release binary, with `XDG_CONFIG_HOME` pointed at a throwaway override directory holding the vendored bytes) and through `sidecar agent explain --file --json`, and diffs `state`, `matched_rule.id`, and `fallback_reason`.
+
+Result at `e2b85c7` against herdr 0.8.2: 45 fixtures compared, 45 agree, 0 disagree; 5 proof transcripts skipped. Two limitations are forced by Herdr's `--file` mode: it passes an empty `osc_title` (`explain_for_label`), so the comparison is screen-only with the title stripped on both sides, and it applies no read window, so the harness feeds both engines the window Sidecar prints with `--print-window`.
+
+### Census before cutover
+
+`go test ./internal/agentactivity -run TestManifestCensus -v` prints, for every fixture, the Go rule-table verdict beside the manifest verdict. At Phase 1's end: 45 fixtures, 35 agree, 10 disagree. Every disagreement is a rule Sidecar has and upstream lacks, or a case where Sidecar's narrower rule is right; none is an engine bug, which the 45/45 harness result confirms independently. Phase 2 resolves each by overlay or by accepting upstream, and records the decision per fixture.
+
+| Fixture | Go verdict | Manifest verdict | Triage |
+| --- | --- | --- | --- |
+| `antigravity/blocked.txt` | blocked | idle (fallback) | Upstream `antigravity.toml` has three rules and no trust-prompt rule. Overlay. |
+| `antigravity/working.txt` | working | idle (fallback) | Upstream has no `Generating…` / `esc to cancel` rule. Overlay. |
+| `claude/overlay.txt` | unknown, skip | idle | Upstream has no model-picker retain rule. Overlay. |
+| `codex/background_terminal.txt` | working | idle | Herdr treats background terminals as not busy; Sidecar's rule requires the waiting line, a running count, and the `/ps` `/stop` hints, and is right for a main turn blocked on one. Overlay. |
+| `cursor/blocked_decision.txt` | blocked | idle (fallback) | Upstream has no `Waiting for decision (y/n/p)` rule. Overlay. |
+| `cursor/false_positive_finished_background.txt` | idle | working | Upstream `background_task_status_working` matches a finished background task. Overlay; candidate for an upstream pull request. |
+| `cursor/working_background.txt` | working | idle (fallback) | Upstream has no `(background)` suffix rule. Overlay. |
+| `grok/background_subagent.txt` | working | idle | Upstream has no "N subagent still running" rule; this is the parked-turn case that produced false completions. Overlay. |
+| `grok/overlay.txt` | unknown, skip | idle | Upstream has no resume-overlay retain rule. Overlay. |
+| `grok/stale_working_scrollback.txt` | idle | working | Stale braille title; Sidecar lets a clear idle footer beat the title, Herdr trusts the title. Overlay. |
+
+### Shadow mode
+
+`features.ManifestDetection` (default off) installs a shadow sink at startup; while it is installed, `Detect` runs the manifest lane beside the Go rule tables and appends one JSON line per disagreement in state, skip, or fallback to `<state dir>/agent-detection-shadow.jsonl`, carrying both verdicts and the manifest explain record (region previews only, never the screen). A difference in evidence spelling alone is not logged, because `claude.title.working` and `osc_title_working` name the same finding. The returned result is still the Go rule tables' verdict for any provider not yet cut over.

@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/marcus/sidecar/internal/agentactivity"
+	"github.com/marcus/sidecar/internal/agentactivity/manifest"
 )
 
 // Authority names which kind of evidence authored the effective state.
@@ -129,6 +130,14 @@ type Explanation struct {
 	// to divide by a billion.
 	ReportAge       string `json:"reportAge,omitempty"`
 	FreshnessWindow string `json:"freshnessWindow,omitempty"`
+
+	// ScreenExplain is the manifest engine's full record for the screen lane:
+	// the manifest source and version, the matched rule, and every rule that was
+	// evaluated with the region text it saw. It is populated only when the
+	// manifest engine actually ran (shadow mode today, and the live screen lane
+	// after the Phase 2 cutover); nil means the Go rule tables answered alone and
+	// there is no manifest record to show.
+	ScreenExplain *manifest.Explain `json:"screenExplain,omitempty"`
 
 	// Identity is the live pane and run this explanation is about.
 	Identity Identity `json:"identity"`

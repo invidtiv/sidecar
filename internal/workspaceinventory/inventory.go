@@ -35,6 +35,10 @@ const (
 type Pane struct {
 	ID, Session, Path, Command, Title string
 	PID                               int
+	// Height is the pane's row count. It is the manifest detection engine's
+	// read window (agentactivity.Observation.PaneHeight); it is free here
+	// because the refresh already takes this listing.
+	Height int
 	// ServerPID is the pid of the tmux server that listed this pane, from the
 	// server-scoped `#{pid}` format. It is the same for every pane in one
 	// listing and it is here because it is free: the refresh already takes this
@@ -456,7 +460,7 @@ func ServerPIDOf(panes []Pane) int {
 // ListPanes takes the single global tmux inventory used by an Overview refresh.
 func (c Collector) ListPanes(ctx context.Context) ([]Pane, error) {
 	c = c.defaults()
-	out, err := c.Runner.Output(ctx, "tmux", "list-panes", "-a", "-F", "#{pane_id}\t#{session_name}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_title}\t#{pane_dead}\t#{pane_pid}\t#{pid}")
+	out, err := c.Runner.Output(ctx, "tmux", "list-panes", "-a", "-F", "#{pane_id}\t#{session_name}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_title}\t#{pane_dead}\t#{pane_pid}\t#{pid}\t#{pane_height}")
 	if err != nil {
 		message := strings.ToLower(string(out))
 		if strings.Contains(message, "no server running") || strings.Contains(message, "no sessions") ||
@@ -474,7 +478,7 @@ func (c Collector) ListPanes(ctx context.Context) ([]Pane, error) {
 		// exact count, so a listing from an older format string — a fixture, or a
 		// tmux too old to answer one of them — still yields the fields it does
 		// have instead of being discarded whole.
-		parts := strings.SplitN(line, "\t", 8)
+		parts := strings.SplitN(line, "\t", 9)
 		if len(parts) < 6 {
 			continue
 		}
@@ -484,6 +488,9 @@ func (c Collector) ListPanes(ctx context.Context) ([]Pane, error) {
 		}
 		if len(parts) >= 8 {
 			p.ServerPID, _ = strconv.Atoi(strings.TrimSpace(parts[7]))
+		}
+		if len(parts) >= 9 {
+			p.Height, _ = strconv.Atoi(strings.TrimSpace(parts[8]))
 		}
 		// The pane hosting this process never enters the inventory. Correlation
 		// is by cwd, so without this a sidecar launched from a plain shell in
@@ -693,7 +700,7 @@ func (c Collector) observeContext(ctx context.Context, workspace *Workspace, mat
 			if pane.PID > 0 && agentactivity.NeedsProcessIdentity(pane.Command) {
 				processIdentity = agentactivity.ResolveForegroundAgent(pane.PID)
 			}
-			ob := agentactivity.Observation{Agent: workspace.Provider, Screen: output, PaneTitle: pane.Title, CurrentCommand: pane.Command, ProcessIdentity: processIdentity, CapturedAt: now}
+			ob := agentactivity.Observation{Agent: workspace.Provider, Screen: output, PaneTitle: pane.Title, CurrentCommand: pane.Command, ProcessIdentity: processIdentity, PaneHeight: pane.Height, CapturedAt: now}
 			if identified := agentactivity.Identify(ob); identified != "" {
 				if identified == "shell" {
 					// A live shell process is not the launch-preference agent.

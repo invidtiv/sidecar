@@ -56,6 +56,16 @@ type lifecycleFlags struct {
 
 	current bool
 	shell   string
+
+	// file, agent and title serve `explain --file`: an offline run of the
+	// screen lane over a saved capture, with no tmux and no lifecycle store.
+	file  string
+	agent string
+	title string
+	rows  int
+	// printWindow asks --file for the detection read window rather than a
+	// verdict: the exact text the engine evaluated.
+	printWindow bool
 }
 
 func agentLifecycleExitCodes() []ExitCode {
@@ -139,21 +149,28 @@ func lifecycleCommands() (report, end, release, explain *Command) {
 	explain = &Command{
 		Name:    "explain",
 		Summary: "Explain which evidence authored a pane's lifecycle state",
-		Usage:   "sidecar agent explain [--current | --shell TARGET] [--json]",
+		Usage:   "sidecar agent explain [--current | --shell TARGET | --file PATH --agent KIND] [--json]",
 		Long: "Reports the effective state, which evidence authored it, the source's exercisable tier, the last valid report, and — when lifecycle evidence did not win — exactly why not.\n\n" +
+			"With --file it runs the screen lane alone over a saved capture: no tmux, no lifecycle store, no running agent. That is how a wrong badge is reproduced from a fixture, and how a new fixture is minted.\n\n" +
 			"Every diagnostic fact the Configuration surface shows is available here, so a pane that is not being driven by its integration always has an actionable reason rather than silence.\n\n" +
 			"This command is read-only. It never locks, compacts, repairs, or creates the lifecycle log.",
 		Flags: []Flag{
 			{Name: "--current", Summary: "Explain the pane this command is running in (the default)", Bool: true},
 			{Name: "--shell", Arg: "TARGET", Summary: "Explain a managed shell by name"},
+			{Name: "--file", Arg: "PATH", Summary: "Explain a saved capture offline, with no tmux and no lifecycle store"},
+			{Name: "--agent", Arg: "KIND", Summary: "Which agent's manifest to evaluate --file against (required with --file)"},
+			{Name: "--title", Arg: "TEXT", Summary: "Pane title for --file when the capture carries no header"},
+			{Name: "--rows", Arg: "N", Summary: "Pane height for --file; the detection read window. Defaults to the fixture header, else 24"},
+			{Name: "--print-window", Summary: "With --file, print the detection read window instead of a verdict", Bool: true},
 			{Name: "--json", Summary: "Write stable structured JSON", Bool: true},
 			{Name: "--help", Short: "-h", Summary: "Show this help", Bool: true},
 		},
 		ExitCodes: agentLifecycleExitCodes(),
 		Examples: []Example{
 			{Command: "sidecar agent explain --current --json"},
+			{Command: "sidecar agent explain --file internal/agentactivity/testdata/claude/blocked.txt --agent claude --json"},
 		},
-		Agent: AgentDoc{Invocation: "sidecar agent explain [--current | --shell TARGET] --json", Summary: "See why a pane is in the state it is, and why hooks are or are not driving it"},
+		Agent: AgentDoc{Invocation: "sidecar agent explain [--current | --shell TARGET | --file PATH --agent KIND] --json", Summary: "See why a pane is in the state it is, why hooks are or are not driving it, and which manifest rule the screen lane matched"},
 		Run:   runAgentExplain,
 	}
 	return report, end, release, explain
@@ -232,6 +249,36 @@ func parseLifecycleFlags(env Env, args []string, help string, kind agentlifecycl
 				return f, usage("--shell requires a value")
 			}
 			f.shell, i = v, n
+		case arg == "--print-window":
+			f.printWindow = true
+		case strings.HasPrefix(arg, "--file"):
+			v, n, ok := takeFlagArg(arg, args, i, "--file")
+			if !ok {
+				return f, usage("--file requires a value")
+			}
+			f.file, i = v, n
+		case strings.HasPrefix(arg, "--agent"):
+			v, n, ok := takeFlagArg(arg, args, i, "--agent")
+			if !ok {
+				return f, usage("--agent requires a value")
+			}
+			f.agent, i = v, n
+		case strings.HasPrefix(arg, "--title"):
+			v, n, ok := takeFlagArg(arg, args, i, "--title")
+			if !ok {
+				return f, usage("--title requires a value")
+			}
+			f.title, i = v, n
+		case strings.HasPrefix(arg, "--rows"):
+			v, n, ok := takeFlagArg(arg, args, i, "--rows")
+			if !ok {
+				return f, usage("--rows requires a value")
+			}
+			rows, err := strconv.Atoi(v)
+			if err != nil || rows < 0 {
+				return f, usage("--rows must be a non-negative integer, got %q", v)
+			}
+			f.rows, i = rows, n
 		case strings.HasPrefix(arg, "--seq"):
 			v, n, ok := takeFlagArg(arg, args, i, "--seq")
 			if !ok {
@@ -527,6 +574,17 @@ func runAgentExplain(env Env, args []string) int {
 		cliErrf(env.Stderr, "--current and --shell name different panes; pass one\n\n%s", help)
 		return 2
 	}
+	if f.file != "" {
+		if f.current || f.shell != "" {
+			cliErrf(env.Stderr, "--file explains a saved capture, not a live pane; drop --current and --shell\n\n%s", help)
+			return 2
+		}
+		return explainFile(env, f, help)
+	}
+	if f.agent != "" || f.title != "" || f.rows != 0 || f.printWindow {
+		cliErrf(env.Stderr, "--agent, --title, --rows and --print-window are only valid with --file\n\n%s", help)
+		return 2
+	}
 
 	stateDir := env.StateDir
 	if stateDir == "" {
@@ -575,11 +633,12 @@ func runAgentExplain(env Env, args []string) int {
 	// The screen half is really captured. explain is an on-demand diagnostic,
 	// not a polling path, so one capture is affordable and an invented
 	// "unknown" screen would misrepresent the arbitration it is describing.
-	screen, paneTitle, command := capturePaneForExplain(ctx.PaneID)
+	screen, paneTitle, command, paneHeight := capturePaneForExplain(ctx.PaneID)
 	ob := agentactivity.Observation{
 		Screen:         screen,
 		PaneTitle:      paneTitle,
 		CurrentCommand: command,
+		PaneHeight:     paneHeight,
 		CapturedAt:     time.Now(),
 	}
 	ob.Agent = agentactivity.Identify(ob)
@@ -658,11 +717,12 @@ func explainManagedShell(env Env, f lifecycleFlags, stateDir string) int {
 	}
 
 	src := agentintegration.NewStoreSourceOn(stateDir, tgt.Namespace)
-	screen, paneTitle, command := capturePaneForExplainOn(tgt.Namespace, identity.PaneID)
+	screen, paneTitle, command, paneHeight := capturePaneForExplainOn(tgt.Namespace, identity.PaneID)
 	ob := agentactivity.Observation{
 		Screen:         screen,
 		PaneTitle:      paneTitle,
 		CurrentCommand: command,
+		PaneHeight:     paneHeight,
 		CapturedAt:     time.Now(),
 	}
 	ob.Agent = agentactivity.Identify(ob)
@@ -690,32 +750,36 @@ func explainManagedShell(env Env, f lifecycleFlags, stateDir string) int {
 // Every failure degrades to empty values, which the detectors read as "no
 // opinion". A diagnostic command that could not capture a screen should still
 // report everything else it knows rather than fail outright.
-func capturePaneForExplain(paneID string) (screen, paneTitle, command string) {
+func capturePaneForExplain(paneID string) (screen, paneTitle, command string, paneHeight int) {
 	return capturePaneForExplainOn("", paneID)
 }
 
 // capturePaneForExplainOn is capturePaneForExplain against an explicit tmux
 // socket, for a pane in a namespace this process is not running in.
-func capturePaneForExplainOn(namespace, paneID string) (screen, paneTitle, command string) {
+func capturePaneForExplainOn(namespace, paneID string) (screen, paneTitle, command string, paneHeight int) {
 	if paneID == "" {
-		return "", "", ""
+		return "", "", "", 0
 	}
 	screen, err := tty.CapturePaneOutput(paneID, 0)
 	if err != nil {
 		screen = ""
 	}
-	args := []string{"display-message", "-p", "-t", paneID, tmuxformat.Fields("pane_title", "pane_current_command")}
+	// pane_height rides along because it is the manifest engine's read window,
+	// and asking for it here costs nothing: it is one more field on a
+	// display-message this command already runs.
+	args := []string{"display-message", "-p", "-t", paneID, tmuxformat.Fields("pane_title", "pane_current_command", "pane_height")}
 	if namespace != "" {
 		args = append([]string{"-S", namespace}, args...)
 	}
 	out, err := exec.Command("tmux", args...).Output()
 	if err == nil {
 		fields := tmuxformat.Split(strings.TrimRight(string(out), "\n"))
-		if len(fields) == 2 {
+		if len(fields) == 3 {
 			paneTitle, command = fields[0], fields[1]
+			paneHeight, _ = strconv.Atoi(strings.TrimSpace(fields[2]))
 		}
 	}
-	return screen, paneTitle, command
+	return screen, paneTitle, command, paneHeight
 }
 
 func encodeStdout(env Env, v any) int {

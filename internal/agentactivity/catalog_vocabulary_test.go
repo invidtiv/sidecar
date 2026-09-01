@@ -3,6 +3,7 @@ package agentactivity
 import (
 	"testing"
 
+	"github.com/marcus/sidecar/internal/agentactivity/manifests"
 	"github.com/marcus/sidecar/internal/agentcatalog"
 )
 
@@ -73,27 +74,47 @@ func TestOnlyClaudesOwnVersionArgv0ResolvesToAProvider(t *testing.T) {
 	}
 }
 
-// upstreamAliases is Herdr's `lookup_agent` table (src/detect/mod.rs:193 at
-// e2b85c7), restricted to the ten families Sidecar claims today, keyed by the
-// Sidecar family id. It is hard-coded here on purpose: it is the fixed record
-// of what upstream recognised at the commit this parity work was measured
-// against, and Phase 0's `aliases.upstream.json` replaces this literal without
-// moving the assertion. Keep it in this one place.
+// upstreamAliases reads Herdr's `lookup_agent` table out of the vendored
+// aliases.upstream.json, restricted to the families Sidecar claims today and
+// re-keyed from Herdr's label to Sidecar's family id.
 //
-// Muse's `muse-bin-<version>` launcher spelling is included because upstream
-// matches it by shape (`is_muse_versioned_binary`, src/detect/mod.rs:231); one
-// representative value stands in for the shape.
-var upstreamAliases = map[string][]string{
-	"claude":      {"claude", "claude-code"},
-	"codex":       {"codex"},
-	"grok":        {"grok", "grok-build"},
-	"antigravity": {"agy", "antigravity", "antigravity-cli"},
-	"pi":          {"pi"},
-	"copilot":     {"copilot", "github-copilot", "ghcs"},
-	"cursor":      {"cursor", "cursor-agent"},
-	"opencode":    {"opencode", "opencode2", "open-code"},
-	"amp":         {"amp", "amp-local"},
-	"muse":        {"muse", "muse-code", "muse-cli", "muse-bin-0.1.0-R708.1"},
+// It used to be a hand-copied Go literal. Driving it from the extracted file
+// instead is the point of extracting the file: a sync that adds an alias for a
+// family Sidecar claims now fails this test on the sync pull request, which is
+// the moment somebody can act on it, rather than waiting for a user's pane to
+// show no badge. Upstream families Sidecar does not claim are ignored on
+// purpose — registering those is Phase 4, and failing here would only make the
+// sync noisy in the meantime.
+//
+// Muse's `muse-bin-<version>` launcher spelling is not in the alias list because
+// upstream matches it by shape (`is_muse_versioned_binary`); the extracted
+// versioned_binary_prefixes table carries the prefix and one representative
+// value stands in for the shape.
+func upstreamAliases(t *testing.T) map[string][]string {
+	t.Helper()
+	table, err := manifests.LoadAliases()
+	if err != nil {
+		t.Fatalf("load aliases.upstream.json: %v", err)
+	}
+	out := make(map[string][]string, len(claimedFamilies))
+	for _, family := range claimedFamilies {
+		label := HerdrAgentLabel(family)
+		aliases, ok := table.Agents[label]
+		if !ok {
+			t.Fatalf("upstream alias table has no entry for %q (Herdr label %q)", family, label)
+		}
+		out[family] = append([]string(nil), aliases...)
+		if prefix, ok := table.VersionedBinaryPrefixes[label]; ok {
+			out[family] = append(out[family], prefix+"0.1.0-R708.1")
+		}
+	}
+	return out
+}
+
+// claimedFamilies are the ten providers Sidecar has screen detection for today.
+var claimedFamilies = []string{
+	"claude", "codex", "grok", "antigravity", "pi",
+	"copilot", "cursor", "opencode", "amp", "muse",
 }
 
 // A pane running an agent under a spelling upstream knows and Sidecar does not
@@ -101,7 +122,7 @@ var upstreamAliases = map[string][]string{
 // --kind` never checked against it. Herdr's alias table is the shared
 // vocabulary, so every entry in it for a family Sidecar claims must resolve.
 func TestUpstreamAliasesResolveForClaimedFamilies(t *testing.T) {
-	for family, aliases := range upstreamAliases {
+	for family, aliases := range upstreamAliases(t) {
 		for _, alias := range aliases {
 			t.Run(family+"/"+alias, func(t *testing.T) {
 				if got := identifyProcessName(alias); got != family {
@@ -116,9 +137,13 @@ func TestUpstreamAliasesResolveForClaimedFamilies(t *testing.T) {
 // Every claimed family is one Sidecar can launch, so the two tables must not
 // drift apart in either direction.
 func TestUpstreamAliasTableCoversEveryCatalogFamily(t *testing.T) {
+	claimed := make(map[string]bool, len(claimedFamilies))
+	for _, family := range claimedFamilies {
+		claimed[family] = true
+	}
 	for _, family := range agentcatalog.Families() {
-		if _, ok := upstreamAliases[family.ID]; !ok {
-			t.Errorf("catalog family %q has no upstream alias record; add its Herdr aliases to upstreamAliases", family.ID)
+		if !claimed[family.ID] {
+			t.Errorf("catalog family %q is not in claimedFamilies; add it there and to Supports, or it has no upstream alias record", family.ID)
 		}
 	}
 }

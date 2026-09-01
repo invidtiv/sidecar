@@ -1,6 +1,6 @@
 # Herdr detection parity: run their manifests, sync automatically, keep our edge
 
-**Status:** approved 2026-09-01 with the decisions recorded at the end; nothing is implemented yet. **Research baseline:** Sidecar `main` at the head of `claude/tui-lifecycle-herdr-parity-cu2d9t`; Herdr `e2b85c7` (`preview-2026-08-31`, ten commits past v0.8.2), the live catalog at `https://herdr.dev/agent-detection/index.toml`, and Herdr's Apache-2.0 `LICENSE`.
+**Status:** in progress. Phase 0 exit gate met 2026-09-01 (vendored tree committed with lock, regex compatibility and read window recorded in [the reference document](../../reference/herdr-detection-parity.md), alias parity fixed). Phase 1 engine, conformance tests, `explain --file`, differential harness (45/45 agreement with herdr 0.8.2), and shadow mode landed 2026-09-01; the census disagreements are triaged in the reference document and resolve in Phase 2. Phase 2 is next, Claude Code and Codex first. **Research baseline:** Sidecar `main` at the head of `claude/tui-lifecycle-herdr-parity-cu2d9t`; Herdr `e2b85c7` (`preview-2026-08-31`, ten commits past v0.8.2), the live catalog at `https://herdr.dev/agent-detection/index.toml`, and Herdr's Apache-2.0 `LICENSE`.
 
 Related plans:
 

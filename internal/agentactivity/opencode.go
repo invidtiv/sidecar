@@ -10,7 +10,7 @@ var openCodeRules = []Rule{
 }
 
 func DetectOpenCode(ob Observation) Result {
-	if ob.Agent != "opencode" || !oneOf(ob.CurrentCommand, "opencode", "open-code") {
+	if ob.Agent != "opencode" || !openCodeProcess(ob.CurrentCommand) {
 		return Result{State: StateUnknown, Evidence: "opencode.process-mismatch"}
 	}
 	result := Evaluate(ob, openCodeRules)
@@ -19,3 +19,7 @@ func DetectOpenCode(ob Observation) Result {
 	}
 	return result
 }
+
+// openCodeProcess is the process gate for OpenCode. Named for the reason on
+// piProcess.
+func openCodeProcess(command string) bool { return oneOf(command, "opencode", "open-code") }

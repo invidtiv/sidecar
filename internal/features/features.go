@@ -161,6 +161,17 @@ var (
 		Default:     false,
 		Description: "Control Sidecar-managed agents through provider-aware commands",
 	}
+
+	// ManifestDetection runs the vendored Herdr detection manifests in shadow
+	// beside the Go rule tables. Nothing user-visible changes while it is on:
+	// the Go tables still author every verdict, and the manifest lane only
+	// writes a JSONL line where the two disagree. It is the evidence Phase 2's
+	// per-provider cutover is decided on.
+	ManifestDetection = Feature{
+		Name:        "manifest_detection",
+		Default:     false,
+		Description: "Run the vendored Herdr manifest engine in shadow alongside the Go rule tables and log disagreements",
+	}
 )
 
 // allFeatures is the registry of all known features.
@@ -180,6 +191,7 @@ var allFeatures = []Feature{
 	TerminalResourceProviders,
 	SidecarRemoteHosts,
 	AgentControl,
+	ManifestDetection,
 }
 
 // defaultValues provides O(1) lookup for feature defaults.

@@ -44,8 +44,11 @@ func TestParseAcceptsTheFullTopLevelShape(t *testing.T) {
 		t.Fatalf("rules = %d, want 1", len(m.Rules))
 	}
 	rule := m.Rules[0]
-	if rule.Region != DefaultRegion {
-		t.Fatalf("region = %q, want the whole_recent default", rule.Region)
+	if rule.Region != nil {
+		t.Fatalf("region key was absent but decoded as %q", *rule.Region)
+	}
+	if rule.RegionName() != DefaultRegion {
+		t.Fatalf("region = %q, want the whole_recent default", rule.RegionName())
 	}
 	if rule.RegionSpec().Kind != RegionWholeRecent {
 		t.Fatalf("parsed region = %v", rule.RegionSpec())
