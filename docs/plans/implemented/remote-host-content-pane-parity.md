@@ -1,8 +1,8 @@
 # Remote host content-pane parity
 
-Status: **active**. Slices 0–5 (files, issues, notes, diffs) are implemented and independently reviewed on `pane-parity` (td-89c1cb, td-87358d). Remaining: remote resource providers and session links, refusals, docs, and two-machine proof (slices 6–7).
+Status: **implemented** on `pane-parity` (td-89c1cb, td-87358d, td-925cf9). Isolated unit and integration proof covers every PlanKind; the two-machine tmux-drive recipe is `docs/guides/active/remote-content-pane-proof.md` and was not executed against a live host in this work.
 
-Related: [Sidecar as its own remote host runtime](sidecar-remote-hosts.md) is the controlling transport plan; [Cross-project td issue links](cross-project-issue-links.md) defines local-first issue ownership and fallback semantics; [Terminal resource providers](../implemented/terminal-resource-providers.md) defines provider matching, safe documents, and lifecycle bounds.
+Related: [Sidecar as its own remote host runtime](../active/sidecar-remote-hosts.md) is the controlling transport plan; [Cross-project td issue links](../active/cross-project-issue-links.md) defines local-first issue ownership and fallback semantics; [Terminal resource providers](terminal-resource-providers.md) defines provider matching, safe documents, and lifecycle bounds.
 
 ## Decision first
 
@@ -264,7 +264,7 @@ This is the first integrated proof: remote terminal text -> click -> host contai
 - Audit every Diff action before enabling the remote source; any mutation or local-command path is hidden or explicitly refused in this slice.
 - Preserve current diff size and untracked-file bounds, add truthful per-operation truncation/paging, and refresh visible panes through conditional git revisions.
 
-### Slice 6 — remote resource providers
+### Slice 6 — remote resource providers — **done** (td-56c5d2, td-ccb1ad)
 
 - Add provider describe/resolve DTOs only in this slice. Describe returns a deterministic fingerprint of validated ordered descriptors, never a process-local generation. Publish a host-scoped matcher snapshot and conditionally re-describe on row selection, explicit reload, the bounded visible-row cadence, or host-incarnation replacement.
 - Resolve through the remote manager, preserving matcher precedence, timeouts, process-group cleanup, typed errors, safe Markdown, source URL validation, and freshness.
@@ -272,7 +272,7 @@ This is the first integrated proof: remote terminal text -> click -> host contai
 - Audit Resource actions before enabling the remote source; validated HTTP(S) source URLs still open locally, while no action may reuse a viewer-local provider instance.
 - Prove that a provider configured only locally never claims remote text and one configured only remotely does.
 
-### Slice 7 — session links, refusals, documentation, and full proof
+### Slice 7 — session links, refusals, documentation, and full proof — **done** (td-eaed0d)
 
 - Scope session-link attachment by source host.
 - Verify the per-kind action audits landed in the same slices that admitted those kinds. No action may launch a local command against remote identity.

@@ -2,7 +2,7 @@
 
 Status: **active, Phase C complete — remote creation, mutation, and rename behind a flag**, 2026-08-30
 
-Related: [Herdr as Sidecar's remote host runtime](../deprecated/herdr-remote-hosts.md) was the competing alternative for the same deliverable; it is deprecated — this plan won on its Phase 0 numbers, and [Relationship to the Herdr plan](#relationship-to-the-herdr-plan) records what was compared. [Remote host content-pane parity](remote-host-content-pane-parity.md) is the active follow-on for resolving and loading clicked files, td items, diffs, and provider resources on the machine that owns a remote Sessions row. [Hosting Herdr plugins in Sidecar](../hold/herdr-plugin-support.md) is on hold and orthogonal.
+Related: [Herdr as Sidecar's remote host runtime](../deprecated/herdr-remote-hosts.md) was the competing alternative for the same deliverable; it is deprecated — this plan won on its Phase 0 numbers, and [Relationship to the Herdr plan](#relationship-to-the-herdr-plan) records what was compared. [Remote host content-pane parity](../implemented/remote-host-content-pane-parity.md) is the follow-on for resolving and loading clicked files, td items, diffs, and provider resources on the machine that owns a remote Sessions row. [Hosting Herdr plugins in Sidecar](../hold/herdr-plugin-support.md) is on hold and orthogonal.
 Evidence: all claims verified against the Sidecar codebase on `main` (citations inline); the Herdr comparisons reference the source inspection at `c2637dc1` recorded in the Herdr plan. Phase 0 measurements, transcripts, and findings are in [docs/evidence/sidecar-remote-hosts-phase0.md](../../evidence/sidecar-remote-hosts-phase0.md). Phase B's final-candidate tests and isolated two-machine proof are in [docs/evidence/sidecar-remote-hosts-phase-b.md](../../evidence/sidecar-remote-hosts-phase-b.md). Phase C's isolated two-machine proof is in [docs/evidence/sidecar-remote-hosts-phase-c.md](../../evidence/sidecar-remote-hosts-phase-c.md).
 
 ## Decision first
@@ -57,7 +57,7 @@ Decision posture: **resolved — this plan won.** Its Phase 0 spike ran first, p
 - Any change to local behavior. The transport injection must leave the local path byte-identical.
 - A persistent daemon on the remote host. Serve processes are per-connection and ephemeral; if that ever changes, it changes in its own plan.
 - Exposing anything to a network. SSH stdio is the only transport; serve never binds a socket.
-- Remote git/diff/file browsing beyond what inventory already summarizes. Click-to-content parity in the existing Sessions pane deck is a bounded follow-on tracked in [Remote host content-pane parity](remote-host-content-pane-parity.md); complete remote Files/Git plugin browsing remains outside this plan.
+- Remote git/diff/file browsing beyond what inventory already summarizes. Click-to-content parity in the existing Sessions pane deck is a bounded follow-on tracked in [Remote host content-pane parity](../implemented/remote-host-content-pane-parity.md); complete remote Files/Git plugin browsing remains outside this plan.
 - A Sidecar plugin system. Noted as a possible future direction (and [the Herdr-plugin plan](herdr-plugin-support.md) takes the opposite bet); neither is prerequisite to this work.
 
 ## Architecture
