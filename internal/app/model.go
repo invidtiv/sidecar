@@ -1327,16 +1327,21 @@ func (m *Model) installPluginHostSeams() {
 }
 
 func (m *Model) boundHostWorkspaces() []plugin.HostWorkspace {
-	ctx := m.registry.Context()
-	if ctx == nil || ctx.HostID == "" {
+	// Read bound identity from the app model, not registry.Context().
+	// Workspace Start calls this during ReinitHost, which already holds the
+	// registry lock; taking Context()'s RLock on the same goroutine deadlocks
+	// (RWMutex is not reentrant) and freezes the TUI on Enter of a remote row.
+	hostID := m.boundDestination.HostID
+	projectKey := m.boundDestination.ProjectKey
+	if hostID == "" {
 		return nil
 	}
 	for _, entry := range m.currentHostCatalog() {
-		if entry.ID != ctx.HostID {
+		if entry.ID != hostID {
 			continue
 		}
 		for _, project := range entry.Projects {
-			if project.Key == ctx.ProjectKey {
+			if project.Key == projectKey {
 				out := make([]plugin.HostWorkspace, 0, len(project.Workspaces))
 				for _, ws := range project.Workspaces {
 					out = append(out, plugin.HostWorkspace{

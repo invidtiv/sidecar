@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/config"
@@ -23,18 +24,25 @@ type recordingInitPlugin struct {
 	id      string
 	workDir string
 	hostID  string
+	ctx     *plugin.Context
 }
 
 func (p *recordingInitPlugin) ID() string   { return p.id }
 func (p *recordingInitPlugin) Name() string { return p.id }
 func (p *recordingInitPlugin) Icon() string { return "" }
 func (p *recordingInitPlugin) Init(ctx *plugin.Context) error {
+	p.ctx = ctx
 	p.workDir = ctx.WorkDir
 	p.hostID = ctx.HostID
 	return nil
 }
-func (p *recordingInitPlugin) Start() tea.Cmd { return nil }
-func (p *recordingInitPlugin) Stop()          {}
+func (p *recordingInitPlugin) Start() tea.Cmd {
+	if p.ctx != nil && p.ctx.HostWorkspaces != nil {
+		_ = p.ctx.HostWorkspaces()
+	}
+	return nil
+}
+func (p *recordingInitPlugin) Stop() {}
 func (p *recordingInitPlugin) Update(tea.Msg) (plugin.Plugin, tea.Cmd) {
 	return p, nil
 }
@@ -261,6 +269,52 @@ func TestRemoteBindDoesNotReinitTwinLocalPath(t *testing.T) {
 	}
 	if m.activeDestinationName() != BoundDestinationNavbarLabel(dest) {
 		t.Errorf("navbar = %q", m.activeDestinationName())
+	}
+}
+
+func TestRemoteBindDoesNotDeadlockOnHostInventory(t *testing.T) {
+	// Workspace Start reads HostWorkspaces during ReinitHost. That callback
+	// must not take the registry lock or Enter on a remote row freezes the TUI.
+	local := t.TempDir()
+	if err := state.InitWithDir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.Features.Flags[features.CrossProjectOverview.Name] = true
+	features.Init(cfg)
+	t.Cleanup(func() { features.Init(config.Default()) })
+	cfg.Projects.List = []config.ProjectConfig{{Name: "local", Path: local}}
+
+	recorder := &recordingInitPlugin{id: "workspace-manager"}
+	reg := plugin.NewRegistry(&plugin.Context{WorkDir: local, ProjectRoot: local})
+	if err := reg.Register(recorder); err != nil {
+		t.Fatal(err)
+	}
+	m := New(reg, keymap.NewRegistry(), cfg, "", local, local, "")
+	m.testHostCatalog = []overview.HostCatalogEntry{{
+		ID: "aerie",
+		Projects: []overview.HostCatalogProject{{
+			Key:  "/home/me/sidecar",
+			Name: "Sidecar",
+			Workspaces: []workspaceinventory.Workspace{{
+				Kind: workspaceinventory.KindShell, Name: "Claude pane", TmuxName: "sidecar-claude",
+			}},
+		}},
+	}}
+
+	done := make(chan struct{})
+	go func() {
+		_ = m.bindRemoteDestination(Destination{
+			HostID:      "aerie",
+			ProjectKey:  "/home/me/sidecar",
+			ProjectName: "Sidecar",
+		})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("bindRemoteDestination deadlocked: HostWorkspaces re-entered the registry lock")
 	}
 }
 
