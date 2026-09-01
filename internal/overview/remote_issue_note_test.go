@@ -272,6 +272,60 @@ func TestRemoteOpenInTDIsRefusedAndLocalStillWorks(t *testing.T) {
 	}
 }
 
+func TestRemoteNestedFileAndNoteFromDocumentStayOnHost(t *testing.T) {
+	t.Run("note", func(t *testing.T) {
+		m, src := showingRemoteIssueNoteModel(t)
+		src.file.body = "see sidecar://note/nt-host01\n"
+		run(t, m, m.openPreviewContent(contentlink.Ref{Kind: contentlink.KindFile, Value: "twin.txt"}, "Document"))
+		if m.preview.doc == nil {
+			t.Fatal("document pane did not open")
+		}
+		cmd := m.activatePreviewDocLink(contentlink.Ref{Kind: contentlink.KindInternal, Namespace: "note", Value: "nt-host01"})
+		if cmd == nil {
+			t.Fatal("nested note from a remote document was refused")
+		}
+		run(t, m, cmd)
+		if m.preview.note == nil || m.preview.note.view() == nil {
+			t.Fatal("nested note from document opened no pane")
+		}
+		if src.noteLoads == 0 {
+			t.Fatal("nested document note did not load through the remote source")
+		}
+		view := m.preview.note.view()
+		view.SetSize(80, 12)
+		if got := ansi.Strip(view.View()); !strings.Contains(got, remoteNoteTitle) {
+			t.Fatalf("nested note missing host title: %q", got)
+		}
+	})
+	t.Run("file", func(t *testing.T) {
+		m, src := showingRemoteIssueNoteModel(t)
+		src.file.body = remoteMarker + "\nother.txt\n"
+		run(t, m, m.openPreviewContent(contentlink.Ref{Kind: contentlink.KindFile, Value: "twin.txt"}, "Document"))
+		if m.preview.doc == nil {
+			t.Fatal("document pane did not open")
+		}
+		cmd := m.activatePreviewDocLink(contentlink.Ref{Kind: contentlink.KindFile, Value: "other.txt"})
+		if cmd == nil {
+			t.Fatal("nested file from a remote document was refused")
+		}
+		run(t, m, cmd)
+		if m.preview.doc == nil || m.preview.doc.view() == nil {
+			t.Fatal("nested file from document opened no pane")
+		}
+		m.preview.doc.view().SetSize(80, 6)
+		got := ansi.Strip(m.preview.doc.view().View())
+		if !strings.Contains(got, remoteMarker) {
+			t.Fatalf("nested file missing host bytes: %q", got)
+		}
+		if strings.Contains(got, localTwinMarker) {
+			t.Fatal("nested file showed this machine's twin")
+		}
+		if src.file.loads == 0 {
+			t.Fatal("nested file did not load through the remote source")
+		}
+	})
+}
+
 func TestRemoteNestedIssueFromDocumentAndCardStaysOnHost(t *testing.T) {
 	m, src := showingRemoteIssueNoteModel(t)
 	src.file.body = "see td-a4dd72\n"

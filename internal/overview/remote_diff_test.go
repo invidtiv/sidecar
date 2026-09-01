@@ -132,6 +132,29 @@ func showingRemoteDiffModel(t *testing.T) (*Model, *fakeRemoteDiffSource) {
 	return m, src
 }
 
+func TestRemoteNestedDiffFromDocumentStaysOnHost(t *testing.T) {
+	m, src := showingRemoteDiffModel(t)
+	src.file.body = "see " + hostOnlyHash + "\n"
+	run(t, m, m.openPreviewContent(contentlink.Ref{Kind: contentlink.KindFile, Value: "twin.txt"}, "Document"))
+	if m.preview.doc == nil {
+		t.Fatal("document pane did not open")
+	}
+	cmd := m.activatePreviewDocLink(contentlink.Ref{Kind: contentlink.KindDiff, Value: "c:" + hostOnlyHash})
+	if cmd == nil {
+		t.Fatal("nested diff from a remote document was refused")
+	}
+	run(t, m, cmd)
+	if m.preview.diff == nil || m.preview.diff.view() == nil {
+		t.Fatal("nested diff from document opened no pane")
+	}
+	if src.loads == 0 {
+		t.Fatal("nested document diff did not load through the remote source")
+	}
+	if src.lastTarget != hostOnlyHash && src.lastTarget != "c:"+hostOnlyHash {
+		t.Fatalf("nested diff resolved %q, want the host-only hash", src.lastTarget)
+	}
+}
+
 func TestRemoteSessionsRowOpensHostDiffNotLocalTwin(t *testing.T) {
 	m, src := showingRemoteDiffModel(t)
 	cmd := m.openPreviewDiff(workspacediff.MustParse(hostOnlyHash))

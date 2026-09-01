@@ -217,11 +217,20 @@ func previewHandlesPlanKind(kind targetactivation.PlanKind) bool {
 // decision (targetactivation), surface-local execution — the rule every kind
 // on these two surfaces already follows.
 //
+// The click carries the source host of the pane it came from. A name in a
+// remote pane matches only (that HostID, tmux session); a name in a local
+// pane matches a local row only. A same-named twin on the other side of the
+// host boundary is not attachable from this click.
+//
 // A session no row is running is not attachable, and the caller treats a nil
 // command as "this click did nothing", which is what an unknown session is.
 func (m *Model) attachPreviewSession(session string) tea.Cmd {
 	if strings.TrimSpace(session) == "" {
 		return nil
+	}
+	sourceHostID := ""
+	if ws, ok := m.SelectedWorkspace(); ok {
+		sourceHostID = ws.HostID
 	}
 	ids := make([]string, 0, len(m.catalog))
 	for id := range m.catalog {
@@ -229,8 +238,8 @@ func (m *Model) attachPreviewSession(session string) tea.Cmd {
 	}
 	sort.Strings(ids)
 	for _, id := range ids {
-		// A session name in a local pane's output names a local session.
-		if m.catalog[id].Remote() || m.catalog[id].TmuxName != session {
+		ws := m.catalog[id]
+		if ws.TmuxName != session || ws.HostID != sourceHostID {
 			continue
 		}
 		if !m.workspaces.SelectID(id) {
