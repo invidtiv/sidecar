@@ -1,6 +1,6 @@
 # Remote destinations in `@` and `W`
 
-Status: **active; slices 0–2 implemented** on `remote-viewer-screen` (td-f7855c: td-823e94, td-72a679, td-90757e). Remaining: slice 3 (viewer-screen landing on the bound project), slice 4 (Files/Git/td/Tasks remoting), slice 5 (docs and isolated proof). **Created:** 2026-09-01 **Verified against the tree on 2026-09-01** after slices 0–2.
+Status: **active; slices 0–2 implemented** on `remote-viewer-screen` (td-f7855c: td-823e94, td-72a679, td-90757e). Remaining: slice 2.5 (portable loopback remote fixture), slice 3 (viewer-screen landing on the bound project), slice 4 (Files/Git/td/Tasks remoting), slice 5 (docs and isolated proof). **Created:** 2026-09-01 **Verified against the tree on 2026-09-01** after slices 0–2.
 
 Related: [Sidecar as its own remote host runtime](sidecar-remote-hosts.md) is the transport and inventory stream. [The viewer owns the screen](../implemented/remote-host-viewer-screen.md) is the lease and `uirequest` announcement this bind must still grow onto the project workspace. [Remote host content-pane parity](../implemented/remote-host-content-pane-parity.md) is the read path a remote-bound plugin must use. [Agent-facing project CLI](agent-project-cli.md) is the local `sidecar project` surface; it does not grow `--host` in this plan.
 
@@ -200,6 +200,56 @@ A plugin that reads `ctx.WorkDir` without checking `HostID` is a bug this plan�
 
 Worktree switcher local-first, then `[host] Project [[feature]]` for linked worktrees of the same-named host project. Host main checkout is not a W row. Enter binds through `bindRemoteDestination`. Last-worktree memory is `GetLastRemoteWorktree` / `SetLastRemoteWorktree` per `hosts.ScopedKey`; `@` Enter restores it when still in the catalog. W Enter is an explicit destination (`restoreLastWorktree=false`).
 
+### Slice 2.5 — portable loopback remote for agents — **not started**
+
+An agent (or any other developer) can bring up and tear down a simulated remote on the machine they are sitting at, with a small injected delay, and drive `@` / `W` against it. No named workstation, no live `~/.local/state/sidecar`, no default tmux server.
+
+#### What already exists (do not rebuild)
+
+There is no agent-facing up/down for this today, and nothing in-tree injects latency. There is a strong foundation:
+
+| Piece | What it is | What it is not |
+| --- | --- | --- |
+| `internal/cli/agent_remote_loopback_test.go` `loopbackHost` | Two isolated Sidecar trees on one machine. A fake `ssh` on `PATH` ignores `-o` and the target, takes the rendered `$SHELL -l -c '…'` word, and runs it locally against the host tree. Real worktree binary, real host tmux socket, real quoting/decode. | Not a script. No latency. No TUI. Explicitly does not cover sshd, ControlMaster, or a dropped connection. |
+| `scripts/tmux-drive.sh` | Isolated viewer TUI: private tmux socket, private state/config, `SIDECAR_ISOLATED_STATE=1`, keystrokes and screen capture. | One process. No host. |
+| `scripts/remote-spike.sh` + `scripts/remote-content-proof.sh` | Real SSH to a second machine, both isolation axes on both ends. Proof recipes for content panes and viewer-screen. | `remote-spike.sh` defaults `SPIKE_HOST=marcusbook`. That default is why this slice exists: a portable agent cannot use it. |
+| `hosts` tests with injected `Dial` | In-process protocol. Fast. | No serve process, no delay, no `@` journey. |
+| `SIDECAR_SPIKE_HOST` / `TestRemoteControlSpike` | Opt-in real-ssh control-mode spike. | Skipped in CI. Names a real machine. |
+
+The loopback fake-ssh plus two isolated trees is the steel thread. A long-lived `sidecar host serve --stdio` invoked through that fake `ssh` is a simulated remote the viewer TUI can register, without sshd.
+
+#### Recommendation
+
+Do not invent a third isolation story and do not make `marcusbook` (or any hostname) a default. Extract the loopback fixture so a script and the existing Go tests share it, add an optional spawn delay, and wire `tmux-drive.sh` as the viewer.
+
+Agent verbs (names are the contract; flags can match existing drive/spike style):
+
+```bash
+./scripts/loopback-remote.sh up [--delay 40ms]
+./scripts/loopback-remote.sh paths          # print every root; refuse unless both axes are isolated
+./scripts/loopback-remote.sh status
+./scripts/loopback-remote.sh down           # only the private tmux servers and run roots this script created
+```
+
+`up` creates `/tmp/sidecar-loopback-$USER/{host,viewer}/` (same refuse-run-dir rules as `remote-spike.sh`: must be under `/tmp/sidecar-loopback*`, no `..`, teardown is `rm -rf` of that root only). It builds this worktree’s `sidecar` into the run root, writes two isolated configs, starts a private host tmux server with one sample project and a couple of shells, installs the fake `ssh` (optional `sleep` before `exec` for `--delay`), and writes a viewer config that `host add`s id `loopback` with `binary`, `config`, and `env` pointing at the host tree. `tmux-drive.sh` then starts the viewer against the viewer tree with `sidecar_remote_hosts` on.
+
+`--delay` is a spawn delay on each fake-ssh invocation (serve connect, control attach, `RunSidecar`). That is enough to prove `@`’s first frame does not wait on SSH. It is not a full bandwidth/jitter model. Do not use `tc` or netem; those are OS-specific and need extra privilege.
+
+`down` kills only the host and viewer private tmux servers by socket and deletes the run root. Never `tmux kill-server` without `-S`/`-L`. Never touch `~/.local/state/sidecar`.
+
+#### Journeys this slice must make runnable
+
+1. `up` then `paths` shows nothing under `$HOME/.local/state/sidecar` or `$HOME/.config/sidecar`.
+2. Viewer `@` lists local rows this frame, then `[loopback] <project>` once the snapshot is in memory. A `--delay 40ms` host does not delay that first local paint.
+3. Enter on `[loopback] <project>` binds without Reinit of a twin path on the viewer; Workspaces lists the host shells; Files/Git name `loopback` and do not panic.
+4. `down` leaves the developer’s default tmux server and real Sidecar tree unchanged (fingerprint before/after, same as `remote-content-proof.sh check-isolation`).
+
+Go tests that currently copy `loopbackHost` keep working; new script tests can be a thin `paths` + isolation assertion so CI does not start a TUI.
+
+#### Out of this slice
+
+sshd, ControlMaster, packet loss, a second physical machine. `remote-spike.sh` remains the real-SSH path and must lose its `marcusbook` default (require `SPIKE_HOST` or fail), so nobody copies that anti-pattern. Slice 5’s isolated proof uses this loopback recipe as the default and the two-machine recipe as opt-in.
+
 ### Slice 3 — viewer-screen lands on the bound project
 
 Relayed `sidecar open` / `layout` from a host pane whose project matches the bound remote destination apply to this project workspace when this instance holds the lease. Off-screen remains exit 4. Sessions landing remains for when the user is in Sessions, not bound to that project.
@@ -212,13 +262,13 @@ One plugin at a time, each through `Source` / `RunSidecar` / host content verbs,
 
 ### Slice 5 — docs, agent-project-cli note, isolated proof
 
-CLI/help: `@` and `W` name remote destinations, and help states the flag requirement from decision 11. Isolated two-machine proof: local `@` stays fast with a slow host; Enter on `[host] Project` does not open the local twin; Workspaces shows the host’s shells; `sidecar project current` on a local shell does not report the bound remote project as this machine’s. The two-machine recipe extends `docs/guides/active/remote-viewer-screen-proof.md` rather than adding a third.
+CLI/help: `@` and `W` name remote destinations, and help states the flag requirement from decision 11. Isolated proof uses the slice 2.5 loopback recipe as the default: local `@` stays fast with `--delay`; Enter on `[loopback] Project` does not open the local twin; Workspaces shows the host’s shells; `sidecar project current` on a local shell does not report the bound remote project as this machine’s. A real second machine remains opt-in via `scripts/remote-content-proof.sh` with an explicit `SPIKE_HOST` (no workstation default).
 
 ## Proof and isolation
 
 Same bar as remote content panes: private tmux sockets and private Sidecar state on both machines, `SIDECAR_ISOLATED_STATE=1`, no default of a live workstation. A proof that Reinit’s a path under the viewer’s `$HOME` because the host reported that string has failed even if the tests are green.
 
-Slices 0–2 are covered by package tests (`go test ./internal/app ./internal/overview ./internal/plugin ./internal/plugins/workspace ./internal/plugins/filebrowser ./internal/plugins/gitstatus ./internal/plugins/tdmonitor ./internal/plugins/tasks ./internal/state`). Isolated two-machine proof is slice 5.
+Slices 0–2 are covered by package tests (`go test ./internal/app ./internal/overview ./internal/plugin ./internal/plugins/workspace ./internal/plugins/filebrowser ./internal/plugins/gitstatus ./internal/plugins/tdmonitor ./internal/plugins/tasks ./internal/state`). Slice 2.5 is the portable loopback fixture an agent uses before slice 3–5 proofs. Slice 5’s isolated proof runs on that fixture by default.
 
 ## Related plan updates
 
@@ -228,6 +278,7 @@ Slices 0–2 are covered by package tests (`go test ./internal/app ./internal/ov
 
 ## Changelog
 
-- **2026-09-01** — Slices 0–2 implemented on `remote-viewer-screen` (td-f7855c). Plan rewritten as current state: bind, catalog, `@`/`W`, Workspaces listing and live attach, Files/Git/td/Tasks refusals. Remaining: slices 3–5.
+- **2026-09-01** — Slice 2.5 added: portable loopback remote (extract existing `loopbackHost` + fake ssh, optional spawn delay, agent up/down). Default proof path for later slices; real SSH stays opt-in with no workstation hostname default.
+- **2026-09-01** — Slices 0–2 implemented on `remote-viewer-screen` (td-f7855c). Plan rewritten as current state: bind, catalog, `@`/`W`, Workspaces listing and live attach, Files/Git/td/Tasks refusals. Remaining: slices 2.5–5.
 - **2026-09-01** — Reviewed against the tree. Corrections: the host registry is owned by `internal/overview`, so slice 1 needs an accessor and inherits the `cross_project_overview` dependency (decision 11); inventory `ProjectKey` is a path on the owning machine, so `W` pairs by project name and identity persists through `hosts.ScopedKey` (decision 10); `Destination` carries `HostIncarnation` to match `contentpanes.SourceContext`; binding must publish `HostID` on instance presence and on the workspace plugin's `AttentionOrigin`, neither of which carries one today; viewer-screen is implemented, and its landing gate is extended by one shared decider rather than copied; theme preview and cursor-on-current stop keying off a path.
 - **2026-09-01** — Created. `@`/`W` list host-qualified destinations asynchronously; entering one binds this TUI as that remote project’s screen; plugin remoting after Workspaces is sliced.
