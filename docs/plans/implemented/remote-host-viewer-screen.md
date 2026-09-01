@@ -1,8 +1,8 @@
 # The viewer owns the screen
 
-Status: **active, proposed; decisions settled** **Created:** 2026-08-31 **Scope:** host→viewer relay of `sidecar open` / `layout get|apply|move` from a Sidecar-managed pane; mixed create-modal routing on a remote Sessions row; serve announcement of host `uirequest` files; no public `sidecar open --host`.
+Status: **implemented** on `remote-viewer-screen` (td-3d2e0d, td-4971ac, td-716ba6, td-15344e, td-3fe778, td-4c955f). Isolated unit and integration proof covers the relay and mixed `n`; the two-machine recipe is `docs/guides/active/remote-viewer-screen-proof.md` and was not executed against a live host in this work.
 
-Related: [Sidecar as its own remote host runtime](sidecar-remote-hosts.md) is the controlling transport plan. [Remote host content-pane parity](../implemented/remote-host-content-pane-parity.md) is the read path this lands on, and is the plan that deferred relaying `sidecar open` from the remote host. [Remote destinations in `@` and `W`](remote-project-switcher.md) binds a remote project as `ScopeProject` so this announcement can land on the project workspace, not only Sessions. [Pane layout control](../implemented/pane-layout-control.md) owns the layout vocabulary, the never-queue rule, and (with [unified create](../implemented/unified-create-workspace-modal.md)) the `n` switcher this splits by ownership. [Agent-facing open CLI](../implemented/agent-open-in-split-cli.md) owns the `uirequest` bus.
+Related: [Sidecar as its own remote host runtime](../active/sidecar-remote-hosts.md) is the controlling transport plan. [Remote host content-pane parity](remote-host-content-pane-parity.md) is the read path this lands on, and is the plan that deferred relaying `sidecar open` from the remote host. [Remote destinations in `@` and `W`](../active/remote-project-switcher.md) binds a remote project as `ScopeProject` so this announcement can land on the project workspace, not only Sessions. [Pane layout control](pane-layout-control.md) owns the layout vocabulary, the never-queue rule, and (with [unified create](unified-create-workspace-modal.md)) the `n` switcher this splits by ownership. [Agent-facing open CLI](agent-open-in-split-cli.md) owns the `uirequest` bus.
 
 ## Decision first
 
@@ -231,11 +231,12 @@ Default tmux servers stay up. Installing this branch on a host does not authoriz
 
 ## Related plan updates
 
-- [sidecar-remote-hosts.md](sidecar-remote-hosts.md): this plan is the follow-on for agent UI commands; serve gains an observation of `uirequest` files and an additive message kind; it still does not execute layout or take a lease.
-- [remote-host-content-pane-parity.md](../implemented/remote-host-content-pane-parity.md): the deferred “relaying `sidecar open`” bullet now points here, still excluding arbitrary processes.
-- Website and CLI docs update in slice 5, not in this file.
+- [sidecar-remote-hosts.md](../active/sidecar-remote-hosts.md): this plan is the follow-on for agent UI commands; serve gains an observation of `uirequest` files and an additive message kind; it still does not execute layout or take a lease.
+- [remote-host-content-pane-parity.md](remote-host-content-pane-parity.md): the deferred “relaying `sidecar open`” bullet now points here, still excluding arbitrary processes.
+- Website and CLI docs updated in slice 5.
 
 ## Changelog
 
-- **2026-09-01** — Related: [Remote destinations in `@` and `W`](remote-project-switcher.md) is how a bound remote project becomes the announcement target instead of only Sessions.
+- **2026-09-01** — Implemented on `remote-viewer-screen`. Two-machine recipe is `docs/guides/active/remote-viewer-screen-proof.md`; not executed against a live host.
+- **2026-09-01** — Related: [Remote destinations in `@` and `W`](../active/remote-project-switcher.md) is how a bound remote project becomes the announcement target instead of only Sessions.
 - **2026-08-31** — Created. Viewer owns the screen (lease holder); host owns workspace objects; serve announces host `uirequest` files and does not apply them; relayed open never queues; mixed `n` routing; no `--host` flag; steel thread is `sidecar open` of a file onto the Sessions preview.

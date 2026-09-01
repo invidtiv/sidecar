@@ -45,6 +45,8 @@ Three verbs over one model, all acting on the surface showing this shell (or, wi
 - `sidecar layout apply` composes panes onto it: `--pane` adds without closing anything, `--spec` replaces the whole layout. All-or-nothing, with a per-pane verdict for each requested pane.
 - `sidecar layout move` repositions one pane that is already open: `sidecar layout move 2.1 --to 1.2`, `--to 3` to append to a column, or `--focused --to left|right|up|down` for the same direction rule the reposition modal's `h/j/k/l` use. Use this rather than rebuilding a whole `--spec` to move one pane. A move with nothing to do reports `unchanged` and exits 0; a refusal exits 4 with the reason.
 
+From a Sidecar-managed pane whose geometry lease is held by a connected viewer, `sidecar open` and `sidecar layout` are that viewer's screen — not a TUI that may not be running on the host. There is no `sidecar open --host`. If the matching row is not on that viewer's screen, or the lease holder cannot receive pane requests, the command declines (exit 4) rather than queueing.
+
 Full reference: `docs/reference/cli.md`.
 
 ### Shells lost to a tmux restart are recoverable, not gone

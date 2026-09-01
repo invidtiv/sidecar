@@ -1,5 +1,5 @@
 #!/bin/bash
-# remote-content-proof.sh - Isolated recipe for remote Sessions content clicks.
+# remote-content-proof.sh - Isolated recipe helper for remote Sessions proofs.
 #
 # Wraps remote-spike.sh (host) and tmux-drive.sh (viewer). Isolates BOTH tmux
 # and Sidecar state on both ends. Does not kill the default tmux server and
@@ -13,7 +13,9 @@
 #   SPIKE_HOST=proof-box ./scripts/remote-content-proof.sh setup
 #   SPIKE_HOST=proof-box ./scripts/remote-content-proof.sh teardown
 #
-# Full click sequence: docs/guides/active/remote-content-pane-proof.md
+# Journeys:
+#   docs/guides/active/remote-content-pane-proof.md     clicks
+#   docs/guides/active/remote-viewer-screen-proof.md    open / layout / n
 
 set -euo pipefail
 unset TMUX
@@ -59,6 +61,17 @@ require_host() {
 real_state_root() { printf '%s' "${HOME}/.local/state/sidecar"; }
 real_config_root() { printf '%s' "${HOME}/.config/sidecar"; }
 
+# Path set a leaked proof would add to. Nested mtimes from a live Sidecar are
+# ignored; a new requests/ or viewers/ file under the real tree is the leak.
+real_tree_fingerprint() {
+    local root="$1"
+    if [ ! -d "$root" ]; then
+        echo "ABSENT"
+        return
+    fi
+    find "$root" \( -path '*/requests/*' -o -path '*/viewers/*' -o -name shells.json \) -print 2>/dev/null | LC_ALL=C sort | cksum
+}
+
 path_is_under() {
     local path="$1" root="$2"
     case "$path/" in
@@ -92,7 +105,9 @@ cmd_check_isolation() {
 
     if [ ! -f "$SNAPSHOT_DIR/tmux.ls" ]; then
         printf '%s\n' "$sessions" > "$SNAPSHOT_DIR/tmux.ls"
+        real_tree_fingerprint "$state_root" > "$SNAPSHOT_DIR/state.hash"
         echo "recorded default tmux session list in $SNAPSHOT_DIR/tmux.ls"
+        echo "recorded real state-tree fingerprint in $SNAPSHOT_DIR/state.hash"
     else
         echo "default tmux sessions at start:"
         cat "$SNAPSHOT_DIR/tmux.ls" | sed 's/^/  /'
@@ -107,6 +122,20 @@ cmd_check_isolation() {
             fi
         done < "$SNAPSHOT_DIR/tmux.ls"
         echo "  all snapshotted default sessions still present"
+        now_hash="$(real_tree_fingerprint "$state_root")"
+        if [ ! -f "$SNAPSHOT_DIR/state.hash" ]; then
+            printf '%s\n' "$now_hash" > "$SNAPSHOT_DIR/state.hash"
+            echo "recorded real state-tree fingerprint in $SNAPSHOT_DIR/state.hash"
+        else
+            old_hash="$(cat "$SNAPSHOT_DIR/state.hash")"
+            if [ "$now_hash" != "$old_hash" ]; then
+                echo "NOTE: real state-tree fingerprint changed (a live Sidecar may write shells.json here; run dirs must still be outside it)"
+                echo "  was: $old_hash"
+                echo "  now: $now_hash"
+            else
+                echo "  real state-tree fingerprint unchanged"
+            fi
+        fi
     fi
 
     echo "viewer run dir      $VIEW_RUN_DIR"
@@ -183,8 +212,9 @@ cmd_setup() {
     plant_host_markers
     echo
     echo "next: SPIKE_HOST=$SPIKE_HOST SPIKE_RUN_DIR=$SPIKE_RUN_DIR ./scripts/remote-spike.sh probe"
-    echo "then register the host in the viewer's isolated config and drive clicks;"
+    echo "then register the host in the viewer's isolated config and drive clicks or open/layout;"
     echo "see docs/guides/active/remote-content-pane-proof.md"
+    echo "    docs/guides/active/remote-viewer-screen-proof.md"
 }
 
 cmd_teardown() {
@@ -213,7 +243,7 @@ cmd_teardown() {
 }
 
 usage() {
-    sed -n '2,18p' "$0"
+    sed -n '2,20p' "$0"
     exit 2
 }
 

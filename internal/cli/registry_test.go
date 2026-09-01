@@ -110,3 +110,34 @@ func TestCLIDocDrift(t *testing.T) {
 		t.Errorf("docs/reference/cli.md does not match generated doc from registry!\nExpected:\n%s\nGot:\n%s", generated, string(content))
 	}
 }
+
+func TestLeaseHolderLandingIsDocumented(t *testing.T) {
+	agents := RenderAgents(RootCommand())
+	for _, want := range []string{
+		"geometry lease is held by a connected viewer",
+		"sidecar open and layout land on that viewer's screen",
+		"there is no sidecar open --host",
+	} {
+		if !strings.Contains(agents, want) {
+			t.Errorf("sidecar agents missing %q:\n%s", want, agents)
+		}
+	}
+
+	open := RootCommand().FindSubcommand("open")
+	if open == nil {
+		t.Fatal("no open command")
+	}
+	for _, want := range []string{"lease", "There is no --host flag", "never queues"} {
+		if !strings.Contains(open.Long, want) {
+			t.Errorf("open Long missing %q:\n%s", want, open.Long)
+		}
+	}
+
+	layout := RootCommand().FindSubcommand("layout")
+	if layout == nil {
+		t.Fatal("no layout command")
+	}
+	if !strings.Contains(layout.Long, "There is no --host flag") {
+		t.Errorf("layout Long missing lease-holder landing:\n%s", layout.Long)
+	}
+}

@@ -2,7 +2,7 @@
 
 Status: **active, proposed; decisions settled** **Created:** 2026-09-01 **Scope:** host-qualified rows in the project and worktree switchers; entering a remote project as `ScopeProject` with the laptop as its screen; async catalog so local listings do not wait on SSH. Plugin remoting beyond Workspaces and the existing content-pane source is phased.
 
-Related: [Sidecar as its own remote host runtime](sidecar-remote-hosts.md) is the transport and inventory stream. [The viewer owns the screen](remote-host-viewer-screen.md) is the lease and `uirequest` announcement this binds a project workspace to. [Remote host content-pane parity](../implemented/remote-host-content-pane-parity.md) is the read path a remote-bound plugin must use; it already kept the source seam presentation-neutral “so a future remote project Workspace can reuse them.” [Agent-facing project CLI](agent-project-cli.md) is the local `sidecar project` surface; it does not grow `--host` in this plan.
+Related: [Sidecar as its own remote host runtime](sidecar-remote-hosts.md) is the transport and inventory stream. [The viewer owns the screen](../implemented/remote-host-viewer-screen.md) is the lease and `uirequest` announcement this binds a project workspace to. [Remote host content-pane parity](../implemented/remote-host-content-pane-parity.md) is the read path a remote-bound plugin must use; it already kept the source seam presentation-neutral “so a future remote project Workspace can reuse them.” [Agent-facing project CLI](agent-project-cli.md) is the local `sidecar project` surface; it does not grow `--host` in this plan.
 
 ## Decision first
 
@@ -198,7 +198,7 @@ Same bar as remote content panes: private tmux sockets and private Sidecar state
 ## Related plan updates
 
 - [sidecar-remote-hosts.md](sidecar-remote-hosts.md): complete remote Files/Git browsing is no longer “outside all three”; it is this plan’s later slices, entered through `@`.
-- [remote-host-viewer-screen.md](remote-host-viewer-screen.md): once a remote project is bound, the announcement target is this project workspace, not only Sessions.
+- [remote-host-viewer-screen.md](../implemented/remote-host-viewer-screen.md): once a remote project is bound, the announcement target is this project workspace, not only Sessions.
 - [remote-host-content-pane-parity.md](../implemented/remote-host-content-pane-parity.md): the “future remote project Workspace” the source seam was saved for is this plan.
 
 ## Changelog

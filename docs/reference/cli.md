@@ -1379,6 +1379,11 @@ open (`layout move`). All three act on the surface showing this Sidecar
 shell — or, with --sessions, the global Sessions surface — and never queue:
 a request whose destination is off screen declines with the reason.
 
+From a Sidecar-managed pane whose geometry lease is held by a connected
+viewer, these verbs read and mutate that viewer's screen, not a host TUI.
+There is no --host flag. If the lease holder cannot receive pane requests,
+the command declines (exit 4).
+
 ```
 Usage: sidecar layout <command>
 ```
@@ -1428,7 +1433,8 @@ happens, or nothing changes and the decline names the first violation.
 The ack's items array lists EVERY requested pane with verdict opened,
 retargeted, carried (a live leaf the spec kept rather than created), or
 declined, plus its landed cell — so one round trip shows everything wrong
-with a refused spec. Like get, apply never queues.
+with a refused spec. Like get, apply never queues: off-screen, or a lease
+holder that cannot receive pane requests, is exit 4.
 
 ```
 Usage: sidecar layout apply (--spec '<json>' | --pane '<json>' [--pane '<json>' ...]) [--sessions [ROW]]
@@ -1451,7 +1457,7 @@ Usage: sidecar layout apply (--spec '<json>' | --pane '<json>' [--pane '<json>' 
 - `1`: state failure
 - `2`: usage or validation error
 - `3`: no running instance
-- `4`: declined host-side; the reason names the first violation
+- `4`: declined host-side; the reason names the first violation (off-screen, unfit, or the lease holder cannot receive pane requests)
 - `5`: an unknown --project or --shell
 
 **Examples:**
@@ -1489,6 +1495,9 @@ Unlike open, a layout request never queues: when this shell is not on
 screen the request declines instead (exit 4), because a stale answer is
 worse than a refusal.
 
+From a Sidecar-managed pane on a host you are viewing, the JSON is that
+viewer's grid for the matching Sessions row.
+
 ```
 Usage: sidecar layout get [--json] [--sessions [ROW]]
 ```
@@ -1508,7 +1517,7 @@ Usage: sidecar layout get [--json] [--sessions [ROW]]
 - `1`: state failure
 - `2`: usage error
 - `3`: no running instance
-- `4`: declined: the origin shell is not on screen
+- `4`: declined: the origin shell is not on screen, or the lease holder cannot receive pane requests
 - `5`: an unknown --project or --shell
 
 **Examples:**
@@ -1556,7 +1565,8 @@ never as moved and never as a refusal.
 With --sessions this changes the pane tree of the Sessions viewer on THIS
 machine, including for a row whose workspace lives on another one: no
 layout mutation is sent to the remote host. The acknowledgement names the
-surface it changed. Like get and apply, move never queues.
+surface it changed. Like get and apply, move never queues: off-screen,
+or a lease holder that cannot receive pane requests, is exit 4.
 
 ```
 Usage: sidecar layout move (CELL | --focused) --to (CELL | COLUMN | left|right|up|down) [--sessions [ROW]]
@@ -1579,7 +1589,7 @@ Usage: sidecar layout move (CELL | --focused) --to (CELL | COLUMN | left|right|u
 - `1`: state failure
 - `2`: usage error
 - `3`: no running instance
-- `4`: declined host-side; the reason names the refusal
+- `4`: declined host-side; the reason names the refusal (off-screen, unfit, or the lease holder cannot receive pane requests)
 - `5`: an unknown --project or --shell
 
 **Examples:**
@@ -1903,6 +1913,12 @@ provider instance and is required for a resource: a bare locator is never guesse
 would retarget an existing pane, or any cell that cannot be honored exactly, declines
 rather than land elsewhere (--split expresses a preference; --at, a demand).
 
+From a Sidecar-managed pane whose geometry lease is held by a connected viewer,
+the open lands on that viewer's screen — not on a host TUI that may not be running.
+There is no --host flag: routing is the lease. A relayed open never queues: if that
+row is not on the viewer's screen, or the lease holder cannot receive pane requests
+(disconnected, too old, or presence expired), the command declines (exit 4).
+
 ```
 Usage: sidecar open [options] [<target>]
 ```
@@ -1936,7 +1952,7 @@ Usage: sidecar open [options] [<target>]
 - `1`: state failure
 - `2`: usage or validation error
 - `3`: no running instance, or several running with no target
-- `4`: an instance declined (e.g. the window is too small to split)
+- `4`: an instance declined (too small to split, row not on screen, or the lease holder cannot receive pane requests)
 - `5`: an unknown --project or --shell
 
 **Examples:**

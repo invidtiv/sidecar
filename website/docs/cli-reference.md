@@ -73,9 +73,9 @@ Manage provider lifecycle integration hooks.
 
 ## `sidecar content`
 
-Internal read-only transport a viewing Sidecar invokes on a registered host to resolve and load files, issues, notes, diffs, and resource documents. This is not a public file browser and not `sidecar open --host`. Agents that want content on that machine use ordinary tools over SSH.
+Internal read-only transport a viewing Sidecar invokes on a registered host to resolve and load files, issues, notes, diffs, and resource documents. This is not a public file browser and not `sidecar open --host`. Agents in a Sidecar-managed pane on that host run `sidecar open` / `layout` onto the lease holder's screen; other processes use ordinary tools over SSH.
 
-The host must advertise `ContentReadV1`. See [Remote Hosts](./remote-hosts#clicks-in-a-remote-terminal) for the user-visible clicks this powers.
+The host must advertise `ContentReadV1`. See [Remote Hosts](./remote-hosts#clicks-in-a-remote-terminal) for the user-visible clicks this powers, and [Agent open and layout from a host pane](./remote-hosts#agent-open-and-layout-from-a-host-pane) for the lease-holder rule.
 
 ```bash
 Usage: sidecar content <describe|resolve|read> --json
@@ -175,7 +175,7 @@ Unregister a remote host.
 
 ## `sidecar layout`
 
-Inspect and manipulate the multi-pane grid layout.
+Inspect and manipulate the multi-pane grid layout. From a Sidecar-managed pane whose geometry lease is held by a connected viewer, these verbs read and mutate that viewer's screen. There is no `--host` flag. Off-screen, or a lease holder that cannot receive pane requests, is exit 4.
 
 ```bash
 Usage: sidecar layout <get|apply|move> [options]
@@ -237,7 +237,7 @@ Trigger a test notification.
 
 ## `sidecar open`
 
-Open files, tasks, diffs, notes, or resources in adjacent panes. There is no `--host` flag; remote Sessions clicks use the internal `sidecar content` transport instead.
+Open files, tasks, diffs, notes, or resources in adjacent panes. From a Sidecar-managed pane whose geometry lease is held by a connected viewer, the open lands on that viewer's screen. There is no `--host` flag; routing is the lease. A relayed open never queues. Remote Sessions clicks use the internal `sidecar content` transport.
 
 ```bash
 Usage: sidecar open TARGET [options]

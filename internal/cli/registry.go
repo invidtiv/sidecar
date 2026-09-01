@@ -458,7 +458,12 @@ func RootCommand() *Command {
 			"--split only overrides the split axis; it never halves a live terminal after content is open.\n" +
 			"--at places the pane at an explicit grid cell and is a requirement: a kind whose open\n" +
 			"would retarget an existing pane, or any cell that cannot be honored exactly, declines\n" +
-			"rather than land elsewhere (--split expresses a preference; --at, a demand).",
+			"rather than land elsewhere (--split expresses a preference; --at, a demand).\n\n" +
+			"From a Sidecar-managed pane whose geometry lease is held by a connected viewer,\n" +
+			"the open lands on that viewer's screen — not on a host TUI that may not be running.\n" +
+			"There is no --host flag: routing is the lease. A relayed open never queues: if that\n" +
+			"row is not on the viewer's screen, or the lease holder cannot receive pane requests\n" +
+			"(disconnected, too old, or presence expired), the command declines (exit 4).",
 		Targets: []TargetDoc{
 			{Target: "path", Summary: "A file inside the target workspace, optionally \"path:line\""},
 			{Target: "td-xxxxxx", Summary: "A td issue id"},
@@ -486,7 +491,7 @@ func RootCommand() *Command {
 			{Code: 1, Summary: "state failure"},
 			{Code: 2, Summary: "usage or validation error"},
 			{Code: 3, Summary: "no running instance, or several running with no target"},
-			{Code: 4, Summary: "an instance declined (e.g. the window is too small to split)"},
+			{Code: 4, Summary: "an instance declined (too small to split, row not on screen, or the lease holder cannot receive pane requests)"},
 			{Code: 5, Summary: "an unknown --project or --shell"},
 		},
 		Examples: []Example{
@@ -505,7 +510,7 @@ func RootCommand() *Command {
 		},
 		Agent: AgentDoc{
 			Invocation: "sidecar open <path>[:line] | td-xxxxxx | sidecar://note/nt-xxxx | --diff [spec] | --provider ID <locator> [--split right|below] [--at COL[.ROW]]",
-			Summary:    "Put a file, a td issue, a td note, a git diff, or a provider resource in front of the user",
+			Summary:    "Put a file, issue, note, diff, or resource in front of the user on the lease holder's screen",
 		},
 		Mutates: true,
 		Run:     runOpen,
