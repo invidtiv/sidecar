@@ -1,6 +1,6 @@
 # Remote host content-pane parity
 
-Status: **active**. File steel thread (slices 0–3) is implemented and independently reviewed on `pane-parity` (td-89c1cb). Paused for assessment before issues/notes, diffs, providers, and session links (slices 4–7).
+Status: **active**. Slices 0–5 (files, issues, notes, diffs) are implemented and independently reviewed on `pane-parity` (td-89c1cb, td-87358d). Remaining: remote resource providers and session links, refusals, docs, and two-machine proof (slices 6–7).
 
 Related: [Sidecar as its own remote host runtime](sidecar-remote-hosts.md) is the controlling transport plan; [Cross-project td issue links](cross-project-issue-links.md) defines local-first issue ownership and fallback semantics; [Terminal resource providers](../implemented/terminal-resource-providers.md) defines provider matching, safe documents, and lifecycle bounds.
 
@@ -248,7 +248,7 @@ Refusals are specific and actionable:
 
 This is the first integrated proof: remote terminal text -> click -> host containment/bytes -> local shared Document pane -> remote edit on the host -> conditional change detection -> same pane refresh. No other content kind is required to land before this journey works end to end.
 
-### Slice 4 — td issues and notes
+### Slice 4 — td issues and notes — **done** (td-a4dd72)
 
 - Add issue/note methods and DTOs to the content service and source interface only in this slice.
 - Run issue/note loaders and td-store revision resolution on the host with the existing read-only td environment.
@@ -257,7 +257,7 @@ This is the first integrated proof: remote terminal text -> click -> host contai
 - Before admitting a remote Issue pane, hide or explicitly refuse `Open in td` and audit every Issue/Note action so none switches to or invokes a viewer-local tool against remote identity.
 - Prove conditional live refresh for visible issue/note panes without checking hidden tabs.
 
-### Slice 5 — git diffs
+### Slice 5 — git diffs — **done** (td-b11294, td-ea957f)
 
 - Add diff methods and bounded operation DTOs to the content service/source, then move git process execution behind that seam while keeping `workspacediff.View` as the only renderer/state machine.
 - Resolve specs and load working tree, commit, range, selected commit-file, full-file page, and cursor-driven detail operations on the host.
