@@ -91,6 +91,16 @@ func resolveCreateDestination(ctx context.Context, stateDir, shellFlag, projectF
 		// LookupOrigin miss for a sidecar-sh-/sidecar-ws- session: continue.
 	}
 
+	// The shell Sidecar exported into our environment is the same answer tmux
+	// would have given, minus the tmux subprocess and minus the dependence on
+	// TMUX_PANE surviving whatever harness spawned us. A managed shell is the
+	// documented omitted-target context for the agent verbs; resolving the
+	// caller's project from it here is what lets those verbs honour that
+	// without a --shell flag repeating what SIDECAR_SHELL already says.
+	if origin, ok := callerShellOrigin(stateDir); ok {
+		return destFromOrigin(origin, uirequest.ResolvedCurrentShell, origin.WorkDir), nil
+	}
+
 	instances, err := uirequest.ListInstances(stateDir)
 	if err != nil {
 		return openDestination{}, &destError{code: 1, msg: err.Error()}
@@ -138,11 +148,20 @@ func resolveRegisteredCwdProject(stateDir string) (openDestination, error) {
 	return destFromProject(proj, workDir, uirequest.ResolvedProject), nil
 }
 
+// uniqueProjectContaining is the registered project whose root holds path,
+// choosing the deepest root. Two projects claiming the same deepest root is
+// ambiguous unless exactly one of them claims it more strongly, in the order
+// managedTargetCandidates uses for the same question: the project that
+// created it as a worktree, then the project whose own checkout it is, then a
+// project that only has a shell working there. A project with no checkout
+// path claims nothing over one that has, which is how a stale state
+// directory listing the main checkout as its worktree stopped making the main
+// project's own directory unresolvable.
 func uniqueProjectContaining(projects []registeredProject, path string) (registeredProject, string, bool) {
 	var best registeredProject
 	bestRoot := ""
 	bestLen := -1
-	nBest := 0
+	var ties []registeredProject
 	for _, p := range projects {
 		root := containingRoot(path, p.roots())
 		if root == "" {
@@ -153,17 +172,54 @@ func uniqueProjectContaining(projects []registeredProject, path string) (registe
 			best = p
 			bestRoot = root
 			bestLen = n
-			nBest = 1
+			ties = ties[:0]
 			continue
 		}
 		if n == bestLen {
-			nBest++
+			ties = append(ties, p)
 		}
 	}
-	if nBest != 1 {
+	if bestLen < 0 {
 		return registeredProject{}, "", false
 	}
-	return best, bestRoot, true
+	if len(ties) == 0 {
+		return best, bestRoot, true
+	}
+	var owners []registeredProject
+	bestRank := -1
+	for _, p := range append([]registeredProject{best}, ties...) {
+		rank := p.claimRank(bestRoot)
+		switch {
+		case bestRank < 0 || rank < bestRank:
+			owners = []registeredProject{p}
+			bestRank = rank
+		case rank == bestRank:
+			owners = append(owners, p)
+		}
+	}
+	if len(owners) == 1 {
+		return owners[0], bestRoot, true
+	}
+	return registeredProject{}, "", false
+}
+
+// claimRank orders how strongly a project claims a root; lower is stronger.
+// It is the one statement of the order both cwd resolution and the managed
+// target scan rank owners in.
+func (p registeredProject) claimRank(root string) int {
+	if p.Path == "" {
+		return 3
+	}
+	want := canonicalOpenPath(root)
+	for _, wt := range p.Worktrees {
+		if canonicalOpenPath(wt) == want {
+			return 0
+		}
+	}
+	if canonicalOpenPath(p.Path) == want {
+		return 1
+	}
+	return 2
 }
 
 func registeredProjectForCreate(stateDir string, dest openDestination) (registeredProject, error) {
@@ -205,6 +261,13 @@ func resolveOpenDestination(ctx context.Context, stateDir, shellFlag, projectFla
 		if err != nil {
 			return openDestination{}, &destError{code: 3, msg: err.Error()}
 		}
+		return destFromOrigin(origin, uirequest.ResolvedCurrentShell, origin.WorkDir), nil
+	}
+
+	// The same rung resolveCreateDestination has, so `open` and `create` agree
+	// about who the caller is from a process that kept SIDECAR_SHELL but not
+	// the TMUX variables.
+	if origin, ok := callerShellOrigin(stateDir); ok {
 		return destFromOrigin(origin, uirequest.ResolvedCurrentShell, origin.WorkDir), nil
 	}
 
@@ -577,6 +640,15 @@ func matchProject(stateDir string, projects []registeredProject, name string, re
 		if proj, ok := configuredProjectFallback(stateDir, name, register); ok {
 			return proj, nil
 		}
+		// A worktree Sidecar created is addressable by what `create worktree`
+		// hands back — its path or its basename — and resolves to the project
+		// that owns it. The worktree is not a project; it is the selector a
+		// caller holding the create result actually has.
+		if proj, err := projectOwningWorktree(projects, name, wantPath); err != nil {
+			return registeredProject{}, err
+		} else if proj.Key != "" {
+			return proj, nil
+		}
 		// 5, not 2. "unknown project" is a verdict on a value the caller
 		// supplied, and a caller on another machine reads 2 as version skew and
 		// tells its user to update Sidecar. That reading is especially wrong
@@ -584,6 +656,37 @@ func matchProject(stateDir string, projects []registeredProject, name string, re
 		// checking the path still exists, so the commonest way to reach this
 		// line is a stale entry in the host's own config.
 		return registeredProject{}, &destError{code: exitInputRejected, msg: fmt.Sprintf("unknown project %q", name)}
+	}
+}
+
+// projectOwningWorktree is the registered project holding a created worktree
+// named by path or basename, or the zero project when none does. Two projects
+// each holding a worktree with that basename is a refusal that lists them, as
+// the basename tier above does for projects.
+func projectOwningWorktree(projects []registeredProject, name, wantPath string) (registeredProject, error) {
+	var hits []registeredProject
+	for _, p := range projects {
+		for _, wt := range p.Worktrees {
+			if canonicalOpenPath(wt) == wantPath || filepath.Base(wt) == name || filepath.Base(canonicalOpenPath(wt)) == name {
+				hits = append(hits, p)
+				break
+			}
+		}
+	}
+	switch len(hits) {
+	case 0:
+		return registeredProject{}, nil
+	case 1:
+		return hits[0], nil
+	default:
+		keys := make([]string, 0, len(hits))
+		for _, p := range hits {
+			keys = append(keys, p.Key)
+		}
+		return registeredProject{}, &destError{
+			code: 3,
+			msg:  fmt.Sprintf("worktree %q belongs to more than one Sidecar project (%s); pass --project with a slug", name, strings.Join(keys, ", ")),
+		}
 	}
 }
 

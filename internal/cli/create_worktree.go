@@ -18,6 +18,7 @@ func runCreateWorktree(env Env, args []string) int {
 	cmd := RootCommand().FindSubcommand("create").FindSubcommand("worktree")
 	help := RenderHelp(cmd)
 
+	usage := newUsageReporter(env, wantsJSON(args), help)
 	flags := createCommonFlags{wait: createWaitDefault}
 	base := ""
 	agent := ""
@@ -27,6 +28,10 @@ func runCreateWorktree(env Env, args []string) int {
 	noLaunch := false
 	planOnly := false
 	var positional []string
+	// extra are provider arguments written after `--`, in the vocabulary
+	// `agent start TARGET --kind KIND -- ARGS` already has: they follow the
+	// family's launch command, and the family is still recorded.
+	var extra []string
 
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -34,7 +39,7 @@ func runCreateWorktree(env Env, args []string) int {
 			_, _ = fmt.Fprint(env.Stdout, help)
 			return 0
 		}
-		next, handled, code := applyCreateCommonFlag(arg, args, i, help, env.Stderr, &flags)
+		next, handled, code := applyCreateCommonFlag(arg, args, i, usage, &flags)
 		if handled {
 			if code != 0 {
 				return code
@@ -44,40 +49,51 @@ func runCreateWorktree(env Env, args []string) int {
 		}
 		switch {
 		case arg == "--":
-			// Everything after `--` is a value, not a flag: a worktree may
+			// Everything after `--` is a value, not a flag. With the name
+			// already given, every value is a provider argument
+			// (`create worktree NAME --agent claude -- --model X`). With no
+			// name yet, a lone value after `--` is the name — a worktree may
 			// legitimately be named "-fix", and refusing it here made the
 			// local and remote paths disagree about what a legal name is.
-			positional = append(positional, args[i+1:]...)
+			// A lone value that looks like a flag, or several values, is a
+			// caller who copied `create shell --agent X -- --model Y` and
+			// left the name off; guessing "model" as the name would create
+			// a branch nobody asked for, so it is refused instead.
+			rest := args[i+1:]
+			if len(positional) == 0 && len(rest) > 0 {
+				if len(rest) > 1 || strings.HasPrefix(rest[0], "--") {
+					return usage("the worktree name must come before --; every value after it is a provider argument (sidecar create worktree NAME --agent KIND -- ARGS...)")
+				}
+				positional = append(positional, rest[0])
+				rest = nil
+			}
+			extra = append(extra, rest...)
 			i = len(args)
 		case arg == "--base" || strings.HasPrefix(arg, "--base="):
 			val, next, ok := takeFlagArg(arg, args, i, "--base")
 			if !ok || val == "" {
-				cliErrf(env.Stderr, "--base requires a ref\n\n%s", help)
-				return 2
+				return usage("--base requires a ref")
 			}
 			base = val
 			i = next
 		case arg == "--agent" || strings.HasPrefix(arg, "--agent="):
 			val, next, ok := takeFlagArg(arg, args, i, "--agent")
 			if !ok || val == "" {
-				cliErrf(env.Stderr, "--agent requires an agent type\n\n%s", help)
-				return 2
+				return usage("--agent requires an agent type")
 			}
 			agent = val
 			i = next
 		case arg == "--expect-source-oid" || strings.HasPrefix(arg, "--expect-source-oid="):
 			val, next, ok := takeFlagArg(arg, args, i, "--expect-source-oid")
 			if !ok || val == "" {
-				cliErrf(env.Stderr, "--expect-source-oid requires a commit OID\n\n%s", help)
-				return 2
+				return usage("--expect-source-oid requires a commit OID")
 			}
 			expectOID = val
 			i = next
 		case arg == "--run" || strings.HasPrefix(arg, "--run="):
 			val, next, ok := takeFlagArg(arg, args, i, "--run")
 			if !ok || val == "" {
-				cliErrf(env.Stderr, "--run requires a command\n\n%s", help)
-				return 2
+				return usage("--run requires a command")
 			}
 			runCmd = val
 			i = next
@@ -89,27 +105,33 @@ func runCreateWorktree(env Env, args []string) int {
 			planOnly = true
 		default:
 			if strings.HasPrefix(arg, "-") {
-				cliErrf(env.Stderr, "unknown option %q\n\n%s", arg, help)
-				return 2
+				return usage("unknown option %q", arg)
 			}
 			positional = append(positional, arg)
 		}
 	}
 
 	if flags.splitSet {
-		return refuseCreateSplit(env)
+		return usage("%s", createSplitWorktreeUnsupported)
 	}
 	if len(positional) != 1 {
-		cliErrf(env.Stderr, "create worktree requires exactly one name\n\n%s", help)
-		return 2
+		return usage("create worktree requires exactly one name")
 	}
-	if noLaunch && (agent != "" || runCmd != "") {
-		cliErrf(env.Stderr, "--no-launch cannot be combined with --agent or --run\n\n%s", help)
-		return 2
+	if noLaunch && (agent != "" || runCmd != "" || len(extra) > 0) {
+		return usage("--no-launch cannot be combined with --agent, --run, or provider arguments")
 	}
-	if agent != "" && runCmd != "" {
-		cliErrf(env.Stderr, "--agent and --run are separate launch modes and cannot be combined\n\n%s", help)
-		return 2
+	// --agent with --run is the layering `create shell` already has: --agent
+	// is the durable record of which family the worktree is for, and --run is
+	// a caller saying it owns the launch. Recording one and running the other
+	// is what a viewer creating on a remote host does; refusing the pair
+	// left `--run "claude --model X"` with no family on record (td-a658ed).
+	// Provider arguments, though, extend --agent's own launch, which --run
+	// replaces: nothing here can append to an opaque command line.
+	if len(extra) > 0 && agent == "" {
+		return usage("provider arguments after -- require --agent")
+	}
+	if len(extra) > 0 && runCmd != "" {
+		return usage("provider arguments after -- extend --agent's launch; put them in the --run command instead")
 	}
 	if agent != "" {
 		if _, ok := agentcatalog.Find(agent); !ok {
@@ -120,9 +142,8 @@ func runCreateWorktree(env Env, args []string) int {
 	// only describe one are refused rather than silently ignored. --agent and
 	// --skip-permissions are kept: they are plan fields the confirming caller
 	// needs to see back.
-	if planOnly && (noLaunch || runCmd != "") {
-		cliErrf(env.Stderr, "--plan cannot be combined with --run or --no-launch\n\n%s", help)
-		return 2
+	if planOnly && (noLaunch || runCmd != "" || len(extra) > 0) {
+		return usage("--plan cannot be combined with --run, --no-launch, or provider arguments")
 	}
 
 	ctx := env.Ctx
@@ -191,7 +212,10 @@ func runCreateWorktree(env Env, args []string) int {
 	if planOnly {
 		return emitWorktreePlan(env, flags.jsonOutput, plan)
 	}
-	if agent != "" {
+	// Only a launch this run performs needs agent control; a --run of the
+	// caller's own is theirs to make, and the family is recorded either way.
+	startProvider := agent != "" && runCmd == ""
+	if startProvider {
 		if code := requireAgentControl(env, flags.jsonOutput); code >= 0 {
 			return code
 		}
@@ -237,8 +261,8 @@ func runCreateWorktree(env Env, args []string) int {
 			Env:          workspaceops.BuildEnvOverrides(plan.MainWorktree),
 			StartAgent:   startAgent,
 		})
-		if launchErr == nil && agent != "" {
-			_, launchErr = startCreatedAgent(ctx, proj, session, record.Name, record.Path, agent, skipPerms)
+		if launchErr == nil && startProvider {
+			_, launchErr = startCreatedAgent(ctx, proj, session, record.Name, record.Path, agent, skipPerms, extra)
 		}
 	}
 
@@ -271,6 +295,7 @@ func runCreateWorktree(env Env, args []string) int {
 			Session:     session,
 			WorkDir:     record.Path,
 		},
+		Project:   proj.Key,
 		Path:      record.Path,
 		Branch:    record.Branch,
 		Setup:     encodeSetupOutcomes(outcomes),
@@ -359,7 +384,12 @@ type createSetupOutcome struct {
 }
 
 type createWorktreeResult struct {
-	Shell     createShellInfo      `json:"shell"`
+	Shell createShellInfo `json:"shell"`
+	// Project is the registered project slug the worktree was created under.
+	// It is the selector the agent verbs' --project accepts, put in the result
+	// because none of path, branch, or displayName was one before --project
+	// learned to resolve a worktree to its project (td-c906c1).
+	Project   string               `json:"project,omitempty"`
 	Path      string               `json:"path"`
 	Branch    string               `json:"branch"`
 	Setup     []createSetupOutcome `json:"setup"`

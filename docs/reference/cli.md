@@ -99,6 +99,8 @@ Get one managed agent
 
 TARGET is a managed tmux session name or unique display name. Inside a managed shell it may be omitted.
 
+An explicit TARGET is searched across every registered project. When that finds the same name in several projects, the caller's own project — the one SIDECAR_SHELL belongs to — breaks the tie; outside a managed shell the refusal lists the projects, and --project NAME (a slug, path, or a worktree Sidecar created, by path or basename) or --shell NAME picks one. This rule is shared by get, start, prompt, wait, read, and send-keys.
+
 sessionRef reports whether the shell is bound to an exact provider conversation. Its value is shown for your own shell, or with --include-session-ref; otherwise only the kind and whether an official integration reported it are returned, so ordinary output does not carry conversation identifiers into logs.
 
 ```
@@ -107,7 +109,7 @@ Usage: sidecar agent get [TARGET] [--project NAME] [--include-session-ref] [--js
 
 **Options:**
 
-- `--project NAME`: Target project (slug, basename, or path)
+- `--project NAME`: Target project (slug, basename, or path; or a worktree it created, by path or basename)
 - `--shell NAME`: Resolve the project from a registered shell
 - `--host ID`: Run the verb on a registered remote host (requires an explicit TARGET)
 - `--json`: Write stable structured JSON
@@ -372,7 +374,7 @@ Usage: sidecar agent list [--project NAME] [--include-session-ref] [--json]
 
 **Options:**
 
-- `--project NAME`: Target project (slug, basename, or path)
+- `--project NAME`: Target project (slug, basename, or path; or a worktree it created, by path or basename)
 - `--shell NAME`: Resolve the project from a registered shell
 - `--host ID`: Run the verb on a registered remote host (requires an explicit TARGET)
 - `--json`: Write stable structured JSON
@@ -418,7 +420,7 @@ Usage: sidecar agent prompt [TARGET] TEXT [--wait] [--until STATUS]... [--timeou
 
 **Options:**
 
-- `--project NAME`: Target project (slug, basename, or path)
+- `--project NAME`: Target project (slug, basename, or path; or a worktree it created, by path or basename)
 - `--shell NAME`: Resolve the project from a registered shell
 - `--host ID`: Run the verb on a registered remote host (requires an explicit TARGET)
 - `--json`: Write stable structured JSON
@@ -464,7 +466,7 @@ Usage: sidecar agent read [TARGET] [--source SOURCE] [--lines N] [--ansi] [--jso
 
 **Options:**
 
-- `--project NAME`: Target project (slug, basename, or path)
+- `--project NAME`: Target project (slug, basename, or path; or a worktree it created, by path or basename)
 - `--shell NAME`: Resolve the project from a registered shell
 - `--host ID`: Run the verb on a registered remote host (requires an explicit TARGET)
 - `--json`: Write stable structured JSON
@@ -639,7 +641,7 @@ Usage: sidecar agent send-keys [TARGET] KEY [KEY ...] [--json]
 
 **Options:**
 
-- `--project NAME`: Target project (slug, basename, or path)
+- `--project NAME`: Target project (slug, basename, or path; or a worktree it created, by path or basename)
 - `--shell NAME`: Resolve the project from a registered shell
 - `--host ID`: Run the verb on a registered remote host (requires an explicit TARGET)
 - `--json`: Write stable structured JSON
@@ -673,7 +675,7 @@ Usage: sidecar agent start [TARGET] --kind KIND [--timeout DURATION] [-- AGENT_A
 
 **Options:**
 
-- `--project NAME`: Target project (slug, basename, or path)
+- `--project NAME`: Target project (slug, basename, or path; or a worktree it created, by path or basename)
 - `--shell NAME`: Resolve the project from a registered shell
 - `--host ID`: Run the verb on a registered remote host (requires an explicit TARGET)
 - `--json`: Write stable structured JSON
@@ -709,7 +711,7 @@ Usage: sidecar agent wait [TARGET] [--until STATUS]... --timeout DURATION [--jso
 
 **Options:**
 
-- `--project NAME`: Target project (slug, basename, or path)
+- `--project NAME`: Target project (slug, basename, or path; or a worktree it created, by path or basename)
 - `--shell NAME`: Resolve the project from a registered shell
 - `--host ID`: Run the verb on a registered remote host (requires an explicit TARGET)
 - `--json`: Write stable structured JSON
@@ -968,6 +970,19 @@ when it is ready; otherwise it records the family and starts nothing, and --run
 workspace row carries the field, --agent places the shell there: it is refused
 with --split and overrides the beside-the-session default.
 
+Provider arguments go after `--`, as `agent start` takes them: `--agent claude
+-- --model fable` starts the family's command with those arguments appended and
+still records the family. They need --agent and they need agent_control, since
+they describe a launch this command performs. They belong to --agent's launch,
+so with --run or --type they are refused: put them in your own command instead.
+A configured launch override (.sidecar-agent-start, plugins.workspace.agentStart)
+takes them appended, unless it contains shell syntax such as a pipe, in which
+case the start is refused and names the command to put them in.
+
+Usage refusals with --json are `{"error":{"code":"usage",...}}` on stderr,
+like the agent verbs; without --json they are the reason and the help text.
+The result carries `project`, the slug every other verb's --project accepts.
+
 ```
 Usage: sidecar create shell [options]
 ```
@@ -976,11 +991,12 @@ Usage: sidecar create shell [options]
 
 - `--name NAME`: Display name (default: the next Shell N)
 - `--agent TYPE`: Record the agent family (claude, codex, …), and start it when agent_control is on
+- `-- ARGS`: Provider arguments appended to --agent's launch command
 - `--skip-permissions`: Pass the selected provider's auto-approve flag
 - `--run COMMAND`: Execute COMMAND in the new shell
 - `--type COMMAND`: Type COMMAND without pressing Enter
 - `--shell NAME`: Resolve the project from a registered shell
-- `--project NAME`: Target project (slug, basename, or path)
+- `--project NAME`: Target project (slug, basename, or path; or a worktree it created, by path or basename)
 - `--split auto|right|below`: Place a live terminal beside the current shell
 - `--tab`: Open as a workspace shell instead of beside this session
 - `--wait DURATION`: Time to wait for instances to acknowledge (default 1200ms; 0 = fire and forget)
@@ -994,7 +1010,7 @@ Usage: sidecar create shell [options]
 - `2`: usage error, or this directory is not in a registered project
 - `3`: no running instance (split mode)
 - `4`: instance declined (cap, too small, or feature off)
-- `5`: a value was rejected: --name, --agent, or an unknown --project / --shell
+- `5`: a value was rejected: --name, --agent, an unknown --project / --shell, or provider arguments with agent_control off
 
 **Examples:**
 
@@ -1003,6 +1019,8 @@ sidecar create shell --name reviewer --agent codex --json
 sidecar create shell --name "dev server" --run "python3 -m http.server"
 # an agent shell the board knows is one
 sidecar create shell --agent claude --run claude
+# the catalog command with provider arguments
+sidecar create shell --tab --name orchestrator --agent claude -- --model fable
 sidecar create shell --split right --run "python3 -m http.server 8765"
 sidecar create shell --json --wait 0
 # type a command for the user to review
@@ -1015,8 +1033,18 @@ Create a Sidecar-managed git worktree
 
 Create a git worktree with the same setup pipeline as the TUI create modal:
 plan, add, pending-creation journal, identity, and configured hook/env-file rules.
---agent launches the worktree session (sidecar-ws-…). --no-launch skips that
-launch after the worktree and setup still complete.
+--agent records the agent family on the worktree and, with agent_control on,
+starts it in the worktree session (sidecar-ws-…) and returns when it is ready.
+Provider arguments go after `--`, as `agent start` takes them: `--agent claude
+-- --model fable` appends them to the family's command. --run COMMAND launches
+the session with your own command instead; given with --agent it still records
+the family and starts nothing else, the layering `create shell` has. --no-launch
+skips the launch after the worktree and setup still complete.
+
+The name comes before `--`. Because `--` also ends flag parsing, a name that
+starts with a dash may stand alone after it (`create worktree -- -fix`), but
+once provider arguments follow, or the lone value looks like a flag, the command
+is refused rather than guessing which value was meant as the name.
 
 --plan resolves the same plan and prints it without changing anything: no
 worktree is added, no directory is created, no journal is written. It answers
@@ -1033,8 +1061,13 @@ message naming both commits. A caller that showed a --plan result in a
 confirmation passes the plan's sourceOid back here, and gets the same
 source-moved guard the TUI's confirmation gets from executing its stored plan.
 
+The result carries `project`, the slug the agent verbs' --project accepts, and
+those verbs also accept the worktree's path or basename as --project. Usage
+refusals with --json are `{"error":{"code":"usage",...}}` on stderr, like
+the agent verbs; without --json they are the reason and the help text.
+
 ```
-Usage: sidecar create worktree [options] <name>
+Usage: sidecar create worktree [options] <name> [-- ARGS...]
 ```
 
 **Options:**
@@ -1042,12 +1075,13 @@ Usage: sidecar create worktree [options] <name>
 - `--base REF`: Base ref (default HEAD)
 - `--plan`: Resolve and print the plan without creating anything
 - `--expect-source-oid OID`: Refuse (exit 5) if the base ref no longer resolves to this commit
-- `--agent TYPE`: Launch this agent in the new worktree session
+- `--agent TYPE`: Record the agent family and, with agent_control on and no --run, start it in the worktree session
+- `-- ARGS`: Provider arguments appended to --agent's launch command
 - `--skip-permissions`: Pass the agent's auto-approve flag
 - `--run COMMAND`: Execute COMMAND in the new worktree session
 - `--no-launch`: Create the worktree without launching a session
 - `--shell NAME`: Resolve the project from a registered shell
-- `--project NAME`: Target project (slug, basename, or path)
+- `--project NAME`: Target project (slug, basename, or path; or a worktree it created, by path or basename)
 - `--wait DURATION`: Time to wait for instances to acknowledge (default 1200ms; 0 = fire and forget)
 - `--json`: Write one structured result object to stdout
 - `-h, --help`: Show this help
@@ -1063,6 +1097,8 @@ Usage: sidecar create worktree [options] <name>
 
 ```bash
 sidecar create worktree fix-auth --base main --agent claude
+# the catalog command with provider arguments; the family is recorded
+sidecar create worktree orchestrate --agent claude --json -- --model fable
 sidecar create worktree scratch --no-launch --json
 # what would be created, without creating it
 sidecar create worktree fix-auth --base main --plan --json

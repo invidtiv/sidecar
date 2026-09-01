@@ -94,6 +94,11 @@ const (
 	ErrTimeout               ErrorCode = "timeout"
 	ErrTransport             ErrorCode = "transport_failed"
 	ErrFeatureDisabled       ErrorCode = "feature_disabled"
+	// ErrUsage is a command line the verb could not accept: a refused flag
+	// combination, a missing argument. It exists so a --json caller reads the
+	// refusal as the same envelope every other refusal arrives in, rather
+	// than a prose line followed by the help text (td-a658ed).
+	ErrUsage ErrorCode = "usage"
 	// ErrHostUnavailable and ErrVersionSkew are M5 additions, and they exist
 	// because a remote target has two failure modes the local vocabulary
 	// cannot express without lying about them.
