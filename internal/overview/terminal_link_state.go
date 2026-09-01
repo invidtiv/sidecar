@@ -129,7 +129,7 @@ func (m *Model) applyPreviewLinkRevalidated(msg previewLinkRevalidatedMsg) tea.C
 			return nil
 		}
 		ctx, ok := m.previewDeckContext()
-		if !ok {
+		if !ok || ctx.Source.Remote() {
 			return nil
 		}
 		ref, err := contentpanes.ResolveDocument(m.previewDeckConfig(ctx).Source, ctx.Source, contentlink.Pending{

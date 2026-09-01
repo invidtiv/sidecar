@@ -24,6 +24,9 @@ import (
 // openPreviewDocFinder opens the fuzzy file finder in the focused document
 // pane, rooted at that pane's directory.
 func (m *Model) openPreviewDocFinder() tea.Cmd {
+	if hostID := m.previewRemoteHostID(); hostID != "" {
+		return remoteDocumentUnsupported(hostID, "File finding")
+	}
 	doc := m.preview.doc
 	if doc == nil || doc.root == "" {
 		return nil
@@ -36,6 +39,9 @@ func (m *Model) openPreviewDocFinder() tea.Cmd {
 // openPreviewDocProjectSearch opens the ripgrep project search in the focused
 // document pane, rooted at that pane's directory.
 func (m *Model) openPreviewDocProjectSearch() tea.Cmd {
+	if hostID := m.previewRemoteHostID(); hostID != "" {
+		return remoteDocumentUnsupported(hostID, "Project search")
+	}
 	doc := m.preview.doc
 	if doc == nil || doc.root == "" {
 		return nil

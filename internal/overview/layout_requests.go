@@ -371,15 +371,12 @@ func (m *Model) restoreSpecPreviewLayout(layout *state.PaneLayoutJSON) tea.Cmd {
 	if !ok {
 		return nil
 	}
-	// A remote workspace's Path is a directory on another machine; restoring
-	// content panes against it would read this machine's files under the
-	// remote row's name. See previewDeckContext.
-	if ws.Remote() {
+	if ws.Remote() && !m.hostShows(ws.HostID) {
 		return nil
 	}
 	m.preview.contentEpoch++
-	ctx := m.localPreviewSurfaceContext(ws)
-	st, live := panecodec.Decode(layout, panecodec.Options{AcceptTab: m.acceptRestoredPreviewTab(ws.Path)})
+	ctx := m.previewSurfaceContext(ws)
+	st, live := panecodec.Decode(layout, panecodec.Options{AcceptTab: m.acceptRestoredPreviewTab(ws)})
 	if previewLiveKindCount(live, panecodec.KindTerminal) != 1 {
 		m.resetActivePreviewPanes()
 		return nil

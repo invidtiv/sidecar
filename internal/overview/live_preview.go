@@ -38,7 +38,20 @@ const (
 	livePreviewNotes  = "notes"
 	livePreviewDocs   = "docs"
 	livePreviewDiffs  = "diffs"
+
+	// remoteDocumentRefreshInterval is the visible-tab conditional read cadence
+	// for remote Documents. Hidden tabs are not checked.
+	remoteDocumentRefreshInterval = 2 * time.Second
+	remoteDocumentStaleNotice     = "stale"
 )
+
+type remoteDocumentRefreshTickMsg struct {
+	Generation  int
+	WorkspaceID string
+	HostID      string
+	Incarnation uint64
+	Epoch       uint64
+}
 
 // previewTDStoreResolvedMsg carries the resolved td store location for a
 // worktree. Resolving it walks parents and can shell out to git, so it happens
@@ -53,7 +66,7 @@ type previewTDStoreResolvedMsg struct {
 // the visible surface, exactly like the shell probes above them.
 func isLiveWatchMessage(msg tea.Msg) bool {
 	switch msg.(type) {
-	case previewTDStoreResolvedMsg, workspacediff.AdminTargetsMsg:
+	case previewTDStoreResolvedMsg, workspacediff.AdminTargetsMsg, remoteDocumentRefreshTickMsg:
 		return true
 	}
 	return livepanes.Owns(livePreviewOwner, msg)
@@ -101,6 +114,8 @@ func (m *Model) newLiveSet() *livepanes.Set {
 // one of them.
 func (m *Model) handleLiveWatchMsg(msg tea.Msg) (tea.Cmd, bool) {
 	switch msg := msg.(type) {
+	case remoteDocumentRefreshTickMsg:
+		return m.applyRemoteDocumentRefreshTick(msg), true
 	case previewTDStoreResolvedMsg:
 		if m.preview.tdStoreTargets == nil {
 			m.preview.tdStoreTargets = make(map[string][]livewatch.Target)
@@ -316,7 +331,7 @@ func (m *Model) previewDocTargets() []livewatch.Target {
 
 func (m *Model) refreshPreviewDocs() []tea.Cmd {
 	doc := m.preview.doc
-	if doc == nil {
+	if doc == nil || !m.previewPaneVisible(panelayout.Document) {
 		return nil
 	}
 	view := doc.tabs.ActiveView()
@@ -330,6 +345,58 @@ func (m *Model) refreshPreviewDocs() []tea.Cmd {
 		return []tea.Cmd{cmd}
 	}
 	return nil
+}
+
+func (m *Model) visibleRemoteDocument() bool {
+	if m.preview.deck == nil || !m.preview.deck.Context().Source.Remote() {
+		return false
+	}
+	if m.preview.doc == nil || m.preview.doc.view() == nil {
+		return false
+	}
+	if !m.hostShows(m.preview.deck.Context().Source.HostID) {
+		return false
+	}
+	return m.previewPaneVisible(panelayout.Document)
+}
+
+func (m *Model) remoteDocumentRefreshCmd() tea.Cmd {
+	if m.preview.remoteDocTick || !m.visibleRemoteDocument() {
+		return nil
+	}
+	src := m.preview.deck.Context().Source
+	m.preview.remoteDocTick = true
+	msg := remoteDocumentRefreshTickMsg{
+		Generation:  m.preview.generation,
+		WorkspaceID: m.preview.workspaceID,
+		HostID:      src.HostID,
+		Incarnation: src.HostIncarnation,
+		Epoch:       m.preview.contentEpoch,
+	}
+	return tea.Tick(remoteDocumentRefreshInterval, func(time.Time) tea.Msg { return msg })
+}
+
+func (m *Model) applyRemoteDocumentRefreshTick(msg remoteDocumentRefreshTickMsg) tea.Cmd {
+	m.preview.remoteDocTick = false
+	if msg.Generation != m.preview.generation || msg.WorkspaceID != m.preview.workspaceID {
+		return m.remoteDocumentRefreshCmd()
+	}
+	if m.preview.deck == nil {
+		return nil
+	}
+	src := m.preview.deck.Context().Source
+	if src.HostID != msg.HostID || src.HostIncarnation != msg.Incarnation || m.preview.contentEpoch != msg.Epoch {
+		return m.remoteDocumentRefreshCmd()
+	}
+	if !m.visibleRemoteDocument() {
+		return nil
+	}
+	var cmds []tea.Cmd
+	cmds = append(cmds, m.refreshPreviewDocs()...)
+	if next := m.remoteDocumentRefreshCmd(); next != nil {
+		cmds = append(cmds, next)
+	}
+	return tea.Batch(cmds...)
 }
 
 // isPreviewEditorScratchPath drops the files an editor leaves beside the one

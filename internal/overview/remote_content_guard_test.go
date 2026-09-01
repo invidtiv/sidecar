@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/contentpanes"
+	"github.com/marcus/sidecar/internal/hostproto"
 	"github.com/marcus/sidecar/internal/targetactivation"
 	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/uirequest"
@@ -17,10 +18,10 @@ import (
 
 const localTwinMarker = "LOCAL-TWIN"
 
-// Slice 0 of docs/plans/active/remote-host-content-pane-parity.md: pin the
-// current fail-closed remote content-pane guard and the local happy path it
-// must not disturb. Remote rows whose Path exists on this machine still refuse;
-// they must not show this machine's files under the remote row's name.
+// Slice 0/3 of docs/plans/active/remote-host-content-pane-parity.md: a remote
+// row whose Path exists on this machine must not show this machine's bytes.
+// A host that does not Shows() still refuses; a showing host with ContentReadV1
+// is the file steel thread in remote_document_test.go.
 
 func remoteTwinSessionsModel(t *testing.T) (*Model, string) {
 	t.Helper()
@@ -155,19 +156,38 @@ func TestRemoteSessionsDispatchDeclaresEveryPlanKindWithoutLocalContent(t *testi
 	}
 }
 
-func TestPreviewDeckConfigStaysOnLocalSource(t *testing.T) {
+func TestPreviewDeckConfigUsesRemoteSourceForRemoteContext(t *testing.T) {
 	m, stub := remoteCreateModel(t)
 	cfg := m.previewDeckConfig(contentpanes.SurfaceContext{
 		Source: contentpanes.SourceContext{HostID: "mac-mini", WorkspaceID: "p:shell:s1"},
 	})
-	if _, ok := cfg.Source.(contentpanes.LocalSource); !ok {
-		t.Fatalf("document source = %T, want LocalSource (slice 3 flips this)", cfg.Source)
+	src, ok := cfg.Source.(contentpanes.RemoteSource)
+	if !ok {
+		t.Fatalf("document source = %T, want RemoteSource", cfg.Source)
 	}
-	if ctx, ok := m.previewDeckContext(); ok && ctx.Source.Remote() {
-		t.Fatal("previewDeckContext admitted a remote workspace")
+	if src.HostID != "mac-mini" {
+		t.Fatalf("remote source host = %q", src.HostID)
+	}
+	cfg = m.previewDeckConfig(contentpanes.SurfaceContext{})
+	if _, ok := cfg.Source.(contentpanes.LocalSource); !ok {
+		t.Fatalf("local context source = %T, want LocalSource", cfg.Source)
 	}
 	if len(stub.calls) != 0 {
-		t.Fatalf("a registered host invoked sidecar: %v", stub.calls)
+		t.Fatalf("constructing a content source invoked sidecar: %v", stub.calls)
+	}
+}
+
+func TestPreviewDeckContextAdmitsShowingRemoteHost(t *testing.T) {
+	m, _ := remoteTwinSessionsModel(t)
+	bindShowingRemoteHost(m, hostproto.VerbCapabilities{ContentReadV1: true})
+	stub := &remoteRunnerStub{}
+	stub.install(t)
+	ctx, ok := m.previewDeckContext()
+	if !ok || !ctx.Source.Remote() || ctx.Source.HostID != "mac-mini" {
+		t.Fatalf("admitted=%v ctx=%#v", ok, ctx)
+	}
+	if len(stub.calls) != 0 {
+		t.Fatalf("admitting a remote context invoked sidecar: %v", stub.calls)
 	}
 }
 

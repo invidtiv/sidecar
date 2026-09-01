@@ -17,8 +17,7 @@ import (
 type RemoteRunner func(ctx context.Context, hostID string, args []string, out any) error
 
 // RemoteSource is a Document source that reads through `sidecar content`
-// verbs on a registered host. Slice 3 wires this into Sessions; this slice
-// only constructs it.
+// verbs on a registered host.
 type RemoteSource struct {
 	HostID string
 	Verbs  hostproto.VerbCapabilities

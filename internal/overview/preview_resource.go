@@ -182,8 +182,8 @@ func (m *Model) OpenPreviewResource(ref resourceview.Ref) tea.Cmd {
 }
 
 func (m *Model) openPreviewResourceRef(ref resourceview.Ref, fromTerminal bool) tea.Cmd {
-	_, ok := m.SelectedWorkspace()
-	if !ok || !ref.Valid() {
+	workspace, ok := m.SelectedWorkspace()
+	if !ok || !ref.Valid() || workspace.Remote() {
 		return nil
 	}
 	if fromTerminal {

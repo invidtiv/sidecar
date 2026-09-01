@@ -69,7 +69,7 @@ type previewNoteLoadedMsg struct {
 func (m *Model) openPreviewNote(noteID string) tea.Cmd {
 	workspace, ok := m.SelectedWorkspace()
 	noteID = noteview.NormalizeID(noteID)
-	if !ok || noteID == "" || workspace.Path == "" {
+	if !ok || noteID == "" || workspace.Path == "" || workspace.Remote() {
 		return nil
 	}
 	return m.openPreviewContent(contentlink.Ref{Kind: contentlink.KindInternal, Namespace: "note", Value: noteID}, "Note")

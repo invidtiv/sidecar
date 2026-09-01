@@ -1,0 +1,460 @@
+package overview
+
+import (
+	"context"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/contentlink"
+	"github.com/marcus/sidecar/internal/contentpanes"
+	"github.com/marcus/sidecar/internal/filepreview"
+	"github.com/marcus/sidecar/internal/hostproto"
+	"github.com/marcus/sidecar/internal/hosts"
+	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/targetactivation"
+	"github.com/marcus/sidecar/internal/uirequest"
+)
+
+const remoteMarker = "REMOTE-MARKER"
+
+type fakeRemoteFileSource struct {
+	mu          sync.Mutex
+	body        string
+	revision    string
+	notModified bool
+	resolveErr  error
+	loadErr     error
+	loads       int
+	resolves    int
+	lastIfRev   string
+	lastTarget  string
+	blockLoad   chan struct{}
+}
+
+func (f *fakeRemoteFileSource) Resolve(_ context.Context, _ contentpanes.SourceContext, pending contentlink.Pending) (contentlink.Ref, error) {
+	f.mu.Lock()
+	f.resolves++
+	f.lastTarget = pending.Raw
+	err := f.resolveErr
+	f.mu.Unlock()
+	if err != nil {
+		return contentlink.Ref{}, err
+	}
+	return contentlink.Ref{Kind: contentlink.KindFile, Value: pending.Raw}, nil
+}
+
+func (f *fakeRemoteFileSource) LoadDocument(_ context.Context, _ contentpanes.SourceContext, req contentpanes.DocumentReadRequest) (contentpanes.DocumentReadResult, error) {
+	if f.blockLoad != nil {
+		<-f.blockLoad
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.loads++
+	f.lastIfRev = req.IfRevision
+	if req.Ref.Value != "" {
+		f.lastTarget = req.Ref.Value
+	}
+	if f.loadErr != nil {
+		return contentpanes.DocumentReadResult{}, f.loadErr
+	}
+	rev := f.revision
+	if rev == "" {
+		rev = "v1:1"
+	}
+	if f.notModified {
+		return contentpanes.DocumentReadResult{NotModified: true, Revision: rev}, nil
+	}
+	body := f.body
+	return contentpanes.DocumentReadResult{
+		Value:    filepreview.PreviewResult{Content: body, Lines: strings.Split(strings.TrimSuffix(body, "\n"), "\n")},
+		Revision: rev,
+	}, nil
+}
+
+func (f *fakeRemoteFileSource) stats() (loads int, lastIfRev string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.loads, f.lastIfRev
+}
+
+func bindShowingRemoteHost(m *Model, verbs hostproto.VerbCapabilities) {
+	if m.hostHealth == nil {
+		m.hostHealth = map[string]hosts.Health{}
+	}
+	m.hostHealth["mac-mini"] = hosts.Health{
+		State: hosts.StateOnline,
+		Hello: &hostproto.Hello{
+			Proto:        hostproto.Version,
+			Capabilities: hostproto.Capabilities{Verbs: verbs},
+		},
+	}
+	if m.hostIncarnations == nil {
+		m.hostIncarnations = map[string]uint64{}
+	}
+	m.hostIncarnations["mac-mini"] = 1
+	if m.hostRegistered == nil {
+		m.hostRegistered = map[string]bool{}
+	}
+	m.hostRegistered["mac-mini"] = true
+}
+
+func showingRemoteTwinModel(t *testing.T, src contentpanes.Source) (*Model, *fakeRemoteFileSource, string) {
+	t.Helper()
+	m, root := remoteTwinSessionsModel(t)
+	bindShowingRemoteHost(m, hostproto.VerbCapabilities{ContentReadV1: true})
+	fake, _ := src.(*fakeRemoteFileSource)
+	if fake == nil {
+		lines := make([]string, 30)
+		for i := range lines {
+			lines[i] = "line" + strconv.Itoa(i+1)
+		}
+		lines[19] = remoteMarker
+		fake = &fakeRemoteFileSource{
+			body:     strings.Join(lines, "\n") + "\n",
+			revision: "v1:1",
+		}
+		src = fake
+	}
+	m.contentSource = src
+	return m, fake, root
+}
+
+func openRemoteTwin(t *testing.T, m *Model, line int) {
+	t.Helper()
+	cmd := m.openPreviewDocTarget(uirequest.Target{Kind: uirequest.TargetKindFile, Value: "twin.txt", Line: line})
+	if cmd == nil {
+		t.Fatal("openPreviewDocTarget returned nil on a showing remote row")
+	}
+	if view := m.preview.doc.view(); view != nil {
+		view.SetSize(80, 6)
+	}
+	run(t, m, cmd)
+	if m.preview.doc == nil || m.preview.doc.view() == nil {
+		t.Fatal("remote file click opened no Document pane")
+	}
+	m.preview.doc.view().SetSize(80, 6)
+	m.focusPreviewPane(panelayout.Document)
+}
+
+func TestRemoteSessionsRowOpensHostFileNotLocalTwin(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		open func(*testing.T, *Model)
+	}{
+		{"openPreviewContent", func(t *testing.T, m *Model) {
+			cmd := m.openPreviewContent(contentlink.Ref{Kind: contentlink.KindFile, Value: "twin.txt", Line: 20}, "Document")
+			if view := m.preview.doc.view(); view != nil {
+				view.SetSize(80, 6)
+			}
+			run(t, m, cmd)
+		}},
+		{"openPreviewDocTarget", func(t *testing.T, m *Model) {
+			openRemoteTwin(t, m, 20)
+		}},
+		{"activatePreviewPlan", func(t *testing.T, m *Model) {
+			cmd, handled := m.activatePreviewPlan(targetactivation.Plan{
+				Kind: targetactivation.PlanOpenFile, Path: "twin.txt", Line: 20,
+			})
+			if !handled || cmd == nil {
+				t.Fatalf("activatePreviewPlan handled=%v cmd=%v", handled, cmd != nil)
+			}
+			if view := m.preview.doc.view(); view != nil {
+				view.SetSize(80, 6)
+			}
+			run(t, m, cmd)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, fake, _ := showingRemoteTwinModel(t, nil)
+			tc.open(t, m)
+			if m.preview.doc == nil {
+				t.Fatal("remote file click opened no Document pane")
+			}
+			view := m.preview.doc.view()
+			view.SetSize(80, 6)
+			got := ansi.Strip(view.View())
+			if !strings.Contains(got, remoteMarker) {
+				t.Fatalf("document missing remote bytes: %q", got)
+			}
+			if strings.Contains(got, localTwinMarker) {
+				t.Fatalf("document showed this machine's twin: %q", got)
+			}
+			if chrome := ansi.Strip(m.previewDocHeaderTabs("twin.txt")); !strings.Contains(chrome, "mac-mini") {
+				t.Fatalf("host provenance missing from %q", chrome)
+			}
+			if fake.lastTarget != "twin.txt" {
+				t.Fatalf("resolved %q, want the original token", fake.lastTarget)
+			}
+			if view.TopSourceLine() != 20 {
+				t.Fatalf("top source line = %d, want 20", view.TopSourceLine())
+			}
+		})
+	}
+}
+
+func TestRemoteSessionsMissingContentReadV1ToastsAndDoesNotOpen(t *testing.T) {
+	m, _ := remoteTwinSessionsModel(t)
+	bindShowingRemoteHost(m, hostproto.VerbCapabilities{})
+	stub := &remoteRunnerStub{}
+	stub.install(t)
+
+	cmd := m.openPreviewDocTarget(uirequest.Target{Kind: uirequest.TargetKindFile, Value: "twin.txt"})
+	toast, ok := toastFrom(t, cmd)
+	if !ok {
+		t.Fatal("missing ContentReadV1 returned no toast")
+	}
+	if !strings.Contains(toast.Message, "Update Sidecar on mac-mini") {
+		t.Fatalf("toast = %q", toast.Message)
+	}
+	if m.preview.doc != nil {
+		t.Fatalf("opened a document pane: %#v", m.preview.doc)
+	}
+	if view := ansi.Strip(m.WorkspacesView(previewWide, previewTall)); strings.Contains(view, localTwinMarker) {
+		t.Fatalf("missing capability showed local twin bytes in %q", view)
+	}
+	if len(stub.calls) != 0 {
+		t.Fatalf("host without ContentReadV1 was invoked: %v", stub.calls)
+	}
+}
+
+func TestRemoteSessionsIssueNoteDiffResourceStayRefusedOnShowingHost(t *testing.T) {
+	m, fake, _ := showingRemoteTwinModel(t, nil)
+	resolver := &fakeResolver{}
+	m.SetResourceMatchers(jiraMatchers())
+	m.SetResourceResolver(resolver.resolve)
+
+	for _, plan := range []targetactivation.Plan{
+		{Kind: targetactivation.PlanOpenIssue, Issue: "td-196c42"},
+		{Kind: targetactivation.PlanOpenNote, Note: "nt-abc123"},
+		{Kind: targetactivation.PlanOpenDiff, Spec: "abc1234"},
+		{Kind: targetactivation.PlanOpenResource, Provider: "jira-work", Matcher: "project-key", Locator: "CASH-1245"},
+	} {
+		cmd, handled := m.activatePreviewPlan(plan)
+		run(t, m, cmd)
+		if handled || cmd != nil {
+			t.Fatalf("%s: handled=%v cmd=%v on a showing remote row", plan.Kind, handled, cmd != nil)
+		}
+		if m.preview.issue != nil || m.preview.note != nil || m.preview.diff != nil || m.preview.resource != nil {
+			t.Fatalf("%s opened a non-document pane", plan.Kind)
+		}
+	}
+	if refs := resolver.refs(); len(refs) != 0 {
+		t.Fatalf("remote resource activation asked the local resolver: %v", refs)
+	}
+	if fake.loads != 0 {
+		t.Fatalf("non-file plans loaded a document: loads=%d", fake.loads)
+	}
+}
+
+func TestRemoteDocumentRefreshUpdatesChangedAndKeepsLastBodyOnFailure(t *testing.T) {
+	m, fake, _ := showingRemoteTwinModel(t, nil)
+	openRemoteTwin(t, m, 0)
+	view := m.preview.doc.view()
+	if remoteDocumentRefreshInterval < time.Second || remoteDocumentRefreshInterval > 10*time.Second {
+		t.Fatalf("cadence = %s", remoteDocumentRefreshInterval)
+	}
+
+	fake.mu.Lock()
+	fake.body = "CHANGED-REMOTE\n"
+	fake.revision = "v1:2"
+	fake.mu.Unlock()
+	run(t, m, tea.Batch(m.refreshPreviewDocs()...))
+	got := ansi.Strip(view.View())
+	if !strings.Contains(got, "CHANGED-REMOTE") {
+		t.Fatalf("changed payload did not refresh: %q", got)
+	}
+	loads, lastIf := fake.stats()
+	if lastIf != "v1:1" {
+		t.Fatalf("refresh IfRevision = %q, want v1:1", lastIf)
+	}
+
+	fake.mu.Lock()
+	fake.notModified = true
+	fake.mu.Unlock()
+	before := loads
+	run(t, m, tea.Batch(m.refreshPreviewDocs()...))
+	if !strings.Contains(ansi.Strip(view.View()), "CHANGED-REMOTE") {
+		t.Fatal("notModified dropped the body")
+	}
+	if m.preview.doc.hostNotice != "" {
+		t.Fatalf("notModified set host notice %q", m.preview.doc.hostNotice)
+	}
+
+	fake.mu.Lock()
+	fake.notModified = false
+	fake.loadErr = context.DeadlineExceeded
+	fake.mu.Unlock()
+	run(t, m, tea.Batch(m.refreshPreviewDocs()...))
+	if !strings.Contains(ansi.Strip(view.View()), "CHANGED-REMOTE") {
+		t.Fatal("failed refresh dropped the last body")
+	}
+	if m.preview.doc.hostNotice != remoteDocumentStaleNotice {
+		t.Fatalf("host notice = %q, want %q", m.preview.doc.hostNotice, remoteDocumentStaleNotice)
+	}
+
+	fake.mu.Lock()
+	fake.loadErr = nil
+	loadsAfterFail := fake.loads
+	fake.mu.Unlock()
+	m.WorkspacesView(40, 10)
+	run(t, m, tea.Batch(m.refreshPreviewDocs()...))
+	loadsHidden, _ := fake.stats()
+	if loadsHidden != loadsAfterFail {
+		t.Fatalf("hidden pane issued a remote check: before=%d after=%d (first changed loads=%d)", loadsAfterFail, loadsHidden, before)
+	}
+}
+
+func TestRemoteDocumentActionsRefuseLocalIOAndKeepInDocumentSearch(t *testing.T) {
+	m, _, _ := showingRemoteTwinModel(t, nil)
+	openRemoteTwin(t, m, 0)
+	if !m.docPaneFocused() {
+		t.Fatal("document pane is not focused")
+	}
+
+	for _, tc := range []struct {
+		key    tea.KeyPressMsg
+		want   string
+		action string
+	}{
+		{tea.KeyPressMsg{Code: 'e', Text: "e"}, "Inline editing", "e"},
+		{tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl}, "File finding", "ctrl+p"},
+		{tea.KeyPressMsg{Code: 'f', Text: "f"}, "Project search", "f"},
+	} {
+		handled, cmd := m.WorkspacesKey(tc.key)
+		if !handled {
+			t.Fatalf("%s was not handled", tc.action)
+		}
+		toast, ok := toastFrom(t, cmd)
+		if !ok || !strings.Contains(toast.Message, tc.want) || !strings.Contains(toast.Message, "mac-mini") {
+			t.Fatalf("%s toast = %#v", tc.action, toast)
+		}
+		if m.preview.doc.editing() {
+			t.Fatalf("%s started an inline editor", tc.action)
+		}
+		if m.preview.doc.mode != nil {
+			t.Fatalf("%s opened a local finder/search", tc.action)
+		}
+	}
+
+	if !pressWorkspaces(t, m, tea.KeyPressMsg{Code: '/', Text: "/"}) {
+		t.Fatal("/ was not handled")
+	}
+	if !m.preview.doc.view().SearchActive() {
+		t.Fatal("in-document search did not start")
+	}
+}
+
+func TestRemoteDocumentStaleLoadIsDiscardedAfterRowSwitchAndTabClose(t *testing.T) {
+	t.Run("row switch", func(t *testing.T) {
+		block := make(chan struct{})
+		fake := &fakeRemoteFileSource{body: remoteMarker + "\n", revision: "v1:1", blockLoad: block}
+		m, _, _ := showingRemoteTwinModel(t, fake)
+		cmd := m.openPreviewDocTarget(uirequest.Target{Kind: uirequest.TargetKindFile, Value: "twin.txt"})
+		if cmd == nil || m.preview.doc == nil {
+			t.Fatal("blocked open did not create a document pane")
+		}
+		remoteID := m.preview.workspaceID
+		if !m.workspaces.SelectID("a") {
+			t.Fatal("could not select the local row")
+		}
+		run(t, m, m.previewSync())
+		close(block)
+		run(t, m, cmd)
+		if m.preview.workspaceID == remoteID {
+			t.Fatal("row switch did not leave the remote row")
+		}
+		if view := ansi.Strip(m.WorkspacesView(previewWide, previewTall)); strings.Contains(view, remoteMarker) {
+			t.Fatalf("stale remote load landed on the local row: %q", view)
+		}
+	})
+	t.Run("tab close", func(t *testing.T) {
+		block := make(chan struct{})
+		fake := &fakeRemoteFileSource{body: remoteMarker + "\n", revision: "v1:1", blockLoad: block}
+		m, _, _ := showingRemoteTwinModel(t, fake)
+		cmd := m.openPreviewDocTarget(uirequest.Target{Kind: uirequest.TargetKindFile, Value: "twin.txt"})
+		if cmd == nil || m.preview.doc == nil {
+			t.Fatal("blocked open did not create a document pane")
+		}
+		run(t, m, m.closePreviewDocTab())
+		close(block)
+		run(t, m, cmd)
+		if m.preview.doc != nil {
+			t.Fatal("a closed tab applied a stale remote load")
+		}
+		if view := ansi.Strip(m.WorkspacesView(previewWide, previewTall)); strings.Contains(view, remoteMarker) {
+			t.Fatalf("closed tab still showed remote bytes: %q", view)
+		}
+	})
+}
+
+func TestRemoteRestoreDropsIssueAndDiffAndDoesNotReadLocalTwin(t *testing.T) {
+	m, fake, root := showingRemoteTwinModel(t, nil)
+	ws, ok := m.SelectedWorkspace()
+	if !ok {
+		t.Fatal("no selected workspace")
+	}
+	layout := &state.PaneLayoutJSON{
+		Root: root, Surface: ws.ID, Open: true, HostID: "mac-mini", FocusKind: "doc",
+		Split: &state.PaneSplitJSON{
+			Axis: "cols", Ratio: 50,
+			A: &state.PaneLayoutJSON{Kind: "terminal"},
+			B: &state.PaneLayoutJSON{Split: &state.PaneSplitJSON{
+				Axis: "rows", Ratio: 50,
+				A: &state.PaneLayoutJSON{Kind: "doc", Tabs: []state.PaneDocTabJSON{{Path: "twin.txt"}}},
+				B: &state.PaneLayoutJSON{Split: &state.PaneSplitJSON{
+					Axis: "cols", Ratio: 50,
+					A: &state.PaneLayoutJSON{Kind: "issue", IssueTabs: []state.PaneIssueTabJSON{{Issue: "td-196c42"}}},
+					B: &state.PaneLayoutJSON{Kind: "diff", DiffTabs: []state.PaneDiffTabJSON{{Spec: "HEAD"}}},
+				}},
+			}},
+		},
+	}
+	cmd := m.restoreSpecPreviewLayout(layout)
+	if view := m.preview.doc.view(); view != nil {
+		view.SetSize(80, 8)
+	}
+	run(t, m, cmd)
+	if m.preview.issue != nil {
+		t.Fatalf("restore opened a remote issue against local I/O: %#v", m.preview.issue)
+	}
+	if m.preview.diff != nil {
+		t.Fatalf("restore opened a remote diff against local I/O: %#v", m.preview.diff)
+	}
+	if panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Issue) != nil {
+		t.Fatal("restore kept an Issue leaf")
+	}
+	if panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Diff) != nil {
+		t.Fatal("restore kept a Diff leaf")
+	}
+	if m.preview.doc == nil {
+		t.Fatal("restore dropped the remote Document tab")
+	}
+	got := ansi.Strip(m.preview.doc.view().View())
+	if !strings.Contains(got, remoteMarker) {
+		t.Fatalf("restored document = %q", got)
+	}
+	if strings.Contains(got, localTwinMarker) {
+		t.Fatal("restore loaded this machine's twin")
+	}
+	if fake.loads == 0 {
+		t.Fatal("restore did not load through the remote source")
+	}
+}
+
+func TestRemoteDeckContextRefusesDisconnectedHost(t *testing.T) {
+	m, _ := remoteTwinSessionsModel(t)
+	m.contentSource = &fakeRemoteFileSource{body: remoteMarker + "\n"}
+	if _, ok := m.previewDeckContext(); ok {
+		t.Fatal("previewDeckContext admitted a host that does not Show()")
+	}
+	cmd := m.openPreviewDocTarget(uirequest.Target{Kind: uirequest.TargetKindFile, Value: "twin.txt"})
+	if cmd != nil || m.preview.doc != nil {
+		t.Fatal("a disconnected host opened a document")
+	}
+}

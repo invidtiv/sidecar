@@ -117,6 +117,9 @@ func (m *Model) enterPreviewDocEdit() tea.Cmd {
 	if doc == nil || doc.editing() {
 		return nil
 	}
+	if hostID := m.previewRemoteHostID(); hostID != "" {
+		return remoteDocumentUnsupported(hostID, "Inline editing")
+	}
 	if !features.IsEnabled(features.TmuxInlineEdit.Name) {
 		return appmsg.ShowToast("Inline edit is disabled (features.tmux-inline-edit)", 3*time.Second)
 	}

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/contentpanes"
 	"github.com/marcus/sidecar/internal/panecodec"
 	"github.com/marcus/sidecar/internal/panelayout"
@@ -100,11 +101,6 @@ func (m *Model) persistSessionsLayout() {
 		return
 	}
 	if ws, ok := m.catalog[id]; ok {
-		if ws.Remote() {
-			// Never persist another machine's path into this machine's state
-			// tree: a later restore would resolve it locally.
-			return
-		}
 		src := sourceContextFromWorkspace(ws, 0)
 		layout.Root = ws.Path
 		layout.HostID = src.HostID
@@ -287,13 +283,13 @@ func (m *Model) restorePreviewPanes(workspaceID string) tea.Cmd {
 
 func (m *Model) warmPreviewFromLayout(workspaceID string, layout *state.PaneLayoutJSON) tea.Cmd {
 	ws, ok := m.catalog[workspaceID]
-	if !ok || ws.Remote() {
+	if !ok || (ws.Remote() && !m.hostShows(ws.HostID)) {
 		m.resetActivePreviewPanes()
 		return nil
 	}
 	m.preview.contentEpoch++
-	ctx := m.localPreviewSurfaceContext(ws)
-	st, live := panecodec.Decode(layout, panecodec.Options{AcceptTab: m.acceptRestoredPreviewTab(ws.Path)})
+	ctx := m.previewSurfaceContext(ws)
+	st, live := panecodec.Decode(layout, panecodec.Options{AcceptTab: m.acceptRestoredPreviewTab(ws)})
 	if previewLiveKindCount(live, panecodec.KindTerminal) != 1 {
 		m.resetActivePreviewPanes()
 		return nil
@@ -385,12 +381,22 @@ func (m *Model) applyRestoredPreviewFocus(kind string) {
 	}
 }
 
-func (m *Model) acceptRestoredPreviewTab(root string) func(string, contentpanes.TabState) bool {
+func (m *Model) acceptRestoredPreviewTab(ws workspaceinventory.Workspace) func(string, contentpanes.TabState) bool {
 	return func(kind string, tab contentpanes.TabState) bool {
+		if ws.Remote() {
+			switch kind {
+			case panecodec.KindDoc:
+				return tab.Ref.Kind == contentlink.KindFile && strings.TrimSpace(tab.Ref.Value) != ""
+			case panecodec.KindIssue, panecodec.KindNote, panecodec.KindDiff, panecodec.KindResource:
+				return false
+			default:
+				return true
+			}
+		}
 		if kind != panecodec.KindDoc {
 			return true
 		}
-		display, _, ok := terminallink.ResolveFile(root, tab.Ref.Value)
+		display, _, ok := terminallink.ResolveFile(ws.Path, tab.Ref.Value)
 		return ok && display != "" && !filepath.IsAbs(display)
 	}
 }

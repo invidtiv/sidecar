@@ -79,7 +79,7 @@ func (m *Model) issueFallbackRefs() []issueview.ProjectRef {
 func (m *Model) openPreviewIssue(issueID string) tea.Cmd {
 	workspace, ok := m.SelectedWorkspace()
 	issueID = issueview.NormalizeID(issueID)
-	if !ok || issueID == "" || workspace.Path == "" {
+	if !ok || issueID == "" || workspace.Path == "" || workspace.Remote() {
 		return nil
 	}
 	return m.openPreviewContent(contentlink.Ref{Kind: contentlink.KindIssue, Value: issueID}, "Issue")

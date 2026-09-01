@@ -273,6 +273,9 @@ type Model struct {
 	hostConfigured map[string]hosts.Host
 	hostHealth     map[string]hosts.Health
 	hostProjects   map[string][]Project
+	// contentSource, when set, is the Document adapter for remote rows. Tests
+	// inject a fake; production leaves it nil and documentSource builds one.
+	contentSource contentpanes.Source
 
 	// docFinderCaches holds one file list per pane root, so the file finder a
 	// document pane opens walks a tree once rather than once per ctrl+p.
@@ -735,6 +738,9 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 	}
 	if pulse := m.pulseCmd(); pulse != nil {
 		cmds = append(cmds, pulse)
+	}
+	if tick := m.remoteDocumentRefreshCmd(); tick != nil {
+		cmds = append(cmds, tick)
 	}
 	if len(cmds) == 1 {
 		return cmd

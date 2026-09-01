@@ -95,6 +95,9 @@ func resolvePreviewDocContentLink(source contentpanes.Source, src contentpanes.S
 			ref, err := contentpanes.ResolveDocument(source, src, request.Candidate)
 			result.Ref, result.Found = ref, err == nil && ref.Value != ""
 		case contentlink.KindDiff:
+			if src.Remote() {
+				return previewDocLinkResolvedMsg{Result: result}
+			}
 			target, ok := workspacediff.ParseSpec(request.Candidate.Raw)
 			if !ok {
 				return previewDocLinkResolvedMsg{Result: result}
@@ -127,10 +130,19 @@ func (m *Model) activatePreviewDocLink(ref contentlink.Ref) tea.Cmd {
 	case contentlink.KindFile:
 		return m.openPreviewContent(ref, "Document")
 	case contentlink.KindIssue:
+		if m.previewRemoteHostID() != "" {
+			return nil
+		}
 		return m.openPreviewContent(ref, "Issue")
 	case contentlink.KindDiff:
+		if m.previewRemoteHostID() != "" {
+			return nil
+		}
 		return m.openPreviewContent(ref, "Diff")
 	case contentlink.KindResource:
+		if m.previewRemoteHostID() != "" {
+			return nil
+		}
 		return m.openPreviewContent(ref, "Resource")
 	default:
 		return nil

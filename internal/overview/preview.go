@@ -82,6 +82,8 @@ type previewState struct {
 	contentEpoch uint64
 	workspaceID  string
 	reason       string
+	// remoteDocTick is true while a remote Document refresh tick is armed.
+	remoteDocTick bool
 	// terminalPanes owns the live terminal state keyed by the terminal leaf in
 	// paneRoot. Phase 2 intentionally operates at N=1; the collection removes
 	// the singular-state assumption without changing what the browser exposes.

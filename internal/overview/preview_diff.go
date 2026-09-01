@@ -40,8 +40,8 @@ func (d *previewDiff) view() *workspacediff.View {
 }
 
 func (m *Model) openPreviewDiff(target workspacediff.Target) tea.Cmd {
-	_, ok := m.SelectedWorkspace()
-	if !ok {
+	workspace, ok := m.SelectedWorkspace()
+	if !ok || workspace.Remote() {
 		return nil
 	}
 	if target.Identity() == "" {

@@ -237,11 +237,18 @@ func adoptPreviewMsg(load tea.Cmd, base LoadedMsg) LoadedMsg {
 
 // SetResult applies msg if it belongs to the current load. It returns false
 // without changing the model for stale model, request, epoch, or path results.
+func (m *Model) ResultMatches(msg LoadedMsg) bool {
+	if m == nil {
+		return false
+	}
+	return msg.ModelID == m.modelID &&
+		msg.RequestGeneration == m.requestGeneration &&
+		msg.Epoch == m.epoch &&
+		msg.Path == m.path
+}
+
 func (m *Model) SetResult(msg LoadedMsg) bool {
-	if msg.ModelID != m.modelID ||
-		msg.RequestGeneration != m.requestGeneration ||
-		msg.Epoch != m.epoch ||
-		msg.Path != m.path {
+	if !m.ResultMatches(msg) {
 		return false
 	}
 	if msg.Revision != "" {
