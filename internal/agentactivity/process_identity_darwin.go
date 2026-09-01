@@ -22,8 +22,7 @@ func platformForegroundArgv0s(group int) []string {
 	if err != nil {
 		return nil
 	}
-	var leader string
-	var members []string
+	matches := make([]foregroundProcess, 0, 2)
 	for i := range processes {
 		process := &processes[i]
 		if int(process.Eproc.Pgid) != group {
@@ -34,16 +33,9 @@ func platformForegroundArgv0s(group int) []string {
 		if argv0 == "" {
 			continue
 		}
-		if pid == group {
-			leader = argv0
-		} else {
-			members = append(members, argv0)
-		}
+		matches = append(matches, foregroundProcess{PID: pid, ParentPID: int(process.Eproc.Ppid), Argv0: argv0})
 	}
-	if leader != "" {
-		return append([]string{leader}, members...)
-	}
-	return members
+	return foregroundProcessArgv0s(group, matches)
 }
 
 // darwinProcessArgv0 parses sysctl(KERN_PROCARGS2)'s native layout:

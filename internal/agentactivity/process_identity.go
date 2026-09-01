@@ -15,6 +15,44 @@ type foregroundIdentityEntry struct {
 	resolvedAt time.Time
 }
 
+// foregroundProcess is the small, platform-neutral slice of process-table
+// state needed to decide which members still belong to a foreground job.
+//
+// A daemon may double-fork, be adopted by init, and retain its old process
+// group. Git's fsmonitor daemon does exactly that on macOS. Such a process no
+// longer belongs to the pane shell even though a group-only scan finds it.
+type foregroundProcess struct {
+	PID       int
+	ParentPID int
+	Argv0     string
+}
+
+func foregroundProcessArgv0s(group int, processes []foregroundProcess) []string {
+	var leader string
+	var members []string
+	for _, process := range processes {
+		argv0 := strings.TrimSpace(process.Argv0)
+		if argv0 == "" {
+			continue
+		}
+		// The group leader is authoritative even if its parent later exits.
+		// Other init-adopted members are detached daemons, not jobs still
+		// owned by the interactive shell.
+		if process.PID != group && process.ParentPID == 1 {
+			continue
+		}
+		if process.PID == group {
+			leader = argv0
+		} else {
+			members = append(members, argv0)
+		}
+	}
+	if leader != "" {
+		return append([]string{leader}, members...)
+	}
+	return members
+}
+
 var foregroundIdentities = struct {
 	sync.Mutex
 	entries map[int]foregroundIdentityEntry

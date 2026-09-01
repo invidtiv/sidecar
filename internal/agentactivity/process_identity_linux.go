@@ -46,8 +46,7 @@ func platformForegroundArgv0s(group int) []string {
 	if err != nil {
 		return nil
 	}
-	var leader string
-	var members []string
+	matches := make([]foregroundProcess, 0, 2)
 	for _, entry := range entries {
 		pid, err := strconv.Atoi(entry.Name())
 		if err != nil || pid <= 0 {
@@ -73,16 +72,9 @@ func platformForegroundArgv0s(group int) []string {
 			// mid-exec.
 			continue
 		}
-		if pid == group {
-			leader = argv0
-		} else {
-			members = append(members, argv0)
-		}
+		matches = append(matches, foregroundProcess{PID: pid, ParentPID: parseLinuxPPID(stat), Argv0: argv0})
 	}
-	if leader != "" {
-		return append([]string{leader}, members...)
-	}
-	return members
+	return foregroundProcessArgv0s(group, matches)
 }
 
 // linuxStatFields returns the space-separated fields of /proc/<pid>/stat that
@@ -132,6 +124,12 @@ func parseLinuxTpgid(stat []byte) int {
 // parseLinuxPgrp reads field 5, the process's own group.
 func parseLinuxPgrp(stat []byte) int {
 	return linuxStatField(stat, 5)
+}
+
+// parseLinuxPPID reads field 4, used to distinguish a live member of the
+// shell's job from a double-forked daemon that init has adopted.
+func parseLinuxPPID(stat []byte) int {
+	return linuxStatField(stat, 4)
 }
 
 // parseLinuxArgv0 returns the first NUL-terminated element of a cmdline.

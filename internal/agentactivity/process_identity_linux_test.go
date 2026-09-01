@@ -12,8 +12,8 @@ import (
 // statLine builds a /proc/<pid>/stat line with the fields this code reads.
 // proc(5) numbering: 1 pid, 2 comm, 3 state, 4 ppid, 5 pgrp, 6 session,
 // 7 tty_nr, 8 tpgid.
-func statLine(pid int, comm string, pgrp, tpgid int) string {
-	return strconv.Itoa(pid) + " (" + comm + ") S 1 " +
+func statLine(pid int, comm string, ppid, pgrp, tpgid int) string {
+	return strconv.Itoa(pid) + " (" + comm + ") S " + strconv.Itoa(ppid) + " " +
 		strconv.Itoa(pgrp) + " 1 34816 " + strconv.Itoa(tpgid) +
 		" 4194304 1 0 0 0 0 0 0 0 20 0 1 0 100 0 0\n"
 }
@@ -24,12 +24,15 @@ func statLine(pid int, comm string, pgrp, tpgid int) string {
 // which has been used deliberately to defeat exactly this kind of code.
 func TestParseHandlesCommWithSpacesAndParens(t *testing.T) {
 	for _, comm := range []string{"node", "my (weird) name", "a b c", ")", "((("} {
-		stat := []byte(statLine(42, comm, 900, 901))
+		stat := []byte(statLine(42, comm, 7, 900, 901))
 		if got := parseLinuxPgrp(stat); got != 900 {
 			t.Errorf("comm %q: pgrp = %d, want 900", comm, got)
 		}
 		if got := parseLinuxTpgid(stat); got != 901 {
 			t.Errorf("comm %q: tpgid = %d, want 901", comm, got)
+		}
+		if got := parseLinuxPPID(stat); got != 7 {
+			t.Errorf("comm %q: ppid = %d, want 7", comm, got)
 		}
 	}
 }
@@ -38,7 +41,7 @@ func TestParseHandlesCommWithSpacesAndParens(t *testing.T) {
 // tpgid -1. Returning that as a group would make the caller scan for a group
 // that cannot exist.
 func TestNoForegroundGroupIsNotAGroup(t *testing.T) {
-	if got := parseLinuxTpgid([]byte(statLine(42, "bash", 900, -1))); got != 0 {
+	if got := parseLinuxTpgid([]byte(statLine(42, "bash", 7, 900, -1))); got != 0 {
 		t.Errorf("tpgid = %d, want 0 for a terminal with no foreground group", got)
 	}
 }
@@ -76,12 +79,12 @@ func TestForegroundArgv0sReadsAFixtureProcTree(t *testing.T) {
 	linuxProcRoot = root
 	t.Cleanup(func() { linuxProcRoot = original })
 
-	write := func(pid int, comm string, pgrp, tpgid int, argv0 string) {
+	write := func(pid int, comm string, ppid, pgrp, tpgid int, argv0 string) {
 		dir := filepath.Join(root, strconv.Itoa(pid))
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, "stat"), []byte(statLine(pid, comm, pgrp, tpgid)), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "stat"), []byte(statLine(pid, comm, ppid, pgrp, tpgid)), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(filepath.Join(dir, "cmdline"), []byte(argv0+"\x00"), 0o644); err != nil {
@@ -89,9 +92,9 @@ func TestForegroundArgv0sReadsAFixtureProcTree(t *testing.T) {
 		}
 	}
 
-	write(100, "bash", 100, 200, "bash")   // the shell, a different group
-	write(200, "node", 200, 200, "claude") // group leader, exec -a'd
-	write(201, "node", 200, 200, "helper") // group member
+	write(100, "bash", 10, 100, 200, "bash")    // the shell, a different group
+	write(200, "node", 100, 200, 200, "claude") // group leader, exec -a'd
+	write(201, "node", 200, 200, 200, "helper") // group member
 	// Non-process entries must be skipped rather than crash the scan.
 	if err := os.MkdirAll(filepath.Join(root, "sys"), 0o755); err != nil {
 		t.Fatal(err)
@@ -116,6 +119,7 @@ func TestForegroundShellReadyLinuxFixtureMatrix(t *testing.T) {
 	t.Cleanup(func() { linuxProcRoot = original })
 	type fixtureProcess struct {
 		pid         int
+		ppid        int
 		comm        string
 		pgrp, tpgid int
 		argv0       string
@@ -130,23 +134,27 @@ func TestForegroundShellReadyLinuxFixtureMatrix(t *testing.T) {
 	}{
 		{
 			name: "sole foreground interactive shell", panePID: 100, currentCommand: "bash", want: true,
-			processes: []fixtureProcess{{100, "bash", 100, 100, "bash"}},
+			processes: []fixtureProcess{{100, 10, "bash", 100, 100, "bash"}},
 		},
 		{
 			name: "foreground command group replaces shell", panePID: 100, currentCommand: "bash",
-			processes: []fixtureProcess{{100, "bash", 100, 200, "bash"}, {200, "vim", 200, 200, "vim"}},
+			processes: []fixtureProcess{{100, 10, "bash", 100, 200, "bash"}, {200, 100, "vim", 200, 200, "vim"}},
 		},
 		{
 			name: "helper shares foreground shell group", panePID: 100, currentCommand: "bash",
-			processes: []fixtureProcess{{100, "bash", 100, 100, "bash"}, {101, "helper", 100, 100, "helper"}},
+			processes: []fixtureProcess{{100, 10, "bash", 100, 100, "bash"}, {101, 100, "helper", 100, 100, "helper"}},
+		},
+		{
+			name: "init-adopted daemon retained shell group", panePID: 100, currentCommand: "bash", want: true,
+			processes: []fixtureProcess{{100, 10, "bash", 100, 100, "bash"}, {101, 1, "git", 100, 100, "git"}},
 		},
 		{
 			name: "unknown foreground executable", panePID: 100, currentCommand: "bash",
-			processes: []fixtureProcess{{100, "mystery", 100, 100, "mystery"}},
+			processes: []fixtureProcess{{100, 10, "mystery", 100, 100, "mystery"}},
 		},
 		{
 			name: "tmux command disagrees with process", panePID: 100, currentCommand: "vim",
-			processes: []fixtureProcess{{100, "bash", 100, 100, "bash"}},
+			processes: []fixtureProcess{{100, 10, "bash", 100, 100, "bash"}},
 		},
 	}
 
@@ -159,7 +167,7 @@ func TestForegroundShellReadyLinuxFixtureMatrix(t *testing.T) {
 				if err := os.MkdirAll(dir, 0o755); err != nil {
 					t.Fatal(err)
 				}
-				if err := os.WriteFile(filepath.Join(dir, "stat"), []byte(statLine(process.pid, process.comm, process.pgrp, process.tpgid)), 0o644); err != nil {
+				if err := os.WriteFile(filepath.Join(dir, "stat"), []byte(statLine(process.pid, process.comm, process.ppid, process.pgrp, process.tpgid)), 0o644); err != nil {
 					t.Fatal(err)
 				}
 				if err := os.WriteFile(filepath.Join(dir, "cmdline"), []byte(process.argv0+"\x00"), 0o644); err != nil {

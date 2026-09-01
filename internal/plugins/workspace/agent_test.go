@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/marcus/sidecar/internal/agentcontrol"
+	app "github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/projectdir"
@@ -53,6 +55,25 @@ func TestStartAgentWithOptionsRoutesCatalogLaunchThroughAgentControl(t *testing.
 	if msg.PaneID != "%ready" || !msg.Reconnected {
 		t.Fatalf("result = %+v", msg)
 	}
+	if got := loadAgentType(root, worktree); got != AgentCodex {
+		t.Fatalf("persisted agent = %q, want codex", got)
+	}
+}
+
+func TestAgentStartFailureIsVisible(t *testing.T) {
+	p := &Plugin{ctx: &plugin.Context{Epoch: 9}}
+	_, cmd := p.update(AgentStartedMsg{Epoch: 9, Err: fmt.Errorf("pane is busy")})
+	if cmd == nil {
+		t.Fatal("agent start failure produced no feedback")
+	}
+	msg := cmd()
+	toast, ok := msg.(app.ToastMsg)
+	if !ok {
+		t.Fatalf("feedback = %T, want ToastMsg", msg)
+	}
+	if !toast.IsError || !strings.Contains(toast.Message, "Failed to start agent") || !strings.Contains(toast.Message, "pane is busy") {
+		t.Fatalf("toast = %+v", toast)
+	}
 }
 
 func TestStartAgentWithOptionsKeepsConfiguredLaunchOpaqueButReadyChecked(t *testing.T) {
@@ -83,6 +104,37 @@ func TestStartAgentWithOptionsKeepsConfiguredLaunchOpaqueButReadyChecked(t *test
 	}
 	if request.Kind != "codex" || len(request.Argv) != 3 || request.Argv[1] != "-lc" || request.Argv[2] != "codex-custom --profile fast" {
 		t.Fatalf("opaque request = %+v", request)
+	}
+}
+
+func TestStartAgentWithOptionsCreatesMissingWorktreeShell(t *testing.T) {
+	root, worktree := t.TempDir(), t.TempDir()
+	p := &Plugin{ctx: &plugin.Context{Epoch: 4, ProjectRoot: root, WorkDir: root, Config: config.Default()}, operationCtx: context.Background()}
+	wt := &Worktree{Key: "empty-key", Name: "empty-worktree", Path: worktree}
+	session := worktreeTmuxSession(wt)
+	_ = exec.Command("tmux", "kill-session", "-t", session).Run()
+	t.Cleanup(func() { _ = exec.Command("tmux", "kill-session", "-t", session).Run() })
+
+	originalStart := startWorkspaceAgent
+	defer func() { startWorkspaceAgent = originalStart }()
+	var request agentcontrol.StartRequest
+	startWorkspaceAgent = func(_ context.Context, got agentcontrol.StartRequest) (agentcontrol.Agent, error) {
+		request = got
+		return agentcontrol.Agent{Target: got.Target}, nil
+	}
+
+	msg := p.StartAgentWithOptions(wt, AgentCodex, false)().(AgentStartedMsg)
+	if msg.Err != nil {
+		t.Fatalf("start from missing shell failed: %v", msg.Err)
+	}
+	if msg.Reconnected {
+		t.Fatal("missing shell was reported as a reconnection")
+	}
+	if request.Target.Session != session || msg.PaneID == "" {
+		t.Fatalf("unaddressable created shell: request=%+v result=%+v", request.Target, msg)
+	}
+	if !workspaceops.SessionExists(session) {
+		t.Fatalf("created shell %q is not live", session)
 	}
 }
 

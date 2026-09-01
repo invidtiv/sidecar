@@ -689,44 +689,48 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		if plugin.IsStale(p.ctx, msg) {
 			return p, nil
 		}
-		if msg.Err == nil {
-			// Create agent record
-			agent := &Agent{
-				Type:        msg.AgentType,
-				TmuxSession: msg.SessionName,
-				TmuxPane:    msg.PaneID, // Store pane ID for interactive mode
-				StartedAt:   time.Now(),
-				OutputBuf:   tty.NewOutputBuffer(outputBufferCap),
+		if msg.Err != nil {
+			return p, func() tea.Msg {
+				return app.ToastMsg{Message: fmt.Sprintf("Failed to start agent: %v", msg.Err), Duration: 5 * time.Second, IsError: true}
 			}
+		}
+		// Create agent record
+		agent := &Agent{
+			Type:        msg.AgentType,
+			TmuxSession: msg.SessionName,
+			TmuxPane:    msg.PaneID, // Store pane ID for interactive mode
+			StartedAt:   time.Now(),
+			OutputBuf:   tty.NewOutputBuffer(outputBufferCap),
+		}
 
-			key := msg.WorktreeKey
-			if key == "" {
-				key = msg.WorkspaceName
-			}
-			if wt := p.findWorktree(key); wt != nil {
-				wt.Agent = agent
-				wt.Status = StatusActive
-				wt.IsOrphaned = false
-				p.agents[wt.IdentityKey()] = agent
-			}
-			p.managedSessions[msg.SessionName] = true
+		key := msg.WorktreeKey
+		if key == "" {
+			key = msg.WorkspaceName
+		}
+		if wt := p.findWorktree(key); wt != nil {
+			wt.Agent = agent
+			wt.ChosenAgentType = msg.AgentType
+			wt.Status = StatusActive
+			wt.IsOrphaned = false
+			p.agents[wt.IdentityKey()] = agent
+		}
+		p.managedSessions[msg.SessionName] = true
 
-			// Resize pane to match preview width immediately
-			if cmd := p.resizeSelectedPaneCmd(); cmd != nil {
-				cmds = append(cmds, cmd)
-			}
-			// Start polling for output
-			pollKey := msg.WorktreeKey
-			if pollKey == "" {
-				pollKey = msg.WorkspaceName
-			}
-			cmds = append(cmds, p.scheduleAgentPoll(pollKey, pollIntervalInitial))
+		// Resize pane to match preview width immediately
+		if cmd := p.resizeSelectedPaneCmd(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		// Start polling for output
+		pollKey := msg.WorktreeKey
+		if pollKey == "" {
+			pollKey = msg.WorkspaceName
+		}
+		cmds = append(cmds, p.scheduleAgentPoll(pollKey, pollIntervalInitial))
 
-			// If this is a resume operation, enter interactive mode (td-aa4136)
-			if p.pendingResumeWorktree == msg.WorkspaceName {
-				p.pendingResumeWorktree = ""
-				cmds = append(cmds, p.enterInteractiveMode())
-			}
+		// If this is a resume operation, enter interactive mode (td-aa4136)
+		if p.pendingResumeWorktree == msg.WorkspaceName {
+			p.pendingResumeWorktree = ""
+			cmds = append(cmds, p.enterInteractiveMode())
 		}
 
 	case pollAgentMsg:
