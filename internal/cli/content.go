@@ -77,6 +77,36 @@ func contentCommand() *Command {
 		Run: runContentResolve,
 	}
 
+	catalogCmd := &Command{
+		Name:    "catalog",
+		Summary: "List file, diff, issue, and note picker candidates for a workspace",
+		Usage:   "sidecar content catalog --workspace ID [--kind file|issue|note|diff] [--json]",
+		Long: "List the bounded picker catalogs a viewing Sidecar offers for File, Diff, Issue, and Note on this machine.\n\n" +
+			"This is the read-only catalog a viewing Sidecar invokes on a host, not a general file browser.\n" +
+			"The workspace id is re-resolved to its authoritative root on every request.\n" +
+			"--kind restricts the list to one picker kind; omitting it returns every kind together.\n" +
+			"Resource rows come from content describe, not this verb.\n\n" +
+			"--json writes the machine contract.",
+		Flags: []Flag{
+			{Name: "--workspace", Arg: "ID", Summary: "Unscoped durable workspace id (projectKey:shell:name or projectKey:worktree:path)"},
+			{Name: "--kind", Arg: "KIND", Summary: "Picker kind (file, issue, note, or diff); omit to list all"},
+			jsonFlag,
+			helpFlag,
+		},
+		Args: ArgSpec{Min: 0, Max: 0},
+		ExitCodes: []ExitCode{
+			{Code: 0, Summary: "listed"},
+			{Code: 1, Summary: "internal or load failure"},
+			{Code: 2, Summary: "usage error or unknown kind"},
+			{Code: 5, Summary: "value rejected: unknown workspace"},
+		},
+		Examples: []Example{
+			{Command: "sidecar content catalog --workspace /home/me/api:shell:sidecar-sh-1 --json"},
+			{Command: "sidecar content catalog --workspace /home/me/api:shell:sidecar-sh-1 --kind file --json"},
+		},
+		Run: runContentCatalog,
+	}
+
 	readCmd := &Command{
 		Name:    "read",
 		Summary: "Read bounded file, issue, note, diff, or resource content",
@@ -126,7 +156,7 @@ func contentCommand() *Command {
 		Long: "Resolve and read files, issues, notes, diffs, and resources for a viewing Sidecar over the existing host request seam.\n\n" +
 			"This is an internal transport endpoint, not a general file browser and not a public open-on-host surface.\n" +
 			"Every verb is non-interactive, read-only, and strictly enumerated.",
-		Sub: []*Command{describeCmd, readCmd, resolveCmd},
+		Sub: []*Command{catalogCmd, describeCmd, readCmd, resolveCmd},
 		Run: runContentRoot,
 	}
 }
@@ -304,6 +334,47 @@ func parseContentFlags(env Env, help string, args []string, allowRead bool) (con
 	return flags, 0, true
 }
 
+func parseCatalogFlags(env Env, help string, args []string) (contentFlags, int, bool) {
+	var flags contentFlags
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "-h" || arg == "--help":
+			_, _ = fmt.Fprint(env.Stdout, help)
+			return flags, 0, false
+		case arg == "--json":
+			flags.json = true
+		case arg == "--workspace" || strings.HasPrefix(arg, "--workspace="):
+			val, next, ok := takeFlagArg(arg, args, i, "--workspace")
+			if !ok || val == "" {
+				cliErrf(env.Stderr, "--workspace requires an id\n\n%s", help)
+				return flags, 2, false
+			}
+			flags.workspace = val
+			i = next
+		case arg == "--kind" || strings.HasPrefix(arg, "--kind="):
+			val, next, ok := takeFlagArg(arg, args, i, "--kind")
+			if !ok || val == "" {
+				cliErrf(env.Stderr, "--kind requires a kind\n\n%s", help)
+				return flags, 2, false
+			}
+			flags.kind = val
+			i = next
+		case strings.HasPrefix(arg, "-"):
+			cliErrf(env.Stderr, "unknown option %q\n\n%s", arg, help)
+			return flags, 2, false
+		default:
+			cliErrf(env.Stderr, "content catalog takes no positional arguments\n\n%s", help)
+			return flags, 2, false
+		}
+	}
+	if flags.workspace == "" {
+		cliErrf(env.Stderr, "--workspace is required\n\n%s", help)
+		return flags, 2, false
+	}
+	return flags, 0, true
+}
+
 func parseDescribeFlags(env Env, help string, args []string) (contentFlags, int, bool) {
 	var flags contentFlags
 	for i := 0; i < len(args); i++ {
@@ -358,6 +429,29 @@ func contentExit(env Env, err error) int {
 		return coded.ExitCode()
 	}
 	return 1
+}
+
+func runContentCatalog(env Env, args []string) int {
+	cmd := RootCommand().FindSubcommand("content").FindSubcommand("catalog")
+	help := RenderHelp(cmd)
+	flags, code, ok := parseCatalogFlags(env, help, args)
+	if !ok {
+		return code
+	}
+	result, err := contentservice.Default().Catalog(contentCtx(env), flags.workspace, flags.kind)
+	if err != nil {
+		return contentExit(env, err)
+	}
+	if flags.json {
+		raw, err := contentservice.EncodeCatalogResult(result)
+		if err != nil {
+			return contentExit(env, err)
+		}
+		return writeContentJSON(env, raw)
+	}
+	_, _ = fmt.Fprintf(env.Stdout, "catalog %s files=%d diffs=%d issues=%d notes=%d\n",
+		result.Workspace, len(result.Files), len(result.Diffs), len(result.Issues), len(result.Notes))
+	return 0
 }
 
 func runContentDescribe(env Env, args []string) int {

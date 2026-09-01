@@ -43,6 +43,44 @@ func EnsureSession(session, workDir string) (string, error) {
 	return workspaceops.PaneID(session), nil
 }
 
+// TmuxRunner runs one tmux argv on another machine and returns stdout.
+type TmuxRunner func(args ...string) ([]byte, error)
+
+// EnsureRemoteSession is the host-side equivalent of EnsureSession: reuse the
+// split session when tmux already has it, otherwise `new-session -d` there.
+func EnsureRemoteSession(run TmuxRunner, session, workDir string) (string, error) {
+	session = strings.TrimSpace(session)
+	if session == "" {
+		return "", fmt.Errorf("terminal split session is required")
+	}
+	if pane := remotePaneID(run, session); pane != "" {
+		return pane, nil
+	}
+	if _, err := run("new-session", "-d", "-s", session, "-c", workDir); err != nil {
+		if pane := remotePaneID(run, session); pane != "" {
+			return pane, nil
+		}
+		return "", fmt.Errorf("create terminal panel session: %w", err)
+	}
+	pane := remotePaneID(run, session)
+	if pane == "" {
+		return "", fmt.Errorf("create terminal panel session: no pane")
+	}
+	return pane, nil
+}
+
+func remotePaneID(run TmuxRunner, session string) string {
+	out, err := run("list-panes", "-t", session, "-F", "#{pane_id}")
+	if err != nil {
+		return ""
+	}
+	paneID := strings.TrimSpace(string(out))
+	if idx := strings.Index(paneID, "\n"); idx > 0 {
+		paneID = paneID[:idx]
+	}
+	return paneID
+}
+
 type CloseMode uint8
 
 const (

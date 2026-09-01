@@ -224,6 +224,17 @@ func (t *Transport) ControlCommand(session string) string {
 	return t.RemoteShell(strings.Join(tmux, " "))
 }
 
+// TmuxCommand is a one-shot tmux invocation on the host, wrapped in the same
+// login shell as SidecarCommand so tmux is found on PATH.
+func (t *Transport) TmuxCommand(args ...string) string {
+	parts := make([]string, 0, 1+len(args))
+	parts = append(parts, "tmux")
+	for _, arg := range args {
+		parts = append(parts, shellQuote(arg))
+	}
+	return t.RemoteShell(strings.Join(parts, " "))
+}
+
 // Close tears the master connection down. Leaving it to ControlPersist would
 // also work, but an explicit exit means quitting Sidecar leaves no ssh process
 // behind at all, which is the behaviour a user expects and can verify.

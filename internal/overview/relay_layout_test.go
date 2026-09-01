@@ -1,6 +1,7 @@
 package overview
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -61,6 +62,37 @@ func refuseLocalTerminalSplit(t *testing.T) {
 		return "", nil
 	}
 	t.Cleanup(func() { ensurePreviewTerminalSession = original })
+}
+
+type remoteSplitStub struct {
+	calls []remoteSplitCall
+}
+
+type remoteSplitCall struct {
+	HostID, Session, WorkDir string
+}
+
+func installRemoteTerminalSplitStub(t *testing.T) *remoteSplitStub {
+	t.Helper()
+	stub := &remoteSplitStub{}
+	original := ensureRemoteTerminalSession
+	ensureRemoteTerminalSession = func(_ context.Context, _ *hosts.Registry, hostID, session, workDir string) (string, error) {
+		stub.calls = append(stub.calls, remoteSplitCall{HostID: hostID, Session: session, WorkDir: workDir})
+		return "%host-pane", nil
+	}
+	t.Cleanup(func() { ensureRemoteTerminalSession = original })
+	return stub
+}
+
+func (s *remoteSplitStub) assertCalled(t *testing.T, hostID, session, workDir string) {
+	t.Helper()
+	if len(s.calls) != 1 {
+		t.Fatalf("remote ensure calls = %+v, want 1", s.calls)
+	}
+	got := s.calls[0]
+	if got.HostID != hostID || got.Session != session || got.WorkDir != workDir {
+		t.Fatalf("remote ensure = %+v, want host=%s session=%s dir=%s", got, hostID, session, workDir)
+	}
 }
 
 func previewLayoutSnapshot(m *Model) string {

@@ -6,6 +6,8 @@ All notable changes to sidecar are documented here.
 
 ### Features
 
+- **`n` on a remote Sessions row lists that host's files, diffs, issues, and notes, and a Terminal split creates the tmux session on the host.** Pickers stay empty until the host catalog arrives rather than filling from a same-named local twin. Resource rows come from the host's `content describe` matchers, not this machine's provider snapshot. `layout apply` of a new `kind: shell` pane uses the same host tmux path. (td-3fe778)
+
 - **A click in a remote Sessions pane opens that host's file, issue, note, diff, or resource, not a same-named local twin.** Selecting a registered host's row and clicking a reference resolves and loads on the machine that owns the workspace, then renders here in the same Document, Issue, Note, Diff, and Resource panes local workspaces use. Nested links stay on that host; a failed remote read never falls back to this filesystem; HTTP(S) still opens in the local browser. The host must advertise `ContentReadV1` — an older Sidecar still streams its terminals, and the click names the machine to update. There is no `sidecar open --host`; `sidecar content resolve|read|describe` is the internal transport over the SSH connection already held. Inline edit, file finder, and project search stay unavailable on a remote source, because those would walk this machine. (td-89c1cb, td-87358d, td-925cf9)
 
 ### Bug Fixes

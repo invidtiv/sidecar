@@ -327,6 +327,48 @@ func (c *Client) RunSidecar(ctx context.Context, args []string, out any) error {
 	return nil
 }
 
+// RunTmux runs a one-shot tmux argv on the host and returns its stdout.
+func (c *Client) RunTmux(ctx context.Context, args []string) ([]byte, error) {
+	if health := c.Health(); !health.State.Shows() {
+		detail := fmt.Sprintf("%s is %s", c.host.ID, health.State)
+		if line := firstRunLine(health.Detail); line != "" {
+			detail += ": " + line
+		}
+		return nil, fmt.Errorf("host %s: tmux: %s", c.host.ID, detail)
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, DefaultRunTimeout)
+		defer cancel()
+	}
+	cmd, err := c.TmuxCommand(ctx, args...)
+	if err != nil {
+		return nil, fmt.Errorf("host %s: tmux: %w", c.host.ID, err)
+	}
+	invoke := c.invoke
+	if invoke == nil {
+		invoke = runCommand
+	}
+	output, runErr := invoke(ctx, cmd)
+	stderr := boundedText(output.Stderr, MaxRunStderrBytes)
+	if failure, detail := classifyRun(ctx, output, runErr, stderr); failure != "" {
+		if detail == "" {
+			detail = string(failure)
+		}
+		return nil, fmt.Errorf("host %s: tmux %s: %s", c.host.ID, strings.Join(args, " "), detail)
+	}
+	return output.Stdout, nil
+}
+
+// TmuxCommand builds the one-shot tmux invocation on the host.
+func (c *Client) TmuxCommand(ctx context.Context, args ...string) (*exec.Cmd, error) {
+	transport, err := NewTransport(c.host, c.controlDir)
+	if err != nil {
+		return nil, err
+	}
+	return transport.Command(ctx, transport.TmuxCommand(args...)), nil
+}
+
 // classifyRun turns an exit status into a Failure and a sentence, or ("", "")
 // for success.
 //

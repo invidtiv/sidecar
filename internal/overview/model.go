@@ -135,7 +135,7 @@ func IsAsyncMessage(msg tea.Msg) bool {
 		sessionsSelectedTickMsg,
 		previewDocLoadedMsg, previewDocSearchMsg, previewIssueLoadedMsg, previewNoteLoadedMsg, previewResourceResolvedMsg, previewHistoryLoadedMsg, previewTerminalSearchLoadedMsg, contentpanes.Result,
 		renameShellDoneMsg, globalShellCreatedMsg, previewTerminalSplitCreatedMsg, previewSplitSeedFailedMsg, previewSplitCloseProbeMsg, projectMutationRefreshMsg, globalCreateBranchesMsg, previewLinkRevalidatedMsg,
-		createPickerDataMsg, workspacecreate.FilesScannedMsg:
+		createPickerDataMsg, createHostCatalogMsg, workspacecreate.FilesScannedMsg:
 		// creation is a multi-stage async workflow; every result must stay
 		// routed to the global host even while its modal owns focus.
 		return true
@@ -924,6 +924,9 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		return nil
 	case createPickerDataMsg:
 		applyPickerData(m.createForm, msg)
+		return nil
+	case createHostCatalogMsg:
+		m.applyCreateHostCatalog(msg)
 		return nil
 	case workspacecreate.FilesScannedMsg:
 		m.applyCreateFileCandidates(msg)

@@ -2,6 +2,7 @@ package hosts
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"sort"
 	"strings"
@@ -331,6 +332,15 @@ func (r *Registry) RunSidecar(ctx context.Context, hostID string, args []string,
 		}
 	}
 	return client.RunSidecar(ctx, args, out)
+}
+
+// RunTmux runs a one-shot tmux argv on one registered host.
+func (r *Registry) RunTmux(ctx context.Context, hostID string, args []string) ([]byte, error) {
+	client, ok := r.Client(hostID)
+	if !ok {
+		return nil, fmt.Errorf("host %s: no host is registered as %s", hostID, hostID)
+	}
+	return client.RunTmux(ctx, args)
 }
 
 // MarkStaleIfQuiet ages every connected host, returning true if any moved.

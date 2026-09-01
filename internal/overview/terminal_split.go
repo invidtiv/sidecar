@@ -2,10 +2,12 @@ package overview
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/features"
+	"github.com/marcus/sidecar/internal/hosts"
 	"github.com/marcus/sidecar/internal/layoutapply"
 	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/panelayout"
@@ -27,6 +29,31 @@ type previewSplitSeed struct {
 }
 
 var ensurePreviewTerminalSession = termpanes.EnsureSession
+
+var ensureRemoteTerminalSession = ensureRemoteTerminalSessionProduction
+
+func ensureRemoteTerminalSessionProduction(ctx context.Context, registry *hosts.Registry, hostID, session, workDir string) (string, error) {
+	if registry == nil {
+		return "", fmt.Errorf("%s is not connected", hostID)
+	}
+	run := func(args ...string) ([]byte, error) {
+		return registry.RunTmux(ctx, hostID, args)
+	}
+	return termpanes.EnsureRemoteSession(run, session, workDir)
+}
+
+var killRemotePreviewSession = killRemotePreviewSessionProduction
+
+func killRemotePreviewSessionProduction(ctx context.Context, registry *hosts.Registry, hostID, session string) tea.Cmd {
+	session = strings.TrimSpace(session)
+	if registry == nil || hostID == "" || session == "" {
+		return nil
+	}
+	return func() tea.Msg {
+		_, _ = registry.RunTmux(ctx, hostID, []string{"kill-session", "-t", session})
+		return nil
+	}
+}
 
 // applyCreateShellSplit is the Sessions half of `sidecar create shell --split`.
 // The project plugin writes `shell:<tmux>`; this surface is keyed by the
@@ -187,13 +214,24 @@ func (m *Model) openPreviewTerminalSplit(name string, plan panelayout.OpenPlan) 
 	leaf.Session = termpanes.SessionName(workspace.TmuxName)
 	leaf.Target.Source = "shell"
 	leaf.Target.SourceID = workspace.ID
+	leaf.Target.Host = workspace.HostID
 	m.persistSessionsLayout()
 	workDir := workspace.Path
 	workspaceID, leafID, session := workspace.ID, leaf.ID, leaf.Session
+	hostID := workspace.HostID
+	registry := m.hostRegistry
+	ctx := m.hostContext()
 	return func() tea.Msg {
-		paneID, err := ensurePreviewTerminalSession(session, workDir)
+		paneID, err := ensureSplitSession(ctx, registry, hostID, session, workDir)
 		return previewTerminalSplitCreatedMsg{WorkspaceID: workspaceID, LeafID: leafID, Session: session, PaneID: paneID, Err: err}
 	}
+}
+
+func ensureSplitSession(ctx context.Context, registry *hosts.Registry, hostID, session, workDir string) (string, error) {
+	if hostID == "" {
+		return ensurePreviewTerminalSession(session, workDir)
+	}
+	return ensureRemoteTerminalSession(ctx, registry, hostID, session, workDir)
 }
 
 func (m *Model) applyPreviewTerminalSplitCreated(msg previewTerminalSplitCreatedMsg) tea.Cmd {
@@ -274,15 +312,28 @@ func (m *Model) syncTerminalLeaf(id int) tea.Cmd {
 	if state.terminal == nil {
 		state.terminal = newPreviewTerminal(m.TerminalConfig(), m.previewTerminalHooksFor(leaf))
 	}
-	desired := tty.Target{Session: leaf.Session, Pane: leaf.PaneID}
-	if state.terminal.IsActive() && leaf.Target.Session == desired.Session && leaf.Target.Pane == desired.Pane {
+	desired := tty.Target{Session: leaf.Session, Pane: leaf.PaneID, Host: leaf.Target.Host}
+	if state.terminal.IsActive() && leaf.Target.Session == desired.Session && leaf.Target.Pane == desired.Pane && leaf.Target.Host == desired.Host {
 		leaf.Buffer = state.terminal.Buffer()
 		return m.syncTerminalLeafGeometry(id)
 	}
 	if state.terminal.IsActive() {
 		state.terminal.Close()
 	}
-	leaf.Target.Session, leaf.Target.Pane = desired.Session, desired.Pane
+	leaf.Target.Session, leaf.Target.Pane, leaf.Target.Host = desired.Session, desired.Pane, desired.Host
+	switcher, canSwitch := state.terminal.(controlModeSwitcher)
+	switch desired.Host {
+	case "":
+		if canSwitch {
+			switcher.UseLocalControl()
+		}
+	default:
+		spawn := m.hostControlSpawner(desired.Host)
+		if !canSwitch || spawn == nil {
+			return nil
+		}
+		switcher.UseRemoteControl(spawn)
+	}
 	var cmds []tea.Cmd
 	if width, height, ok := m.terminalLeafSize(id); ok {
 		leaf.Target.Width, leaf.Target.Height = width, height

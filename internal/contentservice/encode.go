@@ -26,6 +26,29 @@ func marshalJSON(v any) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// EncodeCatalogResult writes the compact JSON object for a picker catalog,
+// shrinking the file list until the encoded form fits under MaxEncodedBytes.
+func EncodeCatalogResult(result CatalogResult) ([]byte, error) {
+	if result.Kind == "" {
+		result.Kind = KindCatalog
+	}
+	for {
+		raw, err := marshalJSON(result)
+		if err != nil {
+			return nil, Internal("encode catalog result", err)
+		}
+		if len(raw) <= MaxEncodedBytes {
+			return raw, nil
+		}
+		if len(result.Files) > 1 {
+			result.Files = result.Files[:len(result.Files)/2]
+			result.Truncated = true
+			continue
+		}
+		return nil, Rejected("encoded catalog result exceeds %d bytes", MaxEncodedBytes)
+	}
+}
+
 // EncodeResolveResult writes the compact JSON object (plus newline) for
 // resolve. Resolve payloads are small; this still refuses to emit a value
 // larger than MaxEncodedBytes.

@@ -546,8 +546,10 @@ func (m *Model) handleCreateShellKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		return true, nil
 	}
 	prevProject := ""
+	prevStep := workspacecreate.StepKind
 	if m.createForm != nil {
 		prevProject = m.createForm.ProjectKey()
+		prevStep = m.createForm.Step()
 	}
 	// The form owns the two-step flow: Esc on the picker step returns to the
 	// kind list instead of closing, and Enter on a target-needing kind
@@ -559,7 +561,7 @@ func (m *Model) handleCreateShellKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	} else {
 		action, cmd = md.HandleKey(msg)
 	}
-	return true, tea.Batch(cmd, m.finishCreateInput(action, prevProject))
+	return true, tea.Batch(cmd, m.finishCreateInput(action, prevProject, prevStep))
 }
 
 func (m *Model) handleCreateShellMouse(msg tea.MouseMsg) tea.Cmd {
@@ -579,8 +581,10 @@ func (m *Model) handleCreateShellMouse(msg tea.MouseMsg) tea.Cmd {
 		return nil
 	}
 	prevProject := ""
+	prevStep := workspacecreate.StepKind
 	if m.createForm != nil {
 		prevProject = m.createForm.ProjectKey()
+		prevStep = m.createForm.Step()
 	}
 	action := md.HandleMouse(msg, m.createMouse)
 	if action == workspacecreate.FieldKind {
@@ -602,16 +606,19 @@ func (m *Model) handleCreateShellMouse(msg tea.MouseMsg) tea.Cmd {
 	if m.createForm != nil {
 		action = m.createForm.TranslateMouseAction(action)
 	}
-	return m.finishCreateInput(action, prevProject)
+	return m.finishCreateInput(action, prevProject, prevStep)
 }
 
-func (m *Model) finishCreateInput(action, previousProject string) tea.Cmd {
+func (m *Model) finishCreateInput(action, previousProject string, previousStep workspacecreate.FormStep) tea.Cmd {
 	if m.createForm != nil {
 		m.createForm.SyncAfterInput()
 	}
 	var reload tea.Cmd
 	if m.createForm != nil && m.createForm.ProjectKey() != previousProject {
 		reload = m.loadCreateBranches()
+	}
+	if m.remoteSelection() && m.createForm != nil && m.createForm.Step() == workspacecreate.StepTarget && previousStep != workspacecreate.StepTarget {
+		reload = tea.Batch(reload, m.loadCreatePickerData())
 	}
 	if action == "" {
 		m.setCreateError("")

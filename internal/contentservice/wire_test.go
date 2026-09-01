@@ -75,6 +75,21 @@ func TestValidRemoteResultAcceptsRealAnswers(t *testing.T) {
 	if !oversize.ValidRemoteResult() {
 		t.Fatalf("oversize refused: %+v", oversize)
 	}
+
+	var catalog CatalogResult
+	if err := json.Unmarshal([]byte(`{"kind":"catalog","workspace":"p:shell:s1","files":["a.md"],"futureField":1}`), &catalog); err != nil {
+		t.Fatal(err)
+	}
+	if !catalog.ValidRemoteResult() {
+		t.Fatalf("real catalog refused: %+v", catalog)
+	}
+	var catalogLog CatalogResult
+	if err := json.Unmarshal([]byte(`{"level":"info","msg":"loading nvm","name":"nvm","path":"/usr/local/nvm"}`), &catalogLog); err != nil {
+		t.Fatal(err)
+	}
+	if catalogLog.ValidRemoteResult() {
+		t.Fatalf("a log line passed for catalog: %+v", catalogLog)
+	}
 }
 
 func TestEncodeReadResultTruncatesBeforeTransportCap(t *testing.T) {

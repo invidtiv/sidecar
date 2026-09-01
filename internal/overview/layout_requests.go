@@ -22,10 +22,6 @@ import (
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
-// remoteNewShellReason declines creating a tmux session on this machine for a
-// remote row. Carry a live terminal by session, or wait for host tmux splits.
-const remoteNewShellReason = "a new shell pane on a remote row cannot be created here yet; carry an existing live terminal with its session from layout get"
-
 func (m *Model) applyLayoutRequest(req uirequest.Request) tea.Cmd {
 	relayed := req.Origin.HostID != ""
 	if !req.Origin.Sessions && !relayed {
@@ -271,15 +267,9 @@ func (h overviewLayoutHost) DeckTree() *panelayout.Node {
 	return h.m.preview.deck.Tree()
 }
 func (h overviewLayoutHost) TerminalEnabled() bool {
-	if h.remoteSelected() {
-		return false
-	}
 	return features.IsEnabled(features.WorkspaceTerminalPanel.Name)
 }
 func (h overviewLayoutHost) TerminalOffReason() string {
-	if h.remoteSelected() {
-		return remoteNewShellReason
-	}
 	return features.WorkspaceTerminalPanel.Name + " is off"
 }
 func (h overviewLayoutHost) ShellCapMessage() string { return termpanes.CapMessage }
@@ -347,9 +337,6 @@ func (h overviewLayoutHost) CommitPassive(targets []uirequest.Target, plan panel
 	return uirequest.ItemVerdictOpened, "", cmd
 }
 func (h overviewLayoutHost) CommitShell(spec uirequest.LayoutPane, plan panelayout.OpenPlan) (string, string, tea.Cmd) {
-	if h.remoteSelected() {
-		return uirequest.ItemVerdictDeclined, remoteNewShellReason, nil
-	}
 	if !h.TerminalEnabled() {
 		return uirequest.ItemVerdictDeclined, h.TerminalOffReason(), nil
 	}
@@ -366,9 +353,6 @@ func (h overviewLayoutHost) RestoreSpec(layout *state.PaneLayoutJSON) tea.Cmd {
 	return h.m.restoreSpecPreviewLayout(layout)
 }
 func (h overviewLayoutHost) AdoptSpecShell(spec uirequest.LayoutPane) (string, string, tea.Cmd) {
-	if h.remoteSelected() {
-		return uirequest.ItemVerdictDeclined, remoteNewShellReason, nil
-	}
 	ws, ok := h.m.SelectedWorkspace()
 	if !ok {
 		return uirequest.ItemVerdictDeclined, layoutapply.SpecOriginRequired, nil
@@ -390,10 +374,14 @@ func (h overviewLayoutHost) AdoptSpecShell(spec uirequest.LayoutPane) (string, s
 	}
 	leaf.Target.Source = "shell"
 	leaf.Target.SourceID = ws.ID
+	leaf.Target.Host = ws.HostID
 	h.m.persistSessionsLayout()
 	workspaceID, leafID, session, workDir := ws.ID, leaf.ID, leaf.Session, ws.Path
+	hostID := ws.HostID
+	registry := h.m.hostRegistry
+	ctx := h.m.hostContext()
 	return uirequest.ItemVerdictOpened, "", func() tea.Msg {
-		paneID, err := ensurePreviewTerminalSession(session, workDir)
+		paneID, err := ensureSplitSession(ctx, registry, hostID, session, workDir)
 		return previewTerminalSplitCreatedMsg{WorkspaceID: workspaceID, LeafID: leafID, Session: session, PaneID: paneID, Err: err}
 	}
 }
@@ -580,4 +568,5 @@ func (m *Model) attachSpecPreviewShell(ws workspaceinventory.Workspace, live []p
 	if leaf.Name == "" {
 		leaf.Name = "Terminal"
 	}
+	leaf.Target.Host = ws.HostID
 }

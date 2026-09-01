@@ -767,6 +767,44 @@ Every verb is non-interactive, read-only, and strictly enumerated.
 Usage: sidecar content <command>
 ```
 
+### `sidecar content catalog`
+
+List file, diff, issue, and note picker candidates for a workspace
+
+List the bounded picker catalogs a viewing Sidecar offers for File, Diff, Issue, and Note on this machine.
+
+This is the read-only catalog a viewing Sidecar invokes on a host, not a general file browser.
+The workspace id is re-resolved to its authoritative root on every request.
+--kind restricts the list to one picker kind; omitting it returns every kind together.
+Resource rows come from content describe, not this verb.
+
+--json writes the machine contract.
+
+```
+Usage: sidecar content catalog --workspace ID [--kind file|issue|note|diff] [--json]
+```
+
+**Options:**
+
+- `--workspace ID`: Unscoped durable workspace id (projectKey:shell:name or projectKey:worktree:path)
+- `--kind KIND`: Picker kind (file, issue, note, or diff); omit to list all
+- `--json`: Write the structured result object to stdout (required for the machine contract)
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: listed
+- `1`: internal or load failure
+- `2`: usage error or unknown kind
+- `5`: value rejected: unknown workspace
+
+**Examples:**
+
+```bash
+sidecar content catalog --workspace /home/me/api:shell:sidecar-sh-1 --json
+sidecar content catalog --workspace /home/me/api:shell:sidecar-sh-1 --kind file --json
+```
+
 ### `sidecar content describe`
 
 Describe this host's terminal resource providers

@@ -39,6 +39,9 @@ func (m *Model) requestClosePreviewShellLeaf(leafID int) tea.Cmd {
 	if session == "" {
 		return m.closePreviewShellLeaf(leafID, termpanes.CloseSessionEnded)
 	}
+	if leaf.Target.Host != "" {
+		return m.closePreviewShellLeaf(leafID, termpanes.CloseExplicit)
+	}
 	workspaceID := m.preview.workspaceID
 	return func() tea.Msg {
 		evidence, err := probePreviewTerminal(session)
@@ -85,9 +88,14 @@ func (m *Model) closePreviewShellLeaf(leafID int, mode termpanes.CloseMode) tea.
 	m.preview.terminalPanes.Release(leafID)
 	m.cancelPreviewSplitClose()
 	m.persistSessionsLayout()
+	hostID := leaf.Target.Host
 	var ended tea.Cmd
 	if mode == termpanes.CloseExplicit {
-		ended = killPreviewTerminalSession(session)
+		if hostID != "" {
+			ended = killRemotePreviewSession(m.hostContext(), m.hostRegistry, hostID, session)
+		} else {
+			ended = killPreviewTerminalSession(session)
+		}
 	}
 	return tea.Batch(ended, m.syncTerminalGeometry())
 }

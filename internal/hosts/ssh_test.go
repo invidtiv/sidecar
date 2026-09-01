@@ -62,6 +62,22 @@ func TestControlCommandKeepsIgnoreSize(t *testing.T) {
 // interactive preexec hooks — and on a stock macOS install those write OSC 697
 // sequences to STDOUT, the same pipe the JSONL protocol travels on. The stream
 // is then unparseable for a reason nothing in the error points at.
+func TestTmuxCommandIsALoginShellNewSession(t *testing.T) {
+	command := newTestTransport(t, Host{ID: "h", Target: "h"}).TmuxCommand("new-session", "-d", "-s", "sidecar-tp-api", "-c", "/home/me/api")
+	if !strings.Contains(command, "-l -c") {
+		t.Errorf("tmux command is not a login shell: %s", command)
+	}
+	if !strings.Contains(command, "tmux") || !strings.Contains(command, "new-session") {
+		t.Errorf("tmux command is not new-session: %s", command)
+	}
+	if !strings.Contains(command, "sidecar-tp-api") || !strings.Contains(command, "/home/me/api") {
+		t.Errorf("tmux command lost session or workdir: %s", command)
+	}
+	if strings.Contains(command, "-C attach-session") {
+		t.Errorf("tmux ensure used control attach: %s", command)
+	}
+}
+
 func TestRemoteShellUsesLoginDashC(t *testing.T) {
 	command := newTestTransport(t, Host{ID: "h", Target: "h"}).RemoteShell("sidecar host serve --stdio")
 	if !strings.Contains(command, "-l -c") {

@@ -8,6 +8,7 @@ import (
 	"github.com/marcus/sidecar/internal/hosts"
 	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/uirequest"
+	"github.com/marcus/sidecar/internal/workspacecreate"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 	"github.com/marcus/sidecar/internal/workspaceops"
 )
@@ -359,16 +360,27 @@ func TestExecuteCreateWorktreeSaysSoWhenTheHostIsGone(t *testing.T) {
 // fallback for the first — so a remote row filled the diff, issue and note
 // pickers with THIS machine's commits and issues while the form targeted a host.
 // Its two siblings already answer nothing; so must this.
-func TestCreatePickersAnswerNothingForARemoteRow(t *testing.T) {
-	m, _ := remoteCreateModel(t)
+func TestCreatePickersAnswerNothingFromThisMachineForARemoteRow(t *testing.T) {
+	m, stub := remoteCreateModel(t)
 	if !m.workspaces.SelectID(remoteShellRowID()) {
 		t.Fatalf("could not select the remote row")
 	}
-	if cmd := m.loadCreatePickerData(); cmd != nil {
-		t.Error("the diff/issue/note pickers were populated from this machine for a remote row")
+	run(t, m, m.OpenCreate(""))
+	if m.createForm == nil {
+		t.Fatal("create form did not open")
 	}
-	if cmd := m.loadCreateFileCandidates(); cmd != nil {
+	m.createForm.SetKind(workspacecreate.KindFile)
+	m.createForm.AdvanceToTarget()
+	cmd := m.loadCreatePickerData()
+	if cmd == nil {
+		t.Fatal("remote picker catalog was not requested")
+	}
+	if m.loadCreateFileCandidates() != nil {
 		t.Error("the file picker was populated from this machine for a remote row")
+	}
+	run(t, m, cmd)
+	if len(stub.calls) != 1 || !strings.Contains(strings.Join(stub.argv(t, 0), " "), "content catalog") {
+		t.Fatalf("expected a host catalog invocation, got %v", stub.calls)
 	}
 }
 

@@ -3,6 +3,7 @@ package contentservice
 import (
 	"context"
 	"os/exec"
+	"strconv"
 
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/issueview"
@@ -24,6 +25,8 @@ type Service struct {
 	LookupIssue        func(ctx context.Context, workDir, issueID string, fallbacks []issueview.ProjectRef) (*issueview.Data, *issueview.Owner, error)
 	LookupNote         func(ctx context.Context, workDir, noteID string) (*noteview.Data, error)
 	NewResourceManager func() (*resourceprovider.Manager, error)
+	ListIssues         func(ctx context.Context, root string, limit int) ([]CatalogIssue, error)
+	ListNotes          func(ctx context.Context, root string, limit int) ([]CatalogNote, error)
 }
 
 // Default returns a Service bound to this process's config and state.
@@ -36,6 +39,39 @@ func defaultGit(ctx context.Context, dir string, args ...string) ([]byte, error)
 }
 
 func defaultLoadConfig() (*config.Config, error) { return config.Load() }
+
+func defaultListIssues(ctx context.Context, root string, limit int) ([]CatalogIssue, error) {
+	if limit <= 0 {
+		limit = catalogIssueLimit
+	}
+	var out []CatalogIssue
+	for _, status := range []string{"in_progress", "open"} {
+		cmd := exec.CommandContext(ctx, "td", "list", "--json", "--status", status, "--limit", strconv.Itoa(limit))
+		cmd.Dir = root
+		output, err := cmd.Output()
+		if err != nil {
+			continue
+		}
+		out = append(out, parseTDListIssues(output, limit)...)
+	}
+	if len(out) > limit*2 {
+		out = out[:limit*2]
+	}
+	return out, nil
+}
+
+func defaultListNotes(ctx context.Context, root string, limit int) ([]CatalogNote, error) {
+	if limit <= 0 {
+		limit = catalogNoteLimit
+	}
+	cmd := exec.CommandContext(ctx, "td", "-w", root, "--json", "note", "list")
+	cmd.Env = append(cmd.Environ(), "TD_SYNC_AUTO_START=0", "TD_ANALYTICS=false")
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	return parseTDListNotes(output, limit), nil
+}
 
 // ResolveParams is one content resolve, including resource identity.
 type ResolveParams struct {

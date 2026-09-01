@@ -3,6 +3,7 @@ package workspacecreate
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"charm.land/bubbles/v2/textinput"
@@ -14,6 +15,7 @@ import (
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/uirequest"
+	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
 // pickerState is the target picker's data: what the hosts loaded, the query
@@ -109,6 +111,14 @@ func filterSuggestions(query string, all []Suggestion) []Suggestion {
 }
 
 // items are the picker's filtered rows for the current step and kind.
+// PickerSuggestions is the current picker's suggestion pool, for tests.
+func (f *Form) PickerSuggestions() []Suggestion {
+	if f == nil {
+		return nil
+	}
+	return f.items()
+}
+
 func (f *Form) items() []Suggestion {
 	if f == nil || f.step != StepTarget {
 		return nil
@@ -209,6 +219,9 @@ func (f *Form) Step() FormStep {
 
 // needsTarget reports whether the currently selected kind continues onto the
 // picker step.
+// NeedsTarget reports that the selected kind has a picker step.
+func (f *Form) NeedsTarget() bool { return f.needsTarget() }
+
 func (f *Form) needsTarget() bool {
 	if f == nil {
 		return false
@@ -307,12 +320,29 @@ func (f *Form) TargetFor(workDir string) (uirequest.Target, error) {
 	if f.step != StepTarget {
 		return uirequest.Target{}, fmt.Errorf("the %s row has no target to resolve", kindLabel(f.rows, f.kind))
 	}
+	return ResolvePickerTarget(workDir, f.kind, f.selectedProviderID(), f.pickerRaw())
+}
+
+func (f *Form) pickerRaw() string {
 	raw := strings.TrimSpace(f.picker.input.Value())
 	filtered := f.items()
 	if f.kind != KindResource && len(filtered) > 0 && f.picker.cursor < len(filtered) {
 		raw = filtered[f.picker.cursor].Value
 	}
-	return ResolvePickerTarget(workDir, f.kind, f.selectedProviderID(), raw)
+	return raw
+}
+
+// TargetForRemote resolves the picker answer without touching this machine's
+// filesystem. File and diff values pass through as the host listed them;
+// openPreviewTarget re-resolves through SourceContext.
+func (f *Form) TargetForRemote() (uirequest.Target, error) {
+	if f == nil {
+		return uirequest.Target{}, fmt.Errorf("no form")
+	}
+	if f.step != StepTarget {
+		return uirequest.Target{}, fmt.Errorf("the %s row has no target to resolve", kindLabel(f.rows, f.kind))
+	}
+	return ResolvePickerTargetRemote(f.kind, f.selectedProviderID(), f.pickerRaw())
 }
 
 // ResolvePickerTarget resolves one picker answer onto the CLI's target shape,
@@ -340,6 +370,48 @@ func ResolvePickerTarget(workDir string, kind Kind, providerID, raw string) (uir
 	default:
 		return uirequest.Target{}, fmt.Errorf("kind %d takes no target", int(kind))
 	}
+}
+
+// ResolvePickerTargetRemote is the host-catalog equivalent of ResolvePickerTarget:
+// identity only, no local path or git resolution.
+func ResolvePickerTargetRemote(kind Kind, providerID, raw string) (uirequest.Target, error) {
+	raw = strings.TrimSpace(raw)
+	switch kind {
+	case KindFile:
+		path, line := splitPickerFileLine(raw)
+		if path == "" {
+			return uirequest.Target{}, fmt.Errorf("file path cannot be empty")
+		}
+		return uirequest.Target{Kind: uirequest.TargetKindFile, Value: path, Line: line}, nil
+	case KindDiff:
+		if raw == "" {
+			return uirequest.Target{Kind: uirequest.TargetKindDiff, Value: workspacediff.IdentityWorkingTree}, nil
+		}
+		return uirequest.Target{Kind: uirequest.TargetKindDiff, Value: raw}, nil
+	case KindIssue:
+		if !terminallink.IssueID(raw) {
+			return uirequest.Target{}, fmt.Errorf("type an issue id like td-756c34")
+		}
+		return uirequest.Target{Kind: uirequest.TargetKindIssue, Value: raw}, nil
+	case KindNote:
+		if !contentlink.NoteID(raw) {
+			return uirequest.Target{}, fmt.Errorf("type a note identity like nt-4jdj4e")
+		}
+		return uirequest.Target{Kind: uirequest.TargetKindNote, Value: raw}, nil
+	case KindResource:
+		return uirequest.ResolveResourceTarget(providerID, raw)
+	default:
+		return uirequest.Target{}, fmt.Errorf("kind %d takes no target", int(kind))
+	}
+}
+
+func splitPickerFileLine(raw string) (string, int) {
+	if colonIdx := strings.LastIndex(raw, ":"); colonIdx > 0 && colonIdx < len(raw)-1 {
+		if n, err := strconv.Atoi(raw[colonIdx+1:]); err == nil && n > 0 {
+			return raw[:colonIdx], n
+		}
+	}
+	return raw, 0
 }
 
 // HandleKey routes a key through the modal and keeps the two-step flow local:

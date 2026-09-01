@@ -213,52 +213,50 @@ func TestRelayedLayoutApplyIssueNoteDiffResourceThroughSource(t *testing.T) {
 	})
 }
 
-func TestRelayedLayoutApplyNewShellDeclines(t *testing.T) {
-	m, _, _ := showingRemoteTwinModel(t, nil)
+func TestRelayedLayoutApplyNewShellCreatesOnHost(t *testing.T) {
+	m, _, root := showingRemoteTwinModel(t, nil)
 	stub := &remoteRunnerStub{}
 	stub.install(t)
 	refuseLocalTerminalSplit(t)
+	remote := installRemoteTerminalSplitStub(t)
 	session := selectedRemoteSession(t, m)
-	before := previewLayoutSnapshot(m)
+	selected, _ := m.SelectedWorkspace()
 
-	req := requestFromAnnouncement(relayedLayoutApplyPanes(session, uirequest.LayoutPane{
+	handleRelayedLayout(t, m, relayedLayoutApplyPanes(session, uirequest.LayoutPane{
 		Kind: "shell", Name: "dev",
 	}))
-	if cmd := m.handleUIRequest(req); cmd != nil {
-		t.Fatalf("new-shell decline returned cmd %v", cmd)
+	if panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Shell) == nil {
+		t.Fatal("new shell leaf was not placed on the viewer tree")
 	}
-	if panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Shell) != nil {
-		t.Fatal("new shell leaf was created on a remote row")
-	}
-	if got := previewLayoutSnapshot(m); got != before {
-		t.Fatalf("new-shell decline mutated the tree:\nbefore %s\nafter  %s", before, got)
-	}
-	assertRemoteAck(t, stub, "declined", remoteNewShellReason)
+	remote.assertCalled(t, "mac-mini", termpanes.SessionName(selected.TmuxName), root)
+	assertRemoteAck(t, stub, "opened", "--action layout")
 }
 
-func TestRelayedLayoutApplySpecNewShellDeclines(t *testing.T) {
-	m, _, _ := showingRemoteTwinModel(t, nil)
+func TestRelayedLayoutApplySpecNewShellCreatesOnHost(t *testing.T) {
+	m, fake, root := showingRemoteTwinModel(t, nil)
 	stub := &remoteRunnerStub{}
 	stub.install(t)
 	refuseLocalTerminalSplit(t)
+	remote := installRemoteTerminalSplitStub(t)
 	session := selectedRemoteSession(t, m)
-	before := previewLayoutSnapshot(m)
+	selected, _ := m.SelectedWorkspace()
 
-	req := requestFromAnnouncement(relayedLayoutApplySpec(session, []uirequest.LayoutSpecColumn{
+	handleRelayedLayout(t, m, relayedLayoutApplySpec(session, []uirequest.LayoutSpecColumn{
 		{Panes: []uirequest.LayoutPane{{Kind: "primary"}}},
 		{Panes: []uirequest.LayoutPane{{Kind: "file", Targets: []string{"twin.txt"}}}},
 		{Panes: []uirequest.LayoutPane{{Kind: "shell", Name: "dev"}}},
 	}))
-	if cmd := m.handleUIRequest(req); cmd != nil {
-		t.Fatalf("spec new-shell decline returned cmd %v", cmd)
+	if m.preview.doc == nil || panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Document) == nil {
+		t.Fatal("spec with a new shell opened no file pane")
 	}
-	if m.preview.doc != nil {
-		t.Fatal("spec with a new shell still opened a file pane")
+	if panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Shell) == nil {
+		t.Fatal("spec new shell leaf is missing")
 	}
-	if got := previewLayoutSnapshot(m); got != before {
-		t.Fatalf("spec new-shell decline mutated the tree:\nbefore %s\nafter  %s", before, got)
+	if fake.resolves == 0 {
+		t.Fatal("file target did not resolve through Source")
 	}
-	assertRemoteAck(t, stub, "declined", remoteNewShellReason)
+	remote.assertCalled(t, "mac-mini", termpanes.SessionName(selected.TmuxName), root)
+	assertRemoteAck(t, stub, "opened", "--action layout")
 }
 
 func TestRelayedLayoutApplyCarriesLiveShellSession(t *testing.T) {

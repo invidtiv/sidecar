@@ -57,6 +57,29 @@ func TestRunSidecarDecodesContentResults(t *testing.T) {
 		}
 	})
 
+	t.Run("catalog is an answer and a log line is not", func(t *testing.T) {
+		answer := contentservice.CatalogResult{Kind: "catalog", Workspace: "p:shell:s1", Files: []string{"a.md"}}
+		raw, err := json.Marshal(answer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		client := testRunClient(t, Host{ID: "h", Target: "h"}, stubInvoker(logLine+"\n"+string(raw)+"\n", "", 0))
+		var result contentservice.CatalogResult
+		if err := client.RunSidecar(context.Background(), []string{"content", "catalog", "--json"}, &result); err != nil {
+			t.Fatalf("RunSidecar: %v", err)
+		}
+		if !result.ValidRemoteResult() || len(result.Files) != 1 {
+			t.Fatalf("decoded %+v", result)
+		}
+
+		client = testRunClient(t, Host{ID: "h", Target: "h"}, stubInvoker(logLine+"\n", "", 0))
+		result = contentservice.CatalogResult{}
+		err = client.RunSidecar(context.Background(), []string{"content", "catalog", "--json"}, &result)
+		if got := RunFailure(err); got != FailNotResult {
+			t.Fatalf("failure = %q, want %q (err %v, result %+v)", got, FailNotResult, err, result)
+		}
+	})
+
 	t.Run("empty object is not a resolve result", func(t *testing.T) {
 		client := testRunClient(t, Host{ID: "h", Target: "h"}, stubInvoker("{}\n", "", 0))
 		var result contentservice.ResolveResult
