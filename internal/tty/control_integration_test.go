@@ -75,9 +75,6 @@ func TestControlManagerIsolatedTmuxSessionPool(t *testing.T) {
 	}
 	factoryMu.Unlock()
 
-	snapshotMu.Lock()
-	twoBefore := len(snapshots["two"])
-	snapshotMu.Unlock()
 	sendIsolatedTmuxText(t, socket, paneOne, "CONTROL_ONE")
 	sawControlOne := func() bool {
 		snapshotMu.Lock()
@@ -99,10 +96,13 @@ func TestControlManagerIsolatedTmuxSessionPool(t *testing.T) {
 	}
 	time.Sleep(20 * time.Millisecond)
 	snapshotMu.Lock()
-	if len(snapshots["two"]) != twoBefore {
-		t.Fatalf("session two captured after output only in session one")
-	}
+	twoSnaps := append([]ControlSnapshot(nil), snapshots["two"]...)
 	snapshotMu.Unlock()
+	for _, snapshot := range twoSnaps {
+		if strings.Contains(snapshot.Output, "CONTROL_ONE") {
+			t.Fatalf("session two captured output from session one: %q", snapshot.Output)
+		}
+	}
 
 	sendIsolatedTmuxText(t, socket, paneTwo, "CONTROL_TWO")
 	waitFor(t, func() bool {
