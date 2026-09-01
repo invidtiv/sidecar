@@ -417,6 +417,22 @@ func TestHideIdleKeepsLiveAndAgentRows(t *testing.T) {
 	}
 }
 
+func TestLocalLiveMainCheckoutStaysVisible(t *testing.T) {
+	m := catalogModel(t)
+	result := m.results["sidecar"]
+	result.Workspaces = append(result.Workspaces, workspaceinventory.Workspace{
+		ID: "s-main", ProjectKey: "sidecar", ProjectName: "sidecar",
+		Kind: workspaceinventory.KindWorktree, Name: "sidecar", Path: "/tmp/sidecar",
+		Branch: "main", IsMain: true, Plain: true, Live: true,
+	})
+	m.results["sidecar"] = result
+	m.syncBoard()
+	got, ok := visibleByID(m)["s-main"]
+	if !ok || got.Group != workspacelist.GroupLive {
+		t.Fatalf("local live main = %#v ok=%v, want a LIVE row", got, ok)
+	}
+}
+
 func TestFirstRunEmptyCatalogRegistersCreateControl(t *testing.T) {
 	m := catalogModel(t)
 	m.results["sidecar"] = workspaceinventory.ProjectResult{ProjectKey: "sidecar"}

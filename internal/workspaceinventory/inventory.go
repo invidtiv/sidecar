@@ -858,13 +858,14 @@ const (
 )
 
 // resolveWorktreePanes picks the Output / type target for a worktree row.
-// Sidecar chrome (term panels, inline editors) and project shells are not
-// rivals. A live sidecar-ws-* session wins when it is the only such session;
-// leftover unmanaged or extra worktree sessions stay Ambiguous.
+// Sidecar chrome (term panels, inline editors, project shells, and the TUI
+// itself) is not a rival. A live sidecar-ws-* session wins when it is the
+// only such session; leftover unmanaged or extra worktree sessions stay
+// Ambiguous.
 func resolveWorktreePanes(workspace Workspace, matches []Pane) []Pane {
 	remaining := make([]Pane, 0, len(matches))
 	for _, pane := range matches {
-		if worktreeChromeSession(pane.Session) {
+		if worktreeChromePane(pane) {
 			continue
 		}
 		remaining = append(remaining, pane)
@@ -875,10 +876,24 @@ func resolveWorktreePanes(workspace Workspace, matches []Pane) []Pane {
 	return remaining
 }
 
+func worktreeChromePane(pane Pane) bool {
+	return worktreeChromeSession(pane.Session) || sidecarTUICommand(pane.Command)
+}
+
 func worktreeChromeSession(session string) bool {
 	return strings.HasPrefix(session, termPanelSessionPrefix) ||
 		strings.HasPrefix(session, editorSessionPrefix) ||
 		strings.HasPrefix(session, shellSessionPrefix)
+}
+
+// sidecarTUICommand reports whether pane_current_command is the Sidecar TUI.
+// Correlation is by cwd, so without this a TUI launched from a catalogued
+// checkout is the worktree's only live match — locally HostPane already
+// drops this process's pane, but sidecar host serve is an SSH child with no
+// TMUX_PANE, and the pane it would need to drop is the *other* Sidecar
+// running on that machine.
+func sidecarTUICommand(command string) bool {
+	return filepath.Base(strings.TrimSpace(command)) == "sidecar"
 }
 
 func preferredWorktreePane(workspace Workspace, matches []Pane) *Pane {

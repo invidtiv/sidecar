@@ -140,7 +140,20 @@ func (m *Model) idleWorktreeRevealed(ws workspaceinventory.Workspace) bool {
 }
 
 func (m *Model) hideIdleWorkspace(item workspacelist.Item, ws workspaceinventory.Workspace) bool {
-	return !m.showIdleWorktrees && item.Group == workspacelist.GroupNoSession && !m.idleWorktreeRevealed(ws)
+	if m.idleWorktreeRevealed(ws) {
+		return false
+	}
+	// A remote main checkout with no agent is the host's project home, not a
+	// session. The project plugin already refuses that row locally. Globally it
+	// usually hid behind the idle-worktrees toggle — until a pane whose cwd is
+	// the checkout (almost always the host's own Sidecar TUI) marked it LIVE.
+	// Managed shells are already their own rows. Keep the row when an agent is
+	// actually running on main; a leftover zsh sitting in the checkout is not
+	// a reason for a remote viewer to attach.
+	if ws.Remote() && ws.Kind == workspaceinventory.KindWorktree && ws.IsMain && !ws.HasAgent() {
+		return true
+	}
+	return !m.showIdleWorktrees && item.Group == workspacelist.GroupNoSession
 }
 
 func (m *Model) syncCreateActions() {

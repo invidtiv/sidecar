@@ -8,6 +8,8 @@ All notable changes to sidecar are documented here.
 
 - **`sidecar agent read` without `--source` now reads the visible screen, matching its documented default.** Omitting the flag previously failed with `source "" is not a terminal capture`. (td-152978)
 
+- **Sessions no longer lists a remote project's main checkout just because Sidecar is running there.** `sidecar host serve` cannot exclude the host's own TUI pane the way a local collector excludes `TMUX_PANE`, so that pane's cwd used to mark the main worktree LIVE. The TUI is chrome, not a session, and a remote main checkout with no agent is hidden the same way the project sidebar already hides it locally. Linked worktrees, managed shells, and an agent actually running on main still appear.
+
 ### Changed
 
 - **Tmux 3.4 is now Sidecar's explicit compatibility floor, with 3.7c continuously tested.** One checksum-pinned manifest drives local source builds and an oldest/latest CI matrix, including real private-server coverage for control mode, terminal rendering, paste, metadata and shell lifecycle. A separate latest-client/minimum-server proof models a Homebrew upgrade without touching the live default server and verifies capture fallback when tmux explicitly declines cross-version control mode. Future stable upgrades are one manifest change plus the same repeatable proof. (td-22399a)

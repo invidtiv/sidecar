@@ -78,6 +78,66 @@ func rowNames(m *Model) []string {
 	return names
 }
 
+func remoteMainSnapshot(live bool, agent *hostproto.Presentation) *hostproto.Snapshot {
+	item := hostproto.Item{
+		ID: "/code/sidecar:worktree:/code/sidecar", ProjectKey: "/code/sidecar",
+		ProjectName: "sidecar", ProjectRoot: "/code/sidecar",
+		Kind: "worktree", Key: "/code/sidecar", Name: "sidecar",
+		Path: "/code/sidecar", Branch: "main", Live: live, IsMain: true,
+	}
+	if agent != nil {
+		item.Agent = agent
+		item.Provider = "grok"
+	}
+	return &hostproto.Snapshot{
+		Generation: 1,
+		ObservedAt: time.Now(),
+		Projects: []hostproto.Project{{
+			Key: "/code/sidecar", Name: "sidecar", Root: "/code/sidecar",
+			Items: []hostproto.Item{
+				item,
+				{
+					ID: "/code/sidecar:shell:s1", ProjectKey: "/code/sidecar",
+					ProjectName: "sidecar", ProjectRoot: "/code/sidecar",
+					Kind: "shell", Key: "s1", Name: "Shell 1", Session: "sidecar-sh-1",
+					Live: true,
+				},
+			},
+		}},
+	}
+}
+
+func TestRemoteMainCheckoutWithoutAgentIsHiddenEvenWhenLive(t *testing.T) {
+	m := hostModel(t, "sidecar", hosts.Health{State: hosts.StateOnline}, remoteMainSnapshot(true, nil))
+	m.syncWorkspaces()
+	for _, item := range m.workspaces.Items() {
+		if item.Kind == workspacelist.KindWorktree && strings.Contains(item.ID, "worktree") {
+			t.Fatalf("remote main checkout was listed: %#v", item)
+		}
+	}
+	if rowByName(t, m, "Shell 1").Name != "Shell 1" {
+		t.Fatal("hiding the main checkout took the project's shell with it")
+	}
+
+	m.showIdleWorktrees = true
+	m.syncWorkspaces()
+	for _, item := range m.workspaces.Items() {
+		if item.Kind == workspacelist.KindWorktree && strings.Contains(item.ID, "worktree") {
+			t.Fatalf("show idle worktrees resurrected the remote main checkout: %#v", item)
+		}
+	}
+}
+
+func TestRemoteMainCheckoutWithAgentStaysVisible(t *testing.T) {
+	m := hostModel(t, "sidecar", hosts.Health{State: hosts.StateOnline}, remoteMainSnapshot(true, &hostproto.Presentation{
+		Lane: "working", Label: "working", Icon: "●",
+	}))
+	row := rowByName(t, m, "sidecar")
+	if row.Group != workspacelist.GroupWorking {
+		t.Fatalf("agent on remote main = %#v, want the working row", row)
+	}
+}
+
 // TestRemoteRowsJoinTheOrdinaryList is the whole design claim: a remote
 // workspace is an ordinary row, in the ordinary lane grouping.
 func TestRemoteRowsJoinTheOrdinaryList(t *testing.T) {
