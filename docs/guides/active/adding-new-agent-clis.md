@@ -5,7 +5,7 @@ This guide is the complete, step-by-step developer and agent reference for addin
 Sidecar provides unified workspace creation, live status tracking, terminal embedding, prompt coordination, session resume durability, and conversation history across all supported CLIs. To make a CLI a first-class citizen, several subsystems need to be wired.
 
 > [!TIP]
-> **Borrowing from Herdr**: When adding a new CLI, you can reference the source code for [Herdr](https://github.com/marcus/herdr). Herdr is often ahead on prototyping and testing new CLI integrations (process names, regex rules, hook schemas, and screen captures), and Sidecar frequently ports or adapts proven patterns from Herdr.
+> **Borrowing from Herdr**: When adding a new CLI, you can reference the source code for [Herdr](https://github.com/herdrdev/herdr). Herdr is often ahead on prototyping and testing new CLI integrations (process names, regex rules, hook schemas, and screen captures), and Sidecar frequently ports or adapts proven patterns from Herdr.
 
 ---
 
@@ -48,11 +48,11 @@ Adding a new agent CLI touches up to seven distinct subsystems:
 
 ## Step 1: Catalog & Launch/Resume Registry
 
-[`internal/agentcatalog`](file:///Users/marcus/code/sidecar/internal/agentcatalog/agentcatalog.go) is the single shared source of truth for agent families Sidecar can launch, configure, and resume.
+`internal/agentcatalog` is the single shared source of truth for agent families Sidecar can launch, configure, and resume.
 
-### 1.1 Register Family in [`agentcatalog.go`](file:///Users/marcus/code/sidecar/internal/agentcatalog/agentcatalog.go)
+### 1.1 Register Family in `internal/agentcatalog/agentcatalog.go`
 
-Add the new CLI family entry to `families` in [`internal/agentcatalog/agentcatalog.go`](file:///Users/marcus/code/sidecar/internal/agentcatalog/agentcatalog.go#L68-L86):
+Add the new CLI family entry to `families` in `internal/agentcatalog/agentcatalog.go`:
 
 ```go
 {
@@ -82,37 +82,37 @@ Add the new CLI family entry to `families` in [`internal/agentcatalog/agentcatal
 
 ### 1.3 What Inherits This Automatically
 
-Adding a family to [`internal/agentcatalog`](file:///Users/marcus/code/sidecar/internal/agentcatalog/agentcatalog.go) automatically wires:
-- Creation pickers in [`internal/workspacecreate/form.go`](file:///Users/marcus/code/sidecar/internal/workspacecreate/form.go) (Worktree & Shell modals).
-- Configuration settings in [`internal/configui/page_agents.go`](file:///Users/marcus/code/sidecar/internal/configui/page_agents.go) (Agent toggle allowlist and launch command override editors).
-- Workspace default agent dropdown in [`internal/configui/page_workspaces.go`](file:///Users/marcus/code/sidecar/internal/configui/page_workspaces.go).
+Adding a family to `internal/agentcatalog` automatically wires:
+- Creation pickers in `internal/workspacecreate/form.go` (Worktree & Shell modals).
+- Configuration settings in `internal/configui/page_agents.go` (Agent toggle allowlist and launch command override editors).
+- Workspace default agent dropdown in `internal/configui/page_workspaces.go`.
 - CLI commands: `sidecar create shell --agent <kind>`, `sidecar create worktree --agent <kind>`, `sidecar agent start --kind <kind>`.
-- Structured resume command generation via [`agentcatalog.BuildResume`](file:///Users/marcus/code/sidecar/internal/agentcatalog/agentcatalog.go#L228-L235) and [`agentcatalog.DisplayCommand`](file:///Users/marcus/code/sidecar/internal/agentcatalog/agentcatalog.go#L152-L162).
+- Structured resume command generation via `agentcatalog.BuildResume` and `agentcatalog.DisplayCommand`.
 
 ---
 
 ## Step 2: Live Activity & Process Identification
 
-[`internal/agentactivity`](file:///Users/marcus/code/sidecar/internal/agentactivity) classifies live agent state (`working`, `blocked`, `idle`, `done`, `unknown`) from pane titles, tmux screen captures, and process information.
+`internal/agentactivity` classifies live agent state (`working`, `blocked`, `idle`, `done`, `unknown`) from pane titles, tmux screen captures, and process information.
 
-### 2.1 Register Process Name in [`internal/agentactivity/activity.go`](file:///Users/marcus/code/sidecar/internal/agentactivity/activity.go)
+### 2.1 Register Process Name in `internal/agentactivity/activity.go`
 
-1. Update [`identifyProcessName(command)`](file:///Users/marcus/code/sidecar/internal/agentactivity/activity.go#L143-L169):
+1. Update `identifyProcessName(command)`:
    ```go
    case command == "muse" || strings.HasPrefix(command, "muse-"):
        return "muse"
    ```
-2. Update [`Detect(ob Observation) Result`](file:///Users/marcus/code/sidecar/internal/agentactivity/activity.go#L211-L234):
+2. Update `Detect(ob Observation) Result`:
    ```go
    case "muse":
        return DetectMuse(ob)
    ```
-3. Update [`Supports(agent string) bool`](file:///Users/marcus/code/sidecar/internal/agentactivity/activity.go#L236-L244):
+3. Update `Supports(agent string) bool`:
    ```go
    case "codex", "claude", "grok", "antigravity", "pi", "copilot", "cursor", "opencode", "amp", "muse":
        return true
    ```
-4. If the CLI runs under a generic runtime wrapper like Node, Bun, or Python, check [`NeedsProcessIdentity()`](file:///Users/marcus/code/sidecar/internal/agentactivity/activity.go#L173-L180) and screen identity heuristics in [`Identify()`](file:///Users/marcus/code/sidecar/internal/agentactivity/activity.go#L80-L121).
+4. If the CLI runs under a generic runtime wrapper like Node, Bun, or Python, check `NeedsProcessIdentity()` and screen identity heuristics in `Identify()`.
 
 ### 2.2 Create Provider Detection Rules in `internal/agentactivity/<provider>.go`
 
@@ -121,7 +121,10 @@ Create `internal/agentactivity/muse.go`:
 ```go
 package agentactivity
 
-import "regexp"
+import (
+	"regexp"
+	"strings"
+)
 
 // Spinners are provider-owned: never share regexes across providers as glyph
 // sets and framing drift independently.
@@ -191,19 +194,19 @@ func museProcess(command string) bool {
 
 - **Spinners are provider-owned**: Never share spinner regexes across providers. Codex uses standard braille dots; Claude, Grok, and Cursor cycle the entire U+2800–U+28FF block.
 - **Overlays must use `Skip: true`**: Splash screens, model pickers, and transcript viewers must retain the prior semantic state rather than prematurely reporting `idle` or `unknown`.
-- **Verify with tests**: Run `go test ./internal/agentactivity/...` to ensure [`TestTheProcessNameVocabularyMatchesTheAgentCatalog`](file:///Users/marcus/code/sidecar/internal/agentactivity/catalog_vocabulary_test.go#L19-L31) passes.
+- **Verify with tests**: Run `go test ./internal/agentactivity/...` to ensure `TestTheProcessNameVocabularyMatchesTheAgentCatalog` passes.
 
 ---
 
 ## Step 3: Workspace Plugin Compatibility
 
-While new code queries [`internal/agentcatalog`](file:///Users/marcus/code/sidecar/internal/agentcatalog/agentcatalog.go), the workspace plugin maintains several helper tables in [`internal/plugins/workspace/types.go`](file:///Users/marcus/code/sidecar/internal/plugins/workspace/types.go):
+While new code queries `internal/agentcatalog`, the workspace plugin maintains several helper tables in `internal/plugins/workspace/types.go`:
 
-1. **Add `AgentType` constant** in [`internal/plugins/workspace/types.go`](file:///Users/marcus/code/sidecar/internal/plugins/workspace/types.go#L135-L148):
+1. **Add `AgentType` constant** in `internal/plugins/workspace/types.go`:
    ```go
    AgentMuse AgentType = "muse" // Meta Muse
    ```
-2. **Add to `buildSkipPermissionsFlags()`** in [`internal/plugins/workspace/types.go`](file:///Users/marcus/code/sidecar/internal/plugins/workspace/types.go#L155-L165):
+2. **Add to `buildSkipPermissionsFlags()`** in `internal/plugins/workspace/types.go`:
    ```go
    agents := []AgentType{
        AgentClaude, AgentCodex, AgentCopilot, AgentAider, AgentAntigravity,
@@ -211,9 +214,9 @@ While new code queries [`internal/agentcatalog`](file:///Users/marcus/code/sidec
    }
    ```
 3. **Optional flags**:
-   - [`SystemPromptAppendFlags`](file:///Users/marcus/code/sidecar/internal/plugins/workspace/types.go#L175-L178): If the CLI accepts a flag to append system prompt instructions (e.g. `AgentMuse: "--rules"`).
-   - [`PrintModeArgs`](file:///Users/marcus/code/sidecar/internal/plugins/workspace/types.go#L184-L188): If the CLI has non-interactive stdout execution mode (e.g. `AgentMuse: {"-p"}`).
-4. **Fallback session status** in [`internal/plugins/workspace/agent_session.go`](file:///Users/marcus/code/sidecar/internal/plugins/workspace/agent_session.go#L92-L111): Add a case to `detectAgentSessionStatus` if file-based inspection is supported.
+   - `SystemPromptAppendFlags`: If the CLI accepts a flag to append system prompt instructions (e.g. `AgentMuse: "--rules"`).
+   - `PrintModeArgs`: If the CLI has non-interactive stdout execution mode (e.g. `AgentMuse: {"-p"}`).
+4. **Fallback session status** in `internal/plugins/workspace/agent_session.go`: Add a case to `detectAgentSessionStatus` if file-based inspection is supported.
 
 ---
 
@@ -221,9 +224,9 @@ While new code queries [`internal/agentcatalog`](file:///Users/marcus/code/sidec
 
 When an agent CLI supports telemetry/lifecycle hooks, Sidecar can track exact sessions, state transitions, and process exits.
 
-### 4.1 Record Capability in [`internal/agentlifecycle/capabilities.json`](file:///Users/marcus/code/sidecar/internal/agentlifecycle/capabilities.json)
+### 4.1 Record Capability in `internal/agentlifecycle/capabilities.json`
 
-Add an entry to [`capabilities.json`](file:///Users/marcus/code/sidecar/internal/agentlifecycle/capabilities.json):
+Add an entry to `internal/agentlifecycle/capabilities.json`:
 
 ```json
 {
@@ -249,14 +252,14 @@ Add an entry to [`capabilities.json`](file:///Users/marcus/code/sidecar/internal
 }
 ```
 
-### 4.2 Approved Store Roots in [`internal/agentsession/trust.go`](file:///Users/marcus/code/sidecar/internal/agentsession/trust.go)
+### 4.2 Approved Store Roots in `internal/agentsession/trust.go`
 
-1. Register official source in [`OfficialSources()`](file:///Users/marcus/code/sidecar/internal/agentsession/trust.go#L18-L25) and [`OfficialSourceFor(kind)`](file:///Users/marcus/code/sidecar/internal/agentsession/trust.go#L33-L46):
+1. Register official source in `OfficialSources()` and `OfficialSourceFor(kind)` in `internal/agentsession/trust.go`:
    ```go
    case "muse":
        return "sidecar.muse.hooks"
    ```
-2. Define approved storage roots in [`Roots.For(kind)`](file:///Users/marcus/code/sidecar/internal/agentsession/trust.go#L93-L128):
+2. Define approved storage roots in `Roots.For(kind)` in `internal/agentsession/trust.go`:
    ```go
    case "muse":
        base := r.env("MUSE_HOME")
@@ -272,8 +275,8 @@ Add an entry to [`capabilities.json`](file:///Users/marcus/code/sidecar/internal
 ### 4.3 Automated Integration Installer (Optional)
 
 If Sidecar bundles an automatic hook or plugin installer for this CLI:
-1. Implement [`agentintegration.Adapter`](file:///Users/marcus/code/sidecar/internal/agentintegration/install.go#L483-L498) in `internal/agentintegration/muse_install.go`.
-2. Register the adapter in [`agentintegration.DefaultAdapters()`](file:///Users/marcus/code/sidecar/internal/agentintegration/install.go#L501-L503).
+1. Implement `agentintegration.Adapter` in `internal/agentintegration/muse_install.go`.
+2. Register the adapter in `agentintegration.DefaultAdapters()` in `internal/agentintegration/install.go`.
 3. This exposes `sidecar agent integration install muse`, `status`, `update`, and `uninstall`, as well as the UI in **Configuration → Agents → Integrations**.
 
 ---
@@ -285,7 +288,7 @@ To allow Sidecar's **Conversations** plugin to display transcripts, search histo
 ### 5.1 Implement `adapter.Adapter` in `internal/adapter/<provider>/`
 
 Create the adapter package in `internal/adapter/muse/`:
-- `adapter.go`: Implements [`adapter.Adapter`](file:///Users/marcus/code/sidecar/internal/adapter/adapter.go#L36-L47):
+- `adapter.go`: Implements `adapter.Adapter`:
   - `ID() string`: `"muse"`
   - `Name() string`: `"Meta Muse"`
   - `Icon() string`: `"M"` or custom glyph
@@ -296,33 +299,49 @@ Create the adapter package in `internal/adapter/muse/`:
   - `Usage(sessionID string) (*UsageStats, error)`: Token usage statistics
   - `Watch(projectRoot string) (<-chan Event, io.Closer, error)`: File watcher
 - `types.go`: Native data structures for parsing session logs.
-- `watcher.go`: Watcher setup (use [`tieredwatcher`](file:///Users/marcus/code/sidecar/internal/adapter/tieredwatcher) for append-only JSONL files).
+- `watcher.go`: Watcher setup (use `internal/adapter/tieredwatcher` for append-only JSONL files).
 
-### 5.2 Register Adapter
+### 5.2 Register Adapter Factory
 
-1. Register in [`internal/adapter/register.go`](file:///Users/marcus/code/sidecar/internal/adapter/register.go).
-2. Add blank import in [`cmd/sidecar/main.go`](file:///Users/marcus/code/sidecar/cmd/sidecar/main.go#L17-L30):
+1. Create `internal/adapter/muse/register.go` to self-register via `adapter.RegisterFactory`:
+   ```go
+   package muse
+
+   import "github.com/marcus/sidecar/internal/adapter"
+
+   func init() {
+       adapter.RegisterFactory(func() adapter.Adapter {
+           return New()
+       })
+   }
+   ```
+2. Add blank import in `cmd/sidecar/main.go`:
    ```go
    _ "github.com/marcus/sidecar/internal/adapter/muse"
    ```
 
 ### 5.3 Conversations UI Integration
 
-In [`internal/plugins/conversations/view_content.go`](file:///Users/marcus/code/sidecar/internal/plugins/conversations/view_content.go):
-- [`renderAdapterIcon()`](file:///Users/marcus/code/sidecar/internal/plugins/conversations/view_content.go#L162-L190): Add color styling for the adapter badge.
-- [`adapterAbbrev()`](file:///Users/marcus/code/sidecar/internal/plugins/conversations/view_content.go#L192-L221): Add 2-letter abbreviation (e.g. `"MU"`).
-- [`adapterShortName()`](file:///Users/marcus/code/sidecar/internal/plugins/conversations/view_content.go#L223-L253): Return short name string.
-- [`adapterFilterOptions()`](file:///Users/marcus/code/sidecar/internal/plugins/conversations/view_content.go#L255-L325): Add dedicated filter shortcut key if desired.
+In `internal/plugins/conversations/view_content.go`:
+- `renderAdapterIcon()`: Add color styling for the adapter badge.
+- `adapterAbbrev()`: Add 2-letter abbreviation (e.g. `"MU"`).
+- `adapterShortName()`: Return short name string.
+- `adapterFilterOptions()`: Add dedicated filter shortcut key if desired.
 
 ---
 
 ## Step 6: Theme Colors & Visual Presentation
 
-1. **Default Color**: In [`internal/styles/overview.go`](file:///Users/marcus/code/sidecar/internal/styles/overview.go#L23-L30), add a default hex color to `defaultAgentColors`:
-   ```go
-   "muse": "#A78BFA",
-   ```
-2. **Website & Theme Palette**: In [`website/src/data/themes.json`](file:///Users/marcus/code/sidecar/website/src/data/themes.json), add `"muse": "#..."` under `AgentColors` for themes.
+1. **Default Color & Icon Glyph**: In `internal/styles/overview.go`:
+   - Add default hex color to `defaultAgentColors`:
+     ```go
+     "muse": "#A78BFA",
+     ```
+   - Add icon glyph to `defaultAgentIcons` (must match `Adapter.Icon()`):
+     ```go
+     "muse": "✦",
+     ```
+2. **Website & Theme Palette**: In `website/src/data/themes.json`, add `"muse": "#..."` under `AgentColors` for themes.
 
 ---
 
@@ -335,6 +354,9 @@ Always run the full verification suite when adding a new agent CLI:
 # Verify catalog and process name resolution
 go test ./internal/agentcatalog/...
 go test ./internal/agentactivity/...
+
+# Verify icon consistency with conversations adapters
+go test ./internal/styles/ -run TestAgentIconMatchesConversationsAdapters
 
 # Verify workspace pickers match catalog
 go test ./internal/plugins/workspace/ -run TestAgentPickersFollowCatalog
@@ -369,5 +391,5 @@ SIDECAR_BIN=$HOME/go/bin/sidecar ./scripts/tmux-drive.sh start 200 50
 - [ ] **Step 3 (`internal/plugins/workspace`)**: Add `AgentType` constant, append to `buildSkipPermissionsFlags()`, and set optional system prompt / print mode flags.
 - [ ] **Step 4 (`internal/agentlifecycle` & `agentsession`)**: Add capability to `capabilities.json`, register official source, and configure approved store roots.
 - [ ] **Step 5 (`internal/adapter`)**: Implement conversation adapter, register constructor, and add blank import in `cmd/sidecar/main.go`.
-- [ ] **Step 6 (`internal/styles` & themes)**: Add default hex color to `defaultAgentColors` and `themes.json`.
+- [ ] **Step 6 (`internal/styles` & themes)**: Add default hex color and icon to `defaultAgentColors`/`defaultAgentIcons` in `internal/styles/overview.go` and update `themes.json`.
 - [ ] **Step 7 (Tests)**: Pass vocabulary parity tests, adapter unit tests, and live matrix tests.
