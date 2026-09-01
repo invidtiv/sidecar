@@ -73,3 +73,19 @@ func TestUpdateMovementKeyWithHostIDDoesNotPanic(t *testing.T) {
 	_, _ = p.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
 	_, _ = p.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 }
+
+func TestFocusContextWithHostIDDoesNotPanic(t *testing.T) {
+	p := New()
+	if err := p.Init(&plugin.Context{WorkDir: t.TempDir(), HostID: "marcusbook"}); err != nil {
+		t.Fatal(err)
+	}
+	if p.tree != nil {
+		t.Fatal("tree should be nil while remotely bound")
+	}
+	got := p.FocusContext()
+	if got != "git-status" {
+		t.Fatalf("FocusContext() = %q, want git-status", got)
+	}
+	_ = p.Diagnostics()
+	_ = p.Commands()
+}

@@ -293,6 +293,10 @@ func resolveGitRoot(dir string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+func (p *Plugin) remoteBound() bool {
+	return p.ctx != nil && p.ctx.HostID != ""
+}
+
 func (p *Plugin) inNoRepoMode() bool {
 	return p.ctx != nil && p.ctx.HostID == "" && !p.hasRepo
 }
@@ -352,7 +356,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 
 // Start begins plugin operation.
 func (p *Plugin) Start() tea.Cmd {
-	if p.ctx != nil && p.ctx.HostID != "" {
+	if p.remoteBound() {
 		return nil
 	}
 	// Repository discovery invokes Git, so it must remain inside the command.
@@ -369,7 +373,7 @@ func (p *Plugin) Stop() {
 
 // Update handles messages.
 func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
-	if p.ctx != nil && p.ctx.HostID != "" {
+	if p.remoteBound() {
 		return p, nil
 	}
 	switch msg := msg.(type) {
@@ -1088,7 +1092,7 @@ func (p *Plugin) View(width, height int) string {
 	p.height = height
 
 	var content string
-	if p.ctx != nil && p.ctx.HostID != "" {
+	if p.remoteBound() {
 		content = styles.Title.Render(pluginName) + "\n\n" + styles.Muted.Render(plugin.FormatRemoteUnavailable(pluginName, p.ctx.HostID))
 	} else if p.inNoRepoMode() {
 		content = p.renderNoRepoView()
@@ -1146,7 +1150,7 @@ func (p *Plugin) SetFocused(f bool) { p.focused = f }
 
 // Commands returns the available commands.
 func (p *Plugin) Commands() []plugin.Command {
-	if p.ctx != nil && p.ctx.HostID != "" {
+	if p.remoteBound() {
 		return nil
 	}
 	commands := []plugin.Command{
@@ -1260,6 +1264,9 @@ func (p *Plugin) Commands() []plugin.Command {
 
 // FocusContext returns the current focus context.
 func (p *Plugin) FocusContext() string {
+	if p.remoteBound() {
+		return "git-status"
+	}
 	if p.inNoRepoMode() {
 		return "git-no-repo"
 	}
@@ -1317,7 +1324,21 @@ func (p *Plugin) BlocksGlobalKeys() bool {
 
 // Diagnostics returns plugin health info.
 func (p *Plugin) Diagnostics() []plugin.Diagnostic {
+	if p.remoteBound() {
+		host := ""
+		if p.ctx != nil {
+			host = p.ctx.HostID
+		}
+		return []plugin.Diagnostic{
+			{ID: "git-status", Status: "warn", Detail: plugin.FormatRemoteUnavailable(pluginName, host)},
+		}
+	}
 	if p.inNoRepoMode() {
+		return []plugin.Diagnostic{
+			{ID: "git-status", Status: "warn", Detail: "No git repository"},
+		}
+	}
+	if p.tree == nil {
 		return []plugin.Diagnostic{
 			{ID: "git-status", Status: "warn", Detail: "No git repository"},
 		}
