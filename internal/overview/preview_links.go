@@ -149,9 +149,6 @@ func (m *Model) activatePreviewLinkAt(action mouse.MouseAction, modified bool) (
 	if plan.Kind == targetactivation.PlanOpenFile || plan.Kind == targetactivation.PlanOpenDiff {
 		workspace, ok := m.SelectedWorkspace()
 		if ok && workspace.Remote() {
-			if plan.Kind == targetactivation.PlanOpenDiff {
-				return nil, false
-			}
 			return m.activatePreviewPlan(plan)
 		}
 		return m.revalidatePreviewLink(span)

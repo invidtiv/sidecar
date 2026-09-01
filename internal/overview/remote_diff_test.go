@@ -15,6 +15,7 @@ import (
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/targetactivation"
 	"github.com/marcus/sidecar/internal/terminallink"
+	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/workspacediff"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
@@ -171,6 +172,36 @@ func TestRemoteSessionsPrepareMakesHostOnlyHashClickable(t *testing.T) {
 	}
 	if src.lastTarget != hostOnlyHash && src.lastTarget != "c:"+hostOnlyHash {
 		t.Fatalf("resolved %q, want the host-only hash", src.lastTarget)
+	}
+	if src.loads == 0 {
+		t.Fatal("click did not load through the remote source")
+	}
+}
+
+func TestRemoteSessionsHostOnlyHashClickOpensDiff(t *testing.T) {
+	m, src := showingRemoteDiffModel(t)
+	const line = "review " + hostOnlyHash + " please"
+	leaf := m.previewTerminalLeaf()
+	if leaf.Buffer == nil {
+		leaf.Buffer = tty.NewOutputBuffer(200)
+	}
+	if buf := m.previewBuffer(); buf == nil {
+		t.Fatal("no preview buffer")
+	} else {
+		buf.Update(line + "\n")
+	}
+	m.WorkspacesView(previewWide, previewTall)
+	m.PrepareTerminalLinks()
+	deliverPreviewLinkResults(t, m, m.terminalLinks.TakeCmd())
+	m.PrepareTerminalLinks()
+	m.WorkspacesView(previewWide, previewTall)
+	cmd, claimed := m.activatePreviewLinkAt(previewNeedleAction(t, m, hostOnlyHash), false)
+	if !claimed || cmd == nil {
+		t.Fatalf("click claimed=%v cmd=%v (span exists, click refused)", claimed, cmd != nil)
+	}
+	run(t, m, cmd)
+	if m.preview.diff == nil {
+		t.Fatal("click opened no Diff pane")
 	}
 	if src.loads == 0 {
 		t.Fatal("click did not load through the remote source")
