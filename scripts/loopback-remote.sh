@@ -18,6 +18,14 @@ set -euo pipefail
 # Never let an attached tmux client select a server implicitly.
 unset TMUX
 
+# An agent runs this from a live Sidecar pane. Those identity variables name
+# the CALLER's shell and tmux server; leaking them into the private host
+# server or the viewer TUI is how a fixture would talk to the wrong pane.
+# Keep SIDECAR_BIN / SIDECAR_ISOLATED_STATE / SIDECAR_DRIVE_* /
+# SIDECAR_LOOPBACK_* — those are harness levers we set below.
+unset SIDECAR_SHELL SIDECAR_SHELL_NAME SIDECAR_MANAGED_SHELL \
+    SIDECAR_NAMESPACE SIDECAR_TMUX_SERVER SIDECAR_HOST SIDECAR_PANE
+
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DRIVE="$REPO_DIR/scripts/tmux-drive.sh"
 LOOPBACK_SSH="$REPO_DIR/scripts/loopback-ssh.sh"
@@ -235,6 +243,26 @@ plant_git_project() {
     fi
 }
 
+# td on PATH with no .todos opens the "Set up td" modal on the first TUI
+# frame, which blocks @ / W. Match demo.sh: init when td exists, skip if not.
+init_td_if_available() {
+    local dir="$1"
+    command -v td >/dev/null 2>&1 || return 0
+    (
+        cd "$dir"
+        printf '\n' | td init >/dev/null 2>&1
+    ) || true
+}
+
+plant_host_worktree() {
+    local main="$1" linked="$2"
+    mkdir -p "$(dirname "$linked")"
+    if [ -d "$linked/.git" ] || [ -f "$linked/.git" ]; then
+        return 0
+    fi
+    git -C "$main" worktree add -b feature "$linked" >/dev/null 2>&1
+}
+
 create_host_session() {
     local name="$1" out
     if TMUX= tmux -S "$HOST_SOCKET" has-session -t "$name" 2>/dev/null; then
@@ -440,6 +468,9 @@ cmd_up() {
     plant_git_project "$VIEWER_PROJECT" "LOCAL-TWIN" "viewer local twin"
     HOST_PROJECT_CANON=$(cd "$HOST_PROJECT" && pwd -P)
     VIEWER_PROJECT_CANON=$(cd "$VIEWER_PROJECT" && pwd -P)
+    plant_host_worktree "$HOST_PROJECT_CANON" "$HOST/worktrees/feature"
+    init_td_if_available "$HOST_PROJECT_CANON"
+    init_td_if_available "$VIEWER_PROJECT_CANON"
 
     HOST_PATH=$(host_path)
     FAKE_SSH_PATH="$VIEWER/bin:$BASE_PATH"

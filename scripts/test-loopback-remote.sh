@@ -60,6 +60,15 @@ real_tree_paths "$REAL_STATE" > "$SNAPSHOT_DIR/state.paths"
 echo "recorded default tmux sessions: $(grep -c . "$SNAPSHOT_DIR/tmux.ls" || true)"
 echo "recorded real state-tree paths: $(grep -c . "$SNAPSHOT_DIR/state.paths" || true)"
 
+# An agent runs up from a live Sidecar pane. These must not land on the
+# private host server (the Go loopback harness already drops them).
+export SIDECAR_SHELL=sidecar-sh-LIVE-DO-NOT-TOUCH
+export SIDECAR_SHELL_NAME="live caller"
+export SIDECAR_MANAGED_SHELL=1
+export SIDECAR_NAMESPACE=/tmp/tmux-$(id -u)/default
+export SIDECAR_TMUX_SERVER=99999
+export SIDECAR_HOST=aerie
+
 LOOPBACK_RUN_DIR="$RUN_DIR" "$HARNESS" up --delay 40ms --no-drive >/dev/null
 
 canon=$(cd "$RUN_DIR" && pwd -P)
@@ -100,6 +109,20 @@ host_socket="$canon/host/tmux/tmux-$(id -u)/default"
 [ -S "$host_socket" ] || fail "host tmux socket missing"
 n=$(TMUX= tmux -S "$host_socket" list-sessions 2>/dev/null | wc -l | tr -d '[:space:]')
 [ "$n" -ge 2 ] || fail "host tmux should have at least two sessions, got $n"
+
+host_env=$(TMUX= tmux -S "$host_socket" show-environment -g 2>/dev/null || true)
+for leaked in SIDECAR_SHELL=sidecar-sh-LIVE-DO-NOT-TOUCH SIDECAR_MANAGED_SHELL=1 \
+    SIDECAR_NAMESPACE=/tmp/tmux-$(id -u)/default SIDECAR_TMUX_SERVER=99999 \
+    "SIDECAR_SHELL_NAME=live caller" SIDECAR_HOST=aerie; do
+    printf '%s\n' "$host_env" | grep -Fqx "$leaked" && fail "host tmux inherited $leaked"
+done
+
+wt_list=$(git -C "$canon/host/project" worktree list --porcelain)
+printf '%s\n' "$wt_list" | grep -q "$canon/host/worktrees/feature" || fail "host linked worktree missing"
+if command -v td >/dev/null 2>&1; then
+    test -d "$canon/host/project/.todos" || fail "host td was not initialized"
+    test -d "$canon/viewer/project/.todos" || fail "viewer td was not initialized"
+fi
 
 # Viewer TUI must not have been started.
 if [ -S "$canon/viewer/tmux/tmux-$(id -u)/sidecar-drive" ]; then
