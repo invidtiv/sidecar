@@ -42,7 +42,7 @@ A same-named local checkout is a different destination. Reinit of `~/code/sideca
 | `W` while in local Sidecar, aerie online | Local worktrees this frame. Then `[aerie] Sidecar [[feature]]` for linked worktrees of the project aerie registered under the same *name* (decision 10). | Implemented. Host main checkout is not a W row; it remains the `@` destination. |
 | `W` while already in `[aerie] Sidecar` | Aerie’s worktrees for that project, plus this machine’s worktrees of the same-named local project as unprefixed rows. | Implemented. Local rows come from the in-memory cache of that named config project; omitted rather than `git worktree list` on open. |
 | Enter on `[aerie] Sidecar [[feature]]` | Bind to that host worktree. Plugins reinit against the remote context, not against a local path of the same name. | Implemented via `bindRemoteDestination`. |
-| Files / Git / td / Tasks on a remote-bound project | Honest unavailable state naming the host, until that plugin’s remote slice. They must not walk this disk. | Implemented (Init/Start/View/Update). Notes is not yet in this refusal set. |
+| Files / Git / td / Tasks / Notes on a remote-bound project | Honest unavailable state naming the host, until that plugin’s remote slice. They must not walk this disk. | Implemented (Init/Start/View/Update/FocusContext). |
 | Workspaces on a remote-bound project | That host’s shells and worktrees for the project, live panes through the existing proxied control channel. | Listing and live attach implemented. Create shell/worktree from this surface is refused naming the host; Phase C Sessions create is unchanged. Content panes opened from this surface still build a local `SourceContext` (no `HostID`). |
 | Agent on aerie, `sidecar open README.md`, laptop bound to `[aerie] Sidecar` and holding the lease | Document pane on this project workspace (viewer-screen relay), not a Sessions-only landing and not aerie’s own TUI. | Remaining (slice 3). |
 
@@ -86,13 +86,13 @@ Done in slices 0–2:
 - Disabled remote rows when the host is not online, with the existing health sentence.
 - Persisting last remote project/worktree as host-qualified identity (`LastBoundLocation`, `GetLastRemoteWorktree`), never as a raw remote path in `LastWorktreePath`.
 - Navbar / title reflecting the bound host.
-- Honest refusals from Files, Git, td, and Tasks (Init/Start/View/Update).
+- Honest refusals from Files, Git, td, Tasks, and Notes (Init/Start/View/Update/FocusContext).
 
 Remaining in this plan:
 
 - Lease claim on bind, instance `HostID`, workspace `AttentionOrigin.HostID`, and one landing decider so relayed `sidecar open` / `layout` target the bound project workspace (slice 3).
 - Content-pane `SourceContext` on the bound project workspace (slice 3 or with it: the source seam already exists).
-- Files, Git, td, Tasks as remote-capable plugins (slice 4). Notes refusal or remoting.
+- Files, Git, td, Tasks, Notes as remote-capable plugins (slice 4).
 - Create shell/worktree from the bound project workspace (today refused; Phase C Sessions create is the reuse target).
 - CLI/help and isolated two-machine proof (slice 5).
 
@@ -167,7 +167,7 @@ Sitting at aerie’s own TUI still wins the lease by typing, per geometry_lease.
 | Files | Unavailable view naming the host. No local tree of a twin path. | Slice 4 remoting. |
 | Git | Same. | Slice 4. |
 | td / Tasks | Same. | Slice 4, then host td store via content verbs and `RunSidecar`. |
-| Notes | Still assumes a local tree. | Refusal (same as Files) or remoting in slice 4. |
+| Notes | Unavailable view naming the host. No local td store. | Slice 4 remoting. |
 | Conversations | Remains demand-gated per the remote-hosts plan. | Unchanged. |
 
 A plugin that reads `ctx.WorkDir` without checking `HostID` is a bug this plan’s tests must catch at the Reinit boundary, the way `localSelectedRoot` already refuses a remote Sessions row.
@@ -258,7 +258,7 @@ The work is one shared decider over the two surfaces plus the presence changes l
 
 ### Slice 4 — Files (then Git, td, Tasks) as remote-capable plugins
 
-One plugin at a time, each through `Source` / `RunSidecar` / host content verbs, each with the twin-path tripwire. Not a second compositor, not a mounted FS. Notes gets the same refusal-or-remote treatment the steel thread already gave Files.
+One plugin at a time, each through `Source` / `RunSidecar` / host content verbs, each with the twin-path tripwire. Not a second compositor, not a mounted FS. Notes already refuses like Files while bound.
 
 ### Slice 5 — docs, agent-project-cli note, isolated proof
 
