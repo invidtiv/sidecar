@@ -140,30 +140,84 @@ func claudeVersionArgv0(command string) bool {
 	return semanticVersionCommand.MatchString(command)
 }
 
+// launcherSuffixes are the wrapper extensions a process name may carry without
+// changing which program is running. Matches Herdr's list verbatim
+// (`normalized_agent_lookup_name`, src/detect/mod.rs:668 at e2b85c7), and only
+// one is stripped, as upstream does.
+var launcherSuffixes = []string{".exe", ".cmd", ".bat", ".ps1", ".js"}
+
+// normalizeProcessName reduces a process name to the spelling the alias table
+// is written in. It is Herdr's `path_basename` + `normalized_agent_lookup_name`
+// pair (src/detect/mod.rs:668-683 at e2b85c7) rather than a Sidecar invention,
+// so a vendored upstream alias list can be asserted against this resolver
+// directly: lower-case, trim, take the last non-empty path component across
+// either separator, then strip at most one launcher suffix.
+//
+// It exists because npm and Windows shims present `claude.cmd`, `codex.exe`,
+// `opencode.js` and paths like `/opt/homebrew/bin/opencode`, and carrying a
+// case per spelling is how the two vocabularies drift.
+func normalizeProcessName(command string) string {
+	command = strings.ToLower(strings.TrimSpace(command))
+	name := command
+	if index := strings.LastIndexAny(strings.TrimRight(name, `/\`), `/\`); index >= 0 {
+		if base := strings.Trim(name[index+1:], `/\`); base != "" {
+			name = base
+		}
+	}
+	for _, suffix := range launcherSuffixes {
+		if strings.HasSuffix(name, suffix) && len(name) > len(suffix) {
+			name = name[:len(name)-len(suffix)]
+			break
+		}
+	}
+	return name
+}
+
 func identifyProcessName(command string) string {
 	command = strings.ToLower(strings.TrimSpace(command))
-	switch {
-	case command == "claude" || claudeVersionArgv0(command):
+	// Claude's version-shaped argv[0] is tested before normalisation on
+	// purpose: stripping a launcher suffix first would let "1.2.3.js" read as
+	// Claude, which is exactly the widening the claudeVersionArgv0 comment
+	// forbids. Claude renames its own process to a bare version string, never
+	// to a suffixed or path-qualified one.
+	if claudeVersionArgv0(command) {
 		return "claude"
-	case command == "codex" || command == "codex-cli":
+	}
+	// Alias spellings below are Herdr's `lookup_agent` table
+	// (src/detect/mod.rs:193 at e2b85c7) for the families Sidecar claims,
+	// plus the Sidecar-only spellings noted per case.
+	name := normalizeProcessName(command)
+	switch {
+	case oneOf(name, "claude", "claude-code"):
+		return "claude"
+	// "codex-cli" is Sidecar-only; upstream knows just "codex".
+	case oneOf(name, "codex", "codex-cli"):
 		return "codex"
-	case command == "grok" || strings.HasPrefix(command, "grok-"):
+	// Upstream lists "grok" and "grok-build"; the prefix is a Sidecar superset.
+	case name == "grok" || strings.HasPrefix(name, "grok-"):
 		return "grok"
-	case command == "agy" || command == "antigravity":
+	case oneOf(name, "agy", "antigravity", "antigravity-cli"):
 		return "antigravity"
-	case command == "pi":
+	case name == "pi":
 		return "pi"
-	case oneOf(command, "copilot", "github-copilot", "ghcs"):
+	case oneOf(name, "copilot", "github-copilot", "ghcs"):
 		return "copilot"
-	case oneOf(command, "cursor-agent", "cursor", "cursor-agent.cmd"):
+	case oneOf(name, "cursor", "cursor-agent"):
 		return "cursor"
-	case oneOf(command, "opencode", "open-code"):
+	case oneOf(name, "opencode", "opencode2", "open-code"):
 		return "opencode"
-	case oneOf(command, "amp", "amp-local"):
+	case oneOf(name, "amp", "amp-local"):
 		return "amp"
-	case command == "muse" || strings.HasPrefix(command, "muse-"):
+	// Upstream lists "muse", "muse-code", "muse-cli" and `muse-bin-<digit>`;
+	// the prefix is a Sidecar superset that already covers all four.
+	case name == "muse" || strings.HasPrefix(name, "muse-"):
 		return "muse"
-	case oneOf(command, "sh", "bash", "zsh", "fish", "nu", "pwsh"):
+	// Deliberately narrower than Herdr's `is_generic_runtime_or_shell`, which
+	// also lists tmux, node, bun, cmd, powershell and python[3[.N]]. That
+	// predicate scores process-tree candidates; this one gates a launch
+	// (ForegroundShellReady), so it names only interactive shells. Widening it
+	// is Phase 4 work with its own predicate, not a rename of this bucket.
+	case oneOf(name, "sh", "bash", "zsh", "fish", "nu", "pwsh"):
 		return "shell"
 	default:
 		return ""
@@ -173,7 +227,7 @@ func identifyProcessName(command string) string {
 // NeedsProcessIdentity reports whether tmux's command name is shared by
 // multiple agent CLIs and therefore benefits from foreground argv[0].
 func NeedsProcessIdentity(command string) bool {
-	switch strings.ToLower(strings.TrimSpace(command)) {
+	switch normalizeProcessName(command) {
 	case "agent", "node", "bun":
 		return true
 	default:

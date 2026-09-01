@@ -1,0 +1,182 @@
+{
+  "schema_version": 1,
+  "generated_from": [
+    "docs/preview/website/src/content/docs/agents.mdx",
+    "src/integration/assets"
+  ],
+  "herdr_ref": "e2b85c7",
+  "agents": {
+    "agy": {
+      "display_name": "Antigravity CLI",
+      "lifecycle_authority": "session_identity",
+      "state_authority": "screen manifest",
+      "integration_role": "session",
+      "integration_version": 3,
+      "integration_asset_dir": "antigravity_cli"
+    },
+    "amp": {
+      "display_name": "Amp",
+      "lifecycle_authority": "none",
+      "state_authority": "screen manifest",
+      "integration_role": "none"
+    },
+    "claude": {
+      "display_name": "Claude Code",
+      "lifecycle_authority": "session_identity",
+      "state_authority": "screen manifest",
+      "integration_role": "session",
+      "integration_version": 9,
+      "integration_asset_dir": "claude"
+    },
+    "cline": {
+      "display_name": "Cline",
+      "lifecycle_authority": "none",
+      "state_authority": "screen manifest",
+      "integration_role": "none"
+    },
+    "codex": {
+      "display_name": "Codex",
+      "lifecycle_authority": "session_identity",
+      "state_authority": "screen manifest",
+      "integration_role": "session",
+      "integration_version": 8,
+      "integration_asset_dir": "codex"
+    },
+    "copilot": {
+      "display_name": "GitHub Copilot CLI",
+      "lifecycle_authority": "session_identity",
+      "state_authority": "screen manifest",
+      "integration_role": "session",
+      "integration_version": 3,
+      "integration_asset_dir": "copilot"
+    },
+    "cursor": {
+      "display_name": "Cursor Agent CLI",
+      "lifecycle_authority": "session_identity",
+      "state_authority": "screen manifest",
+      "integration_role": "session",
+      "integration_version": 1,
+      "integration_asset_dir": "cursor"
+    },
+    "devin": {
+      "display_name": "Devin CLI",
+      "lifecycle_authority": "session_identity",
+      "state_authority": "screen manifest",
+      "integration_role": "session",
+      "integration_version": 2,
+      "integration_asset_dir": "devin"
+    },
+    "droid": {
+      "display_name": "Droid",
+      "lifecycle_authority": "session_identity",
+      "state_authority": "screen manifest",
+      "integration_role": "session",
+      "integration_version": 3,
+      "integration_asset_dir": "droid"
+    },
+    "gemini": {
+      "display_name": "Gemini CLI",
+      "lifecycle_authority": "none",
+      "state_authority": "screen manifest",
+      "integration_role": "none"
+    },
+    "grok": {
+      "display_name": "Grok CLI",
+      "lifecycle_authority": "session_identity",
+      "state_authority": "screen manifest",
+      "integration_role": "session",
+      "integration_version": 1,
+      "integration_asset_dir": "grok"
+    },
+    "hermes": {
+      "display_name": "Hermes Agent",
+      "lifecycle_authority": "session_identity",
+      "state_authority": "screen manifest",
+      "integration_role": "session",
+      "integration_version": 5,
+      "integration_asset_dir": "hermes"
+    },
+    "kilo": {
+      "display_name": "Kilo Code CLI",
+      "lifecycle_authority": "hooks",
+      "state_authority": "lifecycle plugin when installed; otherwise screen manifest",
+      "integration_role": "state and session",
+      "integration_version": 4,
+      "integration_asset_dir": "kilo"
+    },
+    "kimi": {
+      "display_name": "Kimi Code CLI",
+      "lifecycle_authority": "hooks",
+      "state_authority": "lifecycle hooks when installed; otherwise screen manifest",
+      "integration_role": "state and session",
+      "integration_version": 7,
+      "integration_asset_dir": "kimi"
+    },
+    "kiro": {
+      "display_name": "Kiro CLI",
+      "lifecycle_authority": "none",
+      "state_authority": "screen manifest",
+      "integration_role": "none"
+    },
+    "maki": {
+      "display_name": "Maki",
+      "lifecycle_authority": "none",
+      "state_authority": "screen manifest",
+      "integration_role": "none"
+    },
+    "mastracode": {
+      "display_name": "MastraCode",
+      "lifecycle_authority": "hooks",
+      "state_authority": "lifecycle hooks when installed",
+      "integration_role": "state and session",
+      "integration_version": 2,
+      "integration_asset_dir": "mastracode"
+    },
+    "muse": {
+      "display_name": "Muse",
+      "lifecycle_authority": "none",
+      "state_authority": "screen manifest",
+      "integration_role": "none"
+    },
+    "omp": {
+      "display_name": "OMP",
+      "lifecycle_authority": "hooks",
+      "state_authority": "lifecycle hooks when installed",
+      "integration_role": "state and session",
+      "integration_version": 9,
+      "integration_asset_dir": "omp"
+    },
+    "opencode": {
+      "display_name": "OpenCode",
+      "lifecycle_authority": "hooks",
+      "state_authority": "lifecycle plugin when installed; otherwise screen manifest",
+      "integration_role": "state and session",
+      "integration_version": 10,
+      "integration_asset_dir": "opencode"
+    },
+    "pi": {
+      "display_name": "Pi",
+      "lifecycle_authority": "hooks",
+      "state_authority": "lifecycle hooks when installed; otherwise screen manifest",
+      "integration_role": "state and session",
+      "integration_version": 8,
+      "integration_asset_dir": "pi"
+    },
+    "qodercli": {
+      "display_name": "Qoder CLI",
+      "lifecycle_authority": "session_identity",
+      "state_authority": "screen manifest",
+      "integration_role": "session",
+      "integration_version": 3,
+      "integration_asset_dir": "qodercli"
+    },
+    "qwen": {
+      "display_name": "Qwen Code",
+      "lifecycle_authority": "session_identity",
+      "state_authority": "screen manifest",
+      "integration_role": "session",
+      "integration_version": 1,
+      "integration_asset_dir": "qwen"
+    }
+  }
+}

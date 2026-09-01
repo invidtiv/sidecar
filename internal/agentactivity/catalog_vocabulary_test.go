@@ -72,3 +72,105 @@ func TestOnlyClaudesOwnVersionArgv0ResolvesToAProvider(t *testing.T) {
 		}
 	}
 }
+
+// upstreamAliases is Herdr's `lookup_agent` table (src/detect/mod.rs:193 at
+// e2b85c7), restricted to the ten families Sidecar claims today, keyed by the
+// Sidecar family id. It is hard-coded here on purpose: it is the fixed record
+// of what upstream recognised at the commit this parity work was measured
+// against, and Phase 0's `aliases.upstream.json` replaces this literal without
+// moving the assertion. Keep it in this one place.
+//
+// Muse's `muse-bin-<version>` launcher spelling is included because upstream
+// matches it by shape (`is_muse_versioned_binary`, src/detect/mod.rs:231); one
+// representative value stands in for the shape.
+var upstreamAliases = map[string][]string{
+	"claude":      {"claude", "claude-code"},
+	"codex":       {"codex"},
+	"grok":        {"grok", "grok-build"},
+	"antigravity": {"agy", "antigravity", "antigravity-cli"},
+	"pi":          {"pi"},
+	"copilot":     {"copilot", "github-copilot", "ghcs"},
+	"cursor":      {"cursor", "cursor-agent"},
+	"opencode":    {"opencode", "opencode2", "open-code"},
+	"amp":         {"amp", "amp-local"},
+	"muse":        {"muse", "muse-code", "muse-cli", "muse-bin-0.1.0-R708.1"},
+}
+
+// A pane running an agent under a spelling upstream knows and Sidecar does not
+// has no provider identity at all: no state badge, and `agent report-session
+// --kind` never checked against it. Herdr's alias table is the shared
+// vocabulary, so every entry in it for a family Sidecar claims must resolve.
+func TestUpstreamAliasesResolveForClaimedFamilies(t *testing.T) {
+	for family, aliases := range upstreamAliases {
+		for _, alias := range aliases {
+			t.Run(family+"/"+alias, func(t *testing.T) {
+				if got := identifyProcessName(alias); got != family {
+					t.Fatalf("identifyProcessName(%q) = %q, want %q (upstream alias for %s)",
+						alias, got, family, family)
+				}
+			})
+		}
+	}
+}
+
+// Every claimed family is one Sidecar can launch, so the two tables must not
+// drift apart in either direction.
+func TestUpstreamAliasTableCoversEveryCatalogFamily(t *testing.T) {
+	for _, family := range agentcatalog.Families() {
+		if _, ok := upstreamAliases[family.ID]; !ok {
+			t.Errorf("catalog family %q has no upstream alias record; add its Herdr aliases to upstreamAliases", family.ID)
+		}
+	}
+}
+
+// npm and Windows shims present the same program under a wrapper extension,
+// and a pane's command can arrive path-qualified. Upstream folds both away
+// before its alias lookup; so does this resolver, which is why the table above
+// carries only bare names.
+func TestLauncherSuffixAndPathSpellingsResolve(t *testing.T) {
+	cases := map[string]string{
+		"claude.cmd":                     "claude",
+		"CLAUDE.EXE":                     "claude",
+		"opencode.js":                    "opencode",
+		"cursor-agent.cmd":               "cursor",
+		"codex.ps1":                      "codex",
+		"amp.bat":                        "amp",
+		"/opt/homebrew/bin/opencode":     "opencode",
+		`C:\Users\a\AppData\claude.cmd`:  "claude",
+		"/usr/local/bin/cursor-agent/":   "cursor",
+		"/bin/zsh":                       "shell",
+		" /Users/a/.local/bin/grok-cli ": "grok",
+	}
+	for command, want := range cases {
+		if got := identifyProcessName(command); got != want {
+			t.Errorf("identifyProcessName(%q) = %q, want %q", command, got, want)
+		}
+	}
+}
+
+// The version-shaped argv[0] is matched before suffix stripping so that
+// stripping can never manufacture Claude's shape out of something else.
+func TestLauncherSuffixStrippingCannotManufactureClaudesVersionArgv0(t *testing.T) {
+	for _, command := range []string{"1.2.3.js", "1.2.3.exe", "1.2.3.cmd", "1.2.3.bat", "1.2.3.ps1"} {
+		if got := identifyProcessName(command); got != "" {
+			t.Errorf("identifyProcessName(%q) = %q, want no identity", command, got)
+		}
+	}
+}
+
+// Herdr treats these as generic runtimes rather than agents; Sidecar must not
+// name a provider for any of them either. Sidecar's "shell" bucket is
+// deliberately narrower (see identifyProcessName), so the assertion is only
+// that none of them resolves to a provider family.
+func TestHerdrGenericRuntimesNeverResolveToAProvider(t *testing.T) {
+	// src/detect/mod.rs:696 `is_generic_runtime_or_shell` at e2b85c7.
+	runtimes := []string{
+		"sh", "bash", "zsh", "fish", "tmux", "node", "bun", "cmd",
+		"powershell", "pwsh", "python", "python3", "python3.12",
+	}
+	for _, runtime := range runtimes {
+		if got := identifyProcessName(runtime); got != "" && got != "shell" {
+			t.Errorf("identifyProcessName(%q) = %q, want no provider identity", runtime, got)
+		}
+	}
+}
