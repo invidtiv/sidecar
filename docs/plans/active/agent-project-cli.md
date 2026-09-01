@@ -1,18 +1,18 @@
 # Agent-facing project CLI
 
-**Status:** proposed, for discussion **Scope:** `internal/config` (already owns the mutations), a new `sidecar project` command group, a `uirequest` action that switches the running TUI, `sidecar agents` / CLI help / `docs/reference/cli.md`. **Created:** 2026-08-31
+**Status:** proposed; decisions settled **Scope:** `internal/config` (already owns the mutations), a new `sidecar project` command group, a `uirequest` action that switches the running TUI, `sidecar agents` / CLI help / `docs/reference/cli.md`. **Created:** 2026-08-31
 
 One sentence: **an agent should be able to see which Sidecar project it is in, list the configured projects, add or edit one, and put the user there immediately — without pretending a live shell can change projects.**
 
 ## Outcome and agent journey
 
-A user tells an agent "add a new project called vacuum simulator." The agent works with the user to pick a path (`~/code/vacuum-simulator`), creates the directory and a git repo with ordinary tools if they do not exist yet, then:
+A user tells an agent "add a new project called vacuum simulator." The agent works with the user to pick a path (`~/code/vacuum-simulator`), creates the directory with ordinary tools if it does not exist yet, then:
 
 ```bash
 sidecar project add "vacuum-simulator" --path ~/code/vacuum-simulator --switch
 ```
 
-Sidecar writes the project into `config.json`, the running TUI switches to it the same way `@` would, and the user is looking at that project's workspace. The conversation that just did this is still in the original project's shell — shells do not move — so the agent creates a landing shell there if the user needs one:
+Sidecar writes the project into `config.json`, the running TUI switches to it the same way `@` would, and the user is looking at that project's workspace. Adding a project does not initialize a Git repository or a td project; the agent offers those to the user after the add, and only does them if asked. The conversation that just did this is still in the original project's shell — shells do not move — so the agent creates a landing shell there only if the user wants one:
 
 ```bash
 sidecar create shell --project vacuum-simulator --name "vacuum simulator"
@@ -87,11 +87,9 @@ Every entry in `projects.list`, in list order. Marks `shell` (this command's pro
 
 ### `sidecar project add NAME --path PATH [--theme NAME] [--open-in APP] [--switch]`
 
-Validates through `config.ValidateProject`, writes through `config.AddProject`, broadcasts `ActionConfigReload`. `--path` is required, expanded with `~`, and must already be a directory — the agent `mkdir`s, the CLI does not. Git is not required and is not initialized here; the agent runs `git init` (or `gitinit` is a later opt-in) if the user wants a repo.
+Validates through `config.ValidateProject`, writes through `config.AddProject`, broadcasts `ActionConfigReload`. `--path` is required, expanded with `~`, and must already be a directory — the agent `mkdir`s, the CLI does not. Git and td are not initialized; the add command's help and `AgentDoc` say so in one sentence so the agent infers it should offer both to the user after the project exists.
 
-`--switch` is the steel-thread flag: after a successful write, perform `project switch` against the new name. If no TUI is running, add still succeeds and JSON reports `"switched": false` the same way `create shell` reports `"acked": false`.
-
-Recommended default: add does **not** switch unless asked. Registering a project is not permission to yank the user's view. The documented agent journey uses `--switch`. (Open question below if this should invert.)
+`--switch` is the steel-thread flag: after a successful write, perform `project switch` against the new name. Add never switches unless `--switch` is passed. If no TUI is running, add still succeeds and JSON reports `"switched": false` the same way `create shell` reports `"acked": false`. A landing shell is a separate `create shell --project` the agent runs only when the user asks for one.
 
 ### `sidecar project switch NAME`
 
@@ -107,12 +105,13 @@ Edit. At least one flag required. Path changes re-validate uniqueness and direct
 
 ### `sidecar project remove NAME [--yes]`
 
-`--yes` is required (non-interactive destructive). Does not delete the directory, the git repo, or `state.json` workdir keys — same as Configuration. If NAME is the visible project, refuse unless `--switch` names somewhere else to land, or the TUI already has another project to fall back to; do not leave the user on a removed project. First slice can also refuse to remove the visible project and tell the agent to switch first. Pick one and keep it boring.
+`--yes` is required (non-interactive destructive). Does not delete the directory, the git repo, or `state.json` workdir keys — same as Configuration. If NAME is the visible project, refuse with a message naming `project switch` first. Do not switch as a side effect of remove.
 
 ### Discoverability
 
 - Every verb in `sidecar agents`.
 - `RenderAgents` intro grows one clause: project current/list/add/switch act on Sidecar's configured projects, not on the filesystem.
+- The `add` command's `Long` and `AgentDoc` include this sentence, and nothing more on the subject: "Adding a project does not initialize a Git repository or a td project." That is enough for the agent to offer both to the user; do not teach `git init` or `td` usage here.
 - Regenerated `docs/reference/cli.md` via `REGEN_CLI_DOC=1`.
 - No AGENTS.md dump of the full command tree — `sidecar agents` stays the canonical pointer.
 
@@ -122,10 +121,10 @@ A Sidecar-managed shell is born in a project. Its tmux session, `shells.json` re
 
 1. `project switch` changes the TUI, not the calling process. After it, `project current` reports `aligned: false`.
 2. Work in the new project happens in a new shell (`create shell --project`), a new worktree, or a human-created workspace row — the same as if the user had hit `@` themselves.
-3. The agent that added the project should not claim it is now *in* that project. It should say the project exists, the user is looking at it (if the switch acked), and offer to create a shell there.
+3. The agent that added the project should not claim it is now *in* that project. It should say the project exists, the user is looking at it (if the switch acked), and create a shell there only if the user asks.
 4. `--split` create stays in the calling shell's pane tree. A landing shell in the new project is a workspace-shell create, not a split of the conversation the user just left.
 
-"Drop them there" therefore means: switch the visible TUI, then optionally create a shell in the new project. It does not mean teleport this conversation.
+"Drop them there" therefore means: switch the visible TUI when `--switch` is passed, then create a shell in the new project only if the user asks. It does not mean teleport this conversation.
 
 ## Steel thread
 
@@ -134,7 +133,7 @@ The smallest journey that is actually useful:
 1. `sidecar project list --json` shows the configured list and the visible project.
 2. `sidecar project add vacuum-simulator --path ~/code/vacuum-simulator --switch` writes the entry and the running TUI switches to it.
 3. The user can see the new project in the header and the empty Workspaces list.
-4. `sidecar create shell --project vacuum-simulator --name "vacuum simulator"` puts a shell there, using the existing create path.
+4. If the user wants a shell there, `sidecar create shell --project vacuum-simulator --name "vacuum simulator"` puts one there, using the existing create path. Add does not create it.
 5. `sidecar project current --json` from the original conversation still names the original shell project and reports the new one as `visible`.
 
 That is one new command group, one new `uirequest` action, and no new persistence. List and current without a TUI still work, because they read config and origin.
@@ -161,12 +160,12 @@ New `uirequest.Action` whose payload is the project name/path. Host handler: res
 
 ### M3 — Discoverability and the documented journey
 
-`AgentDoc` lines, regenerated CLI reference, `sidecar agents` intro, a short example in the command's `Long` that names the session constraint out loud. Optional follow: `create shell --project` in the same example so the landing-shell step is copy-pasteable.
+`AgentDoc` lines, regenerated CLI reference, `sidecar agents` intro, a short example in the command's `Long` that names the session constraint out loud. The `add` help includes the one-sentence Git/td note so the agent offers those after creating the project. The landing-shell step stays a separate `create shell --project` example, not part of add.
 
 ## Deliberately out of scope
 
 - Moving a live shell from one project to another.
-- Creating directories or git repositories. Those are `mkdir` and `git init`. Sidecar validates the path exists and is a directory.
+- Creating directories, Git repositories, or td projects. The path must already exist; `mkdir`, `git init`, and td setup are the agent's, offered to the user after add. Sidecar validates the path exists and is a directory.
 - Per-project worktree-setup overrides. Configuration deferred them; the CLI does too.
 - Reorder. Humans drag/keyboard-move on the Projects page; agents have no current reason to care about list order beyond round-tripping it.
 - Publishing `SIDECAR_PROJECT`. Revisit if `current` is not enough of a cue.
@@ -174,43 +173,33 @@ New `uirequest.Action` whose payload is the project name/path. Host handler: res
 - Changing what Configuration's Save does. The form still returns to the Projects page; only the CLI switch verb (and `add --switch`) jumps the TUI. If we later want Save to offer "Switch to this project," that is a human-surface follow-up, not a prerequisite.
 - Remote hosts. A remote `project add` would write that host's config; it is a later composition with `sidecar host`, not part of the steel thread.
 
-## Settled (pending discussion)
-
-These are the recommendations the implementation should follow unless the discussion changes them.
+## Settled decisions
 
 1. **One command group, `sidecar project`.** Not a flag on `create`, not a `sidecar config` grab-bag.
 2. **Same validation and persistence as Configuration.** No parallel schema.
 3. **Same `--project` matcher as the rest of the CLI.**
-4. **Switch is explicit (`--switch` / `project switch`), not a silent side effect of add.**
+4. **Switch is explicit (`--switch` / `project switch`).** Add never switches unless `--switch` is passed. Registering a project is not permission to yank the user's view.
 5. **Switch changes the TUI, not the calling shell.** JSON always reports both.
-6. **A landing shell is `create shell --project`, not a hidden extra step inside add.** Agents compose; add stays one job.
-7. **Path must already exist.** Git is optional.
-8. **Works headless; better when Sidecar is running.** Same ack contract as `create shell`.
+6. **A landing shell is `create shell --project`, only when the user asks.** Add does not create a shell. Agents compose; add stays one job.
+7. **Path must already exist.** Add does not `mkdir`, `git init`, or initialize a td project. Help and `AgentDoc` say: "Adding a project does not initialize a Git repository or a td project." The agent offers both after the project exists.
+8. **Removing the visible project is refused.** The message names `project switch` first. Remove never switches as a side effect.
+9. **Works headless; better when Sidecar is running.** Same ack contract as `create shell`.
 
 ## Unresolved questions
 
-These change the journey. They are the discussion.
+1. **Where does a switch land inside the new project?** `@` restores the last worktree and the last active plugin. A brand-new project has neither, so it lands on the Workspaces plugin at the project root. That is the right empty state. Confirm we should not also force-focus a particular row or open Configuration.
 
-1. **Should `add` switch by default?** The "immediately" example wants yes. The "don't steal focus" rule that `open` follows wants `--switch` as opt-in. Recommendation: opt-in, and make `--switch` the example every agent sees. Invert if you would rather the command mean "put me there."
-
-2. **Should `add --switch` also create a first shell?** A brand-new project has an empty Workspaces list unless `plugins.workspace.autoCreateShell` is on (it defaults off). Creating a shell is the difference between "the user can see the project" and "the user can begin working there." Recommendation: do not bake it in; document the two-command sequence. A `--create-shell` flag is easy to add later if agents reliably forget the second step.
-
-3. **Where does a switch land inside the new project?** `@` restores the last worktree and the last active plugin. A brand-new project has neither, so it lands on the Workspaces plugin at the project root. That is the right empty state. Confirm we should not also force-focus a particular row or open Configuration.
-
-4. **Removing the visible project.** Refuse, or switch to another project as part of remove? Recommendation: refuse with a message naming `project switch` first. Fewer surprises.
-
-5. **Multiple live TUI instances.** Rare (one process that switches projects is the normal shape). Recommendation: unique instance or refuse, identical to `open`. Do not fan a switch out to every instance.
-
-6. **`git init` as `--init`.** The Configuration form offers it for cwd. An agent can already run `git init`. Recommendation: omit. Reconsider only if we want Sidecar's `.gitignore` entries (`internal/gitinit.SidecarGitignoreEntries`) applied the same way the form does.
+2. **Multiple live TUI instances.** Rare (one process that switches projects is the normal shape). Recommendation: unique instance or refuse, identical to `open`. Do not fan a switch out to every instance.
 
 ## Acceptance evidence
 
 - `sidecar project list --json` / `current --json` contract tests covering aligned, unaligned, no TUI, and unmanaged cwd.
 - Add / set / remove go through `config.ValidateProject` and survive a concurrent Configuration save (reload-first).
 - Duplicate name, missing path, unknown project: exit 5, plain-language message, no write.
-- Isolated `tmux-drive.sh` proof of the steel thread (header and Workspaces show the new project after `--switch`).
+- Isolated `tmux-drive.sh` proof of the steel thread (header and Workspaces show the new project after `--switch`). Add without `--switch` leaves the visible project unchanged.
 - Isolated proof that add without a TUI still writes and reports `switched: false`.
-- `sidecar agents` lists the verbs; `docs/reference/cli.md` regenerated.
+- Remove of the visible project is refused; remove of another project succeeds with `--yes`.
+- `sidecar agents` lists the verbs; `add`'s one-line Git/td note is in help and the generated CLI reference.
 - A `create shell --project` after add still works without a TUI, as it does today.
 
 ## Relationship to other plans
