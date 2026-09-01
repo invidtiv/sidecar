@@ -112,6 +112,10 @@ type Update struct {
 	// wants them adapts them into its own notification model; the ssh side of
 	// this feature ends at this field.
 	Notify []hostproto.NotifyEvent
+	// UIRequest carries host-side open/layout request announcements. Same
+	// rules as Notify: not snapshot state, not replayed on reconnect, and
+	// preserved across a dropped update because the agent is blocked on an ack.
+	UIRequest []hostproto.UIRequest
 }
 
 // Conn is one open connection to a host's serve process.
@@ -172,10 +176,11 @@ type Client struct {
 	publishMu     sync.RWMutex
 	updatesClosed bool
 
-	// notifyMu guards pendingNotify, which is written by the reader loop and
-	// drained by whichever publish call gets through.
-	notifyMu      sync.Mutex
-	pendingNotify []hostproto.NotifyEvent
+	// notifyMu guards pendingNotify and pendingUIRequest, which are written
+	// by the reader loop and drained by whichever publish call gets through.
+	notifyMu         sync.Mutex
+	pendingNotify    []hostproto.NotifyEvent
+	pendingUIRequest []hostproto.UIRequest
 
 	// controlDir is where this host's ssh ControlMaster socket lives, shared
 	// by the serve stream and every pane channel. ownsControlDir marks one
@@ -477,8 +482,8 @@ func (c *Client) session(ctx context.Context) (State, string) {
 			sawData = true
 			c.applyNotify(msg.Notify)
 		case hostproto.KindUIRequest:
-			// Slice 0 only announces. Applying is a later slice; folding this
-			// into snapshot state would replay it on reconnect.
+			sawData = true
+			c.applyUIRequest(msg.UIRequest)
 		case hostproto.KindError:
 			if msg.Error != nil && msg.Error.Fatal {
 				return stateForErrorCode(msg.Error.Code), msg.Error.Message
@@ -623,6 +628,25 @@ func (c *Client) applyNotify(event *hostproto.NotifyEvent) {
 	c.publish(Update{HostID: c.host.ID, Health: health, Snapshot: snapshot})
 }
 
+// applyUIRequest queues one forwarded UI request and publishes it with the
+// host's current state. It touches neither the snapshot nor the health: a
+// reconnect must not replay an open the agent is no longer waiting on.
+func (c *Client) applyUIRequest(event *hostproto.UIRequest) {
+	if event == nil {
+		return
+	}
+	c.notifyMu.Lock()
+	c.pendingUIRequest = append(c.pendingUIRequest, *event)
+	c.notifyMu.Unlock()
+
+	c.mu.Lock()
+	c.lastData = c.now()
+	health := c.health
+	snapshot := c.snapshot
+	c.mu.Unlock()
+	c.publish(Update{HostID: c.host.ID, Health: health, Snapshot: snapshot})
+}
+
 // maxPendingNotify bounds the queue of forwarded events awaiting a consumer. A
 // host that produced more than this while nothing read the channel has a
 // problem the viewer cannot fix by growing its heap; the oldest go first,
@@ -652,6 +676,29 @@ func (c *Client) returnPendingNotify(events []hostproto.NotifyEvent) {
 	c.pendingNotify = append(events, c.pendingNotify...)
 	if extra := len(c.pendingNotify) - maxPendingNotify; extra > 0 {
 		c.pendingNotify = c.pendingNotify[extra:]
+	}
+}
+
+func (c *Client) takePendingUIRequest() []hostproto.UIRequest {
+	c.notifyMu.Lock()
+	defer c.notifyMu.Unlock()
+	if len(c.pendingUIRequest) == 0 {
+		return nil
+	}
+	events := c.pendingUIRequest
+	c.pendingUIRequest = nil
+	return events
+}
+
+func (c *Client) returnPendingUIRequest(events []hostproto.UIRequest) {
+	if len(events) == 0 {
+		return
+	}
+	c.notifyMu.Lock()
+	defer c.notifyMu.Unlock()
+	c.pendingUIRequest = append(events, c.pendingUIRequest...)
+	if extra := len(c.pendingUIRequest) - maxPendingNotify; extra > 0 {
+		c.pendingUIRequest = c.pendingUIRequest[extra:]
 	}
 }
 
@@ -730,8 +777,10 @@ func (c *Client) MarkStaleIfQuiet() bool {
 // events are attached here and put back if this update did not get through.
 func (c *Client) publish(update Update) {
 	update.Notify = append(c.takePendingNotify(), update.Notify...)
+	update.UIRequest = append(c.takePendingUIRequest(), update.UIRequest...)
 	if !c.publishUpdate(update) {
 		c.returnPendingNotify(update.Notify)
+		c.returnPendingUIRequest(update.UIRequest)
 	}
 }
 

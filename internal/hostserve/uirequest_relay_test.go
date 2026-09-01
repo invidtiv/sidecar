@@ -87,6 +87,27 @@ func TestServeWritesViewerPresence(t *testing.T) {
 	}
 }
 
+func TestLookupLiveViewerExpiresAndRequiresCapability(t *testing.T) {
+	state := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", state)
+	t.Setenv(config.IsolationEnv, "1")
+	stateDir := config.StateDir()
+	now := time.Now()
+	if err := refreshViewerPresence(stateDir, "laptop-7", now, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := LookupLiveViewer(stateDir, "laptop-7", now)
+	if !ok || !got.HasCapability(ViewerCapabilityUIRequestRelayV1) {
+		t.Fatalf("live presence = %+v ok=%v", got, ok)
+	}
+	if _, ok := LookupLiveViewer(stateDir, "laptop-7", now.Add(2*time.Minute)); ok {
+		t.Fatal("expired presence still looked live")
+	}
+	if _, ok := LookupLiveViewer(stateDir, "missing", now); ok {
+		t.Fatal("missing instance looked live")
+	}
+}
+
 func TestViewerPresenceRefusesRealStateTree(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

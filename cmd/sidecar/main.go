@@ -111,6 +111,10 @@ func main() {
 	// outer tmux session. This allows prefix+d to detach from the workspace's
 	// inner session rather than the user's outer tmux.
 	_ = os.Unsetenv("TMUX")
+	// After TMUX is unset, tmux children talk to this process's default
+	// socket — the server that holds Sidecar-managed sessions. Tests never
+	// reach here, so they cannot query the developer's live server.
+	tty.SessionOwner = tty.ReadTmuxSessionOwner
 
 	// The performance snapshot shares pprof's localhost-only diagnostic server.
 	// Keep it opt-in so ordinary builds pay only the existing nil-probe check.

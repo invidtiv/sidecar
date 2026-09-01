@@ -14,6 +14,10 @@ import (
 
 const viewerCapabilityUIRequestRelayV1 = "uiRequestRelayV1"
 
+// ViewerCapabilityUIRequestRelayV1 is the presence capability the host CLI
+// looks for before waiting for a relayed ack.
+const ViewerCapabilityUIRequestRelayV1 = viewerCapabilityUIRequestRelayV1
+
 // viewerPresence is the ephemeral file serve writes so the host CLI can tell
 // a connected viewer from a stale lease. Isolation-gated; not shells.json.
 type viewerPresence struct {
@@ -21,6 +25,43 @@ type viewerPresence struct {
 	PID          int       `json:"pid"`
 	Capabilities []string  `json:"capabilities"`
 	ExpiresAt    time.Time `json:"expiresAt"`
+}
+
+// ViewerPresence is the exported form of a live viewer presence record.
+type ViewerPresence = viewerPresence
+
+// LookupLiveViewer reads stateDir/viewers/<instance>.json and reports whether
+// it is still unexpired at now. Isolation-gated; a missing or expired file is
+// not an error, just not live.
+func LookupLiveViewer(stateDir, instance string, now time.Time) (ViewerPresence, bool) {
+	path, err := viewerPresencePath(stateDir, instance)
+	if err != nil {
+		return ViewerPresence{}, false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ViewerPresence{}, false
+	}
+	var got viewerPresence
+	if err := json.Unmarshal(data, &got); err != nil {
+		return ViewerPresence{}, false
+	}
+	if got.Instance != instance {
+		return ViewerPresence{}, false
+	}
+	if got.ExpiresAt.IsZero() || !got.ExpiresAt.After(now) {
+		return ViewerPresence{}, false
+	}
+	return got, true
+}
+
+func (p ViewerPresence) HasCapability(name string) bool {
+	for _, cap := range p.Capabilities {
+		if cap == name {
+			return true
+		}
+	}
+	return false
 }
 
 func viewersDir(stateDir string) (string, error) {

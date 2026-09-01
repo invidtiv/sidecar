@@ -494,6 +494,21 @@ type Request struct {
 	Payload json.RawMessage `json:"payload,omitempty"`
 }
 
+// AckResult is the machine contract for `sidecar request ack --json`.
+type AckResult struct {
+	ID      string `json:"id"`
+	Action  Action `json:"action"`
+	Status  Status `json:"status"`
+	Reason  string `json:"reason,omitempty"`
+	Surface string `json:"surface,omitempty"`
+	Pane    int    `json:"pane,omitempty"`
+}
+
+// ValidRemoteResult reports whether a decoded object is this verb's answer.
+func (r AckResult) ValidRemoteResult() bool {
+	return r.ID != "" && r.Action != "" && r.Status != ""
+}
+
 // Ack is the acknowledgement written by each Sidecar instance handling a request.
 type Ack struct {
 	Instance string    `json:"instance"`

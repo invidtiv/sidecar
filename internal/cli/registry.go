@@ -449,6 +449,9 @@ func RootCommand() *Command {
 		Long: "Show a file, a td issue, a td note, a git diff, or an external provider resource to the user as a\n" +
 			"split pane in a Sidecar workspace. From a Sidecar shell this targets that shell.\n" +
 			"Otherwise it targets the unique running instance, or a specific --shell / --project.\n" +
+			"--sessions addresses the global Sessions surface of a running instance\n" +
+			"(optional ROW is a durable inventory ID, then a display name). It is\n" +
+			"mutually exclusive with --shell and --project.\n" +
 			"--diff with no spec is the working tree. --provider names a configured terminal resource\n" +
 			"provider instance and is required for a resource: a bare locator is never guessed at.\n" +
 			"--split only overrides the split axis; it never halves a live terminal after content is open.\n" +
@@ -469,6 +472,7 @@ func RootCommand() *Command {
 			{Name: "--provider", Arg: "ID", Summary: "Open a locator through a configured terminal resource provider"},
 			{Name: "--shell", Arg: "NAME", Summary: "Target a registered shell by display name or tmux name"},
 			{Name: "--project", Arg: "NAME", Summary: "Target a project's Workspaces surface (slug, basename, or path)"},
+			{Name: "--sessions", Arg: "[ROW]", Summary: "Target the global Sessions surface (optional row by ID or display name)"},
 			{Name: "--split", Arg: "auto|right|below", Summary: "Where to place a new pane (default auto)"},
 			{Name: "--at", Arg: "COL[.ROW]", Summary: "Place at an explicit grid cell (1-based); a requirement, mutually exclusive with --split"},
 			{Name: "--wait", Arg: "DURATION", Summary: "Time to wait for instances to acknowledge (default 1200ms; 0 = fire and forget)"},
@@ -496,6 +500,7 @@ func RootCommand() *Command {
 			{Command: "sidecar open --json --split below README.md", Description: "structured result for the agent"},
 			{Command: "sidecar open README.md --at 2.1", Description: "explicit cell: second column, top row"},
 			{Command: "sidecar open --project sidecar README.md", Description: "from any terminal, that project's Workspaces surface"},
+			{Command: "sidecar open --sessions README.md", Description: "the selected row on the global Sessions surface"},
 		},
 		Agent: AgentDoc{
 			Invocation: "sidecar open <path>[:line] | td-xxxxxx | sidecar://note/nt-xxxx | --diff [spec] | --provider ID <locator> [--split right|below] [--at COL[.ROW]]",
@@ -557,7 +562,7 @@ func RootCommand() *Command {
 		Launch: runSetupLaunch,
 	}
 
-	root.Sub = []*Command{agentCommand(), agentsCmd, contentCommand(), createCmd, helpCmd, hostCommand(), layoutCommand(), notifyCommand(), openCmd, sessionCommand(), setupCmd, shellCmd, terminalLinksCommand()}
+	root.Sub = []*Command{agentCommand(), agentsCmd, contentCommand(), createCmd, helpCmd, hostCommand(), layoutCommand(), notifyCommand(), openCmd, requestCommand(), sessionCommand(), setupCmd, shellCmd, terminalLinksCommand()}
 	return root
 }
 

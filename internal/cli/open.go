@@ -27,6 +27,8 @@ func runOpen(env Env, args []string) int {
 	shellFlag := ""
 	projectFlag := ""
 	providerFlag := ""
+	sessions := false
+	sessionsRow := ""
 	var positional []string
 
 	for i := 0; i < len(args); i++ {
@@ -89,6 +91,16 @@ func runOpen(env Env, args []string) int {
 			if projectFlag == "" {
 				cliErrf(env.Stderr, "--project requires a project name\n\n%s", openHelp)
 				return 2
+			}
+		case arg == "--sessions" || strings.HasPrefix(arg, "--sessions="):
+			sessions = true
+			if strings.HasPrefix(arg, "--sessions=") {
+				sessionsRow = strings.TrimPrefix(arg, "--sessions=")
+				continue
+			}
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				i++
+				sessionsRow = args[i]
 			}
 		case arg == "--line":
 			if i+1 >= len(args) {
@@ -169,6 +181,10 @@ func runOpen(env Env, args []string) int {
 		}
 	}
 
+	if sessions && (shellFlag != "" || projectFlag != "") {
+		cliErrf(env.Stderr, "--sessions cannot be combined with --shell or --project\n\n%s", openHelp)
+		return 2
+	}
 	if providerFlag != "" && wantDiff {
 		cliErrf(env.Stderr, "--provider and --diff name different kinds of target\n\n%s", openHelp)
 		return 2
@@ -213,8 +229,18 @@ func runOpen(env Env, args []string) int {
 	// onto the bus for a running instance — so it resolves without creating
 	// one. It is still a mutating verb for the isolation gate: the request bus
 	// is state outside this process.
-	dest, err := resolveOpenDestination(ctx, env.StateDir, shellFlag, projectFlag, resolveProjectOnly)
+	var dest openDestination
+	var err error
+	if sessions {
+		dest, err = resolveSessionsDestination(ctx, env.StateDir, sessionsRow)
+	} else {
+		dest, err = resolveOpenDestination(ctx, env.StateDir, shellFlag, projectFlag, resolveProjectOnly)
+	}
 	if err != nil {
+		cliErrln(env.Stderr, err)
+		return destExitCode(err)
+	}
+	if err := refuseRelayIfUnavailable(env.StateDir, dest.Origin); err != nil {
 		cliErrln(env.Stderr, err)
 		return destExitCode(err)
 	}

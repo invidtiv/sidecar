@@ -29,6 +29,7 @@ func TestOpenValidation(t *testing.T) {
 		{"invalid split flag", []string{"open", "--split", "diagonal", "foo.txt"}, 2, "invalid split option"},
 		{"invalid wait flag", []string{"open", "--wait", "invalid", "foo.txt"}, 2, "invalid wait duration"},
 		{"unknown option", []string{"open", "--bogus", "foo.txt"}, 2, "unknown option"},
+		{"host flag", []string{"open", "--host", "mini", "foo.txt"}, 2, "unknown option"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var out, errOut bytes.Buffer

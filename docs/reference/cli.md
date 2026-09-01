@@ -1854,6 +1854,9 @@ Show a file, a td issue, a note, a git diff, or a provider resource in a split p
 Show a file, a td issue, a td note, a git diff, or an external provider resource to the user as a
 split pane in a Sidecar workspace. From a Sidecar shell this targets that shell.
 Otherwise it targets the unique running instance, or a specific --shell / --project.
+--sessions addresses the global Sessions surface of a running instance
+(optional ROW is a durable inventory ID, then a display name). It is
+mutually exclusive with --shell and --project.
 --diff with no spec is the working tree. --provider names a configured terminal resource
 provider instance and is required for a resource: a bare locator is never guessed at.
 --split only overrides the split axis; it never halves a live terminal after content is open.
@@ -1881,6 +1884,7 @@ Usage: sidecar open [options] [<target>]
 - `--provider ID`: Open a locator through a configured terminal resource provider
 - `--shell NAME`: Target a registered shell by display name or tmux name
 - `--project NAME`: Target a project's Workspaces surface (slug, basename, or path)
+- `--sessions [ROW]`: Target the global Sessions surface (optional row by ID or display name)
 - `--split auto|right|below`: Where to place a new pane (default auto)
 - `--at COL[.ROW]`: Place at an explicit grid cell (1-based); a requirement, mutually exclusive with --split
 - `--wait DURATION`: Time to wait for instances to acknowledge (default 1200ms; 0 = fire and forget)
@@ -1921,6 +1925,59 @@ sidecar open --json --split below README.md
 sidecar open README.md --at 2.1
 # from any terminal, that project's Workspaces surface
 sidecar open --project sidecar README.md
+# the selected row on the global Sessions surface
+sidecar open --sessions README.md
+```
+
+## `sidecar request`
+
+Host-side UI request bus verbs a viewing Sidecar invokes
+
+Acknowledge UI requests into this machine's request bus.
+
+This is an internal transport endpoint, not a public open-on-host surface.
+
+```
+Usage: sidecar request <command>
+```
+
+### `sidecar request ack`
+
+Write one acknowledgement into a host request's *.acks directory
+
+Write an acknowledgement for a UI request file this machine already holds.
+
+This is the mutation seam a viewing Sidecar uses to ack a relayed open or layout
+request into the host *.acks directory. It is not a public targeting flag and not
+a serve write: serve still does not write acks or apply requests.
+
+--json writes the machine contract.
+
+```
+Usage: sidecar request ack --id ID --action open|layout --status STATUS [--reason TEXT] [--surface TEXT] [--pane N] --json
+```
+
+**Options:**
+
+- `--id ID`: Request id to acknowledge
+- `--action ACTION`: Request action (open or layout)
+- `--status STATUS`: Ack status (opened, declined, retargeted, queued, moved, unchanged)
+- `--reason TEXT`: Decline or no-op reason
+- `--surface TEXT`: Surface that handled the request
+- `--pane N`: Pane id that received the open, when any
+- `--json`: Write the structured result object to stdout (required for the machine contract)
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: acknowledged
+- `1`: state failure
+- `2`: usage error
+
+**Examples:**
+
+```bash
+sidecar request ack --id req-1 --action open --status opened --json
 ```
 
 ## `sidecar session`

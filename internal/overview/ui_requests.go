@@ -1,21 +1,30 @@
 package overview
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/hostproto"
+	"github.com/marcus/sidecar/internal/hosts"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/resourceview"
+	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspacediff"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
+
+const relayedOpenNotOnScreenReason = "that Sessions row is not on screen, and relayed open requests are never queued"
+
+const sessionsOpenNotOnScreenReason = "the Sessions surface is not on screen, and open --sessions is never queued"
 
 type pendingView struct {
 	Target    uirequest.Target
@@ -41,126 +50,64 @@ func (m *Model) handleUIRequest(req uirequest.Request) tea.Cmd {
 		return m.applyCreateRequest(req)
 	}
 	if req.Action == uirequest.ActionLayout {
+		if req.Origin.HostID == "" && !req.Origin.Sessions && !tty.ThisInstanceOwnsSession(req.Origin.TmuxSession) {
+			return nil
+		}
 		return m.applyLayoutRequest(req)
 	}
 	if req.Action != uirequest.ActionOpen {
 		return nil
 	}
-
-	var targetWorkspace *workspaceinventory.Workspace
-	for _, ws := range m.catalog {
-		// Session names are unique per machine, not globally: two machines
-		// running Sidecar on the same project produce the same name. A request
-		// that originated in a local shell must never bind to a remote row,
-		// which unordered map iteration would otherwise do at random.
-		if ws.Remote() {
-			continue
-		}
-		if ws.TmuxName == req.Origin.TmuxSession {
-			targetWorkspace = &ws
-			break
-		}
-	}
-	if targetWorkspace == nil {
+	if req.Origin.HostID == "" && !req.Origin.Sessions && !tty.ThisInstanceOwnsSession(req.Origin.TmuxSession) {
 		return nil
 	}
 
-	selected, hasSelected := m.SelectedWorkspace()
-	isSelected := hasSelected && selected.TmuxName == req.Origin.TmuxSession
-
-	if isSelected {
-		prevSplit := m.openSplit
-		m.openSplit = req.Options.Split
-		// The plan is scoped to THIS request whether or not the open reaches a
-		// placement: a resource that no matcher claims, or a kind that opens
-		// nothing, returns before previewDeckPlacement consumes it, and a plan
-		// left behind would place the NEXT open at a cell nobody asked for.
-		defer func() {
-			m.openSplit = prevSplit
-			m.pendingOpenPlan = nil
-		}()
-
-		if at := strings.TrimSpace(req.Options.At); at != "" {
-			plan, refusal, ok := m.planPreviewOpenAt(req.Target, at)
-			if !ok {
-				_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
-					Instance: hostInstanceID(), Host: uirequest.HostName(), PID: os.Getpid(),
-					Status: uirequest.StatusDeclined, Reason: refusal,
-					Surface: "shell:" + targetWorkspace.TmuxName, At: time.Now().UTC(),
-				})
-				return nil
-			}
-			m.pendingOpenPlan = plan
-		}
-
-		var cmd tea.Cmd
-		// Asked before the open, because afterwards the pane exists either way:
-		// the planner is what decides between a new split and an existing pane.
-		retargeted := false
-		switch req.Target.Kind {
-		case uirequest.TargetKindFile:
-			retargeted = m.willRetargetPreviewPane(panelayout.Document)
-			// The request already carries a uirequest.Target; the pane opener
-			// takes one directly, so nothing is re-wrapped as a span here.
-			cmd = m.openPreviewDocTarget(req.Target)
-		case uirequest.TargetKindIssue:
-			retargeted = m.willRetargetPreviewPane(panelayout.Issue)
-			cmd = m.openPreviewIssue(req.Target.Value)
-		case uirequest.TargetKindNote:
-			retargeted = m.willRetargetPreviewPane(panelayout.Note)
-			cmd = m.openPreviewNote(req.Target.Value)
-		case uirequest.TargetKindDiff:
-			retargeted = m.willRetargetPreviewPane(panelayout.Diff)
-			if targetWorkspace.Remote() {
-				spec, ok := workspacediff.ParseSpec(req.Target.Value)
-				if !ok {
-					spec = workspacediff.WorkingTreeTarget()
+	targetWorkspace, ok := m.bindOpenWorkspace(req)
+	if !ok {
+		if req.Origin.HostID != "" || req.Origin.Sessions {
+			reason := "no Sessions row matches that origin"
+			if req.Origin.Sessions {
+				if _, _, _, rowReason := m.resolveSessionsLayoutRow(req); rowReason != "" {
+					reason = rowReason
 				}
-				cmd = m.openPreviewDiff(spec)
-			} else {
-				cmd = m.openPreviewDiff(uirequest.DiffTarget(targetWorkspace.Path, req.Target.Value))
 			}
-		case uirequest.TargetKindResource:
-			ref, refusal := resourceview.ReferenceForLocator(m.previewResourceMatchers(), req.Target.Provider, req.Target.Value)
-			if refusal != "" {
-				_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
-					Instance: hostInstanceID(), Host: uirequest.HostName(), PID: os.Getpid(),
-					Status: uirequest.StatusDeclined, Reason: refusal,
-					Surface: "shell:" + targetWorkspace.TmuxName, At: time.Now().UTC(),
-				})
-				return nil
-			}
-			retargeted = m.willRetargetPreviewPane(panelayout.Resource)
-			cmd = m.OpenPreviewResource(ref)
+			m.ackOpen(req, uirequest.StatusDeclined, reason, "", 0)
 		}
+		return nil
+	}
 
-		if cmd == nil {
-			_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
-				Instance: hostInstanceID(),
-				Host:     uirequest.HostName(),
-				PID:      os.Getpid(),
-				Status:   uirequest.StatusDeclined,
-				Reason:   "window too small to split",
-				Surface:  "shell:" + targetWorkspace.TmuxName,
-				At:       time.Now().UTC(),
-			})
+	neverQueue := req.Origin.HostID != "" || req.Origin.Sessions
+	selected, hasSelected := m.SelectedWorkspace()
+	isSelected := hasSelected && selected.ID == targetWorkspace.ID
+
+	if neverQueue {
+		if !m.preview.visible {
+			reason := relayedOpenNotOnScreenReason
+			if req.Origin.Sessions && req.Origin.HostID == "" {
+				reason = sessionsOpenNotOnScreenReason
+			}
+			m.ackOpen(req, uirequest.StatusDeclined, reason, openAckSurface(*targetWorkspace), 0)
 			return nil
 		}
-
-		status := uirequest.StatusOpened
-		if retargeted {
-			status = uirequest.StatusRetargeted
+		if req.Origin.Sessions && req.Origin.HostID == "" {
+			if cmd := m.focusSessionsLayoutRow(targetWorkspace.ID); cmd != nil {
+				_ = cmd
+			}
+			selected, hasSelected = m.SelectedWorkspace()
+			isSelected = hasSelected && selected.ID == targetWorkspace.ID
 		}
-		_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
-			Instance: hostInstanceID(),
-			Host:     uirequest.HostName(),
-			PID:      os.Getpid(),
-			Status:   status,
-			Surface:  "shell:" + targetWorkspace.TmuxName,
-			Pane:     m.preview.paneFocus,
-			At:       time.Now().UTC(),
-		})
-		return cmd
+		if !isSelected {
+			m.ackOpen(req, uirequest.StatusDeclined, relayedOpenNotOnScreenReason, openAckSurface(*targetWorkspace), 0)
+			return nil
+		}
+		if req.Origin.HostID != "" && req.Target.Kind != uirequest.TargetKindFile {
+			return nil
+		}
+		return m.applyOpenOnPreview(req, *targetWorkspace)
+	}
+
+	if isSelected {
+		return m.applyOpenOnPreview(req, *targetWorkspace)
 	}
 
 	if m.pendingViews == nil {
@@ -173,15 +120,207 @@ func (m *Model) handleUIRequest(req uirequest.Request) tea.Cmd {
 		TTLMs:     req.TTLMs,
 	}
 
-	_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
-		Instance: hostInstanceID(),
-		Host:     uirequest.HostName(),
-		PID:      os.Getpid(),
-		Status:   uirequest.StatusQueued,
-		Surface:  "shell:" + targetWorkspace.TmuxName,
-		At:       time.Now().UTC(),
-	})
+	m.ackOpen(req, uirequest.StatusQueued, "", openAckSurface(*targetWorkspace), 0)
 	return nil
+}
+
+func (m *Model) applyOpenOnPreview(req uirequest.Request, targetWorkspace workspaceinventory.Workspace) tea.Cmd {
+	prevSplit := m.openSplit
+	m.openSplit = req.Options.Split
+	// The plan is scoped to THIS request whether or not the open reaches a
+	// placement: a resource that no matcher claims, or a kind that opens
+	// nothing, returns before previewDeckPlacement consumes it, and a plan
+	// left behind would place the NEXT open at a cell nobody asked for.
+	defer func() {
+		m.openSplit = prevSplit
+		m.pendingOpenPlan = nil
+	}()
+
+	surface := openAckSurface(targetWorkspace)
+	if at := strings.TrimSpace(req.Options.At); at != "" {
+		plan, refusal, ok := m.planPreviewOpenAt(req.Target, at)
+		if !ok {
+			m.ackOpen(req, uirequest.StatusDeclined, refusal, surface, 0)
+			return nil
+		}
+		m.pendingOpenPlan = plan
+	}
+
+	var cmd tea.Cmd
+	// Asked before the open, because afterwards the pane exists either way:
+	// the planner is what decides between a new split and an existing pane.
+	retargeted := false
+	switch req.Target.Kind {
+	case uirequest.TargetKindFile:
+		retargeted = m.willRetargetPreviewPane(panelayout.Document)
+		cmd = m.openPreviewDocTarget(req.Target)
+	case uirequest.TargetKindIssue:
+		retargeted = m.willRetargetPreviewPane(panelayout.Issue)
+		cmd = m.openPreviewIssue(req.Target.Value)
+	case uirequest.TargetKindNote:
+		retargeted = m.willRetargetPreviewPane(panelayout.Note)
+		cmd = m.openPreviewNote(req.Target.Value)
+	case uirequest.TargetKindDiff:
+		retargeted = m.willRetargetPreviewPane(panelayout.Diff)
+		if targetWorkspace.Remote() {
+			spec, ok := workspacediff.ParseSpec(req.Target.Value)
+			if !ok {
+				spec = workspacediff.WorkingTreeTarget()
+			}
+			cmd = m.openPreviewDiff(spec)
+		} else {
+			cmd = m.openPreviewDiff(uirequest.DiffTarget(targetWorkspace.Path, req.Target.Value))
+		}
+	case uirequest.TargetKindResource:
+		ref, refusal := resourceview.ReferenceForLocator(m.previewResourceMatchers(), req.Target.Provider, req.Target.Value)
+		if refusal != "" {
+			m.ackOpen(req, uirequest.StatusDeclined, refusal, surface, 0)
+			return nil
+		}
+		retargeted = m.willRetargetPreviewPane(panelayout.Resource)
+		cmd = m.OpenPreviewResource(ref)
+	}
+
+	if cmd == nil {
+		m.ackOpen(req, uirequest.StatusDeclined, "window too small to split", surface, 0)
+		return nil
+	}
+
+	status := uirequest.StatusOpened
+	if retargeted {
+		status = uirequest.StatusRetargeted
+	}
+	m.ackOpen(req, status, "", surface, m.preview.paneFocus)
+	return cmd
+}
+
+func (m *Model) bindOpenWorkspace(req uirequest.Request) (*workspaceinventory.Workspace, bool) {
+	if req.Origin.HostID != "" {
+		for _, ws := range m.catalog {
+			if ws.HostID == req.Origin.HostID && ws.TmuxName == req.Origin.TmuxSession && ws.TmuxName != "" {
+				hit := ws
+				return &hit, true
+			}
+		}
+		return nil, false
+	}
+	if req.Origin.Sessions {
+		_, ws, ok, _ := m.resolveSessionsLayoutRow(req)
+		if !ok {
+			return nil, false
+		}
+		return &ws, true
+	}
+	if req.Origin.TmuxSession == "" {
+		return nil, false
+	}
+	for _, ws := range m.catalog {
+		// Session names are unique per machine, not globally: two machines
+		// running Sidecar on the same project produce the same name. A request
+		// that originated in a local shell must never bind to a remote row,
+		// which unordered map iteration would otherwise do at random.
+		// Display-name fallback stays on this skip; a relayed request binds
+		// (HostID, TmuxSession) above.
+		if ws.Remote() {
+			continue
+		}
+		if ws.TmuxName == req.Origin.TmuxSession {
+			hit := ws
+			return &hit, true
+		}
+	}
+	return nil, false
+}
+
+func openAckSurface(ws workspaceinventory.Workspace) string {
+	if ws.Remote() {
+		return ws.ID
+	}
+	if ws.TmuxName != "" {
+		return "shell:" + ws.TmuxName
+	}
+	return ws.ID
+}
+
+func (m *Model) ackOpen(req uirequest.Request, status uirequest.Status, reason, surface string, pane int) {
+	if req.Origin.HostID == "" {
+		_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
+			Instance: hostInstanceID(),
+			Host:     uirequest.HostName(),
+			PID:      os.Getpid(),
+			Status:   status,
+			Reason:   reason,
+			Surface:  surface,
+			Pane:     pane,
+			At:       time.Now().UTC(),
+		})
+		return
+	}
+	args := []string{"request", "ack", "--id", req.ID, "--action", string(req.Action), "--status", string(status), "--json"}
+	if reason != "" {
+		args = append(args, "--reason", reason)
+	}
+	if surface != "" {
+		args = append(args, "--surface", surface)
+	}
+	if pane != 0 {
+		args = append(args, "--pane", strconv.Itoa(pane))
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), remoteQuickTimeout)
+	defer cancel()
+	var result uirequest.AckResult
+	_ = runRemoteSidecar(ctx, m.hostRegistry, req.Origin.HostID, args, &result)
+}
+
+func requestFromAnnouncement(event hostproto.UIRequest) uirequest.Request {
+	return uirequest.Request{
+		Version:   1,
+		ID:        event.ID,
+		CreatedAt: event.CreatedAt,
+		TTLMs:     event.TTLMs,
+		Origin: uirequest.Origin{
+			TmuxSession: event.Origin.TmuxSession,
+			Namespace:   event.Origin.Namespace,
+			ProjectKey:  event.Origin.ProjectKey,
+			WorkDir:     event.Origin.WorkDir,
+			HostID:      event.Origin.HostID,
+			Sessions:    event.Origin.Sessions,
+			SessionsRow: event.Origin.SessionsRow,
+		},
+		Action: uirequest.Action(event.Action),
+		Target: uirequest.Target{
+			Kind:     uirequest.TargetKind(event.Target.Kind),
+			Value:    event.Target.Value,
+			Line:     event.Target.Line,
+			Provider: event.Target.Provider,
+			Matcher:  event.Target.Matcher,
+		},
+		Options: uirequest.Options{
+			Split: event.Options.Split,
+			At:    event.Options.At,
+		},
+		Payload: event.Payload,
+	}
+}
+
+func (m *Model) forwardHostUIRequests(update hosts.Update) tea.Cmd {
+	if len(update.UIRequest) == 0 {
+		return nil
+	}
+	cmds := make([]tea.Cmd, 0, len(update.UIRequest))
+	for _, event := range update.UIRequest {
+		req := requestFromAnnouncement(event)
+		if req.Origin.HostID == "" {
+			req.Origin.HostID = update.HostID
+		}
+		if cmd := m.handleUIRequest(req); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+	if len(cmds) == 0 {
+		return nil
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m *Model) applyCreateRequest(req uirequest.Request) tea.Cmd {
