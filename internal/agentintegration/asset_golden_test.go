@@ -40,6 +40,18 @@ var assetGoldens = []assetGolden{
 	{provider: CodexProvider, name: "hooks.json", version: "1", checksum: "bed1991b2721f08148a2089600ae09d6328b244317355ea66e16c4b4a8de26d0"},
 	{provider: CodexProvider, name: "config.toml", version: "1", checksum: "380d955d0141f00dd10fe9d3e769c7d5e31fec036e356a0583e0f4b91d64615f"},
 	{provider: ClaudeProvider, name: "settings.json", version: "1", checksum: "0d2ca7075dff1faab0645c82e8fd5a04f5982e4be27667b9afa19e2ab05e6f3d"},
+	// Pi stays at version 1 across a content change, which is the one case the
+	// bump order below deliberately allows and is worth recording rather than
+	// leaving a reader to wonder. A version exists so an already-installed copy
+	// can be recognised as outdated and so authority granted to a qualified
+	// version is not inherited by unqualified bytes. Neither applies yet: no
+	// release has shipped `agent integration install pi`, so there is no copy of
+	// version 1 on any machine to be misread, and the change that moved this
+	// checksum -- seeding the report sequence from the clock, plus comments --
+	// leaves the event-to-lane mapping identical, so the recorded traces that
+	// earned the advisory tier still describe this asset exactly. See the note on
+	// PiAssetVersion, which states the same rule at the constant.
+	{provider: PiProvider, name: "sidecar-lifecycle.js", version: "1", checksum: "054a5b8b0134f2fc1dc8e3e5bb2047c8611bdd77cc618ef3b05c4c2738477516"},
 }
 
 // bumpInstructions is the whole point of the guard: a failure here has to tell
@@ -49,7 +61,7 @@ const bumpInstructions = `
 An asset's bytes changed. Before updating the golden below, do this in order:
 
   1. Bump the asset's version constant (OpenCodeAssetVersion, CodexAssetVersion,
-     or ClaudeAssetVersion) if it has not already moved. An installed copy is
+     ClaudeAssetVersion, or PiAssetVersion) if it has not already moved. An installed copy is
      recognised as outdated by its version, so without this every existing
      install keeps reporting itself current while running different code.
   2. Update the matching AssetVersion in internal/agentlifecycle/capabilities.json,

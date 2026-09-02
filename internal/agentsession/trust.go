@@ -15,6 +15,25 @@ import (
 // discovery may propose a candidate for a human to confirm, but it can never
 // enter this set, because "the newest conversation in this directory" is a
 // guess and resuming the wrong conversation is worse than resuming none.
+//
+// "Ships" is the whole test, and it is checked against the adapters rather than
+// against intent. This list once carried "sidecar.pi.extension" alongside a
+// capability entry for Pi, and neither was backed by anything: there was no
+// PiAdapter, no asset under internal/agentintegration/assets/pi, and no code
+// path that installed an extension Pi would load. Nothing Sidecar wrote could
+// ever produce a report carrying that source, so the only caller it could have
+// had was a hook somebody wrote by hand, and trusting one of those is exactly
+// the "resume a conversation nobody proved was the right one" the paragraph
+// above refuses. Both were retracted, and Pi is back here now that the port in
+// docs/plans/active/herdr-parity-close-the-gap.md, Slice 1, has shipped
+// PiAdapter and internal/agentintegration/assets/pi/sidecar-lifecycle.js, which
+// is what does the reporting.
+//
+// Being here is a statement about provenance and nothing else: it says Sidecar
+// wrote the thing that sent the report, so the conversation reference may be
+// resumed without a human confirming it. It is not a tier. Pi's capability entry
+// is session-identity on docs-only evidence, and that is what decides how much
+// its *state* reports are trusted; the two are deliberately separate registers.
 func OfficialSources() []string {
 	return []string{
 		"sidecar.codex.hooks",
@@ -30,6 +49,13 @@ func OfficialSources() []string {
 // an empty one, so the ordinary installed path produces a trusted, resumable
 // reference and only a caller that deliberately names a different source gets an
 // untrusted one.
+//
+// A provider with no shipped integration returns the empty string, and the
+// report-session command turns that into a refusal naming the cause rather than
+// letting the validator complain that the source is blank. A hand-written hook
+// for such a provider can still report by naming --source explicitly, and what
+// it gets is an untrusted reference, which is the honest amount of authority for
+// an integration Sidecar did not write.
 func OfficialSourceFor(kind string) string {
 	switch strings.TrimSpace(kind) {
 	case "codex":
@@ -53,6 +79,49 @@ func Official(source string) bool {
 		}
 	}
 	return false
+}
+
+// PiAgentDir resolves Pi's agent directory the way Pi itself does, from the home
+// directory and the raw PI_CODING_AGENT_DIR value. An empty result means the
+// answer is unknowable, which happens only when a tilde has to be expanded and
+// the home directory is unknown.
+//
+// Pi's getAgentDir trims nothing itself, but Sidecar does, and deliberately: a
+// PI_CODING_AGENT_DIR that is whitespace is a variable somebody exported without
+// a value, not a directory named " ". What matters far more than which reading is
+// right is that there is only one of them. This function exists because there
+// were two -- the installer's, in agentintegration, and the store root's, here --
+// and they had already disagreed on exactly that case, which is the failure this
+// derivation is worth naming: the installer would write the extension into
+// ~/.pi/agent/extensions while the approved root became "  /sessions", so the
+// extension installed cleanly and every session binding it sent was refused for
+// being outside the store.
+//
+// The tilde expansion is Pi's own (dist/config.js:420-426, verified against pi
+// 0.84.3), not a convenience: getAgentDir expands a leading "~" before using the
+// value, so a Sidecar that did not would read and write a literal directory
+// named "~" while Pi used somewhere else entirely.
+//
+// It lives in this package rather than in agentintegration because this is the
+// package that already owns where every provider keeps its files, and because it
+// is a leaf: agentintegration may import it, and the reverse edge -- a trust
+// primitive importing an installer that pulls in the UI packages -- is one worth
+// refusing.
+func PiAgentDir(home, override string) string {
+	value := strings.TrimSpace(override)
+	if value == "" {
+		if home == "" {
+			return ""
+		}
+		return filepath.Join(home, ".pi", "agent")
+	}
+	if value == "~" || strings.HasPrefix(value, "~/") {
+		if home == "" {
+			return ""
+		}
+		return filepath.Join(home, strings.TrimPrefix(strings.TrimPrefix(value, "~"), "/"))
+	}
+	return value
 }
 
 // Roots describes where a provider is allowed to keep its conversations.
@@ -122,6 +191,27 @@ func (r Roots) For(kind string) []string {
 			base = filepath.Join(r.Home, ".local", "share")
 		}
 		return []string{filepath.Join(base, "opencode")}
+	case "pi":
+		// Pi keeps its conversations at getAgentDir()/sessions
+		// (dist/config.js:455-457). The agent directory itself is derived by
+		// PiAgentDir below, which is also what the installer calls, because the
+		// two used to derive it separately and had already drifted: the
+		// installer trimmed the environment value and this did not, so a
+		// whitespace-only PI_CODING_AGENT_DIR installed the extension into
+		// ~/.pi/agent/extensions while the approved root became "  /sessions"
+		// and every binding that extension sent was refused.
+		//
+		// This root is what makes Pi's session binding more than decoration: the
+		// installed extension reports the session FILE, because a path names the
+		// exact transcript a restore would resume where an id alone does not, and
+		// a path reference outside every approved root is refused rather than
+		// stored. Without an entry here the binding would be refused on every
+		// report and the session-identity tier would be a claim about nothing.
+		base := PiAgentDir(r.Home, r.env("PI_CODING_AGENT_DIR"))
+		if base == "" {
+			return nil
+		}
+		return []string{filepath.Join(base, "sessions")}
 	case "muse":
 		base := r.env("XDG_DATA_HOME")
 		if base == "" {

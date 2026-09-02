@@ -23,19 +23,33 @@ Some traces are checked in to record that a provider emitted **nothing** — the
 two Claude cancellation captures are the current examples, and that absence is
 the single fact capping Claude below full lifecycle authority.
 
-An absence is only as strong as the window it was watched over. "Nothing fired"
-over one second and over eighteen are very different claims, and a reader cannot
-tell them apart from a trace that simply stops. So a trace making an absence
-claim must carry a trailing comment row naming its window:
+An absence is only as strong as the interval it was measured over, and there are
+two kinds of interval. **A window is owed when the interval is a watch**: the
+listener stayed attached and nothing arrived, and the trace simply stops.
+"Nothing fired" over one second and over eighteen are very different claims, and
+a reader cannot tell them apart from a trace that ends. Such a trace must carry a
+trailing comment row naming its window:
 
 ```
 # capture-window: 18s
 ```
 
-`hooktrace_test.go` requires it for those traces and rejects a value
-`time.ParseDuration` cannot read, so the evidence stays attached to the claim
-rather than living in a session log nobody will find. Traces that only record
-what did happen need no such row.
+**A window is not owed when the interval is delimited by recorded rows.** "No
+permission event appeared between before_agent_start and agent_settled" is
+bounded by two rows a reader can see, so its strength is in the fixture already
+and a duration would add nothing. `traces/pi/tool-turn.tsv` is that shape and
+deliberately carries no window.
+
+The distinction matters because it is also the test for whether an absence claim
+belongs in a trace file at all. A claim the six columns cannot support is not
+made stronger by a window: it is prose about a run, and it belongs beside the
+evidence that does support it. That trace carries a note saying exactly this
+about Pi's untyped event bus, which no column here observes.
+
+`hooktrace_test.go` requires a window for the watch-shaped traces and rejects a
+value `time.ParseDuration` cannot read, so the evidence stays attached to the
+claim rather than living in a session log nobody will find. Traces that only
+record what did happen need no such row.
 
 Note what these traces do **not** do. A test reading a static fixture cannot
 notice that a provider's behavior changed; it fails only once a human has
@@ -53,6 +67,16 @@ Captured 2026-08-30 on darwin/arm64.
 | `traces/opencode/session-error-turn.tsv` | opencode | 1.18.23 | google/gemini-2.5-flash | provider auth error | Phase A |
 | `traces/opencode/cancelled-turn.tsv` | opencode | 1.18.25 | openai/gpt-4o-mini | user cancellation | Phase B |
 | `traces/opencode/provider-error-named.tsv` | opencode | 1.18.25 | google/gemini-2.5-flash | provider auth error | Phase B |
+| `traces/pi/simple-turn.tsv` | pi | 0.84.3 | openrouter z-ai/glm-5.3-flash | success | Slice 1 |
+| `traces/pi/tool-turn.tsv` | pi | 0.84.3 | openrouter z-ai/glm-5.3-flash | success, one bash tool call | Slice 1 |
+| `traces/pi/cancelled-turn.tsv` | pi | 0.84.3 | openrouter z-ai/glm-5.3-flash | user cancellation | Slice 1 |
+| `traces/pi/error-turn-and-quit.tsv` | pi | 0.84.3 | openrouter stealth/ox-alpha | provider 404, then /quit | Slice 1 |
+
+The Pi traces were captured 2026-09-02 on darwin/arm64; the four rows above are
+one Pi 0.84.3 process each for the first three and a second process for the
+fourth. Their capture procedure and their extra sanitization rule are in the Pi
+section below, because they are the first traces in this directory to record any
+event *value*.
 
 The error trace is kept deliberately. A failed turn is a real lifecycle path,
 and it is the one that shows `session.error` resolving to `session.idle` rather
@@ -125,6 +149,82 @@ which is what makes it safe to record where a message would not be.
 Phase B traces additionally drop `message.part.delta`. The TUI streams one of
 those per token, so a single cancelled turn produced 1604 of them; they carry no
 lifecycle information and would bury the fixture.
+
+## Pi
+
+Pi's traces use the six-column hook layout — `offset_ms`, `event`, `session`,
+`turn`, `tool`, `fields` — that `readHookTrace` in `hooktrace_test.go` reads, the
+same one Codex and Claude use. Pi is bus-shaped rather than hook-shaped, but the
+columns carry the same evidence and a second reader would have bought nothing.
+`turn` is always `-`: Pi's `turn_start` carries a `turnIndex`, which is a
+position rather than an identifier, and it is recorded as a field name only.
+
+### How they were captured, and what was not touched
+
+A tracer extension was installed into a **temporary** `PI_CODING_AGENT_DIR`
+created under the run's scratch directory. Pi resolves both its extension
+directory and its sessions directory from that variable
+(`dist/config.js:420-426`, `:455-457`), so the whole agent tree moved with it.
+The user's real `~/.pi` — which holds their own extensions, including Herdr's —
+was read once to see what a run needs and never written, moved, or deleted.
+Only `settings.json`, `models.json`, `models-store.json` and `trust.json` were
+copied *out*, and the copy's `defaultModel` was pointed at a live cheap model
+after the configured one turned out to have been retired. `auth.json` is empty
+on this machine: Pi reads its OpenRouter credential from the environment, so
+nothing secret was copied anywhere.
+
+Sidecar's own asset was installed beside the tracer with
+`sidecar agent integration install pi`, not by hand, so the run also proves the
+installer. Pi was driven in a real TUI inside a Sidecar-managed shell on a
+**private tmux server** (`tmux -S` on a dedicated socket, never the machine's
+default server), with `XDG_STATE_HOME`, `-config` and `SIDECAR_ISOLATED_STATE=1`
+holding Sidecar's own state off the real tree. `HERDR_ENV` was never set: with it
+set, Herdr's extension and Sidecar's would both claim the pane.
+
+One trap is worth recording for whoever recaptures. The `sidecar` **CLI**
+dispatches in `cmd/sidecar/main.go` before `main` unsets `TMUX`, deliberately and
+by comment. A CLI-driven proof run started from inside a tmux pane therefore
+talks to the socket named in `$TMUX` — the machine's default server — no matter
+what `TMUX_TMPDIR` says. Unset `TMUX` in the harness. `scripts/tmux-drive.sh` is
+unaffected because it launches the TUI, which does reach the unset.
+
+### Sanitization
+
+Sanitization is by construction, as everywhere else in this directory: the
+tracer recorded event names, `ctx` discriminators, and payload field **names**,
+and never had prompt text, response text, tool arguments, tool results, file
+contents, or environment values. Session identifiers were mapped to
+`session-N` placeholders inside the tracer process, so no real identifier ever
+reached a file.
+
+Pi's traces are the first here to record event **values**, and the rule is
+narrow, closed, and enforced. A value is recorded only for a key whose vocabulary
+is fixed by Pi's own source, which is the same rule that let the OpenCode Phase B
+traces record a bounded error class name where a message would have been a
+privacy failure. The permitted keys are exactly:
+
+| Key | Why a value is safe |
+| --- | --- |
+| `type` | Pi's own event discriminator |
+| `reason` | Pi's own bounded reason enum (`startup`, `reload`, `quit`, …) |
+| `ctx.mode` | The session mode discriminator (`tui`, `rpc`, …) |
+| `ctx.isIdle` | A tri-state boolean, or absent |
+| `ctx.sessionFile` | `present` or `absent` only — never the path |
+| `ctx.sessionId` | `present` or `absent` only — never the id |
+
+Every other key appears as a bare name: `prompt`, `images`, `message`, `args`,
+`result` and `systemPrompt` are all in these fixtures, and all of them as names
+alone. The last four rows are derived observations rather than payload fields,
+and they are recorded at all because the shipped asset's guards are built on
+exactly them — a bare name would not show whether a guard was correct.
+
+`TestNoHookTraceCarriesAValue` enforces this as an allowlist: a `=` on any key
+outside the table fails, whatever the value looks like. Before that check it
+compared only the `session` and `turn` columns, which was sufficient while every
+trace here held bare names, and would have let a future capture record
+`prompt=<the user's prompt>` without a single test noticing. Widening the
+allowlist is a deliberate act, and it means asserting that the key's values
+cannot carry user content.
 
 ## Re-capturing
 

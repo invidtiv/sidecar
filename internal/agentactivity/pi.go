@@ -23,7 +23,23 @@ func DetectPi(ob Observation) Result {
 	return DetectManifestResult(ob)
 }
 
-// piProcess is the process gate for Pi. It is named rather than inlined so
-// the manifest engine can apply exactly the same refusal without going through
-// a Go rule table; see manifest_detect.go.
+// piProcess is Pi's no-identity process gate — what Sidecar will accept from
+// `pane_current_command` alone. It is named rather than inlined so the manifest
+// engine can apply exactly the same refusal without going through a Go rule
+// table; see manifest_detect.go.
+//
+// It deliberately does not allow a bare `node`, even though Pi 0.84.3 installs
+// as a `#!/usr/bin/env node` shim and that shim is precisely what made
+// `sidecar agent start --kind pi` time out. Allowing it would trade one refusal
+// for a worse claim: upstream's pi.toml has a single rule, `working_literal`,
+// which is the literal "Working..." anywhere in the read window, so a `node`
+// allowance would let Pi's manifest report *any* Node pane that ever prints
+// that word as working, and let every Pi pane's fallback report a Node pane as
+// idle. What reaches a Pi shim instead is processGate's identity rule, on the
+// evidence of the pane's own foreground argv.
+//
+// The residual is stated rather than hidden: on a platform with no
+// process-identity adapter nothing resolves, so a shim-installed Pi pane is
+// still refused there. That is a missing badge on those platforms, which is the
+// side of this trade Sidecar has taken everywhere else in this gate.
 func piProcess(command string) bool { return command == "pi" }

@@ -1,0 +1,3 @@
+# offset_ms	event	reason	mode	idle	session_path	session_id	blocked_active	blocked_label
+0	session_start	startup	tui	true	/tmp/pi-a.jsonl	pi-a	-	-
+10	agent_start	-	tui	false	/tmp/pi-a.jsonl	pi-a	-	-

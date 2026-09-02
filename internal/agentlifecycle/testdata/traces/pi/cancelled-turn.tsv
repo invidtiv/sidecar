@@ -1,0 +1,21 @@
+# ms	event	session	turn	tool	fields
+0	before_agent_start	session-1	-	-	images,prompt,systemPrompt,systemPromptOptions,type=before_agent_start,ctx.mode=tui,ctx.isIdle=true,ctx.sessionFile=present,ctx.sessionId=present
+1	agent_start	session-1	-	-	type=agent_start,ctx.mode=tui,ctx.isIdle=false,ctx.sessionFile=present,ctx.sessionId=present
+1	turn_start	session-1	-	-	timestamp,turnIndex,type=turn_start,ctx.mode=tui,ctx.isIdle=false,ctx.sessionFile=present,ctx.sessionId=present
+1	message_start	session-1	-	-	message,type=message_start,ctx.mode=tui,ctx.isIdle=false,ctx.sessionFile=present,ctx.sessionId=present
+1	message_end	session-1	-	-	message,type=message_end,ctx.mode=tui,ctx.isIdle=false,ctx.sessionFile=present,ctx.sessionId=present
+3603	message_start	session-1	-	-	message,type=message_start,ctx.mode=tui,ctx.isIdle=false,ctx.sessionFile=present,ctx.sessionId=present
+4031	message_end	session-1	-	-	message,type=message_end,ctx.mode=tui,ctx.isIdle=false,ctx.sessionFile=present,ctx.sessionId=present
+4032	turn_end	session-1	-	-	message,toolResults,turnIndex,type=turn_end,ctx.mode=tui,ctx.isIdle=false,ctx.sessionFile=present,ctx.sessionId=present
+4032	agent_end	session-1	-	-	messages,type=agent_end,ctx.mode=tui,ctx.isIdle=false,ctx.sessionFile=present,ctx.sessionId=present
+4033	agent_settled	session-1	-	-	type=agent_settled,ctx.mode=tui,ctx.isIdle=true,ctx.sessionFile=present,ctx.sessionId=present
+# capture-window: 20s
+# The turn was interrupted with Escape roughly 4s after submission; the pane
+# printed "Operation aborted". The listener stayed attached for 20s after the
+# interrupt and nothing further arrived. Compare with simple-turn.tsv: the tail
+# is the identical turn_end, agent_end, agent_settled sequence, carrying the
+# identical field names. Pi has no cancellation event and no field on these
+# events distinguishes an aborted turn from a completed one, which is why the
+# cancelled transition is not claimed. The lane is still correct, because
+# agent_settled is emitted from a finally block and so arrives however the turn
+# ended.

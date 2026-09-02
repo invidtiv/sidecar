@@ -346,6 +346,15 @@ type Env struct {
 	Home string
 	// ConfigHome is $XDG_CONFIG_HOME when set, and empty otherwise.
 	ConfigHome string
+	// PiAgentDir is $PI_CODING_AGENT_DIR when set, and empty otherwise.
+	//
+	// It is a field rather than a general environment accessor for the same
+	// reason ConfigHome is: an adapter that read os.Getenv directly would make
+	// every test in this package depend on the developer's own environment, and
+	// the installer suite's whole premise is that it runs inside t.TempDir and
+	// can be run twice. Empty means "no override", which is also what a test
+	// that never sets it gets.
+	PiAgentDir string
 	// LookPath finds a provider executable. Defaults to exec.LookPath.
 	LookPath func(file string) (string, error)
 	// ProviderVersion reports an installed provider's version string.
@@ -364,6 +373,7 @@ func OSEnv() Env {
 	return Env{
 		Home:            os.Getenv("HOME"),
 		ConfigHome:      os.Getenv("XDG_CONFIG_HOME"),
+		PiAgentDir:      os.Getenv("PI_CODING_AGENT_DIR"),
 		LookPath:        exec.LookPath,
 		ProviderVersion: detectProviderVersion,
 		UID:             os.Getuid(),
@@ -499,7 +509,7 @@ type Adapter interface {
 
 // DefaultAdapters returns the adapters this build ships.
 func DefaultAdapters() []Adapter {
-	return []Adapter{OpenCodeAdapter{}, CodexAdapter{}, ClaudeAdapter{}}
+	return []Adapter{OpenCodeAdapter{}, CodexAdapter{}, ClaudeAdapter{}, PiAdapter{}}
 }
 
 // Service is the application service behind the CLI and the Configuration

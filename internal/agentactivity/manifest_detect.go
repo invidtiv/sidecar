@@ -57,13 +57,60 @@ func HerdrAgentLabel(agent string) string {
 	}
 }
 
-// processGate applies the per-provider process refusal without evaluating any
-// rules. It is Sidecar's, not Herdr's, and it is stricter: Herdr will happily
-// evaluate claude.toml against whatever is on a pane it believes is Claude,
-// while Sidecar refuses unless the foreground command is Claude or a permitted
-// runtime wrapper. That refusal stays through the cutover, so it lives here
-// rather than inside the engine.
+// processGate applies the process refusal without evaluating any rules. It is
+// Sidecar's, not Herdr's, and it is stricter: Herdr will happily evaluate
+// claude.toml against whatever is on a pane it believes is Claude, while
+// Sidecar refuses unless the pane's own process evidence names this provider.
+// That refusal stays through the cutover, so it lives here rather than inside
+// the engine.
+//
+// There is one rule above the per-provider ones, and it is that a *resolved*
+// process identity settles the question in both directions. Before it there
+// were ten inconsistent answers to "which identity input counts", and both
+// directions of that were wrong.
+//
+// The missing direction cost a whole provider. Pi installs as a plain
+// `#!/usr/bin/env node` shim, so tmux reports the pane's foreground command as
+// `node`, and piProcess — an exact match on "pi" — refused before any rule ran.
+// `sidecar agent list` reported `evidence=pi.process-mismatch` and `sidecar
+// agent start --kind pi` ran to its full timeout, because agentcontrol's
+// detector consults Detect and nothing else, so it never saw a state to be
+// ready on. The screen lane answered `idle` for the very same capture the
+// moment the gate let it through, which is how we know the gate was the whole
+// of that defect. See docs/plans/active/herdr-parity-close-the-gap.md, Slice 1's
+// result.
+//
+// The open direction cost worse than a missing badge. Four of the launchable
+// gates accept a bare `node` or `bun` with no other evidence, which is the only
+// reason a Node-installed agent is reachable at all where nothing can resolve
+// argv. On that same Pi pane it also means claudeProcess("node") is true, so
+// claude.toml would be evaluated against a Pi screen. Letting a resolved
+// identity refuse every provider it does not name is what closes that, and it
+// is why the widening had to land here rather than in the resolver alone: the
+// plan's rule is that identity and the gate widen together or not at all.
+//
+// When nothing is resolved — a platform with no process-identity adapter, or a
+// pane whose foreground group is its own shell — the per-provider command rules
+// below stand exactly as they were, runtime allowances included, because there
+// `pane_current_command` is the only evidence there is.
 func processGate(agent, command string, ob Observation) bool {
+	// Read through identifyAgentName rather than comparing the raw string: that
+	// is what Identify reads ob.ProcessIdentity through, and reading one input
+	// two ways is how a gate and the identity it is checking drift apart. It
+	// also means an unresolvable value — a bare runtime, a path, anything the
+	// alias table cannot name — is *not* an identity and falls through, rather
+	// than refusing every provider on a pane nothing was learned about.
+	if identity := identifyAgentName(ob.ProcessIdentity); identity != "" {
+		return identity == agent
+	}
+	return commandGate(agent, command)
+}
+
+// commandGate is the no-identity fallback: what a provider will accept from
+// `pane_current_command` alone. Each provider owns its own answer in its own
+// file, because the runtime allowances are per-provider knowledge — Claude and
+// Codex ship npm launchers, Pi deliberately allows none (see piProcess).
+func commandGate(agent, command string) bool {
 	switch agent {
 	case "claude":
 		return claudeProcess(command)
@@ -78,9 +125,12 @@ func processGate(agent, command string, ob Observation) bool {
 	case "copilot":
 		return copilotProcess(command)
 	case "cursor":
-		// Cursor is the one provider whose gate reads more than the command
-		// name: `agent` and `node` are shared, so a resolved argv[0] counts too.
-		return cursorProcess(command) || ob.ProcessIdentity == "cursor"
+		// Cursor used to be the one provider whose gate read a second input
+		// here, `ob.ProcessIdentity == "cursor"`, because `agent` and `node` are
+		// shared names. processGate answers that for every provider now, so the
+		// clause is gone rather than kept as a special case that can only ever
+		// be false on this branch.
+		return cursorProcess(command)
 	case "opencode":
 		return openCodeProcess(command)
 	case "amp":
@@ -95,36 +145,32 @@ func processGate(agent, command string, ob Observation) bool {
 		// actually running Qwen — and identifyProcessName already answers that
 		// from Herdr's own alias table, so the gate is that answer.
 		//
-		// It reads *both* identity inputs, for the same reason Cursor's gate
-		// above does. Identify resolves ob.ProcessIdentity before
-		// ob.CurrentCommand, and ProcessIdentity carries a family id resolved
-		// from a foreground argv[0], so a pane whose pane_current_command is
-		// `node` and whose argv[0] basename is `qwen` is identified as Qwen and
-		// then arrives here with a command name the alias table cannot name.
-		// Gating on the command alone refused it, which is worse than not
-		// claiming the pane at all: the row got a provider chip whose state
-		// could only ever be unknown, with no idle fallback, because Supports is
-		// true and Detect refuses. See
-		// TestDetectionOnlyGateAcceptsEitherIdentityInput.
+		// It used to read ob.ProcessIdentity here as well, for the same reason
+		// Cursor's branch did, and the case that forced it is worth keeping:
+		// a pane whose pane_current_command is `node` and whose argv[0] basename
+		// is `qwen` is identified as Qwen by Identify and then arrives here with
+		// a command name the alias table cannot name. Gating on the command
+		// alone refused it, which is worse than not claiming the pane at all —
+		// Supports is true, so the row got a provider chip whose state could
+		// only ever be unknown, with no idle fallback behind it. processGate
+		// answers that for every provider now, so this branch reads the command
+		// and nothing else. See TestDetectionOnlyGateAcceptsEitherIdentityInput.
 		//
-		// It is still stricter than the launchable providers' gates in one
-		// direction, and that is deliberate: a pane running one of these under a
-		// runtime that leaves *neither* input naming the agent is refused rather
-		// than evaluated. Refusing costs a missing badge; a bare runtime
-		// allowance for ten agents nobody here has captured would cost one
-		// agent's manifest reading another's screen.
+		// With no identity resolved it stays stricter than the launchable
+		// providers' gates, and that is deliberate: a pane running one of these
+		// under a runtime that leaves the command unnamed is refused rather than
+		// evaluated. Refusing costs a missing badge; a bare runtime allowance
+		// for ten agents nobody here has captured would let one agent's manifest
+		// read another's screen on exactly the platforms where nothing can
+		// contradict it.
 		//
-		// The known residual is the Node-installed CLI whose bin is a
-		// `#!/usr/bin/env node` shim: tmux reports `node` and argv[0] is the node
-		// interpreter path, so neither input names the agent and the pane is
-		// never claimed. Identify's node/bun/agent branch only rescues claude,
-		// codex, grok and cursor, each from screen chrome nobody has captured for
-		// these ten. Herdr reaches them because it scores the whole foreground
-		// process tree past its generic-runtime list; ResolveForegroundAgent
-		// matches argv[0] basenames only. Closing that is a widening of Identify
-		// with its own risk, and is not this gate's job.
+		// The residual is the Node-installed CLI whose bin is a
+		// `#!/usr/bin/env node` shim on a platform with no process-identity
+		// adapter: tmux reports `node`, nothing resolves, and the pane is never
+		// claimed. Where an adapter does resolve argv, processGate's identity
+		// rule is what now reaches it.
 		if detectionOnly(agent) {
-			return identifyProcessName(command) == agent || ob.ProcessIdentity == agent
+			return identifyProcessName(command) == agent
 		}
 		return false
 	}

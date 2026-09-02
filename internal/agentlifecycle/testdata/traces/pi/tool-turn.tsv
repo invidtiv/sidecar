@@ -1,0 +1,50 @@
+# ms	event	session	turn	tool	fields
+0	before_agent_start	session-1	-	-	images,prompt,systemPrompt,systemPromptOptions,type=before_agent_start,ctx.mode=tui,ctx.isIdle=true,ctx.sessionFile=present,ctx.sessionId=present
+2	agent_start	session-1	-	-	type=agent_start,ctx.mode=tui,ctx.isIdle=false,ctx.sessionFile=present,ctx.sessionId=present
+2	turn_start	session-1	-	-	timestamp,turnIndex,type=turn_start,ctx.mode=tui,ctx.isIdle=false,ctx.sessionFile=present,ctx.sessionId=present
+2	message_start	session-1	-	-	message,type=message_start,ctx.mode=tui,ctx.isIdle=false,ctx.sessionFile=present,ctx.sessionId=present
+2	message_end	session-1	-	-	message,type=message_end,ctx.mode=tui,ctx.isIdle=false,ctx.sessionFile=present,ctx.sessionId=present
+5247	message_start	session-1	-	-	message,type=message_start,ctx.mode=tui,ctx.isIdle=false,ctx.sessionFile=present,ctx.sessionId=present
+5255	message_end	session-1	-	-	message,type=message_end,ctx.mode=tui,ctx.isIdle=false,ctx.sessionFile=present,ctx.sessionId=present
+5255	tool_execution_start	session-1	-	bash	args,toolCallId,toolName,type=tool_execution_start,ctx.mode=tui,ctx.isIdle=false,ctx.sessionFile=present,ctx.sessionId=present
+5261	tool_execution_end	session-1	-	bash	isError,result,toolCallId,toolName,type=tool_execution_end,ctx.mode=tui,ctx.isIdle=false,ctx.sessionFile=present,ctx.sessionId=present
+5261	message_start	session-1	-	-	message,type=message_start,ctx.mode=tui,ctx.isIdle=false,ctx.sessionFile=present,ctx.sessionId=present
+5262	message_end	session-1	-	-	message,type=message_end,ctx.mode=tui,ctx.isIdle=false,ctx.sessionFile=present,ctx.sessionId=present
+5262	turn_end	session-1	-	-	message,toolResults,turnIndex,type=turn_end,ctx.mode=tui,ctx.isIdle=false,ctx.sessionFile=present,ctx.sessionId=present
+5262	turn_start	session-1	-	-	timestamp,turnIndex,type=turn_start,ctx.mode=tui,ctx.isIdle=false,ctx.sessionFile=present,ctx.sessionId=present
+7557	message_start	session-1	-	-	message,type=message_start,ctx.mode=tui,ctx.isIdle=false,ctx.sessionFile=present,ctx.sessionId=present
+7819	message_end	session-1	-	-	message,type=message_end,ctx.mode=tui,ctx.isIdle=false,ctx.sessionFile=present,ctx.sessionId=present
+7819	turn_end	session-1	-	-	message,toolResults,turnIndex,type=turn_end,ctx.mode=tui,ctx.isIdle=false,ctx.sessionFile=present,ctx.sessionId=present
+7819	agent_end	session-1	-	-	messages,type=agent_end,ctx.mode=tui,ctx.isIdle=false,ctx.sessionFile=present,ctx.sessionId=present
+7820	agent_settled	session-1	-	-	type=agent_settled,ctx.mode=tui,ctx.isIdle=true,ctx.sessionFile=present,ctx.sessionId=present
+# One turn that called a tool. Two facts, both load-bearing.
+#
+# FIRST: no permission, approval, or prompt event of any kind appears anywhere in
+# this run. The interval is delimited by recorded rows rather than by a watch --
+# before_agent_start opens it and agent_settled closes it, with
+# tool_execution_start and tool_execution_end inside -- so no capture window is
+# owed and none is claimed. The tool was a bash command and it ran
+# unconditionally. Pi ships no permission system, which is why blocked_on_request
+# and unblocked are structurally unreachable rather than merely untraced.
+#
+# Be precise about what this does NOT show, because an earlier version of this
+# note overreached. Pi's untyped event bus is not in these columns at all. The
+# tracer that produced this file listened on sidecar:blocked and herdr:blocked
+# and neither fired, but nothing here distinguishes "subscribed and saw nothing"
+# from "never subscribed", so that is a fact about a run rather than evidence in
+# a fixture, and it is not what the unreachability claim rests on. What it rests
+# on is the emitter side, checkable without this file: the string "herdr" does
+# not appear in pi 0.84.3's shipped bundle; ExtensionAPI.on enumerates thirty
+# events and not one is a permission, approval or prompt event
+# (types.d.ts:892-928); and Herdr's own four occurrences of its channel name are
+# two listeners and two test drivers, with no publisher anywhere in its tree.
+#
+# SECOND: turn_start and turn_end each fire TWICE inside this single agent run,
+# once around the tool call and once around the reply that followed it. A turn
+# in Pi's vocabulary is a provider round trip, not a user-visible turn, so
+# turn_end cannot be turn completion. agent_settled fires once, at the end, and
+# that is why it is the only event the asset closes a turn on.
+#
+# tool_execution_start and tool_execution_end do fire and carry toolName, so
+# tool_use is unclaimed by choice rather than by absence: the asset subscribes
+# to neither, because tool use is a refinement of work_start rather than a lane.

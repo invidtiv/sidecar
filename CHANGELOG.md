@@ -2,6 +2,18 @@
 
 All notable changes to sidecar are documented here.
 
+## [Unreleased]
+
+### Features
+
+- **Pi reports its own lifecycle to Sidecar.** `sidecar agent integration install pi` writes one Sidecar-owned extension into Pi's user-level extension directory (`$PI_CODING_AGENT_DIR/extensions`, or `~/.pi/agent/extensions`), and from then on a Pi pane's working, idle and session-identity transitions come from Pi itself rather than from reading its screen. It installs at the advisory tier on real traces of pi 0.84.3, which is the ceiling Pi can reach: it ships no permission system, so a blocked lane does not exist to be reported. Turn completion is taken from `agent_settled` and never from `agent_end`, because Pi can follow `agent_end` with an automatic retry or a compaction; tool use and process exit are deliberately not claimed. Install, inspect, repair and uninstall go through the same adapter contract as the other integrations, so `--dry-run` shows the exact ops and uninstall removes only the file Sidecar owns. It reports lifecycle facts only: never prompts, responses, tool data, paths or credentials.
+
+- **An agent installed as a plain `#!/usr/bin/env node` shim now gets a state badge.** Detection used to match the pane's `argv[0]` basename only, so an npm-installed CLI left the interpreter in `argv[0]`, tmux reported `node`, and neither identity input named the agent — the pane was never claimed at all. Sidecar now scores the whole foreground process group the way Herdr does: it knows the generic runtimes (`sh bash zsh fish tmux node bun cmd powershell pwsh`, plus `python[3[.N]]`), unwraps one using its own argv, prefers the process group leader, and ranks a non-runtime match above a runtime one. A pane running `node /usr/local/bin/qwen` is Qwen. Node package layouts upstream recognises by path are recognised too, so a Pi or Qwen CLI launched by its `dist/cli.js` is named without guessing from screen text.
+
+- **`sidecar agent start --kind pi` no longer times out.** Pi rewrites its own process title, so tmux reports the pane as `node` while the process is really named `pi`; Pi's process check accepted only the literal `pi` and refused its own correctly identified pane before a single detection rule ran. A resolved process identity now settles which provider a pane is, and it settles it in both directions — the same check stops one agent's detection rules being evaluated against another agent's screen, which a bare `node` allowance previously permitted. Pi deliberately gains no bare-`node` allowance of its own: its published rules are a single literal "Working…", which on any Node pane would be a wrong answer rather than a missing one.
+
+- **`SIDECAR_AGENT` names the agent in a pane where the process cannot be seen.** Export it on a wrapper command — a container, a sandbox, anything that hides the real process — and Sidecar uses the named provider's detection rules for that pane. It is a hint and nothing more: real process evidence always wins over it, and it can never grant or revoke an agent's lifecycle authority, so setting it in someone else's pane cannot switch off their session binding. One bound on macOS: a wrapper that is a SIP-protected system binary, such as `sandbox-exec` or `ssh`, publishes no readable environment to anyone, so it cannot be hinted through; a wrapper you installed yourself can.
+
 ## [v1.12.0] - 2026-09-02
 
 ### Features

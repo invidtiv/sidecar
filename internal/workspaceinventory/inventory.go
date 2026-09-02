@@ -696,10 +696,12 @@ func (c Collector) observeContext(ctx context.Context, workspace *Workspace, mat
 				return
 			default:
 			}
-			processIdentity := ""
-			if pane.PID > 0 && agentactivity.NeedsProcessIdentity(pane.Command) {
-				processIdentity = agentactivity.ResolveForegroundAgent(pane.PID)
-			}
+			// The command is handed to the resolver rather than gated on here:
+			// it decides what this pane can afford (nothing for an idle shell,
+			// two per-process reads for an unrecognised wrapper that may publish
+			// SIDECAR_AGENT, a process-table walk only for the runtimes that
+			// hide an agent). One ladder, one place.
+			processIdentity := agentactivity.ResolveForegroundAgent(pane.PID, pane.Command)
 			ob := agentactivity.Observation{Agent: workspace.Provider, Screen: output, PaneTitle: pane.Title, CurrentCommand: pane.Command, ProcessIdentity: processIdentity, PaneHeight: pane.Height, CapturedAt: now}
 			if identified := agentactivity.Identify(ob); identified != "" {
 				if identified == "shell" {

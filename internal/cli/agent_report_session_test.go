@@ -100,6 +100,12 @@ func TestReportSessionUsageErrorsComeBeforeAnyContextWork(t *testing.T) {
 // symptom. Falling through to the validator produced "the source is empty",
 // which describes what the defaulting failed to fill in instead of why.
 func TestAProviderWithNoOfficialIntegrationSaysSo(t *testing.T) {
+	// pi is on this list again, and the round trip it made is the reason this
+	// comment exists. It had an official source before any adapter existed, both
+	// were retracted, and PiAdapter plus assets/pi/sidecar-lifecycle.js earned
+	// the source back. When the source came back this case did not, so the loop
+	// below skipped itself on pi and `go test` still printed ok -- a test that
+	// silently stopped testing anything.
 	for _, kind := range []string{"codex", "claude", "opencode", "pi"} {
 		if agentsession.OfficialSourceFor(kind) == "" {
 			t.Fatalf("%s is expected to have an official source", kind)

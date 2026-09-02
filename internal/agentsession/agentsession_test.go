@@ -132,6 +132,60 @@ func TestAPathOutsideTheProvidersStoreIsRefused(t *testing.T) {
 	}
 }
 
+// TestPisStoreRootFollowsItsAgentDirectory covers the provider whose root moves,
+// which none of the cases above do.
+//
+// Pi's conversations live at getAgentDir()/sessions, and getAgentDir is
+// PI_CODING_AGENT_DIR with a leading tilde expanded, so the approved root is
+// wherever the user pointed Pi. Every branch of that is here because the branch
+// that was not tested is the one that broke: PiAgentDir now trims the
+// environment value, and before the two derivations were merged this side did
+// not, so a whitespace-only PI_CODING_AGENT_DIR made the root "  /sessions"
+// while the installer wrote the extension into ~/.pi/agent/extensions.
+func TestPisStoreRootFollowsItsAgentDirectory(t *testing.T) {
+	home := "/home/u"
+	for _, tc := range []struct {
+		name     string
+		override string
+		want     string
+	}{
+		{"unset", "", "/home/u/.pi/agent/sessions"},
+		{"an absolute override", "/opt/pi/agent", "/opt/pi/agent/sessions"},
+		{"a tilde override", "~/elsewhere/agent", "/home/u/elsewhere/agent/sessions"},
+		{"the bare tilde", "~", "/home/u/sessions"},
+		{"whitespace, which is an unset variable somebody exported", "  ", "/home/u/.pi/agent/sessions"},
+		{"an override with surrounding whitespace", " ~/elsewhere/agent ", "/home/u/elsewhere/agent/sessions"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			roots := Roots{Home: home, Env: func(name string) string {
+				if name == "PI_CODING_AGENT_DIR" {
+					return tc.override
+				}
+				return ""
+			}}
+			got := roots.For("pi")
+			if len(got) != 1 || got[0] != tc.want {
+				t.Fatalf("PI_CODING_AGENT_DIR=%q gave roots %v, want [%s]", tc.override, got, tc.want)
+			}
+			// A transcript under that root is accepted and one beside it is not,
+			// because a root nobody can be inside is the same as no root at all.
+			if err := roots.WithinRoots("pi", filepath.Join(tc.want, "a.jsonl")); err != nil {
+				t.Fatalf("a transcript inside pi's own store was refused: %v", err)
+			}
+			if err := roots.WithinRoots("pi", "/etc/passwd"); !errors.Is(err, ErrOutsideStoreRoot) {
+				t.Fatalf("an unrelated file was accepted for pi: %v", err)
+			}
+		})
+	}
+
+	// A tilde that cannot be expanded is unknowable rather than guessable, and no
+	// root at all is what makes every path reference for it a refusal.
+	noHome := Roots{Home: "", Env: func(string) string { return "~/agent" }}
+	if got := noHome.For("pi"); got != nil {
+		t.Fatalf("a tilde override with no home resolved to %v; it cannot be known", got)
+	}
+}
+
 // TestOnlyAnOfficialSourceMarksAReferenceResumable is the trust rule. An
 // unofficial reporter may still record what it saw; what it may not do is make
 // that record something Sidecar will act on unattended.
@@ -389,6 +443,9 @@ func TestPolicyVocabulary(t *testing.T) {
 }
 
 func TestOfficialSourcesAreTheOnesAdaptersShip(t *testing.T) {
+	// The four that ship. This list is exactly agentintegration.DefaultAdapters,
+	// and it is spelled out rather than derived so that adding a source here
+	// without adding the adapter that produces it fails.
 	for _, kind := range []string{"codex", "claude", "opencode", "pi"} {
 		source := OfficialSourceFor(kind)
 		if source == "" {
@@ -398,8 +455,18 @@ func TestOfficialSourcesAreTheOnesAdaptersShip(t *testing.T) {
 			t.Fatalf("OfficialSourceFor(%q) returned %q, which Official() does not trust", kind, source)
 		}
 	}
-	if OfficialSourceFor("grok") != "" {
-		t.Fatal("a provider with no shipped integration reported an official source")
+	// grok has no Sidecar integration and never had one, and it is the standing
+	// example of what this list refuses. pi is the cautionary one: it carried an
+	// official source and a capability entry ahead of any adapter, so nothing
+	// Sidecar installed could produce a report bearing it, and the only reference
+	// it could ever have marked resumable came from a hook Sidecar did not write.
+	// Both were retracted, and pi earned its source back only once PiAdapter and
+	// assets/pi/sidecar-lifecycle.js shipped -- which is exactly the rule the
+	// loop above enforces.
+	for _, kind := range []string{"grok", "cursor", "amp"} {
+		if OfficialSourceFor(kind) != "" {
+			t.Fatalf("%q has no shipped integration but reported an official source", kind)
+		}
 	}
 	if Official("") || Official("sidecar.codex.hooks.evil") {
 		t.Fatal("Official() trusted a source it should not")

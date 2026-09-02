@@ -1438,11 +1438,18 @@ func splitCaptureEnvelope(output string) (string, capturedPaneMetadata) {
 	return paneOutput, capturedPaneMetadata{PanePID: pid, CurrentCommand: parts[2], PaneTitle: parts[3]}
 }
 
+// resolvePaneProcessIdentity names the program behind a pane's tmux command.
+//
+// The command is passed through rather than gated on here: how much a pane can
+// afford to spend on the answer is the resolver's decision, and it varies from
+// nothing (an idle shell) through two per-process reads (an unrecognised
+// wrapper, which may publish SIDECAR_AGENT) to a process-table walk (node, bun,
+// python). This
+// poll runs for every visible row, so the ladder matters — but it is one ladder,
+// in one place, and duplicating a cheaper copy of it here is what previously
+// made the hint unreachable for the sandbox panes it exists for.
 func resolvePaneProcessIdentity(capture capturedPaneMetadata) string {
-	if capture.PanePID <= 0 || !agentactivity.NeedsProcessIdentity(capture.CurrentCommand) {
-		return ""
-	}
-	return agentactivity.ResolveForegroundAgent(capture.PanePID)
+	return agentactivity.ResolveForegroundAgent(capture.PanePID, capture.CurrentCommand)
 }
 
 // trimCapturedOutputRows applies the byte cap only at a complete line

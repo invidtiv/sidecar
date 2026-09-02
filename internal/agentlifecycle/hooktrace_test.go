@@ -3,6 +3,7 @@ package agentlifecycle
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -73,12 +74,44 @@ func assertEvents(t *testing.T, got []string, want ...string) {
 	}
 }
 
+// valueBearingTraceKeys is the closed set of field keys a trace may record a
+// VALUE for. Everything else may appear only as a bare name.
+//
+// The rule this enforces is the README's: a value is permitted only where the
+// vocabulary is closed and chosen by the provider's own source, which is what
+// made it safe for the OpenCode Phase B traces to record a bounded error class
+// name where a message would have been a privacy failure. `type` and `reason`
+// are Pi's own discriminators. The four `ctx.` entries are derived observations
+// rather than payload fields, and they are here because the shipped asset's
+// guards are built on exactly them and a bare field name would not show whether
+// a guard was correct — `ctx.sessionFile` and `ctx.sessionId` record only
+// `present` or `absent`, never a path or an id.
+//
+// Widening this set is a deliberate act. Adding a key here means asserting that
+// its values cannot carry user content, and the review that finds otherwise has
+// to happen before the trace is checked in, not after.
+var valueBearingTraceKeys = map[string]bool{
+	"type":            true,
+	"reason":          true,
+	"ctx.mode":        true,
+	"ctx.isIdle":      true,
+	"ctx.sessionFile": true,
+	"ctx.sessionId":   true,
+}
+
 // TestNoHookTraceCarriesAValue is the privacy gate over the fixtures
 // themselves. The traces record which fields a payload had, and a field named
 // "prompt" or "tool_input" is exactly the kind of thing that must never appear
 // with a value beside it.
+//
+// It used to check the session and turn columns and nothing else, which was
+// enough while every trace here recorded bare field names. The Pi traces are the
+// first to put `key=value` pairs in the `fields` column, and under the old check
+// a future capture that recorded `prompt=<the user's prompt>` would have passed
+// every test in the tree. So the allowlist above is enforced here: a `=` on any
+// key outside it fails, whatever the value looks like.
 func TestNoHookTraceCarriesAValue(t *testing.T) {
-	for _, provider := range []string{"codex", "claude"} {
+	for _, provider := range []string{"codex", "claude", "pi"} {
 		entries, err := os.ReadDir(filepath.Join("testdata", "traces", provider))
 		if err != nil {
 			t.Fatalf("%s has no traces but its capability entry claims real evidence: %v", provider, err)
@@ -94,6 +127,16 @@ func TestNoHookTraceCarriesAValue(t *testing.T) {
 				}
 				if !strings.HasPrefix(r.turn, "turn-") && r.turn != "-" {
 					t.Fatalf("%s/%s carries a real turn identifier %q", provider, e.Name(), r.turn)
+				}
+				for _, field := range r.fields {
+					key, _, hasValue := strings.Cut(field, "=")
+					if !hasValue || valueBearingTraceKeys[key] {
+						continue
+					}
+					t.Fatalf("%s/%s records a value for %q, which is not in the closed set of keys "+
+						"whose vocabulary the provider's own source fixes (%v). A payload field's NAME is "+
+						"evidence; its value is the thing these traces exist not to keep.",
+						provider, e.Name(), key, sortedTraceValueKeys())
 				}
 			}
 		}
@@ -243,6 +286,16 @@ func TestClaudeBlockingIsFirstClassOnTheCurrentRelease(t *testing.T) {
 	}
 }
 
+// sortedTraceValueKeys renders the allowlist for a failure message.
+func sortedTraceValueKeys() []string {
+	out := make([]string, 0, len(valueBearingTraceKeys))
+	for k := range valueBearingTraceKeys {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
 func contains(xs []string, want string) bool {
 	for _, x := range xs {
 		if x == want {
@@ -250,4 +303,234 @@ func contains(xs []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// Pi.
+//
+// The Pi entry is the first in this registry promoted from docs-only to
+// real-trace by a live capture, and these tests are what stop that promotion
+// from being a sentence. Each one re-derives a specific line of the capability
+// entry from the fixtures, so deleting a trace or editing its shape fails here
+// rather than quietly turning a measurement back into a claim.
+
+// TestPiTraceEarnsExactlyWorkStartAndTurnCompletion is the promotion, asserted.
+//
+// It reads the registry entry and requires the traces to contain the events
+// that entry says it reports — and requires that they contain no event the
+// entry does not claim. A future edit that adds `tool_use` to `covered` without
+// the asset subscribing to anything fails here.
+func TestPiTraceEarnsExactlyWorkStartAndTurnCompletion(t *testing.T) {
+	cap, ok := CapabilityForSource("sidecar.pi.extension")
+	if !ok {
+		t.Fatal("no capability registered for sidecar.pi.extension")
+	}
+	if cap.Evidence != EvidenceRealTrace {
+		t.Fatalf("pi evidence = %q; these traces exist to make it real-trace", cap.Evidence)
+	}
+	if tier, reason := cap.TierFor(StatusCurrent, true); tier != TierAdvisory {
+		t.Fatalf("pi exercises %q (%s), want advisory: it is the traced ceiling", tier, reason)
+	}
+
+	events := eventsOf(readHookTrace(t, "pi", "simple-turn.tsv"))
+	assertEvents(t, events,
+		"session_start",
+		"before_agent_start", "agent_start", "turn_start", "message_start", "message_end",
+		"message_start", "message_end", "turn_end", "agent_end", "agent_settled")
+
+	// Each claimed transition maps to an event that is actually in the trace.
+	for _, claim := range []struct {
+		transition Transition
+		event      string
+	}{
+		{TransitionSessionIdentity, "session_start"},
+		{TransitionWorkStart, "agent_start"},
+		{TransitionTurnComplete, "agent_settled"},
+	} {
+		if !cap.Covers(claim.transition) {
+			t.Fatalf("pi no longer claims %s, which %s in the trace supports", claim.transition, claim.event)
+		}
+		if !contains(events, claim.event) {
+			t.Fatalf("pi claims %s but no %s appears in simple-turn.tsv", claim.transition, claim.event)
+		}
+	}
+	// And nothing else is claimed. blocked_on_request and unblocked are
+	// structurally unreachable; tool_use and process_exit are unclaimed by
+	// choice; cancelled is unknowable. See the tests below for each.
+	for _, absent := range []Transition{
+		TransitionToolUse, TransitionProcessExit, TransitionCancelled,
+		TransitionBlockedOnRequest, TransitionUnblocked, TransitionSubagent,
+	} {
+		if cap.Covers(absent) {
+			t.Fatalf("pi claims %q, which no trace here supports", absent)
+		}
+	}
+	if cap.CoversFullLifecycle() {
+		t.Fatal("pi claims full lifecycle coverage; no released Pi can produce a blocked signal")
+	}
+}
+
+// TestPiSessionStartIsTuiOnlyAndCarriesATranscript pins the two facts the
+// session-identity claim rests on: the mode gate the asset checks instead of
+// hasUI, and the presence of a session file to bind the pane to.
+func TestPiSessionStartIsTuiOnlyAndCarriesATranscript(t *testing.T) {
+	rows := readHookTrace(t, "pi", "simple-turn.tsv")
+	if rows[0].event != "session_start" {
+		t.Fatalf("simple-turn.tsv no longer opens on session_start (%s)", rows[0].event)
+	}
+	for _, want := range []string{"reason=startup", "ctx.mode=tui", "ctx.sessionFile=present", "ctx.sessionId=present"} {
+		if !contains(rows[0].fields, want) {
+			t.Fatalf("session_start no longer records %s; fields are %v", want, rows[0].fields)
+		}
+	}
+}
+
+// TestPiTurnCompletionCannotComeFromAgentEnd is the trap, measured.
+//
+// The asset deliberately does not subscribe to agent_end, and the reason is not
+// visible from the event names: agent_end can be followed by an automatic retry
+// or a compaction. The trace shows the mechanical half of that — Pi still
+// reports itself busy at agent_end and idle at agent_settled, milliseconds
+// later — so an asset that closed a turn on agent_end would announce a finished
+// turn in the middle of one.
+func TestPiTurnCompletionCannotComeFromAgentEnd(t *testing.T) {
+	rows := readHookTrace(t, "pi", "simple-turn.tsv")
+	var end, settled *hookRow
+	for i := range rows {
+		switch rows[i].event {
+		case "agent_end":
+			end = &rows[i]
+		case "agent_settled":
+			settled = &rows[i]
+		}
+	}
+	if end == nil || settled == nil {
+		t.Fatal("the trace no longer contains both agent_end and agent_settled, which is the whole comparison")
+	}
+	if !contains(end.fields, "ctx.isIdle=false") {
+		t.Fatalf("agent_end no longer reports isIdle false; fields are %v", end.fields)
+	}
+	if !contains(settled.fields, "ctx.isIdle=true") {
+		t.Fatalf("agent_settled no longer reports isIdle true; fields are %v", settled.fields)
+	}
+}
+
+// TestPiTurnEndIsAProviderRoundTripNotATurn is the second half of the same
+// finding, and the one that rules out the other plausible completion event.
+//
+// A single agent run that calls a tool emits turn_start and turn_end twice:
+// once around the tool call, once around the reply. agent_settled emits once.
+func TestPiTurnEndIsAProviderRoundTripNotATurn(t *testing.T) {
+	events := eventsOf(readHookTrace(t, "pi", "tool-turn.tsv"))
+	if n := count(events, "turn_end"); n < 2 {
+		t.Fatalf("tool-turn.tsv has %d turn_end rows; the finding is that one agent run emits more than one", n)
+	}
+	if n := count(events, "agent_settled"); n != 1 {
+		t.Fatalf("tool-turn.tsv has %d agent_settled rows, want exactly 1", n)
+	}
+	if events[len(events)-1] != "agent_settled" {
+		t.Fatalf("the run no longer ends on agent_settled (%s)", events[len(events)-1])
+	}
+}
+
+// TestPiRunsAToolWithNoPermissionEvent is the emitter-side proof that the
+// blocked lane is structurally unreachable rather than merely untraced.
+//
+// The capability entry's reading of Pi's shipped type definitions said no
+// permission event exists. This is the same claim measured from the other side:
+// a bash tool ran, and nothing that could be a block appeared around it.
+func TestPiRunsAToolWithNoPermissionEvent(t *testing.T) {
+	cap, ok := CapabilityForSource("sidecar.pi.extension")
+	if !ok {
+		t.Fatal("no capability registered for sidecar.pi.extension")
+	}
+	if cap.Covers(TransitionBlockedOnRequest) || cap.Covers(TransitionUnblocked) {
+		t.Fatal("pi claims a blocked transition; no released Pi can produce one")
+	}
+
+	rows := readHookTrace(t, "pi", "tool-turn.tsv")
+	var sawTool bool
+	for _, r := range rows {
+		if r.event == "tool_execution_start" {
+			sawTool = true
+			if r.tool == "-" {
+				t.Fatal("tool_execution_start no longer names the tool, so tool_use being unclaimed-by-choice is unproved")
+			}
+		}
+		for _, banned := range []string{"permission", "approval", "prompt_request", "blocked"} {
+			if strings.Contains(strings.ToLower(r.event), banned) {
+				t.Fatalf("tool-turn.tsv contains %q; the recorded finding is that Pi emits no such event", r.event)
+			}
+		}
+	}
+	if !sawTool {
+		t.Fatal("tool-turn.tsv contains no tool execution, so it proves nothing about permissions")
+	}
+}
+
+// TestPiCancellationIsIndistinguishableFromCompletion is an absence claim, and
+// it is why `cancelled` is not in `covered`.
+//
+// Read the note on TestClaudeCancellationEmitsNothingAtAll about what a static
+// fixture can and cannot do: this is a fixture-integrity guard, not a tripwire
+// on the provider.
+func TestPiCancellationIsIndistinguishableFromCompletion(t *testing.T) {
+	cancelled := readHookTrace(t, "pi", "cancelled-turn.tsv")
+	completed := readHookTrace(t, "pi", "simple-turn.tsv")
+
+	tail := func(rows []hookRow) []hookRow { return rows[len(rows)-3:] }
+	for i, got := range tail(cancelled) {
+		want := tail(completed)[i]
+		if got.event != want.event {
+			t.Fatalf("cancelled tail %v differs from completed tail %v; the finding is that they are the same",
+				eventsOf(tail(cancelled)), eventsOf(tail(completed)))
+		}
+		if strings.Join(got.fields, ",") != strings.Join(want.fields, ",") {
+			t.Fatalf("%s now carries different fields on a cancelled turn (%v) than a completed one (%v); "+
+				"a distinguishing field would make the cancelled transition claimable",
+				got.event, got.fields, want.fields)
+		}
+	}
+	if window := captureWindow(t, "pi", "cancelled-turn.tsv"); window == "" {
+		t.Fatal("cancelled-turn.tsv makes an absence claim without recording how long it watched")
+	}
+}
+
+// TestPiErrorTurnResolvesAndQuitIsReadable covers the last two fixtures.
+//
+// A failed turn takes the same path as a successful one, so the pane does not
+// latch on working — the failure mode the resolver has to survive. And
+// session_shutdown's reason is readable and is "quit", which is what keeps
+// process_exit an unclaimed-by-choice gap rather than an impossible one.
+func TestPiErrorTurnResolvesAndQuitIsReadable(t *testing.T) {
+	rows := readHookTrace(t, "pi", "error-turn-and-quit.tsv")
+	events := eventsOf(rows)
+	if !contains(events, "agent_start") || !contains(events, "agent_settled") {
+		t.Fatalf("the error turn no longer runs the full ladder: %v", events)
+	}
+
+	last := rows[len(rows)-1]
+	if last.event != "session_shutdown" {
+		t.Fatalf("the fixture no longer ends on session_shutdown (%s)", last.event)
+	}
+	if !contains(last.fields, "reason=quit") {
+		t.Fatalf("session_shutdown no longer records reason=quit; fields are %v", last.fields)
+	}
+
+	cap, ok := CapabilityForSource("sidecar.pi.extension")
+	if !ok {
+		t.Fatal("no capability registered for sidecar.pi.extension")
+	}
+	if cap.Covers(TransitionProcessExit) {
+		t.Fatal("pi claims process_exit; the shipped asset does not subscribe to session_shutdown at all")
+	}
+}
+
+func count(xs []string, want string) int {
+	n := 0
+	for _, x := range xs {
+		if x == want {
+			n++
+		}
+	}
+	return n
 }

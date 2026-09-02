@@ -1,0 +1,26 @@
+# ms	event	session	turn	tool	fields
+0	session_start	session-1	-	-	reason=startup,type=session_start,ctx.mode=tui,ctx.isIdle=true,ctx.sessionFile=present,ctx.sessionId=present
+18957	before_agent_start	session-1	-	-	images,prompt,systemPrompt,systemPromptOptions,type=before_agent_start,ctx.mode=tui,ctx.isIdle=true,ctx.sessionFile=present,ctx.sessionId=present
+18958	agent_start	session-1	-	-	type=agent_start,ctx.mode=tui,ctx.isIdle=false,ctx.sessionFile=present,ctx.sessionId=present
+18959	turn_start	session-1	-	-	timestamp,turnIndex,type=turn_start,ctx.mode=tui,ctx.isIdle=false,ctx.sessionFile=present,ctx.sessionId=present
+18959	message_start	session-1	-	-	message,type=message_start,ctx.mode=tui,ctx.isIdle=false,ctx.sessionFile=present,ctx.sessionId=present
+18959	message_end	session-1	-	-	message,type=message_end,ctx.mode=tui,ctx.isIdle=false,ctx.sessionFile=present,ctx.sessionId=present
+28353	message_start	session-1	-	-	message,type=message_start,ctx.mode=tui,ctx.isIdle=false,ctx.sessionFile=present,ctx.sessionId=present
+30433	message_end	session-1	-	-	message,type=message_end,ctx.mode=tui,ctx.isIdle=false,ctx.sessionFile=present,ctx.sessionId=present
+30434	turn_end	session-1	-	-	message,toolResults,turnIndex,type=turn_end,ctx.mode=tui,ctx.isIdle=false,ctx.sessionFile=present,ctx.sessionId=present
+30434	agent_end	session-1	-	-	messages,type=agent_end,ctx.mode=tui,ctx.isIdle=false,ctx.sessionFile=present,ctx.sessionId=present
+30436	agent_settled	session-1	-	-	type=agent_settled,ctx.mode=tui,ctx.isIdle=true,ctx.sessionFile=present,ctx.sessionId=present
+# One successful turn in a TUI session, from process start.
+#
+# session_start carries reason=startup and ctx.mode=tui, which is the gate the
+# asset checks instead of hasUI: an RPC session reports hasUI true while being
+# headless. ctx.sessionFile and ctx.sessionId are both present, so the pane can
+# be bound to its transcript by path.
+#
+# The lane comes from agent_start (work start) and agent_settled (turn
+# complete), and nothing else. Note what the intermediate rows show about why:
+# ctx.isIdle is false on agent_end and true on agent_settled, three milliseconds
+# apart. An asset that closed the turn on agent_end would report idle while Pi
+# still considers the run active, which is exactly the trap the shipped asset's
+# isIdle !== true guard exists for. turn_end is equally unusable as turn
+# completion; see tool-turn.tsv, where two turn_end rows arrive inside one run.

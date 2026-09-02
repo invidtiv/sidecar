@@ -1,0 +1,2 @@
+# offset_ms	event	reason	mode	idle	session_path	session_id	blocked_active	blocked_label
+0	session_start	resume	tui	true	C:\Users\User\.pi\agent\sessions\s.jsonl	pi-win	-	-
