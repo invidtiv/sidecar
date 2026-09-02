@@ -2,7 +2,7 @@
 
 Status: **active; slices 0–3 implemented** on `remote-viewer-screen` (td-f7855c: td-823e94, td-72a679, td-90757e; slice 2.5: td-11d3d3, td-761cea; slice 3: td-af932a). Remaining: slice 4 (Files/Git/td/Tasks remoting), slice 5 (docs and isolated proof). **Created:** 2026-09-01 **Verified against the tree on 2026-09-01** after slice 3.
 
-Related: [Sidecar as its own remote host runtime](sidecar-remote-hosts.md) is the transport and inventory stream. [The viewer owns the screen](../implemented/remote-host-viewer-screen.md) is the lease and `uirequest` announcement the bound project workspace now shares with Sessions. [Remote host content-pane parity](../implemented/remote-host-content-pane-parity.md) is the read path a remote-bound plugin uses. [Agent-facing project CLI](agent-project-cli.md) is the local `sidecar project` surface; it does not grow `--host` in this plan.
+Related: [Files on a remote-bound project](remote-files-plugin.md) is slice 4's Files half. [Sidecar as its own remote host runtime](sidecar-remote-hosts.md) is the transport and inventory stream. [The viewer owns the screen](../implemented/remote-host-viewer-screen.md) is the lease and `uirequest` announcement the bound project workspace now shares with Sessions. [Remote host content-pane parity](../implemented/remote-host-content-pane-parity.md) is the read path a remote-bound plugin uses. [Agent-facing project CLI](agent-project-cli.md) is the local `sidecar project` surface; it does not grow `--host` in this plan.
 
 ## Decision first
 
@@ -221,6 +221,8 @@ Relayed `sidecar open` / `layout` from a host pane whose project matches the bou
 
 One plugin at a time, each through `Source` / `RunSidecar` / host content verbs, each with the twin-path tripwire. Not a second compositor, not a mounted FS. Notes already refuses like Files while bound.
 
+Files is planned in its own document: [Files on a remote-bound project](remote-files-plugin.md). It is the largest of the four because it is the only one that needs a new host verb (`sidecar content tree`, capability `ContentTreeV1`) alongside a plugin-wide source seam at `FileTree.loadChildren` and a bound worktree key on `plugin.Context`. Git, td, and Tasks follow it and reuse whatever it establishes.
+
 ### Slice 5 — docs, agent-project-cli note, isolated proof
 
 CLI/help: `@` and `W` name remote destinations, and help states the flag requirement from decision 11. Isolated proof uses the slice 2.5 loopback recipe as the default: local `@` stays fast with `--delay`; Enter on `[loopback] Project` does not open the local twin; Workspaces shows the host’s shells; `sidecar project current` on a local shell does not report the bound remote project as this machine’s. A real second machine remains opt-in via `scripts/remote-content-proof.sh` with an explicit `SPIKE_HOST` (no workstation default).
@@ -239,6 +241,7 @@ Slices 0–3 are covered by package tests (`go test ./internal/app ./internal/ov
 
 ## Changelog
 
+- **2026-09-01** — Slice 4's Files half split into [remote-files-plugin.md](remote-files-plugin.md): it needs a new host verb, not just a plugin change. Slice 3 review cleanup (td-1d6735): `layoutapply.ResolveRemoteTargets` and `hosts.OriginNamesProject` are the single remote resolver and the single origin/project predicate both surfaces use.
 - **2026-09-01** — Slice 3 implemented (td-af932a): bound `@` destination is the screen for relayed open/layout. Instance `HostID`, workspace `AttentionOrigin.HostID`, lease claim on bind, shared `uiRequestLanding` decider, `workspaceSourceContext` + `RemoteSource`. Remaining: slices 4–5.
 - **2026-09-01** — Slice 2.5 implemented: `scripts/loopback-remote.sh` (`up`/`paths`/`status`/`down`, `--no-drive`, `--delay`), shared `scripts/loopback-ssh.sh`, `scripts/test-loopback-remote.sh`. `remote-spike.sh` requires `SPIKE_HOST`. Default proof path for later slices; real SSH stays opt-in with no workstation hostname default.
 - **2026-09-01** — Slice 2.5 added: portable loopback remote (extract existing `loopbackHost` + fake ssh, optional spawn delay, agent up/down). Default proof path for later slices; real SSH stays opt-in with no workstation hostname default.
