@@ -3,7 +3,6 @@ package agentintegration
 import (
 	_ "embed"
 	"regexp"
-	"strconv"
 
 	"github.com/marcus/sidecar/internal/agentactivity"
 	"github.com/marcus/sidecar/internal/agentlifecycle"
@@ -277,16 +276,6 @@ func piSessionStartReason(reason string) agentlifecycle.ReasonCode {
 	}
 }
 
-// PiCarriesSequence reports whether an action's verb takes --seq.
-//
-// `agent report-session` does not: a binding is not a point in an ordered
-// stream. Only the verbs that carry a sequence consume one, which keeps the
-// state stream's sequence gapless. The asset's carriesSequence is the same rule,
-// and the equivalence test is what holds them together.
-func PiCarriesSequence(action PiAction) bool {
-	return action.Kind != agentlifecycle.KindSession
-}
-
 // PiReportArgs builds the exact CLI argv one action becomes.
 //
 // It mirrors buildArgs in the bundled asset. Both exist because the asset must
@@ -294,10 +283,23 @@ func PiCarriesSequence(action PiAction) bool {
 // two lists element for element -- so this is the Go statement of the same
 // contract, not a convenience wrapper.
 //
+// NEITHER VERB CARRIES --seq, and there is no sequence parameter to pass.
+// `agent report-session` never had the flag. `agent report` has it and it is
+// omitted, which is what its own help names as the right thing for a per-event
+// hook process to do: the store assigns under the exclusive lock it already
+// takes for the append (lifecyclestore.AppendNext), which is the only place the
+// read and the write are atomic.
+//
+// The asset held a counter twice and dropped reports both times -- opening at
+// zero dropped a reloaded instance's reports, and seeding at Date.now()*1000
+// dropped every report by exceeding MaxSequence -- and both were silent because
+// reports spawn with stdio "ignore". The asset's buildArgs carries the full
+// account. What matters here is that this mirror has no sequence to drift on.
+//
 // The blocked label is deliberately absent from every argv: it is unbounded text
 // authored by another extension, and nothing but lanes, bounded codes and
 // conversation identifiers goes over this wire.
-func PiReportArgs(action PiAction, seq uint64, sessionID string) []string {
+func PiReportArgs(action PiAction, sessionID string) []string {
 	if action.Kind == agentlifecycle.KindSession {
 		args := []string{"agent", "report-session", "--kind", PiProvider, "--source", PiSource}
 		switch {
@@ -313,7 +315,6 @@ func PiReportArgs(action PiAction, seq uint64, sessionID string) []string {
 		"--source", PiSource,
 		"--source-version", PiAssetVersion,
 		"--provider", PiProvider,
-		"--seq", strconv.FormatUint(seq, 10),
 	}
 	if sessionID != "" {
 		args = append(args, "--session-id", sessionID)

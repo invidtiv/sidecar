@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -364,25 +363,28 @@ func TestPiReportArgsCarryTheAssetVersionAndOmitTheBlockedLabel(t *testing.T) {
 		Kind:   agentlifecycle.KindState,
 		State:  agentactivity.StateBlocked,
 		Reason: agentlifecycle.ReasonPermissionRequest,
-	}, 7, "pi-session")
+	}, "pi-session")
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "--source-version "+PiAssetVersion) {
 		t.Fatalf("argv does not carry the asset version: %v", args)
 	}
-	if !strings.Contains(joined, "--seq 7") || !strings.Contains(joined, "--session-id pi-session") {
-		t.Fatalf("argv lost the sequence or the session id: %v", args)
+	if !strings.Contains(joined, "--session-id pi-session") {
+		t.Fatalf("argv lost the session id: %v", args)
 	}
 	if strings.Contains(joined, "--detail") {
 		t.Fatalf("argv carries a detail field; the blocked label must not be transmitted: %v", args)
 	}
-
-	// A binding is not a point in an ordered stream, so its verb takes no
-	// sequence and consumes none.
-	bind := PiAction{Kind: agentlifecycle.KindSession, SessionPath: "/tmp/s.jsonl"}
-	if PiCarriesSequence(bind) {
-		t.Fatal("a session binding was told it carries a sequence; report-session has no --seq flag")
+	// NO SEQUENCE, on either verb. The store assigns one under the lock it
+	// already holds. A counter here was tried twice and dropped reports both
+	// times -- opening at zero dropped a reloaded instance's, and seeding at
+	// Date.now()*1000 exceeded MaxSequence and dropped every one -- and both were
+	// silent, because reports spawn with stdio "ignore".
+	if strings.Contains(joined, "--seq") {
+		t.Fatalf("a state report carries --seq; the store must assign it: %v", args)
 	}
-	bindArgs := strings.Join(PiReportArgs(bind, 9, "pi-session"), " ")
+
+	bind := PiAction{Kind: agentlifecycle.KindSession, SessionPath: "/tmp/s.jsonl"}
+	bindArgs := strings.Join(PiReportArgs(bind, "pi-session"), " ")
 	if strings.Contains(bindArgs, "--seq") {
 		t.Fatalf("the binding argv carries --seq, which report-session would reject as usage: %s", bindArgs)
 	}
@@ -539,19 +541,17 @@ func TestBundledPiAssetBehavesLikeTheHandler(t *testing.T) {
 // piHandlerArgs replays a fixture through the Go handler and returns the argv
 // each action becomes, in order.
 //
-// The sequence rule is the asset's: only the verbs that carry --seq consume one,
-// so the state stream's sequence stays gapless while bindings pass through it.
+// There is no sequence bookkeeping here because there is none in the asset
+// either: neither verb carries --seq and the store assigns. What the comparison
+// asserts is the argv itself and the order it comes out in, which is the whole
+// contract now.
 func piHandlerArgs(t *testing.T, fixture string) [][]string {
 	t.Helper()
 	var h PiHandler
 	var out [][]string
-	var seq uint64
 	for _, ev := range piEvents(t, fixture) {
 		for _, action := range h.Handle(ev) {
-			if PiCarriesSequence(action) {
-				seq++
-			}
-			out = append(out, PiReportArgs(action, seq, h.Session()))
+			out = append(out, PiReportArgs(action, h.Session()))
 		}
 	}
 	return out
@@ -703,10 +703,11 @@ func TestThePiAssetSubscribesToTheEventsItClaimsTo(t *testing.T) {
 		}
 	}
 
-	// Every state report, minus its sequence, which is clock-seeded and
-	// therefore not a fixed value. `working` on the first one is the isIdle read:
-	// the harness's ctx reports isIdle() === false, so a readCtx that dropped
-	// idle would publish `idle` here and never say a turn was running.
+	// Every state report, in full. There is nothing to strip: no verb carries
+	// --seq any more, and this test is one of the places that says so. `working`
+	// on the first one is the isIdle read: the harness's ctx reports
+	// isIdle() === false, so a readCtx that dropped idle would publish `idle`
+	// here and never say a turn was running.
 	wantStates := []struct {
 		label string
 		state string
@@ -716,11 +717,8 @@ func TestThePiAssetSubscribesToTheEventsItClaimsTo(t *testing.T) {
 		{"blocked-permission_request", "blocked", []string{"--reason", "permission_request"}},
 		{"working-permission_resolved", "working", []string{"--reason", "permission_resolved"}},
 	}
-	var seqs []uint64
 	for _, tc := range wantStates {
 		argv := result.Argv[tc.label]
-		seq, rest := piSplitSeq(t, tc.label, argv)
-		seqs = append(seqs, seq)
 		want := append([]string{
 			"agent", "report",
 			"--source", "sidecar.pi.extension",
@@ -729,83 +727,83 @@ func TestThePiAssetSubscribesToTheEventsItClaimsTo(t *testing.T) {
 			"--session-id", "pi-order",
 			"--state", tc.state,
 		}, tc.rest...)
-		if !reflect.DeepEqual(rest, want) {
-			t.Fatalf("the %s report was spawned with %v (sequence removed), want %v", tc.label, rest, want)
-		}
-	}
-	for i := 1; i < len(seqs); i++ {
-		if seqs[i] <= seqs[i-1] {
-			t.Fatalf("report sequences %v do not strictly increase; the store rejects the second one", seqs)
+		if !reflect.DeepEqual(argv, want) {
+			t.Fatalf("the %s report was spawned with %v, want %v", tc.label, argv, want)
 		}
 	}
 }
 
-// piSplitSeq removes the --seq pair from a recorded argv and returns the value
-// with the rest. The sequence is asserted separately because it is seeded from
-// the clock and has no fixed value.
-func piSplitSeq(t *testing.T, label string, argv []string) (uint64, []string) {
-	t.Helper()
-	for i := 0; i+1 < len(argv); i++ {
-		if argv[i] != "--seq" {
-			continue
-		}
-		seq, err := strconv.ParseUint(argv[i+1], 10, 64)
-		if err != nil {
-			t.Fatalf("the %s report carried --seq %q, which is not a sequence: %v", label, argv[i+1], err)
-		}
-		return seq, append(append([]string{}, argv[:i]...), argv[i+2:]...)
-	}
-	t.Fatalf("the %s report carried no --seq: %v", label, argv)
-	return 0, nil
-}
-
-// TestPiSequencesNeverRestartWhenTheExtensionIsReinstantiated is the property no
-// single-instance test can see.
+// TestPiReinstantiationSendsNoSequenceToRestart is the property no
+// single-instance test can see, and it is what replaced an assertion about
+// sequence seeding once the asset stopped sending a sequence at all.
 //
 // Pi can replace this extension mid-run without emitting another agent_start.
 // The run key survives that -- lifecycleenv derives RunID from the process
-// generation and the session fingerprint, and a reload changes neither -- and the
-// store rejects any sequence at or below the run's high-water mark. A counter
-// that restarted at zero would therefore have every report from the replacement
-// instance dropped in silence, because reports spawn with stdio: "ignore" and
-// their exit codes are never read, starting with the forced reload-recovery
-// report that the session_start branch exists to send.
+// generation and the session fingerprint, and a reload changes neither -- so the
+// replacement instance's reports land against the same run as the first
+// instance's. A counter held in the extension has to be right about that, and
+// this one was wrong twice: opening at zero had the store reject everything at
+// or below the previous instance's high-water mark, and seeding at
+// Date.now()*1000 exceeded MaxSequence and had the store reject every report
+// from either instance. Both failed in total silence, because reports spawn with
+// stdio "ignore" and their exit codes are never read.
 //
-// The clock floor is the second half of the assertion: 1 and 2 are monotonic too,
-// and would still be wrong.
-func TestPiSequencesNeverRestartWhenTheExtensionIsReinstantiated(t *testing.T) {
-	node := requireNode(t, "that a re-instantiated Pi extension does not restart its sequence")
+// The asset now sends no sequence, so there is nothing to restart and nothing to
+// overflow, and what this asserts is that the omission survives a reload. That
+// the resulting argv is one the shipped CLI accepts, and that two identical
+// reports against one run are both stored, is asserted at the subprocess seam in
+// internal/cli.
+func TestPiReinstantiationSendsNoSequenceToRestart(t *testing.T) {
+	node := requireNode(t, "that a re-instantiated Pi extension sends nothing a reload could restart")
+	first, second := piRunReinstantiateHarness(t, node)
+
+	if len(first) != 2 || len(second) != 2 {
+		t.Fatalf("instances spawned %d and %d report processes, want a binding and a state report each:\nfirst  %v\nsecond %v",
+			len(first), len(second), first, second)
+	}
+	for _, group := range []struct {
+		label string
+		argv  [][]string
+	}{{"first", first}, {"second", second}} {
+		for _, argv := range group.argv {
+			for _, arg := range argv {
+				if arg == "--seq" {
+					t.Fatalf("the %s instance spawned %v, which carries --seq; the store must assign it, "+
+						"and a counter here has dropped reports in silence twice", group.label, argv)
+				}
+			}
+		}
+	}
+	// Identical argv from both instances is the point rather than a coincidence:
+	// nothing instance-scoped reaches the wire, so a reload is invisible to the
+	// store except as two more reports against the same run.
+	if !reflect.DeepEqual(first, second) {
+		t.Fatalf("the replacement instance spawned different argv than the first:\nfirst  %v\nsecond %v", first, second)
+	}
+}
+
+// piRunReinstantiateHarness runs the re-instantiation harness and returns each
+// instance's recorded argv, in spawn order.
+func piRunReinstantiateHarness(t *testing.T, node string) (first, second [][]string) {
+	t.Helper()
 	dir := t.TempDir()
-	cmd := exec.Command(node, "sequence-harness.mjs",
-		filepath.Join(dir, "sidecar-stub"), filepath.Join(dir, "seq.log"))
+	cmd := exec.Command(node, "reinstantiate-harness.mjs",
+		filepath.Join(dir, "sidecar-stub"), filepath.Join(dir, "argv"))
 	cmd.Dir = filepath.Join("assets", "pi")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		t.Fatalf("running the sequence harness: %v\n%s", err, stderr.String())
+		t.Fatalf("running the re-instantiation harness: %v\n%s", err, stderr.String())
 	}
 	var result struct {
-		StartedAtMS uint64   `json:"startedAtMs"`
-		Seqs        []uint64 `json:"seqs"`
+		First  [][]string `json:"first"`
+		Second [][]string `json:"second"`
 	}
 	if err := json.Unmarshal(out, &result); err != nil {
 		t.Fatalf("harness output is not JSON: %q (%v)", out, err)
 	}
-
-	if len(result.Seqs) != 2 {
-		t.Fatalf("two instances produced %d sequences (%v), want one each", len(result.Seqs), result.Seqs)
-	}
-	if result.Seqs[1] <= result.Seqs[0] {
-		t.Fatalf("the second instance's first sequence is %d and the first instance's last was %d; "+
-			"the store rejects everything at or below its high-water mark, so that report is dropped in silence",
-			result.Seqs[1], result.Seqs[0])
-	}
-	if floor := result.StartedAtMS * 1000; result.Seqs[0] < floor {
-		t.Fatalf("the first sequence is %d, below the clock floor %d; the counter is not seeded from the clock, "+
-			"so a module reload -- as opposed to this test's re-instantiation -- would restart it",
-			result.Seqs[0], floor)
-	}
+	return result.First, result.Second
 }
 
 // TestThePiAssetFailsOpen checks the properties that keep a reporting failure

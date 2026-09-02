@@ -51,7 +51,7 @@ var assetGoldens = []assetGolden{
 	// leaves the event-to-lane mapping identical, so the recorded traces that
 	// earned the advisory tier still describe this asset exactly. See the note on
 	// PiAssetVersion, which states the same rule at the constant.
-	{provider: PiProvider, name: "sidecar-lifecycle.js", version: "1", checksum: "f52031f5daf5c84eeb026cb0c51e1a730dcd88c4436f1af064b4a2f8994bfb84"},
+	{provider: PiProvider, name: "sidecar-lifecycle.js", version: "1", checksum: "054a5b8b0134f2fc1dc8e3e5bb2047c8611bdd77cc618ef3b05c4c2738477516"},
 }
 
 // bumpInstructions is the whole point of the guard: a failure here has to tell

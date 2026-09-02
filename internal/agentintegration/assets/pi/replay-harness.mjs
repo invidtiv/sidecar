@@ -19,7 +19,7 @@ import SidecarLifecycle from "./sidecar-lifecycle.js"
 
 // The mapping hangs off the factory because Pi drops a module whose default
 // export is not a function. See the export-surface note in the asset.
-const { buildArgs, carriesSequence, mapEvent, newState } = SidecarLifecycle.internals
+const { buildArgs, mapEvent, newState } = SidecarLifecycle.internals
 
 const fixturePath = process.argv[2]
 if (!fixturePath) {
@@ -37,7 +37,6 @@ const tri = (value) => (value === "-" ? undefined : value === "true")
 const text = (value) => (value === "-" ? undefined : value)
 
 const st = newState()
-let seq = 0
 const emitted = []
 
 for (const line of readFileSync(fixturePath, "utf8").trim().split("\n")) {
@@ -58,8 +57,7 @@ for (const line of readFileSync(fixturePath, "utf8").trim().split("\n")) {
     blockedLabel: text(cols[8]),
   }
   for (const action of mapEvent(st, ev)) {
-    if (carriesSequence(action)) seq += 1
-    emitted.push(buildArgs(action, seq, st.sessionId))
+    emitted.push(buildArgs(action, st.sessionId))
   }
 }
 

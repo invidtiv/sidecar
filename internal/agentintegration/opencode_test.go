@@ -506,7 +506,7 @@ func TestTheAssetSerializesReportsUnderInvertedExitOrder(t *testing.T) {
 	stub := filepath.Join(dir, "sidecar-stub")
 	orderLog := filepath.Join(dir, "order.log")
 
-	cmd := exec.Command(node, "ordering-harness.mjs", stub, orderLog)
+	cmd := exec.Command(node, "ordering-harness.mjs", stub, orderLog, filepath.Join(dir, "argv"))
 	cmd.Dir = filepath.Join("assets", "opencode")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

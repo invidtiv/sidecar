@@ -23,18 +23,30 @@
 // timer kept Node's event loop alive and held the host process open for the
 // full five second budget after every report had already landed.
 //
-// Usage: ordering-harness.mjs <stub-path> <order-log-path>
+// And it records each report's COMPLETE argv, keyed by its sequence, because
+// the order alone says nothing about whether the argv is one the Sidecar CLI
+// would accept. That gap is what let a Pi asset ship an argv carrying a --seq
+// about 1600x over the store's MaxSequence: it passed every offline test and
+// every report was rejected at runtime, silently, because reports spawn with
+// stdio "ignore". TestBundledAssetsSpawnArgvTheShippedCLIAccepts in internal/cli
+// consumes what this records and pushes it through the real flag parser,
+// validator and store.
+//
+// Usage: ordering-harness.mjs <stub-path> <order-log-path> <argv-dir>
 
-import { writeFileSync, chmodSync, readFileSync, existsSync } from "node:fs"
+import { writeFileSync, chmodSync, readFileSync, existsSync, mkdirSync } from "node:fs"
+import { join } from "node:path"
 
-const [stub, orderLog] = process.argv.slice(2)
-if (!stub || !orderLog) {
-  console.error("usage: ordering-harness.mjs <stub-path> <order-log-path>")
+const [stub, orderLog, argvDir] = process.argv.slice(2)
+if (!stub || !orderLog || !argvDir) {
+  console.error("usage: ordering-harness.mjs <stub-path> <order-log-path> <argv-dir>")
   process.exit(2)
 }
+mkdirSync(argvDir, { recursive: true })
 
-// The stub stands in for the Sidecar binary. It sleeps for a duration chosen to
-// invert the completion order, then records that it ran.
+// The stub stands in for the Sidecar binary. It writes its complete argv, one
+// element per line, to a file named for its sequence, sleeps for a duration
+// chosen to invert the completion order, then records that it ran.
 writeFileSync(
   stub,
   `#!/bin/sh
@@ -44,6 +56,7 @@ for a in "$@"; do
   if [ "$prev" = "--seq" ]; then seq="$a"; fi
   prev="$a"
 done
+printf '%s\\n' "$@" > "$SIDECAR_ARGV_DIR/$seq"
 case "$seq" in
   1) sleep 0.6 ;;
   2) sleep 0.3 ;;
@@ -59,6 +72,7 @@ chmodSync(stub, 0o755)
 process.env.SIDECAR_MANAGED_SHELL = "1"
 process.env.SIDECAR_BIN = stub
 process.env.SIDECAR_ORDER_LOG = orderLog
+process.env.SIDECAR_ARGV_DIR = argvDir
 
 const { SidecarLifecycle } = await import("./sidecar-lifecycle.js")
 const plugin = await SidecarLifecycle()
@@ -84,4 +98,9 @@ const elapsedMs = Date.now() - started
 const recorded = existsSync(orderLog)
   ? readFileSync(orderLog, "utf8").trim().split("\n").filter(Boolean)
   : []
-process.stdout.write(JSON.stringify({ order: recorded, elapsedMs }))
+const argv = {}
+for (const seq of recorded) {
+  const path = join(argvDir, seq)
+  argv[seq] = existsSync(path) ? readFileSync(path, "utf8").split("\n").filter(Boolean) : []
+}
+process.stdout.write(JSON.stringify({ order: recorded, argv, elapsedMs }))

@@ -3,6 +3,7 @@ package agentlifecycle
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -73,10 +74,42 @@ func assertEvents(t *testing.T, got []string, want ...string) {
 	}
 }
 
+// valueBearingTraceKeys is the closed set of field keys a trace may record a
+// VALUE for. Everything else may appear only as a bare name.
+//
+// The rule this enforces is the README's: a value is permitted only where the
+// vocabulary is closed and chosen by the provider's own source, which is what
+// made it safe for the OpenCode Phase B traces to record a bounded error class
+// name where a message would have been a privacy failure. `type` and `reason`
+// are Pi's own discriminators. The four `ctx.` entries are derived observations
+// rather than payload fields, and they are here because the shipped asset's
+// guards are built on exactly them and a bare field name would not show whether
+// a guard was correct — `ctx.sessionFile` and `ctx.sessionId` record only
+// `present` or `absent`, never a path or an id.
+//
+// Widening this set is a deliberate act. Adding a key here means asserting that
+// its values cannot carry user content, and the review that finds otherwise has
+// to happen before the trace is checked in, not after.
+var valueBearingTraceKeys = map[string]bool{
+	"type":            true,
+	"reason":          true,
+	"ctx.mode":        true,
+	"ctx.isIdle":      true,
+	"ctx.sessionFile": true,
+	"ctx.sessionId":   true,
+}
+
 // TestNoHookTraceCarriesAValue is the privacy gate over the fixtures
 // themselves. The traces record which fields a payload had, and a field named
 // "prompt" or "tool_input" is exactly the kind of thing that must never appear
 // with a value beside it.
+//
+// It used to check the session and turn columns and nothing else, which was
+// enough while every trace here recorded bare field names. The Pi traces are the
+// first to put `key=value` pairs in the `fields` column, and under the old check
+// a future capture that recorded `prompt=<the user's prompt>` would have passed
+// every test in the tree. So the allowlist above is enforced here: a `=` on any
+// key outside it fails, whatever the value looks like.
 func TestNoHookTraceCarriesAValue(t *testing.T) {
 	for _, provider := range []string{"codex", "claude", "pi"} {
 		entries, err := os.ReadDir(filepath.Join("testdata", "traces", provider))
@@ -94,6 +127,16 @@ func TestNoHookTraceCarriesAValue(t *testing.T) {
 				}
 				if !strings.HasPrefix(r.turn, "turn-") && r.turn != "-" {
 					t.Fatalf("%s/%s carries a real turn identifier %q", provider, e.Name(), r.turn)
+				}
+				for _, field := range r.fields {
+					key, _, hasValue := strings.Cut(field, "=")
+					if !hasValue || valueBearingTraceKeys[key] {
+						continue
+					}
+					t.Fatalf("%s/%s records a value for %q, which is not in the closed set of keys "+
+						"whose vocabulary the provider's own source fixes (%v). A payload field's NAME is "+
+						"evidence; its value is the thing these traces exist not to keep.",
+						provider, e.Name(), key, sortedTraceValueKeys())
 				}
 			}
 		}
@@ -241,6 +284,16 @@ func TestClaudeBlockingIsFirstClassOnTheCurrentRelease(t *testing.T) {
 	if !contains(blocked, "Notification") {
 		t.Fatal("Notification is absent from the blocked trace")
 	}
+}
+
+// sortedTraceValueKeys renders the allowlist for a failure message.
+func sortedTraceValueKeys() []string {
+	out := make([]string, 0, len(valueBearingTraceKeys))
+	for k := range valueBearingTraceKeys {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func contains(xs []string, want string) bool {

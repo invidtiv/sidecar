@@ -19,12 +19,25 @@
 7820	agent_settled	session-1	-	-	type=agent_settled,ctx.mode=tui,ctx.isIdle=true,ctx.sessionFile=present,ctx.sessionId=present
 # One turn that called a tool. Two facts, both load-bearing.
 #
-# FIRST: no permission, approval, or prompt event of any kind appears between
-# tool_execution_start and tool_execution_end. The tool was a bash command and
-# it ran unconditionally. This is the emitter-side confirmation that Pi ships no
-# permission system, and therefore that blocked_on_request and unblocked are
-# structurally unreachable rather than merely untraced. Neither sidecar:blocked
-# nor herdr:blocked was published during this run; the tracer subscribed to both.
+# FIRST: no permission, approval, or prompt event of any kind appears anywhere in
+# this run. The interval is delimited by recorded rows rather than by a watch --
+# before_agent_start opens it and agent_settled closes it, with
+# tool_execution_start and tool_execution_end inside -- so no capture window is
+# owed and none is claimed. The tool was a bash command and it ran
+# unconditionally. Pi ships no permission system, which is why blocked_on_request
+# and unblocked are structurally unreachable rather than merely untraced.
+#
+# Be precise about what this does NOT show, because an earlier version of this
+# note overreached. Pi's untyped event bus is not in these columns at all. The
+# tracer that produced this file listened on sidecar:blocked and herdr:blocked
+# and neither fired, but nothing here distinguishes "subscribed and saw nothing"
+# from "never subscribed", so that is a fact about a run rather than evidence in
+# a fixture, and it is not what the unreachability claim rests on. What it rests
+# on is the emitter side, checkable without this file: the string "herdr" does
+# not appear in pi 0.84.3's shipped bundle; ExtensionAPI.on enumerates thirty
+# events and not one is a permission, approval or prompt event
+# (types.d.ts:892-928); and Herdr's own four occurrences of its channel name are
+# two listeners and two test drivers, with no publisher anywhere in its tree.
 #
 # SECOND: turn_start and turn_end each fire TWICE inside this single agent run,
 # once around the tool call and once around the reply that followed it. A turn

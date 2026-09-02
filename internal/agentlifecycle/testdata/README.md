@@ -23,19 +23,33 @@ Some traces are checked in to record that a provider emitted **nothing** — the
 two Claude cancellation captures are the current examples, and that absence is
 the single fact capping Claude below full lifecycle authority.
 
-An absence is only as strong as the window it was watched over. "Nothing fired"
-over one second and over eighteen are very different claims, and a reader cannot
-tell them apart from a trace that simply stops. So a trace making an absence
-claim must carry a trailing comment row naming its window:
+An absence is only as strong as the interval it was measured over, and there are
+two kinds of interval. **A window is owed when the interval is a watch**: the
+listener stayed attached and nothing arrived, and the trace simply stops.
+"Nothing fired" over one second and over eighteen are very different claims, and
+a reader cannot tell them apart from a trace that ends. Such a trace must carry a
+trailing comment row naming its window:
 
 ```
 # capture-window: 18s
 ```
 
-`hooktrace_test.go` requires it for those traces and rejects a value
-`time.ParseDuration` cannot read, so the evidence stays attached to the claim
-rather than living in a session log nobody will find. Traces that only record
-what did happen need no such row.
+**A window is not owed when the interval is delimited by recorded rows.** "No
+permission event appeared between before_agent_start and agent_settled" is
+bounded by two rows a reader can see, so its strength is in the fixture already
+and a duration would add nothing. `traces/pi/tool-turn.tsv` is that shape and
+deliberately carries no window.
+
+The distinction matters because it is also the test for whether an absence claim
+belongs in a trace file at all. A claim the six columns cannot support is not
+made stronger by a window: it is prose about a run, and it belongs beside the
+evidence that does support it. That trace carries a note saying exactly this
+about Pi's untyped event bus, which no column here observes.
+
+`hooktrace_test.go` requires a window for the watch-shaped traces and rejects a
+value `time.ParseDuration` cannot read, so the evidence stays attached to the
+claim rather than living in a session log nobody will find. Traces that only
+record what did happen need no such row.
 
 Note what these traces do **not** do. A test reading a static fixture cannot
 notice that a provider's behavior changed; it fails only once a human has
@@ -184,15 +198,33 @@ contents, or environment values. Session identifiers were mapped to
 reached a file.
 
 Pi's traces are the first here to record event **values**, and the rule is
-narrow. A value is recorded only for a key whose vocabulary is closed and chosen
-by Pi's own source — `reason`, `type`, `mode`, `status` and their siblings — which
-is the same rule that let the OpenCode Phase B traces record a bounded error
-class name. Those appear in the `fields` column as `key=value`; every other key
-appears as a bare name. Two derived observations are recorded the same way
-because the asset's guards are built on them and a field name alone would not
-show whether a guard was correct: `ctx.mode`, `ctx.isIdle`, and the presence
-booleans `ctx.sessionFile` and `ctx.sessionId`. A path or an id is never written,
-only `present` or `absent`.
+narrow, closed, and enforced. A value is recorded only for a key whose vocabulary
+is fixed by Pi's own source, which is the same rule that let the OpenCode Phase B
+traces record a bounded error class name where a message would have been a
+privacy failure. The permitted keys are exactly:
+
+| Key | Why a value is safe |
+| --- | --- |
+| `type` | Pi's own event discriminator |
+| `reason` | Pi's own bounded reason enum (`startup`, `reload`, `quit`, …) |
+| `ctx.mode` | The session mode discriminator (`tui`, `rpc`, …) |
+| `ctx.isIdle` | A tri-state boolean, or absent |
+| `ctx.sessionFile` | `present` or `absent` only — never the path |
+| `ctx.sessionId` | `present` or `absent` only — never the id |
+
+Every other key appears as a bare name: `prompt`, `images`, `message`, `args`,
+`result` and `systemPrompt` are all in these fixtures, and all of them as names
+alone. The last four rows are derived observations rather than payload fields,
+and they are recorded at all because the shipped asset's guards are built on
+exactly them — a bare name would not show whether a guard was correct.
+
+`TestNoHookTraceCarriesAValue` enforces this as an allowlist: a `=` on any key
+outside the table fails, whatever the value looks like. Before that check it
+compared only the `session` and `turn` columns, which was sufficient while every
+trace here held bare names, and would have let a future capture record
+`prompt=<the user's prompt>` without a single test noticing. Widening the
+allowlist is a deliberate act, and it means asserting that the key's values
+cannot carry user content.
 
 ## Re-capturing
 

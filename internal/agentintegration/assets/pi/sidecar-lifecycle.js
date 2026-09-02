@@ -23,11 +23,11 @@
 //
 // WHAT THIS SENDS
 //
-// Lanes, a bounded reason code, a monotonically increasing sequence, and -- when
-// Pi supplies one -- the conversation this pane is on, as the session file's
-// path or Pi's own session id. It never sends prompt text, response text, tool
-// arguments or results, file contents, or environment values. There is no code
-// path here that reads message content.
+// Lanes, a bounded reason code, and -- when Pi supplies one -- the conversation
+// this pane is on, as the session file's path or Pi's own session id. It never
+// sends prompt text, response text, tool arguments or results, file contents, or
+// environment values. There is no code path here that reads message content.
+// It does not send a sequence at all; see buildArgs.
 //
 // STRUCTURE
 //
@@ -306,11 +306,50 @@ function sessionStartReason(reason) {
 // RunID every later report is sequenced against. So the path is not missing from
 // the state report; it is somewhere the state report does not need it.
 //
-// A state report carries a sequence; a session binding does not, because
-// `agent report-session` has no --seq flag -- it is a binding rather than a
-// point in an ordered stream. The queue therefore consumes a sequence number
-// only for the verbs that carry one, which keeps the state stream's sequence
-// gapless.
+// NO --seq IS SENT, BY EITHER VERB, AND THAT IS THE POINT. This is the fifth
+// deliberate difference from upstream, which numbers every message it sends.
+//
+// `agent report-session` has never had the flag: a binding is not a point in an
+// ordered stream. `agent report` does have it and it is deliberately omitted,
+// which `sidecar agent report --help` names as what a per-event hook process
+// should do: "Omit it to have the store assign the next one." The store assigns
+// under the exclusive lock it already takes for the append, which is the only
+// place the read and the write are atomic (lifecyclestore.AppendNext).
+//
+// This file carried a counter until it did not, and the history is worth
+// keeping because both ends of it were wrong in instructive ways.
+//
+// It opened at zero, and that dropped reports: Pi can replace this extension
+// mid-run without emitting another agent_start, the run key survives that
+// (lifecycleenv derives RunID from the process generation and the session
+// fingerprint, neither of which a reload changes), and the store rejects any
+// sequence at or below the run's high-water mark. The replacement instance's
+// reports were therefore dropped until its counter climbed past the previous
+// instance's mark, starting with the forced reload-recovery report the
+// session_start branch exists to send.
+//
+// It was then seeded at `Date.now() * 1000`, copying upstream, and that dropped
+// EVERY report. Upstream writes to Herdr's socket, which bounds nothing;
+// Sidecar's store bounds the field at MaxSequence = 1 << 40 (validate.go) and
+// enforces it unconditionally. The seed is about 1.79e15 against a ceiling of
+// 1.10e12, roughly 1600x over, so every single report was rejected as
+// "sequence N exceeds 1099511627776".
+//
+// Both failures were silent for the same reason, which is the reason not to
+// hold a counter here at all: reports spawn with stdio "ignore" and their exit
+// codes are never read, so this file cannot tell a stored report from a refused
+// one. Omitting the flag removes the class rather than re-tuning the constant.
+// A replacement instance has no counter to restart and no clock reading to
+// overflow, because the only counter left is the store's high-water mark and it
+// only ever goes up. The reload hazard becomes structurally impossible instead
+// of statistically unlikely.
+//
+// Ordering still holds, and it is the queue that holds it, not the numbering.
+// The queue below is serialized -- one report subprocess at a time, the next
+// spawned only after the previous has exited -- so the store assigns in exactly
+// the order the events happened. Concurrent spawns would not corrupt anything
+// either, since AppendNext assigns rather than validates, but the queue is what
+// makes the order meaningful.
 //
 // The blocked label is deliberately absent from every argv. It is unbounded text
 // authored by another extension, `--detail` would put it into Sidecar's store,
@@ -318,7 +357,7 @@ function sessionStartReason(reason) {
 // identifiers goes over the wire. It is still carried in the mapping's state,
 // because upstream compares it when suppressing a repeat and the port keeps that
 // behavior byte for byte.
-function buildArgs(action, seq, sessionId) {
+function buildArgs(action, sessionId) {
   if (action.kind === "session") {
     const args = ["agent", "report-session", "--kind", PROVIDER, "--source", SOURCE]
     if (action.sessionPath) args.push("--path", action.sessionPath)
@@ -330,52 +369,12 @@ function buildArgs(action, seq, sessionId) {
     "--source", SOURCE,
     "--source-version", VERSION,
     "--provider", PROVIDER,
-    "--seq", String(seq),
   ]
   if (sessionId) args.push("--session-id", sessionId)
   args.push("--state", action.state)
   args.push("--reason", action.reason)
   return args
 }
-
-// carriesSequence reports whether an action's verb takes --seq.
-function carriesSequence(action) {
-  return action.kind !== "session"
-}
-
-// reportSeq is the run-scoped report counter, and seeding it from the clock is
-// a deliberate difference from the OpenCode asset beside it -- which opens its
-// counter at zero, deliberately, and must not be "fixed" to match this. td-447cfa
-// records why the two differ and what would settle it.
-//
-// The counter is at module scope and starts at `Date.now() * 1000` because that
-// is what upstream does (upstream/pi/herdr-agent-state.ts:64) and because Pi is
-// the provider that needs it. The reason is the same one the session_start
-// branch's forced publish exists for: a reload can replace this extension
-// mid-run without emitting another agent_start. The run key survives that --
-// lifecycleenv derives RunID from the process generation and the session
-// fingerprint, neither of which a reload changes -- and Sidecar's store rejects
-// any sequence at or below the run's high-water mark (lifecyclestore's
-// ErrStaleSequence). A counter that restarted at zero would therefore have every
-// report from the replacement instance dropped, in silence, until it climbed
-// past the previous instance's high mark: reports are spawned with
-// stdio: "ignore" and their exit codes are never read, so nothing anywhere would
-// say so. The first casualty would be the forced reload-recovery report itself,
-// which is precisely the recovery this file goes to trouble to preserve.
-//
-// Module scope rather than inside the factory covers both shapes of the same
-// hazard. A host that re-imports the module gets a fresh clock reading, which is
-// higher because time has passed; a host that calls the factory again on the
-// cached module shares this counter, which is higher because it only ever
-// increments. Seeding inside the factory would handle the first and quietly
-// reintroduce the bug for the second, in the case where the two instantiations
-// land in the same millisecond.
-//
-// The pure half is deliberately untouched by this. `buildArgs` still takes the
-// sequence as an argument and `carriesSequence` still decides which verbs
-// consume one, so the replay harness and the Go mirror keep comparing element
-// for element over fixed fixtures.
-let reportSeq = Date.now() * 1000
 
 // SidecarLifecycle is the Pi extension factory.
 //
@@ -433,8 +432,8 @@ export default function SidecarLifecycle(pi) {
   // consumer could otherwise accumulate a backlog of stale lanes.
   //
   // Sidecar serializes without dropping, for three reasons. Each report here is
-  // a subprocess against an append-only store that enforces a strictly
-  // increasing sequence per run, so ordering is already the constraint and a
+  // a subprocess against an append-only store that assigns a strictly increasing
+  // sequence per run in arrival order, so ordering is the whole contract and a
   // dropped intermediate is a lane the notification lane never sees at all --
   // "working" swallowed between two idles is a turn that appears never to have
   // happened. Its depth is bounded by the state-change rate rather than by the
@@ -448,14 +447,13 @@ export default function SidecarLifecycle(pi) {
   // over a fixed fixture -- the one test that has ever caught real drift
   // between them.
   //
-  // Sequences are assigned here, in the same order the queue will deliver them,
-  // so the store's strictly-increasing contract is satisfied by construction
-  // rather than by luck. See reportSeq for why the counter does not start at
-  // zero.
+  // No sequence is assigned here, or anywhere in this file. The store assigns
+  // one under the lock it already holds, and this queue is what makes the order
+  // it assigns the order the events happened in. See buildArgs for why holding a
+  // counter here was tried twice and dropped reports both times.
   let queue = Promise.resolve()
   const enqueue = (action) => {
-    if (carriesSequence(action)) reportSeq += 1
-    const args = buildArgs(action, reportSeq, st.sessionId)
+    const args = buildArgs(action, st.sessionId)
     queue = queue.then(() => runOnce(args)).catch(() => {})
     return queue
   }
@@ -534,7 +532,6 @@ SidecarLifecycle.internals = {
   newState,
   mapEvent,
   buildArgs,
-  carriesSequence,
   isAbsoluteSessionPath,
   sessionStartReason,
   SOURCE,
