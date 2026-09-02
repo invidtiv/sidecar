@@ -247,6 +247,17 @@ func runCreateShellWorkspace(env Env, dest openDestination, flags createCommonFl
 		cliErrln(env.Stderr, "no Sidecar project is registered for this directory; pass --project or run from a registered project")
 		return 2
 	}
+	// dest.Origin.WorkDir already carries the caller's own worktree, resolved
+	// by resolveCreateDestination's ladder (SIDECAR_SHELL, tmux identity, or
+	// cwd) before registeredProjectForCreate collapsed it to the owning
+	// project's root. proj.Path is only the fallback for a destination that
+	// resolved no directory of its own (an explicit --project, say): using it
+	// unconditionally is what put a worktree's new shell in the main checkout
+	// (td-e3a93d).
+	workDir := dest.Origin.WorkDir
+	if workDir == "" {
+		workDir = proj.Path
+	}
 
 	display, session := workspaceops.ShellNames(proj.Path, existingShellDefinitions(proj))
 	if custom := strings.TrimSpace(nameFlag); custom != "" {
@@ -260,7 +271,7 @@ func runCreateShellWorkspace(env Env, dest openDestination, flags createCommonFl
 
 	spec := workspaceops.ManagedShellSpec{
 		ShellSpec: workspaceops.ShellSpec{
-			WorkDir:     proj.Path,
+			WorkDir:     workDir,
 			SessionName: session,
 			DisplayName: display,
 		},
@@ -286,7 +297,7 @@ func runCreateShellWorkspace(env Env, dest openDestination, flags createCommonFl
 	} else if typeCmd != "" {
 		seedErr = workspaceops.TypeInShell(ctx, session, typeCmd)
 	} else if startAgent {
-		_, seedErr = startCreatedAgent(ctx, proj, session, display, proj.Path, agentKind, skipPerms, extra)
+		_, seedErr = startCreatedAgent(ctx, proj, session, display, workDir, agentKind, skipPerms, extra)
 	}
 
 	focus := true
@@ -297,9 +308,7 @@ func runCreateShellWorkspace(env Env, dest openDestination, flags createCommonFl
 		Focus:       &focus,
 	}
 	dest.Origin.ProjectKey = proj.Key
-	if dest.Origin.WorkDir == "" {
-		dest.Origin.WorkDir = proj.Path
-	}
+	dest.Origin.WorkDir = workDir
 	req, reqErr := writeCreateRequest(env, dest, payload, uirequest.Target{
 		Kind:  uirequest.TargetKindShell,
 		Value: session,
@@ -317,7 +326,7 @@ func runCreateShellWorkspace(env Env, dest openDestination, flags createCommonFl
 		Shell: createShellInfo{
 			DisplayName: display,
 			Session:     session,
-			WorkDir:     proj.Path,
+			WorkDir:     workDir,
 		},
 		Project:   proj.Key,
 		Acked:     len(acks) > 0,

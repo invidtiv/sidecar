@@ -241,6 +241,10 @@ func RootCommand() *Command {
 			"whatever answers to it, so an unregistered name is refused (exit 3) rather\n" +
 			"than killed. A sidecar-ws-… worktree session resolves but is refused (exit 5):\n" +
 			"removing a checkout carries branch-cleanup decisions this verb cannot express.\n\n" +
+			"A sidecar-tp-… target is different: it is a beside-the-session terminal split\n" +
+			"(`create shell`'s default placement, or --split), never a managed shell, so it\n" +
+			"has no record to tombstone — this is the only CLI path that closes one, and\n" +
+			"--shell/--project are refused alongside it since neither applies.\n\n" +
 			"There is no current-shell form. Deleting the shell you are sitting in would\n" +
 			"kill the session running the command, so the subject is always named.",
 		Flags: []Flag{
@@ -255,7 +259,7 @@ func RootCommand() *Command {
 			{Code: 0, Summary: "deleted"},
 			{Code: 1, Summary: "tmux, ambiguity, or state failure"},
 			{Code: 2, Summary: "usage error, including a missing --target"},
-			{Code: 3, Summary: "--target names no session this project owns, or one recorded on a different tmux server"},
+			{Code: 3, Summary: "--target names no session this project owns (or, for a sidecar-tp-… split, no live session by that name), or one recorded on a different tmux server"},
 			{Code: 5, Summary: "a value was rejected: --target names a worktree, or an unknown --project / --shell"},
 		},
 		Examples: []Example{
@@ -329,7 +333,11 @@ func RootCommand() *Command {
 			"beside-the-session split explicitly (the workspace_terminal_panel feature,\n" +
 			"on by default, must not be disabled). Beside-the-session modes need a running\n" +
 			"instance and a current shell (SIDECAR_SHELL / --shell) and do not add a\n" +
-			"workspace row.\n\n" +
+			"workspace row: the result's session is a sidecar-tp-… terminal split, not a\n" +
+			"managed shell, so it is invisible to `shell list`, refused by the agent verbs,\n" +
+			"and closable only with `shell delete --target` (nothing else names it).\n" +
+			"Handing a shell to a second agent (coordinate-agents) needs a workspace row, so\n" +
+			"use --tab rather than the default placement.\n\n" +
 			"--agent records which agent family the shell is for, in the same durable field\n" +
 			"the TUI's Create Shell writes. That record is what keeps the shell on the\n" +
 			"Activity board while the agent is booting and whenever live screen\n" +

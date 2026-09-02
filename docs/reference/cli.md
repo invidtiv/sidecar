@@ -966,7 +966,11 @@ to a completely new surface; --split auto|right|below picks the side of the
 beside-the-session split explicitly (the workspace_terminal_panel feature,
 on by default, must not be disabled). Beside-the-session modes need a running
 instance and a current shell (SIDECAR_SHELL / --shell) and do not add a
-workspace row.
+workspace row: the result's session is a sidecar-tp-… terminal split, not a
+managed shell, so it is invisible to `shell list`, refused by the agent verbs,
+and closable only with `shell delete --target` (nothing else names it).
+Handing a shell to a second agent (coordinate-agents) needs a workspace row, so
+use --tab rather than the default placement.
 
 --agent records which agent family the shell is for, in the same durable field
 the TUI's Create Shell writes. That record is what keeps the shell on the
@@ -2283,6 +2287,11 @@ whatever answers to it, so an unregistered name is refused (exit 3) rather
 than killed. A sidecar-ws-… worktree session resolves but is refused (exit 5):
 removing a checkout carries branch-cleanup decisions this verb cannot express.
 
+A sidecar-tp-… target is different: it is a beside-the-session terminal split
+(`create shell`'s default placement, or --split), never a managed shell, so it
+has no record to tombstone — this is the only CLI path that closes one, and
+--shell/--project are refused alongside it since neither applies.
+
 There is no current-shell form. Deleting the shell you are sitting in would
 kill the session running the command, so the subject is always named.
 
@@ -2303,7 +2312,7 @@ Usage: sidecar shell delete --target SESSION [--project NAME] [--json]
 - `0`: deleted
 - `1`: tmux, ambiguity, or state failure
 - `2`: usage error, including a missing --target
-- `3`: --target names no session this project owns, or one recorded on a different tmux server
+- `3`: --target names no session this project owns (or, for a sidecar-tp-… split, no live session by that name), or one recorded on a different tmux server
 - `5`: a value was rejected: --target names a worktree, or an unknown --project / --shell
 
 **Examples:**

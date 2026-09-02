@@ -3,8 +3,10 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"os/exec"
 	"strings"
 
+	"github.com/marcus/sidecar/internal/termpanes"
 	"github.com/marcus/sidecar/internal/tmuxenv"
 	"github.com/marcus/sidecar/internal/workspaceops"
 )
@@ -120,6 +122,22 @@ func runShellDelete(env Env, args []string) int {
 		cliErrf(env.Stderr, "shell delete requires --target\n\n%s", help)
 		return 2
 	}
+	// A beside-the-session terminal split (sidecar-tp-…, made by `create shell`
+	// with no --tab/--split) has no shells.json record and no worktree meta, so
+	// resolveShellTarget below would refuse it as unregistered — which is
+	// exactly the dead end td-5f5dac reported: the only way to close one was
+	// `tmux kill-session` on the default server. The sidecar-tp- prefix is
+	// reserved for this feature alone (termpanes.SessionName never produces
+	// anything else, and nothing but this feature is expected to create a
+	// session with it), so it is proof enough of ownership on its own, the same
+	// trust boundary termpanes.KillSession and ProbeClose already use.
+	if strings.HasPrefix(target, termpanes.SessionPrefix) {
+		if shellFlag != "" || projectFlag != "" {
+			cliErrf(env.Stderr, "--shell and --project name a registered shell's project; a %s… terminal split has neither, so name it with --target alone\n", termpanes.SessionPrefix)
+			return 2
+		}
+		return runShellDeleteSplit(env, target, jsonOutput)
+	}
 
 	tgt, code := resolveShellTarget(env, target, shellFlag, projectFlag, help)
 	if code != 0 {
@@ -170,6 +188,38 @@ func runShellDelete(env Env, args []string) int {
 		return 0
 	}
 	if _, err := fmt.Fprintf(env.Stdout, "Deleted Sidecar shell %q (%s).\n", tgt.DisplayName, tgt.Session); err != nil {
+		return 1
+	}
+	return 0
+}
+
+// runShellDeleteSplit closes a beside-the-session terminal split. It has no
+// shells.json record to tombstone — a split was never a managed shell, only a
+// tmux session — so this is a kill and nothing else, always on the tmux server
+// this process talks to: a split is only ever made beside a session on that
+// same server, so there is no cross-server case to detect and refuse.
+func runShellDeleteSplit(env Env, session string, jsonOutput bool) int {
+	if !workspaceops.SessionExists(session) {
+		cliErrf(env.Stderr, "no terminal split session named %q on this tmux server; run `tmux list-sessions` to see what is live\n", session)
+		return shellTargetUnregistered
+	}
+	if err := exec.Command("tmux", "kill-session", "-t", session).Run(); err != nil {
+		cliErrln(env.Stderr, fmt.Errorf("close terminal split: %w", err))
+		return 1
+	}
+	if jsonOutput {
+		result := shellDeleteResult{
+			Shell:   session,
+			Status:  shellStatusDeleted,
+			Deleted: true,
+		}
+		if err := json.NewEncoder(env.Stdout).Encode(result); err != nil {
+			cliErrln(env.Stderr, err)
+			return 1
+		}
+		return 0
+	}
+	if _, err := fmt.Fprintf(env.Stdout, "Closed terminal split %q.\n", session); err != nil {
 		return 1
 	}
 	return 0
