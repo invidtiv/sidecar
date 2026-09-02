@@ -1,6 +1,12 @@
 #!/bin/bash
 # test-loopback-remote.sh - Thin CI for the portable loopback remote.
 # No TUI: up --no-drive only. Never touches the default tmux server.
+#
+# The serve stream's own regression test lives in Go, not here:
+# internal/cli/serve_stream_loopback_test.go drives `host serve --stdio` over
+# this same fake ssh and asserts the hello survives the stdout banner
+# (td-055768). This script asserts the fixture still writes that banner, which
+# is what makes the Go test mean anything.
 
 set -euo pipefail
 unset TMUX
@@ -91,7 +97,11 @@ printf '%s\n' "$paths" | grep -F "$canon" >/dev/null || fail "paths did not name
 
 test -x "$canon/sidecar" || fail "worktree binary missing"
 test -x "$canon/viewer/bin/ssh" || fail "fake ssh missing"
+# Unconditionally, and with no switch to turn it off: a fixture that can be
+# talked out of contaminating stdout stops being the regression test for
+# td-055768, where one banner line left every host permanently not-protocol.
 grep -q "Welcome to loopback -- stdout banner" "$canon/viewer/bin/ssh" || fail "fake ssh missing stdout banner"
+grep -q "SIDECAR_LOOPBACK_SSH_QUIET" "$canon/viewer/bin/ssh" && fail "fake ssh can be talked out of its stdout banner"
 grep -q "Last login: Tue -- stderr banner" "$canon/viewer/bin/ssh" || fail "fake ssh missing stderr banner"
 
 grep -qx REMOTE-MARKER "$canon/host/project/twin.txt" || fail "host REMOTE-MARKER missing"

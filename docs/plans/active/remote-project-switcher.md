@@ -1,6 +1,6 @@
 # Remote destinations in `@` and `W`
 
-Status: **active; slices 0–3 implemented** on `remote-viewer-screen` (td-f7855c: td-823e94, td-72a679, td-90757e; slice 2.5: td-11d3d3, td-761cea; slice 3: td-af932a). Remaining: slice 4 (Files/Git/td/Tasks remoting), slice 5 (docs and isolated proof). **Created:** 2026-09-01 **Verified against the tree on 2026-09-01** after slice 3.
+Status: **active; slices 0–3 implemented, and slice 4's Files half complete** on `remote-viewer-screen` (td-f7855c: td-823e94, td-72a679, td-90757e; slice 2.5: td-11d3d3, td-761cea; slice 3: td-af932a; slice 3 review cleanup: td-1d6735; Files: td-bc57bb, planned in [remote-files-plugin.md](remote-files-plugin.md)). Remaining: Git, td, Tasks, and Notes remoting, create shell/worktree from the bound workspace, and slice 5 (docs and isolated proof). **Created:** 2026-09-01 **Verified against the tree on 2026-09-01** after the Files slice.
 
 Related: [Files on a remote-bound project](remote-files-plugin.md) is slice 4's Files half. [Sidecar as its own remote host runtime](sidecar-remote-hosts.md) is the transport and inventory stream. [The viewer owns the screen](../implemented/remote-host-viewer-screen.md) is the lease and `uirequest` announcement the bound project workspace now shares with Sessions. [Remote host content-pane parity](../implemented/remote-host-content-pane-parity.md) is the read path a remote-bound plugin uses. [Agent-facing project CLI](agent-project-cli.md) is the local `sidecar project` surface; it does not grow `--host` in this plan.
 
@@ -217,7 +217,7 @@ Relayed `sidecar open` / `layout` from a host pane whose project matches the bou
 
 `uiRequestLanding` (`internal/app/scope.go`) is the one decider. `overview.handleUIRequest` is extended with `RelayedLanding` rather than copied into the workspace plugin. `uirequest.Instance` has `HostID` (same json as `Origin`); `bindRemoteDestination` publishes the bound host and does not write a remote path into `WorkDir`. Workspace `AttentionOrigin` sets `HostID` from `p.ctx.HostID`. Live session leases are claimed on bind through `tty.ClaimGeometryLease`. `workspaceSourceContext` carries `HostID`/`HostIncarnation`/`ProjectKey`; `workspaceDeckConfig` uses `RemoteSource` from the Sessions adapter injected on `plugin.Context` (`RemoteRunner` / `HostVerbs`); nested links follow the deck's Source. A `HostIncarnation` bump while bound re-resolves. Relayed requests never use the workspace plugin's local pending-view queue. The refusal reasons stay the ones viewer-screen already ships.
 
-### Slice 4 — Files (then Git, td, Tasks) as remote-capable plugins
+### Slice 4 — Files (done), then Git, td, Tasks
 
 One plugin at a time, each through `Source` / `RunSidecar` / host content verbs, each with the twin-path tripwire. Not a second compositor, not a mounted FS. Notes already refuses like Files while bound.
 
@@ -241,7 +241,7 @@ Slices 0–3 are covered by package tests (`go test ./internal/app ./internal/ov
 
 ## Changelog
 
-- **2026-09-01** — Slice 4's Files half split into [remote-files-plugin.md](remote-files-plugin.md) and implemented there: it needed a new host verb (`sidecar content tree`, `ContentTreeV1`), not just a plugin change. Git, td, Tasks, and Notes remain. Slice 3 review cleanup (td-1d6735): `layoutapply.ResolveRemoteTargets` and `hosts.OriginNamesProject` are the single remote resolver and the single origin/project predicate both surfaces use.
+- **2026-09-01** — Slice 4's Files half split into [remote-files-plugin.md](remote-files-plugin.md) and implemented there: it needed a new host verb (`sidecar content tree`, `ContentTreeV1`), not just a plugin change. Git, td, Tasks, and Notes remain. Proving it on the loopback fixture surfaced td-055768 — the serve stream could not skip a login banner, so any host with a chatty profile showed no remote rows at all — fixed in `internal/hostproto` and now covered end to end by `internal/cli/serve_stream_loopback_test.go`. Slice 3 review cleanup (td-1d6735): `layoutapply.ResolveRemoteTargets` and `hosts.OriginNamesProject` are the single remote resolver and the single origin/project predicate both surfaces use.
 - **2026-09-01** — Slice 3 implemented (td-af932a): bound `@` destination is the screen for relayed open/layout. Instance `HostID`, workspace `AttentionOrigin.HostID`, lease claim on bind, shared `uiRequestLanding` decider, `workspaceSourceContext` + `RemoteSource`. Remaining: slices 4–5.
 - **2026-09-01** — Slice 2.5 implemented: `scripts/loopback-remote.sh` (`up`/`paths`/`status`/`down`, `--no-drive`, `--delay`), shared `scripts/loopback-ssh.sh`, `scripts/test-loopback-remote.sh`. `remote-spike.sh` requires `SPIKE_HOST`. Default proof path for later slices; real SSH stays opt-in with no workstation hostname default.
 - **2026-09-01** — Slice 2.5 added: portable loopback remote (extract existing `loopbackHost` + fake ssh, optional spawn delay, agent up/down). Default proof path for later slices; real SSH stays opt-in with no workstation hostname default.

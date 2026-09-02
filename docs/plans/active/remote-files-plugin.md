@@ -123,14 +123,14 @@ Proof: each refused gesture is asserted to name the host and to leave both files
 Run on the slice 2.5 loopback fixture. `docs/reference/cli.md` documents `content tree`.
 
 ```bash
-./scripts/loopback-remote.sh up --quiet-banner
+./scripts/loopback-remote.sh up
 # 8 (Sessions) until loopback is LIVE, then @ -> [loopback] Loopback -> 3 (Files)
 ./scripts/loopback-remote.sh down
 ```
 
 Observed: `@` lists `[loopback] Loopback` beside the unprefixed local twin; binding it shows the host's shells and worktrees; Files lists the host tree; `twin.txt` previews `REMOTE-MARKER` and never the viewer's `LOCAL-TWIN`; `D` answers `deleting is unavailable on [loopback]` and leaves both checkouts untouched; the footer offers only Find / Tab+ / Filter / Close; `ctrl+p` finds `twin.txt` from the host catalog. Nothing under `~/.local/state/sidecar` or `~/.config/sidecar` was written.
 
-`--quiet-banner` is required today and is not part of this plan's contract: the `host serve` stream has no banner tolerance (**td-055768**), so the fixture's deliberate stdout banner leaves the host permanently `not-protocol` and no remote row ever appears. Delete the flag when that lands — the banner is the regression test.
+The first run of this proof could not reach `online` at all: the `host serve` stream had no banner tolerance, so the fixture's deliberate stdout banner left the host permanently `not-protocol`. That is **td-055768**, fixed in `internal/hostproto` rather than worked around here, and the proof above is the run after it. The fixture still writes the banner unconditionally, which is what keeps `internal/cli/serve_stream_loopback_test.go` meaningful.
 
 ## Proof and isolation
 
@@ -140,5 +140,6 @@ Packages: `internal/contentservice`, `internal/cli`, `internal/hostserve`, `inte
 
 ## Changelog
 
-- **2026-09-01** — Slices 4a–4e implemented. Proof run on the loopback fixture; it needed `--quiet-banner` because the serve stream cannot skip a login banner (td-055768), which is filed against the transport rather than fixed here.
+- **2026-09-01** — td-055768 fixed, so the loopback proof runs with the fixture's banner intact and needs no workaround.
+- **2026-09-01** — Slices 4a–4e implemented. The first proof run could not connect at all: the serve stream could not skip a login banner (td-055768), filed against the transport.
 - **2026-09-01** — Created. Split out of remote-project-switcher.md slice 4 once it was clear Files needs a new host verb (`content tree`), a plugin-context addition (the bound worktree key), and a source seam at `loadChildren`, rather than a landing rule.
