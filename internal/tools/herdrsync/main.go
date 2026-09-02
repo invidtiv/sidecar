@@ -1,10 +1,13 @@
 // Command herdrsync refreshes Sidecar's vendored copy of Herdr's
-// agent-detection manifests, the lock that pins them, and the alias and
-// authority tables extracted from Herdr's source.
+// agent-detection manifests, the lock that pins them, the alias and authority
+// tables extracted from Herdr's source, and Herdr's provider integration
+// assets.
 //
-// It writes only under the output directory (internal/agentactivity/manifests
-// by default). Vendored files are byte-for-byte copies; nothing here rewrites
-// upstream content.
+// It writes under two output directories and nowhere else:
+// internal/agentactivity/manifests for the detection lane and
+// internal/agentintegration for the hooks lane, each with its own lock.
+// Vendored files are byte-for-byte copies; nothing here rewrites upstream
+// content.
 //
 // Usage:
 //
@@ -19,8 +22,15 @@
 // bytes and the commit recorded in the lock are always the same object; a ref
 // that does not resolve in that checkout fails the run.
 //
-// Steps 1 to 4 and 6 of the plan's sync design are implemented. Step 5,
-// vendoring src/integration/assets, is Phase 3 work and is marked TODO below.
+// There are two pins and they are not the same pin. --ref selects the source
+// tree to vendor and defaults to Herdr's own default branch, because Sidecar
+// ships faster than Herdr tags and takes detection fixes as they land.
+// --release-tag names the release whose binary the differential harness
+// downloads, and defaults to the newest release of any kind, because it has to
+// be something a runner can actually download. A sync never moves --ref's
+// resolved commit backwards past the one the lock records; see holdPin.
+//
+// All six steps of the plan's sync design are implemented.
 package main
 
 import (
@@ -50,6 +60,11 @@ const (
 	// offline run still records a defensible pin for the differential harness.
 	fallbackReleaseTag = "v0.8.2"
 
+	// fallbackDefaultBranch is Herdr's default branch, used only when the
+	// repository API cannot be reached to confirm it. It is `master`, not
+	// `main`: `main` does not exist in that repository at all.
+	fallbackDefaultBranch = "master"
+
 	// bundledDir and publishedDir are the two manifest directories in the
 	// Herdr repository.
 	bundledDir   = "src/detect/manifests"
@@ -72,6 +87,12 @@ type options struct {
 	sourceDir  string
 	offline    bool
 	out        string
+	// integrationOut is the second output root, for the vendored integration
+	// assets and their own lock. It is deliberately separate from out: the two
+	// trees are embedded into different packages, and a lock that described
+	// files outside its own directory could not be checked by the package that
+	// embeds it.
+	integrationOut string
 }
 
 func main() {
@@ -85,12 +106,13 @@ func run(args []string, out *os.File) error {
 	var opts options
 	fs := flag.NewFlagSet("herdrsync", flag.ContinueOnError)
 	fs.SetOutput(out)
-	fs.StringVar(&opts.ref, "ref", "", "Herdr git ref to vendor from (default: the newest release tag)")
+	fs.StringVar(&opts.ref, "ref", "", "Herdr git ref to vendor from (default: Herdr's default branch, or HEAD with --offline)")
 	fs.StringVar(&opts.releaseTag, "release-tag", "", "Herdr release tag the differential harness runs against (default: the newest release tag)")
 	fs.StringVar(&opts.catalogURL, "catalog", defaultCatalogURL, "published catalog index URL")
 	fs.StringVar(&opts.sourceDir, "source-dir", "", "read Herdr files from a local checkout instead of fetching them")
 	fs.BoolVar(&opts.offline, "offline", false, "do not touch the network; take published copies from the source checkout's distribution directory")
-	fs.StringVar(&opts.out, "out", filepath.Join("internal", "agentactivity", "manifests"), "output directory")
+	fs.StringVar(&opts.out, "out", filepath.Join("internal", "agentactivity", "manifests"), "output directory for the manifests and their lock")
+	fs.StringVar(&opts.integrationOut, "integration-out", filepath.Join("internal", "agentintegration"), "output directory for the vendored integration assets and their lock")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -107,13 +129,29 @@ func sync(opts options) (*syncReport, error) {
 	if opts.releaseTag == "" {
 		opts.releaseTag = newestReleaseTag(opts.offline)
 	}
-	if opts.ref == "" {
-		opts.ref = opts.releaseTag
+	// Whether the ref was typed decides what the rollback guard is allowed to
+	// do with it, so it has to be read before the default fills it in.
+	explicitRef := strings.TrimSpace(opts.ref) != ""
+	if !explicitRef {
+		opts.ref = defaultRef(opts)
 	}
 	// The report compares upstream aliases against Sidecar's own source, so a
 	// working directory outside this repository is a failure worth catching
 	// before anything is written.
-	if _, err := sidecarRepoRoot(); err != nil {
+	root, err := sidecarRepoRoot()
+	if err != nil {
+		return nil, err
+	}
+	if opts.integrationOut == "" {
+		// Nothing derives this from opts.out. The two trees are embedded into
+		// different packages, and guessing a second output root from the first
+		// is how a sync writes a vendored tree somewhere nobody is looking.
+		return nil, fmt.Errorf("no integration output directory; pass --integration-out")
+	}
+	if err := checkOutputDir(root, "--out", opts.out); err != nil {
+		return nil, err
+	}
+	if err := checkOutputDir(root, "--integration-out", opts.integrationOut); err != nil {
 		return nil, err
 	}
 
@@ -122,11 +160,30 @@ func sync(opts options) (*syncReport, error) {
 		return nil, err
 	}
 
+	// The lock is read here rather than at step 6 because the guard needs the
+	// commit it records before a byte is vendored: everything below reads the
+	// tree the guard may still move.
+	previous := readPreviousLock(opts.out)
+	src, pin, err := holdPin(src, previous, opts.ref, explicitRef)
+	if err != nil {
+		return nil, err
+	}
+	if pin != nil && pin.keptPin {
+		// The lock describes the tree that was vendored, so a held pin keeps
+		// the previous lock's ref beside the commit it belongs to rather than
+		// recording a ref that names something else.
+		opts.ref = previous.Herdr.Ref
+		if opts.ref == "" {
+			opts.ref = previous.Herdr.Commit
+		}
+	}
+
 	report := &syncReport{
-		Ref:        opts.ref,
-		ReleaseTag: opts.releaseTag,
-		Out:        opts.out,
-		StartedAt:  time.Now().UTC(),
+		Ref:            opts.ref,
+		ReleaseTag:     opts.releaseTag,
+		Out:            opts.out,
+		IntegrationOut: opts.integrationOut,
+		StartedAt:      time.Now().UTC(),
 	}
 
 	// Step 1: fetch both manifest sets.
@@ -151,34 +208,53 @@ func sync(opts options) (*syncReport, error) {
 		return nil, err
 	}
 
-	// Step 4: extract the alias and authority tables.
+	// Step 4: extract the alias and authority tables. The integration assets are
+	// read here rather than inside the authority extractor because step 5
+	// vendors the same bytes, and reading the tree twice would cost 34 more
+	// reads to learn what is already in hand.
 	aliases, err := extractAliases(src, opts.ref)
 	if err != nil {
 		return nil, fmt.Errorf("extract aliases: %w", err)
 	}
-	authority, err := extractAuthority(src, opts.ref)
+	assetDirs, sharedAssets, err := integrationAssets(src)
+	if err != nil {
+		return nil, fmt.Errorf("read integration assets: %w", err)
+	}
+	authority, err := extractAuthority(src, opts.ref, assetDirs)
 	if err != nil {
 		return nil, fmt.Errorf("extract authority: %w", err)
 	}
 
-	// Step 5 (integration assets under internal/agentintegration/upstream) is
-	// Phase 3 work. TODO(phase3): vendor src/integration/assets with the same
-	// lock discipline, recording each file's digest and its
-	// HERDR_INTEGRATION_VERSION, and report every version bump. The version
-	// numbers themselves are already extracted into authority.upstream.json,
-	// so the report can name a bump before the assets are vendored.
+	previousIntegration := readPreviousIntegrationLock(opts.integrationOut)
+	// The vendored bytes as they stand *before* step 6 overwrites them. There
+	// is no second copy afterwards, so the verdict-flip table's "before" side
+	// has to be taken here or not at all.
+	previousManifests := readVendoredManifests(filepath.Join(opts.out, "upstream"))
 
-	previous := readPreviousLock(opts.out)
+	// Step 5: vendor the integration assets and lock them.
+	integrationLock, err := writeIntegrationTree(opts, src, assetDirs, sharedAssets)
+	if err != nil {
+		return nil, fmt.Errorf("vendor integration assets: %w", err)
+	}
 
 	// Step 6: write the tree, the lock, and the report.
-	lock, err := writeTree(opts, src, catalog, choices, aliases, authority)
+	lock, err := writeTree(opts, src, catalog, choices, aliases, authority, pin)
 	if err != nil {
 		return nil, err
 	}
 	report.Lock = lock
+	report.Pin = pin
+	if pin != nil && pin.reportNote != "" {
+		report.Notes = append(report.Notes, pin.reportNote)
+	}
 	report.Previous = previous
+	report.PreviousManifests = previousManifests
+	report.Manifests = chosenBytes(choices)
 	report.Aliases = aliases
 	report.Authority = authority
+	report.Integration = integrationLock
+	report.PreviousIntegration = previousIntegration
+	report.IntegrationDiffs = integrationPortDiffs(src, opts.integrationOut, integrationLock)
 	report.FinishedAt = time.Now().UTC()
 
 	body, err := report.render()
@@ -193,6 +269,65 @@ func sync(opts options) (*syncReport, error) {
 	return report, nil
 }
 
+// checkOutputDir refuses an output directory outside the places a sync is meant
+// to write.
+//
+// It is not a tidiness rule. Both output roots are emptied of anything the run
+// did not produce, and the integration side does that recursively, directories
+// included: `--integration-out ~` from the repository root would delete
+// everything under ~/upstream. The flag is the only unvalidated path in a tool
+// that otherwise assumes it is standing in the Sidecar repository, so it is
+// checked against that assumption before anything is written.
+//
+// The system temp directory is allowed as well, because that is where the tests
+// and every rehearsal sync write, and refusing it would mean the destructive
+// path could only be exercised against the repository itself.
+func checkOutputDir(root, flag, dir string) error {
+	if strings.TrimSpace(dir) == "" {
+		return fmt.Errorf("no output directory for %s", flag)
+	}
+	abs, err := expandPath(dir)
+	if err != nil {
+		return fmt.Errorf("%s %s: %w", flag, dir, err)
+	}
+	for _, base := range []string{root, os.TempDir()} {
+		if withinDir(base, abs) {
+			return nil
+		}
+	}
+	return fmt.Errorf("%s %s resolves to %s, which is outside the Sidecar repository at %s. "+
+		"A sync removes everything under its output directories that it did not write, "+
+		"so it refuses to write anywhere else", flag, dir, abs, root)
+}
+
+// withinDir reports whether target is base or sits under it, comparing paths
+// with symlinks resolved so /var and /private/var are one place.
+func withinDir(base, target string) bool {
+	rel, err := filepath.Rel(resolveExisting(base), resolveExisting(target))
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
+// resolveExisting resolves symlinks on the deepest part of p that exists and
+// re-joins the rest, so an output directory a sync has not created yet still
+// compares against a resolved base.
+func resolveExisting(p string) string {
+	rest := ""
+	for {
+		if resolved, err := filepath.EvalSymlinks(p); err == nil {
+			return filepath.Join(resolved, rest)
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return filepath.Join(p, rest)
+		}
+		rest = filepath.Join(filepath.Base(p), rest)
+		p = parent
+	}
+}
+
 // chosenManifest is one agent's winning copy plus why it won.
 type chosenManifest struct {
 	id       string
@@ -204,6 +339,16 @@ type chosenManifest struct {
 
 	bundledVersion   string
 	publishedVersion string
+}
+
+// chosenBytes keys this sync's vendored bytes by file base, the way
+// readVendoredManifests keys the previous ones, so the two are comparable.
+func chosenBytes(choices []chosenManifest) map[string][]byte {
+	out := make(map[string][]byte, len(choices))
+	for _, choice := range choices {
+		out[strings.TrimSuffix(choice.filename, ".toml")] = choice.data
+	}
+	return out
 }
 
 // chooseManifests validates every file and picks, per agent, the copy a Herdr
@@ -290,7 +435,16 @@ func chooseManifests(bundled map[string]sourceFile, catalog *catalogSet) ([]chos
 
 // writeTree writes upstream/, the extracted JSON tables, and the lock.
 func writeTree(opts options, src source, catalog *catalogSet, choices []chosenManifest,
-	aliases *manifests.Aliases, authority *manifests.Authority) (*manifests.Lock, error) {
+	aliases *manifests.Aliases, authority *manifests.Authority, pin *pinDecision) (*manifests.Lock, error) {
+
+	// Read before write, for the reason writeIntegrationTree gives: a LICENSE
+	// fetch that fails after the manifests are on disk leaves the tree updated
+	// with no matching lock, and the digest test then fails in the repository
+	// until someone re-runs the sync.
+	license, err := src.read(licenseSource)
+	if err != nil {
+		return nil, fmt.Errorf("read Herdr LICENSE: %w", err)
+	}
 
 	upstream := filepath.Join(opts.out, "upstream")
 	if err := os.MkdirAll(upstream, 0o755); err != nil {
@@ -362,10 +516,6 @@ func writeTree(opts options, src source, catalog *catalogSet, choices []chosenMa
 	if err := os.WriteFile(filepath.Join(upstream, "index.toml"), catalog.indexData, 0o644); err != nil {
 		return nil, err
 	}
-	license, err := src.read(licenseSource)
-	if err != nil {
-		return nil, fmt.Errorf("read Herdr LICENSE: %w", err)
-	}
 	if err := os.WriteFile(filepath.Join(upstream, "LICENSE"), license, 0o644); err != nil {
 		return nil, err
 	}
@@ -390,6 +540,11 @@ func writeTree(opts options, src source, catalog *catalogSet, choices []chosenMa
 		},
 	}
 
+	// The pin note first: it is the one note that says the vendored tree is not
+	// simply what the ref names.
+	if pin != nil && pin.lockNote != "" {
+		lock.Notes = append(lock.Notes, pin.lockNote)
+	}
 	if !catalog.fetched {
 		lock.Notes = append(lock.Notes,
 			"The published catalog was not fetched over the network; published copies came from "+catalog.source+

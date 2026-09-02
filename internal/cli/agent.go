@@ -147,11 +147,11 @@ func agentCommand() *Command {
 	// record what a provider says about itself, and a pane whose integration is
 	// installed should keep reporting whether or not the operator has opted in
 	// to agent control.
-	lcReport, lcEnd, lcRelease, lcExplain := lifecycleCommands()
+	lcReport, lcEnd, lcRelease, lcExplain, lcManifests := lifecycleCommands()
 
 	// Sub is rendered in slice order by both RenderHelp and the generated CLI
 	// doc, so it is kept alphabetical and TestCLIDocDrift enforces the result.
-	sub := []*Command{lcEnd, lcExplain, get, integrationCommand(), list, prompt, read, lcRelease, lcReport, agentReportSessionCommand(), sendKeys, start, wait}
+	sub := []*Command{lcEnd, lcExplain, get, integrationCommand(), list, lcManifests, prompt, read, lcRelease, lcReport, agentReportSessionCommand(), sendKeys, start, wait}
 	return &Command{Name: "agent", Summary: "Inspect, start, and coordinate agents in Sidecar-managed shells", Usage: "sidecar agent <command>", Long: "Provider-aware control over shells Sidecar owns.\n\nThe safe sequence is: create the layout separately with sidecar create shell, start the provider with agent start, prompt and wait, read before you send keys, and never close a target you did not create.\n\nWith --host ID the verb runs on that registered host instead, as one invocation over the existing ssh connection, and the host's own answer is what you get back. A remote verb needs an explicit TARGET, because the omitted-target rule names the shell you are in and that shell is on this machine. Conversation identifiers stay on the host that owns them: remote output reports whether a shell is bound, not what it is bound to, unless you ask with --include-session-ref.\n\nThe report, end, release, and explain commands are a separate surface: they record and inspect the lifecycle events a provider's own integration reports, and they are not gated behind agent_control.", Sub: sub, Run: runAgentRoot}
 }
 

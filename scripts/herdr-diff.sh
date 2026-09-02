@@ -52,6 +52,10 @@
 # script copies internal/agentactivity/manifests/upstream/<file> into a throwaway
 # XDG_CONFIG_HOME. The user's real ~/.config/herdr is never read or written.
 #
+# Sidecar's side is isolated the same way and for the same reason: it also reads
+# a local override directory, so every `sidecar` invocation here is given its own
+# config axis with -config. See run_sidecar below.
+#
 # Sidecar's side additionally merges its own overlay, and the overlay holds two
 # different kinds of rule, which the harness must treat differently.
 #
@@ -234,6 +238,25 @@ sidecar_bin="$work/sidecar"
 echo "building sidecar..." >&2
 go build -o "$sidecar_bin" ./cmd/sidecar
 
+# Sidecar's side needs the same isolation the Herdr side gets, for the same
+# reason. `sidecar agent explain` reads a local manifest override from
+# ~/.config/sidecar/agent-detection, so a developer who has tuned one rule for
+# one agent -- which is exactly what that directory is for -- would otherwise
+# have this harness compare their override against Herdr's vendored bytes and
+# report a disagreement per fixture. The numbers in
+# docs/reference/herdr-detection-parity.md are the only tripwire for that.
+#
+# -config moves the whole config axis, and the override directory is derived from
+# it (manifests.OverrideDir). It has to come *before* the subcommand: global
+# flags are stripped ahead of dispatch (internal/cli/cli.go stripGlobalFlags),
+# and `sidecar agent explain -config X` is an unknown flag to the subcommand.
+# Note that XDG_CONFIG_HOME moves nothing here; -config is the only lever.
+mkdir -p "$work/sidecar-config" "$work/sidecar-state"
+run_sidecar() {
+  XDG_STATE_HOME="$work/sidecar-state" \
+    "$sidecar_bin" -config "$work/sidecar-config/config.json" "$@"
+}
+
 merged=0
 args=()
 for arg in "$@"; do
@@ -290,9 +313,9 @@ for dir in "$FIXTURES"/*/; do
     rows=${rows:-24}
 
     window="$work/window.txt"
-    "$sidecar_bin" agent explain --file "$fixture" --agent "$agent" --rows "$rows" --print-window > "$window"
+    run_sidecar agent explain --file "$fixture" --agent "$agent" --rows "$rows" --print-window > "$window"
 
-    sc=$("$sidecar_bin" agent explain --file "$window" --agent "$agent" --rows "$rows" --json)
+    sc=$(run_sidecar agent explain --file "$window" --agent "$agent" --rows "$rows" --json)
     hd=$(XDG_CONFIG_HOME="$work/config" XDG_STATE_HOME="$work/state" \
       "$HERDR_BIN" agent explain --file "$window" --agent "$label" --json)
 

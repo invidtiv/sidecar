@@ -1,6 +1,8 @@
 package agentactivity
 
 import (
+	"slices"
+	"sort"
 	"testing"
 
 	"github.com/marcus/sidecar/internal/agentactivity/manifests"
@@ -17,6 +19,11 @@ import (
 // whose panes have no identity at all. That degrades rather than breaks — an
 // unnamable occupant passes the gate instead of failing it — which is precisely
 // why it would go unnoticed without this test.
+// Both halves of the catalog are covered. A launchable family is checked
+// through its launch command, which is the spelling its own panes report; a
+// detection-only family has no command, so it is checked through its id and
+// every alias it records — which for those ten is the whole of their Sidecar
+// code, so a missing case here is the entire feature missing.
 func TestTheProcessNameVocabularyMatchesTheAgentCatalog(t *testing.T) {
 	for _, family := range agentcatalog.Families() {
 		t.Run(family.ID, func(t *testing.T) {
@@ -28,6 +35,68 @@ func TestTheProcessNameVocabularyMatchesTheAgentCatalog(t *testing.T) {
 					family.Command, got, family.ID, family.ID)
 			}
 		})
+	}
+	for _, family := range agentcatalog.DetectionFamilies() {
+		t.Run("detection/"+family.ID, func(t *testing.T) {
+			if family.Command != "" {
+				t.Fatalf("detection-only family %q has Command %q; it is not launchable and must not claim to be",
+					family.ID, family.Command)
+			}
+			for _, spelling := range append([]string{family.ID}, family.Aliases...) {
+				if got := identifyProcessName(spelling); got != family.ID {
+					t.Fatalf("identifyProcessName(%q) = %q, want %q.\n"+
+						"A detection-only family this resolver cannot name never becomes an Observation.Agent,\n"+
+						"so its vendored manifest is never evaluated and its panes show no badge at all.\n"+
+						"Add a case to identifyProcessName in activity.go.",
+						spelling, got, family.ID)
+				}
+			}
+		})
+	}
+}
+
+// The two spellings of the detection-only set — agentcatalog's list and this
+// package's detectionOnly switch — are what Supports and processGate are built
+// on. They are separate so that agentactivity's hot path does not import the
+// catalog, which makes them exactly the kind of pair that drifts.
+func TestDetectionOnlySetMatchesTheCatalog(t *testing.T) {
+	for _, family := range agentcatalog.DetectionFamilies() {
+		if !detectionOnly(family.ID) {
+			t.Errorf("agentcatalog has detection-only family %q and detectionOnly() does not; its panes refuse with %s.process-mismatch",
+				family.ID, family.ID)
+		}
+		if !Supports(family.ID) {
+			t.Errorf("Supports(%q) = false; Detect would answer \"unsupported-agent\" for every pane running it", family.ID)
+		}
+	}
+	for _, family := range agentcatalog.Families() {
+		if detectionOnly(family.ID) {
+			t.Errorf("launchable family %q is also in detectionOnly(); one of the two lists is wrong", family.ID)
+		}
+	}
+}
+
+// Herdr's alias table is the source for both the catalog's recorded aliases and
+// this package's resolver, so the catalog must not carry a spelling upstream
+// does not have or miss one it does.
+func TestDetectionOnlyAliasesMatchTheUpstreamTable(t *testing.T) {
+	table, err := manifests.LoadAliases()
+	if err != nil {
+		t.Fatalf("load aliases.upstream.json: %v", err)
+	}
+	for _, family := range agentcatalog.DetectionFamilies() {
+		upstream, ok := table.Agents[family.ID]
+		if !ok {
+			t.Errorf("detection-only family %q has no entry in the upstream alias table", family.ID)
+			continue
+		}
+		recorded := append([]string{family.ID}, family.Aliases...)
+		sort.Strings(recorded)
+		want := append([]string(nil), upstream...)
+		sort.Strings(want)
+		if !slices.Equal(recorded, want) {
+			t.Errorf("%s aliases = %v, upstream table says %v", family.ID, recorded, want)
+		}
 	}
 }
 
@@ -82,9 +151,12 @@ func TestOnlyClaudesOwnVersionArgv0ResolvesToAProvider(t *testing.T) {
 // instead is the point of extracting the file: a sync that adds an alias for a
 // family Sidecar claims now fails this test on the sync pull request, which is
 // the moment somebody can act on it, rather than waiting for a user's pane to
-// show no badge. Upstream families Sidecar does not claim are ignored on
-// purpose — registering those is Phase 4, and failing here would only make the
-// sync noisy in the meantime.
+// show no badge.
+//
+// Phase 4 widened "claims" from ten families to twenty: the ten launchable ones
+// and the ten detection-only ones. The two upstream agents still ignored are
+// gemini, excluded by Decision 4 because Antigravity replaced it, and omp,
+// which upstream ships hooks-only with no screen manifest to execute.
 //
 // Muse's `muse-bin-<version>` launcher spelling is not in the alias list because
 // upstream matches it by shape (`is_muse_versioned_binary`); the extracted
@@ -96,8 +168,8 @@ func upstreamAliases(t *testing.T) map[string][]string {
 	if err != nil {
 		t.Fatalf("load aliases.upstream.json: %v", err)
 	}
-	out := make(map[string][]string, len(claimedFamilies))
-	for _, family := range claimedFamilies {
+	out := make(map[string][]string, len(sidecarFamilies()))
+	for _, family := range sidecarFamilies() {
 		label := HerdrAgentLabel(family)
 		aliases, ok := table.Agents[label]
 		if !ok {
@@ -111,16 +183,33 @@ func upstreamAliases(t *testing.T) map[string][]string {
 	return out
 }
 
-// claimedFamilies are the ten providers Sidecar has screen detection for today.
+// claimedFamilies are the ten providers Sidecar can launch and has screen
+// detection for.
 var claimedFamilies = []string{
 	"claude", "codex", "grok", "antigravity", "pi",
 	"copilot", "cursor", "opencode", "amp", "muse",
 }
 
+// detectionOnlyFamilies are the ten Herdr screen-manifest agents Sidecar
+// detects and cannot launch (Phase 4, Decision 4).
+var detectionOnlyFamilies = []string{
+	"cline", "devin", "droid", "hermes", "kilo",
+	"kimi", "kiro", "maki", "qodercli", "qwen",
+}
+
+// sidecarFamilies is every family Sidecar has an identity for, in either half of
+// the catalog. Twenty of Herdr's twenty-three agents; the three missing are
+// gemini and omp, both excluded by Decision 4, and mastracode, which upstream
+// has an integration for but no screen manifest.
+func sidecarFamilies() []string {
+	return append(append([]string(nil), claimedFamilies...), detectionOnlyFamilies...)
+}
+
 // A pane running an agent under a spelling upstream knows and Sidecar does not
 // has no provider identity at all: no state badge, and `agent report-session
 // --kind` never checked against it. Herdr's alias table is the shared
-// vocabulary, so every entry in it for a family Sidecar claims must resolve.
+// vocabulary, so every entry in it for a family Sidecar claims must resolve —
+// for all twenty families since Phase 4, not just the launchable ten.
 func TestUpstreamAliasesResolveForClaimedFamilies(t *testing.T) {
 	for family, aliases := range upstreamAliases(t) {
 		for _, alias := range aliases {
@@ -134,16 +223,21 @@ func TestUpstreamAliasesResolveForClaimedFamilies(t *testing.T) {
 	}
 }
 
-// Every claimed family is one Sidecar can launch, so the two tables must not
-// drift apart in either direction.
+// Every family in either half of the catalog must be in the list above, so the
+// alias assertion cannot quietly stop covering one.
 func TestUpstreamAliasTableCoversEveryCatalogFamily(t *testing.T) {
-	claimed := make(map[string]bool, len(claimedFamilies))
-	for _, family := range claimedFamilies {
+	claimed := make(map[string]bool, len(claimedFamilies)+len(detectionOnlyFamilies))
+	for _, family := range sidecarFamilies() {
 		claimed[family] = true
 	}
 	for _, family := range agentcatalog.Families() {
 		if !claimed[family.ID] {
 			t.Errorf("catalog family %q is not in claimedFamilies; add it there and to Supports, or it has no upstream alias record", family.ID)
+		}
+	}
+	for _, family := range agentcatalog.DetectionFamilies() {
+		if !claimed[family.ID] {
+			t.Errorf("detection-only family %q is not in detectionOnlyFamilies; add it there, or its upstream aliases go unasserted", family.ID)
 		}
 	}
 }

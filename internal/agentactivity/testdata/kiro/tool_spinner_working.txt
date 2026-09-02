@@ -1,8 +1,10 @@
-source: synthetic. Kiro is not a Sidecar provider; there is no Kiro on the
-        harvest machine and no capture of one. This screen is built to the
-        shape upstream's `tool_spinner_working` rule describes — one of the
-        four quarter-circle spinner frames, a space, a word, and the "esc to
-        cancel" hint the same rule requires — and to nothing else.
+source: synthetic. There is no Kiro on the harvest machine and no capture of
+        one; Kiro became a Sidecar provider in Phase 4, as one of the ten
+        detection-only families, and was not one when this was written. This
+        screen is built to the shape upstream's `tool_spinner_working` rule
+        describes — one of the four quarter-circle spinner frames, a space, a
+        word, and the "esc to cancel" hint the same rule requires — and to
+        nothing else.
 why: manifests/sidecar/kiro.toml rewrites that rule's `\p{Alphabetic}` as
      `[\p{L}\p{Nl}]` because RE2 cannot compile the property, and until this
      fixture the rewrite had no coverage of any kind: no fixture, no census

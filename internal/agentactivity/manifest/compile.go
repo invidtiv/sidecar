@@ -70,8 +70,29 @@ type Compiled struct {
 	// Source is a human-readable description of where the manifest came from,
 	// in Herdr's `manifest_source` style. The loader fills it in.
 	Source string
+	// ActiveSource is the machine-readable half of Source: which of the
+	// loader's sources answered ("bundled", "remote", "local override"). It is
+	// a plain string rather than the loader's SourceKind because the dependency
+	// runs the other way: this package must not import the loader.
+	ActiveSource string
+	// VendoredVersion is the version of the manifest vendored into the binary
+	// for this agent, whichever source actually answered, and
+	// CachedRemoteVersion is the version in the runtime fetch cache, or "".
+	// Together with Manifest.Version they are what lets a user with
+	// detection.remoteManifests on see whether they are ahead of the vendored
+	// tree.
+	VendoredVersion     string
+	CachedRemoteVersion string
 	// OverlayApplied records that a Sidecar overlay was merged in.
 	OverlayApplied bool
+	// Warning carries what the loader had to ignore to produce this manifest,
+	// or what it had to accept: a local override or an overlay that was found
+	// and refused, or an override that is in use and carries a rule this engine
+	// cannot evaluate. It is Herdr's `warning` explain field (manifest.rs:881),
+	// and it is the whole reason a refused file is not silent -- explain says
+	// the file was found, what is wrong with it, and which manifest is running.
+	// Empty when nothing was refused and nothing is wrong.
+	Warning string
 
 	rules []compiledRule
 }

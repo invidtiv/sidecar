@@ -4,7 +4,7 @@
     "docs/preview/website/src/content/docs/agents.mdx",
     "src/integration/assets"
   ],
-  "herdr_ref": "e2b85c7",
+  "herdr_ref": "master",
   "agents": {
     "agy": {
       "display_name": "Antigravity CLI",

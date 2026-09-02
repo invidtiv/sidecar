@@ -258,6 +258,39 @@ func identifyProcessName(command string) string {
 	// the prefix is a Sidecar superset that already covers all four.
 	case name == "muse" || strings.HasPrefix(name, "muse-"):
 		return "muse"
+	// The ten detection-only families (Phase 4 of
+	// docs/plans/active/herdr-detection-parity.md). Sidecar cannot launch any of
+	// them, so the whole of their Sidecar-specific code is this alias case: the
+	// vendored manifest supplies every rule and the engine executes it. The
+	// spellings are Herdr's `lookup_agent` table verbatim, including the ones
+	// carrying a space, which upstream has because it lowercases display names.
+	// agentcatalog.DetectionFamilies is the other half of the pair and
+	// TestTheProcessNameVocabularyMatchesTheAgentCatalog keeps the two in step.
+	//
+	// None of the ten needs the versioned-binary prefix rule: `muse` is the only
+	// entry in the extracted versioned_binary_prefixes table.
+	case name == "cline":
+		return "cline"
+	case oneOf(name, "devin", "devin cli", "devin-cli"):
+		return "devin"
+	case name == "droid":
+		return "droid"
+	case oneOf(name, "hermes", "hermes-agent"):
+		return "hermes"
+	case oneOf(name, "kilo", "kilo code", "kilo-code"):
+		return "kilo"
+	case oneOf(name, "kimi", "kimi code", "kimi-code"):
+		return "kimi"
+	case oneOf(name, "kiro", "kiro-cli"):
+		return "kiro"
+	case name == "maki":
+		return "maki"
+	// Herdr's label for Qoder is `qodercli`, which is also its manifest id and
+	// its file name; `qoder` is one of the four process spellings, not the id.
+	case oneOf(name, "qoder", "qodercli", "qoderclicn", "qodercn"):
+		return "qodercli"
+	case oneOf(name, "qwen", "qwen code", "qwen-code"):
+		return "qwen"
 	// Deliberately narrower than Herdr's `is_generic_runtime_or_shell`, which
 	// also lists tmux, node, bun, cmd, powershell and python[3[.N]]. That
 	// predicate scores process-tree candidates; this one gates a launch
@@ -295,9 +328,30 @@ func NeedsProcessIdentity(command string) bool {
 func Detect(ob Observation) Result { return DetectManifestResult(ob) }
 
 // Supports reports whether Sidecar has provider-owned activity evidence rules.
+//
+// Since Phase 4 it answers true for twenty agents, not ten: the launchable ten,
+// and the ten detection-only families below. What the second group has is
+// exactly what the first group has for detection purposes — a vendored Herdr
+// manifest and a process gate — and nothing else, which is the point. Supports
+// is a statement about the screen lane, not about launch, resume, or a
+// conversation adapter; agentcatalog.Families and agentcatalog.DetectionOnly are
+// what answer those.
 func Supports(agent string) bool {
 	switch agent {
 	case "codex", "claude", "grok", "antigravity", "pi", "copilot", "cursor", "opencode", "amp", "muse":
+		return true
+	default:
+		return detectionOnly(agent)
+	}
+}
+
+// detectionOnly names the ten families Sidecar detects and cannot launch. It is
+// spelled here rather than read from agentcatalog so this package stays free of
+// that import on its hot path; TestDetectionOnlySetMatchesTheCatalog is what
+// stops the two lists drifting.
+func detectionOnly(agent string) bool {
+	switch agent {
+	case "cline", "devin", "droid", "hermes", "kilo", "kimi", "kiro", "maki", "qodercli", "qwen":
 		return true
 	default:
 		return false

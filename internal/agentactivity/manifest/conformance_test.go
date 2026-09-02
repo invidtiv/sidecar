@@ -11,16 +11,26 @@ package manifest_test
 // Nine of Herdr's 45 inline tests are NOT ported, all for the same reason: they
 // exercise Herdr's *loader* (its remote-manifest cache under the state
 // directory, its ~/.config/herdr/agent-detection override, and the explicit
-// reload boundary between them), not its engine. Sidecar's loader is
-// vendored-plus-overlay with no remote cache until Phase 5, so there is nothing
-// to hold to those semantics yet. They are, in Herdr's order:
+// reload boundary between them), not its engine.
+//
+// Sidecar has all three of those since Phase 5, so the equivalent assertions
+// exist -- they live in the manifests package against Sidecar's own loader,
+// which is vendored-plus-overlay under a fetched file rather than Herdr's flat
+// three-source stack, and they are named for what they assert here rather than
+// for the Rust test they answer. The map, in Herdr's order:
 //
 //	remote_manifest_loads_between_local_override_and_bundled
+//	  manifests.TestAFetchedManifestNewerThanTheVendoredOneBecomesActive
 //	fallback_explain_preserves_active_manifest_version
+//	  the version fields on every explain path; no single test
 //	older_cached_remote_manifest_does_not_shadow_newer_bundled_manifest
+//	  manifests.TestAFetchedManifestOlderThanTheVendoredOneIsCachedButNotActive
 //	local_override_shadows_cached_remote_manifest
+//	  manifests.TestALocalOverrideWinsOverAFetchedManifest
 //	invalid_local_override_falls_back_to_cached_remote_manifest
+//	  manifests.TestAnInvalidLocalOverrideFallsBackToTheCachedManifest
 //	detection_uses_cached_manifest_until_explicit_reload
+//	  manifests.TestFetchInvalidatesOnlyTheAgentsWhoseCacheMoved
 //
 // Two more are covered elsewhere rather than here:
 // all_bundled_manifests_parse_and_validate is

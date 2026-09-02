@@ -1,0 +1,379 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-09-02T14:03:03Z",
+  "herdr": {
+    "repository": "https://github.com/herdrdev/herdr",
+    "ref": "master",
+    "commit": "d08e44686d8b19bd9555cc99ec9068d9fde05f16",
+    "assets_dir": "src/integration/assets"
+  },
+  "providers": [
+    {
+      "id": "agy",
+      "directory": "antigravity_cli",
+      "version": 3,
+      "files": [
+        {
+          "path": "upstream/antigravity_cli/herdr-agent-state.ps1",
+          "origin": "src/integration/assets/antigravity_cli/herdr-agent-state.ps1",
+          "sha256": "25eefb17464a01ee000bfab24b95b7f040b8beaa9020e993416e315d6db1ef84",
+          "bytes": 1856,
+          "version": 3
+        },
+        {
+          "path": "upstream/antigravity_cli/herdr-agent-state.sh",
+          "origin": "src/integration/assets/antigravity_cli/herdr-agent-state.sh",
+          "sha256": "bdf8073a23de2aa919a23d004c1788f2af3082484acb144e2f6735699995ec09",
+          "bytes": 1971,
+          "version": 3
+        }
+      ]
+    },
+    {
+      "id": "claude",
+      "directory": "claude",
+      "version": 9,
+      "files": [
+        {
+          "path": "upstream/claude/herdr-agent-state.ps1",
+          "origin": "src/integration/assets/claude/herdr-agent-state.ps1",
+          "sha256": "6db8bf92db45a3c5aa67994c1fb665231339e1dc3b08c28239c246c0874ebaaa",
+          "bytes": 1937,
+          "version": 9
+        },
+        {
+          "path": "upstream/claude/herdr-agent-state.sh",
+          "origin": "src/integration/assets/claude/herdr-agent-state.sh",
+          "sha256": "a61bbe2619a316669406316de260c13b6c1ae525dafd6f4f4956e26646268105",
+          "bytes": 3069,
+          "version": 9
+        }
+      ]
+    },
+    {
+      "id": "codex",
+      "directory": "codex",
+      "version": 8,
+      "files": [
+        {
+          "path": "upstream/codex/herdr-agent-state.ps1",
+          "origin": "src/integration/assets/codex/herdr-agent-state.ps1",
+          "sha256": "8fee2867ba1346e472157966dde74d7c5c6976a2a6e394583f03a5b9df690f4a",
+          "bytes": 1636,
+          "version": 8
+        },
+        {
+          "path": "upstream/codex/herdr-agent-state.sh",
+          "origin": "src/integration/assets/codex/herdr-agent-state.sh",
+          "sha256": "38a90a2a99872d06dcbc978e7613406cdd852dbb07503abd7a113f518d5951f3",
+          "bytes": 2965,
+          "version": 8
+        }
+      ]
+    },
+    {
+      "id": "copilot",
+      "directory": "copilot",
+      "version": 3,
+      "files": [
+        {
+          "path": "upstream/copilot/herdr-agent-state.ps1",
+          "origin": "src/integration/assets/copilot/herdr-agent-state.ps1",
+          "sha256": "5df815609525dad3a2e93cfd46a16650a6baba2ec20e89ee8fbca32ce3a6a4dd",
+          "bytes": 1885,
+          "version": 3
+        },
+        {
+          "path": "upstream/copilot/herdr-agent-state.sh",
+          "origin": "src/integration/assets/copilot/herdr-agent-state.sh",
+          "sha256": "197460e7423d243862690eeb2dadaa0eeaec3d42f3106c5972483b029b797825",
+          "bytes": 2697,
+          "version": 3
+        }
+      ]
+    },
+    {
+      "id": "cursor",
+      "directory": "cursor",
+      "version": 1,
+      "files": [
+        {
+          "path": "upstream/cursor/herdr-agent-state.ps1",
+          "origin": "src/integration/assets/cursor/herdr-agent-state.ps1",
+          "sha256": "3405df5870b8151f8179fb96b0c79304566567339db7938b07fc2a79f0fd7b30",
+          "bytes": 1551,
+          "version": 1
+        },
+        {
+          "path": "upstream/cursor/herdr-agent-state.sh",
+          "origin": "src/integration/assets/cursor/herdr-agent-state.sh",
+          "sha256": "186c6b4b9e0f8ca59288cb74c3c2c9131c0e3ca086004b1a26d0617c843a38a2",
+          "bytes": 1520,
+          "version": 1
+        }
+      ]
+    },
+    {
+      "id": "devin",
+      "directory": "devin",
+      "version": 2,
+      "files": [
+        {
+          "path": "upstream/devin/herdr-agent-state.ps1",
+          "origin": "src/integration/assets/devin/herdr-agent-state.ps1",
+          "sha256": "a62c8c65b789843b9fdc99e702bc75f18279ce85a7228cc604e86750d626212c",
+          "bytes": 2173,
+          "version": 2
+        },
+        {
+          "path": "upstream/devin/herdr-agent-state.sh",
+          "origin": "src/integration/assets/devin/herdr-agent-state.sh",
+          "sha256": "29ee8f4c216dd07b08d45a2549ae1d3cbe0d593e6f0af987eb6983cca64cc6af",
+          "bytes": 4624,
+          "version": 2
+        }
+      ]
+    },
+    {
+      "id": "droid",
+      "directory": "droid",
+      "version": 3,
+      "files": [
+        {
+          "path": "upstream/droid/herdr-agent-state.ps1",
+          "origin": "src/integration/assets/droid/herdr-agent-state.ps1",
+          "sha256": "26d0f52c594a0322396ce746d6f9ee4723511005ce7ceff631c6895da74fa384",
+          "bytes": 1016,
+          "version": 3
+        },
+        {
+          "path": "upstream/droid/herdr-agent-state.sh",
+          "origin": "src/integration/assets/droid/herdr-agent-state.sh",
+          "sha256": "635a1e6eac814460c61da9421f6cd7a7fea81eaeca2b7469ac333e3c4e780b77",
+          "bytes": 2080,
+          "version": 3
+        }
+      ]
+    },
+    {
+      "id": "grok",
+      "directory": "grok",
+      "version": 1,
+      "files": [
+        {
+          "path": "upstream/grok/herdr-agent-state.ps1",
+          "origin": "src/integration/assets/grok/herdr-agent-state.ps1",
+          "sha256": "f5868cb925780899a912f06e38c5000cca913627556816d4d9b2f8f73e8bda3b",
+          "bytes": 1547,
+          "version": 1
+        },
+        {
+          "path": "upstream/grok/herdr-agent-state.sh",
+          "origin": "src/integration/assets/grok/herdr-agent-state.sh",
+          "sha256": "a5c66f3117037341df12e59fbefc5ff9869e092f8766dedf0500629e24006def",
+          "bytes": 2851,
+          "version": 1
+        }
+      ]
+    },
+    {
+      "id": "hermes",
+      "directory": "hermes",
+      "version": 5,
+      "files": [
+        {
+          "path": "upstream/hermes/__init__.py",
+          "origin": "src/integration/assets/hermes/__init__.py",
+          "sha256": "62884f3e0f714f78bfc42722cddef3dd32a0a184502864d79d113329563deed2",
+          "bytes": 2031,
+          "version": 5
+        },
+        {
+          "path": "upstream/hermes/plugin.yaml",
+          "origin": "src/integration/assets/hermes/plugin.yaml",
+          "sha256": "e1c775a6d6ccad2f8e6e0566a0aa61aeef9b8141f59d8a742a77c6951a261170",
+          "bytes": 103
+        }
+      ]
+    },
+    {
+      "id": "kilo",
+      "directory": "kilo",
+      "version": 4,
+      "files": [
+        {
+          "path": "upstream/kilo/herdr-agent-state.js",
+          "origin": "src/integration/assets/kilo/herdr-agent-state.js",
+          "sha256": "386e7605e0bfb39b71bc9c48509c54e9964e71097d3b35a44f4a509af421469d",
+          "bytes": 3911,
+          "version": 4
+        }
+      ]
+    },
+    {
+      "id": "kimi",
+      "directory": "kimi",
+      "version": 7,
+      "files": [
+        {
+          "path": "upstream/kimi/herdr-agent-state.ps1",
+          "origin": "src/integration/assets/kimi/herdr-agent-state.ps1",
+          "sha256": "2b76be7c2b7be2e3a5a746ab7949ebec77d451914d50f6f7ca5348c03d824f32",
+          "bytes": 1632,
+          "version": 7
+        },
+        {
+          "path": "upstream/kimi/herdr-agent-state.sh",
+          "origin": "src/integration/assets/kimi/herdr-agent-state.sh",
+          "sha256": "f28cf38a2b1e46b654b33e4dff72bdafbd24b6d58b37f7c0f538c2a096410f00",
+          "bytes": 1510,
+          "version": 7
+        }
+      ]
+    },
+    {
+      "id": "mastracode",
+      "directory": "mastracode",
+      "version": 2,
+      "files": [
+        {
+          "path": "upstream/mastracode/herdr-agent-state.ps1",
+          "origin": "src/integration/assets/mastracode/herdr-agent-state.ps1",
+          "sha256": "36672725e132737d0659c8f906380f9fb033c68b70f646d0dc0197cbefc6bf73",
+          "bytes": 1535,
+          "version": 2
+        },
+        {
+          "path": "upstream/mastracode/herdr-agent-state.sh",
+          "origin": "src/integration/assets/mastracode/herdr-agent-state.sh",
+          "sha256": "f5d9dc5c99458a5872ccb437bbd92d7b2d5c6d5469510a6b39b95ecc671ba94a",
+          "bytes": 2750,
+          "version": 2
+        }
+      ]
+    },
+    {
+      "id": "omp",
+      "directory": "omp",
+      "version": 9,
+      "files": [
+        {
+          "path": "upstream/omp/herdr-agent-state.ts",
+          "origin": "src/integration/assets/omp/herdr-agent-state.ts",
+          "sha256": "4cfd1e32da1f15efba0521c52fee3ba4b23c36dc236a77aea922220fdefa024e",
+          "bytes": 12438,
+          "version": 9
+        }
+      ]
+    },
+    {
+      "id": "opencode",
+      "directory": "opencode",
+      "version": 10,
+      "files": [
+        {
+          "path": "upstream/opencode/herdr-agent-state.js",
+          "origin": "src/integration/assets/opencode/herdr-agent-state.js",
+          "sha256": "5cb15e059a5f812a20fcfd64b43303efbaa63c1b4874b124e25df64dc023a15e",
+          "bytes": 5363,
+          "version": 10
+        },
+        {
+          "path": "upstream/opencode/herdr-agent-state.test.ts",
+          "origin": "src/integration/assets/opencode/herdr-agent-state.test.ts",
+          "sha256": "8c19e191ef4235e8631f381c8a4f85aae67622a77faadbd594d59f4dbb287f7e",
+          "bytes": 6418
+        },
+        {
+          "path": "upstream/opencode/herdr-tui-session.js",
+          "origin": "src/integration/assets/opencode/herdr-tui-session.js",
+          "sha256": "dc79b96c1cd123ff2254efd1830b21cfb4c0557ab01f8b9972fdff6df8a85400",
+          "bytes": 3253,
+          "version": 10
+        },
+        {
+          "path": "upstream/opencode/herdr-tui-session.test.ts",
+          "origin": "src/integration/assets/opencode/herdr-tui-session.test.ts",
+          "sha256": "dfdd7551fafc47e0989ff8305c7378c9b709a6f7e3f274d3ff46d2a0d3a50b3a",
+          "bytes": 5091
+        }
+      ]
+    },
+    {
+      "id": "pi",
+      "directory": "pi",
+      "version": 8,
+      "files": [
+        {
+          "path": "upstream/pi/herdr-agent-state.ts",
+          "origin": "src/integration/assets/pi/herdr-agent-state.ts",
+          "sha256": "9b1c41cd72520fc2abe5f2a2aec995c12a926cce844df472c7fd5fcae4f4dbfa",
+          "bytes": 6602,
+          "version": 8
+        }
+      ]
+    },
+    {
+      "id": "qodercli",
+      "directory": "qodercli",
+      "version": 3,
+      "files": [
+        {
+          "path": "upstream/qodercli/herdr-agent-state.ps1",
+          "origin": "src/integration/assets/qodercli/herdr-agent-state.ps1",
+          "sha256": "6558902b7778d32702a8a2a375b2bd004ae3389de37f296e52cb0d20e6129577",
+          "bytes": 1025,
+          "version": 3
+        },
+        {
+          "path": "upstream/qodercli/herdr-agent-state.sh",
+          "origin": "src/integration/assets/qodercli/herdr-agent-state.sh",
+          "sha256": "fbcca789b1488b6ac6092e1143655184fb5c321207182b31ac17324b23e13132",
+          "bytes": 1094,
+          "version": 3
+        }
+      ]
+    },
+    {
+      "id": "qwen",
+      "directory": "qwen",
+      "version": 1,
+      "files": [
+        {
+          "path": "upstream/qwen/herdr-agent-session.ps1",
+          "origin": "src/integration/assets/qwen/herdr-agent-session.ps1",
+          "sha256": "f3207f32d99a3517e0560de1d3352e6118e67dfea18fc31a44ff0394a0dfeafd",
+          "bytes": 1303,
+          "version": 1
+        },
+        {
+          "path": "upstream/qwen/herdr-agent-session.sh",
+          "origin": "src/integration/assets/qwen/herdr-agent-session.sh",
+          "sha256": "db424e03eca6bef24f3e04cd41292128acf3b8bfd0e97d838a577b39da660075",
+          "bytes": 1385,
+          "version": 1
+        }
+      ]
+    }
+  ],
+  "files": [
+    {
+      "path": "upstream/LICENSE",
+      "origin": "LICENSE",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "bytes": 11357
+    },
+    {
+      "path": "upstream/NOTICE",
+      "origin": "generated by internal/tools/herdrsync",
+      "sha256": "63b9fc97df1f0672e63bfe4ad45159b2683150b053d91d874dd01a921acbf662",
+      "bytes": 1428
+    },
+    {
+      "path": "upstream/herdr-agent-state.test.ts",
+      "origin": "src/integration/assets/herdr-agent-state.test.ts",
+      "sha256": "4ddc306851d6a6504fbb9f178610099c9988a86cdb3354c78b89a60235935f99",
+      "bytes": 20246
+    }
+  ]
+}
