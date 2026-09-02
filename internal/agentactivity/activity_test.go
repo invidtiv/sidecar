@@ -408,11 +408,12 @@ func TestRealPhase2ProviderFixtures(t *testing.T) {
 		{"grok", "overlay.txt", "sidecar.overlay_retain", StateUnknown, true},
 		{"grok", "stale_working_scrollback.txt", "sidecar.idle_footer", StateIdle, false},
 		{"grok", "background_subagent.txt", "sidecar.background_subagent_working", StateWorking, false},
-		// The permission prompt upstream's four blockers do not describe. Grok's
-		// `osc_title_idle` is a *visible* idle, so without this rule an
-		// unanswered prompt announces a completed turn. The fixture is synthetic
-		// and says so; see manifests/sidecar/grok.toml.
-		{"grok", "allow_prompt.txt", "sidecar.allow_prompt_blocked", StateBlocked, false},
+		// The permission prompt, captured live from Grok Build 1.0.13. Upstream
+		// does describe it — three of its blockers match, the title rule wins —
+		// which is what the capture settled and what retired the overlay rule
+		// this fixture used to prove. See manifests/sidecar/grok.toml and
+		// TestGrokPermissionPromptIsCaughtByUpstreamBlockers.
+		{"grok", "allow_prompt.txt", "osc_title_blocked", StateBlocked, false},
 		// Antigravity's four fixtures. Every verdict is unchanged. Upstream has
 		// no rule that matches any of these screens, so both non-fallback
 		// verdicts come from the overlay:
@@ -1575,12 +1576,48 @@ func TestClaudeStaleBackgroundAgentEvidenceDoesNotHoldTheWorkingLane(t *testing.
 	}
 }
 
-// Grok's permission prompt, which none of upstream's four blockers describe.
-// The rule is synthetic and unproven — see manifests/sidecar/grok.toml — so its
-// negatives carry more weight than usual: the question line alone is a sentence
-// a turn writes, and a live footer means a turn is running.
+// Grok's real permission prompt, captured from Grok Build 1.0.13 on an isolated
+// tmux server. The fixture used to be a synthetic guess at an `Allow …?` screen
+// carried from the deleted `grok.screen.blocked`; the capture shows Grok paints
+// the ┃-guttered option dialog upstream already describes, under an
+// "⚠ Action Required" title, so three upstream blockers reach it and
+// `sidecar.allow_prompt_blocked` (1130) is not among them.
+func TestGrokPermissionPromptIsCaughtByUpstreamBlockers(t *testing.T) {
+	ob := readObservationFixture(t, "grok", "allow_prompt.txt")
+	got := Detect(ob)
+	if got.State != StateBlocked || got.Evidence != "osc_title_blocked" || !got.VisibleBlocker {
+		t.Fatalf("grok permission prompt got %+v, want blocked/osc_title_blocked with VisibleBlocker", got)
+	}
+
+	// Sidecar reads `#{pane_title}` one repaint later than Herdr reads the OSC
+	// payload, so the title is the signal most likely to be stale on a pane that
+	// has just started asking. The screen alone has to carry the verdict, and it
+	// does: the numbered ┃ rows are `option_dialog_blocked` at 1200, still above
+	// this overlay's 1130.
+	noTitle := ob
+	noTitle.PaneTitle = ""
+	if got := Detect(noTitle); got.State != StateBlocked || got.Evidence != "option_dialog_blocked" || !got.VisibleBlocker {
+		t.Fatalf("grok permission prompt with a stale title got %+v, want blocked/option_dialog_blocked", got)
+	}
+}
+
+// The overlay rule the capture above displaced. It is kept because deleting a
+// rule is a separate decision from proving one wrong, so it keeps a positive
+// case — but the screen is now written here rather than held as a fixture,
+// because no Grok release is known to paint it and a fixture file would claim
+// otherwise. Its negatives carry the weight: the question line alone is a
+// sentence a turn writes, and a live footer means a turn is running.
 func TestGrokAllowPromptBlocksOnlyWithItsControlLine(t *testing.T) {
-	got := Detect(readObservationFixture(t, "grok", "allow_prompt.txt"))
+	synthetic := Observation{
+		Agent:          "grok",
+		CurrentCommand: "grok",
+		PaneTitle:      "session title - grok",
+		PaneHeight:     24,
+		Screen: "  ◇ Run a shell command\n" +
+			"  Allow bash(git status --short)?\n" +
+			"  ↑/↓ select  │  Enter confirm  │  Esc reject\n",
+	}
+	got := Detect(synthetic)
 	if got.State != StateBlocked || got.Evidence != "sidecar.allow_prompt_blocked" || !got.VisibleBlocker {
 		t.Fatalf("allow prompt got %+v, want blocked/sidecar.allow_prompt_blocked with VisibleBlocker", got)
 	}

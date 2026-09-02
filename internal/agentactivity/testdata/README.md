@@ -119,13 +119,16 @@ failure the whole plan opened with.
   count is all that is left. It is the positive fixture for
   `sidecar.background_agents_footer_working`, which is the half the waiting rule
   cannot reach.
-- `grok/allow_prompt.txt` (**synthetic and unproven**) — Grok's `Allow …?`
-  permission prompt over an arrow-key control line, carried from the deleted
-  pre-manifest `grok.screen.blocked`. Nothing has captured this prompt in any
-  release, and the header says so twice. It is written down anyway because Grok
-  is the one provider whose idle rule is a *visible* idle: an unanswered prompt
-  upstream cannot describe does not degrade to a quiet fallback there, it
-  announces that the turn is done. A live capture replaces this file.
+- `grok/allow_prompt.txt` (**real capture**, Grok Build 1.0.13) — Grok's
+  tool-permission prompt: a `┃`-guttered numbered option list under a
+  `1/5:select │ Tab:next option │ Ctrl+o:always-approve │ Ctrl+c:cancel` footer.
+  It replaced a synthetic fixture written from the deleted pre-manifest
+  `grok.screen.blocked`, and it retired the rule it was minted to prove: the
+  screen resolves through upstream's own `osc_title_blocked` (1300), with
+  `option_dialog_blocked` (1200) and `permission_scope_selector` (1180) also
+  matching, so it still reports blocked with the title blanked. The guessed
+  `Allow …?` shape over an arrow-key control line does not exist in this
+  release. See the reference document's "What the Grok capture measured".
 - `claude/legacy_permission_wait.txt` and `codex/weak_blocker.txt` (both
   synthetic) — one screen each for the two upstream rules that declare a blocked
   state with no `visible_blocker`, transcribed from those rules' own literals.

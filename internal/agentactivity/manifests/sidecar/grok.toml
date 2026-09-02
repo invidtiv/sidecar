@@ -2,9 +2,11 @@
 #
 # Five rules. Four of them are about the same thing: Grok's OSC title and its
 # footer can disagree, and upstream settles that disagreement in favour of the
-# title. The fifth is the permission prompt upstream has no blocker for, which
-# is the same problem seen from its worst side — an unrecognised prompt under a
-# title that reads idle.
+# title. The fifth, `sidecar.allow_prompt_blocked`, was written for a permission
+# prompt upstream was believed to have no blocker for; a live Grok 1.0.13
+# capture has since shown upstream does catch that prompt and this rule does
+# not. See its own comment below — it is retained pending a deletion decision,
+# not because it earns its place.
 #
 # Upstream's grok.toml says so in its own header comment — the title is the
 # primary signal and the screen rules exist for older Grok Build releases — and
@@ -35,6 +37,7 @@
 #   1150  osc_progress_working                  (upstream; always empty here)
 #   1140  sidecar.overlay_retain                startup/resume overlay
 #   1130  sidecar.allow_prompt_blocked          "Allow …?" over a control line
+#                                               (no Grok release paints this)
 #   1120  sidecar.working_footer                Esc:cancel beats a cleared title
 #   1100  osc_title_idle                        (upstream)
 #   1050  sidecar.idle_footer                   idle footer beats a stale title
@@ -147,52 +150,61 @@ not = [
   { contains = ["ctrl+c:cancel"] },
 ]
 
-# The `Allow …?` permission prompt, carried from the pre-manifest rule; a live
-# Grok capture replaces this.
+# The `Allow …?` permission prompt, carried from the pre-manifest rule. **The
+# capture this comment used to ask for has been taken, and it says this rule
+# describes no screen Grok renders.** It is kept only because deleting a rule is
+# a separate decision from proving one wrong; nothing below still argues for it.
 #
-# This is the one gap the Phase 2 review named and left open, and it is left
-# open no longer, with the provenance stated rather than hidden. The deleted
-# `grok.screen.blocked` (git show bcb01c02:internal/agentactivity/grok.go)
-# matched an alternation over the last twenty-two lines that included
-# `Allow .*\?` and `Enter to confirm`. Upstream's four blockers describe a
-# different prompt entirely — a `┃`-guttered option list under a
-# `:select │ ctrl+o:yolo │ ctrl+c:cancel` or `tab:scrollback │ shift+x:dismiss`
-# footer, from Grok Build 0.2.101 pane reads — so a prompt of this shape reaches
-# none of them.
+# What was captured (2026-09-01, Grok Build 1.0.13 `5e9a58528b76`, isolated tmux
+# server, 120x40, `--permission-mode default`): both of Grok's live permission
+# prompts are the `┃`-guttered option dialog upstream already describes, under a
+# title that opens `⚠ Action Required`.
 #
-# Grok is the provider where that costs the most. Its `osc_title_idle` (1100) is
-# a *visible* idle, so an unrecognised prompt does not degrade to a quiet
-# fallback the way an unrecognised Cursor screen does: the tracker turns a
-# visible idle out of working into a completed turn, and the pane announces that
-# it is done while it sits on a question nobody has answered.
+#   - a shell-command prompt (testdata/grok/allow_prompt.txt) reports through
+#     `osc_title_blocked` (1300), and also matches `option_dialog_blocked`
+#     (1200) and `permission_scope_selector` (1180) on its own screen rows;
+#   - a file-edit prompt carries a literal "Allow Edit to <path>" row, but
+#     inside the `┃` gutter and with no `?`, so neither `line_regex` here can
+#     reach it; it reports through `osc_title_blocked` and `option_dialog_blocked`
+#     for the same reasons.
 #
-# The fixture beside it (testdata/grok/allow_prompt.txt) is **synthetic and
-# unproven**, and says so in its own header. No live Grok capture of this prompt
-# exists in any release. What keeps that from being the invention the cutover
-# removed elsewhere is that the rule requires a *pair*, and both halves come
-# from the deleted rule rather than from imagination: the question line and a
-# control line beneath it. Either alone is text a turn writes — "Allow bash(…)?"
-# is a sentence, and an arrow-key hint is chrome — and the pair is a prompt.
+# Neither screen carries a bare `Allow …?` line or an `Enter to confirm` control
+# line. The `Enter confirm` string does exist in the 1.0.13 binary, in the
+# `↑/↓ navigate · enter confirm · esc cancel` chrome of the resume-session and
+# tools pickers, which is menu chrome and not a permission prompt. So the
+# deleted `grok.screen.blocked` (git show bcb01c02:internal/agentactivity/grok.go)
+# was describing something no current release paints, and this rule inherited
+# that.
 #
-# The `not` gate is `sidecar.working_footer`'s own two literals. Grok's live
-# footer carries `Esc:cancel` beside `Ctrl+x:shortcuts` for exactly as long as a
-# turn runs, so a screen showing it is a running turn whose output happens to
-# quote an allow question, not a pane waiting on one. An unanswered prompt
-# replaces that footer with its own control line, which is the line the second
-# `line_regex` reads.
+# The gap it was written for is closed by upstream rather than by this rule.
+# `permission_hints_blocked` (1190) is the only upstream blocker that misses:
+# it wants `ctrl+o:yolo`, where 1.0.13's footer writes `Ctrl+o:always-approve`.
+# The three that hit make that miss harmless.
 #
-# Priority 1130 sits above `osc_title_idle` (1100), which is the verdict this
-# rule exists to displace, and above `sidecar.working_footer` (1120), because a
-# blocker must outrank a working rule reading the same bottom rows. It sits
-# below `sidecar.overlay_retain` (1140) — Grok's startup overlay replaces the
-# whole pane and is not a prompt — below `osc_progress_working` (1150) and
-# `sidecar.background_subagent_working` (1160), and below every upstream blocker
-# (1180, 1185, 1190, 1200, 1300), so a prompt upstream *can* describe still
-# reports through upstream's more specific rule.
+# The reason it was accepted without a capture still holds as a reason, and it
+# is why the capture was worth taking: Grok's `osc_title_idle` (1100) is a
+# *visible* idle, so an unrecognised prompt does not degrade to a quiet fallback
+# the way an unrecognised Cursor screen does — the tracker turns a visible idle
+# out of working into a completed turn, and the pane announces that it is done
+# while it sits on a question nobody has answered. That cost is now paid by
+# upstream's blockers on the screens Grok actually paints.
 #
-# Delete this rule the day upstream carries a blocker for this shape, or the day
-# a live capture shows Grok 1.0 renders the prompt differently — at which point
-# the capture, not this comment, is what the rule should be written from.
+# The rule is left structurally untouched. Rewriting it around the captured
+# screen would only restate `option_dialog_blocked` at a lower priority, and
+# there is no third shape for it to describe. It still requires a *pair* — the
+# question line and a control line beneath it — because either alone is text a
+# turn writes, and its `not` gate is still `sidecar.working_footer`'s two
+# literals, so a live turn quoting an allow question stays working.
+#
+# Priority 1130 is unchanged and still sits above `osc_title_idle` (1100) and
+# `sidecar.working_footer` (1120), below `sidecar.overlay_retain` (1140),
+# `osc_progress_working` (1150) and `sidecar.background_subagent_working` (1160),
+# and below every upstream blocker (1180, 1185, 1190, 1200, 1300).
+#
+# Delete this rule unless a Grok release is found that paints the shape below.
+# TestGrokPermissionPromptIsCaughtByUpstreamBlockers is the capture's assertion;
+# TestGrokAllowPromptBlocksOnlyWithItsControlLine still pins the rule's own
+# behaviour from a synthetic screen, which is now all it has.
 [[rules]]
 id = "sidecar.allow_prompt_blocked"
 state = "blocked"
