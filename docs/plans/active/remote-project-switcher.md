@@ -1,6 +1,6 @@
 # Remote destinations in `@` and `W`
 
-Status: **active; slices 0–3 implemented, and slice 4's Files half complete** on `remote-viewer-screen` (td-f7855c: td-823e94, td-72a679, td-90757e; slice 2.5: td-11d3d3, td-761cea; slice 3: td-af932a; slice 3 review cleanup: td-1d6735; Files: td-bc57bb, planned in [remote-files-plugin.md](remote-files-plugin.md)). Git is planned in [remote-git-plugin.md](remote-git-plugin.md). Remaining: Git, td, Tasks, and Notes remoting, create shell/worktree from the bound workspace, and slice 5 (docs and isolated proof). **Created:** 2026-09-01 **Verified against the tree on 2026-09-01** after the Files slice.
+Status: **active; slices 0–3 implemented, and slice 4's Files half complete** on `remote-viewer-screen` (td-f7855c: td-823e94, td-72a679, td-90757e; slice 2.5: td-11d3d3, td-761cea; slice 3: td-af932a; slice 3 review cleanup: td-1d6735; Files: td-bc57bb, planned in [remote-files-plugin.md](remote-files-plugin.md)). Git is implemented, in [remote-git-plugin.md](remote-git-plugin.md). Remaining: td, Tasks, and Notes remoting, create shell/worktree from the bound workspace, and slice 5 (docs and isolated proof). **Created:** 2026-09-01 **Verified against the tree on 2026-09-01** after the Files slice.
 
 Related: [Files on a remote-bound project](remote-files-plugin.md) is slice 4's Files half; [Git on a remote-bound project](remote-git-plugin.md) is its Git half. [Sidecar as its own remote host runtime](sidecar-remote-hosts.md) is the transport and inventory stream. [The viewer owns the screen](../implemented/remote-host-viewer-screen.md) is the lease and `uirequest` announcement the bound project workspace now shares with Sessions. [Remote host content-pane parity](../implemented/remote-host-content-pane-parity.md) is the read path a remote-bound plugin uses. [Agent-facing project CLI](agent-project-cli.md) is the local `sidecar project` surface; it does not grow `--host` in this plan.
 
@@ -159,7 +159,7 @@ Sitting at aerie’s own TUI still wins the lease by typing, per geometry_lease.
 | Workspaces | Host inventory for that project; live terminals via `UseRemoteControl` + Sessions spawner. Relayed open/layout land here when this workspace is the screen. `AttentionOrigin.HostID` is the bound host. | Create shell/worktree from this surface (refused today). |
 | Content panes | Sessions already loads remote files through `SourceContext`. Bound project workspace uses the same adapter: `workspaceSourceContext` carries `HostID`/`HostIncarnation`/`ProjectKey`; `workspaceDeckConfig` uses `RemoteSource`; nested links follow the deck's Source. | — |
 | Files | The host's tree through `sidecar content tree`, previews and find-by-name through the existing content verbs. Writes, blame, and project search refuse naming the host. | Done ([remote-files-plugin.md](remote-files-plugin.md)). |
-| Git | The host's working tree, patches, history, and refs through a new `sidecar repo` verb family. Every write refuses naming the host. | Slice 4, planned in [remote-git-plugin.md](remote-git-plugin.md). |
+| Git | The host's working tree, patches, history, and refs through the `sidecar repo` verb family. Every write refuses naming the host. | Done ([remote-git-plugin.md](remote-git-plugin.md)). |
 | td / Tasks | Same. | Slice 4, then host td store via content verbs and `RunSidecar`. |
 | Notes | Unavailable view naming the host. No local td store. | Slice 4 remoting. |
 | Conversations | Remains demand-gated per the remote-hosts plan. | Unchanged. |
@@ -223,7 +223,7 @@ One plugin at a time, each through `Source` / `RunSidecar` / host content verbs,
 
 Files is **implemented**, in its own document: [Files on a remote-bound project](remote-files-plugin.md). It needed a new host verb (`sidecar content tree`, capability `ContentTreeV1`) alongside a plugin-wide source seam at `FileTree.loadChildren` and a bound worktree key on `plugin.Context`.
 
-Git is **planned**, in its own document: [Git on a remote-bound project](remote-git-plugin.md). It needs a verb family of its own (`sidecar repo`, capability `RepoReadV1`) because `contentservice`'s diff kind is branch-versus-base and carries no staging axis, no branch or upstream row, and no author or date. td and Tasks follow, and reuse the seam pattern both establish.
+Git is **implemented**, in its own document: [Git on a remote-bound project](remote-git-plugin.md). It needs a verb family of its own (`sidecar repo`, capability `RepoReadV1`) because `contentservice`'s diff kind is branch-versus-base and carries no staging axis, no branch or upstream row, and no author or date. td and Tasks follow, and reuse the seam pattern both establish.
 
 ### Slice 5 — docs, agent-project-cli note, isolated proof
 
@@ -243,7 +243,7 @@ Slices 0–3 are covered by package tests (`go test ./internal/app ./internal/ov
 
 ## Changelog
 
-- **2026-09-01** — Slice 4's Git half planned in [remote-git-plugin.md](remote-git-plugin.md): a `sidecar repo` read-only verb family and a `RepoSource` seam, read-only in this slice with the write half named rather than half-built.
+- **2026-09-01** — Slice 4's Git half implemented in [remote-git-plugin.md](remote-git-plugin.md): a `sidecar repo` read-only verb family behind `RepoReadV1`, a `RepoSource` seam, and one refusal table. Proven on the loopback fixture, which found a crash on binding that no unit test could have — history landing before status left the sidebar measuring a file tree that did not exist yet. td, Tasks, and Notes remain.
 - **2026-09-01** — Slice 4's Files half split into [remote-files-plugin.md](remote-files-plugin.md) and implemented there: it needed a new host verb (`sidecar content tree`, `ContentTreeV1`), not just a plugin change. Git, td, Tasks, and Notes remain. Proving it on the loopback fixture surfaced td-055768 — the serve stream could not skip a login banner, so any host with a chatty profile showed no remote rows at all — fixed in `internal/hostproto` and now covered end to end by `internal/cli/serve_stream_loopback_test.go`. Slice 3 review cleanup (td-1d6735): `layoutapply.ResolveRemoteTargets` and `hosts.OriginNamesProject` are the single remote resolver and the single origin/project predicate both surfaces use.
 - **2026-09-01** — Slice 3 implemented (td-af932a): bound `@` destination is the screen for relayed open/layout. Instance `HostID`, workspace `AttentionOrigin.HostID`, lease claim on bind, shared `uiRequestLanding` decider, `workspaceSourceContext` + `RemoteSource`. Remaining: slices 4–5.
 - **2026-09-01** — Slice 2.5 implemented: `scripts/loopback-remote.sh` (`up`/`paths`/`status`/`down`, `--no-drive`, `--delay`), shared `scripts/loopback-ssh.sh`, `scripts/test-loopback-remote.sh`. `remote-spike.sh` requires `SPIKE_HOST`. Default proof path for later slices; real SSH stays opt-in with no workstation hostname default.

@@ -230,6 +230,16 @@ open(path, "w").write(json.dumps(cfg, indent=2) + "\n")
 PY
 }
 
+# plant_git_project builds a repository with something for every pane to show.
+#
+# The Git tab needs a working tree, a history, and the three staging senses, and
+# the viewer's twin gets the SAME shapes with its own marker in them: a tab that
+# read the wrong machine would otherwise look plausible, and the whole point of
+# the twin is that reading it is visible rather than merely wrong.
+#
+# twin.txt is deliberately staged and then edited again, because that is the one
+# row a base-relative diff cannot express: it is two rows meaning two patches,
+# and it is what `sidecar repo diff --mode` exists for.
 plant_git_project() {
     local dir="$1" marker="$2" message="$3"
     mkdir -p "$dir"
@@ -240,6 +250,15 @@ plant_git_project() {
         git -C "$dir" config user.name Loopback
         git -C "$dir" add twin.txt
         git -C "$dir" commit -qm "$message"
+
+        printf '%s history\n' "$marker" > "$dir/history.txt"
+        git -C "$dir" add history.txt
+        git -C "$dir" commit -qm "$message: a second commit"
+
+        printf '%s STAGED\n' "$marker" >> "$dir/twin.txt"
+        git -C "$dir" add twin.txt
+        printf '%s UNSTAGED\n' "$marker" >> "$dir/twin.txt"
+        printf '%s UNTRACKED\n' "$marker" > "$dir/untracked.txt"
     fi
 }
 

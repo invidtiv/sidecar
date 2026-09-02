@@ -1438,3 +1438,56 @@ func TestLocalHistoryLoadersKeepTodaysRows(t *testing.T) {
 		t.Errorf("branches = %+v, want %+v", refs.Branches, wantBranches)
 	}
 }
+
+// A bound pane's history can answer before its status does — the two are
+// separate round trips over one ssh connection, and nothing orders them. The
+// pane then has commits and no working tree, and the sidebar layout still has
+// to decide how many commit rows fit.
+//
+// This shipped as a crash on binding: `commitSectionCapacity` read the tree to
+// measure the files section and dereferenced nil, taking the whole TUI down at
+// the moment the user pressed Enter on a remote destination. It was found by
+// running the app, not by a test, which is why it has one now.
+func TestBoundHistoryLandingBeforeStatusDoesNotPanic(t *testing.T) {
+	ctx := connectedHostContext()
+	p, _ := boundGitPlugin(t, ctx)
+	p.width, p.height = 160, 40
+
+	if p.tree != nil {
+		t.Fatal("a bound pane is expected to start with no tree; this test is about that state")
+	}
+
+	// The history answer, with no status answer before it.
+	p.activeHistoryRequestID = 1
+	_, _ = p.Update(RecentCommitsLoadedMsg{
+		Epoch:     p.ctx.Epoch,
+		RequestID: 1,
+		Commits: []*Commit{
+			{Hash: "aerie00001", Subject: "host commit one"},
+			{Hash: "aerie00002", Subject: "host commit two"},
+		},
+	})
+
+	// And every read the sidebar makes of a tree that is not there yet.
+	if got := p.tree.TotalCount(); got != 0 {
+		t.Errorf("TotalCount on an unread tree = %d, want 0", got)
+	}
+	if got := p.tree.AllEntries(); got != nil {
+		t.Errorf("AllEntries on an unread tree = %v, want nil", got)
+	}
+	if p.tree.HasStagedFiles() {
+		t.Error("an unread tree reported staged files")
+	}
+	_ = p.View(160, 40)
+
+	// Non-vacuous: the rows really did land, so the reads above ran against a
+	// pane that had history and no tree rather than against an empty plugin.
+	if len(p.recentCommits) != 2 {
+		t.Fatalf("recentCommits = %d, want the host's two rows", len(p.recentCommits))
+	}
+	// Until the status answers, the pane says it is still reading rather than
+	// drawing a commit list over a working tree it does not have yet.
+	if view := p.View(160, 40); strings.Contains(view, twinMarker) || strings.Contains(view, twinBranchName) {
+		t.Fatalf("the twin reached a bound pane: %q", view)
+	}
+}

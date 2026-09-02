@@ -331,7 +331,21 @@ func parseNumstat(output []byte) []numstatEntry {
 }
 
 // TotalCount returns the total number of changed files.
+// The read accessors below tolerate a nil receiver, because "no tree" is a
+// real state rather than a bug: a remote-bound pane has no working tree until
+// the host's first `repo status` answers, and the host's history can land
+// first. Layout asking how many rows the files section needs before then is a
+// fair question with the answer "none yet", and it is recomputed when the tree
+// arrives. Answering it with a panic is what shipped a crash on binding.
+//
+// The exported FIELDS are not nil-safe and cannot be. Every caller that reads
+// t.Staged / t.Modified / t.Untracked directly must first establish that the
+// tree exists — in practice by taking a len(AllEntries()) > 0 branch, or by an
+// explicit nil check.
 func (t *FileTree) TotalCount() int {
+	if t == nil {
+		return 0
+	}
 	return len(t.Staged) + len(t.Modified) + len(t.Untracked)
 }
 
@@ -406,6 +420,9 @@ func (t *FileTree) groupUntrackedFolders() {
 
 // Summary returns a summary string like "2 staged, 3 modified".
 func (t *FileTree) Summary() string {
+	if t == nil {
+		return ""
+	}
 	var parts []string
 	if len(t.Staged) > 0 {
 		parts = append(parts, strconv.Itoa(len(t.Staged))+" staged")
@@ -425,6 +442,9 @@ func (t *FileTree) Summary() string {
 // AllEntries returns all entries in display order.
 // Folder entries are included, and if expanded, their children follow.
 func (t *FileTree) AllEntries() []*FileEntry {
+	if t == nil {
+		return nil
+	}
 	var all []*FileEntry
 	all = append(all, t.Staged...)
 	all = append(all, t.Modified...)
@@ -490,16 +510,25 @@ func (t *FileTree) UnstageAll() error {
 
 // HasStagedFiles returns true if there are any staged files.
 func (t *FileTree) HasStagedFiles() bool {
+	if t == nil {
+		return false
+	}
 	return len(t.Staged) > 0
 }
 
 // StagedStats returns total additions and deletions for staged files.
 func (t *FileTree) StagedStats() (additions, deletions int) {
+	if t == nil {
+		return 0, 0
+	}
 	return sumDiffStats(t.Staged)
 }
 
 // ModifiedStats returns total additions and deletions for modified (unstaged) files.
 func (t *FileTree) ModifiedStats() (additions, deletions int) {
+	if t == nil {
+		return 0, 0
+	}
 	return sumDiffStats(t.Modified)
 }
 

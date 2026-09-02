@@ -1,6 +1,6 @@
 # Git on a remote-bound project
 
-Status: **active; slices 4f–4j implemented** on `remote-viewer-screen` (td-7a1393: td-3a4da2, td-ca9621, td-d7a47f, td-edd823, td-6fa047). Remaining: 4k, the rest of the viewer half. This is slice 4's Git half of [Remote destinations in `@` and `W`](remote-project-switcher.md), split out for the same reason Files was: it needs a new host verb family and a plugin-wide source seam, not a landing rule. **Created:** 2026-09-01 **Verified against the tree on 2026-09-01.**
+Status: **complete; slices 4f–4k implemented** on `remote-viewer-screen` (td-7a1393: td-3a4da2, td-ca9621, td-d7a47f, td-edd823, td-6fa047, td-2b26ad) and proven on the loopback fixture. Read-only Git on a bound host is done; the write half is [Beyond read-only](#beyond-read-only) and is not started. This is slice 4's Git half of [Remote destinations in `@` and `W`](remote-project-switcher.md), split out for the same reason Files was: it needs a new host verb family and a plugin-wide source seam, not a landing rule. **Created:** 2026-09-01 **Verified against the tree on 2026-09-01.**
 
 Related: [Files on a remote-bound project](remote-files-plugin.md) is the pattern this plan follows — a host verb, a source seam at the one place the plugin reads the world, and refusals that name the host. [Sidecar as its own remote host runtime](sidecar-remote-hosts.md) is the ssh transport and the `hostproto` hello. [Remote host content-pane parity](../implemented/remote-host-content-pane-parity.md) is the `contentpanes.Source` read path, which answers branch-vs-base diffs and is **not** what this plugin needs.
 
@@ -133,6 +133,8 @@ None of that is in scope here, and no half-built write path ships as part of thi
 - **"Both repositories untouched" is a fingerprint, not an absence of complaint.** Each refused gesture is driven with `git status --porcelain` and `git rev-parse HEAD` taken on the twin before and after (through git's absolute path, so the PATH shim can stand in for git during the drive), and with the host's call log checked to be empty across every refusal: a refused key asks the host for nothing at all. A refusal that returned early after already running git passes a sentence assertion and fails this one.
 - **The bound message loop is its own entry point** (`updateRemote`), not a set of guards inside the local one. The local handlers reach stage, discard, push, and the patch loaders, all of which take a path on this disk; a whitelist at the door is checkable, and a dozen guards spread through them is not.
 
+- **A bound pane's reads are unordered, and the pane must survive any order.** Status and history are separate round trips over one connection. `FileTree`'s read accessors tolerate a nil receiver because "not read yet" is a real state on a bound pane; its exported fields cannot and must stay behind a `len(AllEntries()) > 0` branch or an explicit nil check. This was a live crash on binding, not a hypothetical.
+
 ## Slices
 
 Each sub-slice is independently testable and leaves the tree in a shippable state. Every commit references its td task. Slice letters continue the ones Files used, so the ordering across slice 4 stays unambiguous.
@@ -181,17 +183,22 @@ Status refresh binds to the host snapshot generation already delivered in projec
 
 Proof: each refused gesture is asserted to name the host and to leave both repositories untouched, checked by comparing `git status --porcelain` and `git rev-parse HEAD` on both sides before and after; no `startWatcher` while bound.
 
-### 4k — proof and docs
+### 4k — proof and docs — implemented (td-2b26ad)
 
 Run on the slice 2.5 loopback fixture, which already plants a host project with `REMOTE-MARKER` and a viewer twin with `LOCAL-TWIN`. The fixture gains a staged change, an unstaged change, an untracked file, and a second commit on the host so the Git tab has something to show, and the same shapes on the twin so a viewer reading the wrong machine is visible rather than merely wrong.
 
 `docs/reference/cli.md` documents `sidecar repo`.
 
 ```bash
+./scripts/loopback-remote.sh paths   # confirm both axes are isolated first
 ./scripts/loopback-remote.sh up
-# 8 (Sessions) until loopback is LIVE, then @ -> [loopback] Loopback -> 2 (Git)
+# esc (dismiss the td modal) -> @ -> down -> enter -> 2 (Git)
 ./scripts/loopback-remote.sh down
 ```
+
+Observed: the navbar reads `[loopback] Loopback`; the Git tab lists the host's tree — `twin.txt` as both a Staged and a Modified row, `.gitignore` and `untracked.txt` untracked — and the host's two commits with their author and subject. The staged row's patch is `+REMOTE-MARKER STAGED` and the unstaged row's is `+REMOTE-MARKER UNSTAGED`: two rows of one path, two different patches, which is the thing `contentservice`'s branch-versus-base diff cannot express and the reason this verb family exists. Neither shows `LOCAL-TWIN`, which the viewer's twin has in the same three shapes. `s`, `c`, `P`, `D` and `z` answer `Staging a file / Committing / Pushing / Discarding changes / Stashing changes is unavailable on [loopback]`, and `git status --porcelain` plus `git rev-parse HEAD` are unchanged on **both** checkouts afterwards. The branch picker lists `main` and `feature` under `Listing [loopback] — switching is refused`. The footer offers Refresh / Diff / History / Branch / Browse / Sidebar and no write. Nothing under `~/.local/state/sidecar` or `~/.config/sidecar` was written.
+
+The first run of this proof crashed the whole TUI at the moment of binding. A bound pane's history and status are separate round trips and nothing orders them, so the history could land first, and the sidebar's `commitSectionCapacity` read the not-yet-existing file tree to measure the files section. Every unit test in slices 4g–4j had let a status answer land first, so none of them could see it. `FileTree`'s read accessors now answer for a nil receiver — "not read yet" is a real state on a bound pane, and layout asking how many rows the files section needs before then is a fair question with the answer "none yet" — and `TestBoundHistoryLandingBeforeStatusDoesNotPanic` covers the ordering.
 
 ## Proof and isolation
 
@@ -209,5 +216,6 @@ Packages: `internal/reposervice` (new), `internal/cli`, `internal/hostserve`, `i
 - **2026-09-01** — Slice 4i implemented: the commit list, the graph, commit detail with its file list, the branch picker, and the stash list load through `RepoSource`. History is paged by cursor — scrolling past the first page issues exactly one more `repo history` call, proven against a two-page host log — author and path filter on the host while subject search runs in the viewer, and the branch picker lists the host's branches and refuses to switch by name. The branch row is read once per machine: a host answers it with `repo status` and stamps each row's pushed state, a local project still gets it from the history load. The local half is today's `history.go`, `branch.go`, and `stash.go` routed rather than rewritten, and the no-local-git tripwire now drives the history, commit-detail, search, filter, and branch-picker surfaces under the PATH shim.
 - **2026-09-01** — Slice 4h implemented: staged, unstaged, untracked, and commit-file patches load through `RepoSource.Diff`, so a bound pane shows the host's patch for the row the cursor is on, in that row's staging sense. The inline pane and the full-screen diff view both reach it, the local half is today's `GetDiff`/`GetNewFileDiff`/`GetCommitDiff` routed rather than rewritten (proven byte-for-byte against a real repository fixture), and a truncated patch is labelled in both headers. Full-file view and a folder's combined patch refuse by name on a bound pane; nothing else about the parser, the renderer, wrap, or the minimap moved.
 - **2026-09-01** — Slice 4g implemented: `RepoSource` with a local and a remote implementation, and a bound status pane showing the host's changed files, branch, upstream, ahead/behind, and in-progress state. The four unavailable reasons are distinct sentences, and "not a git repository" is answered on both of its paths — the `NoRepository` flag and the exit-5 rejection of a worktree id the host will not resolve. A local twin repository is planted in every bound test and a `git` PATH shim records any local invocation.
+- **2026-09-01** — Slice 4k implemented: the loopback fixture plants a history, an MM path and an untracked file on both machines, and the proof ran. It found a crash on binding that no unit test could have: history landing before status left the sidebar measuring a nil file tree. Fixed on `FileTree`'s read accessors, with the ordering covered by a test.
 - **2026-09-01** — Slice 4f implemented: `internal/reposervice`, `sidecar repo status|diff|history|commit|refs`, and `RepoReadV1`. `contentservice` exports `LookupWorkspace` and `ContainedRelative` so there is one workspace resolver and one containment rule across both verb families.
 - **2026-09-01** — Created. Split out of remote-project-switcher.md slice 4 once it was clear Git needs a verb family of its own: `contentservice`'s diff kind is branch-versus-base and carries no staging axis, no branch or upstream row, and no author or date, so it cannot answer the Git tab.
