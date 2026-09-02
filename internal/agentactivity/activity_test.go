@@ -408,11 +408,12 @@ func TestRealPhase2ProviderFixtures(t *testing.T) {
 		{"grok", "overlay.txt", "sidecar.overlay_retain", StateUnknown, true},
 		{"grok", "stale_working_scrollback.txt", "sidecar.idle_footer", StateIdle, false},
 		{"grok", "background_subagent.txt", "sidecar.background_subagent_working", StateWorking, false},
-		// The permission prompt upstream's four blockers do not describe. Grok's
-		// `osc_title_idle` is a *visible* idle, so without this rule an
-		// unanswered prompt announces a completed turn. The fixture is synthetic
-		// and says so; see manifests/sidecar/grok.toml.
-		{"grok", "allow_prompt.txt", "sidecar.allow_prompt_blocked", StateBlocked, false},
+		// The permission prompt, captured live from Grok Build 1.0.13. Upstream
+		// does describe it — three of its blockers match, the title rule wins —
+		// which is what the capture settled and what retired the overlay rule
+		// this fixture used to prove. See manifests/sidecar/grok.toml and
+		// TestGrokPermissionPromptIsCaughtByUpstreamBlockers.
+		{"grok", "allow_prompt.txt", "osc_title_blocked", StateBlocked, false},
 		// Antigravity's four fixtures. Every verdict is unchanged. Upstream has
 		// no rule that matches any of these screens, so both non-fallback
 		// verdicts come from the overlay:
@@ -1422,8 +1423,12 @@ func TestRewrittenAlphabeticRulesMatchTheScreensTheyTarget(t *testing.T) {
 		}
 	}
 
-	// The two it does not are evaluated as manifests, which is what the census
-	// and scripts/herdr-diff.sh do with their fixtures.
+	// The other two became detection-only families in Phase 4, so they now run
+	// through the same live path, gate included. Both routes are checked: the
+	// verdict must be the rule the rewrite carries either way, because
+	// ExplainVendoredManifest is still what the census and
+	// scripts/herdr-diff.sh use for an id with no provider, and a rewrite that
+	// only worked through one of the two would be half dead.
 	for _, tt := range []struct{ agent, fixture, rule string }{
 		{"kiro", "tool_spinner_working.txt", "tool_spinner_working"},
 		{"qodercli", "spinner_working.txt", "spinner_working"},
@@ -1436,13 +1441,20 @@ func TestRewrittenAlphabeticRulesMatchTheScreensTheyTarget(t *testing.T) {
 		if explain.MatchedRule == nil || explain.MatchedRule.ID != tt.rule || State(explain.State) != StateWorking {
 			t.Fatalf("%s/%s got %+v, want working/%s", tt.agent, tt.fixture, explain.MatchedRule, tt.rule)
 		}
+		if got := Detect(ob); got.State != StateWorking || got.Evidence != tt.rule {
+			t.Fatalf("%s/%s through Detect got %+v, want working/%s", tt.agent, tt.fixture, got, tt.rule)
+		}
 	}
 
-	// A provider Sidecar does claim is still a provider: the manifest-only path
-	// is for ids with no provider, and must not become a second way to classify
-	// a pane without its process gate.
-	if Supports("kiro") || Supports("qodercli") {
-		t.Fatal("kiro/qodercli became providers; the census and CLI paths above assume they are not")
+	// The manifest-only path is still for ids with no provider, and must not
+	// become a second way to classify a pane without its process gate. Gemini is
+	// the id that exercises it now: its manifest is vendored and Decision 4
+	// deliberately registers no family for it.
+	if Supports("gemini") {
+		t.Fatal("gemini became a provider; Decision 4 says Antigravity replaced it")
+	}
+	if !HasVendoredManifest("gemini") {
+		t.Fatal("gemini's manifest is no longer vendored; the manifest-only path has nothing left to exercise")
 	}
 }
 
@@ -1564,44 +1576,28 @@ func TestClaudeStaleBackgroundAgentEvidenceDoesNotHoldTheWorkingLane(t *testing.
 	}
 }
 
-// Grok's permission prompt, which none of upstream's four blockers describe.
-// The rule is synthetic and unproven — see manifests/sidecar/grok.toml — so its
-// negatives carry more weight than usual: the question line alone is a sentence
-// a turn writes, and a live footer means a turn is running.
-func TestGrokAllowPromptBlocksOnlyWithItsControlLine(t *testing.T) {
-	got := Detect(readObservationFixture(t, "grok", "allow_prompt.txt"))
-	if got.State != StateBlocked || got.Evidence != "sidecar.allow_prompt_blocked" || !got.VisibleBlocker {
-		t.Fatalf("allow prompt got %+v, want blocked/sidecar.allow_prompt_blocked with VisibleBlocker", got)
+// Grok's real permission prompt, captured from Grok Build 1.0.13 on an isolated
+// tmux server. The fixture used to be a synthetic guess at an `Allow …?` screen
+// carried from the deleted `grok.screen.blocked`; the capture shows Grok paints
+// the ┃-guttered option dialog upstream already describes, under an
+// "⚠ Action Required" title, so three upstream blockers reach it and
+// `sidecar.allow_prompt_blocked` (1130) is not among them.
+func TestGrokPermissionPromptIsCaughtByUpstreamBlockers(t *testing.T) {
+	ob := readObservationFixture(t, "grok", "allow_prompt.txt")
+	got := Detect(ob)
+	if got.State != StateBlocked || got.Evidence != "osc_title_blocked" || !got.VisibleBlocker {
+		t.Fatalf("grok permission prompt got %+v, want blocked/osc_title_blocked with VisibleBlocker", got)
 	}
 
-	// The same question line quoted in a transcript, with no control line under
-	// it and Grok's own idle footer. The title reads idle, and that is the
-	// correct verdict for a settled pane.
-	quoted := Observation{
-		Agent:          "grok",
-		CurrentCommand: "grok",
-		PaneTitle:      "session title - grok",
-		Screen: "  ◇ the tool would have asked:\n" +
-			"  Allow bash(git status --short)?\n" +
-			"  ╭────────────────────────────────╮\n" +
-			"  │ ❯                              │\n" +
-			"  ╰────────────────────────────────╯\n" +
-			"  Enter:send  │  Shift+Tab:mode  │  Ctrl+x:shortcuts\n",
-	}
-	if got := Detect(quoted); got.State != StateIdle || got.Evidence != "osc_title_idle" {
-		t.Fatalf("quoted allow question got %+v, want idle/osc_title_idle", got)
-	}
-
-	// The `not` gate: a live turn whose output carries both lines is still a
-	// live turn, because Grok's cancel footer is on screen for exactly as long
-	// as the turn runs and an unanswered prompt replaces it.
-	live := quoted
-	live.Screen = "  ◇ the tool would have asked:\n" +
-		"  Allow bash(git status --short)?\n" +
-		"  ↑/↓ select  │  Enter confirm  │  Esc reject\n" +
-		"  Esc:cancel  │  Ctrl+x:shortcuts\n"
-	if got := Detect(live); got.State != StateWorking || got.Evidence != "sidecar.working_footer" {
-		t.Fatalf("allow lines above a live footer got %+v, want working/sidecar.working_footer", got)
+	// Sidecar reads `#{pane_title}` one repaint later than Herdr reads the OSC
+	// payload, so the title is the signal most likely to be stale on a pane that
+	// has just started asking. The screen alone has to carry the verdict, and it
+	// does: the numbered ┃ rows are `option_dialog_blocked` at 1200, still above
+	// this overlay's 1130.
+	noTitle := ob
+	noTitle.PaneTitle = ""
+	if got := Detect(noTitle); got.State != StateBlocked || got.Evidence != "option_dialog_blocked" || !got.VisibleBlocker {
+		t.Fatalf("grok permission prompt with a stale title got %+v, want blocked/option_dialog_blocked", got)
 	}
 }
 

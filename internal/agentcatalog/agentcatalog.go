@@ -87,6 +87,88 @@ var families = []Family{
 		ResumeArgs: []string{"resume"}, ResumeKinds: []string{"id"}},
 }
 
+// detectionFamilies are the agent families Sidecar can recognise in a pane but
+// never offers to start. Herdr publishes a screen-detection manifest for each,
+// Sidecar already vendors all of them, and the engine executes them, so the only
+// things a state badge still needs are an id, the process spellings that name
+// the program, and something to call it.
+//
+// They are a second list rather than a DetectionOnly flag on families above, and
+// the reason is what everything else does with families. Families() is read as
+// "everything Sidecar can launch" by the creation pickers, both configuration
+// pages, workspaceops, and TestAgentPickersFollowCatalog in another package. A
+// flag would put the burden of filtering on every one of those readers, and a
+// reader that forgot would show an agent in a creation picker that cannot be
+// launched. A separate list cannot leak: nothing that offers a choice reads it.
+// Find, FindLaunch, BuildLaunch, Lookup, Resolve, ResolvePicker and Families are
+// all unchanged, and all of them still mean the launchable ten.
+//
+// A detection-only family has no Command, no resume, no conversation adapter and
+// no curated theme colour, deliberately: that presentation work is the expensive
+// half of a full family and none of it is needed to render a state badge
+// (styles.AgentColor answers TextMuted for a provider no theme registers, and
+// styles.AgentLabel falls back to the bare name). Promoting one to a full family
+// is the seven-step guide in docs/guides/active/adding-new-agent-clis.md and is
+// independent work.
+//
+// IDs are Herdr's own agent labels so that the vendored manifest file, the key
+// into aliases.upstream.json and `sidecar agent explain --agent` all agree with
+// no mapping. That is why Qoder is spelled `qodercli` here: it is the id
+// upstream writes everywhere, and a prettier Sidecar-only spelling would buy a
+// third entry in agentactivity.ManifestAgentID and HerdrAgentLabel.
+//
+// Aliases carry Herdr's lookup_agent spellings for the family, minus the id
+// itself. They are recorded as data so the alias table and this catalog can be
+// asserted against each other; agentactivity.identifyProcessName is what
+// actually resolves a pane's process name, and
+// TestDetectionOnlyAliasesMatchTheUpstreamTable keeps the two honest.
+//
+// Gemini is deliberately absent even though its manifest is vendored: Decision 4
+// of docs/plans/active/herdr-detection-parity.md records that Antigravity
+// replaced it and `agy` is already a full family. OMP is absent because upstream
+// ships it hooks-only, with no screen manifest to execute.
+var detectionFamilies = []Family{
+	{ID: "cline", Name: "Cline", Short: "Cline"},
+	{ID: "devin", Name: "Devin CLI", Short: "Devin", Aliases: []string{"devin cli", "devin-cli"}},
+	{ID: "droid", Name: "Droid", Short: "Droid"},
+	{ID: "hermes", Name: "Hermes Agent", Short: "Hermes", Aliases: []string{"hermes-agent"}},
+	{ID: "kilo", Name: "Kilo Code CLI", Short: "Kilo", Aliases: []string{"kilo code", "kilo-code"}},
+	{ID: "kimi", Name: "Kimi Code CLI", Short: "Kimi", Aliases: []string{"kimi code", "kimi-code"}},
+	{ID: "kiro", Name: "Kiro CLI", Short: "Kiro", Aliases: []string{"kiro-cli"}},
+	{ID: "maki", Name: "Maki", Short: "Maki"},
+	{ID: "qodercli", Name: "Qoder CLI", Short: "Qoder", Aliases: []string{"qoder", "qoderclicn", "qodercn"}},
+	{ID: "qwen", Name: "Qwen Code", Short: "Qwen", Aliases: []string{"qwen code", "qwen-code"}},
+}
+
+// DetectionFamilies returns every detection-only family, in id order.
+//
+// It is deliberately not folded into Families: a caller that wants "what can be
+// started" must not be handed a family with no Command, and a caller that wants
+// "what can appear in a pane" wants both lists.
+func DetectionFamilies() []Family {
+	out := make([]Family, len(detectionFamilies))
+	copy(out, detectionFamilies)
+	return out
+}
+
+// FindDetection returns the detection-only family with an ID.
+func FindDetection(id string) (Family, bool) {
+	for _, family := range detectionFamilies {
+		if family.ID == id {
+			return family, true
+		}
+	}
+	return Family{}, false
+}
+
+// DetectionOnly reports whether an ID names a family Sidecar can recognise but
+// not start. It is false for every launchable family, so the two lists answer
+// exactly one question each.
+func DetectionOnly(id string) bool {
+	_, ok := FindDetection(strings.TrimSpace(id))
+	return ok
+}
+
 // legacyLaunchFamilies remain launchable for persisted/configured creation
 // settings but are deliberately absent from Families and every new picker.
 // Aider is the sole compatibility case; unknown ids never fall back to it or
@@ -363,10 +445,16 @@ func ResolvePicker(allowlist []string, shellMode bool) []string {
 	return out
 }
 
-// Label is the picker display name for an agent id.
+// Label is the display name for an agent id.
 //
-// "" is "None (attach only)". Catalog IDs use Family.Name. "shell" is
-// "Project Shell". Unknown IDs pass through.
+// "" is "None (attach only)". "shell" is "Project Shell". Every family in
+// either list uses Family.Name. Unknown IDs pass through.
+//
+// It answers for detection-only families too, even though no picker offers one,
+// because this is the single id-to-name mapping in the codebase and a caller
+// that has an id from a *pane* rather than from a picker has the same question.
+// Without them `qodercli` was its own display name, and the Name and Short on
+// all ten entries were data nothing read.
 func Label(id string) string {
 	switch id {
 	case "":
@@ -376,6 +464,28 @@ func Label(id string) string {
 	}
 	if family, ok := Find(id); ok {
 		return family.Name
+	}
+	if family, ok := FindDetection(id); ok {
+		return family.Name
+	}
+	return id
+}
+
+// ShortLabel is the compact display name for an agent id: Family.Short from
+// either list, and the id itself for anything this catalog does not name.
+//
+// It is what a width-constrained surface wants where Label is what a settings
+// row wants. The agent chip is the case that forced it to exist: chips render a
+// lowercased token, so "Claude Code" is too long and too proper for one, while
+// the raw id is wrong for the one family whose id is not a name — Qoder's id is
+// `qodercli` because that is Herdr's label, and a chip reading `qodercli` names
+// a manifest file rather than a program.
+func ShortLabel(id string) string {
+	if family, ok := Find(id); ok && family.Short != "" {
+		return family.Short
+	}
+	if family, ok := FindDetection(id); ok && family.Short != "" {
+		return family.Short
 	}
 	return id
 }

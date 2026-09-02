@@ -12,6 +12,7 @@ import (
 
 	"github.com/marcus/sidecar/internal/agentactivity/manifest"
 	"github.com/marcus/sidecar/internal/agentactivity/manifests"
+	"github.com/marcus/sidecar/internal/agentintegration"
 )
 
 // syncReport is what the workflow puts in a pull request body. It is written
@@ -19,17 +20,32 @@ import (
 // review surface for a sync, and a diff of it is the fastest way to see what
 // changed upstream since the last one.
 type syncReport struct {
-	Ref        string
-	ReleaseTag string
-	Out        string
-	StartedAt  time.Time
-	FinishedAt time.Time
+	Ref            string
+	ReleaseTag     string
+	Out            string
+	IntegrationOut string
+	StartedAt      time.Time
+	FinishedAt     time.Time
 
 	Lock     *manifests.Lock
 	Previous *manifests.Lock
 
+	// Manifests is the vendored bytes this sync wrote and PreviousManifests is
+	// what it replaced, both keyed by file base. The old bytes are captured
+	// before the tree is overwritten, because a sync writes in place and there
+	// is no second copy afterwards.
+	Manifests         map[string][]byte
+	PreviousManifests map[string][]byte
+
 	Aliases   *manifests.Aliases
 	Authority *manifests.Authority
+
+	// Integration is the lock for the vendored Herdr integration assets, and
+	// PreviousIntegration is the one this sync replaced.
+	Integration         *agentintegration.UpstreamLock
+	PreviousIntegration *agentintegration.UpstreamLock
+	// IntegrationDiffs is what changed upstream since each Sidecar port.
+	IntegrationDiffs []integrationPortDiff
 
 	Notes []string
 	Body  string
@@ -43,6 +59,14 @@ func (r *syncReport) summary() string {
 		incompatible += len(agent.RegexIncompatibilities)
 	}
 	fmt.Fprintf(&b, "catalog etag %s; %d regex patterns need an RE2 rewrite\n", r.Lock.Catalog.ETag, incompatible)
+	if r.Integration != nil {
+		files := len(r.Integration.Files)
+		for _, provider := range r.Integration.Providers {
+			files += len(provider.Files)
+		}
+		fmt.Fprintf(&b, "vendored %d integration assets for %d providers into %s\n",
+			files, len(r.Integration.Providers), filepath.Join(r.IntegrationOut, "upstream"))
+	}
 	fmt.Fprintf(&b, "wrote %s\n", filepath.Join(r.Out, "report.md"))
 	return b.String()
 }
@@ -83,8 +107,36 @@ func (r *syncReport) render() (string, error) {
 	}
 	r.renderAuthority(&b)
 	r.renderIntegrationAssets(&b)
-	r.renderFixtureFlips(&b)
-	return b.String(), nil
+
+	comparison, err := r.compareCorpus()
+	if err != nil {
+		return "", err
+	}
+	comparison.renderFixtureFlips(&b)
+	comparison.renderOverlayRules(&b)
+	return boundReport(b.String()), nil
+}
+
+// maxReportChars is GitHub's cap on a pull request body, which is what
+// report.md becomes. A run that overflows it is a run whose report would be
+// truncated by GitHub silently, in the middle of whatever section happened to
+// be last; truncating here instead costs the same content and says so.
+const maxReportChars = 65536
+
+// boundReport trims the rendered report to something GitHub will accept as a
+// pull request body, cutting at a line boundary and saying what it did.
+func boundReport(body string) string {
+	if len(body) <= maxReportChars {
+		return body
+	}
+	notice := "\n> The rest of this report was truncated: it exceeded the %d-character limit on a " +
+		"GitHub pull request body. Regenerate it with `go run ./internal/tools/herdrsync` to read it in full.\n"
+	keep := maxReportChars - len(fmt.Sprintf(notice, maxReportChars))
+	cut := body[:keep]
+	if at := strings.LastIndexByte(cut, '\n'); at > 0 {
+		cut = cut[:at+1]
+	}
+	return cut + fmt.Sprintf(notice, maxReportChars)
 }
 
 func (r *syncReport) renderVersionChanges(b *strings.Builder) {
@@ -303,6 +355,8 @@ func (r *syncReport) renderAuthority(b *strings.Builder) {
 		return
 	}
 	b.WriteString("Herdr's published authority is a *target*. Sidecar tiers are earned by traces and are never copied.\n\n")
+	b.WriteString("**Below target** marks an agent Herdr gives lifecycle authority to *through hooks* and Sidecar has not proved `full` for. " +
+		"That is the same rule `TestHerdrAuthorityGaps` prints, so this table and `go test ./internal/agentlifecycle/` name the same set.\n\n")
 	b.WriteString("| Agent | Herdr authority | Sidecar tier | Below target |\n| --- | --- | --- | --- |\n")
 	ids := make([]string, 0, len(r.Authority.Agents))
 	for id := range r.Authority.Agents {
@@ -316,12 +370,37 @@ func (r *syncReport) renderAuthority(b *strings.Builder) {
 			tier = "—"
 		}
 		gap := ""
-		if authorityRank(herdr) > tierRank(tier) {
+		if belowTarget(herdr, tier) {
 			gap = "yes"
 		}
 		fmt.Fprintf(b, "| `%s` | %s | %s | %s |\n", id, herdr, tier, gap)
 	}
 	b.WriteString("\n")
+}
+
+// belowTarget is the gap rule, and it has two halves: a membership half and a
+// rank half.
+//
+// The rank half was always shared with TestHerdrAuthorityGaps in
+// internal/agentlifecycle. The membership half was not, and the two lists
+// disagreed: the test filtered to hooks authority while this table marked any
+// rank gap, so report.md said fourteen agents were below target and the test
+// printed five. The test's rule is the plan's (Journey 5 and the Phase 4 bullet
+// both say "lifecycle-through-hooks"), so this side moved.
+//
+// The reason the plan's rule is the right one: where Herdr's own authority is
+// session_identity, Herdr reads state off the screen exactly as Sidecar does,
+// and the screen lane is what this plan brought to parity. Calling that a gap
+// would put nine agents on a list of work to do where there is no work Herdr has
+// done and Sidecar has not. Hooks authority is the only place upstream knows
+// something Sidecar's screen lane cannot reach, which is why Phase 6 is scoped to
+// exactly those agents. The rank comparison stays in both halves so a Sidecar
+// tier that reaches full closes the row.
+func belowTarget(herdrAuthority, tier string) bool {
+	if herdrAuthority != manifests.AuthorityHooks {
+		return false
+	}
+	return authorityRank(herdrAuthority) > tierRank(tier)
 }
 
 func authorityRank(authority string) int {
@@ -373,31 +452,475 @@ func sidecarTiers() map[string]string {
 }
 
 func (r *syncReport) renderIntegrationAssets(b *strings.Builder) {
-	b.WriteString("## Integration asset versions\n\n")
-	if r.Authority == nil {
-		b.WriteString("Authority extraction did not run.\n\n")
+	b.WriteString("## Integration assets\n\n")
+	if r.Integration == nil {
+		b.WriteString("Integration assets were not vendored.\n\n")
 		return
 	}
-	b.WriteString("Vendoring the assets themselves is Phase 3; these are the `HERDR_INTEGRATION_VERSION` values " +
-		"upstream carries today, so a bump is visible before the assets land here.\n\n")
-	b.WriteString("| Agent | Asset directory | Version |\n| --- | --- | --- |\n")
-	ids := make([]string, 0, len(r.Authority.Agents))
-	for id, agent := range r.Authority.Agents {
-		if agent.IntegrationVersion > 0 {
-			ids = append(ids, id)
-		}
+	fmt.Fprintf(b, "Vendored verbatim from `%s` into `%s/upstream/`, pinned by `upstream.lock.json` there. "+
+		"They are reference material: Sidecar installs its own assets and these exist so a re-port is a diff.\n\n",
+		r.Integration.Herdr.AssetsDir, filepath.ToSlash(r.IntegrationOut))
+
+	ported := map[string]agentintegration.PortedFrom{}
+	for _, record := range agentintegration.PortedFromRecords() {
+		ported[record.UpstreamID] = record
 	}
-	sort.Strings(ids)
-	for _, id := range ids {
-		agent := r.Authority.Agents[id]
-		fmt.Fprintf(b, "| `%s` | `%s` | %d |\n", id, agent.IntegrationAssetDir, agent.IntegrationVersion)
+
+	b.WriteString("| Agent | Asset directory | Version | Previous | Change | Sidecar port |\n")
+	b.WriteString("| --- | --- | --- | --- | --- | --- |\n")
+	var bumps []agentintegration.UpstreamProvider
+	for _, provider := range r.Integration.Providers {
+		before, known := previousIntegrationVersion(r.PreviousIntegration, provider.ID)
+		change := "unchanged"
+		previous := fmt.Sprintf("%d", before)
+		switch {
+		case r.PreviousIntegration == nil:
+			change, previous = "first sync", "—"
+		case !known:
+			change, previous = "added", "—"
+			bumps = append(bumps, provider)
+		case before < provider.Version:
+			change = "**bumped**"
+			bumps = append(bumps, provider)
+		case before > provider.Version:
+			change = "**rolled back**"
+			bumps = append(bumps, provider)
+		}
+		port := "not ported"
+		if record, ok := ported[provider.ID]; ok {
+			port = fmt.Sprintf("`%s` from version %s", record.Provider, record.Version)
+		}
+		fmt.Fprintf(b, "| `%s` | `%s` | %d | %s | %s | %s |\n",
+			provider.ID, provider.Directory, provider.Version, previous, change, port)
 	}
 	b.WriteString("\n")
+
+	// A provider Sidecar has not ported gets the bump alone: a heads-up that
+	// the provider's hook payload changed, and nothing for anyone to do yet.
+	var heads []string
+	for _, provider := range bumps {
+		if _, ok := ported[provider.ID]; ok {
+			continue
+		}
+		before, known := previousIntegrationVersion(r.PreviousIntegration, provider.ID)
+		if !known {
+			heads = append(heads, fmt.Sprintf("- `%s` now ships an integration at version %d.", provider.ID, provider.Version))
+			continue
+		}
+		heads = append(heads, fmt.Sprintf("- `%s` moved %d to %d. Sidecar has not ported it; the hook payload changed upstream.",
+			provider.ID, before, provider.Version))
+	}
+	if len(heads) > 0 {
+		b.WriteString("### Bumps for providers Sidecar has not ported\n\n")
+		b.WriteString(strings.Join(heads, "\n"))
+		b.WriteString("\n\n")
+	}
+
+	r.renderIntegrationPorts(b)
 }
 
-func (r *syncReport) renderFixtureFlips(b *strings.Builder) {
+func previousIntegrationVersion(lock *agentintegration.UpstreamLock, id string) (int, bool) {
+	if lock == nil {
+		return 0, false
+	}
+	provider, ok := lock.Provider(id)
+	if !ok {
+		return 0, false
+	}
+	return provider.Version, true
+}
+
+// renderIntegrationPorts is the half of the section that costs a maintainer
+// something: for each provider Sidecar has already ported, what upstream did to
+// that asset since the version the port was written against.
+func (r *syncReport) renderIntegrationPorts(b *strings.Builder) {
+	b.WriteString("### Upstream changes since each Sidecar port\n\n")
+	if len(r.IntegrationDiffs) == 0 {
+		b.WriteString("Sidecar has ported no provider yet.\n\n")
+		return
+	}
+	b.WriteString("`ported-from` is recorded in `internal/agentintegration/portedfrom.go`, not in an asset header: " +
+		"two of the three Sidecar assets are Go values with no header to carry it. " +
+		"A comparison is made on bytes rather than on the version number, so a file upstream edited " +
+		"without bumping still shows here.\n\n")
+
+	// The whole section is bounded, not only each diff. Today's worst case is
+	// about 34 KB against GitHub's 65536-character body limit, but Phase 6's
+	// exit gate is a port per provider in Herdr's authority list, and seventeen
+	// ported providers at today's per-provider size lands near 100 KB. Eliding
+	// per provider here keeps the sections after this one -- the fixture flips
+	// and the overlay rules, which are the ones a reviewer merges on -- inside
+	// the body rather than under boundReport's cut.
+	budget := integrationDiffSectionBudget
+
+	for _, entry := range r.IntegrationDiffs {
+		fmt.Fprintf(b, "#### `%s` — ported from herdr `%s` version %s\n\n",
+			entry.Ported.Provider, entry.Ported.UpstreamID, entry.Ported.Version)
+		if entry.Ported.Commit != "" {
+			fmt.Fprintf(b, "Compared against `%s`; upstream is now at version %d.\n\n",
+				shortCommit(entry.Ported.Commit), entry.CurrentVersion)
+		}
+		if entry.Note != "" {
+			fmt.Fprintf(b, "> %s\n\n", entry.Note)
+		}
+		changed, skipped := 0, 0
+		for _, file := range entry.Files {
+			switch {
+			case file.Skipped:
+				skipped++
+			case file.Changed:
+				changed++
+			}
+		}
+		// A skipped file is a comparison that did not happen, so it is named
+		// before any claim about the rest: "no upstream change" is only true of
+		// the files that were actually compared.
+		for _, file := range entry.Files {
+			if file.Skipped {
+				fmt.Fprintf(b, "> `%s` was **not compared**: %s\n\n", file.Path, file.Body)
+			}
+		}
+		if changed == 0 && len(entry.Files) > skipped {
+			fmt.Fprintf(b, "No upstream change: all %d compared file(s) are byte-identical to the copy this port "+
+				"was written against. Nothing to re-port.\n\n", len(entry.Files)-skipped)
+			continue
+		}
+		for _, file := range entry.Files {
+			if !file.Changed || file.Skipped {
+				continue
+			}
+			label := "diff"
+			if file.Whole {
+				label = "current upstream file"
+			}
+			if budget <= 0 {
+				fmt.Fprintf(b, "`%s` (%s) is not shown: this section is capped at %d lines to keep the "+
+					"report inside GitHub's pull request body limit. Re-run "+
+					"`go run ./internal/tools/herdrsync` locally to read it.\n\n",
+					file.Path, label, integrationDiffSectionBudget)
+				continue
+			}
+			body := file.Body
+			if file.Whole {
+				body = truncateLines(body, budget)
+			} else {
+				body = truncateDiffLines(body, budget)
+			}
+			budget -= strings.Count(file.Body, "\n") + 1
+			fmt.Fprintf(b, "`%s` (%s):\n\n```diff\n%s\n```\n\n", file.Path, label, body)
+		}
+	}
+}
+
+// integrationDiffSectionBudget bounds the rendered diffs across every ported
+// provider, where diffLineBudget bounds only one file's.
+const integrationDiffSectionBudget = 600
+
+// corpusComparison is the fixture corpus run against both sides of the sync,
+// with the overlays that a sync never touches applied to both. It backs the two
+// sections a reviewer actually reads before merging.
+type corpusComparison struct {
+	fixtures []corpusFixture
+	before   *corpusSide
+	after    *corpusSide
+	rules    []overlayRule
+	exempt   map[string]bool
+	// firstSync records that there were no vendored manifests to compare
+	// against, which is a different report from "nothing changed".
+	firstSync bool
+	// setup is why the comparison could not be made at all, when it could not.
+	setup string
+}
+
+// compareCorpus loads the fixtures, the overlays, and both sets of manifest
+// bytes.
+//
+// A failure to read the corpus or the overlays is an error rather than an empty
+// comparison, for the reason sidecarAliasGaps gives: "no fixture changed
+// verdict" is the answer a reviewer merges on, and it must never be what a
+// missing directory renders as.
+func (r *syncReport) compareCorpus() (*corpusComparison, error) {
+	fixtures, err := loadCorpus()
+	if err != nil {
+		return nil, err
+	}
+	overlays, err := readSidecarOverlays()
+	if err != nil {
+		return nil, fmt.Errorf("read Sidecar overlays: %w", err)
+	}
+	out := &corpusComparison{
+		fixtures:  fixtures,
+		after:     newCorpusSide(r.Manifests, overlays),
+		before:    newCorpusSide(r.PreviousManifests, overlays),
+		exempt:    harnessExempt(overlays),
+		firstSync: len(r.PreviousManifests) == 0,
+	}
+	rules, err := overlayRules(overlays, r.Manifests)
+	if err != nil {
+		// An overlay that no longer parses is a finding, not a reason to fail
+		// the sync: the vendored bytes are already written and correct, and the
+		// report is what tells the maintainer which file to fix.
+		out.setup = err.Error()
+		return out, nil
+	}
+	out.rules = rules
+	return out, nil
+}
+
+func (c *corpusComparison) renderFixtureFlips(b *strings.Builder) {
 	b.WriteString("## Fixture verdict flips\n\n")
-	b.WriteString("Engine not yet wired; see Phase 1.\n")
+	b.WriteString("Every fixture in `internal/agentactivity/testdata` with a `screen:` block, " +
+		"classified against the manifests this sync replaced and against the ones it wrote. " +
+		"A verdict is the state, the matched rule id, and the fallback reason: the same triple " +
+		"`scripts/herdr-diff.sh` compares. The Sidecar overlays are applied to **both** sides, " +
+		"because a sync never touches them and applying them to one side would report every " +
+		"overlay rule as a flip. Sidecar's process gate is not applied: it reads the pane's " +
+		"process name and never the manifest, so its answer is the same on both sides and it " +
+		"cannot create or hide a flip.\n\n")
+
+	type flipRow struct {
+		fixture       corpusFixture
+		before, after corpusVerdict
+		beforeMissing bool
+		afterMissing  bool
+	}
+
+	evaluated := 0
+	var flips []flipRow
+	var unevaluable []string
+	for _, fixture := range c.fixtures {
+		after, afterOK, afterProblem := c.after.verdict(fixture)
+		before, beforeOK, beforeProblem := c.before.verdict(fixture)
+
+		if !afterOK && afterProblem == "" && !beforeOK && beforeProblem == "" {
+			// Neither side vendors a manifest for this agent. Nothing about the
+			// sync moved, but a fixture nothing classifies is worth naming.
+			unevaluable = append(unevaluable,
+				fmt.Sprintf("- `%s` has no vendored `%s.toml` on either side of this sync.",
+					fixture, fixture.base))
+			continue
+		}
+		if afterProblem != "" || beforeProblem != "" {
+			problem := afterProblem
+			side := "after"
+			if problem == "" {
+				problem, side = beforeProblem, "before"
+			}
+			unevaluable = append(unevaluable,
+				fmt.Sprintf("- `%s` could not be evaluated (%s this sync): %s", fixture, side, problem))
+			continue
+		}
+		evaluated++
+		if c.firstSync {
+			continue
+		}
+		switch {
+		case !beforeOK:
+			flips = append(flips, flipRow{fixture: fixture, after: after, beforeMissing: true})
+		case !afterOK:
+			flips = append(flips, flipRow{fixture: fixture, before: before, afterMissing: true})
+		case !before.sameVerdict(after):
+			flips = append(flips, flipRow{fixture: fixture, before: before, after: after})
+		}
+	}
+
+	switch {
+	case c.firstSync:
+		fmt.Fprintf(b, "First sync: the output directory held no vendored manifests before this run, "+
+			"so there is nothing to compare against. %d fixture(s) were classified against the new manifests.\n\n",
+			evaluated)
+	case len(flips) == 0:
+		fmt.Fprintf(b, "**No fixture changed verdict.** %d fixture(s) reach the same state, "+
+			"the same matched rule and the same fallback reason under the new manifests as under the old ones. "+
+			"That is the expected result and it is what the review gate is for.\n\n", evaluated)
+	default:
+		fmt.Fprintf(b, "**%d of %d fixture(s) changed verdict.** Each row is a screen Sidecar now reads "+
+			"differently. Read the manifest diff above for the rule that moved, and decide per row whether "+
+			"the new verdict is the better one.\n\n", len(flips), evaluated)
+		b.WriteString("| Agent | Fixture | Before | After |\n| --- | --- | --- | --- |\n")
+		shown := flips
+		if len(shown) > maxFlipRows {
+			shown = shown[:maxFlipRows]
+		}
+		for _, row := range shown {
+			before, after := row.before.label(), row.after.label()
+			if row.beforeMissing {
+				before = "— (manifest added this sync)"
+			}
+			if row.afterMissing {
+				after = "— (**manifest no longer vendored**)"
+			}
+			fmt.Fprintf(b, "| `%s` | `%s` | %s | %s |\n", row.fixture.agent, row.fixture.name, before, after)
+		}
+		b.WriteString("\n")
+		if len(flips) > len(shown) {
+			fmt.Fprintf(b, "%d further flip(s) are not listed; the table is capped at %d rows to keep this "+
+				"report inside GitHub's pull request body limit. Run `go test ./internal/agentactivity/ "+
+				"-run TestFixtureCensus -v` after merging for the full classification.\n\n",
+				len(flips)-len(shown), maxFlipRows)
+		}
+	}
+
+	if len(unevaluable) > 0 {
+		b.WriteString("Fixtures no verdict could be minted for:\n\n")
+		b.WriteString(strings.Join(unevaluable, "\n"))
+		b.WriteString("\n\n")
+	}
+}
+
+// renderOverlayRules is the plan's "overlay changes nothing" signal: for each
+// rule in each internal/agentactivity/manifests/sidecar/<agent>.toml, whether
+// removing that one rule changes any fixture verdict.
+//
+// A rule that changes nothing is how a Sidecar rule gets retired once upstream
+// adopts the same idea, which is the second journey the plan asks for. It is a
+// finding for the maintainer to act on and not something this tool acts on:
+// deleting an overlay rule is a separate decision with a fixture attached.
+func (c *corpusComparison) renderOverlayRules(b *strings.Builder) {
+	b.WriteString("## Overlay rules\n\n")
+	if c.setup != "" {
+		fmt.Fprintf(b, "The overlays could not be read: %s\n\n", c.setup)
+		return
+	}
+	if len(c.rules) == 0 {
+		b.WriteString("No Sidecar overlay rules are vendored.\n\n")
+		return
+	}
+	b.WriteString("Each rule is removed on its own from the manifests this sync wrote, and the corpus " +
+		"is reclassified. A rule that changes no verdict has stopped earning its place, which is the " +
+		"signal that upstream has adopted the same idea and the rule can go. Redundancy is judged on the " +
+		"state and the fallback reason alone, never on the rule id: a `sidecar.` id can never equal the " +
+		"upstream id that would win without it, so folding the id in would make the check unreachable.\n\n")
+	b.WriteString("A rule carrying an **upstream** id is not in that bucket and is never a deletion " +
+		"candidate. It replaces upstream's rule rather than adding one, so removing it leaves a rule that " +
+		"is dead (the `\\p{Alphabetic}` rewrites RE2 cannot compile) or differently flagged (the copies " +
+		"that only add `visible_blocker`), which is a regression rather than a cleanup. Those rows are " +
+		"judged on the matched rule id and the visible flags as well, and say when no fixture covers " +
+		"them at all.\n\n")
+
+	b.WriteString("| Overlay | Rule | Kind | Effect |\n| --- | --- | --- | --- |\n")
+	candidates := 0
+	uncovered := 0
+	for _, rule := range c.rules {
+		kind := "addition"
+		switch {
+		case rule.disables:
+			kind = "disables upstream"
+		case rule.rewrite:
+			kind = "replaces upstream"
+		}
+
+		fixtures := c.fixturesFor(rule.base)
+		if len(fixtures) == 0 {
+			fmt.Fprintf(b, "| `%s` | `%s` | %s | no fixture for this agent |\n", rule.base, rule.id, kind)
+			uncovered++
+			continue
+		}
+		without := c.after.without(rule.base, rule.id)
+		var changed []string
+		// instead names what reports on a fixture this rule currently wins,
+		// once the rule is gone. It is what turns "changes nothing" from a
+		// verdict into a next step: an upstream id there means upstream has
+		// adopted the idea and the rule can go, and a `sidecar.` id means a
+		// sibling overlay rule already covers the only fixture that exercises
+		// this one.
+		matched := 0
+		var instead []string
+		broken := ""
+		for _, fixture := range fixtures {
+			with, ok, problem := c.after.verdict(fixture)
+			if problem != "" || !ok {
+				broken = problem
+				break
+			}
+			bare, ok, problem := without.verdict(fixture)
+			if problem != "" || !ok {
+				broken = problem
+				break
+			}
+			same := with.sameBadge(bare)
+			if rule.rewrite || rule.disables {
+				same = with.sameEvidence(bare)
+			}
+			if !same {
+				changed = append(changed, fixture.name)
+			}
+			if with.rule == rule.id {
+				matched++
+				if same {
+					instead = appendUnique(instead, bare.label())
+				}
+			}
+		}
+
+		effect := ""
+		switch {
+		case broken != "":
+			effect = "could not be judged: " + broken
+		case len(changed) > 0:
+			names := changed
+			if len(names) > maxFixtureNamesPerRule {
+				names = append(append([]string{}, names[:maxFixtureNamesPerRule]...),
+					fmt.Sprintf("and %d more", len(changed)-maxFixtureNamesPerRule))
+			}
+			effect = fmt.Sprintf("changes %d fixture(s): %s", len(changed), strings.Join(backtickAll(names), ", "))
+		case rule.rewrite || rule.disables:
+			if matched > 0 {
+				effect = "matches, but upstream's own rule reaches the same verdict and flags without it"
+				break
+			}
+			effect = "no fixture covers it; upstream's own rule stands without it"
+			uncovered++
+		case c.exempt[rule.base+":"+rule.id]:
+			// Declared by the overlay itself with a `# harness-exempt:` line,
+			// and honoured with the same file-scoped key scripts/herdr-diff.sh
+			// uses, because a rule id is not unique across agents.
+			effect = "changes nothing, and the overlay declares it `harness-exempt`: " +
+				"no fixture holds the screen it is for, and its case is a Go test"
+		case matched == 0:
+			effect = "**no fixture matches this rule**; nothing here proves what it is for"
+			candidates++
+		default:
+			effect = fmt.Sprintf("**changes nothing: deletion candidate**; without it %s", strings.Join(instead, ", "))
+			candidates++
+		}
+		fmt.Fprintf(b, "| `%s` | `%s` | %s | %s |\n", rule.base, rule.id, kind, effect)
+	}
+	b.WriteString("\n")
+
+	switch {
+	case candidates > 0:
+		fmt.Fprintf(b, "%d overlay rule(s) changed no fixture verdict. Delete the rule, or record why it "+
+			"stays and add the fixture that proves it. Deleting one is a separate change with a fixture "+
+			"attached, so this report flags it rather than making it.\n\n", candidates)
+	case uncovered > 0:
+		fmt.Fprintf(b, "Every overlay addition still changes a verdict. %d row(s) are replacements or "+
+			"disables no fixture exercises, which is a coverage gap rather than a deletion candidate.\n\n", uncovered)
+	default:
+		b.WriteString("Every overlay rule still changes a fixture verdict.\n\n")
+	}
+}
+
+// fixturesFor returns the fixtures classified by one vendored manifest.
+func (c *corpusComparison) fixturesFor(base string) []corpusFixture {
+	var out []corpusFixture
+	for _, fixture := range c.fixtures {
+		if fixture.base == base {
+			out = append(out, fixture)
+		}
+	}
+	return out
+}
+
+// appendUnique keeps a short list of distinct labels in first-seen order, so a
+// rule whose fixtures all fall back to the same replacement names it once.
+func appendUnique(values []string, value string) []string {
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
 }
 
 func backtickAll(values []string) []string {

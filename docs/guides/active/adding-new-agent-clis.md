@@ -11,7 +11,7 @@ Sidecar provides unified workspace creation, live status tracking, terminal embe
 
 ## Subsystem Architecture Overview
 
-Adding a new agent CLI touches up to seven distinct subsystems:
+Adding a new agent CLI touches up to seven distinct subsystems. "Up to" is load-bearing: a **detection-only** family, one Sidecar recognises in a pane and never offers to start, needs Step 2 alone, and Step 2 is three moves. Read [Step 2.0](#20-decide-which-shape-you-are-adding) before working through Step 1, because it decides how much of this guide applies to you.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -23,8 +23,8 @@ Adding a new agent CLI touches up to seven distinct subsystems:
 ┌──────────────────────────────┐              ┌──────────────────────────────┐
 │ 2. Live Activity & State     │              │ 3. Shell Creation & Settings │
 │    (internal/agentactivity)  │              │    (workspacecreate, configui│
-│    Process identification,   │              │     workspace plugin)        │
-│    screen/title regex rules  │              │    Modals, pickers, defaults │
+│    Vendored Herdr manifest,  │              │     workspace plugin)        │
+│    process alias, fixture    │              │    Modals, pickers, defaults │
 └──────────────┬───────────────┘              └──────────────┬───────────────┘
                │                                              │
                ▼                                              ▼
@@ -49,6 +49,9 @@ Adding a new agent CLI touches up to seven distinct subsystems:
 ## Step 1: Catalog & Launch/Resume Registry
 
 `internal/agentcatalog` is the single shared source of truth for agent families Sidecar can launch, configure, and resume.
+
+> [!NOTE]
+> A **detection-only** family skips this step's launch registry and gets a four-field entry in `detectionFamilies` instead. See [Step 2.0](#20-decide-which-shape-you-are-adding).
 
 ### 1.1 Register Family in `internal/agentcatalog/agentcatalog.go`
 
@@ -91,59 +94,79 @@ Adding a family to `internal/agentcatalog` automatically wires:
 
 ---
 
-## Step 2: Live Activity & Process Identification
+## Step 2: Detection - sync or vendor the manifest, add the alias, mint a fixture
 
-`internal/agentactivity` classifies live agent state (`working`, `blocked`, `idle`, `done`, `unknown`) from pane titles, tmux screen captures, and process information.
+`internal/agentactivity` classifies live agent state (`working`, `blocked`, `idle`, `done`, `unknown`) from pane titles, tmux screen captures, and process information. There are no Go rule tables left. Every agent Sidecar detects executes Herdr's vendored detection manifest through `internal/agentactivity/manifest`, and anything Sidecar knows that upstream does not is a data overlay under `internal/agentactivity/manifests/sidecar/`. See `docs/plans/active/herdr-detection-parity.md` and `docs/reference/herdr-detection-parity.md`.
 
-### 2.1 Register Process Name in `internal/agentactivity/activity.go`
+That makes this step three moves rather than a subsystem: **sync or vendor the manifest, add the alias, mint a fixture from `explain --file`.** It is also the only step a *detection-only* family needs at all.
 
-1. Update `identifyProcessName(command)`:
-   ```go
-   case command == "muse" || strings.HasPrefix(command, "muse-"):
-       return "muse"
-   ```
-2. Add the provider to `processGate` in `internal/agentactivity/manifest_detect.go`:
-   ```go
-   case "muse":
-       return museProcess(command)
-   ```
-3. Update `Supports(agent string) bool`:
-   ```go
-   case "codex", "claude", "grok", "antigravity", "pi", "copilot", "cursor", "opencode", "amp", "muse":
-       return true
-   ```
-4. If the CLI runs under a generic runtime wrapper like Node, Bun, or Python, check `NeedsProcessIdentity()` and screen identity heuristics in `Identify()`.
+### 2.0 Decide which shape you are adding
 
-### 2.2 Vendor the detection manifest, not a Go rule table
+There are two kinds of agent family, and picking the wrong one is the difference between one commit and seven.
 
-There are no Go rule tables left. Every provider Sidecar claims executes Herdr's vendored detection manifest through `internal/agentactivity/manifest`, and anything Sidecar knows that upstream does not is a data overlay under `internal/agentactivity/manifests/sidecar/`. `internal/agentactivity/<provider>.go` holds the process gate, a comment recording what the deleted rule table knew and where it went, and nothing else. See `docs/plans/active/herdr-detection-parity.md` and `docs/reference/herdr-detection-parity.md`.
+**Detection-only** is an agent Sidecar recognises in a pane and never offers to start. It is registered in `detectionFamilies` in `internal/agentcatalog/agentcatalog.go` with an id, a display name, a short label, and Herdr's process aliases, and nothing else: no `Command`, no `ResumeArgs`, no `AdapterID`, no `SkipPermissionsArg`. It skips Steps 1, 3, 4, 5 and 6 entirely. Ten of them were registered in Phase 4 of the parity plan (Cline, Devin, Droid, Hermes, Kilo, Kimi, Kiro, Maki, Qoder, Qwen) and none of them cost a line of theme work, because `styles.AgentColor` answers `TextMuted` for a provider no theme registers and `styles.AgentLabel` falls back to the bare name. This is the right shape when Herdr publishes a manifest for the agent and nobody has asked Sidecar to launch it.
 
-1. **Check whether the manifest is already vendored.** `ls internal/agentactivity/manifests/upstream/` lists 21 agents; Herdr's catalog is likely to have the one you are adding. If it does, the detection half of this step is already done — the loader keys on the file name, so `ManifestAgentID` is the only place a Sidecar family name that differs from Herdr's file name is written down (today: `copilot` → `github-copilot`).
+**Full** is an agent Sidecar launches, resumes, reads transcripts for, and colours. It is registered in `families` in the same file and works through all seven subsystems below. This is the right shape when a user will pick the agent from a creation modal.
+
+Promoting a detection-only family to a full one later is exactly the seven steps in this guide with detection already done. Nothing has to be undone first: move the entry from `detectionFamilies` to `families`, fill in the launch fields, and add it to the `detectionOnly` switch's opposite side in `internal/agentactivity/activity.go`.
+
+The id of a detection-only family is **Herdr's own agent label**, not a prettier product name, so the manifest file name, the key into `aliases.upstream.json`, and `sidecar agent explain --agent` all agree with no mapping. That is why Qoder is registered as `qodercli`. A full family may use a Sidecar spelling, at the cost of an entry in `ManifestAgentID` and `HerdrAgentLabel` in `manifest_detect.go` (today: `copilot` → `github-copilot`, `antigravity` → `agy`).
+
+### 2.1 Sync or vendor the manifest
+
+1. **Check whether it is already vendored.** `ls internal/agentactivity/manifests/upstream/` lists 21 agents, and Herdr's catalog is likely to have the one you are adding. If it does, the rule half of detection is already done and you write no regexes.
 
 2. **If it is not vendored, sync rather than write.** `scripts/sync-herdr.sh` refreshes the whole vendored tree from a Herdr ref, updates `upstream.lock.json`, and renders `report.md`. Never hand-edit a file under `upstream/`: `TestVendoredManifestsMatchLock` fails on any edit, which is what keeps a re-sync a clean file replacement.
 
-3. **Write the process gate.** `<provider>Process(command string) bool` is Sidecar's own refusal and is stricter than Herdr's: it declines to evaluate the manifest at all unless the pane's foreground command is the provider or a permitted runtime wrapper. Register it in `processGate` in `manifest_detect.go` and give the provider a `Detect<Provider>` wrapper that refuses with `<provider>.process-mismatch` and otherwise calls `DetectManifestResult`.
+3. **If upstream has no manifest for the agent at all**, this guide cannot help you skip the work: write the rules as a Sidecar overlay in the same grammar (`internal/agentactivity/manifests/sidecar/<agent>.toml`), prefix every rule id `sidecar.`, and open a pull request against Herdr carrying the same rules and a sanitized fixture so the overlay can be deleted on a later sync.
 
-4. **Mint a fixture and read which rule matched.**
+### 2.2 Add the alias
 
-   ```bash
-   tmux -L probe -f /dev/null new-session -d -s cap -c "$PWD" -x 120 -y 40
-   tmux -L probe send-keys -t cap 'muse' Enter && sleep 12
-   tmux -L probe capture-pane -p -e -N -t cap > /tmp/muse.txt
-   tmux -L probe kill-server
-   sidecar agent explain --file /tmp/muse.txt --agent muse
-   sidecar agent explain --file /tmp/muse.txt --agent muse --print-window   # what detection saw
-   ```
+`identifyProcessName` in `internal/agentactivity/activity.go` is the one place a process name becomes a family id, and its vocabulary is Herdr's `lookup_agent` table as extracted into `internal/agentactivity/manifests/aliases.upstream.json`. Add one case carrying every spelling the table has for the agent:
 
-   Save the capture under `internal/agentactivity/testdata/<provider>/` in the header format the other fixtures use (`pane_title:`, `pane_current_command:`, `pane_height:`, an optional `state:` the census checks, then a line reading exactly `screen:`). `TestFixtureCensus` classifies every fixture and fails when one declares a state it does not reach.
+```go
+case oneOf(name, "qwen", "qwen code", "qwen-code"):
+    return "qwen"
+```
 
-5. **Only then consider an overlay.** An overlay rule is a claim that upstream is wrong or silent about a screen you have captured, and every one of them costs something on the next sync. Write it in `internal/agentactivity/manifests/sidecar/<herdr-agent-id>.toml`, prefix new rule ids `sidecar.`, state which upstream priorities it sits between and why, and prove it with the fixture. `scripts/herdr-diff.sh` reports a rule that reaches the verdict Herdr reaches without it as **redundant** and fails, which is how an overlay rule that has stopped earning its place gets deleted.
+`normalizeProcessName` has already lower-cased, trimmed, taken the path basename, and stripped one launcher suffix (`.exe .cmd .bat .ps1 .js`), so the case carries bare names only. Two alias shapes in the table are not plain strings and are handled outside the switch: `versioned_binary_prefixes` (Herdr's `muse-bin-<digit>` rule, which today only Muse needs) and `normalized_suffixes`, which is the stripping above.
 
-### 2.3 Critical activity detection rules
+Then add the id to `Supports` in the same file: the `detectionOnly` switch for a detection-only family, or the launchable list for a full one. `Supports` is what `Detect` gates on, so an agent missing from it answers `unsupported-agent` for every pane and shows no badge. `TestSupportedProviderSetIsFrozen` in `compat_test.go` is deliberately a frozen set: widening it is a decision, and the reason belongs in that test's comment.
+
+A **detection-only** family needs no process gate of its own. `processGate` in `manifest_detect.go` falls through to `identifyProcessName(command) == agent || ob.ProcessIdentity == agent`, which is the same refusal every provider makes, evaluate `qwen.toml` only against a pane running Qwen, without a file per agent to say so. It reads both identity inputs because `Identify` resolves `ProcessIdentity` first: a pane reporting `node` whose foreground argv[0] basename is `qwen` is claimed as Qwen, and a gate reading only the command name would then refuse every observation on it, leaving the row with a provider chip stuck at unknown. It is still strict: where neither input names the agent, such as a `#!/usr/bin/env node` shim whose argv[0] is the interpreter, the pane is refused rather than evaluated. That costs a missing badge and buys the guarantee that one agent's manifest never reads another's screen.
+
+A **full** family writes `<provider>Process(command string) bool` in `internal/agentactivity/<provider>.go` and registers it in `processGate`. Do that when the agent runs under a shared runtime and the gate has to admit the wrapper.
+
+### 2.3 Mint a fixture from `explain --file`
+
+```bash
+tmux -L probe -f /dev/null new-session -d -s cap -c "$PWD" -x 120 -y 40
+tmux -L probe send-keys -t cap 'qwen' Enter && sleep 12
+tmux -L probe capture-pane -p -e -N -t cap > /tmp/qwen.txt
+tmux -L probe kill-server
+sidecar agent explain --file /tmp/qwen.txt --agent qwen
+sidecar agent explain --file /tmp/qwen.txt --agent qwen --print-window   # what detection saw
+sidecar agent explain --file /tmp/qwen.txt --agent qwen --json           # the record the harness diffs
+```
+
+`sidecar agent explain --file PATH --agent KIND [--title T] [--rows N] [--print-window] [--json]` runs the screen lane alone over a saved capture: no tmux, no lifecycle store, no running agent. `--agent` takes any id Sidecar vendors a manifest for, not only the ones it registers as families, so a manifest can be exercised before anything is registered at all. `--title` and `--rows` stand in for a header the capture does not carry; `--rows` is the detection read window and defaults to the fixture header, else 24.
+
+Use a private tmux socket (`-L probe`) throughout. `tmux -L probe kill-server` is the teardown: killing the session alone leaves the probe server running, and every command above names the socket, so it never reaches the default server. Never run `tmux kill-server` without `-L probe`; the default server holds live sessions.
+
+Save the capture under `internal/agentactivity/testdata/<agent>/` in the header format the other fixtures use (`pane_title:`, `pane_current_command:`, `pane_height:`, an optional `state:` the census checks, then a line reading exactly `screen:`). `internal/agentactivity/testdata/README.md` is the contract: a fixture is a real capture reduced to evidence rows with no conversation text, or it is synthetic and its `source:` header says so. `TestFixtureCensus` classifies every fixture and fails when one declares a state it does not reach.
+
+A fresh fixture per new agent is not required to register it, because the manifest is already proved upstream, but it is what turns "the badge looked wrong once" into a test, and it is what gives the agent a row in the census and in `scripts/herdr-diff.sh`.
+
+### 2.4 Only then consider an overlay
+
+An overlay rule is a claim that upstream is wrong or silent about a screen you have captured, and every one of them costs something on the next sync. Write it in `internal/agentactivity/manifests/sidecar/<herdr-agent-id>.toml`, prefix new rule ids `sidecar.`, state which upstream priorities it sits between and why, and prove it with the fixture. `scripts/herdr-diff.sh` reports a rule that reaches the verdict Herdr reaches without it as **redundant** and fails, which is how an overlay rule that has stopped earning its place gets deleted.
+
+### 2.5 Critical activity detection rules
 
 - **Do not reintroduce a Go rule table.** If a screen is misread, the fix is an overlay rule with a fixture, or a pull request to Herdr.
 - **Overlays that retain state need corroborating chrome.** A rule keyed on a bare word ("transcript", "resume session") freezes the badge for `SkipRetentionCap` whenever a turn merely discusses one. Two such rules were deleted in the Phase 2 cutover for exactly this reason.
-- **Verify with tests**: `go test ./internal/agentactivity/...`, and `TestTheProcessNameVocabularyMatchesTheAgentCatalog` for the identity half.
+- **Do not add a curated colour, an icon, a picker entry, a resume path, or a conversation adapter for a detection-only family.** Each of those has its own cost in twenty curated themes and the website palette, and none of them is needed for a state badge.
+- **Verify with tests**: `go test ./internal/agentactivity/... ./internal/agentcatalog/...`, and specifically `TestTheProcessNameVocabularyMatchesTheAgentCatalog` (both halves of the catalog resolve), `TestUpstreamAliasesResolveForClaimedFamilies` (every upstream alias for every registered family resolves), and `TestEveryVendoredManifestIsRegisteredOrDeclaredUnregistered` (a synced-in agent is either registered or has a recorded reason it is not).
 
 ---
 
@@ -340,8 +363,20 @@ SIDECAR_BIN=$HOME/go/bin/sidecar ./scripts/tmux-drive.sh start 200 50
 
 ## Summary Checklist for Adding a New CLI
 
+### Detection-only family
+
+- [ ] **Step 2.0**: Add a four-field entry to `detectionFamilies` in `internal/agentcatalog/agentcatalog.go`: id (Herdr's agent label), display name, short label, Herdr's aliases, and nothing else. The display name and the short label are read: `agentcatalog.Label` is what a prose surface shows, and `styles.AgentLabel` lowercases the short label into the agent chip, which is why Qoder's chip reads `qoder` while its id stays `qodercli`.
+- [ ] **Step 2.1**: Confirm the manifest is vendored under `internal/agentactivity/manifests/upstream/`, or run `scripts/sync-herdr.sh`.
+- [ ] **Step 2.2**: Add the alias case to `identifyProcessName()` and the id to the `detectionOnly` switch in `internal/agentactivity/activity.go`.
+- [ ] **Step 2.3**: Optionally mint a fixture with `sidecar agent explain --file`.
+- [ ] **Tests**: `go test ./internal/agentactivity/... ./internal/agentcatalog/... ./internal/styles/...`.
+
+Steps 1, 3, 4, 5 and 6 do not apply, and no theme, icon, adapter, picker or resume work is owed.
+
+### Full family
+
 - [ ] **Step 1 (`internal/agentcatalog`)**: Add `Family` entry with launch/resume args and skip-permissions flag (`--yolo` for Muse).
-- [ ] **Step 2 (`internal/agentactivity`)**: Add process name to `identifyProcessName()`, dispatch in `Detect()`, and create `internal/agentactivity/<name>.go` with spinner and state rules (idle `⟩` for Muse, not `❯`).
+- [ ] **Step 2 (`internal/agentactivity`)**: Vendor or sync the detection manifest, add the process alias to `identifyProcessName()` and the id to `Supports()`, write `<provider>Process` and register it in `processGate`, and mint a fixture with `sidecar agent explain --file`.
 - [ ] **Step 3 (`internal/plugins/workspace`)**: Add `AgentType` constant, append to `buildSkipPermissionsFlags()`, and set optional system prompt / print mode flags; add `AgentMuse` case to `detectAgentSessionStatus` if file-based status is supported.
 - [ ] **Step 4 (`internal/agentlifecycle` & `agentsession`)**: Add capability to `capabilities.json` (use `screen-fallback`/`none` if no hooks as for Muse), register official source only when a hook is shipped, and configure approved store roots (`XDG_DATA_HOME/muse/sessions` for Muse).
 - [ ] **Step 5 (`internal/adapter`)**: Implement conversation adapter (`adapter.go`, `types.go`, `watcher.go`, `register.go`), register constructor, and add blank import in `cmd/sidecar/main.go`.

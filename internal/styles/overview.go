@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+
+	"github.com/marcus/sidecar/internal/agentcatalog"
 )
 
 // defaultProjectHues is the package-level ramp NormalizePalette falls back to
@@ -127,15 +129,25 @@ func AgentIcon(provider string) string {
 // just the provider name. Used for chips and compact agent labels.
 // Provider names are lowercased so every surface shows the same token
 // (matching conversations adapters and the Agent Overview board).
+//
+// The name comes from agentcatalog.ShortLabel rather than from the raw id, so a
+// family whose id is not a name still renders one. For the launchable ten the
+// two are the same token — Short lowercased is "claude", "codex", "opencode" —
+// and this changes nothing they render. It changes one of the ten
+// detection-only families: Qoder's id is `qodercli` because that is Herdr's
+// manifest label, and a chip reading `qodercli` names a file rather than a
+// program. A provider the catalog does not name at all, such as "warp", still
+// passes through as itself.
 func AgentLabel(provider string) string {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	if provider == "" {
 		return ""
 	}
+	name := strings.ToLower(agentcatalog.ShortLabel(provider))
 	if icon := AgentIcon(provider); icon != "" {
-		return icon + " " + provider
+		return icon + " " + name
 	}
-	return provider
+	return name
 }
 
 // AgentChipFill is the background behind an agent chip.

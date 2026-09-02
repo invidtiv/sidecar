@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-09-01T20:39:34Z",
+  "generated_at": "2026-09-02T06:09:09Z",
   "engine_version": 3,
   "herdr": {
     "repository": "https://github.com/herdrdev/herdr",
     "ref": "e2b85c7",
     "commit": "e2b85c73615b37a483eefa839923d9aff8e629b3",
     "source_dir": "/Users/marcus/code/herdr",
-    "pinned_release_tag": "v0.8.2"
+    "pinned_release_tag": "preview-2026-08-31-b1ff4582e968"
   },
   "catalog": {
     "url": "https://herdr.dev/agent-detection/index.toml",

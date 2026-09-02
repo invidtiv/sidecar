@@ -42,10 +42,27 @@ type MatchedRule struct {
 // the per-rule regex_incompatible note — are additions Herdr has no equivalent
 // for; nothing Herdr emits is renamed or dropped from the shared fields.
 type Explain struct {
-	Agent           string       `json:"agent,omitempty"`
-	State           State        `json:"state"`
-	ManifestSource  string       `json:"manifest_source"`
-	ManifestVersion string       `json:"manifest_version"`
+	// Agent is the agent the caller asked about, from Input.Agent, which is
+	// what Herdr reports here too. It is not the loaded manifest's id: see the
+	// note on Input.Agent.
+	Agent           string `json:"agent,omitempty"`
+	State           State  `json:"state"`
+	ManifestSource  string `json:"manifest_source"`
+	ManifestVersion string `json:"manifest_version"`
+	// CachedRemoteVersion is the version in the runtime fetch cache, or "" when
+	// detection.remoteManifests is off, nothing has been fetched yet, or the
+	// cached file was refused. Herdr emits the same field under the same name
+	// (manifest.rs:43).
+	CachedRemoteVersion string `json:"cached_remote_version"`
+	// VendoredVersion and ActiveSource are Sidecar's own. Herdr's bundled
+	// manifest is the binary, so it has no separate version to report and its
+	// `manifest_source` label is the only statement of which file won. Sidecar
+	// reports both as fields because "am I ahead of the vendored tree?" is the
+	// question opting in to a runtime fetch creates, and an agent reading this
+	// record should not have to parse a human-readable label to answer it.
+	// ActiveSource is "bundled", "remote", or "local override".
+	VendoredVersion string       `json:"vendored_version"`
+	ActiveSource    string       `json:"active_source"`
 	OverlayApplied  bool         `json:"overlay_applied"`
 	MatchedRule     *MatchedRule `json:"matched_rule"`
 	VisibleIdle     bool         `json:"visible_idle"`
@@ -56,9 +73,14 @@ type Explain struct {
 	// pointers: Herdr emits null where these are empty, and the differential
 	// harness normalises null to "" on both sides rather than making every Go
 	// caller dereference.
-	SkippedUpdateReason string          `json:"skipped_update_reason"`
-	FallbackReason      string          `json:"fallback_reason"`
-	EvaluatedRules      []EvaluatedRule `json:"evaluated_rules"`
+	SkippedUpdateReason string `json:"skipped_update_reason"`
+	FallbackReason      string `json:"fallback_reason"`
+	// Warning is what the loader had to ignore to produce this manifest: a
+	// local override or a Sidecar overlay that was found and refused, with the
+	// reason. Herdr emits the same field under the same name for the same
+	// reason, so a refused override reads identically in both records.
+	Warning        string          `json:"warning"`
+	EvaluatedRules []EvaluatedRule `json:"evaluated_rules"`
 }
 
 // EvaluatedRule is one rule's result. Every rule in the manifest appears here,
@@ -168,7 +190,7 @@ func (c *Compiled) evaluate(in Input, explain bool) (Verdict, *Explain) {
 
 	if winner == nil {
 		verdict := Verdict{State: StateIdle, FallbackReason: DefaultKnownAgentIdleFallback}
-		return verdict, c.explainRecord(verdict, evaluated, explain)
+		return verdict, c.explainRecord(in.Agent, verdict, evaluated, explain)
 	}
 
 	rule := winner.rule
@@ -192,10 +214,10 @@ func (c *Compiled) evaluate(in Input, explain bool) (Verdict, *Explain) {
 	if rule.SkipStateUpdate {
 		verdict.SkippedUpdateReason = "matched_rule:" + rule.ID
 	}
-	return verdict, c.explainRecord(verdict, evaluated, explain)
+	return verdict, c.explainRecord(in.Agent, verdict, evaluated, explain)
 }
 
-func (c *Compiled) explainRecord(v Verdict, evaluated []EvaluatedRule, want bool) *Explain {
+func (c *Compiled) explainRecord(agent string, v Verdict, evaluated []EvaluatedRule, want bool) *Explain {
 	if !want {
 		return nil
 	}
@@ -203,10 +225,13 @@ func (c *Compiled) explainRecord(v Verdict, evaluated []EvaluatedRule, want bool
 		evaluated = []EvaluatedRule{}
 	}
 	return &Explain{
-		Agent:               c.Manifest.ID,
+		Agent:               agent,
 		State:               v.State,
 		ManifestSource:      c.Source,
 		ManifestVersion:     c.Manifest.Version,
+		CachedRemoteVersion: c.CachedRemoteVersion,
+		VendoredVersion:     c.VendoredVersion,
+		ActiveSource:        c.ActiveSource,
 		OverlayApplied:      c.OverlayApplied,
 		MatchedRule:         v.MatchedRule,
 		VisibleIdle:         v.VisibleIdle,
@@ -215,6 +240,7 @@ func (c *Compiled) explainRecord(v Verdict, evaluated []EvaluatedRule, want bool
 		SkipStateUpdate:     v.SkipStateUpdate,
 		SkippedUpdateReason: v.SkippedUpdateReason,
 		FallbackReason:      v.FallbackReason,
+		Warning:             c.Warning,
 		EvaluatedRules:      evaluated,
 	}
 }

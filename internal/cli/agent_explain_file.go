@@ -15,6 +15,16 @@ import (
 // `sidecar agent explain --file PATH --agent KIND` runs the screen lane alone
 // over a saved capture: no tmux, no lifecycle store, no running agent.
 //
+// One input is not the file: the manifest still comes from manifests.Load, so a
+// local override under ~/.config/sidecar/agent-detection replaces the vendored
+// manifest here exactly as it does on a live pane. Two people running this over
+// the same fixture can therefore reach different verdicts. That is the point of
+// the override -- tuning a rule against a saved screen is the loop it exists for
+// -- and the record says which file answered on its `manifest` line, with a
+// `warning` line whenever an override was found and refused. A run that must not
+// see one, such as scripts/herdr-diff.sh, passes `-config` to move the config
+// axis, which moves the override directory with it.
+//
 // It exists for two jobs the live command cannot do. First, a wrong badge is
 // reproduced from the fixture that produced it, which is what turns "it said
 // idle once" into a test. Second, it is how a new fixture is minted: capture a
@@ -68,11 +78,12 @@ func explainFile(env Env, f lifecycleFlags, help string) int {
 		return 2
 	}
 	// A kind Sidecar claims as a provider is evaluated the way a live pane is,
-	// process gate and all. A kind it merely vendors a manifest for — `kiro`,
-	// `qodercli` — is evaluated as a manifest, with no gate and no verdict, so
-	// that the overlay rules in those two files have a fixture, a census row and
-	// a differential-harness row like every other rule. See
-	// agentactivity.ExplainVendoredManifest.
+	// process gate and all. A kind it merely vendors a manifest for is evaluated
+	// as a manifest, with no gate and no verdict, so that the rules in that file
+	// have a fixture, a census row and a differential-harness row like every
+	// other rule. Since Phase 4 registered the ten detection-only families the
+	// second branch is `gemini` alone, plus whatever a future sync brings in
+	// before someone registers it. See agentactivity.ExplainVendoredManifest.
 	provider := agentactivity.Supports(f.agent)
 	if !provider && !agentactivity.HasVendoredManifest(f.agent) {
 		// A rejected value, not a malformed command line: --agent was spelled
@@ -165,6 +176,22 @@ func writeManifestExplainText(env Env, e *manifest.Explain) {
 	_, _ = fmt.Fprintf(env.Stdout, "agent: %s\n", e.Agent)
 	_, _ = fmt.Fprintf(env.Stdout, "state: %s\n", e.State)
 	_, _ = fmt.Fprintf(env.Stdout, "manifest: %s %s\n", e.ManifestSource, e.ManifestVersion)
+	// Which versions were available and which one answered. The line is printed
+	// only when a runtime fetch has actually cached something, because with
+	// detection.remoteManifests off -- the default -- the vendored version and
+	// the active version are the same number twice, and a line that says nothing
+	// on every ordinary run is a line nobody reads on the run where it matters.
+	if e.CachedRemoteVersion != "" {
+		_, _ = fmt.Fprintf(env.Stdout, "versions: vendored=%s remote=%s active=%s (%s)\n",
+			dashIfEmpty(e.VendoredVersion), e.CachedRemoteVersion,
+			dashIfEmpty(e.ManifestVersion), dashIfEmpty(e.ActiveSource))
+	}
+	if e.Warning != "" {
+		// A local override or an overlay that was found and refused. It goes
+		// directly under the manifest line because it is the answer to "why is
+		// the manifest not the one I put there".
+		_, _ = fmt.Fprintf(env.Stdout, "warning: %s\n", e.Warning)
+	}
 	if e.MatchedRule != nil {
 		_, _ = fmt.Fprintf(env.Stdout, "rule: %s (region=%s priority=%d)\n",
 			e.MatchedRule.ID, e.MatchedRule.Region, e.MatchedRule.Priority)
