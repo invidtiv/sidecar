@@ -1,0 +1,258 @@
+# Sidecar overlay for codex.
+#
+# Five rules and one disable. In order down the file: a main turn parked on a
+# background terminal is working; explicit idle needs the composer rather than a
+# non-empty tmux pane title; a turn whose status line has been pushed off the
+# bottom three lines by tool output is still working; the approval prompt whose
+# option line empties both of upstream's prompt-marker-relative regions is
+# blocked; and upstream's `weak_blocker` is replaced by id so that the blocked
+# lane it puts a pane on still raises Sidecar's attention flag.
+#
+# --- The background terminal ---
+#
+# Herdr's codex.toml has no background-terminal rule at all. Upstream treats a
+# background terminal as something the user started and the agent is not waiting
+# on, so a pane in that state falls through to `osc_title_idle` and reads idle.
+# That is right for the case Herdr models, and wrong for the one Sidecar
+# captured (testdata/codex/background_terminal.txt): Codex itself renders
+# "Waiting for background terminal (… esc to interrupt)" while the *turn* is
+# parked on the command, and calling that idle makes the tracker announce a
+# completed turn while the release script is still running.
+#
+# The gate is the pre-manifest rule's, unchanged, and it is three conjunctions
+# deep on purpose. It needs the waiting line at the head of a line, a *running*
+# count of at least one, and both of Codex's live hints (`/ps to view`,
+# `/stop to close`) in either order. A finished wait ("Waited for background
+# terminal") has no running count; a long-lived helper someone left open has no
+# waiting line. Only the live shape matches, which is what
+# TestCodexBackgroundTerminalRequiresCurrentRunningChrome pins.
+#
+# Priority 500 is upstream's own working tier (`screen_working_fallback`), so
+# every blocker still outranks it — `live_strong_blocker` 900, `trust_directory`
+# 950, `weak_blocker` 600, `osc_title_blocked` 1100 — and it beats the idle rule
+# whose verdict it exists to displace: upstream's `osc_title_idle` (100) on
+# Herdr's side, `sidecar.composer_idle` at the same priority here.
+#
+# This is a candidate for an upstream pull request: the fixture is real and the
+# rule is not Sidecar-specific. Delete it the day Herdr carries an equivalent.
+
+id = "codex"
+
+[[rules]]
+id = "sidecar.background_terminal_working"
+state = "working"
+priority = 500
+region = "bottom_non_empty_lines(12)"
+visible_working = true
+regex = ['(?ims)^\s*[•◦]?\s*Waiting for background terminal\b.*[1-9][0-9]* background terminals? running\b.*(?:/ps to view.*?/stop to close|/stop to close.*?/ps to view)']
+
+# --- Codex idle must be the composer, not the pane title ---
+#
+# Upstream reaches idle through `osc_title_idle`, whose whole matcher is
+# `regex = ['\S']` on the title: any non-empty title with no spinner frame and
+# no "Action Required" in it is an explicit, visible idle. That is sound on
+# Herdr's input, where `osc_title` is a decoded OSC 0/2 payload and genuinely
+# empty until the program writes one. It is not sound on Sidecar's input. tmux
+# seeds `#{pane_title}` with the host name, so a Sidecar pane's title is
+# effectively never empty — which turns "no rule matched" into "explicitly
+# idle", visible flag and all, on every unmatched Codex screen. The tracker
+# turns a visible idle out of working into a completed turn, so any screen
+# upstream has no rule for would announce a completion that never happened.
+#
+# The two rules below put that back the way it was before the cutover: explicit
+# idle needs the composer on screen, and everything else falls through to
+# `codex.known-live-fallback`, which is low-evidence and cannot announce a
+# completion. `sidecar.composer_idle` is the deleted `codex.screen.idle` at
+# upstream's own idle priority, plus the `not` gate the paragraph below is
+# about.
+#
+# Delete both the day Sidecar can hand the engine a real OSC title rather than
+# tmux's `#{pane_title}` — at that point upstream's rule is correct here too.
+
+[[rules]]
+id = "osc_title_idle"
+disable = true
+
+# The `not` gate is not decoration, and it is the half of this rule the first
+# cut got wrong. Codex's composer stays on screen *during* a turn: while a tool
+# runs, the pane reads
+#
+#   • Working (45s • esc to interrupt) · editing files
+#     └ apply_patch /Users/…/file.go
+#
+#   › ⏎ send   ⌃J newline
+#     gpt-5.6-sol low · ~/code/tasks
+#
+# which puts the status line four non-empty lines from the bottom. Upstream's
+# `screen_working_fallback` reads `bottom_non_empty_lines(3)` and so cannot see
+# it; without the gate this rule saw the `›` at 100, nothing outranked it, and a
+# pane with a plain or lagging title read as a *visible* idle in the middle of a
+# tool call — which the tracker turns into a completed turn. That is the exact
+# false "done" the whole plan opened with, reintroduced by a rule meant to
+# prevent it.
+#
+# The gate is the interrupt hint, over this rule's own region, because that hint
+# is on screen for exactly as long as the turn is live: Codex prints it beside
+# the elapsed timer and clears it when the turn ends. `sidecar.working_chrome`
+# below is the positive half — the gate alone would only demote the screen to
+# the low-evidence fallback, and a turn that is running should read as working
+# rather than as unknown.
+[[rules]]
+id = "sidecar.composer_idle"
+state = "idle"
+priority = 100
+region = "bottom_non_empty_lines(8)"
+visible_idle = true
+line_regex = ['^\s*›(?:\s|$)']
+not = [{ regex = ['(?i)esc to interrupt'] }]
+
+# The status line a running turn paints, read deep enough to still be visible
+# when tool output has pushed it up the pane.
+#
+# This is the deleted `codex.screen.working` (`Working \(.*esc to interrupt\)`
+# over the last twelve lines) restored, with upstream's own anchoring and
+# upstream's own interrupted gate. Upstream carries the same signal as
+# `screen_working_fallback` and carries it better — its pattern spells out the
+# trailing " · <detail>" clause and it excludes an interrupted turn — but it
+# reads only the bottom three non-empty lines, which is the bottom of an *idle*
+# pane. One tool call's worth of output moves the line out of that window, and
+# this rule is what still sees it there. Everything else about the rule is
+# upstream's, and deliberately so: it exists to extend upstream's reach, not to
+# disagree with it.
+#
+# Two narrowings the spot-check of the first cut asked for, both of them
+# upstream's own text:
+#
+#   1. `^[•◦]\s+Working \(` rather than `^\s*[•◦]?\s*Working \(`. The deleted Go
+#      rule matched the phrase unanchored, but the chrome Codex actually paints
+#      is a status glyph in column 0 — `background_terminal.txt` and
+#      `tool_running_composer.txt` both show it there — so an indented line
+#      quoting the phrase inside prose is not this rule's screen. Without the
+#      anchor a turn that pastes its own status line into the transcript reads
+#      as live work for as long as the paste stays in the bottom twelve lines.
+#   2. `not = [{ contains = ["■ Conversation interrupted"] }]`, copied verbatim
+#      from `screen_working_fallback`. An interrupted turn leaves the status
+#      line on screen with the banner beneath it; upstream refuses to call that
+#      working and so must this rule, which reads four times as far up the pane
+#      and therefore sees the pair more often, not less.
+#
+# What the interrupted screen then resolves to is worth stating, because it is
+# not the composer idle and that was a deliberate choice. On
+#
+#   • Working (45s • esc to interrupt) · editing files
+#     └ apply_patch …
+#
+#   ■ Conversation interrupted
+#
+#   › ⏎ send   ⌃J newline
+#     gpt-5.6-sol low · ~/code/tasks
+#
+# this rule is gated off by the banner and `sidecar.composer_idle` is gated off
+# by the interrupt hint the stale status line still carries, so nothing matches
+# and the pane reads `codex.known-live-fallback` — a low-evidence idle that
+# establishes the lane without announcing a completion. The alternative
+# considered was to teach `sidecar.composer_idle` to ignore its own interrupt
+# gate when the banner is present, which would make this screen an *explicit*
+# visible idle. That is rejected: the same edit would also fire on an
+# interrupted banner still sitting in the scrollback above a turn the user has
+# since restarted, and an explicit visible idle mid-turn is exactly the false
+# "done" this whole overlay exists to prevent. A quiet idle on an interrupted
+# pane costs one unannounced completion; the other direction costs a completion
+# announced while a tool call is running.
+#
+# Priority 490 is deliberately one step *below* upstream's 500 rather than above
+# it. Both rules report the same state with the same visible flag, so on a
+# screen upstream can see there is nothing to gain by displacing it and two
+# things to lose: the evidence string stops naming upstream's rule, and
+# scripts/herdr-diff.sh correctly reports a `sidecar.` rule that reaches the
+# verdict Herdr reaches without it as REDUNDANT. Below 500 this rule fires only
+# where upstream's cannot, which is the only place it is needed.
+#
+# Delete it the day upstream's rule reads more than three lines.
+[[rules]]
+id = "sidecar.working_chrome"
+state = "working"
+priority = 490
+region = "bottom_non_empty_lines(12)"
+visible_working = true
+line_regex = ['^[•◦]\s+Working \(.*esc to interrupt\)']
+not = [{ contains = ["■ Conversation interrupted"] }]
+
+# The approval prompt Codex paints with its own composer glyph on the option
+# line, which is the one blocker shape upstream cannot see.
+#
+# Upstream has two blockers below the title: `live_strong_blocker` reads
+# `after_last_prompt_marker` and `weak_blocker` reads
+# `whole_recent_without_current_prompt_marker`. Both are defined relative to the
+# Codex prompt marker, and this screen puts a `›` on the *option* line:
+#
+#   Would you like to run the following command?
+#   › 1. Yes, proceed (y)
+#     2. No, and tell Codex what to do differently (esc)
+#
+# So the last prompt marker is the option itself — nothing is below it, and the
+# without-marker region is empty. Both regions are blank and neither blocker can
+# fire. Before the cutover `codex.screen.blocked` matched this alternation
+# anywhere in the last eighteen lines and Sidecar read it as blocked;
+# testdata/codex/approval_prompt.txt is the fixture, and
+# testdata/codex/blocked.txt is the same screen with "Action Required" in the
+# title, which is the only reason upstream catches that one.
+#
+# Priority 700 is between `live_strong_blocker` (900) and `weak_blocker` (600):
+# a stronger, more specific blocker still wins, and this still outranks every
+# working and idle rule. The alternation is the deleted rule's, verbatim.
+#
+# It is deliberately left un-narrowed, and the Phase 2 review looked at this. An
+# *answered* prompt still inside the bottom twelve non-empty lines keeps
+# reporting blocked over the turn that follows it, because the question stays on
+# screen after the answer and there is nothing in the alternation to say the
+# answer arrived. Upstream solves that structurally, with prompt-marker-relative
+# regions — which is exactly what this rule exists because it cannot use. A `not`
+# gate would have to name whatever Codex paints beneath an answered prompt, and
+# no capture of that screen exists to write one from. The behaviour is the
+# pre-manifest rule's, unchanged, and it errs towards an attention badge on a
+# pane that no longer needs one rather than towards a missed prompt.
+[[rules]]
+id = "sidecar.approval_blocker"
+state = "blocked"
+priority = 700
+region = "bottom_non_empty_lines(12)"
+visible_blocker = true
+regex = ['(?i)(Action Required|Would you like to run|Press enter to confirm|Allow command)']
+
+# --- The weak blocker keeps Sidecar's attention nag ---
+#
+# Upstream's rule, verbatim, with `visible_blocker = true` added.
+#
+# The engine takes the visible flags from the matched rule rather than from the
+# state, which is Herdr's semantics and is what the cutover adopted. Upstream
+# declares `weak_blocker` blocked with no `visible_blocker`, so a pane matching
+# it lands on the blocked lane carrying no attention flag and the surfaces that
+# key an alert on `Tracker.VisibleBlocker` stay quiet. That is a deliberate
+# upstream choice — the rule is weak and high-recall, meant to classify rather
+# than to interrupt — and it is a behaviour change here: before the cutover
+# every blocked verdict Sidecar minted nagged. What this rule is the last resort
+# for is `[y/n]`, `yes (y)` and a "do you want to" / "would you like to"
+# question beside a yes option, all of which are questions waiting on the user,
+# and a blocked lane nobody is told about is a pane sitting on a question.
+#
+# Nothing else about the rule is changed: same priority, same region, same
+# `any` list. `scripts/herdr-diff.sh` therefore still requires this rule to
+# AGREE with Herdr on state and rule id — the harness does not compare the
+# visible flags — which is what keeps the copy honest against a re-sync.
+#
+# Delete this overlay if a captured screen shows the nag is wrong: a shape this
+# rule reaches that is not a question waiting on the user.
+# testdata/codex/weak_blocker.txt is the fixture it is kept for.
+[[rules]]
+id = "weak_blocker"
+state = "blocked"
+priority = 600
+region = "whole_recent_without_current_prompt_marker"
+visible_blocker = true
+any = [
+  { contains = ["[y/n]"] },
+  { contains = ["yes (y)"] },
+  { contains = ["do you want to"], any = [{ contains = ["yes"] }, { contains = ["❯"] }] },
+  { contains = ["would you like to"], any = [{ contains = ["yes"] }, { contains = ["❯"] }] },
+]

@@ -506,13 +506,19 @@ func TestOverviewStopDiscardsGenerationLocalTrackers(t *testing.T) {
 	m.refreshCollector = m.collector.ForRefresh(1)
 	root := t.TempDir()
 	previous := workspaceinventory.ProjectResult{ProjectKey: root, ProjectRoot: root, Workspaces: []workspaceinventory.Workspace{{ID: "agent", ProjectKey: root, ProjectRoot: root, Kind: workspaceinventory.KindWorktree, Path: root, Provider: "codex"}}}
-	_ = m.refreshCollector.RefreshProjectStatus(m.ctx, previous, []string{root}, []workspaceinventory.Pane{{ID: "%1", Path: root, Command: "codex"}})
+	// The pane carries a title because a real one always does, and because
+	// Codex's vendored Herdr manifest reaches idle through `osc_title_idle`
+	// since the Phase 2 cutover: a title-less observation resolves idle through
+	// the debounced low-evidence fallback instead, which would leave this test
+	// asserting the debounce rather than the tracker discard it is about.
+	pane := []workspaceinventory.Pane{{ID: "%1", Path: root, Command: "codex", Title: "repo"}}
+	_ = m.refreshCollector.RefreshProjectStatus(m.ctx, previous, []string{root}, pane)
 	m.Stop()
 	if m.refreshCollector.Metrics().TrackerCommits != 0 {
 		t.Fatalf("Stop committed tracker state: %#v", m.refreshCollector.Metrics())
 	}
 	next := m.collector.ForRefresh(1)
-	result := next.RefreshProjectStatus(context.Background(), previous, []string{root}, []workspaceinventory.Pane{{ID: "%1", Path: root, Command: "codex"}})
+	result := next.RefreshProjectStatus(context.Background(), previous, []string{root}, pane)
 	if got := result.Workspaces[0].Presentation.Lane; got != agentstatus.LaneIdle {
 		t.Fatalf("stopped Working contaminated next idle state: %s", got)
 	}

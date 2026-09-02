@@ -204,6 +204,12 @@ func (m *Model) applyOpenOnPreview(req uirequest.Request, targetWorkspace worksp
 
 func (m *Model) bindOpenWorkspace(req uirequest.Request) (*workspaceinventory.Workspace, bool) {
 	if req.Origin.HostID != "" {
+		// A machine the user has hidden has no row on this screen, and the
+		// open contract answers "not on screen" by declining rather than
+		// acting on something the user cannot see.
+		if !m.hostShown(req.Origin.HostID) {
+			return nil, false
+		}
 		for _, ws := range m.catalog {
 			if ws.HostID == req.Origin.HostID && ws.TmuxName == req.Origin.TmuxSession && ws.TmuxName != "" {
 				hit := ws

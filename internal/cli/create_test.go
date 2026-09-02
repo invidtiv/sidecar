@@ -420,6 +420,57 @@ func TestCreateShellFromSiblingWorktree(t *testing.T) {
 	if result.Shell.Session == "" {
 		t.Fatal("missing session")
 	}
+	// td-e3a93d: a shell created from inside a worktree must land in that
+	// worktree, not the main checkout registeredProjectForCreate resolves the
+	// project to.
+	if result.Shell.WorkDir != topic {
+		t.Fatalf("workDir = %q, want the worktree %q", result.Shell.WorkDir, topic)
+	}
+}
+
+// TestCreateShellTabAgentFromWorktreeUsesWorktreeWorkDir is td-e3a93d Bug 2's
+// exact repro: `create shell --tab --agent claude` from inside a worktree
+// shell used to land the new workspace shell (and its manifest WorkDir) in
+// the main checkout, because registeredProjectForCreate's project is always
+// the main checkout's registeredProject.Path — never a worktree's. --tab
+// forces the workspace path regardless of the caller's tmux identity, so this
+// covers that path the same way TestCreateShellFromSiblingWorktree covers the
+// beside-the-session default.
+func TestCreateShellTabAgentFromWorktreeUsesWorktreeWorkDir(t *testing.T) {
+	_, stateDir := setupIsolatedCLI(t)
+	root := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	repo := filepath.Join(root, "repo")
+	topic := filepath.Join(root, "repo-topic")
+	initGitRepo(t, repo)
+	runGit(t, repo, "worktree", "add", "-b", "topic", topic)
+	writeProjectMeta(t, stateDir, "demo", repo)
+	writeRegisteredWorktree(t, stateDir, repo, topic)
+	t.Chdir(topic)
+
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"create", "shell", "--tab", "--agent", "claude", "--name", "from-topic-tab", "--json", "--wait", "0"}, &out, &errOut)
+	if !handled || code != 0 {
+		t.Fatalf("--tab --agent from worktree: handled %v code %d stderr %q", handled, code, errOut.String())
+	}
+	var result createShellResult
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = exec.Command("tmux", "kill-session", "-t", result.Shell.Session).Run() })
+	if result.Shell.WorkDir != topic {
+		t.Fatalf("workDir = %q, want the worktree %q", result.Shell.WorkDir, topic)
+	}
+
+	listed, err := shellstate.ListAtPath(filepath.Join(stateDir, "projects", "demo", "shells.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].WorkDir != topic {
+		t.Fatalf("manifest = %+v, want one record with workDir %q", listed, topic)
+	}
 }
 
 func TestCreateShellFromSidecarWSIdentity(t *testing.T) {

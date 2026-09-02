@@ -25,7 +25,7 @@ func (r *scriptedRunner) Run(_ context.Context, args ...string) ([]byte, error) 
 	return []byte(out), nil
 }
 func metadata(pane string) string {
-	return strings.Join([]string{pane, "999999", "0", "0", "zsh", "title", "71"}, "|") + "\n"
+	return strings.Join([]string{pane, "999999", "0", "0", "zsh", "title", "71", "24"}, "|") + "\n"
 }
 
 // recordingRunner keeps every tmux invocation so a test can assert on the

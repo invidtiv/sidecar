@@ -1,0 +1,21 @@
+kind: synthetic negative
+source: false_positive_finished_background.txt with a live spinner row added.
+        The three lines it is built from are the harvested ones; their
+        co-occurrence is the invented part, and it is invented on purpose.
+why: `sidecar.finished_background_tasks_idle` (96) outranks `spinner_working`
+     (90), and it is gated on Cursor's empty-composer placeholder because a
+     live turn is not believed to render one. This fixture is what happens if
+     that belief is ever wrong: without the rule's `not` gate the pane would
+     report an *explicit* visible idle with the spinner still turning, and the
+     tracker would announce a completed turn. With the gate the screen falls to
+     upstream's `background_task_status_working`, which is working — the
+     direction that costs nothing when it is wrong. This fixture must never
+     resolve through a `sidecar.` rule.
+pane_current_command: cursor-agent
+pane_title: unavailable
+state: working
+screen:
+Finished
+3 background tasks
+⬢ Reading 2 files, 1 directory
+→ Plan, search, build anything

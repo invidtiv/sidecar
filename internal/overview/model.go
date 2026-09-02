@@ -361,6 +361,24 @@ type Model struct {
 	viewFlyoutWidth       int
 	viewFlyoutSortIdx     int
 	viewFlyoutMouse       *mouse.Handler
+	// The remotes section is rebuilt whenever the configured set changes, so
+	// its checkboxes are bound to slices the modal owns for the life of one
+	// build. viewFlyoutHostIDs is the order they were built in;
+	// viewFlyoutHostShow is what each box currently reads.
+	viewFlyoutHostIDs   []string
+	viewFlyoutHostShow  []bool
+	viewFlyoutHostsKey  string
+	viewFlyoutShowHosts bool
+
+	// hostConfiguredIDs is the reconciled host set in display order, the one
+	// startHosts last saw. It is what the remotes controls list and what a
+	// hidden entry is validated against.
+	hostConfiguredIDs []string
+
+	// hiddenHosts are registered machines whose rows the browser withholds.
+	// A view filter only: the connection stays up, so unhiding is instant and
+	// a hidden host's notifications still reach the user.
+	hiddenHosts map[string]bool
 
 	pendingViews map[string]*pendingView
 	// openSplit is the request-scoped --split axis override ("right"/"below").
@@ -474,6 +492,8 @@ var (
 	saveSessionsSelected        = state.SetSessionsSelected
 	loadSessionsPaneLayout      = state.GetSessionsPaneLayout
 	saveSessionsPaneLayout      = state.SetSessionsPaneLayout
+	loadSessionsHiddenHosts     = state.GetSessionsHiddenHosts
+	saveSessionsHiddenHosts     = state.SetSessionsHiddenHosts
 )
 
 func New(collector workspaceinventory.Collector) *Model {
@@ -492,6 +512,10 @@ func New(collector workspaceinventory.Collector) *Model {
 	}
 	m.applyWorkspacesEmptyState(0)
 	m.workspaces.SetPinned(loadPinnedWorkspaceIDs())
+	m.hiddenHosts = make(map[string]bool)
+	for _, id := range loadSessionsHiddenHosts() {
+		m.hiddenHosts[id] = true
+	}
 	// The chosen order is as much a part of "where I left off" as the pins and
 	// the sidebar width beside it. Without this the list reshuffled itself on
 	// every launch, which is the one moment a user is least able to tell a
@@ -1586,8 +1610,10 @@ func (m *Model) syncBoard() {
 	// belongs in the same column as a local one rather than in a section of
 	// its own that a reader has to remember to look at.
 	remoteBase := len(m.projects)
-	m.eachHostWorkspace(func(ordinal int, label string, workspace workspaceinventory.Workspace, stale bool) {
-		if !workspace.HasAgent() {
+	m.eachHostWorkspace(func(ordinal int, label string, workspace workspaceinventory.Workspace, stale bool, shown bool) {
+		// The board is a visible projection, like the list: a hidden machine's
+		// agents leave the lanes with it.
+		if !shown || !workspace.HasAgent() {
 			return
 		}
 		m.cards[workspace.ID] = workspace

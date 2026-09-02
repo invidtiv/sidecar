@@ -65,32 +65,42 @@ Explain which evidence authored a pane's lifecycle state
 
 Reports the effective state, which evidence authored it, the source's exercisable tier, the last valid report, and — when lifecycle evidence did not win — exactly why not.
 
+With --file it runs the screen lane alone over a saved capture: no tmux, no lifecycle store, no running agent. It does read the local override directory, so two people reproducing one fixture can reach different verdicts if one of them has an override for that agent; the `manifest` line of the output says which file answered. That is how a wrong badge is reproduced from a fixture, and how a new fixture is minted.
+
+Detection manifests can be tuned locally: a file at ~/.config/sidecar/agent-detection/<file>.toml replaces the vendored Herdr manifest for that agent, where <file> is the vendored file's own base name (github-copilot.toml for Copilot, antigravity.toml for Antigravity). It replaces the Sidecar overlay too rather than layering over it, so a rule Sidecar rewrote upstream is not rewritten under an override. An override that cannot be parsed, that declares a different agent, or that needs a newer engine is ignored and the vendored manifest is used; either way explain prints a warning line saying what was found and why.
+
 Every diagnostic fact the Configuration surface shows is available here, so a pane that is not being driven by its integration always has an actionable reason rather than silence.
 
 This command is read-only. It never locks, compacts, repairs, or creates the lifecycle log.
 
 ```
-Usage: sidecar agent explain [--current | --shell TARGET] [--json]
+Usage: sidecar agent explain [--current | --shell TARGET | --file PATH --agent KIND] [--json]
 ```
 
 **Options:**
 
 - `--current`: Explain the pane this command is running in (the default)
 - `--shell TARGET`: Explain a managed shell by name
+- `--file PATH`: Explain a saved capture offline, with no tmux and no lifecycle store (a local override for the agent is still read)
+- `--agent KIND`: Which agent's manifest to evaluate --file against (required with --file)
+- `--title TEXT`: Pane title for --file when the capture carries no header
+- `--rows N`: Pane height for --file; the detection read window. Must be positive; defaults to the fixture header, else 24
+- `--print-window`: With --file, print the detection read window instead of a verdict
 - `--json`: Write stable structured JSON
 - `-h, --help`: Show this help
 
 **Exit codes:**
 
 - `0`: success, or no-op outside a Sidecar-managed shell
-- `1`: the report could not be stored
+- `1`: internal failure: the explanation could not be produced or written
 - `2`: usage error
-- `5`: invalid context, stale sequence, or run mismatch
+- `5`: invalid context, or a rejected value: an unreadable --file, an unknown --agent
 
 **Examples:**
 
 ```bash
 sidecar agent explain --current --json
+sidecar agent explain --file internal/agentactivity/testdata/claude/blocked.txt --agent claude --json
 ```
 
 ### `sidecar agent get`
@@ -393,6 +403,46 @@ Usage: sidecar agent list [--project NAME] [--include-session-ref] [--json]
 
 ```bash
 sidecar agent list --json
+```
+
+### `sidecar agent manifests`
+
+List every detection manifest, its version, and which source is active
+
+Prints the table `explain` reports for one agent, for every agent Sidecar vendors a manifest for: which of the three sources is active, the version that source carries, the version vendored into this binary, the version in the runtime fetch cache, whether the Sidecar overlay was merged in, and any file that was found and refused.
+
+Precedence is a local override in ~/.config/sidecar/agent-detection, then the newer of the runtime fetch cache and the vendored manifest, with the Sidecar overlay merged onto whichever upstream file won.
+
+The runtime fetch is off unless `detection.remoteManifests` in ~/.config/sidecar/config.json is set to "herdr.dev" or to a catalog index URL. When it is on, Sidecar checks at most once a day, after the first frame, and a check that fails is reported here rather than shown to the user.
+
+Off means off: with the setting off, nothing fetches and no cached manifest is loaded, so every agent runs the vendored file again. A cache left over from when it was on is still listed in the REMOTE column, marked as not in use, because "you have a fetched file and it is not the one running" is what this table exists to say. `--clear-cache` deletes it.
+
+Without a flag this command is read-only: it never fetches, and it never writes the cache or its status file. `--refresh` and `--clear-cache` are the two forms that change something, and each of them prints the table afterwards.
+
+```
+Usage: sidecar agent manifests [--refresh | --clear-cache] [--json]
+```
+
+**Options:**
+
+- `--refresh`: Check the catalog now, ignoring the once-a-day gate (requires detection.remoteManifests to be on)
+- `--clear-cache`: Delete every cached manifest and the fetch status file, then print the table
+- `--json`: Write stable structured JSON
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: success
+- `1`: the vendored manifest tree could not be read, or --refresh or --clear-cache failed
+- `2`: usage error, including --refresh with detection.remoteManifests off
+
+**Examples:**
+
+```bash
+sidecar agent manifests
+sidecar agent manifests --json
+sidecar agent manifests --refresh
+sidecar agent manifests --clear-cache
 ```
 
 ### `sidecar agent prompt`
@@ -998,7 +1048,11 @@ to a completely new surface; --split auto|right|below picks the side of the
 beside-the-session split explicitly (the workspace_terminal_panel feature,
 on by default, must not be disabled). Beside-the-session modes need a running
 instance and a current shell (SIDECAR_SHELL / --shell) and do not add a
-workspace row.
+workspace row: the result's session is a sidecar-tp-… terminal split, not a
+managed shell, so it is invisible to `shell list`, refused by the agent verbs,
+and closable only with `shell delete --target` (nothing else names it).
+Handing a shell to a second agent (coordinate-agents) needs a workspace row, so
+use --tab rather than the default placement.
 
 --agent records which agent family the shell is for, in the same durable field
 the TUI's Create Shell writes. That record is what keeps the shell on the
@@ -2520,6 +2574,11 @@ whatever answers to it, so an unregistered name is refused (exit 3) rather
 than killed. A sidecar-ws-… worktree session resolves but is refused (exit 5):
 removing a checkout carries branch-cleanup decisions this verb cannot express.
 
+A sidecar-tp-… target is different: it is a beside-the-session terminal split
+(`create shell`'s default placement, or --split), never a managed shell, so it
+has no record to tombstone — this is the only CLI path that closes one, and
+--shell/--project are refused alongside it since neither applies.
+
 There is no current-shell form. Deleting the shell you are sitting in would
 kill the session running the command, so the subject is always named.
 
@@ -2540,7 +2599,7 @@ Usage: sidecar shell delete --target SESSION [--project NAME] [--json]
 - `0`: deleted
 - `1`: tmux, ambiguity, or state failure
 - `2`: usage error, including a missing --target
-- `3`: --target names no session this project owns, or one recorded on a different tmux server
+- `3`: --target names no session this project owns (or, for a sidecar-tp-… split, no live session by that name), or one recorded on a different tmux server
 - `5`: a value was rejected: --target names a worktree, or an unknown --project / --shell
 
 **Examples:**

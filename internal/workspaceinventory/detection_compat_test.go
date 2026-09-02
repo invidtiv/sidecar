@@ -119,9 +119,12 @@ func TestObserveRewritesTheProviderFromLiveIdentity(t *testing.T) {
 			wantProvider: "", wantLane: agentstatus.LanePaused, wantSemantic: false, wantEvidence: "",
 		},
 		{
+			// Evidence was `codex.screen.working` before the Phase 2 cutover;
+			// it is now the id of the Herdr rule that matched. Same verdict,
+			// upstream's vocabulary.
 			name: "an identified provider overwrites the configured one", provider: "claude", command: "codex",
 			screen:       "• Working (1s • esc to interrupt)",
-			wantProvider: "codex", wantLane: agentstatus.LaneWorking, wantSemantic: true, wantEvidence: "codex.screen.working",
+			wantProvider: "codex", wantLane: agentstatus.LaneWorking, wantSemantic: true, wantEvidence: "screen_working_fallback",
 		},
 		{
 			// Nothing identifiable leaves the configured provider in place, and
@@ -232,7 +235,9 @@ func TestObservePromotesAPlainWorktreeFromPositiveLiveIdentity(t *testing.T) {
 	if plain.Provider != "codex" || !plain.HasAgent() {
 		t.Fatalf("plain worktree was not promoted by live identity: %#v", plain)
 	}
-	if plain.Presentation.Lane != agentstatus.LaneWorking || plain.Presentation.Evidence != "codex.screen.working" {
+	// `screen_working_fallback` is the Herdr rule id that replaced
+	// `codex.screen.working` in the Phase 2 cutover.
+	if plain.Presentation.Lane != agentstatus.LaneWorking || plain.Presentation.Evidence != "screen_working_fallback" {
 		t.Fatalf("plain worktree presentation = %#v", plain.Presentation)
 	}
 	if !plain.Presentation.ChangedAt.Equal(compatNow) || plain.Item().Agent == nil {

@@ -84,6 +84,13 @@ type rawConfig struct {
 	// what happened to `hosts` the first time, and the symptom was a
 	// correctly-written config that produced no hosts and no error.
 	Hosts *HostsConfig `json:"hosts"`
+	// Detection is a pointer for the same reason: an absent section leaves the
+	// default (remoteManifests off) alone, and an explicitly empty one says so.
+	Detection *rawDetectionConfig `json:"detection"`
+}
+
+type rawDetectionConfig struct {
+	RemoteManifests string `json:"remoteManifests"`
 }
 
 type rawShellsConfig struct {
@@ -581,6 +588,26 @@ func mergeConfig(cfg *Config, raw *rawConfig) {
 	}
 	if raw.Shells != nil && strings.TrimSpace(raw.Shells.TombstoneRetention) != "" {
 		cfg.Shells.TombstoneRetention = strings.TrimSpace(raw.Shells.TombstoneRetention)
+	}
+
+	// Detection
+	//
+	// An unrecognised value is never read as "on": RemoteCatalogURL refuses it,
+	// so RemoteManifestsEnabled is false and nothing fetches. The value is kept
+	// verbatim rather than replaced with the default, which is what lets
+	// `sidecar agent manifests` show the user the typo they wrote and the
+	// reason it was refused. Replacing it here made that impossible -- the verb
+	// could only ever see "off", so its "setting refused" line was unreachable
+	// and the only trace of the typo was this log line, which is not somewhere
+	// anyone looks.
+	if raw.Detection != nil {
+		if value := strings.TrimSpace(raw.Detection.RemoteManifests); value != "" {
+			if _, err := (DetectionConfig{RemoteManifests: value}).RemoteCatalogURL(); err != nil {
+				slog.Warn("config: detection.remoteManifests not understood, runtime manifest fetch stays off",
+					"value", value, "error", err)
+			}
+			cfg.Detection.RemoteManifests = value
+		}
 	}
 
 	// Features

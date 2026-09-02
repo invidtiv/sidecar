@@ -45,6 +45,11 @@ func (t *cliAgentTerminal) Inspect(_ context.Context, target agentcontrol.Target
 		snapshot.CurrentCommand = "codex"
 		snapshot.ProcessIdentity = "codex"
 		snapshot.ShellReady = false
+		// A launched pane always has a title, and the manifest engine reads it:
+		// Codex's blocked and working rules are both `osc_title` rules. This is
+		// the title the codex fixtures these screens come from were captured
+		// with, so a screen and its title describe the same pane.
+		snapshot.Title = "sidecar-agent-status"
 		snapshot.Screen = t.screen
 		if len(t.screens) > 0 {
 			snapshot.Screen = t.screens[min(t.inspects-1, len(t.screens)-1)]

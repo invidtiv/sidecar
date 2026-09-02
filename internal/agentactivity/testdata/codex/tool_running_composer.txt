@@ -1,0 +1,28 @@
+source: synthetic. Codex's normal chrome while a tool call runs, at the shape a
+        real pane shows it: the status line, the tool's own output row beneath
+        it, then a blank row, the composer, and the model/cwd footer. The
+        elapsed time and the file name are the only invented parts; the row
+        order is Codex 0.147's.
+why: this is the regression the Phase 2 review found. The status line sits four
+     non-empty lines from the bottom, so upstream's `screen_working_fallback`
+     (bottom_non_empty_lines(3)) cannot see it, and `sidecar.composer_idle` saw
+     the `›` at priority 100 with nothing above it — so a pane in the middle of
+     an apply_patch read as a *visible* idle and the tracker announced a
+     completed turn mid-turn. The composer rule now carries a `not` gate on the
+     interrupt hint and `sidecar.working_chrome` reads twelve lines deep, which
+     is what this fixture pins. The title is a plain one on purpose: with a
+     spinner in it `osc_title_working` would carry the verdict and the screen
+     rules would never be reached.
+pane_title: tasks
+pane_current_command: codex
+pane_height: 24
+state: working
+screen:
+• Explored repo
+  └ List ls -la
+
+• Working (45s • esc to interrupt) · editing files
+  └ apply_patch internal/agentactivity/activity.go
+
+› ⏎ send   ⌃J newline
+  gpt-5.6-sol low · ~/code/tasks

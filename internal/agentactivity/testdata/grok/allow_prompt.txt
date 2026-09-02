@@ -1,0 +1,45 @@
+source: **real** Grok Build 1.0.13 (5e9a58528b76, stable) tool-permission prompt,
+        2026-09-01, isolated tmux server (`tmux -L gc1` with a private
+        TMUX_TMPDIR, 120x40), `grok --permission-mode default` in a scratch
+        directory. The account's Grok Build inference balance was exhausted
+        (HTTP 402 on every model), so the tool call that raises the prompt came
+        from a local OpenAI-compatible endpoint declared as a `[model.*]` entry;
+        everything below is drawn by Grok's own permission UI from a
+        `run_terminal_command` call for `echo hello`, held open by an
+        `ask = ["Bash(echo *)"]` rule. Nothing was approved.
+why: this file replaces a synthetic fixture that guessed the prompt's shape from
+     the deleted pre-manifest rule `grok.screen.blocked`, whose alternation held
+     `Allow .*\?` and `Enter to confirm`. Grok 1.0.13 renders no screen of that
+     shape: its permission prompt is the ┃-guttered option dialog upstream
+     already describes, and three upstream blockers reach it —
+     `osc_title_blocked` (1300) on the "⚠ Action Required" title,
+     `option_dialog_blocked` (1200) on the numbered ┃ rows, and
+     `permission_scope_selector` (1180) on "Yes, proceed" / "No, reject" over the
+     "←/→:scope" footer. `sidecar.allow_prompt_blocked` (1130) neither fires nor
+     is needed here. See manifests/sidecar/grok.toml and
+     docs/reference/herdr-detection-parity.md.
+shape: reduced from the 40-row capture to its evidence rows — the context/path
+       header, the clock, the user's own prompt row and the empty scrollbar rows
+       are dropped and trailing whitespace is stripped; every retained row is
+       verbatim, including the footer, which the 120-column pane truncates at
+       "Esc:".
+pane_title: ⚠ Action Required - ⠴ - print a greeting… - run the greeting command - grok
+pane_current_command: grok-1.0.13-mac
+pane_height: 40
+state: blocked
+screen:
+     ◆ Run print a greeting                                                                                            █
+    ◆ print a greeting… 13s                                                                       14s ⇣1.63k [↓][stop]
+  ┃
+  ┃  print a greeting
+  ┃  echo hello
+  ┃  ← → narrow scope  ·  e edit pattern
+  ┃
+  ┃  1 (●) Yes, and don't ask again for anything (always-approve mode)
+  ┃  2 (○) Always allow: echo
+  ┃  3 (○) Yes, proceed
+  ┃  4 (○) No, reject (type to add feedback)
+  ┃  5 (○) Never allow: echo
+  ┃
+
+  1/5:select  │  Tab:next option  │  ←/→:scope  │  e:edit pattern  │  Ctrl+o:always-approve  │  Ctrl+c:cancel  │  Esc:

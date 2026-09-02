@@ -67,13 +67,16 @@ func (p *Plugin) ensureViewFlyout() {
 		}, nil)).
 		AddSection(modal.Spacer()).
 		AddSection(modal.List(viewFlyoutSortListID, items, &p.viewFlyoutSortIdx, modal.WithMaxVisible(len(items)))).
-		AddSection(modal.Spacer()).
+		// The filter line appears only when a filter is doing something. A
+		// permanent "Filter: none" is a row of chrome spent saying nothing,
+		// and it dilutes the line that matters when a query is live. The
+		// global browser's flyout says it the same way.
+		AddSection(modal.When(func() bool { return p.filterActive() }, modal.Spacer())).
 		AddSection(modal.When(func() bool { return p.filterActive() },
 			modal.Custom(func(int, string, string) modal.RenderedSection {
 				return modal.RenderedSection{Content: "Filter: " + p.listFilter.Query()}
 			}, nil),
 		)).
-		AddSection(modal.When(func() bool { return !p.filterActive() }, modal.Text("Filter: none"))).
 		AddSection(modal.Spacer()).
 		AddSection(modal.Buttons(modal.Btn(" Done ", viewFlyoutDoneID)))
 }

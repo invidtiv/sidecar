@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/marcus/sidecar/internal/agentactivity"
+	"github.com/marcus/sidecar/internal/agentactivity/manifests"
 	"github.com/marcus/sidecar/internal/agentintegration"
 	"github.com/marcus/sidecar/internal/agentlifecycle"
 	"github.com/marcus/sidecar/internal/agentlifecycle/lifecycleenv"
@@ -56,6 +58,16 @@ type lifecycleFlags struct {
 
 	current bool
 	shell   string
+
+	// file, agent and title serve `explain --file`: an offline run of the
+	// screen lane over a saved capture, with no tmux and no lifecycle store.
+	file  string
+	agent string
+	title string
+	rows  int
+	// printWindow asks --file for the detection read window rather than a
+	// verdict: the exact text the engine evaluated.
+	printWindow bool
 }
 
 func agentLifecycleExitCodes() []ExitCode {
@@ -67,7 +79,26 @@ func agentLifecycleExitCodes() []ExitCode {
 	}
 }
 
-func lifecycleCommands() (report, end, release, explain *Command) {
+// agentExplainExitCodes is explain's own table rather than the shared lifecycle
+// one, because explain stores nothing: "the report could not be stored" can
+// never be why it failed, and reusing that summary told a caller with an
+// unreadable --file to go looking at a store the command never opens.
+//
+// So exit 1 is narrowed here to a true internal failure, and the two things a
+// caller actually gets wrong -- a file that is not there and an agent kind
+// Sidecar has no manifest for -- take exitInputRejected, which is what the rest
+// of the CLI uses for "the command parsed and a value inside it was refused"
+// and what lifecycleExitFor already returns for every non-store error.
+func agentExplainExitCodes() []ExitCode {
+	return []ExitCode{
+		{Code: 0, Summary: "success, or no-op outside a Sidecar-managed shell"},
+		{Code: 1, Summary: "internal failure: the explanation could not be produced or written"},
+		{Code: 2, Summary: "usage error"},
+		{Code: 5, Summary: "invalid context, or a rejected value: an unreadable --file, an unknown --agent"},
+	}
+}
+
+func lifecycleCommands() (report, end, release, explain, manifests *Command) {
 	common := []Flag{
 		{Name: "--source", Arg: "SOURCE", Summary: "Integration source identifier (required)"},
 		{Name: "--source-version", Arg: "VERSION", Summary: "Installed integration asset version"},
@@ -139,24 +170,62 @@ func lifecycleCommands() (report, end, release, explain *Command) {
 	explain = &Command{
 		Name:    "explain",
 		Summary: "Explain which evidence authored a pane's lifecycle state",
-		Usage:   "sidecar agent explain [--current | --shell TARGET] [--json]",
+		Usage:   "sidecar agent explain [--current | --shell TARGET | --file PATH --agent KIND] [--json]",
 		Long: "Reports the effective state, which evidence authored it, the source's exercisable tier, the last valid report, and — when lifecycle evidence did not win — exactly why not.\n\n" +
+			"With --file it runs the screen lane alone over a saved capture: no tmux, no lifecycle store, no running agent. It does read the local override directory, so two people reproducing one fixture can reach different verdicts if one of them has an override for that agent; the `manifest` line of the output says which file answered. That is how a wrong badge is reproduced from a fixture, and how a new fixture is minted.\n\n" +
+			"Detection manifests can be tuned locally: a file at ~/.config/sidecar/agent-detection/<file>.toml replaces the vendored Herdr manifest for that agent, where <file> is the vendored file's own base name (github-copilot.toml for Copilot, antigravity.toml for Antigravity). It replaces the Sidecar overlay too rather than layering over it, so a rule Sidecar rewrote upstream is not rewritten under an override. An override that cannot be parsed, that declares a different agent, or that needs a newer engine is ignored and the vendored manifest is used; either way explain prints a warning line saying what was found and why.\n\n" +
 			"Every diagnostic fact the Configuration surface shows is available here, so a pane that is not being driven by its integration always has an actionable reason rather than silence.\n\n" +
 			"This command is read-only. It never locks, compacts, repairs, or creates the lifecycle log.",
 		Flags: []Flag{
 			{Name: "--current", Summary: "Explain the pane this command is running in (the default)", Bool: true},
 			{Name: "--shell", Arg: "TARGET", Summary: "Explain a managed shell by name"},
+			{Name: "--file", Arg: "PATH", Summary: "Explain a saved capture offline, with no tmux and no lifecycle store (a local override for the agent is still read)"},
+			{Name: "--agent", Arg: "KIND", Summary: "Which agent's manifest to evaluate --file against (required with --file)"},
+			{Name: "--title", Arg: "TEXT", Summary: "Pane title for --file when the capture carries no header"},
+			{Name: "--rows", Arg: "N", Summary: "Pane height for --file; the detection read window. Must be positive; defaults to the fixture header, else 24"},
+			{Name: "--print-window", Summary: "With --file, print the detection read window instead of a verdict", Bool: true},
 			{Name: "--json", Summary: "Write stable structured JSON", Bool: true},
 			{Name: "--help", Short: "-h", Summary: "Show this help", Bool: true},
 		},
-		ExitCodes: agentLifecycleExitCodes(),
+		ExitCodes: agentExplainExitCodes(),
 		Examples: []Example{
 			{Command: "sidecar agent explain --current --json"},
+			{Command: "sidecar agent explain --file internal/agentactivity/testdata/claude/blocked.txt --agent claude --json"},
 		},
-		Agent: AgentDoc{Invocation: "sidecar agent explain [--current | --shell TARGET] --json", Summary: "See why a pane is in the state it is, and why hooks are or are not driving it"},
+		Agent: AgentDoc{Invocation: "sidecar agent explain [--current | --shell TARGET | --file PATH --agent KIND] --json", Summary: "See why a pane is in the state it is, why hooks are or are not driving it, and which manifest rule the screen lane matched"},
 		Run:   runAgentExplain,
 	}
-	return report, end, release, explain
+
+	manifests = &Command{
+		Name:    "manifests",
+		Summary: "List every detection manifest, its version, and which source is active",
+		Usage:   "sidecar agent manifests [--refresh | --clear-cache] [--json]",
+		Long: "Prints the table `explain` reports for one agent, for every agent Sidecar vendors a manifest for: which of the three sources is active, the version that source carries, the version vendored into this binary, the version in the runtime fetch cache, whether the Sidecar overlay was merged in, and any file that was found and refused.\n\n" +
+			"Precedence is a local override in ~/.config/sidecar/agent-detection, then the newer of the runtime fetch cache and the vendored manifest, with the Sidecar overlay merged onto whichever upstream file won.\n\n" +
+			"The runtime fetch is off unless `detection.remoteManifests` in ~/.config/sidecar/config.json is set to \"herdr.dev\" or to a catalog index URL. When it is on, Sidecar checks at most once a day, after the first frame, and a check that fails is reported here rather than shown to the user.\n\n" +
+			"Off means off: with the setting off, nothing fetches and no cached manifest is loaded, so every agent runs the vendored file again. A cache left over from when it was on is still listed in the REMOTE column, marked as not in use, because \"you have a fetched file and it is not the one running\" is what this table exists to say. `--clear-cache` deletes it.\n\n" +
+			"Without a flag this command is read-only: it never fetches, and it never writes the cache or its status file. `--refresh` and `--clear-cache` are the two forms that change something, and each of them prints the table afterwards.",
+		Flags: []Flag{
+			{Name: "--refresh", Summary: "Check the catalog now, ignoring the once-a-day gate (requires detection.remoteManifests to be on)", Bool: true},
+			{Name: "--clear-cache", Summary: "Delete every cached manifest and the fetch status file, then print the table", Bool: true},
+			{Name: "--json", Summary: "Write stable structured JSON", Bool: true},
+			{Name: "--help", Short: "-h", Summary: "Show this help", Bool: true},
+		},
+		ExitCodes: []ExitCode{
+			{Code: 0, Summary: "success"},
+			{Code: 1, Summary: "the vendored manifest tree could not be read, or --refresh or --clear-cache failed"},
+			{Code: 2, Summary: "usage error, including --refresh with detection.remoteManifests off"},
+		},
+		Examples: []Example{
+			{Command: "sidecar agent manifests"},
+			{Command: "sidecar agent manifests --json"},
+			{Command: "sidecar agent manifests --refresh"},
+			{Command: "sidecar agent manifests --clear-cache"},
+		},
+		Agent: AgentDoc{Invocation: "sidecar agent manifests --json", Summary: "See every detection manifest's active source and version, and whether a runtime fetch is ahead of the vendored tree"},
+		Run:   runAgentManifests,
+	}
+	return report, end, release, explain, manifests
 }
 
 func parseLifecycleFlags(env Env, args []string, help string, kind agentlifecycle.Kind) (lifecycleFlags, int) {
@@ -232,6 +301,41 @@ func parseLifecycleFlags(env Env, args []string, help string, kind agentlifecycl
 				return f, usage("--shell requires a value")
 			}
 			f.shell, i = v, n
+		case arg == "--print-window":
+			f.printWindow = true
+		case strings.HasPrefix(arg, "--file"):
+			v, n, ok := takeFlagArg(arg, args, i, "--file")
+			if !ok {
+				return f, usage("--file requires a value")
+			}
+			f.file, i = v, n
+		case strings.HasPrefix(arg, "--agent"):
+			v, n, ok := takeFlagArg(arg, args, i, "--agent")
+			if !ok {
+				return f, usage("--agent requires a value")
+			}
+			f.agent, i = v, n
+		case strings.HasPrefix(arg, "--title"):
+			v, n, ok := takeFlagArg(arg, args, i, "--title")
+			if !ok {
+				return f, usage("--title requires a value")
+			}
+			f.title, i = v, n
+		case strings.HasPrefix(arg, "--rows"):
+			v, n, ok := takeFlagArg(arg, args, i, "--rows")
+			if !ok {
+				return f, usage("--rows requires a value")
+			}
+			rows, err := strconv.Atoi(v)
+			if err != nil || rows < 1 {
+				// Zero is refused rather than accepted and ignored. It used to
+				// parse and then lose to the fixture header or the 24-row
+				// default, so `--rows 0` silently meant something other than
+				// what it says -- the worst available answer for a flag whose
+				// whole job is to pin the read window.
+				return f, usage("--rows must be a positive integer; omit it for the fixture header, else the 24-row fallback")
+			}
+			f.rows, i = rows, n
 		case strings.HasPrefix(arg, "--seq"):
 			v, n, ok := takeFlagArg(arg, args, i, "--seq")
 			if !ok {
@@ -527,6 +631,17 @@ func runAgentExplain(env Env, args []string) int {
 		cliErrf(env.Stderr, "--current and --shell name different panes; pass one\n\n%s", help)
 		return 2
 	}
+	if f.file != "" {
+		if f.current || f.shell != "" {
+			cliErrf(env.Stderr, "--file explains a saved capture, not a live pane; drop --current and --shell\n\n%s", help)
+			return 2
+		}
+		return explainFile(env, f, help)
+	}
+	if f.agent != "" || f.title != "" || f.rows != 0 || f.printWindow {
+		cliErrf(env.Stderr, "--agent, --title, --rows and --print-window are only valid with --file\n\n%s", help)
+		return 2
+	}
 
 	stateDir := env.StateDir
 	if stateDir == "" {
@@ -575,11 +690,12 @@ func runAgentExplain(env Env, args []string) int {
 	// The screen half is really captured. explain is an on-demand diagnostic,
 	// not a polling path, so one capture is affordable and an invented
 	// "unknown" screen would misrepresent the arbitration it is describing.
-	screen, paneTitle, command := capturePaneForExplain(ctx.PaneID)
+	screen, paneTitle, command, paneHeight := capturePaneForExplain(ctx.PaneID)
 	ob := agentactivity.Observation{
 		Screen:         screen,
 		PaneTitle:      paneTitle,
 		CurrentCommand: command,
+		PaneHeight:     paneHeight,
 		CapturedAt:     time.Now(),
 	}
 	ob.Agent = agentactivity.Identify(ob)
@@ -600,6 +716,7 @@ func runAgentExplain(env Env, args []string) int {
 			ProcessGeneration: ctx.ProcessGeneration,
 		},
 	}, src, time.Now())
+	attachScreenExplain(&dec.Explanation, ob)
 
 	if f.json {
 		return encodeStdout(env, explainResult{
@@ -658,11 +775,12 @@ func explainManagedShell(env Env, f lifecycleFlags, stateDir string) int {
 	}
 
 	src := agentintegration.NewStoreSourceOn(stateDir, tgt.Namespace)
-	screen, paneTitle, command := capturePaneForExplainOn(tgt.Namespace, identity.PaneID)
+	screen, paneTitle, command, paneHeight := capturePaneForExplainOn(tgt.Namespace, identity.PaneID)
 	ob := agentactivity.Observation{
 		Screen:         screen,
 		PaneTitle:      paneTitle,
 		CurrentCommand: command,
+		PaneHeight:     paneHeight,
 		CapturedAt:     time.Now(),
 	}
 	ob.Agent = agentactivity.Identify(ob)
@@ -672,6 +790,7 @@ func explainManagedShell(env Env, f lifecycleFlags, stateDir string) int {
 		Session:  tgt.Session,
 		Identity: identity,
 	}, src, time.Now())
+	attachScreenExplain(&dec.Explanation, ob)
 
 	if f.json {
 		return encodeStdout(env, explainResult{
@@ -690,32 +809,36 @@ func explainManagedShell(env Env, f lifecycleFlags, stateDir string) int {
 // Every failure degrades to empty values, which the detectors read as "no
 // opinion". A diagnostic command that could not capture a screen should still
 // report everything else it knows rather than fail outright.
-func capturePaneForExplain(paneID string) (screen, paneTitle, command string) {
+func capturePaneForExplain(paneID string) (screen, paneTitle, command string, paneHeight int) {
 	return capturePaneForExplainOn("", paneID)
 }
 
 // capturePaneForExplainOn is capturePaneForExplain against an explicit tmux
 // socket, for a pane in a namespace this process is not running in.
-func capturePaneForExplainOn(namespace, paneID string) (screen, paneTitle, command string) {
+func capturePaneForExplainOn(namespace, paneID string) (screen, paneTitle, command string, paneHeight int) {
 	if paneID == "" {
-		return "", "", ""
+		return "", "", "", 0
 	}
 	screen, err := tty.CapturePaneOutput(paneID, 0)
 	if err != nil {
 		screen = ""
 	}
-	args := []string{"display-message", "-p", "-t", paneID, tmuxformat.Fields("pane_title", "pane_current_command")}
+	// pane_height rides along because it is the manifest engine's read window,
+	// and asking for it here costs nothing: it is one more field on a
+	// display-message this command already runs.
+	args := []string{"display-message", "-p", "-t", paneID, tmuxformat.Fields("pane_title", "pane_current_command", "pane_height")}
 	if namespace != "" {
 		args = append([]string{"-S", namespace}, args...)
 	}
 	out, err := exec.Command("tmux", args...).Output()
 	if err == nil {
 		fields := tmuxformat.Split(strings.TrimRight(string(out), "\n"))
-		if len(fields) == 2 {
+		if len(fields) == 3 {
 			paneTitle, command = fields[0], fields[1]
+			paneHeight, _ = strconv.Atoi(strings.TrimSpace(fields[2]))
 		}
 	}
-	return screen, paneTitle, command
+	return screen, paneTitle, command, paneHeight
 }
 
 func encodeStdout(env Env, v any) int {
@@ -724,6 +847,28 @@ func encodeStdout(env Env, v any) int {
 		return 1
 	}
 	return 0
+}
+
+// attachScreenExplain fills in the screen lane's own record: which manifest the
+// engine loaded and from where, which rule matched, and any warning about a
+// local override that was found and refused.
+//
+// The resolver has already run the screen lane, through Evaluate, which builds
+// no record because the polling surfaces would throw one away 200ms later.
+// explain is a diagnostic and can afford the second pass. It is the same
+// observation through the same compiled manifest, so the two cannot reach
+// different verdicts. The record is nil when the process gate refused before any
+// rule ran, which is what "screenExplain is absent" means to a reader.
+//
+// Open, deliberately: the record belongs in agentresolve, which already runs
+// this lane and throws the record away. Producing it there and letting explain
+// read it would remove the second evaluation and the standing risk that a
+// diagnostic holds a private answer beside the shared one. It is duplicated here
+// for now because moving it widens an override fix into a resolver change. If
+// agentresolve ever populates Explanation.ScreenExplain itself, delete this
+// function rather than keeping both.
+func attachScreenExplain(e *agentlifecycle.Explanation, ob agentactivity.Observation) {
+	e.ScreenExplain = agentactivity.ExplainManifest(ob)
 }
 
 func writeExplanationText(env Env, e agentlifecycle.Explanation) {
@@ -749,4 +894,349 @@ func writeExplanationText(env Env, e agentlifecycle.Explanation) {
 		_, _ = fmt.Fprintln(env.Stdout)
 	}
 	_, _ = fmt.Fprintf(env.Stdout, "screen      %s\n", e.ScreenState)
+	if e.ScreenExplain == nil {
+		return
+	}
+	// Which manifest authored that screen state, and from where. A user who put
+	// a file in ~/.config/sidecar/agent-detection has to be able to see here
+	// whether it is the one running, and if not, why not.
+	_, _ = fmt.Fprintf(env.Stdout, "manifest    %s\n", e.ScreenExplain.ManifestSource)
+	// The same rule as `explain --file`: printed only once a runtime fetch has
+	// cached something, because otherwise it is the vendored version restated.
+	if e.ScreenExplain.CachedRemoteVersion != "" {
+		_, _ = fmt.Fprintf(env.Stdout, "versions    vendored=%s remote=%s active=%s (%s)\n",
+			dashIfEmpty(e.ScreenExplain.VendoredVersion), e.ScreenExplain.CachedRemoteVersion,
+			dashIfEmpty(e.ScreenExplain.ManifestVersion), dashIfEmpty(e.ScreenExplain.ActiveSource))
+	}
+	if rule := e.ScreenExplain.MatchedRule; rule != nil {
+		_, _ = fmt.Fprintf(env.Stdout, "rule        %s (region=%s priority=%d)\n",
+			rule.ID, rule.Region, rule.Priority)
+	}
+	if e.ScreenExplain.Warning != "" {
+		_, _ = fmt.Fprintf(env.Stdout, "warning     %s\n", e.ScreenExplain.Warning)
+	}
+}
+
+// `sidecar agent manifests` is the whole-corpus form of the three lines
+// `explain` prints about one agent's manifest. It exists because the question a
+// runtime fetch creates -- "am I ahead of the vendored tree, and where?" -- is
+// per agent, and answering it by running `explain --file` twenty-one times with
+// a fixture for each is not an answer anyone would get.
+//
+// It never fetches. A verb that both reports and mutates would make the report
+// impossible to trust as a description of the state a running Sidecar is in;
+// the fetch belongs to the app, after the first frame, at most once a day.
+
+// manifestsResult is the JSON contract of `sidecar agent manifests`.
+//
+// It carries everything the text form does and two things the text form has no
+// room for: the full per-agent fetch status from the last check, and the raw
+// setting value alongside the URL it resolved to. Agents read this, not the
+// table.
+type manifestsResult struct {
+	SchemaVersion int `json:"schemaVersion"`
+	// RemoteManifests is the configured value, verbatim, and CatalogURL is what
+	// it resolved to, empty when fetching is off. A value that resolved to
+	// neither is reported in SettingError, because the config loader has
+	// already replaced it with the default and the log line it wrote is not
+	// somewhere a user will look.
+	RemoteManifests string `json:"remoteManifests"`
+	CatalogURL      string `json:"catalogUrl,omitempty"`
+	SettingError    string `json:"settingError,omitempty"`
+	// CacheIgnored is set when the fetch cache holds files and the setting is
+	// off, so nothing in it is loaded. The versions still appear per agent,
+	// marked here rather than silently dropped: a cache that is present and
+	// unused is the one state a user cannot deduce from the rest of the table.
+	CacheIgnored string `json:"cacheIgnored,omitempty"`
+	// FetchStatusError says the status file itself could not be read or parsed.
+	// Without it an unreadable status file reports as "never checked", which is
+	// the one answer that makes a broken fetch look like one nobody configured.
+	FetchStatusError string `json:"fetchStatusError,omitempty"`
+	// Refreshed and Cleared record what --refresh and --clear-cache did, and are
+	// absent for the ordinary read-only run.
+	Refreshed *manifestsRefresh `json:"refreshed,omitempty"`
+	Cleared   []string          `json:"cleared,omitempty"`
+	// CacheDir is where a fetched manifest is cached, and OverrideDir is where
+	// a local override is read from. Both are reported whether or not anything
+	// is in them, because "where do I put the file" is the other question this
+	// command gets asked.
+	CacheDir    string                 `json:"cacheDir,omitempty"`
+	OverrideDir string                 `json:"overrideDir,omitempty"`
+	Fetch       manifests.FetchStatus  `json:"fetch"`
+	Agents      []manifestAgentSummary `json:"agents"`
+}
+
+// manifestsRefresh is what `--refresh` did: the agents whose cache moved, or
+// the reason the check did nothing.
+type manifestsRefresh struct {
+	Skipped bool     `json:"skipped"`
+	Reason  string   `json:"reason,omitempty"`
+	Updated []string `json:"updated,omitempty"`
+	Error   string   `json:"error,omitempty"`
+}
+
+// manifestAgentSummary is one row of the table.
+type manifestAgentSummary struct {
+	Agent string `json:"agent"`
+	// ManifestID is the id the active manifest declares, which differs from
+	// Agent for the two agents whose file name and Herdr label disagree
+	// (antigravity.toml declares "agy", github-copilot.toml declares
+	// "copilot"). Agent is the key every path here is built from.
+	ManifestID string `json:"manifestId,omitempty"`
+	// ActiveSource is "bundled", "remote", or "local override".
+	ActiveSource string `json:"activeSource"`
+	// ActiveVersion is the version of the file that answered; VendoredVersion
+	// is always this binary's copy; CachedRemoteVersion is the fetch cache's,
+	// or "" when nothing usable is cached.
+	ActiveVersion       string `json:"activeVersion,omitempty"`
+	VendoredVersion     string `json:"vendoredVersion,omitempty"`
+	CachedRemoteVersion string `json:"cachedRemoteVersion,omitempty"`
+	OverlayApplied      bool   `json:"overlayApplied"`
+	// Path is the file a local override or a cached remote manifest was read
+	// from, empty for a bundled source.
+	Path string `json:"path,omitempty"`
+	// Warning is any file that was found and refused, and why. Never fatal.
+	Warning string `json:"warning,omitempty"`
+	// Error is set when the agent has no usable manifest at all, which can only
+	// mean the vendored file failed to load.
+	Error string `json:"error,omitempty"`
+	// Fetch is the last check's result for this agent, absent when there has
+	// never been one.
+	Fetch *manifests.AgentFetchStatus `json:"fetch,omitempty"`
+}
+
+func runAgentManifests(env Env, args []string) int {
+	cmd := RootCommand().FindSubcommand("agent").FindSubcommand("manifests")
+	help := RenderHelp(cmd)
+	jsonOutput := false
+	refresh := false
+	clearCache := false
+	for _, arg := range args {
+		switch {
+		case isHelp(arg):
+			_, _ = fmt.Fprint(env.Stdout, help)
+			return 0
+		case arg == "--json":
+			jsonOutput = true
+		case arg == "--refresh":
+			refresh = true
+		case arg == "--clear-cache":
+			clearCache = true
+		default:
+			cliErrf(env.Stderr, "unknown flag %q\n\n%s", arg, help)
+			return 2
+		}
+	}
+	if refresh && clearCache {
+		cliErrf(env.Stderr, "--refresh and --clear-cache ask for opposite things; run them one at a time\n\n%s", help)
+		return 2
+	}
+
+	agents, err := manifests.Agents()
+	if err != nil {
+		// The vendored tree is embedded in the binary, so this is a build
+		// problem rather than anything the caller did: exit 1.
+		cliErrln(env.Stderr, err.Error())
+		return 1
+	}
+
+	res := manifestsResult{
+		SchemaVersion:   agentlifecycle.SchemaVersion,
+		RemoteManifests: config.RemoteManifestsOff,
+		CacheDir:        manifests.RemoteDir(),
+		OverrideDir:     manifests.OverrideDir(),
+		Agents:          make([]manifestAgentSummary, 0, len(agents)),
+	}
+	// A config that cannot be read is not a reason to refuse the table: every
+	// other column is answerable without it, and "detection.remoteManifests is
+	// off" is the safe thing to report about a config nobody could load.
+	detection := config.DetectionConfig{RemoteManifests: config.RemoteManifestsOff}
+	if cfg, cfgErr := config.Load(); cfgErr == nil && cfg != nil {
+		detection = cfg.Detection
+		res.RemoteManifests = cfg.Detection.RemoteManifests
+		if res.RemoteManifests == "" {
+			res.RemoteManifests = config.RemoteManifestsOff
+		}
+		if url, urlErr := cfg.Detection.RemoteCatalogURL(); urlErr != nil {
+			// Reachable because the loader keeps the value the user wrote rather
+			// than replacing it with the default. This line, and not a log entry
+			// nobody reads, is how someone finds out their setting did nothing.
+			res.SettingError = urlErr.Error()
+		} else {
+			res.CatalogURL = url
+		}
+	}
+
+	// The two forms that change something, before the table is built, so the
+	// table describes the state they left behind.
+	if clearCache {
+		removed, clearErr := manifests.ClearCache()
+		if clearErr != nil {
+			cliErrln(env.Stderr, clearErr.Error())
+			return 1
+		}
+		res.Cleared = removed
+		manifests.Invalidate(agents...)
+	}
+	if refresh {
+		if !detection.RemoteManifestsEnabled() {
+			cliErrf(env.Stderr,
+				"--refresh needs detection.remoteManifests set to %q or a catalog index URL in %s; it is %q\n\n%s",
+				config.RemoteManifestsHerdrDev, config.ConfigPath(), res.RemoteManifests, help)
+			return 2
+		}
+		result, fetchErr := manifests.FetchFromConfig(context.Background(), detection,
+			manifests.FetchOptions{Force: true})
+		res.Refreshed = &manifestsRefresh{
+			Skipped: result.Skipped,
+			Reason:  result.Reason,
+			Updated: result.Updated,
+		}
+		if fetchErr != nil {
+			// A failed check is reported and the table is still printed: what a
+			// check learned about each agent is in the status file, and refusing
+			// to print it is refusing to answer the question that was asked.
+			res.Refreshed.Error = fetchErr.Error()
+		}
+	}
+
+	res.Fetch = manifests.LoadFetchStatus()
+	res.FetchStatusError = res.Fetch.ReadError
+
+	cacheHolds := false
+	for _, agent := range agents {
+		row := manifestAgentSummary{Agent: agent}
+		compiled, source, loadErr := manifests.Load(agent)
+		row.ActiveSource = string(source.Kind)
+		if row.ActiveSource == "" {
+			row.ActiveSource = string(manifests.KindBundled)
+		}
+		row.ActiveVersion = source.Version
+		row.VendoredVersion = source.VendoredVersion
+		row.CachedRemoteVersion = source.CachedRemoteVersion
+		row.OverlayApplied = source.OverlayApplied
+		row.Path = source.Path
+		row.Warning = source.Diagnostic
+		if loadErr != nil {
+			row.Error = loadErr.Error()
+		} else if compiled != nil && compiled.Manifest != nil {
+			row.ManifestID = compiled.Manifest.ID
+		}
+		// With the setting off the loader ignores the cache entirely, so the
+		// version has to come from the file itself. The row still says the
+		// active source is the vendored one; this is the column that tells the
+		// user there is something on disk that --clear-cache would remove.
+		if !detection.RemoteManifestsEnabled() {
+			if cached := manifests.CachedRemote(agent); cached.Path != "" {
+				cacheHolds = true
+				row.CachedRemoteVersion = cached.Version
+			}
+		}
+		if status, ok := res.Fetch.Agents[agent]; ok {
+			row.Fetch = &status
+		}
+		res.Agents = append(res.Agents, row)
+	}
+	if cacheHolds {
+		res.CacheIgnored = fmt.Sprintf(
+			"detection.remoteManifests is %q, so no cached manifest is loaded; the versions below are files on disk that are not in use",
+			res.RemoteManifests)
+	}
+
+	if jsonOutput {
+		return encodeStdout(env, res)
+	}
+	writeManifestsText(env, res)
+	return 0
+}
+
+func writeManifestsText(env Env, res manifestsResult) {
+	_, _ = fmt.Fprintf(env.Stdout, "remote manifests  %s\n", res.RemoteManifests)
+	if res.SettingError != "" {
+		_, _ = fmt.Fprintf(env.Stdout, "setting refused   %s\n", res.SettingError)
+	}
+	if res.CatalogURL != "" {
+		_, _ = fmt.Fprintf(env.Stdout, "catalog           %s\n", res.CatalogURL)
+	}
+	if res.CacheDir != "" {
+		_, _ = fmt.Fprintf(env.Stdout, "cache             %s\n", res.CacheDir)
+	}
+	if res.OverrideDir != "" {
+		_, _ = fmt.Fprintf(env.Stdout, "overrides         %s\n", res.OverrideDir)
+	}
+	if res.CacheIgnored != "" {
+		_, _ = fmt.Fprintf(env.Stdout, "cache ignored     %s\n", res.CacheIgnored)
+	}
+	if res.FetchStatusError != "" {
+		_, _ = fmt.Fprintf(env.Stdout, "status unreadable %s\n", res.FetchStatusError)
+	}
+	if res.Fetch.LastCheckUnix > 0 {
+		_, _ = fmt.Fprintf(env.Stdout, "last check        %s (%s)\n",
+			time.Unix(res.Fetch.LastCheckUnix, 0).Format(time.RFC3339), res.Fetch.LastResult)
+		if res.Fetch.LastError != "" {
+			_, _ = fmt.Fprintf(env.Stdout, "last error        %s\n", res.Fetch.LastError)
+		}
+	} else if res.CatalogURL != "" && res.FetchStatusError == "" {
+		_, _ = fmt.Fprintln(env.Stdout, "last check        never")
+	}
+	for _, row := range res.Fetch.SkippedRows {
+		_, _ = fmt.Fprintf(env.Stdout, "skipped row       %s\n", row)
+	}
+	if res.Cleared != nil {
+		_, _ = fmt.Fprintf(env.Stdout, "cleared           %d file(s) from the fetch cache\n", len(res.Cleared))
+	}
+	if r := res.Refreshed; r != nil {
+		switch {
+		case r.Error != "":
+			_, _ = fmt.Fprintf(env.Stdout, "refresh           failed: %s\n", r.Error)
+		case r.Skipped:
+			_, _ = fmt.Fprintf(env.Stdout, "refresh           skipped: %s\n", r.Reason)
+		case len(r.Updated) > 0:
+			_, _ = fmt.Fprintf(env.Stdout, "refresh           updated %s\n", strings.Join(r.Updated, ", "))
+		default:
+			_, _ = fmt.Fprintln(env.Stdout, "refresh           everything was already current")
+		}
+	}
+	_, _ = fmt.Fprintln(env.Stdout)
+
+	// A fixed-width table rather than tabwriter, because this output is read by
+	// eye and by `awk`, and a column that moves when one version string grows
+	// is worse for both than a column that is always in the same place.
+	_, _ = fmt.Fprintf(env.Stdout, "%-18s %-14s %-14s %-14s %-14s %s\n",
+		"AGENT", "ACTIVE", "VERSION", "VENDORED", "REMOTE", "OVERLAY")
+	for _, row := range res.Agents {
+		_, _ = fmt.Fprintf(env.Stdout, "%-18s %-14s %-14s %-14s %-14s %s\n",
+			row.Agent, row.ActiveSource,
+			dashIfEmpty(row.ActiveVersion), dashIfEmpty(row.VendoredVersion),
+			dashIfEmpty(row.CachedRemoteVersion), yesNo(row.OverlayApplied))
+	}
+
+	// Warnings go under the table rather than in it: they are sentences, and a
+	// sentence in a column turns the table into something no width fits.
+	for _, row := range res.Agents {
+		if row.Error != "" {
+			_, _ = fmt.Fprintf(env.Stdout, "\nerror   %s: %s\n", row.Agent, row.Error)
+		}
+		if row.Warning != "" {
+			_, _ = fmt.Fprintf(env.Stdout, "\nwarning %s: %s\n", row.Agent, row.Warning)
+		}
+		if row.Fetch != nil && row.Fetch.LastError != "" {
+			_, _ = fmt.Fprintf(env.Stdout, "\nfetch   %s: %s (%s)\n",
+				row.Agent, row.Fetch.LastError, row.Fetch.LastResult)
+		}
+	}
+}
+
+func dashIfEmpty(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
+}
+
+func yesNo(b bool) string {
+	if b {
+		return "yes"
+	}
+	return "no"
 }

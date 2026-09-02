@@ -1,26 +1,26 @@
 package agentactivity
 
-import "regexp"
+// Amp's screen rules are Herdr's, executed from the vendored
+// `manifests/upstream/amp.toml` by the manifest engine (Phase 2 of
+// docs/plans/active/herdr-detection-parity.md). This file is what remains that
+// is Sidecar's: the process gate.
+//
+// The Go rule table is gone and upstream carries all six of its rules under its
+// own ids, with the same patterns: the plugin-confirmation title blocker, the
+// braille title spinner, the approval footer, the `╰ … thinking/streaming/running
+// tools/waiting ─` status line, the "esc to cancel" hint, and the " - amp - "
+// idle title. What Sidecar got from rule order — a blocked title beating a
+// working title beating an idle title — upstream states as priorities 1100,
+// 1050 and 50, and it adds the `not` gate on the idle title that Sidecar spelled
+// as a rule-level exclusion.
 
-var ampRules = []Rule{
-	// Compatibility rules from Herdr amp manifest 2026.07.09.1.
-	{ID: "amp.title.plugin-blocked", State: StateBlocked, Region: RegionTitle, Contains: []string{"Plugin confirmation needed"}},
-	{ID: "amp.title.working", State: StateWorking, Region: RegionTitle, Regexp: regexp.MustCompile(`^[⠀-⣿] `)},
-	{ID: "amp.screen.blocked", State: StateBlocked, Region: RegionCurrent, LastN: 18, Regexp: regexp.MustCompile(`(?is)(waiting for approval|invoke tool|run this command\?|allow editing file:|allow creating file:|confirm tool call|approve.*(?:allow all for this session|allow all for every session|allow file for every session|deny with feedback))`)},
-	{ID: "amp.screen.footer-working", State: StateWorking, Region: RegionCurrent, LastN: 5, Regexp: regexp.MustCompile(`(?im)^\s*╰\s+\S+\s+(thinking|streaming|running tools|waiting)\s+─`)},
-	{ID: "amp.screen.cancel-working", State: StateWorking, Region: RegionCurrent, LastN: 10, Contains: []string{"esc to cancel"}},
-	{ID: "amp.title.idle", State: StateIdle, Region: RegionTitle, Contains: []string{" - amp - "}, Not: []string{"Plugin confirmation needed"}},
-}
-
+// DetectAmp classifies an Amp pane. The process gate runs first and refuses
+// before any manifest is evaluated; everything after it is upstream's.
 func DetectAmp(ob Observation) Result {
-	if ob.Agent != "amp" || !oneOf(ob.CurrentCommand, "amp", "amp-local") {
+	if ob.Agent != "amp" {
 		return Result{State: StateUnknown, Evidence: "amp.process-mismatch"}
 	}
-	result := Evaluate(ob, ampRules)
-	if result.State == StateUnknown && !result.SkipStateUpdate {
-		return Result{State: StateIdle, Evidence: "amp.known-live-fallback", FallbackIdle: true}
-	}
-	return result
+	return DetectManifestResult(ob)
 }
 
 func oneOf(value string, candidates ...string) bool {
@@ -31,3 +31,6 @@ func oneOf(value string, candidates ...string) bool {
 	}
 	return false
 }
+
+// ampProcess is the process gate for Amp. Named for the reason on piProcess.
+func ampProcess(command string) bool { return oneOf(command, "amp", "amp-local") }

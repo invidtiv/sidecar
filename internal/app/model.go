@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -11,6 +12,7 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/agentactivity/manifests"
 	"github.com/marcus/sidecar/internal/clip"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/configui"
@@ -32,6 +34,7 @@ import (
 	"github.com/marcus/sidecar/internal/panereposition"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/projectdir"
+	"github.com/marcus/sidecar/internal/startuptrace"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/termpreview"
@@ -775,6 +778,14 @@ func (m Model) Init() tea.Cmd {
 	// provider, so returning it from Init is safe even though an Init command
 	// can start before the first render.
 	if cmd := describeResourceProvidersCmd(m.cfg); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+
+	// The opt-in runtime detection-manifest fetch, on the same terms: it waits
+	// on the first-ready-frame latch before it does anything at all, and with
+	// the setting off — the default — this returns nil and no command, no
+	// goroutine, and no HTTP client exists.
+	if cmd := fetchDetectionManifestsCmd(m.cfg); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
 
@@ -2405,4 +2416,48 @@ func (m *Model) notifyThemeChanged() tea.Cmd {
 		}
 	}
 	return tea.Batch(cmds...)
+}
+
+// fetchDetectionManifestsCmd returns the command that checks Herdr's published
+// catalog for newer agent-detection manifests — after the first ready frame,
+// never before it, and at most once a day.
+//
+// Three rules are load-bearing here and each one is a rule rather than a
+// preference:
+//
+//   - Nothing runs unless detection.remoteManifests names a catalog. With the
+//     setting off this returns nil, so there is no command, no goroutine, no
+//     state-directory read, and no HTTP client. manifests.HTTPClientsBuilt is
+//     the instrument that proves the last of those in a test.
+//   - The work waits on firstReadyFrameLatch, for the reason the resource
+//     providers do: a command returned from Init can start before the first
+//     render, so "start it from Init" is not by itself a promise about
+//     ordering. The latch is.
+//   - A failure is never user-visible. The command returns no message at all;
+//     what a check learned is in the status file, which `sidecar agent
+//     manifests` prints and `sidecar agent explain` reflects in its version
+//     lines. A pane's badge is never blocked, delayed, or reddened by a catalog
+//     being down.
+func fetchDetectionManifestsCmd(cfg *config.Config) tea.Cmd {
+	if cfg == nil || !cfg.Detection.RemoteManifestsEnabled() {
+		return nil
+	}
+	detection := cfg.Detection
+	return func() tea.Msg {
+		<-firstReadyFrameLatch.wait()
+		defer startuptrace.Begin("detection manifests: catalog fetch")()
+
+		result, err := manifests.FetchFromConfig(context.Background(), detection, manifests.FetchOptions{})
+		switch {
+		case err != nil:
+			slog.Warn("detection manifests: catalog check failed", "error", err)
+		case result.Skipped:
+			slog.Debug("detection manifests: catalog check skipped", "reason", result.Reason)
+		case len(result.Updated) > 0:
+			slog.Info("detection manifests: updated from the catalog", "agents", result.Updated)
+		}
+		// No message. Nothing in the UI is waiting on this, and a message with
+		// no handler is a message someone later wires up by accident.
+		return nil
+	}
 }

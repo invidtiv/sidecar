@@ -1,0 +1,16 @@
+source: synthetic. working.txt with its braille title frame replaced by U+25D0,
+        the half-circle busy spinner Claude Code 2.1.228 switched to. Not a live
+        capture: the harvested Claude on this machine is 2.1.220, which still
+        animates braille. Everything below the header is working.txt verbatim.
+why: this is the drift the parity plan opened with. Sidecar's hand-written
+     claudeTitleWorking matched only U+2800-U+28FF, so on a current Claude the
+     title rule fell through and idle detection had to carry the turn. Herdr's
+     osc_title_working covers both ranges, and this fixture is what proves
+     Sidecar inherited that without anyone writing a regex.
+pane_title: ◐ Count from one to twenty
+pane_current_command: 2.1.220
+screen:
+⏺ Running 1 shell command…
+  ⎿  $ printf phase2-claude-proof
+✶ Cerebrating… (1s · ↓ 25 tokens)
+  ⏸ manual mode on · esc to interrupt · ← for agents

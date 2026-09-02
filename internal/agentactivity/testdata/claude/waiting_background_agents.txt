@@ -1,0 +1,30 @@
+source: real Claude Code 2.1.257 pane, captured 2026-09-01 on the user's own
+        machine: the main loop is parked on a background subagent while the
+        prompt box sits idle beneath it. Reduced to the evidence rows; all
+        conversation text, the composer's own text and the session link are
+        removed, and the subagent's task description is redacted. The two rows
+        that are verbatim are the ones the rule reads: the `✻ Waiting for 1
+        background agent to finish` line and the `✔ Update installed · Restart to
+        update` banner immediately beneath it.
+why: upstream's `background_agents_working` (965) reads
+     `last_non_empty_above_prompt_box`, and on this screen that line is the
+     update banner, not the waiting line — so the rule cannot fire. Upstream's
+     `background_shell_working` (965) reads the footer for `· N shells ·`, and
+     2.1.257's footer spells the same signal `· ← 3 agents ·`. With neither
+     firing the pane falls to `live_prompt_box` (950), an explicit visible
+     idle, and the tracker turns that into a completed turn while the subagent
+     is still running. See manifests/sidecar/claude.toml
+     (`sidecar.background_agents_waiting`).
+pane_title: ✳ Herdr detection parity orchestration
+pane_current_command: 2.1.257
+pane_height: 57
+state: working
+screen:
+✻ Waiting for 1 background agent to finish
+                                                                      ✔ Update installed · Restart to update
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← 3 agents · ↓ to manage
+  ⏺ main
+  ◯ general-purpose  redacted subagent task                                     10m 33s · ↓ 223.2k tokens

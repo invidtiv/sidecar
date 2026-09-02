@@ -38,6 +38,8 @@ func TestMain(m *testing.M) {
 	saveSessionsSelected = func(string) error { return nil }
 	loadSessionsPaneLayout = func(string) *state.PaneLayoutJSON { return nil }
 	saveSessionsPaneLayout = func(string, *state.PaneLayoutJSON) error { return nil }
+	loadSessionsHiddenHosts = func() []string { return nil }
+	saveSessionsHiddenHosts = func([]string) error { return nil }
 	sessionsSelectedDebounce = 0
 	if err := state.InitWithDir(dir); err != nil {
 		panic(err)

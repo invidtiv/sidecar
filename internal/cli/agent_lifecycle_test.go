@@ -3,9 +3,15 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/marcus/sidecar/internal/agentactivity/manifest"
+	"github.com/marcus/sidecar/internal/agentactivity/manifests"
+	"github.com/marcus/sidecar/internal/agentlifecycle"
+	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/shellstate"
 )
 
@@ -229,5 +235,278 @@ func TestASequenceIsOptionalSoAPerEventHookCanReport(t *testing.T) {
 				t.Fatalf("exit %d (stderr: %s)", code, errOut)
 			}
 		})
+	}
+}
+
+// TestLiveExplainTextPrintsTheManifestWarning is the half of "a refused or
+// degraded override must be visible" that runs on a live pane. The --file path
+// already prints the warning and is covered by
+// TestExplainFileReportsARefusedOverride; this is the path a user actually
+// reaches from a pane that is badged wrong, and until it prints the warning the
+// news arrives only in --json.
+func TestLiveExplainTextPrintsTheManifestWarning(t *testing.T) {
+	var out bytes.Buffer
+	writeExplanationText(Env{Stdout: &out}, agentlifecycle.Explanation{
+		State: "idle",
+		ScreenExplain: &manifest.Explain{
+			Agent:          "cursor",
+			ManifestSource: "bundled cursor 2026.08.29.1 + sidecar overlay",
+			Warning:        "ignored override /tmp/cursor.toml because it is invalid: bad",
+		},
+	})
+	text := out.String()
+	if !strings.Contains(text, "warning") || !strings.Contains(text, "/tmp/cursor.toml") {
+		t.Fatalf("live explain text does not carry the warning:\n%s", text)
+	}
+}
+
+// `sidecar agent manifests`. The property under test is parity between the two
+// output forms: the JSON is the interface an agent reads, and a column that
+// exists only in the table is a column an agent cannot see.
+
+func TestAgentManifestsListsEveryVendoredAgentInBothForms(t *testing.T) {
+	config.SetTestConfigPath(filepath.Join(t.TempDir(), "config.json"))
+	t.Cleanup(config.ResetTestConfigPath)
+	config.SetTestStateDir(t.TempDir())
+	t.Cleanup(config.ResetTestStateDir)
+
+	agents, err := manifests.Agents()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	code, out, errOut := runLifecycleCLI(t, "agent", "manifests", "--json")
+	if code != 0 {
+		t.Fatalf("exit %d (stderr: %s)", code, errOut)
+	}
+	var res manifestsResult
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("output is not the manifests record: %v\n%s", err, out)
+	}
+	if len(res.Agents) != len(agents) {
+		t.Fatalf("reported %d agents, want %d", len(res.Agents), len(agents))
+	}
+	if res.RemoteManifests != config.RemoteManifestsOff {
+		t.Fatalf("remoteManifests = %q, want %q by default", res.RemoteManifests, config.RemoteManifestsOff)
+	}
+	if res.CatalogURL != "" {
+		t.Fatalf("catalogUrl = %q with fetching off", res.CatalogURL)
+	}
+	for _, row := range res.Agents {
+		if row.Error != "" {
+			t.Fatalf("%s: %s", row.Agent, row.Error)
+		}
+		if row.ActiveSource != string(manifests.KindBundled) {
+			t.Fatalf("%s active source = %q, want %q", row.Agent, row.ActiveSource, manifests.KindBundled)
+		}
+		if row.ActiveVersion == "" || row.VendoredVersion != row.ActiveVersion {
+			t.Fatalf("%s versions = active %q vendored %q", row.Agent, row.ActiveVersion, row.VendoredVersion)
+		}
+		if row.CachedRemoteVersion != "" {
+			t.Fatalf("%s reports a cached remote version with fetching off", row.Agent)
+		}
+		if row.OverlayApplied != manifests.HasOverlay(row.Agent) {
+			t.Fatalf("%s overlayApplied = %v, want %v", row.Agent, row.OverlayApplied, manifests.HasOverlay(row.Agent))
+		}
+	}
+
+	// Every fact the table shows must also be in the JSON, which is checked by
+	// looking for each row's own values in the text form.
+	code, text, errOut := runLifecycleCLI(t, "agent", "manifests")
+	if code != 0 {
+		t.Fatalf("exit %d (stderr: %s)", code, errOut)
+	}
+	if !strings.Contains(text, "remote manifests  off") {
+		t.Fatalf("text form does not report the setting:\n%s", text)
+	}
+	for _, row := range res.Agents {
+		if !strings.Contains(text, row.Agent) || !strings.Contains(text, row.ActiveVersion) {
+			t.Fatalf("text form is missing %s %s:\n%s", row.Agent, row.ActiveVersion, text)
+		}
+	}
+}
+
+// TestAgentManifestsReportsARefusedSetting: the config loader warns to the log
+// and fetches nothing, and the log is not somewhere anyone looks. This is where
+// a user finds out their setting did nothing.
+//
+// It asserts the refusal itself, which it could not do before: the loader used
+// to replace an unrecognised value with the default, so this verb could only
+// ever see "off" and its `settingError` field was unreachable code. The loader
+// now keeps the value the user wrote, and refuses it here instead.
+func TestAgentManifestsReportsARefusedSetting(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(path, []byte(`{"detection":{"remoteManifests":"yes please"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config.SetTestConfigPath(path)
+	t.Cleanup(config.ResetTestConfigPath)
+	config.SetTestStateDir(t.TempDir())
+	t.Cleanup(config.ResetTestStateDir)
+
+	code, out, errOut := runLifecycleCLI(t, "agent", "manifests", "--json")
+	if code != 0 {
+		t.Fatalf("exit %d (stderr: %s)", code, errOut)
+	}
+	var res manifestsResult
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatal(err)
+	}
+	if res.SettingError == "" {
+		t.Fatalf("a refused value was not reported: %+v", res)
+	}
+	if !strings.Contains(res.SettingError, "yes please") {
+		t.Fatalf("settingError does not quote the value the user wrote: %q", res.SettingError)
+	}
+	// Fetching is still off, which is the safe direction, and there is no
+	// catalog to fetch from.
+	if res.CatalogURL != "" {
+		t.Fatalf("a refused value resolved to a catalog: %q", res.CatalogURL)
+	}
+	if res.RemoteManifests != "yes please" {
+		t.Fatalf("remoteManifests = %q, want the value verbatim", res.RemoteManifests)
+	}
+
+	code, text, errOut := runLifecycleCLI(t, "agent", "manifests")
+	if code != 0 {
+		t.Fatalf("exit %d (stderr: %s)", code, errOut)
+	}
+	if !strings.Contains(text, "setting refused") {
+		t.Fatalf("the text form does not report the refusal:\n%s", text)
+	}
+
+	// And --refresh refuses rather than acting on a setting nobody turned on.
+	code, _, errOut = runLifecycleCLI(t, "agent", "manifests", "--refresh")
+	if code != 2 {
+		t.Fatalf("--refresh with a refused setting exited %d, want 2", code)
+	}
+	if !strings.Contains(errOut, "detection.remoteManifests") {
+		t.Fatalf("stderr does not name the setting: %s", errOut)
+	}
+}
+
+// TestAgentManifestsShowsACacheItIsNotUsing is finding 3's user-visible half:
+// with the setting off nothing cached is loaded, and the table has to say that
+// the files are there rather than pretend they are not. Otherwise the only way
+// to find out why `--clear-cache` has anything to do is to go looking in a state
+// directory.
+func TestAgentManifestsShowsACacheItIsNotUsing(t *testing.T) {
+	stateDir := t.TempDir()
+	config.SetTestConfigPath(filepath.Join(t.TempDir(), "config.json"))
+	t.Cleanup(config.ResetTestConfigPath)
+	config.SetTestStateDir(stateDir)
+	t.Cleanup(config.ResetTestStateDir)
+	writeStaleCursorCache(t)
+
+	code, out, errOut := runLifecycleCLI(t, "agent", "manifests", "--json")
+	if code != 0 {
+		t.Fatalf("exit %d (stderr: %s)", code, errOut)
+	}
+	var res manifestsResult
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatal(err)
+	}
+	if res.CacheIgnored == "" {
+		t.Fatalf("a cache present with the setting off was not reported: %+v", res)
+	}
+	for _, row := range res.Agents {
+		if row.Agent != "cursor" {
+			continue
+		}
+		if row.ActiveSource != string(manifests.KindBundled) {
+			t.Fatalf("cursor active source = %q with the setting off", row.ActiveSource)
+		}
+		if row.CachedRemoteVersion != "9999.01.01.1" {
+			t.Fatalf("cursor cached remote version = %q, want the file on disk", row.CachedRemoteVersion)
+		}
+	}
+
+	code, text, errOut := runLifecycleCLI(t, "agent", "manifests")
+	if code != 0 {
+		t.Fatalf("exit %d (stderr: %s)", code, errOut)
+	}
+	if !strings.Contains(text, "cache ignored") {
+		t.Fatalf("the text form does not say the cache is ignored:\n%s", text)
+	}
+}
+
+// TestAgentManifestsClearCacheRemovesTheCache is the recovery path: turning the
+// setting off stops the cache being used, and this is what makes it stop
+// existing, without anyone having to find a state directory.
+func TestAgentManifestsClearCacheRemovesTheCache(t *testing.T) {
+	config.SetTestConfigPath(filepath.Join(t.TempDir(), "config.json"))
+	t.Cleanup(config.ResetTestConfigPath)
+	config.SetTestStateDir(t.TempDir())
+	t.Cleanup(config.ResetTestStateDir)
+	cachePath := writeStaleCursorCache(t)
+
+	code, out, errOut := runLifecycleCLI(t, "agent", "manifests", "--clear-cache", "--json")
+	if code != 0 {
+		t.Fatalf("exit %d (stderr: %s)", code, errOut)
+	}
+	var res manifestsResult
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Cleared) == 0 {
+		t.Fatalf("nothing was reported as cleared: %+v", res)
+	}
+	if _, err := os.Stat(cachePath); err == nil {
+		t.Fatal("the cached manifest survived --clear-cache")
+	}
+	if res.CacheIgnored != "" {
+		t.Fatalf("the table still reports an ignored cache after clearing it: %q", res.CacheIgnored)
+	}
+}
+
+// TestAgentManifestsRefusesRefreshAndClearCacheTogether: they ask for opposite
+// things, and guessing an order for them would be worse than saying so.
+func TestAgentManifestsRefusesRefreshAndClearCacheTogether(t *testing.T) {
+	code, _, errOut := runLifecycleCLI(t, "agent", "manifests", "--refresh", "--clear-cache")
+	if code != 2 {
+		t.Fatalf("exit %d, want 2", code)
+	}
+	if !strings.Contains(errOut, "one at a time") {
+		t.Fatalf("stderr does not say why: %s", errOut)
+	}
+}
+
+// writeStaleCursorCache puts a fetched cursor manifest in the state directory
+// the test axis points at, the way a week with the setting on would have.
+func writeStaleCursorCache(t *testing.T) string {
+	t.Helper()
+	path := manifests.RemoteCachePath("cursor")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := `
+id = "cursor"
+version = "9999.01.01.1"
+min_engine_version = 1
+
+[[rules]]
+id = "spinner_working"
+state = "working"
+priority = 90
+region = "bottom_non_empty_lines(8)"
+visible_working = true
+line_regex = ['^\s*[⠀-⣿]+\s+\w+ing\b']
+`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifests.Invalidate("cursor")
+	t.Cleanup(func() { manifests.Invalidate("cursor") })
+	return path
+}
+
+func TestAgentManifestsRejectsUnknownFlags(t *testing.T) {
+	code, _, errOut := runLifecycleCLI(t, "agent", "manifests", "--fetch")
+	if code != 2 {
+		t.Fatalf("exit %d, want 2", code)
+	}
+	if !strings.Contains(errOut, "--fetch") {
+		t.Fatalf("stderr does not name the flag: %s", errOut)
 	}
 }

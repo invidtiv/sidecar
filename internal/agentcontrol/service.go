@@ -22,7 +22,10 @@ type Snapshot struct {
 	ShellReady      bool
 	Title           string
 	Screen          string
-	CapturedAt      time.Time
+	// PaneHeight is the pane's row count, which is the manifest detection
+	// engine's read window (agentactivity.Observation.PaneHeight).
+	PaneHeight int
+	CapturedAt time.Time
 }
 
 // Terminal is the adapter every control operation goes through. The local
@@ -357,7 +360,7 @@ func detect(snap Snapshot, tracker *agentactivity.Tracker) AgentState {
 	if kind == "" {
 		return AgentState{Status: StatusUnknown, Freshness: "current", Evidence: "provider-not-identified", CapturedAt: now}
 	}
-	result := agentactivity.Detect(agentactivity.Observation{Agent: kind, Screen: snap.Screen, PaneTitle: snap.Title, CurrentCommand: snap.CurrentCommand, ProcessIdentity: snap.ProcessIdentity, CapturedAt: now})
+	result := agentactivity.Detect(agentactivity.Observation{Agent: kind, Screen: snap.Screen, PaneTitle: snap.Title, CurrentCommand: snap.CurrentCommand, ProcessIdentity: snap.ProcessIdentity, PaneHeight: snap.PaneHeight, CapturedAt: now})
 	tracker.Apply(result, now)
 	p := agentstatus.Resolve(agentstatus.Input{ProviderSupported: agentactivity.Supports(kind), Activity: *tracker, CapturedAt: now, Now: now, StaleAfter: time.Minute})
 	status := Status(p.Lane)

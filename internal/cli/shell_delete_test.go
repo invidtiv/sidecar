@@ -208,3 +208,75 @@ func TestShellDeleteRequiresATarget(t *testing.T) {
 		t.Fatalf("a usage error deleted something: %v", names)
 	}
 }
+
+// TestShellDeleteClosesATerminalSplit is td-5f5dac: a beside-the-session
+// terminal split (`create shell`'s default placement) has no shells.json
+// record and no worktree meta, so resolveShellTarget refuses it as
+// unregistered — before this fix the only way to close one was
+// `tmux kill-session` directly, which the project rules tell agents to avoid.
+// The sidecar-tp- prefix is reserved for this feature, so the target's name
+// alone is proof enough to kill it without a manifest lookup.
+func TestShellDeleteClosesATerminalSplit(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux is not installed")
+	}
+	_, workDir := targetProject(t)
+
+	const session = "sidecar-tp-demo-1"
+	if out, err := exec.Command("tmux", "new-session", "-d", "-s", session, "-c", workDir).CombinedOutput(); err != nil {
+		t.Skipf("cannot start a private tmux session: %v: %s", err, out)
+	}
+	t.Cleanup(func() { _ = exec.Command("tmux", "kill-session", "-t", session).Run() })
+	if !workspaceops.SessionExists(session) {
+		t.Fatal("the fixture session did not start")
+	}
+
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"shell", "delete", "--target", session, "--json"}, &out, &errOut)
+	if !handled || code != 0 || errOut.Len() != 0 {
+		t.Fatalf("shell delete = handled %v code %d stderr %q", handled, code, errOut.String())
+	}
+	var result shellDeleteResult
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("stdout is not one JSON object: %q: %v", out.String(), err)
+	}
+	if result.Shell != session || result.Status != shellStatusDeleted || !result.Deleted {
+		t.Fatalf("result = %+v", result)
+	}
+	if workspaceops.SessionExists(session) {
+		t.Fatal("the tmux session outlived the delete")
+	}
+}
+
+// TestShellDeleteSplitTargetNoLiveSession. A sidecar-tp- name proves nothing
+// but the naming convention, so a caller pointing at one that never existed
+// (or already closed) gets the same unregistered refusal as any other unowned
+// target, not a tmux error.
+func TestShellDeleteSplitTargetNoLiveSession(t *testing.T) {
+	targetProject(t)
+
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"shell", "delete", "--target", "sidecar-tp-nonexistent", "--json"}, &out, &errOut)
+	if !handled || code != shellTargetUnregistered {
+		t.Fatalf("no live split = handled %v code %d stderr %q", handled, code, errOut.String())
+	}
+}
+
+// TestShellDeleteSplitTargetRefusesShellAndProject. --shell/--project resolve
+// a registered shell's project, and a terminal split has neither — accepting
+// them alongside a sidecar-tp- target and silently ignoring them would be
+// exactly the kind of dropped flag this CLI refuses everywhere else.
+func TestShellDeleteSplitTargetRefusesShellAndProject(t *testing.T) {
+	targetProject(t)
+
+	for _, args := range [][]string{
+		{"shell", "delete", "--target", "sidecar-tp-demo-1", "--shell", "one"},
+		{"shell", "delete", "--target", "sidecar-tp-demo-1", "--project", "demo"},
+	} {
+		var out, errOut bytes.Buffer
+		handled, code := Run(args, &out, &errOut)
+		if !handled || code != 2 {
+			t.Fatalf("Run(%v) = handled %v code %d, want a usage error", args, handled, code)
+		}
+	}
+}

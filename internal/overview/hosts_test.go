@@ -27,6 +27,7 @@ import (
 func hostModel(t *testing.T, id string, health hosts.Health, snapshot *hostproto.Snapshot) *Model {
 	t.Helper()
 	m := New(workspaceinventory.Collector{})
+	m.hostConfiguredIDs = []string{id}
 	m.hostHealth = map[string]hosts.Health{id: health}
 	m.hostResults = map[string][]workspaceinventory.ProjectResult{}
 	m.hostProjects = map[string][]Project{}
@@ -601,7 +602,7 @@ func TestHostOrdinalsDoNotCollideAcrossHosts(t *testing.T) {
 	}
 
 	seen := map[int]string{}
-	m.eachHostWorkspace(func(order int, label string, _ workspaceinventory.Workspace, _ bool) {
+	m.eachHostWorkspace(func(order int, label string, _ workspaceinventory.Workspace, _, _ bool) {
 		host := strings.SplitN(label, hostRowPrefix, 2)[0]
 		if other, clash := seen[order]; clash && other != host {
 			t.Errorf("ordinal %d is shared by %s and %s", order, other, host)

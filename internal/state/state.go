@@ -80,6 +80,14 @@ type State struct {
 	// global Workspaces list. First-pinned first. Gone IDs are dropped on sync.
 	PinnedWorkspaceIDs []string `json:"pinnedWorkspaceIDs,omitempty"`
 
+	// SessionsHiddenHosts are registered host IDs whose rows the global
+	// Sessions browser withholds. It is a view filter, not a disable: the host
+	// stays connected and its notifications still arrive, so turning it back on
+	// is instant. Config's own `disabled` is the other thing, and it is
+	// deliberately kept separate — "not this week" is a fact about the machine,
+	// "not right now" is a fact about the list.
+	SessionsHiddenHosts []string `json:"sessionsHiddenHosts,omitempty"`
+
 	// SessionsSelected is the durable inventory row ID last shown in the
 	// global Sessions browser. Empty (fresh profile, or a version that never
 	// wrote it) leaves selection to the catalog's default.
@@ -1016,6 +1024,28 @@ func SetShowIdleWorktrees(show bool) error {
 		current = &State{}
 	}
 	current.ShowIdleWorktrees = show
+	mu.Unlock()
+	return Save()
+}
+
+// GetSessionsHiddenHosts returns the host IDs the global browser is currently
+// withholding rows for. Fresh state hides nothing.
+func GetSessionsHiddenHosts() []string {
+	mu.RLock()
+	defer mu.RUnlock()
+	if current == nil {
+		return nil
+	}
+	return append([]string(nil), current.SessionsHiddenHosts...)
+}
+
+// SetSessionsHiddenHosts saves which hosts the global browser withholds.
+func SetSessionsHiddenHosts(ids []string) error {
+	mu.Lock()
+	if current == nil {
+		current = &State{}
+	}
+	current.SessionsHiddenHosts = append([]string(nil), ids...)
 	mu.Unlock()
 	return Save()
 }
