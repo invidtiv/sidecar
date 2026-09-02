@@ -58,7 +58,14 @@ type Model struct {
 	pulseFrame      int
 	headerAction    *SidebarAction
 	sectionActions  map[string]*SidebarAction
+	sortNote        string
 }
+
+// SetSortNote marks the sort control with state the sort itself does not
+// describe. The global browser uses it for HostHiddenGlyph: a list missing a
+// machine's rows has to say so on the control that can put them back, or the
+// absence reads as the machine having nothing to show.
+func (m *Model) SetSortNote(note string) { m.sortNote = note }
 
 // SetCreateActions supplies presentation-only create affordances. Section
 // actions are keyed by Section.Key, which is a stable project identity under
@@ -426,7 +433,7 @@ func (m *Model) Render(opts RenderOptions) Rendered {
 		ScrollbarHover:       opts.ScrollbarHover,
 		ScrollbarDrag:        opts.ScrollbarDrag,
 		HeaderAction:         m.headerAction,
-		HeaderMeta:           &SidebarAction{ID: "sort", Label: SortPillLabel(m.sortMode)},
+		HeaderMeta:           &SidebarAction{ID: "sort", Label: SortPillLabel(m.sortMode), Suffix: m.sortNote},
 		// The filter row costs a row of chrome, so it appears when the filter is
 		// live and not before — the rule the project sidebar already follows, so
 		// the first heading sits on the same row on both surfaces.

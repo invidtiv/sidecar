@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -86,8 +87,15 @@ func (m *Model) syncWorkspaces() {
 	// the host name goes into the project label, which is both what a row
 	// shows and what the Project sort groups by.
 	remoteBase := len(m.projects)
-	m.eachHostWorkspace(func(order int, label string, workspace workspaceinventory.Workspace, stale bool) {
+	m.eachHostWorkspace(func(order int, label string, workspace workspaceinventory.Workspace, stale bool, shown bool) {
+		// The catalog records a hidden machine's rows for the same reason it
+		// records an idle worktree's: it is what the browser knows exists, and
+		// pins, live splits and the remembered selection are keyed off it. Only
+		// the visible list drops them.
 		m.catalog[workspace.ID] = workspace
+		if !shown {
+			return
+		}
 		item := listItem(workspace.Item(), label, remoteBase+order, stale)
 		if m.hideIdleWorkspace(item, workspace) {
 			return
@@ -100,6 +108,7 @@ func (m *Model) syncWorkspaces() {
 
 	m.pruneDeletedTerminalRows()
 	sort.SliceStable(failures, func(a, b int) bool { return failures[a] < failures[b] })
+	m.workspaces.SetSortNote(hiddenHostsNote(m.hiddenHostCount()))
 	m.workspaces.SetItems(items)
 	m.applyPendingSessionsSelection()
 	m.syncCreateActions()
@@ -109,6 +118,25 @@ func (m *Model) syncWorkspaces() {
 	m.workspaces.SetFailures(failures)
 	m.workspaces.SetLoading(m.loading)
 	m.applyWorkspacesEmptyState(0)
+}
+
+// hiddenHostsNote is the mark the sort control carries while machines are
+// hidden. It is empty when nothing is hidden: a control that always wears a
+// warning is a control nobody reads.
+//
+// One hidden machine gets the bare struck glyph — the count would be answering
+// a question the user just asked and knows the answer to. Two or more get the
+// number, because "some remotes" stops being a useful description the moment
+// it could mean two of six or five of six.
+func hiddenHostsNote(hidden int) string {
+	switch {
+	case hidden <= 0:
+		return ""
+	case hidden == 1:
+		return workspacelist.HostHiddenGlyph
+	default:
+		return workspacelist.HostHiddenGlyph + strconv.Itoa(hidden)
+	}
 }
 
 func idleRevealKey(hostID, path string) string {

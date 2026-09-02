@@ -88,6 +88,7 @@ func (m *Model) startHosts() tea.Cmd {
 		m.closePreviewTerminal()
 	}
 	m.hostConfigured = nextConfigured
+	m.setConfiguredHostIDs(registered, disabled)
 	if len(registered) == 0 && len(disabled) == 0 {
 		// Either the feature is off or nothing is registered. Tear down any
 		// registry a previous config had — which matters once this is called
@@ -101,6 +102,7 @@ func (m *Model) startHosts() tea.Cmd {
 		}
 		m.hostRegistered = make(map[string]bool)
 		m.hostIncarnations = make(map[string]uint64)
+		m.persistPrunedHiddenHosts()
 		m.syncBoard()
 		return nil
 	}
@@ -151,6 +153,7 @@ func (m *Model) startHosts() tea.Cmd {
 			delete(m.hostProjects, id)
 		}
 	}
+	m.persistPrunedHiddenHosts()
 	m.syncBoard()
 
 	if !first {
@@ -283,13 +286,163 @@ func (m *Model) hostOrder() []string {
 	return ids
 }
 
+// hostShown reports whether a machine's rows belong in the browser right now.
+//
+// This is the one gate. Both projections read it through the iterators below
+// rather than each testing the set themselves, for the same reason they share
+// eachHostWorkspace: two places deciding what "hidden" means is how the list
+// and the board come to disagree about which machines exist.
+func (m *Model) hostShown(id string) bool { return !m.hiddenHosts[id] }
+
+// shownHostOrder is hostOrder without the machines the user has hidden.
+func (m *Model) shownHostOrder() []string {
+	order := m.hostOrder()
+	if len(m.hiddenHosts) == 0 {
+		return order
+	}
+	shown := order[:0:0]
+	for _, id := range order {
+		if m.hostShown(id) {
+			shown = append(shown, id)
+		}
+	}
+	return shown
+}
+
+// workspaceShown reports whether a catalog row is on screen. Local rows always
+// are; a remote row follows its machine.
+//
+// The relayed-request paths ask this before binding: a request whose row is
+// hidden is a request whose row is not on this viewer's screen, which the open
+// and layout contracts already answer by declining rather than acting on a row
+// the user cannot see.
+func (m *Model) workspaceShown(workspace workspaceinventory.Workspace) bool {
+	return workspace.HostID == "" || m.hostShown(workspace.HostID)
+}
+
+// hiddenHostIDs is the hidden set as a sorted slice, for persistence and for
+// the count the sort control carries.
+func (m *Model) hiddenHostIDs() []string {
+	ids := make([]string, 0, len(m.hiddenHosts))
+	for id, hidden := range m.hiddenHosts {
+		if hidden {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// hiddenHostCount is how many *configured* machines are hidden. A stale entry
+// for a host that is no longer registered must not be counted, or the control
+// would advertise rows nothing can bring back.
+func (m *Model) hiddenHostCount() int {
+	count := 0
+	for _, id := range m.configuredHostIDs() {
+		if !m.hostShown(id) {
+			count++
+		}
+	}
+	return count
+}
+
+// configuredHostIDs is every machine the user has registered, in display
+// order, whether or not it is currently contributing rows.
+//
+// It is the set startHosts last reconciled rather than a fresh read of the
+// config, because it is consulted on every sync: the remotes section has to
+// list a machine that has not answered yet — a host you cannot see and cannot
+// find a checkbox for is the confusion this feature exists to remove — but the
+// refresh path must not re-walk the configuration to learn that.
+func (m *Model) configuredHostIDs() []string { return m.hostConfiguredIDs }
+
+// setConfiguredHostIDs records the reconciled host set. Registered and
+// disabled machines both count: `disabled` means "off this week", and the
+// browser still shows it a row.
+func (m *Model) setConfiguredHostIDs(registered []hosts.Host, disabled []string) {
+	seen := make(map[string]bool, len(registered)+len(disabled))
+	ids := make([]string, 0, len(registered)+len(disabled))
+	add := func(id string) {
+		if id == "" || seen[id] {
+			return
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	for _, host := range registered {
+		add(host.ID)
+	}
+	for _, id := range disabled {
+		add(id)
+	}
+	sort.Strings(ids)
+	m.hostConfiguredIDs = ids
+}
+
+// setHostHidden records one machine's visibility and returns whether anything
+// changed. Persistence and re-sync are the caller's, so a batch — the "show
+// remotes" master toggle — writes state once.
+func (m *Model) setHostHidden(id string, hidden bool) bool {
+	if m.hiddenHosts == nil {
+		m.hiddenHosts = make(map[string]bool)
+	}
+	if m.hiddenHosts[id] == hidden {
+		return false
+	}
+	if hidden {
+		m.hiddenHosts[id] = true
+	} else {
+		delete(m.hiddenHosts, id)
+	}
+	return true
+}
+
+// persistPrunedHiddenHosts drops stale hidden entries and writes the result.
+func (m *Model) persistPrunedHiddenHosts() {
+	if m.pruneHiddenHosts() {
+		_ = saveSessionsHiddenHosts(m.hiddenHostIDs())
+	}
+}
+
+// pruneHiddenHosts drops hidden entries for machines that are no longer
+// configured. Without it, deleting a host and adding it back later would
+// silently restore a hiding decision made about a different machine.
+//
+// It does nothing when no host is configured at all. "Every host was removed"
+// and "the remote-hosts feature is switched off" are indistinguishable from
+// here, and clearing the set in the second case would lose the user's choices
+// for no reason the moment they turned the flag off.
+func (m *Model) pruneHiddenHosts() bool {
+	if len(m.hiddenHosts) == 0 || len(m.hostConfiguredIDs) == 0 {
+		return false
+	}
+	configured := make(map[string]bool)
+	for _, id := range m.configuredHostIDs() {
+		configured[id] = true
+	}
+	changed := false
+	for id := range m.hiddenHosts {
+		if !configured[id] {
+			delete(m.hiddenHosts, id)
+			changed = true
+		}
+	}
+	return changed
+}
+
 // eachHostWorkspace visits every remote workspace in display order, with the
-// project label a row should carry.
+// project label a row should carry and whether its machine is currently shown.
 //
 // It exists so the list and the board iterate remote rows the same way. Two
 // loops over the same data is how the two projections start disagreeing, which
 // is the failure the shared catalog exists to prevent.
-func (m *Model) eachHostWorkspace(visit func(order int, label string, workspace workspaceinventory.Workspace, stale bool)) {
+//
+// Hidden machines are visited, not skipped. Hiding is a view filter, and the
+// catalog is what the browser knows exists — pins, live terminal splits and
+// the remembered selection are all keyed off it, and dropping a hidden host's
+// rows from it would read to those as "this workspace was deleted". Each
+// caller applies the gate to its own projection instead; see hostShown.
+func (m *Model) eachHostWorkspace(visit func(order int, label string, workspace workspaceinventory.Workspace, stale bool, shown bool)) {
 	// Ordinals are global across hosts, not per host. Restarting the index at
 	// zero for each machine made every host's first project tie with every
 	// other's, so the Project sort — stable, ties keep insertion order —
@@ -297,6 +450,7 @@ func (m *Model) eachHostWorkspace(visit func(order int, label string, workspace 
 	order := 0
 	for _, id := range m.hostOrder() {
 		stale := !m.hostHealth[id].State.Healthy()
+		shown := m.hostShown(id)
 		results := m.hostResults[id]
 		for index, project := range m.hostProjects[id] {
 			label := id + hostRowPrefix + project.Name
@@ -309,7 +463,7 @@ func (m *Model) eachHostWorkspace(visit func(order int, label string, workspace 
 				continue
 			}
 			for _, workspace := range results[index].Workspaces {
-				visit(order, label, workspace, stale)
+				visit(order, label, workspace, stale, shown)
 			}
 			order++
 		}
@@ -325,7 +479,7 @@ func (m *Model) eachHostWorkspace(visit func(order int, label string, workspace 
 // answer.
 func (m *Model) hostHealthRows() []workspacelist.Item {
 	var rows []workspacelist.Item
-	for _, id := range m.hostOrder() {
+	for _, id := range m.shownHostOrder() {
 		health := m.hostHealth[id]
 		if health.State.Shows() {
 			// Healthy and stale hosts speak through their workspaces. A stale

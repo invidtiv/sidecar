@@ -74,6 +74,16 @@ func KindGlyph(kind string) string {
 // would cost the thing it is for; see RowPresentation.
 const HostGlyph = "⇅"
 
+// HostHiddenGlyph is HostGlyph struck through: some machines' rows are being
+// withheld from the list on purpose.
+//
+// It is the host glyph rather than a new symbol because the thing being hidden
+// is exactly what that glyph marks, and it is struck rather than bare because
+// the control it appears on already leads with SortGlyph — the same character.
+// The slash is the only part a reader has to tell apart, and it is the part
+// that carries the meaning.
+const HostHiddenGlyph = HostGlyph + "\u0338"
+
 // HostHue is the colour a machine is drawn in, everywhere it appears.
 //
 // The theme's project ramp is the cycle, hashed from the host ID, for the same

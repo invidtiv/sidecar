@@ -344,7 +344,10 @@ func (m *Model) createProjectItems() []workspacecreate.ProjectItem {
 	for _, project := range m.projects {
 		items = append(items, workspacecreate.ProjectItem{Key: projectKey(project), Label: project.Name})
 	}
-	for _, id := range m.hostOrder() {
+	// Hidden machines are left out. Creating a workspace whose row the browser
+	// would then withhold is a create that appears to have done nothing, and
+	// the pending-selection it leaves behind never resolves.
+	for _, id := range m.shownHostOrder() {
 		for _, project := range m.hostProjects[id] {
 			items = append(items, workspacecreate.ProjectItem{
 				Key:   projectKey(project),

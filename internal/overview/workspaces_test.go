@@ -815,7 +815,7 @@ func TestWorkspaceListSortPersists(t *testing.T) {
 		t.Fatalf("fresh sort = %s, want the Activity default", got.Label())
 	}
 	m.openViewFlyout()
-	if cmd := m.applyViewFlyoutAction(workspacelist.SortActionID(workspacelist.SortProject), m.showIdleWorktrees); cmd != nil {
+	if cmd := m.applyViewFlyoutAction(workspacelist.SortActionID(workspacelist.SortProject), m.viewFlyoutSnapshot()); cmd != nil {
 		_ = cmd()
 	}
 	if saved != "Project" {

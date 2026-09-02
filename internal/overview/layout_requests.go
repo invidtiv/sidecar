@@ -76,13 +76,19 @@ func (m *Model) resolveSessionsLayoutRow(req uirequest.Request) (string, workspa
 			return selected.ID, selected, true, ""
 		}
 		if m.preview.workspaceID != "" {
-			if ws, ok := m.catalog[m.preview.workspaceID]; ok {
+			if ws, ok := m.catalog[m.preview.workspaceID]; ok && m.workspaceShown(ws) {
 				return ws.ID, ws, true, ""
 			}
 		}
 		return "", workspaceinventory.Workspace{}, false, "no Sessions row is selected"
 	}
+	// A hidden machine's row is in the catalog but not on screen, and a pane
+	// request is answered by the screen. Declining names the reason instead of
+	// composing onto a surface the user is not looking at.
 	if ws, ok := m.catalog[rowID]; ok {
+		if !m.workspaceShown(ws) {
+			return "", workspaceinventory.Workspace{}, false, "Sessions row " + strconvQuote(rowID) + " is on a hidden remote"
+		}
 		return rowID, ws, true, ""
 	}
 	for _, ws := range m.catalog {

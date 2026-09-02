@@ -70,6 +70,12 @@ func (m *Model) applyPendingSessionsSelection() {
 	if m.loading {
 		return
 	}
+	// A row on a hidden machine has not gone away, it is being withheld. The
+	// restore stays pending so unhiding the machine returns the user to the row
+	// they left, instead of the hide quietly rewriting the remembered one.
+	if ws, known := m.catalog[m.pendingRestoreSelected]; known && !m.workspaceShown(ws) {
+		return
+	}
 	m.pendingRestoreSelected = ""
 	if m.preview.visible && m.preview.workspaceID != "" {
 		_ = saveSessionsSelected(m.preview.workspaceID)

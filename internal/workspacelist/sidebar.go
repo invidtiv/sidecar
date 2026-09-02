@@ -17,6 +17,12 @@ type SidebarAction struct {
 	ID      string
 	Label   string
 	Hovered bool
+	// Suffix is a mark the control keeps at every degradation step, appended
+	// after whatever is left of Label. It is for state the label does not
+	// otherwise say — "some rows are being withheld" — which is precisely the
+	// thing that must not vanish when the header runs out of room, since a
+	// narrow panel is where a missing row is hardest to explain.
+	Suffix string
 }
 
 // SidebarRow is one caller-owned record projected into the shared list. Data
@@ -513,7 +519,7 @@ type headerCandidate struct {
 
 // headerAttempts is the fixed degradation ladder, widest first.
 func headerAttempts(sort, create *SidebarAction) [][]headerCandidate {
-	sortFull, sortGlyph := "", ""
+	sortFull, sortGlyph, sortMark := "", "", ""
 	if sort != nil {
 		sortFull = sort.Label
 		// The glyph-only form is the label's first cell when the caller built it
@@ -523,17 +529,30 @@ func headerAttempts(sort, create *SidebarAction) [][]headerCandidate {
 		} else {
 			sortGlyph = sort.Label
 		}
+		if sort.Suffix != "" {
+			sortMark = sort.Suffix
+			sortFull += " " + sort.Suffix
+			sortGlyph += " " + sort.Suffix
+		}
 	}
 	createLabel := ""
 	if create != nil {
 		createLabel = create.Label
 	}
+	// The mark is the last thing the control sheds, because it is the only
+	// thing on the header that explains rows the user cannot see. A sort word
+	// has a substitute — the section headings underneath name the grouping —
+	// and a bare sort glyph says only that the list is ordered by something,
+	// which nothing is waiting to be told. So the mark-only pill outranks both
+	// of them, and a control with no mark degrades exactly as it always did.
 	return [][]headerCandidate{
 		{{RegionSort, sort, sortFull}, {RegionHeaderAction, create, createLabel}},
 		{{RegionSort, sort, sortGlyph}, {RegionHeaderAction, create, createLabel}},
+		{{RegionSort, sort, sortMark}, {RegionHeaderAction, create, createLabel}},
 		{{RegionHeaderAction, create, createLabel}},
 		{{RegionSort, sort, sortFull}},
 		{{RegionSort, sort, sortGlyph}},
+		{{RegionSort, sort, sortMark}},
 	}
 }
 
