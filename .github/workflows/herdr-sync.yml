@@ -1,0 +1,373 @@
+name: Herdr sync
+
+on:
+  schedule:
+    # Monday morning UTC. The plan's journey is "the Monday sync run opens a
+    # review"; nothing downstream depends on the exact minute.
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+# The repository default is read, deliberately. Only the sync job needs more,
+# and it grants itself exactly what pushing a branch and opening a pull request
+# costs, in its own permissions block.
+permissions:
+  contents: read
+
+# One sync at a time. Two overlapping runs would both force-push bot/herdr-sync
+# and the loser would silently overwrite the winner's branch.
+concurrency:
+  group: herdr-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync manifests and open the review
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      changed: ${{ steps.diff.outputs.changed }}
+      ref: ${{ steps.diff.outputs.ref }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      SYNC_BRANCH: bot/herdr-sync
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      # Same reason go-ci.yml installs node: the bundled OpenCode integration
+      # is shipped JavaScript and the tests that drive it skip without node.
+      # SIDECAR_REQUIRE_NODE below turns that skip into a failure.
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      # No flags: the tool defaults to the newest stable Herdr release tag, so
+      # the vendored manifests match the release binary the differential job
+      # downloads. It reads Herdr through `gh api` and raw.githubusercontent,
+      # which is why GH_TOKEN is set for the whole job.
+      - name: Sync vendored Herdr manifests
+        run: go run ./internal/tools/herdrsync
+
+      - name: Detect material changes
+        id: diff
+        run: |
+          set -euo pipefail
+          filter='del(.generated_at) | del(.herdr.source_dir) | del(.catalog.etag)'
+
+          # The vendored file trees. internal/agentintegration/upstream is
+          # written by the sync's integration-asset step; it is absent until
+          # that lands, and a path matching nothing must not fail the run.
+          paths=(internal/agentactivity/manifests/upstream)
+          for extra in internal/agentactivity/manifests/aliases.upstream.json \
+                       internal/agentactivity/manifests/authority.upstream.json \
+                       internal/agentintegration/upstream; do
+            if [ -e "$extra" ]; then paths+=("$extra"); fi
+          done
+          files=$(git status --porcelain -- "${paths[@]}")
+
+          # Both locks record generated_at, the checkout they were read from,
+          # and the catalog ETag, all of which move on every run. Diffing them
+          # raw would report a change every Monday and open an empty pull
+          # request every Monday, so the material comparison drops those three
+          # and asks whether a vendored byte, digest, version, alias, or pin
+          # actually moved. A lock that is not in HEAD at all is a change.
+          locks_moved=false
+          for lock in internal/agentactivity/manifests/upstream.lock.json \
+                      internal/agentintegration/upstream.lock.json; do
+            [ -e "$lock" ] || continue
+            before=$(git show "HEAD:$lock" 2>/dev/null | jq -S "$filter" 2>/dev/null || echo absent)
+            after=$(jq -S "$filter" "$lock")
+            if [ "$before" != "$after" ]; then locks_moved=true; fi
+          done
+
+          if [ -n "$files" ] || [ "$locks_moved" = true ]; then
+            changed=true
+            ref="$SYNC_BRANCH"
+          else
+            changed=false
+            ref="$GITHUB_SHA"
+          fi
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### Herdr sync"
+            echo
+            if [ "$changed" = true ]; then
+              echo "Vendored tree changed. Files touched:"
+              echo
+              echo '```'
+              echo "${files:-(locks only)}"
+              echo '```'
+            else
+              echo "Nothing upstream moved; no pull request."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # A pull request opened with GITHUB_TOKEN does not trigger workflows that
+      # listen on `pull_request`. That is documented GitHub behaviour and it
+      # means go-ci.yml never runs on a sync pull request, so this job runs the
+      # suite itself. The lock digest test, the vendored-regex compile test and
+      # the fixture census are precisely the checks a sync exists to run, and
+      # nothing else will run them.
+      #
+      # The result gates the job but not the pull request: on failure the
+      # branch is still pushed and the review still opens, carrying a warning
+      # banner, because a sync that breaks the suite is exactly the thing a
+      # human needs to read the diff of. The workflow run goes red either way.
+      - name: Build and test the synced tree
+        id: checks
+        if: steps.diff.outputs.changed == 'true'
+        continue-on-error: true
+        env:
+          SIDECAR_REQUIRE_NODE: "1"
+        run: |
+          go build ./...
+          go test ./...
+
+      - name: golangci-lint the synced tree
+        id: lint
+        if: steps.diff.outputs.changed == 'true'
+        continue-on-error: true
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.13.1
+          args: ./...
+
+      # The branch is rebuilt from the checked-out commit every run and
+      # force-pushed, so it always holds exactly one commit carrying the
+      # current sync output. Re-running updates the existing review in place
+      # rather than opening a second one.
+      - name: Push the sync branch
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          lock=internal/agentactivity/manifests/upstream.lock.json
+          tag=$(jq -r '.herdr.pinned_release_tag' "$lock")
+          ref=$(jq -r '.herdr.ref' "$lock")
+
+          paths=(internal/agentactivity/manifests)
+          for extra in internal/agentintegration/upstream \
+                       internal/agentintegration/upstream.lock.json; do
+            if [ -e "$extra" ]; then paths+=("$extra"); fi
+          done
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$SYNC_BRANCH"
+          git add -A -- "${paths[@]}"
+          git commit -m "chore(herdr): sync detection manifests to $tag" \
+            -m "Vendored from herdr $ref by go run ./internal/tools/herdrsync."
+          git push --force origin "$SYNC_BRANCH"
+
+      - name: Open or update the review
+        if: steps.diff.outputs.changed == 'true'
+        env:
+          CHECKS_OUTCOME: ${{ steps.checks.outcome }}
+          LINT_OUTCOME: ${{ steps.lint.outcome }}
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          lock=internal/agentactivity/manifests/upstream.lock.json
+          tag=$(jq -r '.herdr.pinned_release_tag' "$lock")
+          body="$RUNNER_TEMP/pr-body.md"
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+
+          {
+            if [ "$CHECKS_OUTCOME" = failure ] || [ "$LINT_OUTCOME" = failure ]; then
+              echo "> [!WARNING]"
+              echo "> The Go suite did **not** pass on this tree ([run]($run_url)). A pull request opened with \`GITHUB_TOKEN\` does not trigger \`pull_request\` workflows, so that run is the only signal there is. Do not merge until it is green."
+            else
+              echo "> [!NOTE]"
+              echo "> \`go build ./...\`, \`go test ./...\` and golangci-lint passed on this tree in the [run]($run_url) that produced it. A pull request opened with \`GITHUB_TOKEN\` does not trigger \`pull_request\` workflows, so Go CI posts no separate check here."
+            fi
+            echo
+            cat internal/agentactivity/manifests/report.md
+            echo
+            echo "---"
+            echo
+            echo "Opened by \`.github/workflows/herdr-sync.yml\` from \`go run ./internal/tools/herdrsync\`. Re-running the workflow force-updates this branch and edits this description in place."
+          } > "$body"
+
+          number=$(gh pr list --head "$SYNC_BRANCH" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh pr edit "$number" --title "chore(herdr): sync detection manifests to $tag" --body-file "$body"
+            echo "updated pull request #$number"
+          else
+            gh pr create --base "$BASE_BRANCH" --head "$SYNC_BRANCH" \
+              --title "chore(herdr): sync detection manifests to $tag" --body-file "$body"
+          fi
+
+      - name: Fail the run when the synced tree did not pass
+        if: steps.checks.outcome == 'failure' || steps.lint.outcome == 'failure'
+        run: |
+          echo "the Go suite failed on the synced tree; the review is open and marked, but this run is red" >&2
+          exit 1
+
+  differential:
+    name: Differential harness against the pinned Herdr release
+    # Runs on the sync branch when there is one, so the harness judges the
+    # manifests the review actually proposes; on the workflow's own commit
+    # otherwise. !cancelled() rather than success() because a sync that failed
+    # its Go suite still pushed a branch worth judging.
+    needs: sync
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      HERDR_REPO: herdrdev/herdr
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.sync.outputs.ref || github.sha }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      # The oracle is the release build, not a source build: that keeps this
+      # workflow free of a Rust toolchain and means the engine being compared
+      # against is the one Herdr's users actually run. Herdr publishes the
+      # binary unarchived, one asset per platform.
+      - name: Download the pinned Herdr release binary
+        run: |
+          set -euo pipefail
+          arch=$(uname -m)
+          if [ "$arch" != x86_64 ]; then
+            echo "no herdr-linux-$arch asset is published; this job assumes an x86_64 runner" >&2
+            exit 1
+          fi
+          tag=$(jq -r '.herdr.pinned_release_tag' internal/agentactivity/manifests/upstream.lock.json)
+          echo "pinned release: $tag"
+          mkdir -p "$RUNNER_TEMP/herdr"
+          gh release download "$tag" --repo "$HERDR_REPO" \
+            --pattern herdr-linux-x86_64 --output "$RUNNER_TEMP/herdr/herdr" --clobber
+          chmod +x "$RUNNER_TEMP/herdr/herdr"
+          "$RUNNER_TEMP/herdr/herdr" --version
+
+      # Both modes, because they ask different questions: the default mode asks
+      # where Sidecar knowingly differs from upstream and whether that list is
+      # exactly the overlay, and --merged asks whether Sidecar's engine runs
+      # Sidecar's own rules the way Herdr's engine would. The script exits
+      # non-zero on any disagreement and on any overlay rule that reached the
+      # verdict Herdr reaches without it, which is the plan's "overlay changes
+      # nothing" signal. Both modes run even when the first one fails, so one
+      # regression does not hide the other mode's result.
+      - name: Run the differential harness
+        env:
+          HERDR_BIN: ${{ runner.temp }}/herdr/herdr
+        run: |
+          set -uo pipefail
+          status=0
+          ./scripts/herdr-diff.sh | tee "$RUNNER_TEMP/herdr-diff-default.txt" || status=1
+          ./scripts/herdr-diff.sh --merged | tee "$RUNNER_TEMP/herdr-diff-merged.txt" || status=1
+          exit "$status"
+
+      - name: Publish the harness tables
+        if: always()
+        run: |
+          set -euo pipefail
+          for mode in default merged; do
+            file="$RUNNER_TEMP/herdr-diff-$mode.txt"
+            [ -f "$file" ] || continue
+            {
+              echo "### Differential harness ($mode mode)"
+              echo
+              echo '```'
+              cat "$file"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          done
+
+  staleness:
+    name: Staleness of the committed lock
+    # Deliberately after sync and deliberately not conditional on it passing.
+    # The check's whole purpose is to catch a sync that is not landing changes,
+    # so it must still run when the sync job failed; and it must run after it,
+    # because a sync pull request opened moments ago is exactly what makes an
+    # upstream bump not stale.
+    needs: sync
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      SYNC_BRANCH: bot/herdr-sync
+      MAX_AGE_DAYS: "14"
+    steps:
+      # The committed lock this compares against is the one on the branch the
+      # workflow ran from, never the sync branch: the question is what has
+      # landed, not what has been proposed.
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      # A throwaway output directory, so this run reads live upstream without
+      # touching the vendored tree. herdrsync already fetches the catalog and
+      # writes a lock; nothing here needs a second catalog fetcher.
+      - name: Write a fresh lock from live upstream
+        run: |
+          set -euo pipefail
+          out=$(mktemp -d)
+          args=(-out "$out")
+          # The integration-asset half of the sync writes to a second root.
+          # Redirect that to a throwaway directory too when the tool has the
+          # flag, so this run cannot write into the checkout at all; asking the
+          # tool's own usage keeps this correct either side of that landing.
+          if go run ./internal/tools/herdrsync -h 2>&1 | grep -q -- '-integration-out'; then
+            args+=(-integration-out "$(mktemp -d)")
+          fi
+          echo "HERDR_FRESH_LOCK=$out/upstream.lock.json" >> "$GITHUB_ENV"
+          go run ./internal/tools/herdrsync "${args[@]}" > /dev/null
+
+      - name: Compare against the committed lock
+        run: |
+          set -euo pipefail
+          stale=$(./scripts/herdr-staleness.sh \
+            "$HERDR_FRESH_LOCK" \
+            internal/agentactivity/manifests/upstream.lock.json \
+            "$MAX_AGE_DAYS")
+
+          if [ -z "$stale" ]; then
+            echo "no agent has been newer upstream for more than $MAX_AGE_DAYS days"
+            echo "The committed lock is current." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          open=$(gh pr list --head "$SYNC_BRANCH" --state open --json number --jq '.[0].number // empty')
+          {
+            echo "### Stale vendored manifests"
+            echo
+            echo '```'
+            echo "$stale"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -n "$open" ]; then
+            echo "$stale"
+            echo "sync pull request #$open is open and carries these bumps; not stale"
+            exit 0
+          fi
+
+          echo "$stale" >&2
+          echo >&2
+          echo "upstream has been ahead of the committed lock for more than $MAX_AGE_DAYS days with no open $SYNC_BRANCH pull request, so the sync is not landing; run scripts/sync-herdr.sh and read the report" >&2
+          exit 1

@@ -22,6 +22,17 @@ on:
       # installs into a user's agent, and without this it triggered no CI run
       # at all.
       - "internal/agentintegration/assets/**"
+      # A Herdr sync changes only vendored data: detection manifests, their
+      # lock, and the vendored integration assets. None of that is Go source,
+      # so none of it matched the filters above — and the lock digest test, the
+      # vendored-regex compile test and the fixture census are exactly the
+      # checks such a change exists to run. A sync pull request opened with
+      # GITHUB_TOKEN triggers no `pull_request` run at all (herdr-sync.yml runs
+      # the suite itself for that reason), but a human pushing to the sync
+      # branch got no CI either, which these three entries fix.
+      - "internal/agentactivity/manifests/**"
+      - "internal/agentintegration/upstream/**"
+      - "internal/agentintegration/upstream.lock.json"
   push:
     branches:
       - main
@@ -39,6 +50,9 @@ on:
       - "scripts/test-tmux-compatibility.sh"
       - "scripts/tmux-compat-lib.sh"
       - "internal/agentintegration/assets/**"
+      - "internal/agentactivity/manifests/**"
+      - "internal/agentintegration/upstream/**"
+      - "internal/agentintegration/upstream.lock.json"
   # Releases gate on a Go CI run for the exact commit being tagged
   # (scripts/check-release-state.sh). A release head is often a docs-only
   # commit — a changelog entry — which the path filters above skip, leaving
