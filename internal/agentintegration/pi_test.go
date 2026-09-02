@@ -8,11 +8,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/marcus/sidecar/internal/agentactivity"
 	"github.com/marcus/sidecar/internal/agentlifecycle"
+	"github.com/marcus/sidecar/internal/agentsession"
 )
 
 // The Pi suite.
@@ -592,6 +595,38 @@ func TestThePiAssetExportsOnlyPluginFactories(t *testing.T) {
 	}
 }
 
+// piRuntime is the ordering harness's report of one real run of the asset: what
+// it subscribed to, what argv every report process was spawned with, and the
+// order those processes completed in.
+type piRuntime struct {
+	Order     []string            `json:"order"`
+	Argv      map[string][]string `json:"argv"`
+	Events    []string            `json:"events"`
+	BusEvents []string            `json:"busEvents"`
+	ElapsedMS int                 `json:"elapsedMs"`
+}
+
+func piRunOrderingHarness(t *testing.T, node string) piRuntime {
+	t.Helper()
+	dir := t.TempDir()
+	cmd := exec.Command(node, "ordering-harness.mjs",
+		filepath.Join(dir, "sidecar-stub"),
+		filepath.Join(dir, "order.log"),
+		filepath.Join(dir, "argv"))
+	cmd.Dir = filepath.Join("assets", "pi")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("running the ordering harness: %v\n%s", err, stderr.String())
+	}
+	var result piRuntime
+	if err := json.Unmarshal(out, &result); err != nil {
+		t.Fatalf("harness output is not JSON: %q (%v)", out, err)
+	}
+	return result
+}
+
 // TestThePiAssetSerializesReportsAndBindsFirst pins the two runtime properties
 // the pure mapping cannot show.
 //
@@ -608,34 +643,168 @@ func TestThePiAssetExportsOnlyPluginFactories(t *testing.T) {
 // different recorded orders and the assertion cannot pass by luck.
 func TestThePiAssetSerializesReportsAndBindsFirst(t *testing.T) {
 	node := requireNode(t, "that the shipped Pi asset serializes its reports and binds the session first")
-	dir := t.TempDir()
-	stub := filepath.Join(dir, "sidecar-stub")
-	orderLog := filepath.Join(dir, "order.log")
+	result := piRunOrderingHarness(t, node)
 
-	cmd := exec.Command(node, "ordering-harness.mjs", stub, orderLog)
+	want := []string{
+		"session",
+		"working-session_change",
+		"blocked-permission_request",
+		"working-permission_resolved",
+	}
+	if !reflect.DeepEqual(result.Order, want) {
+		t.Fatalf("reports were delivered in order %v, want %v.\n"+
+			"That list reversed is the signature of concurrent spawns: the stub inverts the exit order, so "+
+			"that is what unserialized delivery produces and it is exactly what the store rejects. A first "+
+			"element that is not \"session\" means a state report raced the binding it depends on.",
+			result.Order, want)
+	}
+}
+
+// TestThePiAssetSubscribesToTheEventsItClaimsTo closes the gap every other test
+// in this file leaves open.
+//
+// The replay harness drives mapEvent and buildArgs directly, so the asset's
+// runtime wiring is untested by it: a typo in pi.on("agent_start"), a swap of
+// getSessionFile for getSessionId inside readCtx, or dropping isIdle from readCtx
+// would each pass the whole suite while the shipped extension silently never
+// reported a turn correctly. This runs the real factory against a stub Pi and
+// asserts what it registered and what it actually spawned.
+func TestThePiAssetSubscribesToTheEventsItClaimsTo(t *testing.T) {
+	node := requireNode(t, "the Pi asset's own subscriptions and the argv it spawns")
+	result := piRunOrderingHarness(t, node)
+
+	// The typed registry, exactly. agent_end is absent on purpose -- it means
+	// "this attempt stopped" and a retry or compaction can follow it -- and
+	// session_shutdown is absent because three of its five reasons are a session
+	// swap rather than an exit. An extra name here is a claim the asset does not
+	// have evidence for; a missing one is a lane that never gets reported.
+	sort.Strings(result.Events)
+	wantEvents := []string{"agent_settled", "agent_start", "session_start"}
+	if !reflect.DeepEqual(result.Events, wantEvents) {
+		t.Fatalf("the asset subscribed to %v, want exactly %v", result.Events, wantEvents)
+	}
+	if !reflect.DeepEqual(result.BusEvents, []string{"sidecar:blocked"}) {
+		t.Fatalf("the asset subscribed to bus channels %v, want exactly [sidecar:blocked]", result.BusEvents)
+	}
+
+	// The binding carries the session FILE, because a path names the exact
+	// transcript a restore would resume where an id alone does not. The harness
+	// hands ctx a path and a different id, so a readCtx that read the wrong
+	// accessor would bind "pi-order" by --id and this would say so.
+	wantArgv := map[string][]string{
+		"session": {
+			"agent", "report-session", "--kind", "pi", "--source", "sidecar.pi.extension",
+			"--path", "/tmp/pi-order.jsonl",
+		},
+	}
+	for label, want := range wantArgv {
+		if got := result.Argv[label]; !reflect.DeepEqual(got, want) {
+			t.Fatalf("the %s process was spawned with %v, want %v", label, got, want)
+		}
+	}
+
+	// Every state report, minus its sequence, which is clock-seeded and
+	// therefore not a fixed value. `working` on the first one is the isIdle read:
+	// the harness's ctx reports isIdle() === false, so a readCtx that dropped
+	// idle would publish `idle` here and never say a turn was running.
+	wantStates := []struct {
+		label string
+		state string
+		rest  []string
+	}{
+		{"working-session_change", "working", []string{"--reason", "session_change"}},
+		{"blocked-permission_request", "blocked", []string{"--reason", "permission_request"}},
+		{"working-permission_resolved", "working", []string{"--reason", "permission_resolved"}},
+	}
+	var seqs []uint64
+	for _, tc := range wantStates {
+		argv := result.Argv[tc.label]
+		seq, rest := piSplitSeq(t, tc.label, argv)
+		seqs = append(seqs, seq)
+		want := append([]string{
+			"agent", "report",
+			"--source", "sidecar.pi.extension",
+			"--source-version", PiAssetVersion,
+			"--provider", "pi",
+			"--session-id", "pi-order",
+			"--state", tc.state,
+		}, tc.rest...)
+		if !reflect.DeepEqual(rest, want) {
+			t.Fatalf("the %s report was spawned with %v (sequence removed), want %v", tc.label, rest, want)
+		}
+	}
+	for i := 1; i < len(seqs); i++ {
+		if seqs[i] <= seqs[i-1] {
+			t.Fatalf("report sequences %v do not strictly increase; the store rejects the second one", seqs)
+		}
+	}
+}
+
+// piSplitSeq removes the --seq pair from a recorded argv and returns the value
+// with the rest. The sequence is asserted separately because it is seeded from
+// the clock and has no fixed value.
+func piSplitSeq(t *testing.T, label string, argv []string) (uint64, []string) {
+	t.Helper()
+	for i := 0; i+1 < len(argv); i++ {
+		if argv[i] != "--seq" {
+			continue
+		}
+		seq, err := strconv.ParseUint(argv[i+1], 10, 64)
+		if err != nil {
+			t.Fatalf("the %s report carried --seq %q, which is not a sequence: %v", label, argv[i+1], err)
+		}
+		return seq, append(append([]string{}, argv[:i]...), argv[i+2:]...)
+	}
+	t.Fatalf("the %s report carried no --seq: %v", label, argv)
+	return 0, nil
+}
+
+// TestPiSequencesNeverRestartWhenTheExtensionIsReinstantiated is the property no
+// single-instance test can see.
+//
+// Pi can replace this extension mid-run without emitting another agent_start.
+// The run key survives that -- lifecycleenv derives RunID from the process
+// generation and the session fingerprint, and a reload changes neither -- and the
+// store rejects any sequence at or below the run's high-water mark. A counter
+// that restarted at zero would therefore have every report from the replacement
+// instance dropped in silence, because reports spawn with stdio: "ignore" and
+// their exit codes are never read, starting with the forced reload-recovery
+// report that the session_start branch exists to send.
+//
+// The clock floor is the second half of the assertion: 1 and 2 are monotonic too,
+// and would still be wrong.
+func TestPiSequencesNeverRestartWhenTheExtensionIsReinstantiated(t *testing.T) {
+	node := requireNode(t, "that a re-instantiated Pi extension does not restart its sequence")
+	dir := t.TempDir()
+	cmd := exec.Command(node, "sequence-harness.mjs",
+		filepath.Join(dir, "sidecar-stub"), filepath.Join(dir, "seq.log"))
 	cmd.Dir = filepath.Join("assets", "pi")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		t.Fatalf("running the ordering harness: %v\n%s", err, stderr.String())
+		t.Fatalf("running the sequence harness: %v\n%s", err, stderr.String())
 	}
-
 	var result struct {
-		Order     []string `json:"order"`
-		ElapsedMS int      `json:"elapsedMs"`
+		StartedAtMS uint64   `json:"startedAtMs"`
+		Seqs        []uint64 `json:"seqs"`
 	}
 	if err := json.Unmarshal(out, &result); err != nil {
 		t.Fatalf("harness output is not JSON: %q (%v)", out, err)
 	}
 
-	want := []string{"session", "1", "2", "3"}
-	if !reflect.DeepEqual(result.Order, want) {
-		t.Fatalf("reports were delivered in order %v, want %v.\n"+
-			"3,2,1,session is the signature of concurrent spawns: the stub inverts the exit order, so that "+
-			"is what unserialized delivery produces and it is exactly what the store rejects. A first "+
-			"element that is not \"session\" means a state report raced the binding it depends on.",
-			result.Order, want)
+	if len(result.Seqs) != 2 {
+		t.Fatalf("two instances produced %d sequences (%v), want one each", len(result.Seqs), result.Seqs)
+	}
+	if result.Seqs[1] <= result.Seqs[0] {
+		t.Fatalf("the second instance's first sequence is %d and the first instance's last was %d; "+
+			"the store rejects everything at or below its high-water mark, so that report is dropped in silence",
+			result.Seqs[1], result.Seqs[0])
+	}
+	if floor := result.StartedAtMS * 1000; result.Seqs[0] < floor {
+		t.Fatalf("the first sequence is %d, below the clock floor %d; the counter is not seeded from the clock, "+
+			"so a module reload -- as opposed to this test's re-instantiation -- would restart it",
+			result.Seqs[0], floor)
 	}
 }
 
@@ -713,10 +882,31 @@ func TestPiAgentDirIsResolvedTheWayPiResolvesIt(t *testing.T) {
 		{override: "~", want: "/home/u"},
 		{override: "/opt/pi/agent", want: "/opt/pi/agent"},
 		{override: "  ", want: "/home/u/.pi/agent"},
+		{override: " ~/elsewhere/agent ", want: "/home/u/elsewhere/agent"},
 	} {
 		got := piAgentDir(Env{Home: home, PiAgentDir: tc.override})
 		if got != tc.want {
 			t.Fatalf("PI_CODING_AGENT_DIR=%q resolved to %q, want %q", tc.override, got, tc.want)
+		}
+
+		// The installer and the trust boundary must land in the same tree, and
+		// this is the assertion that says so. They used to derive the directory
+		// separately and had already diverged on the whitespace case above: this
+		// side trimmed the value, agentsession.Roots did not, so the extension
+		// installed into ~/.pi/agent/extensions while the approved store root
+		// became "  /sessions" and every binding that extension sent was
+		// refused. Nothing failed loudly, because a refused binding is a silent
+		// one. They share a derivation now; this keeps them sharing it.
+		roots := agentsession.Roots{Home: home, Env: func(name string) string {
+			if name == "PI_CODING_AGENT_DIR" {
+				return tc.override
+			}
+			return ""
+		}}.For(PiProvider)
+		wantRoot := filepath.Join(tc.want, "sessions")
+		if len(roots) != 1 || roots[0] != wantRoot {
+			t.Fatalf("PI_CODING_AGENT_DIR=%q installs under %q but the approved store root is %v, want [%s]",
+				tc.override, got, roots, wantRoot)
 		}
 	}
 	// The asset lands in <agent dir>/extensions, which is where Pi's loader
@@ -811,6 +1001,25 @@ func TestPiRefusesWhenPiHasNeverBeenSetUp(t *testing.T) {
 		UID:             os.Getuid(),
 	}
 	svc := Service{Env: env, Adapters: DefaultAdapters()}
+
+	// The status says it too, and that is not a duplicate assertion. Offered is
+	// computed by asking the planner, so on this machine the status offers no
+	// install at all; without the message the user is looking at a plain
+	// not-installed with a missing action and nothing saying why.
+	st := piStatus(t, svc)
+	if st.Status != agentlifecycle.StatusNotInstalled {
+		t.Fatalf("status with pi never set up = %s", st.Status)
+	}
+	for _, want := range []string{"agent directory", "PI_CODING_AGENT_DIR"} {
+		if !strings.Contains(st.Message, want) {
+			t.Fatalf("the status does not mention %q, so nothing explains the missing install action: %q", want, st.Message)
+		}
+	}
+	for _, offered := range st.Offered {
+		if offered == ActionInstall {
+			t.Fatal("install is offered on a machine where pi's agent directory does not exist; pressing it would refuse")
+		}
+	}
 
 	_, err := svc.Plan(PiProvider, ActionInstall)
 	r := refusalFrom(t, err)

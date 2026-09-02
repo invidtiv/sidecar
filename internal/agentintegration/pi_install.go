@@ -3,9 +3,9 @@ package agentintegration
 import (
 	"io/fs"
 	"path/filepath"
-	"strings"
 
 	"github.com/marcus/sidecar/internal/agentlifecycle"
+	"github.com/marcus/sidecar/internal/agentsession"
 )
 
 // The Pi adapter.
@@ -47,9 +47,10 @@ const PiBackupSuffix = ".sidecar-backup"
 // PiExtensionsDir is the directory name Pi scans inside its agent directory.
 const PiExtensionsDir = "extensions"
 
-// PiDefaultAgentDir is the agent directory Pi uses when PI_CODING_AGENT_DIR is
-// unset, relative to $HOME.
-var PiDefaultAgentDir = []string{".pi", "agent"}
+// The default agent directory Pi uses when PI_CODING_AGENT_DIR is unset used to
+// be spelled out here as well. It is not any more: it is part of the one
+// derivation in agentsession.PiAgentDir, and a second copy of a fact that has
+// already drifted once is not documentation.
 
 // PiAdapter installs Sidecar's Pi lifecycle extension.
 type PiAdapter struct{}
@@ -104,21 +105,29 @@ func piPathsFor(env Env) piPaths {
 
 // piAgentDir resolves Pi's agent directory the way Pi itself does.
 //
-// The tilde expansion is Pi's, not a convenience: getAgentDir expands a leading
-// "~" in PI_CODING_AGENT_DIR before using it, so a Sidecar that did not would
-// install into a literal directory named "~" while Pi read somewhere else.
+// The derivation itself is agentsession's, and calling it rather than repeating
+// it is the point. The same directory decides two independent things -- where
+// this installer writes the extension, and which store root a session binding
+// from that extension is allowed to name -- and when the two derived it
+// separately they drifted: this side trimmed the environment value and the root
+// did not, so a whitespace-only PI_CODING_AGENT_DIR installed into
+// ~/.pi/agent/extensions while the approved root became "  /sessions" and every
+// binding was refused. An installer that works and a trust boundary that refuses
+// everything it sends is the worst shape that disagreement can take, because
+// nothing fails loudly.
 func piAgentDir(env Env) string {
-	if override := strings.TrimSpace(env.PiAgentDir); override != "" {
-		switch {
-		case override == "~":
-			return env.Home
-		case strings.HasPrefix(override, "~/"):
-			return filepath.Join(env.Home, override[2:])
-		default:
-			return override
-		}
-	}
-	return filepath.Join(append([]string{env.Home}, PiDefaultAgentDir...)...)
+	return agentsession.PiAgentDir(env.Home, env.PiAgentDir)
+}
+
+// piNeverSetUp is the one sentence for "pi's agent directory is not there".
+//
+// It is a function because the same fact has to reach a user through two
+// different surfaces -- the refusal a caller gets from Plan, and the message on a
+// status that offers no install -- and a status that stayed silent while the
+// refusal explained itself is how the missing action looked like a bug.
+func piNeverSetUp(agentDir string) string {
+	return "pi's agent directory " + agentDir + " does not exist, so pi has not been set up on this machine; " +
+		"run pi once (or set PI_CODING_AGENT_DIR) and try again"
 }
 
 // piState is everything one inspection learned. Both [PiAdapter.Inspect] and
@@ -198,6 +207,17 @@ func piAssetStatus(s piState) (agentlifecycle.IntegrationStatus, string) {
 		// than to adopt it.
 		return agentlifecycle.StatusNeedsRepair, "a file that is not Sidecar's occupies " + s.paths.Owned + "; Sidecar will not modify or remove it"
 	case !s.owned.Exists:
+		if !s.agent.Exists {
+			// The status has to carry this, not only the refusal. Without it a
+			// machine where pi is on PATH but has never been run reads as a
+			// plain not-installed with an empty message and no install offered,
+			// and nothing anywhere on the status surface says why the one action
+			// that would fix it is missing. Offered is computed by asking the
+			// planner, so the absence is real; this is the sentence that
+			// explains it. It is deliberately the same sentence planConverge
+			// refuses with.
+			return agentlifecycle.StatusNotInstalled, piNeverSetUp(s.paths.AgentDir)
+		}
 		return agentlifecycle.StatusNotInstalled, ""
 	case s.owned.Checksum == s.asset.Checksum():
 		return agentlifecycle.StatusCurrent, ""
@@ -287,8 +307,7 @@ func (a PiAdapter) planConverge(s piState, p Plan, act Action) (Plan, error) {
 	// to be configured somewhere else is Sidecar inventing a provider's private
 	// state. Expressed as Sidecar's own refusal code rather than as an io error.
 	if !s.agent.Exists {
-		return Plan{}, refuse(RefuseProviderMissing, s.paths.AgentDir,
-			"pi's agent directory %s does not exist, so pi has not been set up on this machine; run pi once (or set PI_CODING_AGENT_DIR) and try again", s.paths.AgentDir)
+		return Plan{}, refuse(RefuseProviderMissing, s.paths.AgentDir, "%s", piNeverSetUp(s.paths.AgentDir))
 	}
 
 	// Which starting states each verb accepts. The point of separate verbs is

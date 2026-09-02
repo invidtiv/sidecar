@@ -47,7 +47,8 @@
 // (internal/agentintegration/upstream/pi/herdr-agent-state.ts) and is kept
 // verbatim in behavior. The transport half is Sidecar's own. See
 // internal/agentintegration/portedfrom.go for the recorded provenance, and the
-// notes below for the four places this deliberately differs.
+// notes below for the five places this deliberately differs, each named where it
+// happens.
 
 import { spawn } from "node:child_process"
 
@@ -294,6 +295,17 @@ function sessionStartReason(reason) {
 // command line, and every value is either a bounded enum or an identifier
 // Sidecar re-validates on the way in.
 //
+// A STATE REPORT CARRIES ONLY --session-id, never the path, and that is another
+// place this diverges from upstream without it being a loss. Upstream's
+// withSessionRef prefers the session file's path on every message it sends,
+// state reports included. Sidecar splits the two: `agent report` has no path
+// flag at all, because the binding is not a per-report fact -- it travels on its
+// own verb, `agent report-session`, which is where reportSession above sends the
+// path. What the state report needs the id for is identity, and the lifecycle
+// store keeps only a host-salted fingerprint of it, from which it derives the
+// RunID every later report is sequenced against. So the path is not missing from
+// the state report; it is somewhere the state report does not need it.
+//
 // A state report carries a sequence; a session binding does not, because
 // `agent report-session` has no --seq flag -- it is a binding rather than a
 // point in an ordered stream. The queue therefore consumes a sequence number
@@ -331,6 +343,40 @@ function carriesSequence(action) {
   return action.kind !== "session"
 }
 
+// reportSeq is the run-scoped report counter, and seeding it from the clock is
+// a deliberate difference from the OpenCode asset beside it -- which opens its
+// counter at zero, deliberately, and must not be "fixed" to match this. td-447cfa
+// records why the two differ and what would settle it.
+//
+// The counter is at module scope and starts at `Date.now() * 1000` because that
+// is what upstream does (upstream/pi/herdr-agent-state.ts:64) and because Pi is
+// the provider that needs it. The reason is the same one the session_start
+// branch's forced publish exists for: a reload can replace this extension
+// mid-run without emitting another agent_start. The run key survives that --
+// lifecycleenv derives RunID from the process generation and the session
+// fingerprint, neither of which a reload changes -- and Sidecar's store rejects
+// any sequence at or below the run's high-water mark (lifecyclestore's
+// ErrStaleSequence). A counter that restarted at zero would therefore have every
+// report from the replacement instance dropped, in silence, until it climbed
+// past the previous instance's high mark: reports are spawned with
+// stdio: "ignore" and their exit codes are never read, so nothing anywhere would
+// say so. The first casualty would be the forced reload-recovery report itself,
+// which is precisely the recovery this file goes to trouble to preserve.
+//
+// Module scope rather than inside the factory covers both shapes of the same
+// hazard. A host that re-imports the module gets a fresh clock reading, which is
+// higher because time has passed; a host that calls the factory again on the
+// cached module shares this counter, which is higher because it only ever
+// increments. Seeding inside the factory would handle the first and quietly
+// reintroduce the bug for the second, in the case where the two instantiations
+// land in the same millisecond.
+//
+// The pure half is deliberately untouched by this. `buildArgs` still takes the
+// sequence as an argument and `carriesSequence` still decides which verbs
+// consume one, so the replay harness and the Go mirror keep comparing element
+// for element over fixed fixtures.
+let reportSeq = Date.now() * 1000
+
 // SidecarLifecycle is the Pi extension factory.
 //
 // Pi requires a module's DEFAULT export to be a function `(pi) => void |
@@ -347,7 +393,6 @@ export default function SidecarLifecycle(pi) {
   if (process.env.SIDECAR_MANAGED_SHELL !== "1" || !bin) return
 
   const st = newState()
-  let seq = 0
 
   // runOnce resolves when the report process exits, or when the timeout fires,
   // whichever comes first. It never rejects: a reporting failure is diagnostic
@@ -392,20 +437,25 @@ export default function SidecarLifecycle(pi) {
   // increasing sequence per run, so ordering is already the constraint and a
   // dropped intermediate is a lane the notification lane never sees at all --
   // "working" swallowed between two idles is a turn that appears never to have
-  // happened. The queue cannot grow without bound anyway, because publishState
-  // already suppresses exact repeats, so its depth is the number of genuine
-  // state changes rather than the event rate. And a coalescing queue's output
-  // depends on subprocess timing, which would make the asset and its Go mirror
-  // impossible to compare over a fixed fixture -- the one test that has ever
-  // caught real drift between them.
+  // happened. Its depth is bounded by the state-change rate rather than by the
+  // event rate, because publishState suppresses exact repeats, and a state
+  // machine with three lanes changing state faster than a subprocess can exit
+  // is not a shape a human-driven agent produces -- so in practice the depth
+  // stays at one or two. That is a weaker claim than "cannot grow without
+  // bound", which is what this comment used to say and is not true of a
+  // suppression rule. And a coalescing queue's output depends on subprocess
+  // timing, which would make the asset and its Go mirror impossible to compare
+  // over a fixed fixture -- the one test that has ever caught real drift
+  // between them.
   //
   // Sequences are assigned here, in the same order the queue will deliver them,
   // so the store's strictly-increasing contract is satisfied by construction
-  // rather than by luck.
+  // rather than by luck. See reportSeq for why the counter does not start at
+  // zero.
   let queue = Promise.resolve()
   const enqueue = (action) => {
-    if (carriesSequence(action)) seq += 1
-    const args = buildArgs(action, seq, st.sessionId)
+    if (carriesSequence(action)) reportSeq += 1
+    const args = buildArgs(action, reportSeq, st.sessionId)
     queue = queue.then(() => runOnce(args)).catch(() => {})
     return queue
   }

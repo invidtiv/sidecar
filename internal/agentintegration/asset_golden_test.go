@@ -40,7 +40,18 @@ var assetGoldens = []assetGolden{
 	{provider: CodexProvider, name: "hooks.json", version: "1", checksum: "bed1991b2721f08148a2089600ae09d6328b244317355ea66e16c4b4a8de26d0"},
 	{provider: CodexProvider, name: "config.toml", version: "1", checksum: "380d955d0141f00dd10fe9d3e769c7d5e31fec036e356a0583e0f4b91d64615f"},
 	{provider: ClaudeProvider, name: "settings.json", version: "1", checksum: "0d2ca7075dff1faab0645c82e8fd5a04f5982e4be27667b9afa19e2ab05e6f3d"},
-	{provider: PiProvider, name: "sidecar-lifecycle.js", version: "1", checksum: "d0f19dc75a1771ce2e98c7453df0cf7fd7b025864d7fab387718dc686311029a"},
+	// Pi stays at version 1 across a content change, which is the one case the
+	// bump order below deliberately allows and is worth recording rather than
+	// leaving a reader to wonder. A version exists so an already-installed copy
+	// can be recognised as outdated and so authority granted to a qualified
+	// version is not inherited by unqualified bytes. Neither applies yet: no
+	// release has shipped `agent integration install pi`, so there is no copy of
+	// version 1 on any machine to be misread, and the change that moved this
+	// checksum -- seeding the report sequence from the clock, plus comments --
+	// leaves the event-to-lane mapping identical, so the recorded traces that
+	// earned the advisory tier still describe this asset exactly. See the note on
+	// PiAssetVersion, which states the same rule at the constant.
+	{provider: PiProvider, name: "sidecar-lifecycle.js", version: "1", checksum: "f52031f5daf5c84eeb026cb0c51e1a730dcd88c4436f1af064b4a2f8994bfb84"},
 }
 
 // bumpInstructions is the whole point of the guard: a failure here has to tell
