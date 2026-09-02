@@ -683,6 +683,7 @@ func runAgentExplain(env Env, args []string) int {
 			ProcessGeneration: ctx.ProcessGeneration,
 		},
 	}, src, time.Now())
+	attachScreenExplain(&dec.Explanation, ob)
 
 	if f.json {
 		return encodeStdout(env, explainResult{
@@ -756,6 +757,7 @@ func explainManagedShell(env Env, f lifecycleFlags, stateDir string) int {
 		Session:  tgt.Session,
 		Identity: identity,
 	}, src, time.Now())
+	attachScreenExplain(&dec.Explanation, ob)
 
 	if f.json {
 		return encodeStdout(env, explainResult{
@@ -814,6 +816,20 @@ func encodeStdout(env Env, v any) int {
 	return 0
 }
 
+// attachScreenExplain fills in the screen lane's own record: which manifest the
+// engine loaded and from where, which rule matched, and any warning about a
+// local override that was found and refused.
+//
+// The resolver has already run the screen lane, through Evaluate, which builds
+// no record because the polling surfaces would throw one away 200ms later.
+// explain is a diagnostic and can afford the second pass. It is the same
+// observation through the same compiled manifest, so the two cannot reach
+// different verdicts. The record is nil when the process gate refused before any
+// rule ran, which is what "screenExplain is absent" means to a reader.
+func attachScreenExplain(e *agentlifecycle.Explanation, ob agentactivity.Observation) {
+	e.ScreenExplain = agentactivity.ExplainManifest(ob)
+}
+
 func writeExplanationText(env Env, e agentlifecycle.Explanation) {
 	_, _ = fmt.Fprintf(env.Stdout, "state       %s\n", e.State)
 	_, _ = fmt.Fprintf(env.Stdout, "authority   %s\n", e.Authority)
@@ -837,4 +853,18 @@ func writeExplanationText(env Env, e agentlifecycle.Explanation) {
 		_, _ = fmt.Fprintln(env.Stdout)
 	}
 	_, _ = fmt.Fprintf(env.Stdout, "screen      %s\n", e.ScreenState)
+	if e.ScreenExplain == nil {
+		return
+	}
+	// Which manifest authored that screen state, and from where. A user who put
+	// a file in ~/.config/sidecar/agent-detection has to be able to see here
+	// whether it is the one running, and if not, why not.
+	_, _ = fmt.Fprintf(env.Stdout, "manifest    %s\n", e.ScreenExplain.ManifestSource)
+	if rule := e.ScreenExplain.MatchedRule; rule != nil {
+		_, _ = fmt.Fprintf(env.Stdout, "rule        %s (region=%s priority=%d)\n",
+			rule.ID, rule.Region, rule.Priority)
+	}
+	if e.ScreenExplain.Warning != "" {
+		_, _ = fmt.Fprintf(env.Stdout, "warning     %s\n", e.ScreenExplain.Warning)
+	}
 }

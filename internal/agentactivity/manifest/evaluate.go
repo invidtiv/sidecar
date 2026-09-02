@@ -56,9 +56,14 @@ type Explain struct {
 	// pointers: Herdr emits null where these are empty, and the differential
 	// harness normalises null to "" on both sides rather than making every Go
 	// caller dereference.
-	SkippedUpdateReason string          `json:"skipped_update_reason"`
-	FallbackReason      string          `json:"fallback_reason"`
-	EvaluatedRules      []EvaluatedRule `json:"evaluated_rules"`
+	SkippedUpdateReason string `json:"skipped_update_reason"`
+	FallbackReason      string `json:"fallback_reason"`
+	// Warning is what the loader had to ignore to produce this manifest: a
+	// local override or a Sidecar overlay that was found and refused, with the
+	// reason. Herdr emits the same field under the same name for the same
+	// reason, so a refused override reads identically in both records.
+	Warning        string          `json:"warning"`
+	EvaluatedRules []EvaluatedRule `json:"evaluated_rules"`
 }
 
 // EvaluatedRule is one rule's result. Every rule in the manifest appears here,
@@ -215,6 +220,7 @@ func (c *Compiled) explainRecord(v Verdict, evaluated []EvaluatedRule, want bool
 		SkipStateUpdate:     v.SkipStateUpdate,
 		SkippedUpdateReason: v.SkippedUpdateReason,
 		FallbackReason:      v.FallbackReason,
+		Warning:             c.Warning,
 		EvaluatedRules:      evaluated,
 	}
 }

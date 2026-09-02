@@ -165,6 +165,12 @@ func writeManifestExplainText(env Env, e *manifest.Explain) {
 	_, _ = fmt.Fprintf(env.Stdout, "agent: %s\n", e.Agent)
 	_, _ = fmt.Fprintf(env.Stdout, "state: %s\n", e.State)
 	_, _ = fmt.Fprintf(env.Stdout, "manifest: %s %s\n", e.ManifestSource, e.ManifestVersion)
+	if e.Warning != "" {
+		// A local override or an overlay that was found and refused. It goes
+		// directly under the manifest line because it is the answer to "why is
+		// the manifest not the one I put there".
+		_, _ = fmt.Fprintf(env.Stdout, "warning: %s\n", e.Warning)
+	}
 	if e.MatchedRule != nil {
 		_, _ = fmt.Fprintf(env.Stdout, "rule: %s (region=%s priority=%d)\n",
 			e.MatchedRule.ID, e.MatchedRule.Region, e.MatchedRule.Priority)
