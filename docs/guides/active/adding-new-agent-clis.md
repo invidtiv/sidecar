@@ -116,6 +116,8 @@ Adding a family to `internal/agentcatalog` automatically wires:
 
 ### 2.2 Create Provider Detection Rules in `internal/agentactivity/<provider>.go`
 
+> This step is being replaced. Claude Code and Codex no longer have a Go rule table: they execute Herdr's vendored detection manifest through `internal/agentactivity/manifest`, and anything Sidecar knows that upstream does not is a data overlay under `internal/agentactivity/manifests/sidecar/`. The remaining eight providers still work as described below. Rewriting this step into "vendor a manifest, add the alias, mint a fixture with `sidecar agent explain --file`" is Phase 4 of `docs/plans/active/herdr-detection-parity.md`; check whether the agent you are adding already has a manifest under `internal/agentactivity/manifests/upstream/` before writing a rule table by hand.
+
 Create `internal/agentactivity/muse.go` (harvested from Muse Code 1.0.1 live tmux, 2026-08-31, darwin/arm64, echo provider with `--echo-delay-ms` to expose `◈ Thinking`):
 
 ```go

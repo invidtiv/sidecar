@@ -7,11 +7,17 @@
 // detector's rules already match, and treats each line on stdin as one turn.
 //
 // The screen it paints is deliberately taller than the widest detector window
-// (codex.screen.blocked reads the last 18 lines). Every repaint pushes the
-// previous state's chrome out of every rule's region, so the pane's most recent
-// state is the only one any rule can see. Without that, the working marker from
-// turn one would still be inside the twelve-line working window during turn
-// two's idle, and the pane would read as permanently working.
+// (the read window is the pane's own height, and the deepest region any codex
+// rule reads inside it is twenty lines). Every repaint pushes the previous
+// state's chrome out of every rule's region, so the pane's most recent state is
+// the only one any rule can see. Without that, the working marker from turn one
+// would still be inside the working region during turn two's idle, and the pane
+// would read as permanently working.
+//
+// The chrome is Herdr's, not an approximation of it: since the Phase 2 manifest
+// cutover the detector runs the vendored codex.toml, whose working rule is
+// column-anchored as `^[•◦]\s+Working \([^)]*esc to interrupt\)(?: · .*)?$`.
+// Real Codex separates the task from the timer with " · ", and so does this.
 package main
 
 import (
@@ -50,7 +56,7 @@ func main() {
 		if line == "" {
 			continue
 		}
-		paint(fmt.Sprintf("• Working (0s • esc to interrupt) %s", line))
+		paint(fmt.Sprintf("• Working (0s • esc to interrupt) · %s", line))
 		// Long enough that a poller observes the working state before the turn
 		// settles, short enough that a wait is not the slowest thing in the run.
 		time.Sleep(400 * time.Millisecond)

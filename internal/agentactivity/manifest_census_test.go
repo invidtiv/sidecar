@@ -11,9 +11,14 @@ import (
 )
 
 // TestManifestCensus runs both screen-lane classifiers over every real fixture
-// and prints the table. It is a *report*, not a gate: in this phase the Go rule
-// tables still author every user-visible verdict, and a disagreement here is
-// the input to Phase 2's per-provider cutover decision rather than a failure.
+// and prints the table. It is a *report*, not a gate: for a provider that has
+// not been cut over the Go rule table still authors the user-visible verdict,
+// and a disagreement here is the input to that provider's cutover decision
+// rather than a failure.
+//
+// A provider already cut over (manifestDetection) has only one lane left, so
+// its rows report "cutover" rather than an agreement: both columns are the
+// manifest, and the fixture expectations in activity_test.go are what pin it.
 //
 //	go test ./internal/agentactivity/ -run TestManifestCensus -v
 //
@@ -29,18 +34,25 @@ func TestManifestCensus(t *testing.T) {
 	fmt.Fprintf(&b, "\n%-12s %-36s %-9s %-38s %-9s %-30s %s\n",
 		"AGENT", "FIXTURE", "GO", "GO EVIDENCE", "MANIFEST", "MANIFEST RULE", "AGREE")
 	agreed := 0
+	cutover := 0
 	for _, row := range rows {
 		agree := "yes"
-		if !row.agrees() {
+		switch {
+		case manifestDetection[row.agent]:
+			agree = "cutover"
+			cutover++
+			agreed++
+		case !row.agrees():
 			agree = "NO"
-		} else {
+		default:
 			agreed++
 		}
 		fmt.Fprintf(&b, "%-12s %-36s %-9s %-38s %-9s %-30s %s\n",
 			row.agent, row.fixture, row.goState, row.goEvidence,
 			row.manifestState, row.manifestRule, agree)
 	}
-	fmt.Fprintf(&b, "\n%d fixtures, %d agree, %d disagree\n", len(rows), agreed, len(rows)-agreed)
+	fmt.Fprintf(&b, "\n%d fixtures, %d agree (%d of them on a cut-over provider), %d disagree\n",
+		len(rows), agreed, cutover, len(rows)-agreed)
 	t.Log(b.String())
 }
 

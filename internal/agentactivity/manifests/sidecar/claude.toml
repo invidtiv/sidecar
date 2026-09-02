@@ -1,0 +1,43 @@
+# Sidecar overlay for claude.
+#
+# One rule, and it exists because upstream's overlay-retain coverage is narrower
+# than the shapes Claude actually paints.
+#
+# Upstream has `model_picker_menu` (priority 900, skip_state_update), gated on
+# the literal trio "select model" + "enter to set as default" + "esc to cancel".
+# That is one spelling of one overlay. Claude Code 2.1.x renders the model
+# picker Sidecar captured (testdata/claude/overlay.txt) as "Select a model" over
+# an "Enter to select · Esc to close" footer, which carries none of those three
+# literals, so upstream classifies it from the title alone — `osc_title_idle`,
+# idle. An idle verdict on an overlay is not merely a wrong badge: the tracker
+# turns working → idle into a completed turn, so opening the model picker
+# mid-turn announces a completion that never happened. Sidecar's pre-manifest
+# rule (`claude.overlay.retain`) retained the prior state instead, and that is
+# the behaviour this rule carries forward.
+#
+# It is deliberately narrower than the rule it replaces. That one matched
+# `esc to close` anywhere in the last 24 lines; this one requires the hint to
+# close a line inside the bottom five non-empty lines, which is the same footer
+# shape upstream itself gates `btw_overlay_working` on. A turn that merely
+# prints the words in its output no longer freezes the badge.
+#
+# Priority 900 puts it in upstream's own overlay tier: below every blocker
+# (`live_blocked_form` 980, `bash_permission_prompt` 850 is lower but demands
+# "do you want to proceed?", which no overlay footer carries) and below
+# `live_prompt_box` (950), so a live prompt box still reads as idle; above
+# `osc_title_idle` (250), which is the verdict this rule exists to displace. It
+# also sits below `btw_overlay_working` (975), so upstream's decision that the
+# /btw overlay means *working* survives untouched.
+#
+# Delete this rule the day upstream's `model_picker_menu` grows the "esc to
+# close" footer, and the sync report's overlay-off comparison will say so.
+
+id = "claude"
+
+[[rules]]
+id = "sidecar.overlay_retain"
+state = "unknown"
+priority = 900
+region = "bottom_non_empty_lines(5)"
+skip_state_update = true
+line_regex = ['(?i)esc to close\s*$']

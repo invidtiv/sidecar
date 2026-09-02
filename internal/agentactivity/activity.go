@@ -273,11 +273,17 @@ type Rule struct {
 // dispatch here lets the workspace poll remain product-neutral while each
 // provider owns its evidence table.
 //
-// While shadow mode is on (features.manifest_detection, off by default) the
-// vendored Herdr manifests classify the same observation and disagreements are
-// logged. The verdict Detect returns is the Go rule tables' either way; see
-// shadow.go.
+// Two lanes reach a verdict here. A provider listed in manifestDetection is
+// classified by the vendored Herdr manifest for it, through the ported engine;
+// every other provider still runs its Go rule table. While shadow mode is on
+// (features.manifest_detection, off by default) the not-yet-cut-over providers
+// additionally run the manifest lane and disagreements are logged, which is
+// what says when the next one is ready; see shadow.go.
 func Detect(ob Observation) Result {
+	if manifestDetection[ob.Agent] {
+		result, _ := DetectManifest(ob)
+		return result
+	}
 	result := detect(ob)
 	shadowMu.RLock()
 	sink := shadowSink
@@ -286,6 +292,19 @@ func Detect(ob Observation) Result {
 		compareInShadow(ob, result, sink)
 	}
 	return result
+}
+
+// manifestDetection lists the providers whose screen lane is the vendored Herdr
+// manifest rather than a Go rule table. It grows one provider at a time through
+// Phase 2 of docs/plans/active/herdr-detection-parity.md and disappears with the
+// last one, when there is no second lane left to select between.
+//
+// Membership is what turns shadow mode off for a provider: comparing the
+// manifest lane against itself would log nothing and cost a second evaluation
+// per frame.
+var manifestDetection = map[string]bool{
+	"claude": true,
+	"codex":  true,
 }
 
 func detect(ob Observation) Result {

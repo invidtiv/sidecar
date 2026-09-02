@@ -39,10 +39,24 @@
 # script copies internal/agentactivity/manifests/upstream/<file> into a throwaway
 # XDG_CONFIG_HOME. The user's real ~/.config/herdr is never read or written.
 #
-# Sidecar's side additionally merges its own overlay, which today carries only
-# RE2 rewrites of the four upstream `\p{Alphabetic}` patterns. Those rules are
-# live on Herdr's side too, so agreement on them is a real result: it says the
-# rewrite matches the same screens the original does.
+# Sidecar's side additionally merges its own overlay, and the overlay holds two
+# different kinds of rule, which the harness must treat differently.
+#
+#   - A rule carrying an *upstream* id is a rewrite of upstream's own rule: the
+#     four `\p{Alphabetic}` patterns RE2 cannot compile. Those rules are live on
+#     Herdr's side too, so agreement on them is a real result — it says the
+#     rewrite matches the same screens the original does — and a disagreement is
+#     a bug.
+#   - A rule carrying a `sidecar.` id is a rule Herdr does not have, added
+#     because we believe Herdr is wrong or silent about that screen. A fixture
+#     that matches one is *expected* to differ: the divergence is the whole
+#     point of the overlay, and the fixture beside it is the evidence.
+#
+# So a fixture whose Sidecar verdict comes from a `sidecar.` rule is counted as
+# an overlay divergence and reported separately. It does not fail the run. What
+# would fail the run is such a fixture agreeing with Herdr, because that means
+# the overlay rule is no longer doing anything and should be deleted — the
+# "overlay changes nothing" signal the plan asks the sync report to raise.
 
 set -euo pipefail
 
@@ -99,6 +113,8 @@ printf '%-12s %-38s %-9s %-30s %-9s %-30s %s\n' \
 total=0
 agree=0
 disagree=0
+overlay=0
+redundant=0
 skipped=0
 
 for dir in "$FIXTURES"/*/; do
@@ -146,21 +162,31 @@ def read(name):
 s_state, s_rule, s_fallback = read("SIDECAR_JSON")
 h_state, h_rule, h_fallback = read("HERDR_JSON")
 same = s_state == h_state and s_rule == h_rule and s_fallback == h_fallback
-print("AGREE" if same else "DIFFER", s_state, s_rule, h_state, h_rule)
+if s_rule.startswith("sidecar."):
+    # A Sidecar-owned rule matched. Differing is the expected outcome and is
+    # not a failure; agreeing means the rule has stopped changing anything.
+    verdict = "REDUNDANT" if same else "OVERLAY"
+else:
+    verdict = "AGREE" if same else "DIFFER"
+print(verdict, s_state, s_rule, h_state, h_rule)
 PY
     )
 
     total=$((total + 1))
-    if [ "$verdict" = AGREE ]; then
-      agree=$((agree + 1))
-    else
-      disagree=$((disagree + 1))
-    fi
+    case "$verdict" in
+      AGREE) agree=$((agree + 1)) ;;
+      OVERLAY) overlay=$((overlay + 1)) ;;
+      REDUNDANT) redundant=$((redundant + 1)) ;;
+      *) disagree=$((disagree + 1)) ;;
+    esac
     printf '%-12s %-38s %-9s %-30s %-9s %-30s %s\n' \
       "$agent" "$base" "$sstate" "$srule" "$hstate" "$hrule" "$verdict"
   done
 done
 
 echo
-echo "$total fixtures compared, $agree agree, $disagree disagree, $skipped skipped (no screen block)"
-[ "$disagree" -eq 0 ]
+echo "$total fixtures compared, $agree agree, $disagree disagree, $overlay overlay divergences, $redundant redundant overlay rules, $skipped skipped (no screen block)"
+if [ "$redundant" -gt 0 ]; then
+  echo "a sidecar.* rule reached the same verdict Herdr reaches without it; delete the rule or explain why it stays" >&2
+fi
+[ "$disagree" -eq 0 ] && [ "$redundant" -eq 0 ]

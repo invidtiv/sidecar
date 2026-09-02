@@ -1,0 +1,38 @@
+# Sidecar overlay for codex.
+#
+# One rule: a main turn parked on a background terminal is working, not idle.
+#
+# Herdr's codex.toml has no background-terminal rule at all. Upstream treats a
+# background terminal as something the user started and the agent is not waiting
+# on, so a pane in that state falls through to `osc_title_idle` and reads idle.
+# That is right for the case Herdr models, and wrong for the one Sidecar
+# captured (testdata/codex/background_terminal.txt): Codex itself renders
+# "Waiting for background terminal (… esc to interrupt)" while the *turn* is
+# parked on the command, and calling that idle makes the tracker announce a
+# completed turn while the release script is still running.
+#
+# The gate is the pre-manifest rule's, unchanged, and it is three conjunctions
+# deep on purpose. It needs the waiting line at the head of a line, a *running*
+# count of at least one, and both of Codex's live hints (`/ps to view`,
+# `/stop to close`) in either order. A finished wait ("Waited for background
+# terminal") has no running count; a long-lived helper someone left open has no
+# waiting line. Only the live shape matches, which is what
+# TestCodexBackgroundTerminalRequiresCurrentRunningChrome pins.
+#
+# Priority 500 is upstream's own working tier (`screen_working_fallback`), so
+# every blocker still outranks it — `live_strong_blocker` 900, `trust_directory`
+# 950, `weak_blocker` 600, `osc_title_blocked` 1100 — and it beats
+# `osc_title_idle` (100), which is the verdict it exists to displace.
+#
+# This is a candidate for an upstream pull request: the fixture is real and the
+# rule is not Sidecar-specific. Delete it the day Herdr carries an equivalent.
+
+id = "codex"
+
+[[rules]]
+id = "sidecar.background_terminal_working"
+state = "working"
+priority = 500
+region = "bottom_non_empty_lines(12)"
+visible_working = true
+regex = ['(?ims)^\s*[•◦]?\s*Waiting for background terminal\b.*[1-9][0-9]* background terminals? running\b.*(?:/ps to view.*?/stop to close|/stop to close.*?/ps to view)']

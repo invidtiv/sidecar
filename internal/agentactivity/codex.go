@@ -1,35 +1,36 @@
 package agentactivity
 
-import "regexp"
+// Codex's screen rules are Herdr's, executed from the vendored
+// `manifests/upstream/codex.toml` by the manifest engine (Phase 2 of
+// docs/plans/active/herdr-detection-parity.md). This file is what remains that
+// is Sidecar's: the process gate.
+//
+// The Go rule table that used to live here is gone. Upstream carries every
+// signal it had — the ten-frame dots title spinner is `osc_title_working`, the
+// approval prompt is `live_strong_blocker`, the transcript viewer is
+// `transcript_viewer` — plus rules Sidecar never had: the trust-directory
+// prompt at the top of the buffer, and prompt-marker-relative regions that stop
+// a resolved historical prompt in the scrollback from producing a blocker. The
+// one thing upstream does not model is a turn parked on a background terminal;
+// that rule lives on in `manifests/sidecar/codex.toml`.
+//
+// One consequence is worth naming. Sidecar had an explicit composer-idle rule
+// (`^\s*›`); upstream reaches idle through `osc_title_idle`, which asks only
+// that the title be non-empty and carry no spinner. Under tmux a pane title is
+// effectively always non-empty, so this is the same verdict in practice — but a
+// pane whose title is genuinely empty now resolves idle through the fallback
+// instead, which is FallbackIdle and therefore cannot announce a completed
+// turn. That is the conservative direction, and it is upstream's call to make.
 
-// Codex animates the classic ten-frame dots spinner rather than the whole
-// Braille block, so its title pattern stays narrow and is bounded by spaces:
-// a wider class would let ordinary braille in a task name read as activity.
-// See the package note on provider-owned spinner sets before copying this.
-var codexTitleWorking = regexp.MustCompile(`(?:^| )[⠂⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏](?: |$)`)
-
-var (
-	codexRules = []Rule{
-		{ID: "codex.title.blocked", State: StateBlocked, Region: RegionTitle, Contains: []string{"Action Required"}},
-		{ID: "codex.screen.blocked", State: StateBlocked, Region: RegionLastLines, LastN: 18, Regexp: regexp.MustCompile(`(?i)(Action Required|Would you like to run|Press enter to confirm|Allow command)`)},
-		{ID: "codex.viewer.retain", State: StateUnknown, Region: RegionScreen, Regexp: regexp.MustCompile(`(?m)(/ T R A N S C R I P T /|q to quit\s+esc to edit prev)`), Skip: true},
-		{ID: "codex.title.working", State: StateWorking, Region: RegionTitle, Regexp: codexTitleWorking},
-		{ID: "codex.screen.working", State: StateWorking, Region: RegionLastLines, LastN: 12, Regexp: regexp.MustCompile(`Working \(.*esc to interrupt\)`)},
-		{ID: "codex.screen.background-terminal-working", State: StateWorking, Region: RegionCurrent, LastN: 12, Regexp: regexp.MustCompile(`(?ims)^\s*[•◦]?\s*Waiting for background terminal\b.*[1-9][0-9]* background terminals? running\b.*(?:/ps to view.*?/stop to close|/stop to close.*?/ps to view)`)},
-		{ID: "codex.screen.idle", State: StateIdle, Region: RegionLastLines, LastN: 8, Regexp: regexp.MustCompile(`(?m)^\s*›(?:\s|$)`)},
-	}
-)
-
-// DetectCodex requires live process identity before evaluating Codex-owned UI.
-// tmux commonly reports "node" for the npm-installed Codex launcher.
+// DetectCodex classifies a Codex pane. The process gate runs first and refuses
+// before any manifest is evaluated; everything after it is upstream's. tmux
+// commonly reports "node" for the npm-installed Codex launcher, which is why
+// the gate is a set rather than an equality.
 func DetectCodex(ob Observation) Result {
-	if ob.Agent != "codex" || !codexProcess(ob.CurrentCommand) {
+	if ob.Agent != "codex" {
 		return Result{State: StateUnknown, Evidence: "codex.process-mismatch"}
 	}
-	result := Evaluate(ob, codexRules)
-	if result.State == StateUnknown && !result.SkipStateUpdate {
-		return Result{State: StateIdle, Evidence: "codex.known-live-fallback", FallbackIdle: true}
-	}
+	result, _ := DetectManifest(ob)
 	return result
 }
 

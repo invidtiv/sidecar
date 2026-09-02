@@ -292,8 +292,13 @@ func (h *loopbackHost) startAgent() agentcontrol.Agent {
 	return started
 }
 
-// settleAgent waits until the pane's status comes from the provider's own
-// on-screen composer rather than from the known-live fallback.
+// settleAgent waits until the pane's status comes from an explicit rule in the
+// provider's own manifest rather than from the known-live fallback.
+//
+// For Codex that rule is `osc_title_idle`: since the Phase 2 manifest cutover
+// the vendored Herdr manifest reaches idle from a non-empty pane title with no
+// spinner frame in it, where Sidecar's deleted rule table read the `›` composer
+// off the screen.
 //
 // `agent start` returns on the first idle observation, and an early poll can
 // identify the provider from its process name before it has painted anything —
@@ -309,7 +314,7 @@ func (h *loopbackHost) settleAgent() {
 		result := h.local("agent", "get", h.agentSession, "--json")
 		if result.code == 0 {
 			last = decodeAgent(h.t, result.stdout).Agent.Evidence
-			if last == "codex.screen.idle" {
+			if last == "osc_title_idle" {
 				return
 			}
 		}
@@ -628,7 +633,7 @@ func TestALoopbackHostAnswersEveryAgentVerbExactlyAsTheHostItselfWould(t *testin
 				// blank screen and resolves idle through
 				// `codex.known-live-fallback`; a poll 100ms later sees the
 				// composer and resolves the same idle through
-				// `codex.screen.idle`. Two independent starts can land on
+				// `osc_title_idle`. Two independent starts can land on
 				// either side of that, and under a loaded `go test ./...` they
 				// do — this test failed once in three full-package runs before
 				// the distinction was made.
@@ -643,7 +648,7 @@ func TestALoopbackHostAnswersEveryAgentVerbExactlyAsTheHostItselfWould(t *testin
 					agent agentcontrol.Agent
 				}{{"local", localAgent}, {"remote", remoteAgent}} {
 					switch side.agent.Agent.Evidence {
-					case "codex.screen.idle", "codex.known-live-fallback":
+					case "osc_title_idle", "codex.known-live-fallback":
 					default:
 						t.Fatalf("%s start reached readiness by an unexpected route: %q",
 							side.name, side.agent.Agent.Evidence)
