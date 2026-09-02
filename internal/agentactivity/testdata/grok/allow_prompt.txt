@@ -1,0 +1,23 @@
+source: synthetic and unproven. Grok's tool-permission prompt, carried from the
+        deleted pre-manifest rule `grok.screen.blocked`
+        (git show bcb01c02:internal/agentactivity/grok.go), whose alternation
+        held `Allow .*\?` and `Enter to confirm`. No live Grok capture of this
+        prompt exists in any release, so the layout below is the pair those two
+        branches describe and nothing more. A live Grok capture replaces this
+        file, and the rule should be rewritten from it.
+why: upstream's four grok blockers describe a different prompt entirely — a
+     ┃-guttered option list under a ":select │ ctrl+o:yolo │ ctrl+c:cancel" or
+     "tab:scrollback │ shift+x:dismiss" footer, from Grok Build 0.2.101 pane
+     reads — so a prompt of this shape reaches none of them. Grok's
+     `osc_title_idle` is a *visible* idle, so the pane does not degrade to a
+     quiet fallback: the tracker turns the visible idle into a completed turn
+     and announces that Grok is done while it waits on an unanswered question.
+     See manifests/sidecar/grok.toml (`sidecar.allow_prompt_blocked`).
+pane_title: session title - grok
+pane_current_command: grok
+pane_height: 24
+state: blocked
+screen:
+  ◇ Run a shell command
+  Allow bash(git status --short)?
+  ↑/↓ select  │  Enter confirm  │  Esc reject

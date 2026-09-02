@@ -1,11 +1,12 @@
 # Sidecar overlay for codex.
 #
-# Four rules and one disable. In order down the file: a main turn parked on a
+# Five rules and one disable. In order down the file: a main turn parked on a
 # background terminal is working; explicit idle needs the composer rather than a
 # non-empty tmux pane title; a turn whose status line has been pushed off the
-# bottom three lines by tool output is still working; and the approval prompt
-# whose option line empties both of upstream's prompt-marker-relative regions is
-# blocked.
+# bottom three lines by tool output is still working; the approval prompt whose
+# option line empties both of upstream's prompt-marker-relative regions is
+# blocked; and upstream's `weak_blocker` is replaced by id so that the blocked
+# lane it puts a pane on still raises Sidecar's attention flag.
 #
 # --- The background terminal ---
 #
@@ -218,3 +219,40 @@ priority = 700
 region = "bottom_non_empty_lines(12)"
 visible_blocker = true
 regex = ['(?i)(Action Required|Would you like to run|Press enter to confirm|Allow command)']
+
+# --- The weak blocker keeps Sidecar's attention nag ---
+#
+# Upstream's rule, verbatim, with `visible_blocker = true` added.
+#
+# The engine takes the visible flags from the matched rule rather than from the
+# state, which is Herdr's semantics and is what the cutover adopted. Upstream
+# declares `weak_blocker` blocked with no `visible_blocker`, so a pane matching
+# it lands on the blocked lane carrying no attention flag and the surfaces that
+# key an alert on `Tracker.VisibleBlocker` stay quiet. That is a deliberate
+# upstream choice — the rule is weak and high-recall, meant to classify rather
+# than to interrupt — and it is a behaviour change here: before the cutover
+# every blocked verdict Sidecar minted nagged. What this rule is the last resort
+# for is `[y/n]`, `yes (y)` and a "do you want to" / "would you like to"
+# question beside a yes option, all of which are questions waiting on the user,
+# and a blocked lane nobody is told about is a pane sitting on a question.
+#
+# Nothing else about the rule is changed: same priority, same region, same
+# `any` list. `scripts/herdr-diff.sh` therefore still requires this rule to
+# AGREE with Herdr on state and rule id — the harness does not compare the
+# visible flags — which is what keeps the copy honest against a re-sync.
+#
+# Delete this overlay if a captured screen shows the nag is wrong: a shape this
+# rule reaches that is not a question waiting on the user.
+# testdata/codex/weak_blocker.txt is the fixture it is kept for.
+[[rules]]
+id = "weak_blocker"
+state = "blocked"
+priority = 600
+region = "whole_recent_without_current_prompt_marker"
+visible_blocker = true
+any = [
+  { contains = ["[y/n]"] },
+  { contains = ["yes (y)"] },
+  { contains = ["do you want to"], any = [{ contains = ["yes"] }, { contains = ["❯"] }] },
+  { contains = ["would you like to"], any = [{ contains = ["yes"] }, { contains = ["❯"] }] },
+]

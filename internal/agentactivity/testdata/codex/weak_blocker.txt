@@ -1,0 +1,22 @@
+source: synthetic. The bare [y/n] question upstream's `weak_blocker` is the
+        last resort for, transcribed from that rule's own first literal rather
+        than captured: a tool asking for confirmation in its own output, with
+        no Codex prompt marker on screen and none of the control lines
+        `live_strong_blocker` or `sidecar.approval_blocker` are gated on.
+why: this is the fixture the `weak_blocker` overlay is kept for. Upstream
+     declares the rule blocked with no `visible_blocker`, so the pane lands on
+     the blocked lane with no attention flag and every surface that keys an
+     alert on `Tracker.VisibleBlocker` stays quiet — which before the manifest
+     cutover it did not. The overlay in manifests/sidecar/codex.toml replaces
+     the rule by id, verbatim plus `visible_blocker = true`, so the verdict and
+     the rule id are unchanged and only the nag comes back.
+     The screen deliberately carries no `›` line: `weak_blocker`'s region is
+     `whole_recent_without_current_prompt_marker`, which is empty whenever a
+     current Codex prompt marker is on screen.
+pane_title: codex
+pane_current_command: codex
+pane_height: 24
+state: blocked
+screen:
+• Ran scripts/publish.sh
+  └ overwrite the existing artifact? [y/n]

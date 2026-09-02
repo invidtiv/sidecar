@@ -171,6 +171,10 @@ func TestRealCodexFixtures(t *testing.T) {
 		// to the Codex prompt marker and this prompt puts the marker on its own
 		// option line. See manifests/sidecar/codex.toml (`sidecar.approval_blocker`).
 		{"approval_prompt.txt", StateBlocked, false},
+		// The screen upstream's `weak_blocker` is the last resort for, which the
+		// overlay replaces by id so the blocked lane still nags. See
+		// TestWeakBlockersKeepTheAttentionFlag.
+		{"weak_blocker.txt", StateBlocked, false},
 		{"interrupted.txt", StateIdle, false},
 		{"completed.txt", StateIdle, false},
 		{"transcript_viewer.txt", StateUnknown, true},
@@ -359,6 +363,20 @@ func TestRealPhase2ProviderFixtures(t *testing.T) {
 		// reads as a *visible* idle, which the tracker turns into a completed
 		// turn. See manifests/sidecar/claude.toml (`sidecar.allow_prompt_blocker`).
 		{"claude", "allow_prompt.txt", "sidecar.allow_prompt_blocker", StateBlocked, false},
+		// The two background-agent fixtures are the user-reported 2.1.257 bug:
+		// the main loop parked on a subagent read idle, because upstream's
+		// `background_agents_working` reads the single last non-empty line above
+		// the prompt box (the update banner, on this screen) and its
+		// `background_shell_working` reads the footer for "· N shells ·" where
+		// 2.1.257 writes "· ← 3 agents ·". See manifests/sidecar/claude.toml.
+		{"claude", "waiting_background_agents.txt", "sidecar.background_agents_waiting", StateWorking, false},
+		{"claude", "background_agents_footer.txt", "sidecar.background_agents_footer_working", StateWorking, false},
+		// The screen `legacy_no_prompt_blocker` is the last resort for. The
+		// overlay replaces upstream's rule by id — verbatim plus
+		// `visible_blocker` — so the state and the evidence string are still
+		// upstream's; TestWeakBlockersKeepTheAttentionFlag is what proves the
+		// one thing that changed.
+		{"claude", "legacy_permission_wait.txt", "legacy_no_prompt_blocker", StateBlocked, false},
 		// Grok's six fixtures. Every verdict is unchanged. Per fixture,
 		// old → new and why:
 		//
@@ -390,6 +408,11 @@ func TestRealPhase2ProviderFixtures(t *testing.T) {
 		{"grok", "overlay.txt", "sidecar.overlay_retain", StateUnknown, true},
 		{"grok", "stale_working_scrollback.txt", "sidecar.idle_footer", StateIdle, false},
 		{"grok", "background_subagent.txt", "sidecar.background_subagent_working", StateWorking, false},
+		// The permission prompt upstream's four blockers do not describe. Grok's
+		// `osc_title_idle` is a *visible* idle, so without this rule an
+		// unanswered prompt announces a completed turn. The fixture is synthetic
+		// and says so; see manifests/sidecar/grok.toml.
+		{"grok", "allow_prompt.txt", "sidecar.allow_prompt_blocked", StateBlocked, false},
 		// Antigravity's four fixtures. Every verdict is unchanged. Upstream has
 		// no rule that matches any of these screens, so both non-fallback
 		// verdicts come from the overlay:
@@ -1447,5 +1470,161 @@ func TestIdentityWindowSurvivesTallPanePadding(t *testing.T) {
 	scrolled := banner + strings.Repeat("• ran a command\n", 30) + strings.Repeat("\n", 10)
 	if got := Identify(Observation{CurrentCommand: "node", Screen: scrolled, PaneHeight: 45}); got != "" {
 		t.Fatalf("scrolled banner identified as %q, want no identity", got)
+	}
+}
+
+// claudePromptBoxScreen renders the two-rule prompt box, the 2.1.257 footer and
+// the agent roster beneath a caller-supplied transcript, which is the shape
+// every background-agents case below argues about. footer is the whole footer
+// line so a case can vary the agents chip.
+func claudePromptBoxScreen(transcript, footer string) string {
+	rule := strings.Repeat("─", 110)
+	return transcript +
+		rule + "\n" +
+		"❯\n" +
+		rule + "\n" +
+		footer + "\n" +
+		"  ⏺ main\n"
+}
+
+// The user-reported 2.1.257 failure, from both directions.
+//
+// Claude Code parks the main loop on a background subagent and paints two
+// signals for it: a "Waiting for N background agents to finish" row above the
+// prompt box, and an agents count in the footer. Upstream reads the first at
+// `last_non_empty_above_prompt_box`, which the "Update installed" banner takes
+// on the captured screen, and the second only in its "· N shells ·" spelling.
+// With neither firing the pane resolves to `live_prompt_box`, an explicit
+// visible idle, and the tracker turns that into a completed turn while the
+// subagent is still running.
+func TestClaudeWaitingOnBackgroundAgentsBeatsTheIdlePromptBox(t *testing.T) {
+	// The real capture: the waiting row, one banner between it and the box.
+	got := Detect(readObservationFixture(t, "claude", "waiting_background_agents.txt"))
+	if got.State != StateWorking || got.Evidence != "sidecar.background_agents_waiting" || !got.VisibleWorking {
+		t.Fatalf("captured waiting screen got %+v, want working/sidecar.background_agents_waiting with VisibleWorking", got)
+	}
+
+	// The same evidence carried by the footer alone, which is what survives once
+	// the waiting row has scrolled out of the read window.
+	got = Detect(readObservationFixture(t, "claude", "background_agents_footer.txt"))
+	if got.State != StateWorking || got.Evidence != "sidecar.background_agents_footer_working" || !got.VisibleWorking {
+		t.Fatalf("footer-only screen got %+v, want working/sidecar.background_agents_footer_working with VisibleWorking", got)
+	}
+}
+
+// The adversarial half: a finished turn whose scrollback still holds a waiting
+// row from a *previous* turn, with a footer advertising no live agents. Both
+// new rules must stand down, or a settled pane reports working with no expiry.
+func TestClaudeStaleBackgroundAgentEvidenceDoesNotHoldTheWorkingLane(t *testing.T) {
+	idleFooter := "  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents · ↓ to manage"
+
+	// `above_prompt_box` is unbounded upward, so this is the case the tail
+	// anchor in `sidecar.background_agents_waiting` exists for: the old waiting
+	// row is well above the box, with a finished turn's output between.
+	stale := "✻ Waiting for 2 background agents to finish\n" +
+		"\n" +
+		"✔ Agent \"redacted\" finished · 8m 35s\n" +
+		"\n" +
+		"● Read(internal/agentactivity/activity.go)\n" +
+		"  ⎿  redacted tool result\n" +
+		"\n" +
+		"● redacted assistant reply\n" +
+		"\n"
+	ob := Observation{
+		Agent:          "claude",
+		CurrentCommand: "2.1.257",
+		PaneTitle:      "✳ Herdr detection parity orchestration",
+		PaneHeight:     57,
+		Screen:         claudePromptBoxScreen(stale, idleFooter),
+	}
+	got := Detect(ob)
+	if got.State != StateIdle || got.Evidence != "live_prompt_box" {
+		t.Fatalf("stale waiting row got %+v, want idle/live_prompt_box", got)
+	}
+
+	// The footer rule's own negative, and it is the shape 2.1.220 actually
+	// renders: "← for agents" advertises the key, it does not report a count.
+	// testdata/claude/background-agents.txt is the captured version of it.
+	got = Detect(Observation{
+		Agent:          "claude",
+		CurrentCommand: "2.1.257",
+		PaneTitle:      "✳ Herdr detection parity orchestration",
+		PaneHeight:     57,
+		Screen:         claudePromptBoxScreen("● redacted assistant reply\n\n", idleFooter),
+	})
+	if got.State != StateIdle || got.Evidence != "live_prompt_box" {
+		t.Fatalf("agents key hint got %+v, want idle/live_prompt_box", got)
+	}
+
+	// And the fixture the overlay must not disturb: 2.1.220's title-driven
+	// background-agents capture still reports through upstream's title rule.
+	got = Detect(readObservationFixture(t, "claude", "background-agents.txt"))
+	if got.State != StateWorking || got.Evidence != "osc_title_working" {
+		t.Fatalf("2.1.220 background-agents fixture got %+v, want working/osc_title_working", got)
+	}
+}
+
+// Grok's permission prompt, which none of upstream's four blockers describe.
+// The rule is synthetic and unproven — see manifests/sidecar/grok.toml — so its
+// negatives carry more weight than usual: the question line alone is a sentence
+// a turn writes, and a live footer means a turn is running.
+func TestGrokAllowPromptBlocksOnlyWithItsControlLine(t *testing.T) {
+	got := Detect(readObservationFixture(t, "grok", "allow_prompt.txt"))
+	if got.State != StateBlocked || got.Evidence != "sidecar.allow_prompt_blocked" || !got.VisibleBlocker {
+		t.Fatalf("allow prompt got %+v, want blocked/sidecar.allow_prompt_blocked with VisibleBlocker", got)
+	}
+
+	// The same question line quoted in a transcript, with no control line under
+	// it and Grok's own idle footer. The title reads idle, and that is the
+	// correct verdict for a settled pane.
+	quoted := Observation{
+		Agent:          "grok",
+		CurrentCommand: "grok",
+		PaneTitle:      "session title - grok",
+		Screen: "  ◇ the tool would have asked:\n" +
+			"  Allow bash(git status --short)?\n" +
+			"  ╭────────────────────────────────╮\n" +
+			"  │ ❯                              │\n" +
+			"  ╰────────────────────────────────╯\n" +
+			"  Enter:send  │  Shift+Tab:mode  │  Ctrl+x:shortcuts\n",
+	}
+	if got := Detect(quoted); got.State != StateIdle || got.Evidence != "osc_title_idle" {
+		t.Fatalf("quoted allow question got %+v, want idle/osc_title_idle", got)
+	}
+
+	// The `not` gate: a live turn whose output carries both lines is still a
+	// live turn, because Grok's cancel footer is on screen for exactly as long
+	// as the turn runs and an unanswered prompt replaces it.
+	live := quoted
+	live.Screen = "  ◇ the tool would have asked:\n" +
+		"  Allow bash(git status --short)?\n" +
+		"  ↑/↓ select  │  Enter confirm  │  Esc reject\n" +
+		"  Esc:cancel  │  Ctrl+x:shortcuts\n"
+	if got := Detect(live); got.State != StateWorking || got.Evidence != "sidecar.working_footer" {
+		t.Fatalf("allow lines above a live footer got %+v, want working/sidecar.working_footer", got)
+	}
+}
+
+// Upstream declares claude's `legacy_no_prompt_blocker` (300) and codex's
+// `weak_blocker` (600) blocked with no `visible_blocker`, so a pane matching one
+// lands on the blocked lane carrying no attention flag. Before the manifest
+// cutover every blocked verdict Sidecar minted nagged. Both overlays replace the
+// upstream rule *by id* — verbatim plus the flag — so the state and the evidence
+// string are unchanged and only the nag comes back, which is also what keeps
+// scripts/herdr-diff.sh able to require these two rules to AGREE with Herdr.
+func TestWeakBlockersKeepTheAttentionFlag(t *testing.T) {
+	for _, tt := range []struct{ agent, fixture, rule string }{
+		{"claude", "legacy_permission_wait.txt", "legacy_no_prompt_blocker"},
+		{"codex", "weak_blocker.txt", "weak_blocker"},
+	} {
+		t.Run(tt.agent, func(t *testing.T) {
+			got := Detect(readObservationFixture(t, tt.agent, tt.fixture))
+			if got.State != StateBlocked || got.Evidence != tt.rule {
+				t.Fatalf("got %+v, want blocked/%s", got, tt.rule)
+			}
+			if !got.VisibleBlocker {
+				t.Fatalf("%s reached the blocked lane with no attention flag: %+v", tt.rule, got)
+			}
+		})
 	}
 }

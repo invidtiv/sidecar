@@ -95,3 +95,40 @@ point of adding it:
 A synthetic fixture says so in its own header and says why it could not be
 captured. That convention predates the cutover and still holds: an unavailable
 real state is never represented as a real capture.
+
+## Three overlay fixes after the cutover (2026-09-01)
+
+Five more fixtures, taking the directory to 61. Three of them are about screens
+that read *idle* while something was still owed to the user, which is the same
+failure the whole plan opened with.
+
+- `claude/waiting_background_agents.txt` (**real**, Claude Code 2.1.257,
+  pane_height 57) — the main loop parked on a background subagent, reported by
+  the user from their own pane. Claude paints two signals for it and upstream
+  reads neither: `background_agents_working` reads the single last non-empty
+  line above the prompt box, which on this screen is a
+  `✔ Update installed · Restart to update` banner, and
+  `background_shell_working` reads the footer for `· N shells ·` where 2.1.257
+  writes `· ← 3 agents ·`. The pane resolved to `live_prompt_box`, an explicit
+  visible idle, and announced a completed turn. Reduced to the evidence rows:
+  all conversation text, the composer's own text and the session link are gone,
+  and the subagent's task description is redacted. The waiting row and the
+  banner are verbatim, because those two rows *are* the evidence.
+- `claude/background_agents_footer.txt` — the same pane one repaint later, with
+  the waiting row scrolled out of the read window so the footer's own agent
+  count is all that is left. It is the positive fixture for
+  `sidecar.background_agents_footer_working`, which is the half the waiting rule
+  cannot reach.
+- `grok/allow_prompt.txt` (**synthetic and unproven**) — Grok's `Allow …?`
+  permission prompt over an arrow-key control line, carried from the deleted
+  pre-manifest `grok.screen.blocked`. Nothing has captured this prompt in any
+  release, and the header says so twice. It is written down anyway because Grok
+  is the one provider whose idle rule is a *visible* idle: an unanswered prompt
+  upstream cannot describe does not degrade to a quiet fallback there, it
+  announces that the turn is done. A live capture replaces this file.
+- `claude/legacy_permission_wait.txt` and `codex/weak_blocker.txt` (both
+  synthetic) — one screen each for the two upstream rules that declare a blocked
+  state with no `visible_blocker`, transcribed from those rules' own literals.
+  They exist so the overlays that restore Sidecar's attention nag have something
+  to be proved against, and so a re-sync that changes either upstream rule shows
+  up as a differential-harness failure rather than as silence.

@@ -16,6 +16,8 @@ All notable changes to sidecar are documented here.
 
 ### Bug Fixes
 
+- **A Claude pane waiting on background subagents no longer announces that the turn is done.** Claude Code 2.1.257 reports that state in two places and Sidecar was reading neither: the `Waiting for N background agents to finish` row is no longer the last line above the prompt box once an `Update installed · Restart to update` banner sits between them, and the footer that used to say `· N shells ·` now says `· ← N agents ·`. With both signals missed, the prompt box alone read as a finished turn. Both are read now, and a waiting row left in the scrollback by an earlier turn does not hold the pane on the working lane.
+
 - **A pane's detection window no longer drops its topmost visible row.** Detection reads the last N rows of a capture where N is the pane's height, and the newline that terminates a capture was being counted as a row — so on a real tmux capture, which pads the visible region to the full pane height and *then* terminates with a newline, the window started one row too low. Rules anchored on the first row of the screen, such as Codex's first-run trust prompt, could not match.
 
 - **`sidecar agent read` without `--source` now reads the visible screen, matching its documented default.** Omitting the flag previously failed with `source "" is not a terminal capture`. (td-152978)
