@@ -274,8 +274,9 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) (*Plugin, tea.
 				// Folder expansion is handled by single-click, ignore double-click
 				return p, nil
 			}
-			// Open file in editor
-			return p, p.openFile(entry.Path)
+			// Open file in editor — or refuse, for a file that is another
+			// machine's, through the same call the enter key goes through.
+			return p, p.openFileEntry(entry.Path)
 		}
 		return p, nil
 
@@ -300,6 +301,13 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) (*Plugin, tea.
 			entries := p.tree.AllEntries()
 			if p.cursor < len(entries) {
 				entry := entries[p.cursor]
+				if entry.IsFolder && p.remoteBound() {
+					// A folder's combined patch is one read per file in it,
+					// which a bound pane does not make. Opening a full-screen
+					// view that can never load would be worse than staying put;
+					// the sidebar's own notice already says why.
+					return p, nil
+				}
 				p.diffReturnMode = p.viewMode
 				p.viewMode = ViewModeDiff
 				p.diffFile = entry.Path

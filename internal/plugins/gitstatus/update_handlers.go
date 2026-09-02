@@ -244,7 +244,7 @@ func (p *Plugin) updateStatus(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 				// Reload diff for this folder
 				return p, p.autoLoadDiff()
 			}
-			return p, p.openFile(entry.Path)
+			return p, p.openFileEntry(entry.Path)
 		}
 
 	case "r":

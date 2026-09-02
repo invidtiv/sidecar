@@ -165,6 +165,10 @@ type Plugin struct {
 	// (merge, rebase, cherry-pick, revert, bisect). Only a source that reports
 	// it fills it; an ordinary working tree leaves it empty.
 	repoState string
+	// repoRemoteURL is origin's URL for the repository being shown, as the
+	// status read answered it. Only a source that returns it fills it; a local
+	// project's GitHub link still asks git at the moment it is wanted.
+	repoRemoteURL string
 	// remoteRefusal is the host's own reason this bound pane has nothing to
 	// show, learned from an answer rather than from the connection.
 	remoteRefusal string
@@ -1232,6 +1236,7 @@ func (p *Plugin) refresh() tea.Cmd {
 			Tree:      status.Tree,
 			Push:      status.Push,
 			State:     status.State,
+			RemoteURL: status.RemoteURL,
 			Err:       err,
 		}
 	}
@@ -1316,6 +1321,7 @@ func (p *Plugin) applyStatusSnapshot(msg StatusSnapshotLoadedMsg) tea.Cmd {
 		p.statusError = ""
 		p.remoteRefusal = ""
 		p.repoState = msg.State
+		p.repoRemoteURL = msg.RemoteURL
 		// A source that answers the branch row in the read it was already
 		// making fills it here; locally it still arrives with the history load.
 		if msg.Push != nil {
@@ -1645,11 +1651,12 @@ type StatusSnapshotLoadedMsg struct {
 	Epoch     uint64
 	RequestID uint64
 	Tree      *FileTree
-	// Push and State are set only by a source that answers them in the same
-	// read; see RepoStatus.
-	Push  *PushStatus
-	State string
-	Err   error
+	// Push, State, and RemoteURL are set only by a source that answers them in
+	// the same read; see RepoStatus.
+	Push      *PushStatus
+	State     string
+	RemoteURL string
+	Err       error
 }
 
 func (m StatusSnapshotLoadedMsg) GetEpoch() uint64 { return m.Epoch }

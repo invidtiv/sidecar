@@ -130,6 +130,12 @@ type RepoStatus struct {
 	Tree  *FileTree
 	Push  *PushStatus
 	State string
+	// RemoteURL is origin's URL, filled by a source that returns it with the
+	// status read. The viewer builds GitHub links from it: which URL a
+	// repository has is the repository's fact, opening it is this machine's
+	// browser. A local source leaves it empty and the link site asks git, as it
+	// always has.
+	RemoteURL string
 }
 
 // localRepoSource reads this machine's checkout.
@@ -488,7 +494,8 @@ func remoteRepoStatus(result reposervice.StatusResult) RepoStatus {
 			DetachedHead:   result.Detached,
 			CurrentBranch:  result.Branch,
 		},
-		State: result.State,
+		State:     result.State,
+		RemoteURL: result.RemoteURL,
 	}
 }
 

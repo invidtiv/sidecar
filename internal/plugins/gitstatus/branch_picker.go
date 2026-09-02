@@ -8,7 +8,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/modal"
-	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/ui"
@@ -275,8 +274,9 @@ func (p *Plugin) switchBranchByIndex(idx int) tea.Cmd {
 	if p.remoteBound() {
 		// The picker lists the host's branches and stops there: a checkout is a
 		// write on another machine, and this build owns no host verb that
-		// performs one. Nothing moves on either side.
-		return appmsg.ShowFlash("Switching to " + branch.Name + " is refused: [" + p.ctx.HostID + "] is read-only from here")
+		// performs one. The sentence comes from the refusal table so this row
+		// flips with the rest of them.
+		return p.refuseRemoteBranch(branch.Name)
 	}
 	return p.doSwitchBranch(branch.Name)
 }

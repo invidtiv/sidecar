@@ -180,16 +180,51 @@ func (p *Plugin) updateRemote(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 
 	case tea.KeyPressMsg:
 		return p.updateRemoteKeys(msg)
+
+	case tea.MouseMsg:
+		return p.updateRemoteMouse(msg)
+	}
+	return p, nil
+}
+
+// updateRemoteMouse is the bound pane's pointer.
+//
+// The mouse was inert until now, which stopped being defensible once the commit
+// list and the diff pane were on screen: a click that does nothing on rows that
+// are visibly clickable reads as a broken pane, not as a refusal. So the subset
+// that corresponds to gestures the keyboard already performs — selection,
+// scrolling, pane focus, the divider, the scrollbars — routes to the local
+// handlers themselves, exactly as the two diff surfaces do, because everything
+// they reach reads through RepoSource.
+//
+// The one pointer gesture that does not is the double-click that opens a file
+// in an editor, and it refuses from the table like its key. The modal view modes
+// a bound pane never enters are simply not routed.
+func (p *Plugin) updateRemoteMouse(msg tea.MouseMsg) (plugin.Plugin, tea.Cmd) {
+	switch p.viewMode {
+	case ViewModeStatus:
+		if p.tree == nil {
+			// The first status answer has not landed; there are no rows to hit.
+			return p, nil
+		}
+		return p.handleMouse(msg)
+	case ViewModeDiff:
+		return p.handleDiffMouse(msg)
+	case ViewModeBranchPicker:
+		// The picker lists the host's branches; clicking one refuses by name,
+		// through the same call the keyboard's Enter goes through.
+		return p.handleBranchPickerMouse(msg)
 	}
 	return p, nil
 }
 
 // updateRemoteKeys is the bound pane's keyboard: movement, the sidebar, the
-// patch for the row the cursor is on, and an explicit refresh.
+// host's patches and history, and an explicit refresh.
 //
-// It is deliberately the reachable subset. History and the write refusals
-// arrive with their own slices; wiring a key here that has nothing behind it
-// would tell the user a gesture works when it does not.
+// It is deliberately the reachable subset — wiring a key here that has nothing
+// behind it would tell the user a gesture works when it does not — and every
+// key it does not perform answers out of the refusal table rather than falling
+// through to silence.
 //
 // The two diff surfaces are the local handlers themselves, not copies of them.
 // Everything they reach now reads through RepoSource, and the two loaders that
@@ -223,6 +258,12 @@ func (p *Plugin) updateRemoteKeys(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) 
 	}
 
 	entries := p.treeEntries()
+	// The write keys whose only meaning is a write. Keys that mean one thing on
+	// a file row and another on a commit row resolve the row below and refuse
+	// out of the same table.
+	if what, ok := remoteRefusedKeys[msg.String()]; ok {
+		return p, p.refuseRemote(what)
+	}
 	switch msg.String() {
 	case "j", "down":
 		return p, p.cursorDown()
@@ -256,16 +297,33 @@ func (p *Plugin) updateRemoteKeys(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) 
 
 	case "enter":
 		// A folder's expansion and a commit's preview pane are both this
-		// viewer's own display state. Enter on a file opens it in an editor
-		// locally; that is a host verb nothing answers, and it refuses with the
-		// rest of them in 4j.
+		// viewer's own display state. Enter on a file opens it in an editor,
+		// which no host verb answers.
 		if p.cursorOnCommit() {
 			if p.previewCommit != nil {
 				p.activePane = PaneDiff
 			}
-		} else if p.cursor < len(entries) && entries[p.cursor].IsFolder {
-			entries[p.cursor].IsExpanded = !entries[p.cursor].IsExpanded
-			return p, p.autoLoadDiff()
+		} else if p.cursor < len(entries) {
+			if entries[p.cursor].IsFolder {
+				entries[p.cursor].IsExpanded = !entries[p.cursor].IsExpanded
+				return p, p.autoLoadDiff()
+			}
+			return p, p.openFileEntry(entries[p.cursor].Path)
+		}
+
+	case "O":
+		// Following a file to the Files tab is navigation, and that tab is
+		// bound to the same host, so the file it lands on is the host's.
+		if !p.cursorOnCommit() && p.cursor < len(entries) {
+			return p, p.openInFileBrowser(entries[p.cursor].Path)
+		}
+
+	case "o":
+		// The commit link is built from the remote URL `repo status` already
+		// returned. The URL is the host's fact and opening it is this machine's
+		// browser, which is the correct division of the two.
+		if p.cursorOnCommit() {
+			return p, p.openCommitInGitHub()
 		}
 
 	case "d":
@@ -300,14 +358,16 @@ func (p *Plugin) updateRemoteKeys(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) 
 
 	case "f":
 		// On a commit, filter the log by its author — a host filter, so the
-		// answer is about the whole log rather than about the page in hand.
-		if p.hasSelectedCommit() {
-			commits := p.activeCommits()
-			commit := commits[p.selectedCommitIndex()]
-			p.historyFilterAuthor = commit.Author
-			p.historyFilterActive = true
-			return p, p.loadFilteredCommits()
+		// answer is about the whole log rather than about the page in hand. On
+		// a file row the same key is fetch, which is a write on the host.
+		if !p.hasSelectedCommit() {
+			return p, p.refuseRemote(refuseFetch)
 		}
+		commits := p.activeCommits()
+		commit := commits[p.selectedCommitIndex()]
+		p.historyFilterAuthor = commit.Author
+		p.historyFilterActive = true
+		return p, p.loadFilteredCommits()
 
 	case "F":
 		if p.historyFilterActive {
@@ -465,63 +525,4 @@ func truncationLabel(truncated bool) string {
 		return ""
 	}
 	return " " + lipgloss.NewStyle().Foreground(styles.Warning).Render("(truncated)")
-}
-
-// remoteCommands is the footer while bound.
-//
-// It lists what this build actually performs on the host and nothing else, so
-// the footer tells the truth rather than advertising gestures that would have to
-// refuse.
-func (p *Plugin) remoteCommands() []plugin.Command {
-	if !p.remoteAvailable() {
-		return nil
-	}
-	return []plugin.Command{
-		{ID: "refresh", Name: "Refresh", Description: "Re-read the host's repository status and history", Category: plugin.CategoryActions, Context: "git-status", Priority: 1},
-		{ID: "show-diff", Name: "Diff", Description: "View the host's patch for this file", Category: plugin.CategoryView, Context: "git-status", Priority: 2},
-		{ID: "show-history", Name: "History", Description: "Jump to the host's commit history", Category: plugin.CategoryNavigation, Context: "git-status", Priority: 3},
-		{ID: "branch-picker", Name: "Branch", Description: "List the host's branches (switching is refused)", Category: plugin.CategoryGit, Context: "git-status", Priority: 3},
-		{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Category: plugin.CategoryView, Context: "git-status", Priority: 5},
-		// git-status-commits context (the host's commits in the sidebar)
-		{ID: "view-commit", Name: "View", Description: "View commit details", Category: plugin.CategoryView, Context: "git-status-commits", Priority: 1},
-		{ID: "search-history", Name: "Search", Description: "Search the commits loaded from the host", Category: plugin.CategorySearch, Context: "git-status-commits", Priority: 2},
-		{ID: "toggle-graph", Name: "Graph", Description: "Toggle commit graph display", Category: plugin.CategoryView, Context: "git-status-commits", Priority: 2},
-		{ID: "filter-author", Name: "Author", Description: "Filter the host's history by author", Category: plugin.CategorySearch, Context: "git-status-commits", Priority: 3},
-		{ID: "filter-path", Name: "Path", Description: "Filter the host's history by file path", Category: plugin.CategorySearch, Context: "git-status-commits", Priority: 3},
-		{ID: "clear-filter", Name: "Clear", Description: "Clear history filters", Category: plugin.CategoryActions, Context: "git-status-commits", Priority: 3},
-		{ID: "yank-commit", Name: "Yank", Description: "Copy commit as markdown", Category: plugin.CategoryActions, Context: "git-status-commits", Priority: 3},
-		{ID: "yank-id", Name: "YankID", Description: "Copy commit ID", Category: plugin.CategoryActions, Context: "git-status-commits", Priority: 3},
-		{ID: "next-match", Name: "Next", Description: "Next search match", Category: plugin.CategoryNavigation, Context: "git-status-commits", Priority: 4},
-		{ID: "prev-match", Name: "Prev", Description: "Previous search match", Category: plugin.CategoryNavigation, Context: "git-status-commits", Priority: 4},
-		{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Category: plugin.CategoryView, Context: "git-status-commits", Priority: 5},
-		// git-history-search context (commit search modal)
-		{ID: "select", Name: "Select", Description: "Jump to selected match", Category: plugin.CategoryActions, Context: "git-history-search", Priority: 1},
-		{ID: "cancel", Name: "Cancel", Description: "Close search", Category: plugin.CategoryActions, Context: "git-history-search", Priority: 1},
-		{ID: "navigate", Name: "Nav", Description: "Move through matches", Category: plugin.CategoryNavigation, Context: "git-history-search", Priority: 2},
-		{ID: "toggle-regex", Name: "Regex", Description: "Toggle regex mode", Category: plugin.CategoryView, Context: "git-history-search", Priority: 3},
-		{ID: "toggle-case", Name: "Case", Description: "Toggle case sensitivity", Category: plugin.CategoryView, Context: "git-history-search", Priority: 3},
-		// git-path-filter context (path filter modal)
-		{ID: "apply-filter", Name: "Apply", Description: "Apply path filter", Category: plugin.CategorySearch, Context: "git-path-filter", Priority: 1},
-		{ID: "cancel", Name: "Cancel", Description: "Close path filter", Category: plugin.CategoryActions, Context: "git-path-filter", Priority: 1},
-		// git-commit-preview context (the host's commit in the right pane)
-		{ID: "view-diff", Name: "Diff", Description: "View the host's patch for this file", Category: plugin.CategoryView, Context: "git-commit-preview", Priority: 1},
-		{ID: "back", Name: "Back", Description: "Return to sidebar", Category: plugin.CategoryNavigation, Context: "git-commit-preview", Priority: 1},
-		{ID: "yank-commit", Name: "Yank", Description: "Copy commit as markdown", Category: plugin.CategoryActions, Context: "git-commit-preview", Priority: 3},
-		{ID: "yank-id", Name: "YankID", Description: "Copy commit ID", Category: plugin.CategoryActions, Context: "git-commit-preview", Priority: 3},
-		{ID: "open-in-file-browser", Name: "Browse", Description: "Open file in file browser", Category: plugin.CategoryNavigation, Context: "git-commit-preview", Priority: 3},
-		{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Category: plugin.CategoryView, Context: "git-commit-preview", Priority: 4},
-		// git-status-diff context (inline diff pane)
-		{ID: "toggle-diff-view", Name: "View", Description: "Toggle unified/split diff view", Category: plugin.CategoryView, Context: "git-status-diff", Priority: 2},
-		{ID: "toggle-wrap", Name: "Wrap", Description: "Toggle line wrapping", Category: plugin.CategoryView, Context: "git-status-diff", Priority: 3},
-		{ID: "reset-hscroll", Name: "Col 0", Description: "Snap horizontal scroll back to column 0", Category: plugin.CategoryNavigation, Context: "git-status-diff", Priority: 4},
-		{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Category: plugin.CategoryView, Context: "git-status-diff", Priority: 3},
-		// git-diff context (full-screen patch)
-		{ID: "close-diff", Name: "Close", Description: "Close diff view", Category: plugin.CategoryView, Context: "git-diff", Priority: 1},
-		{ID: "scroll", Name: "Scroll", Description: "Scroll diff content", Category: plugin.CategoryNavigation, Context: "git-diff", Priority: 2},
-		{ID: "toggle-diff-view", Name: "View", Description: "Toggle unified/split diff view", Category: plugin.CategoryView, Context: "git-diff", Priority: 3},
-		{ID: "toggle-wrap", Name: "Wrap", Description: "Toggle line wrapping", Category: plugin.CategoryView, Context: "git-diff", Priority: 3},
-		{ID: "prev-file", Name: "Prev", Description: "Previous changed file", Category: plugin.CategoryNavigation, Context: "git-diff", Priority: 4},
-		{ID: "next-file", Name: "Next", Description: "Next changed file", Category: plugin.CategoryNavigation, Context: "git-diff", Priority: 4},
-		{ID: "open-in-file-browser", Name: "Browse", Description: "Open file in file browser", Category: plugin.CategoryNavigation, Context: "git-diff", Priority: 4},
-	}
 }

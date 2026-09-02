@@ -127,6 +127,7 @@ func hostStatusResult() reposervice.StatusResult {
 		Upstream:    "origin/" + remoteBranch,
 		Ahead:       2,
 		Behind:      1,
+		RemoteURL:   remoteOriginURL,
 		State:       reposervice.StateRebase,
 		Files: []reposervice.StatusFile{
 			{
@@ -144,6 +145,7 @@ func hostStatusResult() reposervice.StatusResult {
 // belongs to the other row, or to the twin on this disk.
 const (
 	hostWorkspaceID     = "/home/me/sidecar:worktree:/home/me/sidecar"
+	remoteOriginURL     = "git@github.com:aerie/sidecar.git"
 	remoteStagedLine    = "REMOTE-STAGED-LINE"
 	remoteUnstagedLine  = "REMOTE-UNSTAGED-LINE"
 	remoteUntrackedLine = "REMOTE-UNTRACKED-LINE"
@@ -459,6 +461,9 @@ func TestBoundStatusPaneShowsTheHostAndNeverTheLocalTwin(t *testing.T) {
 // bound pane driven through its whole lifecycle, with a git that fails and
 // records every invocation, must never invoke it.
 func TestBoundStatusPaneRunsNoLocalGit(t *testing.T) {
+	// o builds a GitHub link from the host's remote URL, and the drive below
+	// presses it; the link is watched rather than handed to a browser.
+	links := stubBrowser(t)
 	ctx := connectedHostContext()
 	p, _ := boundGitPlugin(t, ctx)
 
@@ -512,8 +517,35 @@ func TestBoundStatusPaneRunsNoLocalGit(t *testing.T) {
 	// The branch picker: listed, then a switch refused, then closed.
 	press("b")
 	code(tea.KeyEnter, tea.KeyEscape)
-	// Every write key the local pane binds.
+	// Every write key the local pane binds, each of which now refuses by name.
 	press("sucSUPfLDzZA")
+	code(tea.KeyEnter)
+	// And the pointer, which reaches the same rows: selecting a file and a
+	// commit, scrolling the sidebar, focusing the diff pane, dragging the
+	// divider, and the double-click that would open an editor.
+	_ = p.View(160, 40)
+	click := func(x, y int) {
+		t.Helper()
+		_, cmd := p.Update(clickMsg(x, y))
+		_ = drive(t, p, cmd)
+		_ = p.View(160, 40)
+	}
+	fileX, fileY := boundRegion(t, p, regionFile, 0)
+	commitX, commitY := boundRegion(t, p, regionCommit, 1)
+	paneX, paneY := boundRegionAny(t, p, regionDiffPane)
+	dividerX, dividerY := boundRegionAny(t, p, regionPaneDivider)
+	click(commitX, commitY)
+	click(fileX, fileY)
+	click(fileX, fileY) // the double-click that refuses
+	click(paneX, paneY)
+	_, cmd := p.Update(tea.MouseWheelMsg{X: 10, Y: 6, Button: tea.MouseWheelDown})
+	_ = drive(t, p, cmd)
+	click(dividerX, dividerY)
+	_, cmd = p.Update(motionMsg(dividerX+6, dividerY))
+	_ = drive(t, p, cmd)
+	_, cmd = p.Update(releaseMsg(dividerX+6, dividerY))
+	_ = drive(t, p, cmd)
+
 	_ = p.View(160, 40)
 	_ = p.Diagnostics()
 	_ = p.Commands()
@@ -521,8 +553,9 @@ func TestBoundStatusPaneRunsNoLocalGit(t *testing.T) {
 
 	assertNoLocalGit(t, log)
 	// Non-vacuousness: every read this build performs was made against the
-	// host while the recorder stood in for git, so the assertion above was
-	// made by a pane that had every chance to run one.
+	// host while the recorder stood in for git, and every gesture that refuses
+	// was driven through both the keyboard and the pointer, so the assertion
+	// above was made by a pane that had every chance to run one.
 	view := p.View(160, 40)
 	if !strings.Contains(view, remoteMarker) && !strings.Contains(view, remoteCommitSubject) {
 		t.Fatalf("the bound pane ended up showing nothing of the host:\n%s", view)
@@ -531,6 +564,11 @@ func TestBoundStatusPaneRunsNoLocalGit(t *testing.T) {
 		if len(verbCalls(calls, verb)) == 0 {
 			t.Fatalf("repo %s was never read from the host: %v", verb, calls)
 		}
+	}
+	// o reached the link builder rather than falling through: the URL came from
+	// the host's remote, with no git on this disk asked for one.
+	if len(*links) == 0 {
+		t.Fatal("the GitHub link was never built, so pressing o proved nothing")
 	}
 }
 

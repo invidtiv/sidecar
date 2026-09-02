@@ -65,6 +65,10 @@ func BuildCommitURL(info *GitHubInfo, hash string) string {
 	return fmt.Sprintf("https://github.com/%s/%s/commit/%s", info.Owner, info.Repo, hash)
 }
 
+// browserOpener is how a link reaches this machine's browser. It is a variable
+// so a test can watch a link being built without one being launched.
+var browserOpener = openInBrowser
+
 // openInBrowser opens the URL in the default browser.
 func openInBrowser(url string) tea.Cmd {
 	return func() tea.Msg {
@@ -92,16 +96,15 @@ func (p *Plugin) openCommitInGitHub() tea.Cmd {
 	if commit == nil {
 		return nil
 	}
-	if p.remoteBound() {
-		// The remote URL is the host's fact and `repo status` already returns
-		// it, but nothing carries it to this call yet. Reading it here would
-		// run git in whatever directory Sidecar was started from, because a
-		// bound pane deliberately has no repository root. The link arrives with
-		// the refusal table.
-		return nil
+	// The remote URL is the repository's own fact, and each machine answers it
+	// its own way: a host returned it with `repo status` in the refresh that is
+	// already on screen, a local project is asked for it here. Asking git here
+	// for a bound pane would run it in whatever directory Sidecar was started
+	// from, because a bound pane deliberately has no repository root.
+	remoteURL := p.repoRemoteURL
+	if !p.remoteBound() {
+		remoteURL = GetRemoteURL(p.repoRoot)
 	}
-
-	remoteURL := GetRemoteURL(p.repoRoot)
 	if remoteURL == "" {
 		return msg.ShowFlash("No remote configured")
 	}
@@ -113,7 +116,7 @@ func (p *Plugin) openCommitInGitHub() tea.Cmd {
 
 	url := BuildCommitURL(ghInfo, commit.Hash)
 	return tea.Batch(
-		openInBrowser(url),
+		browserOpener(url),
 		msg.ShowFlash("Opening in GitHub..."),
 	)
 }
