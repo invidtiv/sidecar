@@ -137,7 +137,7 @@ func parseDarwinProcessArgv(data []byte) []string {
 	argv := make([]string, 0, argc)
 	for i := 0; i < argc; i++ {
 		if current >= len(rest) {
-			return nil
+			break
 		}
 		end := bytes.IndexByte(rest[current:], 0)
 		if end < 0 {
@@ -145,10 +145,28 @@ func parseDarwinProcessArgv(data []byte) []string {
 		}
 		end += current
 		if end == current {
-			return nil
+			// An empty slot ends argv rather than voiding it, which is where
+			// this port deliberately parts company with upstream's
+			// `procargs2_argv` (it returns None here and loses the whole
+			// vector). A process that rewrites its own title on macOS writes
+			// into this same memory and blanks the slots it no longer uses:
+			// Pi 0.84.3 is a live case, reporting argc=2 with argv[0]="pi" and
+			// argv[1]="". Voiding the vector there threw away the one element
+			// that names the program, and the pane went from identified to
+			// unidentified — a regression against the argv[0]-only parser this
+			// replaced, on the exact provider Slice 3 exists to reach.
+			//
+			// Keeping the prefix is safe for the reason argc is honoured at
+			// all: the environment cannot be reached, because the loop still
+			// stops at or before argc strings and this break only stops it
+			// sooner. TestDarwinArgvSurvivesAProcessTitleRewrite pins it.
+			break
 		}
 		argv = append(argv, string(rest[current:end]))
 		current = end + 1
+	}
+	if len(argv) == 0 {
+		return nil
 	}
 	return argv
 }

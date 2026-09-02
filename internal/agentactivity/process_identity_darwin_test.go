@@ -235,3 +235,36 @@ func TestDarwinCommIsTheNulTerminatedPrefix(t *testing.T) {
 		t.Fatalf("darwinComm of an empty field = %q, want empty", got)
 	}
 }
+
+// TestDarwinArgvSurvivesAProcessTitleRewrite pins the one place this port
+// deliberately diverges from upstream's `procargs2_argv`.
+//
+// It is a live finding, not a hypothetical. Pi 0.84.3 runs on Node and sets
+// process.title, which on macOS writes into the same argv memory kern.procargs2
+// reports and blanks the slots it no longer needs. The kernel still reports the
+// original argc, so the buffer reads argc=2 with argv[0]="pi" and argv[1]="".
+// Upstream returns None for that and loses argv[0] with it; the argv[0]-only
+// parser this replaced returned "pi" happily. Voiding the vector was therefore a
+// regression that took Pi from identified to unidentified — measured on a live
+// pane, on the exact provider Slice 3 exists to reach.
+func TestDarwinArgvSurvivesAProcessTitleRewrite(t *testing.T) {
+	// argc=2, exec path, padding, then "pi" and a blanked second slot.
+	data := buildProcargs2("/Users/x/.local/bin/pi", []string{"pi", ""}, nil)
+	argv := parseDarwinProcessArgv(data)
+	if len(argv) != 1 || argv[0] != "pi" {
+		t.Fatalf("parseDarwinProcessArgv = %q, want the [pi] prefix kept rather than the whole vector voided", argv)
+	}
+	if got := identifyAgentName(argv[0]); got != "pi" {
+		t.Fatalf("identifyAgentName(%q) = %q, want pi", argv[0], got)
+	}
+}
+
+// TestDarwinArgvStillStopsAtArgc is the other half: shortening the read on a
+// blank slot must not become a licence to run into the environment, which is
+// what bounding by argc is for.
+func TestDarwinArgvStillStopsAtArgc(t *testing.T) {
+	data := buildProcargs2("/usr/bin/node", []string{"node"}, []string{"SIDECAR_AGENT=claude", "PATH=/bin"})
+	if argv := parseDarwinProcessArgv(data); len(argv) != 1 || argv[0] != "node" {
+		t.Fatalf("parseDarwinProcessArgv = %q, want exactly [node] with no environment", argv)
+	}
+}
