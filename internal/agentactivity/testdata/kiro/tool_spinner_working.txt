@@ -1,0 +1,18 @@
+source: synthetic. Kiro is not a Sidecar provider; there is no Kiro on the
+        harvest machine and no capture of one. This screen is built to the
+        shape upstream's `tool_spinner_working` rule describes — one of the
+        four quarter-circle spinner frames, a space, a word, and the "esc to
+        cancel" hint the same rule requires — and to nothing else.
+why: manifests/sidecar/kiro.toml rewrites that rule's `\p{Alphabetic}` as
+     `[\p{L}\p{Nl}]` because RE2 cannot compile the property, and until this
+     fixture the rewrite had no coverage of any kind: no fixture, no census
+     row, no differential-harness row. A dead pattern there would have stayed
+     dead silently. This fixture is what proves the rewritten rule still
+     matches the screen the original targets, and the harness proves Herdr's
+     own engine reaches the same verdict on the original.
+pane_current_command: kiro
+pane_title: unavailable
+state: working
+screen:
+● Reading internal/agentactivity/activity.go
+esc to cancel

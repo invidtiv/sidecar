@@ -159,7 +159,7 @@ func (t *LocalTerminal) Signal(ctx context.Context, snap Snapshot) (<-chan Signa
 	return signals, stop, nil
 }
 
-var paneFormat = tmuxformat.Fields("pane_id", "pane_pid", "pane_dead", "pane_in_mode", "pane_current_command", "pane_title", "pid")
+var paneFormat = tmuxformat.Fields("pane_id", "pane_pid", "pane_dead", "pane_in_mode", "pane_current_command", "pane_title", "pid", "pane_height")
 
 func (t *LocalTerminal) Inspect(ctx context.Context, target Target) (Snapshot, error) {
 	if t == nil {
@@ -181,11 +181,12 @@ func (t *LocalTerminal) Inspect(ctx context.Context, target Target) (Snapshot, e
 		return Snapshot{Target: target, PaneCount: len(lines)}, nil
 	}
 	parts := tmuxformat.Split(lines[0])
-	if len(parts) != 7 {
+	if len(parts) != 8 {
 		return Snapshot{}, fmt.Errorf("unexpected tmux pane metadata")
 	}
 	pid, _ := strconv.Atoi(parts[1])
 	serverPID, _ := strconv.Atoi(parts[6])
+	paneHeight, _ := strconv.Atoi(parts[7])
 	inc := tmuxserver.Combine(tmuxserver.Socket(), serverPID)
 	target.Host = "local"
 	target.Namespace = tmuxenv.Namespace()
@@ -202,7 +203,7 @@ func (t *LocalTerminal) Inspect(ctx context.Context, target Target) (Snapshot, e
 		now = t.Now()
 	}
 	processIdentity := agentactivity.ResolveForegroundProcess(pid)
-	return Snapshot{Target: target, Dead: parts[2] == "1", CopyMode: parts[3] != "0", PaneCount: 1, CurrentCommand: parts[4], ProcessIdentity: processIdentity, ShellReady: agentactivity.ForegroundShellReady(pid, parts[4]), Title: parts[5], Screen: string(screenOut), CapturedAt: now}, nil
+	return Snapshot{Target: target, Dead: parts[2] == "1", CopyMode: parts[3] != "0", PaneCount: 1, CurrentCommand: parts[4], ProcessIdentity: processIdentity, ShellReady: agentactivity.ForegroundShellReady(pid, parts[4]), Title: parts[5], Screen: string(screenOut), PaneHeight: paneHeight, CapturedAt: now}, nil
 }
 
 func (t *LocalTerminal) Launch(ctx context.Context, snap Snapshot, argv []string) error {

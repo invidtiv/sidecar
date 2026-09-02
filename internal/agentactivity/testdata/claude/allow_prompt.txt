@@ -1,0 +1,23 @@
+source: synthetic. Claude Code's tool-permission prompt, transcribed from the
+        control lines the CLI renders (Allow Claude to use <Tool>? / Yes, allow
+        / No, and tell Claude what to do differently) rather than captured: the
+        prompt only appears for a tool this machine has not already allowed.
+why: it is the permission prompt that carries none of the literals upstream's
+     three permission rules are gated on — there is no "do you want to proceed?"
+     and no "do you want to" anywhere on it — so upstream alone falls through to
+     `osc_title_idle` and reads an unanswered prompt as a visible idle, which the
+     tracker turns into a completed turn. See manifests/sidecar/claude.toml
+     (`sidecar.allow_prompt_blocker`).
+pane_title: ✳ Claude Code
+pane_current_command: 2.1.220
+pane_height: 24
+state: blocked
+screen:
+● I need to read the changelog.
+
+╭──────────────────────────────────────────────────────╮
+│ Allow Claude to use WebFetch?                        │
+│                                                      │
+│ ❯ 1. Yes, allow                                      │
+│   2. No, and tell Claude what to do differently      │
+╰──────────────────────────────────────────────────────╯

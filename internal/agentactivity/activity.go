@@ -1,24 +1,31 @@
 // Package agentactivity classifies live agent terminal observations without
 // depending on tmux, Bubble Tea, or persistent conversation storage.
 //
-// # Spinner glyph sets are provider-owned
+// # Where the rules live
 //
-// Every provider file declares its own spinner pattern, even where two of them
-// would look identical today. Sharing one is a standing bug: the sets are not
-// the same and they drift independently as each CLI ships. Codex animates the
-// classic ten braille dots frames; Claude, Grok and Cursor cycle the whole
-// Braille block (U+2800–U+28FF).
+// Not here. Every provider is classified by Herdr's vendored detection manifest
+// for it, executed by internal/agentactivity/manifest; anything Sidecar knows
+// that upstream does not is a data overlay under manifests/sidecar/. This
+// package owns what surrounds that: a stricter-than-Herdr process gate per
+// provider, the identity resolver, the two evidence strings no manifest can
+// produce, the low-evidence fallback policy, and Tracker, which turns a stream
+// of verdicts into transitions. See docs/reference/herdr-detection-parity.md.
 //
-// A set that is too narrow does not merely miss activity, it inverts the
-// verdict. Claude shares one shared eleven-glyph pattern with Codex until this
-// was fixed, so the frames outside that set left the title rule unmatched;
-// evaluation fell through to the prompt-box idle rule while subagents were
-// still running, and the tracker turned that working→idle transition into a
-// completed turn. Sessions reported "done" with work in flight.
+// # Spinner glyph sets are provider-owned, and are upstream's problem now
 //
-// When adding or revising a provider, harvest the real frames rather than
-// assuming a set, and prefer anchoring the pattern to where the glyph actually
-// appears — braille elsewhere in a title or task name is not a spinner.
+// The rule tables that used to live here shared this failure mode, and it is
+// worth remembering because it is what the cutover bought. A spinner set that
+// is too narrow does not merely miss activity, it inverts the verdict: Claude
+// shared one eleven-glyph braille pattern with Codex, so the frames outside
+// that set left the title rule unmatched, evaluation fell through to the
+// prompt-box idle rule while subagents were still running, and Tracker turned
+// that working→idle transition into a completed turn. Sessions reported "done"
+// with work in flight. Claude Code 2.1.228 then switched to half-circle frames
+// (U+25D0–U+25D3), which Sidecar's hand-written pattern never learned and
+// upstream's `osc_title_working` already covered.
+//
+// If a spinner is missed today, the fix is a fixture and either an overlay rule
+// or a pull request to Herdr — never a regex added back into this package.
 package agentactivity
 
 import (
@@ -27,6 +34,8 @@ import (
 	"time"
 
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/marcus/sidecar/internal/agentactivity/manifest"
 )
 
 type State string
@@ -47,7 +56,15 @@ type Observation struct {
 	// process group and argv[0]. It disambiguates shared runtimes such as Node
 	// without promoting phrases from another agent's transcript.
 	ProcessIdentity string
-	CapturedAt      time.Time
+	// PaneHeight is the pane's own row count (tmux #{pane_height}). It is the
+	// manifest engine's read window: Herdr reads the tail of the buffer N rows
+	// deep where N is the pane's height, so a capture carrying scrollback has to
+	// be bounded to the same N or a resolved historical prompt wins a rule it
+	// should never have seen. Zero means the height was not available and the
+	// engine falls back to 24, Herdr's own DEFAULT_DETECTION_ROWS. See
+	// docs/reference/herdr-detection-parity.md ("Read window").
+	PaneHeight int
+	CapturedAt time.Time
 }
 
 type Result struct {
@@ -96,7 +113,7 @@ func Identify(ob Observation) string {
 	// Empty Identify lets callers retain a prior *positive* live identity — not
 	// a launch preference.
 	if command == "agent" || command == "node" || command == "bun" {
-		current := regionText(ob, Rule{Region: RegionCurrent, LastN: 24})
+		current := identityWindow(ob)
 		if command != "agent" {
 			if claudeScreenIdentity.MatchString(current) {
 				return "claude"
@@ -136,34 +153,117 @@ func Identify(ob Observation) string {
 // contains a version. TestOnlyClaudesOwnVersionArgv0ResolvesToAProvider and
 // TestTheProcessNameVocabularyMatchesTheAgentCatalog pin both halves of that:
 // the shape, and that no other catalog family could ever present this argv[0].
+// identityWindow is the bounded screen Identify reads when a pane's command
+// name is a shared runtime. It is deliberately not the detection window, and
+// the difference is the order of two steps rather than the depth: identity is a
+// cheaper, more forgiving question than a verdict — a startup header twenty
+// rows up still names the program that painted it — so the padding a tall pane
+// carries below its content must not be allowed to spend the budget.
+//
+// Trailing blank rows are therefore dropped *before* the last 24 rows are
+// taken, which is what the pre-manifest RegionCurrent did and the opposite of
+// manifest.ReadWindow. ReadWindow is right for detection and was wrong here:
+// tmux pads a capture out to the full pane height, so on a real 40-row pane
+// showing a five-line Codex startup banner the last 24 rows are 24 rows of
+// padding and Identify saw an empty window. A fresh start or a `/clear` on any
+// pane taller than 24 rows silently stopped resolving `node` and `bun` to their
+// provider. TestIdentityWindowSurvivesTallPanePadding is the regression.
+//
+// The SGR strip is shared with the engine so the two lanes see the same bytes;
+// only the trim order differs, and it differs on purpose.
+func identityWindow(ob Observation) string {
+	lines := strings.Split(ansi.Strip(ob.Screen), "\n")
+	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		lines = lines[:len(lines)-1]
+	}
+	if len(lines) > manifest.DefaultDetectionRows {
+		lines = lines[len(lines)-manifest.DefaultDetectionRows:]
+	}
+	return strings.Join(lines, "\n")
+}
+
 func claudeVersionArgv0(command string) bool {
 	return semanticVersionCommand.MatchString(command)
 }
 
+// launcherSuffixes are the wrapper extensions a process name may carry without
+// changing which program is running. Matches Herdr's list verbatim
+// (`normalized_agent_lookup_name`, src/detect/mod.rs:668 at e2b85c7), and only
+// one is stripped, as upstream does.
+var launcherSuffixes = []string{".exe", ".cmd", ".bat", ".ps1", ".js"}
+
+// normalizeProcessName reduces a process name to the spelling the alias table
+// is written in. It is Herdr's `path_basename` + `normalized_agent_lookup_name`
+// pair (src/detect/mod.rs:668-683 at e2b85c7) rather than a Sidecar invention,
+// so a vendored upstream alias list can be asserted against this resolver
+// directly: lower-case, trim, take the last non-empty path component across
+// either separator, then strip at most one launcher suffix.
+//
+// It exists because npm and Windows shims present `claude.cmd`, `codex.exe`,
+// `opencode.js` and paths like `/opt/homebrew/bin/opencode`, and carrying a
+// case per spelling is how the two vocabularies drift.
+func normalizeProcessName(command string) string {
+	command = strings.ToLower(strings.TrimSpace(command))
+	name := command
+	if index := strings.LastIndexAny(strings.TrimRight(name, `/\`), `/\`); index >= 0 {
+		if base := strings.Trim(name[index+1:], `/\`); base != "" {
+			name = base
+		}
+	}
+	for _, suffix := range launcherSuffixes {
+		if strings.HasSuffix(name, suffix) && len(name) > len(suffix) {
+			name = name[:len(name)-len(suffix)]
+			break
+		}
+	}
+	return name
+}
+
 func identifyProcessName(command string) string {
 	command = strings.ToLower(strings.TrimSpace(command))
-	switch {
-	case command == "claude" || claudeVersionArgv0(command):
+	// Claude's version-shaped argv[0] is tested before normalisation on
+	// purpose: stripping a launcher suffix first would let "1.2.3.js" read as
+	// Claude, which is exactly the widening the claudeVersionArgv0 comment
+	// forbids. Claude renames its own process to a bare version string, never
+	// to a suffixed or path-qualified one.
+	if claudeVersionArgv0(command) {
 		return "claude"
-	case command == "codex" || command == "codex-cli":
+	}
+	// Alias spellings below are Herdr's `lookup_agent` table
+	// (src/detect/mod.rs:193 at e2b85c7) for the families Sidecar claims,
+	// plus the Sidecar-only spellings noted per case.
+	name := normalizeProcessName(command)
+	switch {
+	case oneOf(name, "claude", "claude-code"):
+		return "claude"
+	// "codex-cli" is Sidecar-only; upstream knows just "codex".
+	case oneOf(name, "codex", "codex-cli"):
 		return "codex"
-	case command == "grok" || strings.HasPrefix(command, "grok-"):
+	// Upstream lists "grok" and "grok-build"; the prefix is a Sidecar superset.
+	case name == "grok" || strings.HasPrefix(name, "grok-"):
 		return "grok"
-	case command == "agy" || command == "antigravity":
+	case oneOf(name, "agy", "antigravity", "antigravity-cli"):
 		return "antigravity"
-	case command == "pi":
+	case name == "pi":
 		return "pi"
-	case oneOf(command, "copilot", "github-copilot", "ghcs"):
+	case oneOf(name, "copilot", "github-copilot", "ghcs"):
 		return "copilot"
-	case oneOf(command, "cursor-agent", "cursor", "cursor-agent.cmd"):
+	case oneOf(name, "cursor", "cursor-agent"):
 		return "cursor"
-	case oneOf(command, "opencode", "open-code"):
+	case oneOf(name, "opencode", "opencode2", "open-code"):
 		return "opencode"
-	case oneOf(command, "amp", "amp-local"):
+	case oneOf(name, "amp", "amp-local"):
 		return "amp"
-	case command == "muse" || strings.HasPrefix(command, "muse-"):
+	// Upstream lists "muse", "muse-code", "muse-cli" and `muse-bin-<digit>`;
+	// the prefix is a Sidecar superset that already covers all four.
+	case name == "muse" || strings.HasPrefix(name, "muse-"):
 		return "muse"
-	case oneOf(command, "sh", "bash", "zsh", "fish", "nu", "pwsh"):
+	// Deliberately narrower than Herdr's `is_generic_runtime_or_shell`, which
+	// also lists tmux, node, bun, cmd, powershell and python[3[.N]]. That
+	// predicate scores process-tree candidates; this one gates a launch
+	// (ForegroundShellReady), so it names only interactive shells. Widening it
+	// is Phase 4 work with its own predicate, not a rename of this bucket.
+	case oneOf(name, "sh", "bash", "zsh", "fish", "nu", "pwsh"):
 		return "shell"
 	default:
 		return ""
@@ -173,7 +273,7 @@ func identifyProcessName(command string) string {
 // NeedsProcessIdentity reports whether tmux's command name is shared by
 // multiple agent CLIs and therefore benefits from foreground argv[0].
 func NeedsProcessIdentity(command string) bool {
-	switch strings.ToLower(strings.TrimSpace(command)) {
+	switch normalizeProcessName(command) {
 	case "agent", "node", "bun":
 		return true
 	default:
@@ -181,61 +281,18 @@ func NeedsProcessIdentity(command string) bool {
 	}
 }
 
-type Region string
-
-const (
-	RegionScreen    Region = "screen"
-	RegionLastLines Region = "last_lines"
-	RegionCurrent   Region = "current_bottom"
-	RegionTitle     Region = "pane_title"
-)
-
-type Rule struct {
-	ID       string
-	State    State
-	Region   Region
-	Contains []string
-	// Any holds alternative corroborating groups: the rule matches when at
-	// least one group has all of its literals present. It exists so a retain
-	// rule can demand a distinctive phrase *and* surrounding chrome, rather
-	// than firing on a word the agent might merely be discussing. Compared
-	// case-insensitively, since these are rendered UI hints.
-	Any    [][]string
-	Regexp *regexp.Regexp
-	Not    []string
-	LastN  int
-	Skip   bool
-}
-
-// Detect dispatches an observation to the expected provider probe. Keeping
-// dispatch here lets the workspace poll remain product-neutral while each
-// provider owns its evidence table.
-func Detect(ob Observation) Result {
-	switch ob.Agent {
-	case "codex":
-		return DetectCodex(ob)
-	case "claude":
-		return DetectClaude(ob)
-	case "grok":
-		return DetectGrok(ob)
-	case "antigravity":
-		return DetectAntigravity(ob)
-	case "pi":
-		return DetectPi(ob)
-	case "copilot":
-		return DetectCopilot(ob)
-	case "cursor":
-		return DetectCursor(ob)
-	case "opencode":
-		return DetectOpenCode(ob)
-	case "amp":
-		return DetectAmp(ob)
-	case "muse":
-		return DetectMuse(ob)
-	default:
-		return Result{State: StateUnknown, Evidence: "unsupported-agent"}
-	}
-}
+// Detect dispatches an observation to the vendored Herdr manifest for its
+// provider. Keeping dispatch here lets the workspace poll remain
+// product-neutral while each provider file owns only its process gate.
+//
+// There is one lane. Every provider Sidecar claims was cut over in Phase 2 of
+// docs/plans/active/herdr-detection-parity.md, so the Go rule tables, the
+// selector that used to choose between the two lanes, and the shadow mode that
+// compared them are all gone. What is left of each `<provider>.go` is the
+// process gate, plus an identity pattern for cursor and grok; Claude's and
+// Codex's identity patterns sit beside Identify above, because that is the only
+// thing that reads them.
+func Detect(ob Observation) Result { return DetectManifestResult(ob) }
 
 // Supports reports whether Sidecar has provider-owned activity evidence rules.
 func Supports(agent string) bool {
@@ -247,102 +304,7 @@ func Supports(agent string) bool {
 	}
 }
 
-// Evaluate applies rules in caller-supplied priority order. Rules are kept
-// deliberately small: provider files own their evidence and ordering.
-func Evaluate(ob Observation, rules []Rule) Result {
-	for _, rule := range rules {
-		text := regionText(ob, rule)
-		if !matches(text, rule) {
-			continue
-		}
-		result := Result{State: rule.State, Evidence: rule.ID, SkipStateUpdate: rule.Skip}
-		result.VisibleIdle = rule.State == StateIdle && !rule.Skip
-		result.VisibleWorking = rule.State == StateWorking && !rule.Skip
-		result.VisibleBlocker = rule.State == StateBlocked && !rule.Skip
-		return result
-	}
-	return Result{State: StateUnknown, Evidence: "no-match"}
-}
-
-// regionText strips SGR escapes before any rule sees the text. Captures are
-// taken with `capture-pane -e`, so styled chrome carries escape bytes inline —
-// and ESC is not \s, so a coloured prompt marker defeats every column-anchored
-// rule (`^❯`, `^\s*›`, `^[⠀-⣿] `). Stripping here keeps the provider tables
-// written against what a human sees rather than against tmux's byte stream.
-func regionText(ob Observation, rule Rule) string {
-	switch rule.Region {
-	case RegionTitle:
-		return ansi.Strip(ob.PaneTitle)
-	case RegionLastLines:
-		lines := strings.Split(ansi.Strip(ob.Screen), "\n")
-		n := rule.LastN
-		if n <= 0 {
-			n = 12
-		}
-		if len(lines) > n {
-			lines = lines[len(lines)-n:]
-		}
-		return strings.Join(lines, "\n")
-	case RegionCurrent:
-		// capture-pane includes historical scrollback and preserves a tall
-		// pane's trailing blank rows. Drop only that padding, then inspect a
-		// bounded current-bottom window so resolved historical UI cannot win.
-		// Stripping precedes the trim so a row holding nothing but escapes
-		// counts as the padding it renders as.
-		lines := strings.Split(ansi.Strip(ob.Screen), "\n")
-		for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
-			lines = lines[:len(lines)-1]
-		}
-		n := rule.LastN
-		if n <= 0 {
-			n = 24
-		}
-		if len(lines) > n {
-			lines = lines[len(lines)-n:]
-		}
-		return strings.Join(lines, "\n")
-	default:
-		return ansi.Strip(ob.Screen)
-	}
-}
-
-func matches(text string, rule Rule) bool {
-	for _, excluded := range rule.Not {
-		if strings.Contains(text, excluded) {
-			return false
-		}
-	}
-	for _, literal := range rule.Contains {
-		if !strings.Contains(text, literal) {
-			return false
-		}
-	}
-	if len(rule.Any) > 0 {
-		folded := strings.ToLower(text)
-		satisfied := false
-		for _, group := range rule.Any {
-			if containsAll(folded, group) {
-				satisfied = true
-				break
-			}
-		}
-		if !satisfied {
-			return false
-		}
-	}
-	return rule.Regexp == nil || rule.Regexp.MatchString(text)
-}
-
-func containsAll(folded string, literals []string) bool {
-	for _, literal := range literals {
-		if !strings.Contains(folded, strings.ToLower(literal)) {
-			return false
-		}
-	}
-	return true
-}
-
-// Tracker owns transition policy while Evaluate remains state-free.
+// Tracker owns transition policy while classification remains state-free.
 type Tracker struct {
 	State          State
 	Evidence       string

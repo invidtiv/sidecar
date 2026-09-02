@@ -1,0 +1,208 @@
+# Sidecar overlay for grok.
+#
+# Five rules. Four of them are about the same thing: Grok's OSC title and its
+# footer can disagree, and upstream settles that disagreement in favour of the
+# title. The fifth is the permission prompt upstream has no blocker for, which
+# is the same problem seen from its worst side — an unrecognised prompt under a
+# title that reads idle.
+#
+# Upstream's grok.toml says so in its own header comment — the title is the
+# primary signal and the screen rules exist for older Grok Build releases — and
+# it states it as priorities: `osc_title_idle` is 1100 and `osc_title_working` is
+# 1000, where `spinner_status_working` is 200 and `prompt_hints_idle` is 100. On
+# Herdr's input that is right, because Herdr reads a decoded OSC 0 payload the
+# moment the program writes it.
+#
+# Sidecar reads tmux's `#{pane_title}`, which is the same string one repaint
+# later, and Sidecar observed both directions of the lag on live Grok 1.0:
+# a braille frame left in the title after the turn ended (false working), and
+# the pane's own footer is what said so. The two footer rules below put the
+# footer above the title in both directions, which is the rule the deleted Go
+# probe encoded by evaluating footer chrome before any title decision.
+#
+# The other two carry screens upstream has no rule for at all: a parked main
+# turn whose subagents are still running, and the startup/resume overlay.
+#
+# The priority ladder, upstream's numbers included:
+#
+#   1300  osc_title_blocked                     (upstream)
+#   1200  option_dialog_blocked                 (upstream)
+#   1190  permission_hints_blocked              (upstream)
+#   1185  question_dialog_hints_blocked         (upstream)
+#   1180  permission_scope_selector             (upstream)
+#   1170  background_work_chip_working          (upstream)
+#   1160  sidecar.background_subagent_working   parked turn, live subagents
+#   1150  osc_progress_working                  (upstream; always empty here)
+#   1140  sidecar.overlay_retain                startup/resume overlay
+#   1130  sidecar.allow_prompt_blocked          "Allow …?" over a control line
+#   1120  sidecar.working_footer                Esc:cancel beats a cleared title
+#   1100  osc_title_idle                        (upstream)
+#   1050  sidecar.idle_footer                   idle footer beats a stale title
+#   1000  osc_title_working                     (upstream)
+#    ...  upstream's screen rules, unchanged
+#
+# Every upstream blocker still outranks all five, which is the invariant that
+# matters: nothing here can hide a permission prompt upstream can describe.
+
+id = "grok"
+
+# A main turn parked on background subagents restores an idle-*looking* title
+# and an idle-looking footer while a status row above the prompt still says the
+# work is live:
+#
+#   ○ 1 subagent still running · send a message to interrupt
+#
+# Upstream has `background_work_chip_working` for Grok's animated chip on the
+# pinned top row, and nothing for this row. Without it the pane reads idle from
+# its title and the tracker announces a completed turn while subagents are still
+# working — which is the exact false "done" this whole plan opened with.
+# testdata/grok/background_subagent.txt is the fixture and
+# TestGrokBackgroundSubagentBeatsIdleTitleAndFooter pins it.
+#
+# Priority 1160 puts it one step below upstream's own chip rule, in the same
+# tier and for the same reason: background work outranks an idle title.
+[[rules]]
+id = "sidecar.background_subagent_working"
+state = "working"
+priority = 1160
+region = "bottom_non_empty_lines(14)"
+visible_working = true
+regex = ['(?i)[1-9][0-9]*\s+subagents?\s+still\s+running|send a message to interrupt']
+
+# Grok's startup / resume overlay, which upstream has no rule for. It replaces
+# the whole pane while the title still reads "grok", so upstream alone reads it
+# as an explicit visible idle — and a visible idle out of working is a completed
+# turn. Retaining the prior state is what the deleted `grok.overlay.retain` did;
+# testdata/grok/overlay.txt is the fixture.
+#
+# The gate is narrower than the rule it replaces, which matched either phrase
+# anywhere in the last twenty-four lines. "Resume session" has to open a line,
+# because it is a menu entry and not a sentence; "esc to close" may sit anywhere
+# in the bottom eight non-empty lines, because it is a footer hint. Retention has
+# no natural end short of SkipRetentionCap, so a rule that can fire on a turn
+# merely discussing an overlay is worse than no rule.
+[[rules]]
+id = "sidecar.overlay_retain"
+state = "unknown"
+priority = 1140
+region = "bottom_non_empty_lines(8)"
+skip_state_update = true
+line_regex = ['(?i)^\s*resume session\b|esc to close']
+
+# The live cancel footer beats a title that has already cleared.
+#
+# Grok's footer is one line and it is unambiguous: while a turn runs it carries
+# "Esc:cancel" beside the shortcuts hint, and when the turn ends the cancel hint
+# is gone. A title that clears one repaint early would otherwise be read as an
+# explicit visible idle at priority 1100 and announce a completion mid-turn,
+# which is the direction that costs the most. TestGrokBusyChromeBeatsIdleTitleForm
+# is the case.
+#
+# Both literals are required, and the shortcuts hint is the corroboration: a
+# transcript line containing "esc:cancel" on its own is not Grok's footer.
+# `Ctrl+x:shortcuts` is live Grok 1.0's spelling; upstream's `esc_cancel_hints_working`
+# is the same pair with the older `Ctrl+.:shortcuts` and sits at priority 190,
+# far below the title. Delete this rule the day upstream's carries both
+# spellings *and* outranks `osc_title_idle`.
+#
+# harness-exempt: sidecar.working_footer — the only screens where this rule
+# changes a verdict are screens whose title disagrees with the footer, and
+# `herdr agent explain --file` passes an empty osc_title, so scripts/herdr-diff.sh
+# blanks the title on both sides and cannot see the conflict. On every fixture it
+# can see, Herdr reaches working anyway through `spinner_status_working`, which
+# is what makes the rule look redundant there and is not what it is for.
+# TestGrokBusyChromeBeatsIdleTitleForm is the case with the title intact.
+[[rules]]
+id = "sidecar.working_footer"
+state = "working"
+priority = 1120
+region = "bottom_non_empty_lines(2)"
+visible_working = true
+contains = ["esc:cancel", "ctrl+x:shortcuts"]
+
+# The mirror, and the one that was actually observed in the wild: a braille
+# frame left in the title after the turn settled, over a footer that clearly
+# says idle. Upstream reads the stale title as working at priority 1000;
+# testdata/grok/stale_working_scrollback.txt is the fixture, and
+# TestGrokIdleFooterBeatsStickyBrailleTitle and
+# TestGrokIdleFooterBeatsResidualThinkingInViewport are the cases.
+#
+# Priority 1050 is deliberately *below* `osc_title_idle` (1100) rather than
+# above it: this rule only has to beat the title when the title claims work. On
+# a pane where both agree, upstream's rule is the one that reports, so the
+# overlay stays out of the evidence on every screen it would not change.
+#
+# The `not` gates are the same pair the pre-manifest `grokFooterIsIdle` used:
+# the shortcuts hint says this is Grok's footer, and the absence of any cancel
+# hint says the turn is over.
+[[rules]]
+id = "sidecar.idle_footer"
+state = "idle"
+priority = 1050
+region = "bottom_non_empty_lines(2)"
+visible_idle = true
+contains = ["ctrl+x:shortcuts"]
+not = [
+  { contains = ["esc:cancel"] },
+  { contains = ["ctrl+c:cancel"] },
+]
+
+# The `Allow …?` permission prompt, carried from the pre-manifest rule; a live
+# Grok capture replaces this.
+#
+# This is the one gap the Phase 2 review named and left open, and it is left
+# open no longer, with the provenance stated rather than hidden. The deleted
+# `grok.screen.blocked` (git show bcb01c02:internal/agentactivity/grok.go)
+# matched an alternation over the last twenty-two lines that included
+# `Allow .*\?` and `Enter to confirm`. Upstream's four blockers describe a
+# different prompt entirely — a `┃`-guttered option list under a
+# `:select │ ctrl+o:yolo │ ctrl+c:cancel` or `tab:scrollback │ shift+x:dismiss`
+# footer, from Grok Build 0.2.101 pane reads — so a prompt of this shape reaches
+# none of them.
+#
+# Grok is the provider where that costs the most. Its `osc_title_idle` (1100) is
+# a *visible* idle, so an unrecognised prompt does not degrade to a quiet
+# fallback the way an unrecognised Cursor screen does: the tracker turns a
+# visible idle out of working into a completed turn, and the pane announces that
+# it is done while it sits on a question nobody has answered.
+#
+# The fixture beside it (testdata/grok/allow_prompt.txt) is **synthetic and
+# unproven**, and says so in its own header. No live Grok capture of this prompt
+# exists in any release. What keeps that from being the invention the cutover
+# removed elsewhere is that the rule requires a *pair*, and both halves come
+# from the deleted rule rather than from imagination: the question line and a
+# control line beneath it. Either alone is text a turn writes — "Allow bash(…)?"
+# is a sentence, and an arrow-key hint is chrome — and the pair is a prompt.
+#
+# The `not` gate is `sidecar.working_footer`'s own two literals. Grok's live
+# footer carries `Esc:cancel` beside `Ctrl+x:shortcuts` for exactly as long as a
+# turn runs, so a screen showing it is a running turn whose output happens to
+# quote an allow question, not a pane waiting on one. An unanswered prompt
+# replaces that footer with its own control line, which is the line the second
+# `line_regex` reads.
+#
+# Priority 1130 sits above `osc_title_idle` (1100), which is the verdict this
+# rule exists to displace, and above `sidecar.working_footer` (1120), because a
+# blocker must outrank a working rule reading the same bottom rows. It sits
+# below `sidecar.overlay_retain` (1140) — Grok's startup overlay replaces the
+# whole pane and is not a prompt — below `osc_progress_working` (1150) and
+# `sidecar.background_subagent_working` (1160), and below every upstream blocker
+# (1180, 1185, 1190, 1200, 1300), so a prompt upstream *can* describe still
+# reports through upstream's more specific rule.
+#
+# Delete this rule the day upstream carries a blocker for this shape, or the day
+# a live capture shows Grok 1.0 renders the prompt differently — at which point
+# the capture, not this comment, is what the rule should be written from.
+[[rules]]
+id = "sidecar.allow_prompt_blocked"
+state = "blocked"
+priority = 1130
+region = "bottom_non_empty_lines(12)"
+visible_blocker = true
+line_regex = [
+  '^\s*Allow .*\?\s*$',
+  '(?i)enter\s+confirm|↑/↓|allow once|allow always|deny|\(y\)',
+]
+not = [
+  { contains = ["esc:cancel", "ctrl+x:shortcuts"] },
+]

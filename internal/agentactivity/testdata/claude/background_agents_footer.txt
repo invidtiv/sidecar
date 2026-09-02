@@ -1,0 +1,23 @@
+source: real Claude Code 2.1.257 chrome, derived from the same capture as
+        waiting_background_agents.txt one repaint later in the pane's life: the
+        `✻ Waiting for N background agents to finish` line has scrolled out of
+        the read window while the subagents are still running, so the footer's
+        own agent count is the only evidence left on screen. Same redactions.
+why: this is what `sidecar.background_agents_footer_working` is for, and it is
+     the half `sidecar.background_agents_waiting` cannot reach: with no waiting
+     line above the box the screen carries nothing upstream reads, so it falls
+     to `live_prompt_box` (950) and announces a completed turn. Upstream's
+     `background_shell_working` (965) is the same rule for `· N shells ·`;
+     2.1.257 spells the agents form `· ← 3 agents ·`.
+pane_title: ✳ Herdr detection parity orchestration
+pane_current_command: 2.1.257
+pane_height: 57
+state: working
+screen:
+  ⎿  redacted tool result
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← 3 agents · ↓ to manage
+  ⏺ main
+  ◯ general-purpose  redacted subagent task                                     12m 08s · ↓ 231.9k tokens

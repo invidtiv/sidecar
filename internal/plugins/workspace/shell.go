@@ -1062,7 +1062,8 @@ func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.
 		capturedAt := time.Now()
 		observation := agentactivity.Observation{
 			Screen: output, PaneTitle: capture.PaneTitle,
-			CurrentCommand: capture.CurrentCommand, ProcessIdentity: resolvePaneProcessIdentity(capture), CapturedAt: capturedAt,
+			CurrentCommand: capture.CurrentCommand, ProcessIdentity: resolvePaneProcessIdentity(capture),
+			PaneHeight: capture.PaneHeight, CapturedAt: capturedAt,
 		}
 		observedAgentType := AgentType(agentactivity.Identify(observation))
 		if observedAgentType == "" {

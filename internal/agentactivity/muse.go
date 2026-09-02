@@ -1,94 +1,63 @@
 package agentactivity
 
-import (
-	"regexp"
-	"strings"
-)
+import "strings"
 
-// Muse Spark CLI activity evidence.
+// Muse Spark CLI's screen rules are Herdr's, executed from the vendored
+// `manifests/upstream/muse.toml` by the manifest engine (Phase 2 of
+// docs/plans/active/herdr-detection-parity.md). This file is what remains that
+// is Sidecar's: the process gate.
 //
-// Harvested from Muse Code 1.0.1 live tmux captures (2026-08-31,
-// darwin/arm64, echo provider with --echo-delay-ms to expose working
-// transitions). Pane title drives a braille spinner while a turn is
-// active (U+2800–U+28FF block), and the screen shows a status line
-// with "Thinking (Ns · esc to interrupt)" or "Working…". Idle is
-// marked by the composer prompt "⟩" at the bottom with no cancel
-// hint. These patterns are provider-owned and not shared with
-// Codex/Claude/Grok spinners, even where they appear similar.
+// muse.toml is the one vendored manifest Herdr does not publish — it ships
+// bundled only, at 2026.08.26.1, because Herdr will not publish a manifest for
+// an agent whose process it cannot yet identify reliably. The loader does not
+// care: `manifests.Load` reads the vendored file by name and the published
+// catalog never enters it, which TestEveryClaimedProviderHasAVendoredManifest
+// and TestMuseIsClassifiedByItsBundledOnlyManifest both pin. Identity is
+// Sidecar's own: `identifyProcessName` claims `muse` and any `muse-` prefix,
+// which is a superset of upstream's `muse`, `muse-code`, `muse-cli` and
+// `muse-bin-<digit>`.
+//
+// The Go rule table is gone and this is the provider where that buys the most.
+// It was harvested from Muse Code 1.0.1 in a single sitting and it shows:
+// `muse.screen.working` matched the bare words "Thinking" or "Working"
+// anywhere in the last sixteen lines, case-insensitively, so a turn that
+// printed "still working on it" — or a *finished* turn whose transcript said
+// so — kept the pane on the working lane. `muse.screen.blocked` was an
+// eight-way alternation including "Proceed?" and "approve". Upstream's rules
+// are pairs: `blocked_approval` requires "Allow this stage once" *and* "Always
+// allow in this workspace" (or one of two older pairs), `pick_request_blocked`
+// requires "Enter to select" *and* "Tab for an optional note",
+// `workspace_trust_blocked` requires the trust question and its own control.
+// Upstream's own comment says why: Muse emits any one of those phrases as
+// ordinary assistant text after a completed turn.
+//
+// One rule from that table did survive, and the Phase 2 review is what brought
+// it back: `muse.screen.thinking-glyph` is `sidecar.thinking_working` in
+// `manifests/sidecar/muse.toml`. Muse is the provider where a working screen
+// upstream cannot see is not merely unclassified — `idle_prompt` and
+// `idle_status_fallback` are both `visible_idle` and both match a thinking pane,
+// because Muse keeps its composer and footer drawn during a turn, so the pane
+// reports an explicit idle and the tracker announces a completed turn. The
+// restored rule is narrower than the deleted one: the glyph has to open a line.
+//
+// Upstream also carries two things Sidecar had no equivalent for — `menu_overlay`
+// for the /theme and /skills menus, and `idle_status_fallback` for the
+// `model · effort · cwd` footer — and one thing it does not: a title rule.
+// `muse.title.working` read a braille frame in the pane title as working and
+// upstream has no `osc_title` rule for Muse at all. That signal is dropped
+// rather than overlaid: no fixture captured it, upstream's evidence note
+// describes Muse's activity in terms of the `esc to interrupt` hint that
+// `working_esc_interrupt` reads, and inventing a title rule for a provider
+// whose manifest upstream has not yet published would be exactly the
+// speculative rule this cutover is removing elsewhere.
 
-var (
-	museTitleWorking = regexp.MustCompile(`^[\x{2800}-\x{28FF}]\s`)
-
-	museSpinnerWorking = regexp.MustCompile(`(?i)Thinking|Working`)
-
-	museRules = []Rule{
-		// Blocked / approval: provider-owned permission prompts.
-		{
-			ID:     "muse.screen.blocked",
-			State:  StateBlocked,
-			Region: RegionCurrent,
-			LastN:  24,
-			Regexp: regexp.MustCompile(`(?im)(Do you want to proceed\?|Allow command\?|Would you like to run|Proceed\?|Yes.*No|Enter to confirm.*Esc to cancel|Allow.*\?|approve)`),
-		},
-		// Overlays & modals — retain prior state.
-		{
-			ID:     "muse.overlay.retain",
-			State:  StateUnknown,
-			Region: RegionLastLines,
-			LastN:  24,
-			Regexp: regexp.MustCompile(`(?im)(esc to close|model picker|select.*model)`),
-			Skip:   true,
-		},
-		// Title spinner: braille frame + space + project name while working.
-		{
-			ID:     "muse.title.working",
-			State:  StateWorking,
-			Region: RegionTitle,
-			Regexp: museTitleWorking,
-		},
-		// Screen working: Thinking / Working with cancel hint or spinner glyph.
-		{
-			ID:     "muse.screen.working",
-			State:  StateWorking,
-			Region: RegionCurrent,
-			LastN:  16,
-			Regexp: museSpinnerWorking,
-		},
-		{
-			ID:     "muse.screen.cancel-working",
-			State:  StateWorking,
-			Region: RegionCurrent,
-			LastN:  16,
-			Regexp: regexp.MustCompile(`(?i)esc to interrupt`),
-		},
-		{
-			ID:     "muse.screen.thinking-glyph",
-			State:  StateWorking,
-			Region: RegionCurrent,
-			LastN:  16,
-			Regexp: regexp.MustCompile(`◈\s*Thinking`),
-		},
-		// Explicit idle: composer prompt at bottom without cancel hint.
-		{
-			ID:     "muse.screen.idle",
-			State:  StateIdle,
-			Region: RegionLastLines,
-			LastN:  12,
-			Regexp: regexp.MustCompile(`(?m)^⟩(?:\s| |$)`),
-			Not:    []string{"esc to interrupt"},
-		},
-	}
-)
-
+// DetectMuse classifies a Muse pane. The process gate runs first and refuses
+// before any manifest is evaluated; everything after it is upstream's.
 func DetectMuse(ob Observation) Result {
-	if ob.Agent != "muse" || !museProcess(ob.CurrentCommand) {
+	if ob.Agent != "muse" {
 		return Result{State: StateUnknown, Evidence: "muse.process-mismatch"}
 	}
-	result := Evaluate(ob, museRules)
-	if result.State == StateUnknown && !result.SkipStateUpdate {
-		return Result{State: StateIdle, Evidence: "muse.known-live-fallback", FallbackIdle: true}
-	}
-	return result
+	return DetectManifestResult(ob)
 }
 
 func museProcess(command string) bool {

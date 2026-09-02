@@ -1,0 +1,25 @@
+source: synthetic. Antigravity CLI 1.1.11's tool-permission prompt. The literal
+        "requesting permission for:" is upstream's own gate (Herdr's
+        antigravity.toml `permission_prompt`) and the "↑/↓ Navigate · enter
+        Confirm" footer is captured verbatim from blocked.txt, this CLI's one
+        real selection-chrome capture. The three option spellings are the
+        synthetic part: no capture of an answered-or-unanswered permission
+        prompt exists, because the harvest machine has no Antigravity account
+        that can reach a tool call.
+why: upstream's `permission_prompt` needs the phrase *and* either "do you want
+     to proceed?" or "tab amend" + "edit command", none of which this prompt
+     renders. Antigravity is the one provider whose no-match fallback is not
+     low-evidence, so without a rule this screen is a full-evidence visible
+     idle and the tracker announces a completed turn while the pane sits on an
+     unanswered destructive command. See manifests/sidecar/antigravity.toml
+     (`sidecar.permission_prompt_blocked`).
+pane_title: aerie
+pane_current_command: agy
+state: blocked
+screen:
+> Remove the stale build output.
+requesting permission for: rm -rf ./build
+> Allow once
+  Allow always
+  Deny
+↑/↓ Navigate · enter Confirm

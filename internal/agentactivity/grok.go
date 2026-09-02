@@ -5,155 +5,78 @@ import (
 	"strings"
 )
 
-// Grok detection follows Herdr's grok.toml (2026.07.16.2, Grok Build 0.2.101
-// evidence) adapted to Sidecar's ordered-rule engine and tmux capture path.
+// Grok's screen rules are Herdr's, executed from the vendored
+// `manifests/upstream/grok.toml` (2026.07.16.2, engine 3) by the manifest
+// engine, with four Sidecar rules layered over them in
+// `manifests/sidecar/grok.toml`. This file is what remains that is Sidecar's:
+// the process gate and the identity fallback Identify uses.
 //
-// Live Grok emits OSC 0 titles: idle is "grok" or "<session> - grok"; during a
-// turn the title gains a braille spinner and activity text. Working turns also
-// render a status line above the prompt with a braille frame and trailing
-// [stop] chip, plus Esc:cancel in the footer next to shortcuts. Idle footers
-// keep Ctrl+x:shortcuts (and sometimes Ctrl+.:shortcuts) without Esc:cancel.
+// The Go probe that used to live here was the most hand-tuned in the package —
+// three ordered rule tables plus a bespoke resolver that ran footer chrome
+// before any title decision. Upstream carries the same findings and states them
+// as priorities: `osc_title_blocked` is the Action Required title,
+// `option_dialog_blocked` the ┃-guttered choice list, `background_work_chip_working`
+// the pinned top-row chip, `spinner_status_working` the braille+[stop] status
+// line, `waiting_tool_working` the pre-0.2 tool chrome, `osc_title_idle` and
+// `prompt_hints_idle` the two idle shapes. What upstream does not have — the
+// footer outranking a lagging title in both directions, the parked turn with
+// live subagents, the resume overlay — is in the overlay, each with a fixture.
 //
-// OSC 9;4 progress is deferred: tmux does not expose the payload after
-// consumption. Startup splash draws braille in the screen, so working rules
-// never treat a bare spinner glyph as busy — they anchor on [stop] or the
-// title/footer differential.
+// Two rules were dropped outright rather than carried:
 //
-// Screen rules use RegionCurrent so historical Thinking…/[stop] lines scrolled
-// off the live bottom cannot stick the tracker on working after the turn ends.
-// A clear idle footer also beats a sticky braille title (observed false working).
+//   - `grok.overlay.viewer` retained state whenever "transcript" or
+//     "conversation history" appeared beside viewer chrome. It never had a
+//     fixture, and no capture in testdata/grok shows Grok rendering such a
+//     viewer at all; it was a copy of Claude's rule. A retain rule that fires on
+//     a screen the provider may not paint freezes a badge for SkipRetentionCap
+//     on nothing, which is worse than the gap. TestViewerWordsWithoutChromeDoNotRetain
+//     still covers the direction that matters: the words alone never retain.
+//   - `grok.screen.blocked` alternated over "Would you like to", "Allow .*?",
+//     "Enter to confirm" and "↑/↓ select" anywhere in the last twenty-two lines,
+//     any one of which was enough. Upstream's four blockers each require a
+//     corroborating pair from the same footer, which is what stops a turn that
+//     merely quotes one of those phrases from reading as an unanswered prompt.
+//     The narrowing is the point; no fixture depended on the wider form. The
+//     Phase 2 review reopened one branch of it — an `Allow …?` question above an
+//     `enter Confirm` footer is a corroborated pair rather than a bare phrase,
+//     and grok is the provider where an unseen prompt is expensive, because
+//     `osc_title_idle` is a *visible* idle and can announce a completion. It
+//     stays dropped only because nothing has captured that screen: upstream's
+//     blockers are written from Grok Build 0.2.101 pane reads and describe a
+//     different prompt entirely, and testdata/grok has no permission-prompt
+//     capture of any release. A live Grok 1.0 capture is what unblocks the rule.
 //
-// Parked main turns with background subagents restore an idle-looking title and
-// footer (Ctrl+x:shortcuts, no Esc:cancel) while a status row still says
-// "N subagent still running · send a message to interrupt". That row must
-// outrank title/footer idle or Overview reports false "done".
+// Two working phrases also went: `Thinking…` and `Waiting on ` matched anywhere
+// in the current-bottom window, where upstream's `spinner_status_working`
+// requires the braille frame *and* the trailing [stop] chip on one line. A
+// finished turn's last status line still says "Thinking…" for as long as it
+// stays on screen, which is precisely the residual-working case
+// TestGrokIdleFooterBeatsResidualThinkingInViewport was written for.
+//
+// Two smaller narrowings the review asked to have written down. `grok.screen.idle`
+// made a bare prompt box (`│ ❯ │`) an *explicit* idle; it is now the
+// low-evidence fallback, because Grok draws that box under a title and above a
+// footer and both are read — a box with neither is a pane mid-repaint, and
+// calling that an explicit idle is how a repaint becomes a completed turn. And
+// the deleted footer resolver treated "esc to cancel" and "esc to interrupt" as
+// cancel hints alongside Grok's own "Esc:cancel"; `sidecar.idle_footer`'s `not`
+// gate carries only the spellings Grok renders, because in a `not` gate a wider
+// list is a longer list of phrases a transcript line can contain to suppress
+// the rule that corrects a stale braille title.
 
-var (
-	// Idle title form: "grok" or "<session> - grok". Braille is checked in
-	// grokTitleIsIdle — RE2 has no lookaround.
-	grokTitleIdleForm = regexp.MustCompile(`(?i)(?:^| - )grok$`)
-	grokBraille       = regexp.MustCompile(`[\x{2800}-\x{28FF}]`)
-	// Live status line: braille + … + [stop], as in Herdr spinner_status_working.
-	// Also accept Thinking… and Waiting on… from current Grok Build chrome.
-	grokSpinnerStop = regexp.MustCompile(`(?im)(^\s*[\x{2801}-\x{28FF}]\s.*\[stop\]\s*$|Thinking…|Waiting on |background tasks?:\s*[1-9])`)
-	// Working footer: cancel hint together with shortcuts (Ctrl+x live; Ctrl+. in Herdr).
-	grokFooterWorking   = regexp.MustCompile(`(?is)(?:esc:cancel|esc to (?:interrupt|cancel)).*(?:ctrl\+[x.]:shortcuts)|(?:ctrl\+[x.]:shortcuts).*(?:esc:cancel|esc to (?:interrupt|cancel))`)
-	grokFooterShortcuts = regexp.MustCompile(`(?i)ctrl\+[x.]:shortcuts`)
-	grokFooterCancel    = regexp.MustCompile(`(?i)(esc:cancel|esc to (?:interrupt|cancel)|ctrl\+c:cancel)`)
-	// Prompt box alone (older captures / interrupted fixtures).
-	grokPromptIdle = regexp.MustCompile(`(?m)^\s*│ ❯\s+│`)
-	// Background task chip on the first non-empty row (Herdr background_work_chip).
-	grokBackgroundChip = regexp.MustCompile(`(?m)\A(?:\s*\n)*[^\n]*[⋅:⸬⁙.·]\s+[1-9][0-9]*\s+│`)
-	// Parked turn with live background work (Grok 1.0 status row above prompt).
-	// Must run before title-idle: title/footer look idle while this is present.
-	grokBackgroundRunning = regexp.MustCompile(`(?i)(\d+\s+subagents?\s+still\s+running|send a message to interrupt)`)
-	// Option / ask-user dialogs (┃-guttered choices).
-	grokOptionDialog = regexp.MustCompile(`(?m)^\s*┃\s+[0-9a-z]+\s+\([●○]\)\s`)
-	// Legacy pre-0.2 tool wait chrome.
-	grokLegacyToolWorking = regexp.MustCompile(`(?im)(ctrl\+c:cancel.*ctrl\+enter:interject|ctrl\+enter:interject.*ctrl\+c:cancel|^\s*[\x{2801}-\x{28FF}]\s+(Run|Read|Search|List)\b)`)
-	// Distinctive footer/composer chrome. Used when pane_current_command is
-	// a shared runtime (node/agent) so Grok cannot be stolen by Cursor.
-	grokScreenIdentity = regexp.MustCompile(`(?is)(Ctrl\+x:shortcuts|Enter:send.{0,60}Shift\+Tab:mode|Esc:cancel.{0,60}Ctrl\+x:shortcuts)`)
-)
+// grokScreenIdentity is distinctive footer/composer chrome. It is used when
+// pane_current_command is a shared runtime (node/agent) so a Grok pane cannot be
+// claimed by Cursor, and it is identity only — never activity.
+var grokScreenIdentity = regexp.MustCompile(`(?is)(Ctrl\+x:shortcuts|Enter:send.{0,60}Shift\+Tab:mode|Esc:cancel.{0,60}Ctrl\+x:shortcuts)`)
 
-// Blocked, overlay, and background-work outrank title/footer idle.
-var grokPriorityRules = []Rule{
-	{ID: "grok.title.blocked", State: StateBlocked, Region: RegionTitle, Contains: []string{"Action Required"}},
-	{ID: "grok.screen.option-blocked", State: StateBlocked, Region: RegionCurrent, LastN: 28, Regexp: grokOptionDialog},
-	{ID: "grok.screen.blocked", State: StateBlocked, Region: RegionCurrent, LastN: 22, Regexp: regexp.MustCompile(`(?im)(Action Required|Would you like to|Allow .*\?|Enter to confirm|↑/↓.*(?:select|navigate)|:select.*ctrl\+o:yolo|tab:scrollback.*shift\+x:dismiss|yes, proceed.*no, reject)`)},
-	// "transcript"/"conversation history" are ordinary words in a turn, so the
-	// viewer needs its own chrome alongside them; a retained state never expires.
-	{ID: "grok.overlay.viewer", State: StateUnknown, Region: RegionCurrent, LastN: 6, Regexp: regexp.MustCompile(`(?im)(transcript|conversation history)`), Any: [][]string{
-		{"esc", "close"},
-		{"↑↓"},
-		{"scroll"},
-	}, Skip: true},
-	{ID: "grok.overlay.retain", State: StateUnknown, Region: RegionCurrent, LastN: 24, Regexp: regexp.MustCompile(`(?im)(esc to close|resume session)`), Skip: true},
-	// Before title idle: parked main turn with background subagents still live.
-	{ID: "grok.screen.background-running", State: StateWorking, Region: RegionCurrent, LastN: 14, Regexp: grokBackgroundRunning},
-	{ID: "grok.screen.background-chip", State: StateWorking, Region: RegionScreen, Regexp: grokBackgroundChip},
-}
-
-// Working chrome — evaluated before title idle so a parked-looking title
-// cannot mask a live status line (Waiting on… / [stop] / Esc:cancel).
-var grokWorkingChromeRules = []Rule{
-	{ID: "grok.screen.working", State: StateWorking, Region: RegionCurrent, LastN: 16, Regexp: grokSpinnerStop},
-	{ID: "grok.footer.working", State: StateWorking, Region: RegionCurrent, LastN: 4, Regexp: grokFooterWorking},
-	{ID: "grok.screen.legacy-tool-working", State: StateWorking, Region: RegionCurrent, LastN: 16, Regexp: grokLegacyToolWorking},
-}
-
-var grokIdleChromeRules = []Rule{
-	{ID: "grok.screen.idle", State: StateIdle, Region: RegionCurrent, LastN: 10, Regexp: grokPromptIdle},
-}
-
+// DetectGrok classifies a Grok pane. The process gate runs first and refuses
+// before any manifest is evaluated; everything after it is upstream's, plus the
+// four overlay rules.
 func DetectGrok(ob Observation) Result {
-	if ob.Agent != "grok" || !grokProcess(ob.CurrentCommand) {
+	if ob.Agent != "grok" {
 		return Result{State: StateUnknown, Evidence: "grok.process-mismatch"}
 	}
-
-	if result := Evaluate(ob, grokPriorityRules); result.Evidence != "no-match" {
-		return annotateGrok(result)
-	}
-
-	// Live working chrome before any idle title/footer decision.
-	if result := Evaluate(ob, grokWorkingChromeRules); result.Evidence != "no-match" {
-		// Clear idle footer beats residual Thinking…/[stop] still in the
-		// current-bottom window after the turn settled (false sticky working).
-		if footer := regionText(ob, Rule{Region: RegionCurrent, LastN: 4}); grokFooterIsIdle(footer) {
-			return Result{State: StateIdle, Evidence: "grok.footer.idle", VisibleIdle: true}
-		}
-		return annotateGrok(result)
-	}
-
-	// Strict idle title (bare "grok" / "<session> - grok", no braille).
-	if grokTitleIsIdle(ob.PaneTitle) {
-		return Result{State: StateIdle, Evidence: "grok.title.idle", VisibleIdle: true}
-	}
-
-	// Idle footer (shortcuts, no cancel) without idle title form.
-	if footer := regionText(ob, Rule{Region: RegionCurrent, LastN: 4}); grokFooterIsIdle(footer) {
-		return Result{State: StateIdle, Evidence: "grok.footer.idle", VisibleIdle: true}
-	}
-
-	if result := Evaluate(ob, grokIdleChromeRules); result.Evidence != "no-match" {
-		return annotateGrok(result)
-	}
-
-	// Non-idle non-empty title (spinner + activity) after screen/footer.
-	if strings.TrimSpace(ob.PaneTitle) != "" {
-		return Result{State: StateWorking, Evidence: "grok.title.working", VisibleWorking: true}
-	}
-
-	// Live process, no strong evidence: establish idle quietly. Must not
-	// manufacture "done" after a working turn (same policy as pi/cursor/amp).
-	return Result{State: StateIdle, Evidence: "grok.known-live-fallback", FallbackIdle: true}
-}
-
-func annotateGrok(result Result) Result {
-	switch result.State {
-	case StateIdle:
-		result.VisibleIdle = !result.SkipStateUpdate
-	case StateWorking:
-		result.VisibleWorking = !result.SkipStateUpdate
-	case StateBlocked:
-		result.VisibleBlocker = !result.SkipStateUpdate
-	}
-	return result
-}
-
-func grokTitleIsIdle(title string) bool {
-	title = strings.TrimSpace(title)
-	if title == "" || !grokTitleIdleForm.MatchString(title) {
-		return false
-	}
-	return !grokBraille.MatchString(title)
-}
-
-func grokFooterIsIdle(footer string) bool {
-	if !grokFooterShortcuts.MatchString(footer) {
-		return false
-	}
-	return !grokFooterCancel.MatchString(footer)
+	return DetectManifestResult(ob)
 }
 
 func grokProcess(command string) bool {

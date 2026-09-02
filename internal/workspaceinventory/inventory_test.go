@@ -572,7 +572,15 @@ func TestCollectorPreservesTrackerTransitionsAcrossRefreshes(t *testing.T) {
 		outputs = outputs[1:]
 		return out, tty.PaneState{}, nil
 	}}.WithDefaults()
-	pane := []Pane{{ID: "%1", Session: "agent", Path: "/tmp/repo", Command: "codex"}}
+	// The pane carries a title because a real one always does: tmux seeds
+	// #{pane_title} with the host name and Codex overwrites it per turn. Codex's
+	// vendored Herdr manifest reaches idle through `osc_title_idle` — a
+	// non-empty title with no spinner frame in it — where Sidecar's deleted rule
+	// table read the `›` composer off the screen. A title-less observation now
+	// resolves idle through the low-evidence fallback instead, which is
+	// debounced and never announces a completion, so a fixture without one is no
+	// longer testing the transition it claims to.
+	pane := []Pane{{ID: "%1", Session: "agent", Path: "/tmp/repo", Command: "codex", Title: "repo"}}
 	first := Workspace{ID: "repo:worktree:one", Provider: "codex"}
 	collector.observe(&first, pane, collector.Now())
 	if first.Presentation.Lane != agentstatus.LaneWorking {
@@ -852,11 +860,13 @@ func TestSuccessfulRefreshCommitsTrackerContinuity(t *testing.T) {
 	}}).WithDefaults()
 	first := base.ForRefresh(1)
 	working := Workspace{ID: "same-agent", Provider: "codex"}
-	first.observeContext(context.Background(), &working, []Pane{{ID: "%1", Command: "codex"}}, time.Now())
+	// Titled for the same reason as TestCollectorPreservesTrackerTransitions-
+	// AcrossRefreshes: Codex's idle rule is now `osc_title_idle`.
+	first.observeContext(context.Background(), &working, []Pane{{ID: "%1", Command: "codex", Title: "repo"}}, time.Now())
 	first.CommitTrackers()
 	second := base.ForRefresh(1)
 	idle := Workspace{ID: "same-agent", Provider: "codex"}
-	second.observeContext(context.Background(), &idle, []Pane{{ID: "%1", Command: "codex"}}, time.Now().Add(time.Second))
+	second.observeContext(context.Background(), &idle, []Pane{{ID: "%1", Command: "codex", Title: "repo"}}, time.Now().Add(time.Second))
 	if idle.Presentation.Lane != agentstatus.LaneDone {
 		t.Fatalf("committed Working -> idle presentation = %#v", idle.Presentation)
 	}
