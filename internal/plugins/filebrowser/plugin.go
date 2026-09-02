@@ -1090,6 +1090,17 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		return p, p.applyPreviewRefresh(msg)
 
+	case plugin.HostInventoryMsg:
+		// The host's snapshot moved. That is the whole of a bound tree's live
+		// refresh: there is no filesystem watch across the boundary, so this
+		// signal and an explicit r are what it has, and the auto-refresh gate
+		// defers it while a modal or an open search is on screen exactly as a
+		// local watcher signal is deferred.
+		if !p.remoteBound() {
+			return p, nil
+		}
+		return p, p.requestAutoRefresh()
+
 	case remotePreviewLoadedMsg:
 		// A host read is the same payload with a revision attached. Recording
 		// it and re-entering as the ordinary message is what keeps one preview
@@ -1364,9 +1375,17 @@ func (p *Plugin) SetFocused(f bool) {
 
 // Commands returns the available commands.
 func (p *Plugin) Commands() []plugin.Command {
-	if p.ctx != nil && p.ctx.HostID != "" {
-		return nil
+	if p.remoteBound() {
+		// The footer says what this surface can do, not what Files can do
+		// somewhere else. A hint for a command that answers "unavailable on
+		// [aerie]" is worse than no hint.
+		return p.remoteCommands()
 	}
+	return p.localCommands()
+}
+
+// localCommands is the full command set, for a project on this machine.
+func (p *Plugin) localCommands() []plugin.Command {
 	return []plugin.Command{
 		// Tree pane commands
 		{ID: "quick-open", Name: "Find", Description: "Find a file by name", Category: plugin.CategorySearch, Context: "file-browser-tree", Priority: 1},

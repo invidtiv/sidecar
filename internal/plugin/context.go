@@ -105,7 +105,12 @@ func FormatRemoteUnavailable(pluginName, hostID string) string {
 	return fmt.Sprintf("%s is unavailable on [%s]", pluginName, hostID)
 }
 
-// HostInventoryMsg tells a bound workspace plugin that the host catalog it
-// lists from has changed. The app delivers it after overview.IsHostMessage
-// so the sidebar refreshes on the same tick.
+// HostInventoryMsg tells every bound plugin that the host catalog it reads
+// from has changed. The app delivers it after overview.IsHostMessage so the
+// sidebar refreshes on the same tick.
+//
+// It is the only change signal that crosses a host boundary. internal/livewatch
+// watches a filesystem and stays on the machine that owns the files, so a bound
+// surface that wants to notice a change has this and an explicit refresh, and
+// must not claim to be live beyond them.
 type HostInventoryMsg struct{}

@@ -263,16 +263,16 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.boundDestination.HostID != "" && m.registry != nil {
 			m.syncBoundHostIncarnation()
+			// Every bound plugin hears that its host moved, not just the one
+			// that lists shells. It is the only change signal that crosses the
+			// boundary: livewatch is a filesystem watch and stays on the
+			// machine that owns the files.
 			for i, p := range m.registry.Plugins() {
-				if p.ID() != workspacePluginID {
-					continue
-				}
 				updated, extra := p.Update(plugin.HostInventoryMsg{})
 				m.registry.Replace(i, updated)
 				if extra != nil {
 					cmds = append(cmds, extra)
 				}
-				break
 			}
 		}
 		return m, tea.Batch(cmds...)

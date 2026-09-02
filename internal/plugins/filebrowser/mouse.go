@@ -608,6 +608,12 @@ func (p *Plugin) draggableNode(idx int) *FileNode {
 	if p.tree == nil {
 		return nil
 	}
+	// Drag-to-move is a write, and there is no host write verb. Refusing at
+	// the arm rather than at the drop means the gesture never starts, so the
+	// user is not shown a drop target for a move that cannot happen.
+	if p.remoteBound() {
+		return nil
+	}
 	node := p.tree.GetNode(idx)
 	if node == nil || node == p.tree.Root || node.Path == "" {
 		return nil
