@@ -201,6 +201,12 @@ func (m *Model) HostVerbs(hostID string) hostproto.VerbCapabilities {
 	return m.hostVerbs(hostID)
 }
 
+// HostShows is the bound-plugin injection of hostShows: the host is connected
+// enough that a verb sent to it can be expected to answer.
+func (m *Model) HostShows(hostID string) bool {
+	return m.hostShows(hostID)
+}
+
 // hostVerbs is what a host said its CLI understands, read from the hello it
 // sent. The zero value — an unknown host, or one whose Sidecar predates the
 // field — means "assume nothing", which is what makes an older host degrade

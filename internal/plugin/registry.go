@@ -157,11 +157,25 @@ func (r *Registry) Unavailable() map[string]string {
 // Local callers pass empty host identity; HostID/HostIncarnation/ProjectKey are
 // cleared in the same lock so a remote bind cannot race Context() mutation.
 func (r *Registry) Reinit(newWorkDir, newProjectRoot string) []tea.Cmd {
-	return r.ReinitHost(newWorkDir, newProjectRoot, "", 0, "")
+	return r.ReinitHost(newWorkDir, newProjectRoot, HostBind{})
+}
+
+// HostBind is the remote identity plugins are reinitialized against. The zero
+// value is this machine, which is what Reinit passes.
+type HostBind struct {
+	HostID      string
+	Incarnation uint64
+	// ProjectKey is the owning host's inventory key: canonical(root) on that
+	// machine, a path-shaped string that is not a path here.
+	ProjectKey string
+	// WorktreeKey is the bound worktree's canonical path on that machine, or
+	// empty for the project's main checkout. It is the second half of the
+	// durable workspace id a plugin reads host content through.
+	WorktreeKey string
 }
 
 // ReinitHost is Reinit with host identity set in the same lock as WorkDir.
-func (r *Registry) ReinitHost(newWorkDir, newProjectRoot, hostID string, hostIncarnation uint64, projectKey string) []tea.Cmd {
+func (r *Registry) ReinitHost(newWorkDir, newProjectRoot string, bind HostBind) []tea.Cmd {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -177,9 +191,10 @@ func (r *Registry) ReinitHost(newWorkDir, newProjectRoot, hostID string, hostInc
 	// Update context with new working directory, project root, and host bind.
 	r.ctx.WorkDir = newWorkDir
 	r.ctx.ProjectRoot = newProjectRoot
-	r.ctx.HostID = hostID
-	r.ctx.HostIncarnation = hostIncarnation
-	r.ctx.ProjectKey = projectKey
+	r.ctx.HostID = bind.HostID
+	r.ctx.HostIncarnation = bind.Incarnation
+	r.ctx.ProjectKey = bind.ProjectKey
+	r.ctx.HostWorktreeKey = bind.WorktreeKey
 
 	// Increment epoch to invalidate all pending async messages from previous project
 	r.ctx.Epoch++

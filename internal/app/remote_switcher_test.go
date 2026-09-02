@@ -432,6 +432,48 @@ func TestHostCatalogWorkspacesReachBoundWorkspacePlugin(t *testing.T) {
 	}
 }
 
+// A bound plugin composes its host workspace id from the project key and the
+// bound worktree, so the bind has to carry the worktree into the context.
+// Without it every worktree of a host project browses the main checkout.
+func TestBindCarriesTheWorktreeKeyIntoThePluginContext(t *testing.T) {
+	if err := state.InitWithDir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.Features.Flags[features.CrossProjectOverview.Name] = true
+	features.Init(cfg)
+	t.Cleanup(func() { features.Init(config.Default()) })
+
+	ctx := &plugin.Context{}
+	reg := plugin.NewRegistry(ctx)
+	if err := reg.Register(&recordingInitPlugin{id: workspacePluginID}); err != nil {
+		t.Fatal(err)
+	}
+	m := New(reg, keymap.NewRegistry(), cfg, "", "/tmp/one", "/tmp/one", workspacePluginID)
+	m.testHostCatalog = []overview.HostCatalogEntry{{
+		ID:       "aerie",
+		Projects: []overview.HostCatalogProject{{Key: "/home/me/sidecar"}},
+	}}
+
+	_ = m.bindRemoteDestination(Destination{
+		HostID:       "aerie",
+		ProjectKey:   "/home/me/sidecar",
+		ProjectName:  "Sidecar",
+		WorktreeKey:  "/home/me/sidecar-feature",
+		WorktreeName: "feature",
+	})
+	if got := m.registry.Context().HostWorktreeKey; got != "/home/me/sidecar-feature" {
+		t.Fatalf("HostWorktreeKey = %q, want the bound worktree", got)
+	}
+
+	// Binding back to the main checkout must clear it, or the previous
+	// worktree keeps answering for the project root.
+	_ = m.bindRemoteDestination(Destination{HostID: "aerie", ProjectKey: "/home/me/sidecar", ProjectName: "Sidecar"})
+	if got := m.registry.Context().HostWorktreeKey; got != "" {
+		t.Fatalf("HostWorktreeKey = %q after binding the main checkout", got)
+	}
+}
+
 func TestRelayedOpenAfterBindAcksNotSilence(t *testing.T) {
 	stateHome := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", stateHome)

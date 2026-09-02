@@ -30,6 +30,11 @@ type Context struct {
 	HostID          string
 	HostIncarnation uint64
 	ProjectKey      string // owning host's unscoped inventory key; empty when local
+	// HostWorktreeKey is the bound worktree's canonical path on the owning
+	// host, or empty for its main checkout. With ProjectKey it forms the
+	// durable workspace id (projectKey:worktree:key) a plugin reads that
+	// host's content and directory listings through.
+	HostWorktreeKey string
 	ConfigDir       string
 	Config          *config.Config
 	Adapters        map[string]adapter.Adapter
@@ -54,6 +59,11 @@ type Context struct {
 	// the app from the Sessions hello; the workspace plugin builds RemoteSource
 	// from this plus RemoteRunner so this package does not import overview.
 	HostVerbs func() hostproto.VerbCapabilities
+	// HostShows reports that the bound host is connected enough to answer.
+	// It is separate from HostVerbs because a disconnected host advertises
+	// nothing, and "not connected" and "too old to do this" send a user
+	// looking in two different places.
+	HostShows func() bool
 }
 
 // HostWorkspace is one host-side shell or worktree as the bound workspace

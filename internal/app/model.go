@@ -1255,7 +1255,12 @@ func (m *Model) bindRemoteDestination(dest Destination) tea.Cmd {
 	themeCmd := m.applyResolvedTheme(theme.ResolveTheme(m.cfg, ""))
 	var startCmds []tea.Cmd
 	if m.registry != nil {
-		startCmds = m.registry.ReinitHost("", "", dest.HostID, dest.HostIncarnation, dest.ProjectKey)
+		startCmds = m.registry.ReinitHost("", "", plugin.HostBind{
+			HostID:      dest.HostID,
+			Incarnation: dest.HostIncarnation,
+			ProjectKey:  dest.ProjectKey,
+			WorktreeKey: dest.WorktreeKey,
+		})
 		startCmds = append(startCmds, func() tea.Msg {
 			return notify.SeedLaneTrackersMsg{Notifications: append([]notify.Notification(nil), m.notificationCache...)}
 		})
@@ -1353,6 +1358,12 @@ func (m *Model) installPluginHostSeams() {
 			return hostproto.VerbCapabilities{}
 		}
 		return m.overview.HostVerbs(ctx.HostID)
+	}
+	ctx.HostShows = func() bool {
+		if m.overview == nil || ctx.HostID == "" {
+			return false
+		}
+		return m.overview.HostShows(ctx.HostID)
 	}
 	if m.overview != nil {
 		m.overview.RelayedLanding = func(req uirequest.Request) bool {

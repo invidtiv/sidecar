@@ -58,9 +58,18 @@ func (p *Plugin) calculatePaneWidths() {
 
 // renderView creates the 2-pane layout.
 func (p *Plugin) renderView() string {
-	if p.ctx != nil && p.ctx.HostID != "" {
+	// A bound surface paints its reason rather than a tree only when it has
+	// one. "Not connected", "too old for the tree contract", and "no bound
+	// worktree" are three different things for the user to do next, so they
+	// are three different sentences.
+	if reason := p.unavailableReason(); reason != "" {
 		return lipgloss.NewStyle().Width(p.width).Height(p.height).MaxHeight(p.height).Render(
-			styles.Title.Render(pluginName) + "\n\n" + styles.Muted.Render(fmt.Sprintf("%s is unavailable on [%s]", pluginName, p.ctx.HostID)),
+			styles.Title.Render(pluginName) + "\n\n" + styles.Muted.Render(fmt.Sprintf("%s is unavailable: %s", pluginName, reason)),
+		)
+	}
+	if p.remoteBound() && p.tree == nil {
+		return lipgloss.NewStyle().Width(p.width).Height(p.height).MaxHeight(p.height).Render(
+			styles.Title.Render(pluginName) + "\n\n" + styles.Muted.Render(fmt.Sprintf("Loading [%s]…", p.ctx.HostID)),
 		)
 	}
 	// Clear mouse hit regions at start of each render

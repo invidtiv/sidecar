@@ -150,6 +150,11 @@ type Plugin struct {
 	tree    *FileTree
 	focused bool
 
+	// treeSourceOverride replaces the listing seam. Tests bind a fake so a
+	// bound tree can be proven without ssh or a second machine; production
+	// leaves it nil and treeSource builds one from the context.
+	treeSourceOverride TreeSource
+
 	// Pane state
 	activePane       FocusPane
 	treeVisible      bool // Toggle tree pane visibility with \
@@ -407,7 +412,10 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.edit.Host = p
 	p.ctx = ctx
 	if ctx != nil && ctx.HostID != "" {
-		p.tree = nil
+		// The caches, the search, and the drag all describe the project being
+		// left. Reset them exactly as a local reinit does, then build a tree
+		// only when the bind can actually list the host; when it cannot, the
+		// unavailable view says which of the three reasons applies.
 		p.stateRestored = false
 		p.stopped = false
 		p.pendingAutoRefresh = false
@@ -417,6 +425,19 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 		p.dirCache.Reset()
 		p.quickOpenMode = false
 		p.closeProjectSearch()
+		p.tree = nil
+		if source := p.treeSource(); source != nil {
+			p.tree = NewFileTreeWithSource(p.remoteRoot(), source)
+		}
+		renderer, err := markdown.NewRenderer()
+		if err != nil && ctx.Logger != nil {
+			ctx.Logger.Warn("markdown renderer init failed", "error", err)
+		}
+		p.markdownRenderer = renderer
+		if saved := state.GetFileBrowserTreeWidth(); saved > 0 {
+			p.treeWidth = saved
+		}
+		p.previewWrapEnabled = state.GetLineWrapEnabled()
 		return nil
 	}
 	p.tree = NewFileTree(ctx.WorkDir)
@@ -454,8 +475,12 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 
 // Start begins plugin operation.
 func (p *Plugin) Start() tea.Cmd {
-	if p.ctx != nil && p.ctx.HostID != "" {
-		return nil
+	if p.remoteBound() {
+		// No watcher: internal/livewatch is a filesystem signal and does not
+		// cross the host boundary. A bound tree refreshes on request and on
+		// the host snapshot the viewer already receives, and says nothing
+		// about being live that it cannot keep.
+		return p.refresh()
 	}
 	return tea.Batch(
 		p.refresh(),
@@ -690,7 +715,10 @@ func (p *Plugin) requestAutoRefresh() tea.Cmd {
 // swapped in when TreeBuiltMsg is handled; p.tree is never mutated in the
 // background.
 func (p *Plugin) refresh() tea.Cmd {
-	if p.tree == nil || (p.ctx != nil && p.ctx.HostID != "") {
+	if p.tree == nil {
+		return nil
+	}
+	if p.remoteBound() && !p.remoteAvailable() {
 		return nil
 	}
 
@@ -699,6 +727,7 @@ func (p *Plugin) refresh() tea.Cmd {
 		SortMode:      p.tree.SortMode,
 		ShowIgnored:   p.tree.ShowIgnored,
 		ExpandedPaths: p.tree.GetExpandedPaths(),
+		Source:        p.treeSource(),
 	}
 
 	var cursorPath string
@@ -811,7 +840,7 @@ func (p *Plugin) reresolveFileOpTarget() {
 // inline editor was open is flushed here, once the message that closed it has
 // been handled.
 func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
-	if p.ctx != nil && p.ctx.HostID != "" {
+	if p.remoteBound() && (p.tree == nil || !p.remoteAvailable()) {
 		return p, nil
 	}
 	updated, cmd := p.update(msg)

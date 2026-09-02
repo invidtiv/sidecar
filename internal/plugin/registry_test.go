@@ -264,7 +264,7 @@ func TestRegistry_ReinitHostSetsIdentityInSameLock(t *testing.T) {
 	p := &mockPluginWithInit{mockPlugin: mockPlugin{id: "p1"}}
 	_ = r.Register(p)
 
-	cmds := r.ReinitHost("", "", "aerie", 7, "/home/me/sidecar")
+	cmds := r.ReinitHost("", "", HostBind{HostID: "aerie", Incarnation: 7, ProjectKey: "/home/me/sidecar"})
 	if len(cmds) == 0 {
 		t.Error("ReinitHost should return start commands")
 	}
