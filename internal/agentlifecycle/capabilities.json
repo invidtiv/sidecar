@@ -92,36 +92,6 @@
   },
   {
     "schemaVersion": 1,
-    "provider": "pi",
-    "source": "sidecar.pi.extension",
-    "assetVersion": "0",
-    "tier": "session-identity",
-    "evidence": "docs-only",
-    "minProviderVersion": "0.84.0",
-    "testedProviderRange": "",
-    "covered": [
-      "work_start",
-      "tool_use",
-      "turn_complete",
-      "session_identity",
-      "process_exit"
-    ],
-    "knownGaps": [
-      "No Sidecar trace was captured. This entry is read from the released TypeScript definitions shipped in the installed package (dist/core/extensions/types.d.ts), which is stronger than vendor prose but is not an observed trace.",
-      "Blocking and unblocking do not exist, and this is a deliberate product decision rather than a missing event: Pi ships no permission system, so there is nothing to be blocked on. An extension can open its own ctx.ui dialog, but that is invisible to every other extension, so no portable blocked signal exists at all. This caps Pi at advisory however it is traced.",
-      "An earlier docs-only version of this entry cited a `ui_prompt_start` event as partial cover for blocking. No such event exists anywhere in the 0.84.3 package. The blocked lane is NO, not PARTIAL.",
-      "There is no cancellation event. Cancellation is inferable, exactly the way OpenCode's was before it was traced: the final assistant message carries a StopReason that includes \"aborted\", and agent_settled is emitted from a finally block so it arrives however the turn ended. That shares its shape with \"error\", so an adapter reading only the event would get the lane right and the outcome wrong.",
-      "Turn completion must be taken from agent_settled rather than agent_end: agent_end can be followed by an automatic retry or a compaction, so it means 'this attempt stopped' rather than 'the turn is over'.",
-      "Process exit is session_shutdown, which fires on quit, reload, new, resume and fork; an adapter must read the reason, because three of those five are not an exit at all.",
-      "No subagent events. Extension-spawned agents are separate processes.",
-      "The extension API publishes no version or stability guarantee, and the changelog records breaking changes that have already shipped."
-    ],
-    "orderingGuaranteed": false,
-    "sourceDoc": "https://pi.dev/docs/latest/extensions",
-    "sourceVersionNote": "pi 0.84.3 installed locally but not traced. The event inventory is read from the released type definitions in the installed package rather than from documentation prose, and the extension loading contract (--extension/-e, repeatable; --no-extensions; discovery from ~/.pi/agent/extensions/) is documented. No stability guarantee is published."
-  },
-  {
-    "schemaVersion": 1,
     "provider": "grok",
     "source": "",
     "assetVersion": "",

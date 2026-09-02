@@ -293,11 +293,15 @@ func TestAnUnsupportedOrUnknownProviderIsRefusedNotCrashed(t *testing.T) {
 		provider string
 		want     agentintegration.RefusalCode
 	}{
-		// pi has a recorded capability but no bundled adapter, which is what
+		// grok has a recorded capability but no bundled adapter, which is what
 		// keeps the "unsupported" branch honest now that codex and claude
-		// ship adapters. codex covers the third refusal shape: an adapter
-		// exists, but the provider CLI is not on this fixture's PATH.
-		{"pi", agentintegration.RefuseUnsupported},
+		// ship adapters. It replaced pi here when pi's capability entry was
+		// retracted: pi now has no recorded capability at all, so asking to
+		// install it is an unknown provider rather than an unsupported one.
+		// codex covers the third refusal shape: an adapter exists, but the
+		// provider CLI is not on this fixture's PATH.
+		{"grok", agentintegration.RefuseUnsupported},
+		{"pi", agentintegration.RefuseUnknownProvider},
 		{"codex", agentintegration.RefuseProviderMissing},
 		{"not-an-agent", agentintegration.RefuseUnknownProvider},
 	} {

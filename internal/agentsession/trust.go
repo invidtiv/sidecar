@@ -15,12 +15,22 @@ import (
 // discovery may propose a candidate for a human to confirm, but it can never
 // enter this set, because "the newest conversation in this directory" is a
 // guess and resuming the wrong conversation is worse than resuming none.
+//
+// "Ships" is the whole test, and it is checked against the adapters rather than
+// against intent. This list once carried "sidecar.pi.extension" alongside a
+// capability entry for Pi, and neither was backed by anything: Sidecar has no
+// PiAdapter, no asset under internal/agentintegration/assets/pi, and no code
+// path that installs an extension Pi would load. Nothing Sidecar writes could
+// ever produce a report carrying that source, so the only caller it could have
+// had was a hook somebody wrote by hand, and trusting one of those is exactly
+// the "resume a conversation nobody proved was the right one" the paragraph
+// above refuses. Both were retracted; Pi comes back here when the port in
+// docs/plans/active/herdr-parity-close-the-gap.md, Slice 1, ships an asset.
 func OfficialSources() []string {
 	return []string{
 		"sidecar.codex.hooks",
 		"sidecar.claude.hooks",
 		"sidecar.opencode.plugin",
-		"sidecar.pi.extension",
 	}
 }
 
@@ -30,6 +40,14 @@ func OfficialSources() []string {
 // an empty one, so the ordinary installed path produces a trusted, resumable
 // reference and only a caller that deliberately names a different source gets an
 // untrusted one.
+//
+// A provider with no shipped integration returns the empty string, and the
+// report-session command turns that into a refusal naming the cause rather than
+// letting the validator complain that the source is blank. That is the correct
+// answer for Pi until an adapter exists: a hand-written Pi hook can still report
+// by naming --source explicitly, and what it gets is an untrusted reference,
+// which is the honest amount of authority for an integration Sidecar did not
+// write.
 func OfficialSourceFor(kind string) string {
 	switch strings.TrimSpace(kind) {
 	case "codex":
@@ -38,8 +56,6 @@ func OfficialSourceFor(kind string) string {
 		return "sidecar.claude.hooks"
 	case "opencode":
 		return "sidecar.opencode.plugin"
-	case "pi":
-		return "sidecar.pi.extension"
 	default:
 		return ""
 	}

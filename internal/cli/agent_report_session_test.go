@@ -100,15 +100,19 @@ func TestReportSessionUsageErrorsComeBeforeAnyContextWork(t *testing.T) {
 // symptom. Falling through to the validator produced "the source is empty",
 // which describes what the defaulting failed to fill in instead of why.
 func TestAProviderWithNoOfficialIntegrationSaysSo(t *testing.T) {
-	for _, kind := range []string{"codex", "claude", "opencode", "pi"} {
+	for _, kind := range []string{"codex", "claude", "opencode"} {
 		if agentsession.OfficialSourceFor(kind) == "" {
 			t.Fatalf("%s is expected to have an official source", kind)
 		}
 	}
-	// grok is a real catalog family with no Sidecar integration, so the
-	// defaulting genuinely has nothing to fill in.
-	if agentsession.OfficialSourceFor("grok") != "" {
-		t.Skip("grok gained an official integration; pick another provider for this case")
+	// grok and pi are real catalog families with no Sidecar integration, so the
+	// defaulting genuinely has nothing to fill in. pi is here because it used to
+	// be on the other list: it had an official source and a capability entry
+	// before any adapter existed, and both were retracted.
+	for _, kind := range []string{"grok", "pi"} {
+		if agentsession.OfficialSourceFor(kind) != "" {
+			t.Skipf("%s gained an official integration; pick another provider for this case", kind)
+		}
 	}
 }
 

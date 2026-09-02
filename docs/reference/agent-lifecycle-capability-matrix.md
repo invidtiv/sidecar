@@ -1,6 +1,6 @@
 # Agent lifecycle capability matrix
 
-**Status:** Phase A evidence baseline recorded 2026-08-30; OpenCode cancellation traced and promoted to `full` in Phase B, 2026-08-30; installation, status, and repair added in Phase C, 2026-08-30; Codex and Claude Code traced against their current releases in Phase D, 2026-08-30. **Plan:** [Deterministic agent lifecycle hooks](../plans/active/notification-agent-lifecycle-hooks.md). **Tracking:** `td-43a93f`.
+**Status:** Phase A evidence baseline recorded 2026-08-30; OpenCode cancellation traced and promoted to `full` in Phase B, 2026-08-30; installation, status, and repair added in Phase C, 2026-08-30; Codex and Claude Code traced against their current releases in Phase D, 2026-08-30; the untraced Pi entry retracted 2026-09-02 because Sidecar ships no source that could produce a report for it. **Plan:** [Deterministic agent lifecycle hooks](../plans/active/notification-agent-lifecycle-hooks.md). **Tracking:** `td-43a93f`.
 
 How an integration is installed, inspected, and removed is [Agent lifecycle integrations](agent-lifecycle-integrations.md). This document records what each agent provider's own lifecycle events can actually tell Sidecar, how strong the evidence for that claim is, and what authority tier the evidence justifies. It is the prose companion to `internal/agentlifecycle/capabilities.json`, which is the machine-readable version the code reads and the tests police. That file is embedded into the binary and read at runtime through `agentlifecycle.Capabilities()`, so the registry the resolver trusts and the evidence these tests police are one file rather than two that could drift.
 
@@ -30,7 +30,9 @@ This is enforced rather than documented. `Capability.TierFor` polices every tier
 | OpenCode | 1.18.23, 1.18.25 | real-trace | `full` | lifecycle authority | none blocking; see gaps below |
 | Codex | 0.151.0 | real-trace | `session-identity` | session only | shipped hook is SessionStart only. The provider's own contract is traced and would support `full`. |
 | Claude Code | 2.1.220 | real-trace | `session-identity` | session only | shipped hook is SessionStart only. The provider's ceiling is `advisory`: no cancellation event exists. |
-| Pi | 0.84.3 | docs-only | `session-identity` | lifecycle authority | blocking is structurally impossible; ceiling is `advisory` |
+| Pi | 0.84.3 | docs-only | none, retracted | lifecycle authority | blocking is structurally impossible; ceiling is `advisory` |
+
+Pi has no row in `capabilities.json` at all, which is what "none, retracted" means; the research behind its entry is kept below rather than in the registry, because the registry records what a shipped source has earned and Sidecar ships nothing for Pi. See "Why the Pi entry was retracted".
 
 Two columns are doing different jobs here and it is worth being explicit about which. **Tier now** is what the *shipped Sidecar asset* earns, and for Codex and Claude that is `session-identity` because each ships one `SessionStart` entry and nothing more. **Blocking gap** describes the *provider's* ceiling — the best any Sidecar adapter could honestly claim if one were written today. Codex's ceiling is `full` and Claude's is `advisory`, and neither is reached yet because neither asset asks for it.
 
@@ -198,7 +200,15 @@ Pi has the cleanest agent-flow abstraction of the four. `before_agent_start`/`ag
 
 Three further limits are worth recording because each is a trap for an adapter written from the event names alone. Turn completion must come from `agent_settled` rather than `agent_end`, because `agent_end` can be followed by an automatic retry or a compaction — it means "this attempt stopped", not "the turn is over". Process exit is `session_shutdown`, which fires for `quit`, `reload`, `new`, `resume` and `fork`, so three of its five reasons are not an exit at all and an adapter must read the reason. And cancellation has no event: it is inferable from a `StopReason` of `"aborted"` on the final assistant message, with `agent_settled` emitted from a `finally` so it arrives however the turn ended — which is exactly the shape OpenCode's cancellation had before it was traced, sharing its shape with `"error"`.
 
-Pi remains a `session-identity` entry until real traces exist.
+Two more limits belong with those three. **There are no subagent events**: an agent an extension spawns is a separate process, so nothing in Pi's event stream describes it and a parent's lane can never be derived from a child's. And **the extension API publishes no version or stability guarantee**, while the changelog records breaking changes that have already shipped, so an adapter written against 0.84.3 has no contractual reason to keep working on 0.85. The retracted entry recorded `minProviderVersion: 0.84.0`, which is the floor a future entry should carry forward rather than re-derive.
+
+### Why the Pi entry was retracted
+
+`capabilities.json` used to carry Pi at `session-identity` with source `sidecar.pi.extension` and `assetVersion: "0"`. That zero was the tell. There is no `PiAdapter`, no `internal/agentintegration/assets/pi/`, and no code path anywhere in Sidecar that installs something Pi would load, so no report could ever arrive carrying that source. A tier granted to a source nothing can produce is not a weak claim, it is an empty one, and the matrix is only worth checking in because it never claims more than it has proved. The entry was recorded ahead of the port, and it came out; `internal/agentsession/trust.go` dropped the same source id with it, because an official source is what marks a reference resumable and the only hook that could have used one here is a hook Sidecar did not write.
+
+Pi is not filed under "evaluated but not built" below either. That table means "surveyed, and deliberately not built", which is false: Pi is the first port in [Close the Herdr parity gap](../plans/active/herdr-parity-close-the-gap.md), Slice 1. With no entry at all, `TestHerdrAuthorityGaps` prints `pi ... sidecar=(none)` beside `kilo`, `kimi`, `mastracode` and `omp`, which is the accurate statement: outstanding work, not a decision.
+
+Everything above this heading is the research that entry carried, and it is the brief for that port. What the port owes back is a capability entry whose tier its own traces earn, starting no higher than the `advisory` ceiling and no higher than `session-identity` until traces exist at all. Nothing here is a tier; it is what to expect when tracing begins.
 
 ## Catalog agents evaluated but not built
 

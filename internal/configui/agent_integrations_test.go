@@ -205,7 +205,11 @@ func TestARouteReachedWithoutDiscoverySaysSoRatherThanClaimingToBeChecking(t *te
 func TestTheRouteShowsEveryProviderAndItsHonestState(t *testing.T) {
 	m, _, _ := integrationsFixture(t)
 	view := openIntegrations(t, m)
-	for _, want := range []string{"opencode", "codex", "claude", "pi", "unsupported"} {
+	// grok is the unsupported exemplar: a recorded capability with no bundled
+	// adapter, so the route has to show it and say so. It took that job from pi,
+	// whose capability entry was retracted because nothing Sidecar ships could
+	// produce a report for it.
+	for _, want := range []string{"opencode", "codex", "claude", "grok", "unsupported"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("the route does not mention %q:\n%s", want, view)
 		}
