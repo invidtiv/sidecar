@@ -303,28 +303,70 @@ func resolveRemoteCommit(ref string) (string, error) {
 	return commit.SHA, nil
 }
 
-// newestReleaseTag asks GitHub for the newest Herdr release. A failure is not
-// fatal: the tool falls back to the tag known at the time it was written and
-// says so in the report, so an offline sync still records a defensible pin.
+// newestReleaseTag asks GitHub for the newest Herdr release of any kind,
+// preview builds included.
+//
+// Herdr's preview releases are its real cadence for detection work — they land
+// roughly weekly and carry the manifest fixes — and each one ships the same
+// release binaries a stable tag does, so the differential harness has an oracle
+// either way. Pinning to the newest *stable* tag instead would vendor manifests
+// weeks behind the tree and, at the time this changed, would have dropped
+// `muse.toml` entirely. A failure is not fatal: the tool falls back to the tag
+// known at the time it was written and says so in the report, so an offline
+// sync still records a defensible pin.
 func newestReleaseTag(offline bool) string {
 	if offline {
 		return fallbackReleaseTag
 	}
-	// Herdr publishes preview builds as prereleases between stable tags. The
-	// differential harness downloads a release binary, so only a stable tag is
-	// a usable pin.
+	// Not `--jq '.[0]'`: gh's ordering is not part of its contract and drafts
+	// sort ahead of releases, so the choice is made here on the published date.
 	cmd := exec.Command("gh", "release", "list", "--repo", repoSlug,
-		"--limit", "30", "--json", "tagName,isPrerelease",
-		"--jq", "[.[] | select(.isPrerelease == false)] | .[0].tagName")
+		"--limit", "30", "--json", "tagName,isDraft,publishedAt")
 	out, err := cmd.Output()
 	if err != nil {
 		return fallbackReleaseTag
 	}
-	tag := strings.TrimSpace(string(out))
-	if tag == "" {
-		return fallbackReleaseTag
+	if tag := newestReleaseTagFrom(out); tag != "" {
+		return tag
 	}
-	return tag
+	return fallbackReleaseTag
+}
+
+// newestReleaseTagFrom picks the newest published release from `gh release
+// list --json tagName,isDraft,publishedAt` output. It returns "" when there is
+// nothing to choose, which is the caller's signal to fall back.
+//
+// Drafts are excluded: they have no assets, so the harness could not download a
+// binary for one. Prereleases are not, which is the whole point.
+func newestReleaseTagFrom(data []byte) string {
+	var releases []struct {
+		TagName     string `json:"tagName"`
+		IsDraft     bool   `json:"isDraft"`
+		PublishedAt string `json:"publishedAt"`
+	}
+	if err := json.Unmarshal(data, &releases); err != nil {
+		return ""
+	}
+	best := ""
+	var bestAt time.Time
+	for _, release := range releases {
+		if release.IsDraft || strings.TrimSpace(release.TagName) == "" {
+			continue
+		}
+		at, err := time.Parse(time.RFC3339, release.PublishedAt)
+		if err != nil {
+			// No usable date. It cannot win on recency, but it can stand in
+			// when nothing else does, since gh lists newest first.
+			if best == "" {
+				best = release.TagName
+			}
+			continue
+		}
+		if best == "" || at.After(bestAt) {
+			best, bestAt = release.TagName, at
+		}
+	}
+	return best
 }
 
 // --- shared IO ------------------------------------------------------------------

@@ -186,6 +186,10 @@ func sync(opts options) (*syncReport, error) {
 
 	previous := readPreviousLock(opts.out)
 	previousIntegration := readPreviousIntegrationLock(opts.integrationOut)
+	// The vendored bytes as they stand *before* step 6 overwrites them. There
+	// is no second copy afterwards, so the verdict-flip table's "before" side
+	// has to be taken here or not at all.
+	previousManifests := readVendoredManifests(filepath.Join(opts.out, "upstream"))
 
 	// Step 5: vendor the integration assets and lock them.
 	integrationLock, err := writeIntegrationTree(opts, src, assetDirs, sharedAssets)
@@ -200,6 +204,8 @@ func sync(opts options) (*syncReport, error) {
 	}
 	report.Lock = lock
 	report.Previous = previous
+	report.PreviousManifests = previousManifests
+	report.Manifests = chosenBytes(choices)
 	report.Aliases = aliases
 	report.Authority = authority
 	report.Integration = integrationLock
@@ -230,6 +236,16 @@ type chosenManifest struct {
 
 	bundledVersion   string
 	publishedVersion string
+}
+
+// chosenBytes keys this sync's vendored bytes by file base, the way
+// readVendoredManifests keys the previous ones, so the two are comparable.
+func chosenBytes(choices []chosenManifest) map[string][]byte {
+	out := make(map[string][]byte, len(choices))
+	for _, choice := range choices {
+		out[strings.TrimSuffix(choice.filename, ".toml")] = choice.data
+	}
+	return out
 }
 
 // chooseManifests validates every file and picks, per agent, the copy a Herdr

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/marcus/sidecar/internal/agentactivity"
+	"github.com/marcus/sidecar/internal/agentactivity/manifest"
 	"github.com/marcus/sidecar/internal/agentactivity/manifests"
 	"github.com/marcus/sidecar/internal/agentintegration"
 )
@@ -615,7 +617,7 @@ func TestReportNamesTheThingsAReviewerLooksFor(t *testing.T) {
 		"## Alias table",
 		"## Authority gaps",
 		"## Fixture verdict flips",
-		"Engine not yet wired; see Phase 1.",
+		"## Overlay rules",
 		"grok",
 		"muse",
 	} {
@@ -871,5 +873,341 @@ func TestUnifiedDiffShowsOnlyWhatChanged(t *testing.T) {
 	body, _ = unifiedDiff("before", "after", before, long, 20)
 	if !strings.Contains(body, "diff truncated at 20 lines") {
 		t.Errorf("an oversized diff was not truncated:\n%s", body)
+	}
+}
+
+// --- fixture corpus ----------------------------------------------------------------
+
+// demoManifest is a two-rule manifest in Herdr's grammar, small enough to read
+// and complete enough to compile. The tests that use it are about the
+// comparison, not about the engine, which has its own suite.
+const demoManifest = `id = "demo"
+version = "2026.01.01.1"
+min_engine_version = 1
+
+[[rules]]
+id = "demo_working"
+state = "working"
+priority = 100
+region = "whole_recent"
+contains = ["esc to interrupt"]
+`
+
+func demoSide(t *testing.T, manifests map[string]string) *corpusSide {
+	t.Helper()
+	bytesByBase := map[string][]byte{}
+	for base, body := range manifests {
+		bytesByBase[base] = []byte(body)
+	}
+	return newCorpusSide(bytesByBase, nil)
+}
+
+func demoFixture(screen string) corpusFixture {
+	return corpusFixture{
+		agent: "demo", name: "screen.txt", base: "demo",
+		input: manifest.Input{Screen: screen, Rows: 24},
+	}
+}
+
+// TestTheFlipTableNamesAManifestAddedAndOneNoLongerVendored covers the two
+// shape changes a sync can produce that a naive comparison drops on the floor:
+// an agent whose manifest is new, and one whose manifest is gone. Neither may
+// panic and neither may vanish from the report.
+func TestTheFlipTableNamesAManifestAddedAndOneNoLongerVendored(t *testing.T) {
+	fixtures := []corpusFixture{demoFixture("running… esc to interrupt\n")}
+
+	added := &corpusComparison{
+		fixtures: fixtures,
+		before:   demoSide(t, nil),
+		after:    demoSide(t, map[string]string{"demo": demoManifest}),
+	}
+	var b strings.Builder
+	added.renderFixtureFlips(&b)
+	if !strings.Contains(b.String(), "manifest added this sync") {
+		t.Errorf("a manifest that is new this sync is not reported:\n%s", b.String())
+	}
+
+	removed := &corpusComparison{
+		fixtures: fixtures,
+		before:   demoSide(t, map[string]string{"demo": demoManifest}),
+		after:    demoSide(t, nil),
+	}
+	b.Reset()
+	removed.renderFixtureFlips(&b)
+	if !strings.Contains(b.String(), "manifest no longer vendored") {
+		t.Errorf("a manifest that vanished upstream is not reported:\n%s", b.String())
+	}
+}
+
+// TestAFixtureWithNoManifestOnEitherSideIsNamedRatherThanDropped is the third
+// shape: a fixture directory for an agent nothing vendors a manifest for. It is
+// not a flip, and it must not be silence either.
+func TestAFixtureWithNoManifestOnEitherSideIsNamedRatherThanDropped(t *testing.T) {
+	c := &corpusComparison{
+		fixtures: []corpusFixture{demoFixture("idle\n")},
+		before:   demoSide(t, nil),
+		after:    demoSide(t, nil),
+	}
+	var b strings.Builder
+	c.renderFixtureFlips(&b)
+	if !strings.Contains(b.String(), "has no vendored `demo.toml` on either side") {
+		t.Errorf("a fixture no side can classify is not named:\n%s", b.String())
+	}
+}
+
+// TestRedundancyIgnoresTheRuleIDForAdditionsAndReadsItForRewrites pins the
+// asymmetry that makes the two checks work.
+//
+// Folding the rule id into an addition's comparison made REDUNDANT unreachable
+// in scripts/herdr-diff.sh, because a `sidecar.` id can never equal the
+// upstream id that wins without it. That was a real defect found in the Phase 2
+// review. A rewrite is the opposite case: it carries upstream's own id, is
+// never a deletion candidate, and reading the id and the visible flags is what
+// tells "no fixture covers this" apart from "a fixture covers it and the badge
+// is the same".
+func TestRedundancyIgnoresTheRuleIDForAdditionsAndReadsItForRewrites(t *testing.T) {
+	with := corpusVerdict{state: "working", rule: "sidecar.working_footer", visibleWorking: true}
+	without := corpusVerdict{state: "working", rule: "spinner_status_working", visibleWorking: true}
+
+	if !with.sameBadge(without) {
+		t.Error("an addition reaching the same state through a different rule must read as redundant")
+	}
+	if with.sameVerdict(without) || with.sameEvidence(without) {
+		t.Error("the flip and rewrite comparisons must both notice the rule id")
+	}
+
+	flagged := corpusVerdict{state: "blocked", rule: "weak_blocker", visibleBlocker: true}
+	unflagged := corpusVerdict{state: "blocked", rule: "weak_blocker"}
+	if !flagged.sameBadge(unflagged) {
+		t.Error("the badge comparison is state and fallback only; a flag must not move it")
+	}
+	if flagged.sameEvidence(unflagged) {
+		t.Error("a rewrite that only adds visible_blocker must not read as changing nothing")
+	}
+}
+
+// TestHarnessExemptionsAreScopedToTheOverlayThatDeclaresThem is the whitelist's
+// one load-bearing property: `sidecar.overlay_retain` exists in both claude.toml
+// and grok.toml, so an unscoped list would silence one agent's rule because
+// another agent's rule of the same name is exempt.
+func TestHarnessExemptionsAreScopedToTheOverlayThatDeclaresThem(t *testing.T) {
+	exempt := harnessExempt(map[string][]byte{
+		"grok":   []byte("# harness-exempt: sidecar.overlay_retain — the title is blanked\nid = \"grok\"\n"),
+		"claude": []byte("id = \"claude\"\n"),
+	})
+	if !exempt["grok:sidecar.overlay_retain"] {
+		t.Error("the exemption grok.toml declares was not read")
+	}
+	if exempt["claude:sidecar.overlay_retain"] {
+		t.Error("an exemption leaked from one overlay to another agent's rule of the same name")
+	}
+}
+
+// TestTheDeclaredExemptionsMatchTheOverlaysOnDisk is the same check against the
+// real files, so a `# harness-exempt:` line added in a shape this reader does
+// not accept fails here rather than silently going unread.
+func TestTheDeclaredExemptionsMatchTheOverlaysOnDisk(t *testing.T) {
+	overlays, err := readSidecarOverlays()
+	if err != nil {
+		t.Fatalf("read overlays: %v", err)
+	}
+	declared := 0
+	for _, data := range overlays {
+		declared += strings.Count(string(data), "\n# harness-exempt: ")
+	}
+	if got := len(harnessExempt(overlays)); got != declared {
+		t.Errorf("%d exemption line(s) in the overlays, %d read", declared, got)
+	}
+}
+
+// TestTheCorpusMapsEveryFixtureDirectoryToItsManifest pins the one mapping this
+// tool copies from internal/agentactivity rather than importing. The copy is
+// deliberate — the sync writes the tree that package reads, so the dependency
+// must not run that way in the tool itself — and this test is what keeps a
+// third spelling from appearing.
+func TestTheCorpusMapsEveryFixtureDirectoryToItsManifest(t *testing.T) {
+	fixtures, err := loadCorpus()
+	if err != nil {
+		t.Fatalf("load corpus: %v", err)
+	}
+	if len(fixtures) == 0 {
+		t.Fatal("the corpus is empty; the comparison would measure nothing")
+	}
+	for _, fixture := range fixtures {
+		if want := agentactivity.ManifestAgentID(fixture.agent); fixture.base != want {
+			t.Errorf("%s maps to %q, agentactivity maps it to %q", fixture, fixture.base, want)
+		}
+		if !agentactivity.HasVendoredManifest(fixture.base) {
+			t.Errorf("%s has no vendored %s.toml", fixture, fixture.base)
+		}
+	}
+}
+
+// TestASecondSyncNamesTheFixturesAnUpstreamChangeMoved is the verdict-flip
+// table against a real upstream change rather than a synthetic one: Herdr's
+// "ignore Cursor Run Everything status" fix, which is exactly the shape of the
+// first journey in the plan. The first sync has nothing to compare against, the
+// rolled-back file is genuine upstream history, and the second sync must name
+// the fixture that moved and nothing else.
+func TestASecondSyncNamesTheFixturesAnUpstreamChangeMoved(t *testing.T) {
+	source := herdrSource(t)
+	root := t.TempDir()
+	opts := options{
+		ref:            "e2b85c7",
+		releaseTag:     "v0.8.2",
+		catalogURL:     defaultCatalogURL,
+		sourceDir:      source,
+		offline:        true,
+		out:            filepath.Join(root, "manifests"),
+		integrationOut: filepath.Join(root, "agentintegration"),
+	}
+	first, err := sync(opts)
+	if err != nil {
+		t.Fatalf("first sync: %v", err)
+	}
+	if !strings.Contains(first.Body, "First sync: the output directory held no vendored manifests") {
+		t.Error("a sync with nothing to compare against does not say so")
+	}
+
+	// A re-sync of the same ref changes nothing, which is the result the review
+	// gate exists to produce.
+	unchanged, err := sync(opts)
+	if err != nil {
+		t.Fatalf("unchanged re-sync: %v", err)
+	}
+	if !strings.Contains(unchanged.Body, "**No fixture changed verdict.**") {
+		t.Errorf("a re-sync of the same ref reported a flip:\n%s", flipSection(unchanged.Body))
+	}
+
+	// Roll one vendored file back to the revision before the Cursor fix, so the
+	// next sync is a real upstream change rather than a synthetic edit.
+	before := showAt(t, source, "fae0b236~1", "src/detect/manifests/cursor.toml")
+	path := filepath.Join(opts.out, "upstream", "cursor.toml")
+	if err := os.WriteFile(path, before, 0o644); err != nil {
+		t.Fatalf("roll cursor.toml back: %v", err)
+	}
+
+	moved, err := sync(opts)
+	if err != nil {
+		t.Fatalf("sync after the rollback: %v", err)
+	}
+	section := flipSection(moved.Body)
+	if !strings.Contains(section, "| `cursor` | `false_positive_run_everything.txt` |") {
+		t.Errorf("the fixture Herdr's Cursor fix moved is not in the flip table:\n%s", section)
+	}
+	if !strings.Contains(section, "1 of ") {
+		t.Errorf("exactly one fixture should have moved:\n%s", section)
+	}
+}
+
+// TestTheOverlaySectionJudgesEveryVendoredOverlayRule is the redundancy report
+// against the real overlays. It asserts the shape rather than the verdicts:
+// which rules are redundant is a finding for a maintainer to act on and changes
+// as upstream moves, but every rule must be judged and the two kinds must be
+// told apart.
+func TestTheOverlaySectionJudgesEveryVendoredOverlayRule(t *testing.T) {
+	overlays, err := readSidecarOverlays()
+	if err != nil {
+		t.Fatalf("read overlays: %v", err)
+	}
+	out, _, _ := syncIntoTemp(t)
+	body, err := os.ReadFile(filepath.Join(out, "report.md"))
+	if err != nil {
+		t.Fatalf("read report.md: %v", err)
+	}
+	vendored := readVendoredManifests(filepath.Join(out, "upstream"))
+	rules, err := overlayRules(overlays, vendored)
+	if err != nil {
+		t.Fatalf("read overlay rules: %v", err)
+	}
+	if len(rules) == 0 {
+		t.Fatal("no overlay rules were read")
+	}
+	rewrites := 0
+	for _, rule := range rules {
+		row := "| `" + rule.base + "` | `" + rule.id + "` |"
+		if !strings.Contains(string(body), row) {
+			t.Errorf("overlay rule %s/%s is not judged in the report", rule.base, rule.id)
+		}
+		if rule.rewrite {
+			rewrites++
+		}
+	}
+	if rewrites == 0 {
+		t.Error("no overlay rule was recognised as carrying an upstream id")
+	}
+}
+
+// flipSection returns the verdict-flip section alone, for a readable failure.
+func flipSection(body string) string {
+	_, rest, ok := strings.Cut(body, "## Fixture verdict flips")
+	if !ok {
+		return body
+	}
+	if section, _, ok := strings.Cut(rest, "## Overlay rules"); ok {
+		return section
+	}
+	return rest
+}
+
+func TestBoundReportTruncatesAtALineBoundaryAndSaysSo(t *testing.T) {
+	short := "# Report\n\nnothing to see\n"
+	if boundReport(short) != short {
+		t.Error("a report inside the limit was rewritten")
+	}
+	long := strings.Repeat("a line of report text that is long enough to matter\n", 4000)
+	bounded := boundReport(long)
+	if len(bounded) > maxReportChars {
+		t.Errorf("bounded report is %d characters, over the %d cap", len(bounded), maxReportChars)
+	}
+	if !strings.Contains(bounded, "was truncated") {
+		t.Error("a truncated report does not say it was truncated")
+	}
+	if !strings.HasSuffix(strings.TrimRight(bounded, "\n"), "in full.") {
+		t.Errorf("the truncation notice is not the last thing in the report:\n%s", bounded[len(bounded)-200:])
+	}
+}
+
+// --- release selection -------------------------------------------------------------
+
+// TestNewestReleaseTagPrefersTheNewestReleaseIncludingPreviews is the pin the
+// differential harness and the vendored ref both follow. Herdr's preview builds
+// carry the detection fixes and ship the same release binaries, so filtering
+// them out pinned the tree weeks behind the manifests it vendors.
+func TestNewestReleaseTagPrefersTheNewestReleaseIncludingPreviews(t *testing.T) {
+	list := []byte(`[
+	  {"isDraft": true,  "publishedAt": "2026-09-09T00:00:00Z", "tagName": "draft-do-not-pin"},
+	  {"isDraft": false, "publishedAt": "2026-08-31T16:14:35Z", "tagName": "preview-2026-08-31-b1ff4582e968"},
+	  {"isDraft": false, "publishedAt": "2026-08-19T18:00:03Z", "tagName": "v0.8.2"}
+	]`)
+	if got := newestReleaseTagFrom(list); got != "preview-2026-08-31-b1ff4582e968" {
+		t.Errorf("newestReleaseTagFrom = %q, want the newest preview", got)
+	}
+
+	// Order is not gh's to decide: the newest release wins wherever it appears.
+	reordered := []byte(`[
+	  {"isDraft": false, "publishedAt": "2026-08-19T18:00:03Z", "tagName": "v0.8.2"},
+	  {"isDraft": false, "publishedAt": "2026-08-31T16:14:35Z", "tagName": "preview-2026-08-31-b1ff4582e968"}
+	]`)
+	if got := newestReleaseTagFrom(reordered); got != "preview-2026-08-31-b1ff4582e968" {
+		t.Errorf("newestReleaseTagFrom = %q on a reordered list, want the newest preview", got)
+	}
+}
+
+func TestNewestReleaseTagFallsBackWhenThereIsNothingToChoose(t *testing.T) {
+	for name, list := range map[string]string{
+		"empty list":      `[]`,
+		"drafts only":     `[{"isDraft": true, "publishedAt": "2026-09-09T00:00:00Z", "tagName": "draft"}]`,
+		"not valid json":  `nope`,
+		"no tag names":    `[{"isDraft": false, "publishedAt": "2026-09-09T00:00:00Z", "tagName": ""}]`,
+		"gh was not able": ``,
+	} {
+		if got := newestReleaseTagFrom([]byte(list)); got != "" {
+			t.Errorf("%s: newestReleaseTagFrom = %q, want the caller's fallback", name, got)
+		}
+	}
+	// An offline run never asks GitHub anything.
+	if got := newestReleaseTag(true); got != fallbackReleaseTag {
+		t.Errorf("offline newestReleaseTag = %q, want %q", got, fallbackReleaseTag)
 	}
 }
