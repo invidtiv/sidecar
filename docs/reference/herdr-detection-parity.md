@@ -18,8 +18,8 @@ Per-agent the tool chooses the copy a Herdr client would load: the published one
 ### Re-syncing
 
 ```bash
-scripts/sync-herdr.sh                                        # newest Herdr release tag + live catalog
-scripts/sync-herdr.sh --ref main                              # track main instead
+scripts/sync-herdr.sh                                        # Herdr's default branch + live catalog
+scripts/sync-herdr.sh --ref preview-2026-08-31-b1ff4582e968   # pin to a release tag by hand
 scripts/sync-herdr.sh --source-dir ~/code/herdr --ref e2b85c7 # a local checkout, live catalog
 scripts/sync-herdr.sh --source-dir ~/code/herdr --offline     # no network at all
 ```

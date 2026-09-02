@@ -47,6 +47,10 @@ type syncReport struct {
 	// IntegrationDiffs is what changed upstream since each Sidecar port.
 	IntegrationDiffs []integrationPortDiff
 
+	// Pin is what the rollback guard concluded, and nil when the resolved ref
+	// simply moved the vendored tree forward.
+	Pin *pinDecision
+
 	Notes []string
 	Body  string
 }
@@ -54,6 +58,12 @@ type syncReport struct {
 func (r *syncReport) summary() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "vendored %d manifests from herdr %s into %s\n", len(r.Lock.Agents), r.Ref, r.Out)
+	// The guard's verdict goes in the summary, not only in report.md: the
+	// workflow prints the summary into its own log, and a run that holds the
+	// pin writes a tree nobody opens a pull request over.
+	if r.Pin != nil && r.Pin.lockNote != "" {
+		fmt.Fprintf(&b, "%s\n", r.Pin.lockNote)
+	}
 	incompatible := 0
 	for _, agent := range r.Lock.Agents {
 		incompatible += len(agent.RegexIncompatibilities)

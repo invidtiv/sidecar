@@ -5,8 +5,8 @@
 # This is a thin wrapper over `go run ./internal/tools/herdrsync`; every flag is
 # passed straight through. Run it from the repository root.
 #
-#   scripts/sync-herdr.sh                                   # newest Herdr release + live catalog
-#   scripts/sync-herdr.sh --ref main                         # track main instead
+#   scripts/sync-herdr.sh                                   # Herdr's default branch + live catalog
+#   scripts/sync-herdr.sh --ref v0.8.2                       # pin to a release tag by hand
 #   scripts/sync-herdr.sh --source-dir ~/code/herdr --offline # no network at all
 #
 # With --source-dir every file is read with `git show <ref>:<path>` inside that

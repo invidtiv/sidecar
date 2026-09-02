@@ -22,6 +22,14 @@
 // bytes and the commit recorded in the lock are always the same object; a ref
 // that does not resolve in that checkout fails the run.
 //
+// There are two pins and they are not the same pin. --ref selects the source
+// tree to vendor and defaults to Herdr's own default branch, because Sidecar
+// ships faster than Herdr tags and takes detection fixes as they land.
+// --release-tag names the release whose binary the differential harness
+// downloads, and defaults to the newest release of any kind, because it has to
+// be something a runner can actually download. A sync never moves --ref's
+// resolved commit backwards past the one the lock records; see holdPin.
+//
 // All six steps of the plan's sync design are implemented.
 package main
 
@@ -51,6 +59,11 @@ const (
 	// written. It is used when `gh release list` cannot reach GitHub, so an
 	// offline run still records a defensible pin for the differential harness.
 	fallbackReleaseTag = "v0.8.2"
+
+	// fallbackDefaultBranch is Herdr's default branch, used only when the
+	// repository API cannot be reached to confirm it. It is `master`, not
+	// `main`: `main` does not exist in that repository at all.
+	fallbackDefaultBranch = "master"
 
 	// bundledDir and publishedDir are the two manifest directories in the
 	// Herdr repository.
@@ -93,7 +106,7 @@ func run(args []string, out *os.File) error {
 	var opts options
 	fs := flag.NewFlagSet("herdrsync", flag.ContinueOnError)
 	fs.SetOutput(out)
-	fs.StringVar(&opts.ref, "ref", "", "Herdr git ref to vendor from (default: the newest release tag)")
+	fs.StringVar(&opts.ref, "ref", "", "Herdr git ref to vendor from (default: Herdr's default branch, or HEAD with --offline)")
 	fs.StringVar(&opts.releaseTag, "release-tag", "", "Herdr release tag the differential harness runs against (default: the newest release tag)")
 	fs.StringVar(&opts.catalogURL, "catalog", defaultCatalogURL, "published catalog index URL")
 	fs.StringVar(&opts.sourceDir, "source-dir", "", "read Herdr files from a local checkout instead of fetching them")
@@ -116,8 +129,11 @@ func sync(opts options) (*syncReport, error) {
 	if opts.releaseTag == "" {
 		opts.releaseTag = newestReleaseTag(opts.offline)
 	}
-	if opts.ref == "" {
-		opts.ref = opts.releaseTag
+	// Whether the ref was typed decides what the rollback guard is allowed to
+	// do with it, so it has to be read before the default fills it in.
+	explicitRef := strings.TrimSpace(opts.ref) != ""
+	if !explicitRef {
+		opts.ref = defaultRef(opts)
 	}
 	// The report compares upstream aliases against Sidecar's own source, so a
 	// working directory outside this repository is a failure worth catching
@@ -142,6 +158,24 @@ func sync(opts options) (*syncReport, error) {
 	src, err := openSource(opts)
 	if err != nil {
 		return nil, err
+	}
+
+	// The lock is read here rather than at step 6 because the guard needs the
+	// commit it records before a byte is vendored: everything below reads the
+	// tree the guard may still move.
+	previous := readPreviousLock(opts.out)
+	src, pin, err := holdPin(src, previous, opts.ref, explicitRef)
+	if err != nil {
+		return nil, err
+	}
+	if pin != nil && pin.keptPin {
+		// The lock describes the tree that was vendored, so a held pin keeps
+		// the previous lock's ref beside the commit it belongs to rather than
+		// recording a ref that names something else.
+		opts.ref = previous.Herdr.Ref
+		if opts.ref == "" {
+			opts.ref = previous.Herdr.Commit
+		}
 	}
 
 	report := &syncReport{
@@ -191,7 +225,6 @@ func sync(opts options) (*syncReport, error) {
 		return nil, fmt.Errorf("extract authority: %w", err)
 	}
 
-	previous := readPreviousLock(opts.out)
 	previousIntegration := readPreviousIntegrationLock(opts.integrationOut)
 	// The vendored bytes as they stand *before* step 6 overwrites them. There
 	// is no second copy afterwards, so the verdict-flip table's "before" side
@@ -205,11 +238,15 @@ func sync(opts options) (*syncReport, error) {
 	}
 
 	// Step 6: write the tree, the lock, and the report.
-	lock, err := writeTree(opts, src, catalog, choices, aliases, authority)
+	lock, err := writeTree(opts, src, catalog, choices, aliases, authority, pin)
 	if err != nil {
 		return nil, err
 	}
 	report.Lock = lock
+	report.Pin = pin
+	if pin != nil && pin.reportNote != "" {
+		report.Notes = append(report.Notes, pin.reportNote)
+	}
 	report.Previous = previous
 	report.PreviousManifests = previousManifests
 	report.Manifests = chosenBytes(choices)
@@ -398,7 +435,7 @@ func chooseManifests(bundled map[string]sourceFile, catalog *catalogSet) ([]chos
 
 // writeTree writes upstream/, the extracted JSON tables, and the lock.
 func writeTree(opts options, src source, catalog *catalogSet, choices []chosenManifest,
-	aliases *manifests.Aliases, authority *manifests.Authority) (*manifests.Lock, error) {
+	aliases *manifests.Aliases, authority *manifests.Authority, pin *pinDecision) (*manifests.Lock, error) {
 
 	// Read before write, for the reason writeIntegrationTree gives: a LICENSE
 	// fetch that fails after the manifests are on disk leaves the tree updated
@@ -503,6 +540,11 @@ func writeTree(opts options, src source, catalog *catalogSet, choices []chosenMa
 		},
 	}
 
+	// The pin note first: it is the one note that says the vendored tree is not
+	// simply what the ref names.
+	if pin != nil && pin.lockNote != "" {
+		lock.Notes = append(lock.Notes, pin.lockNote)
+	}
 	if !catalog.fetched {
 		lock.Notes = append(lock.Notes,
 			"The published catalog was not fetched over the network; published copies came from "+catalog.source+
