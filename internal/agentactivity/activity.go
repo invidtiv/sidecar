@@ -95,7 +95,7 @@ var (
 // current screen distinguishes the provider. Callers can retain their prior
 // identity in that case without paying for a process-tree scan.
 func Identify(ob Observation) string {
-	if identity := identifyProcessName(ob.ProcessIdentity); identity != "" && identity != "shell" {
+	if identity := identifyAgentName(ob.ProcessIdentity); identity != "" {
 		return identity
 	}
 	command := strings.ToLower(strings.TrimSpace(ob.CurrentCommand))
@@ -294,8 +294,11 @@ func identifyProcessName(command string) string {
 	// Deliberately narrower than Herdr's `is_generic_runtime_or_shell`, which
 	// also lists tmux, node, bun, cmd, powershell and python[3[.N]]. That
 	// predicate scores process-tree candidates; this one gates a launch
-	// (ForegroundShellReady), so it names only interactive shells. Widening it
-	// is Phase 4 work with its own predicate, not a rename of this bucket.
+	// (ForegroundShellReady), so it names only interactive shells. The scoring
+	// predicate now exists, separately, as isGenericRuntimeOrShell in
+	// process_tree.go — the two lists are different on both sides (this one has
+	// `nu`, that one has `node`, `tmux`, `cmd` and python) because they answer
+	// different questions. Merging them is not a simplification.
 	case oneOf(name, "sh", "bash", "zsh", "fish", "nu", "pwsh"):
 		return "shell"
 	default:
@@ -304,9 +307,38 @@ func identifyProcessName(command string) string {
 }
 
 // NeedsProcessIdentity reports whether tmux's command name is shared by
-// multiple agent CLIs and therefore benefits from foreground argv[0].
+// multiple agent CLIs and therefore benefits from a foreground process scan.
+//
+// This is a cost gate, not a correctness one. Its callers poll every workspace
+// row, and answering true means paying for a process-table walk (a full
+// kern.proc.all on macOS) behind a two-second cache. So it names the runtimes
+// that hide an agent and nothing else.
+//
+// It is therefore a strict subset of isGenericRuntimeOrShell, and the three
+// exclusions are deliberate:
+//
+//   - The interactive shells. `sh`, `bash`, `zsh` and `fish` are in the scoring
+//     predicate because a shell-wrapped agent (`/bin/sh /usr/local/bin/pi`) is a
+//     real install shape upstream tests. But an idle shell is the overwhelmingly
+//     common pane, so admitting them here would make every idle row in every
+//     workspace scan the process table forever to find nothing. Those panes are
+//     still resolved on the paths that scan unconditionally — agentcontrol's
+//     Inspect and observer, which is what `sidecar agent list` and `agent start`
+//     read.
+//   - `tmux`. wrappedAgentNameFromRuntimeArgv refuses it by construction, so a
+//     scan could not produce an answer even in principle.
+//   - `cmd`, `powershell`, `pwsh`. No Windows process-identity adapter exists,
+//     so the scan would return nothing on every platform that reaches this.
+//
+// Python was added when process-tree scoring landed: upstream unwraps
+// `python3.12 /nix/store/.../hermes --resume …`, and a python pane is rare
+// enough that the scan is affordable where a shell pane is not.
 func NeedsProcessIdentity(command string) bool {
-	switch normalizeProcessName(command) {
+	name := normalizeProcessName(command)
+	if isPythonRuntime(name) {
+		return true
+	}
+	switch name {
 	case "agent", "node", "bun":
 		return true
 	default:

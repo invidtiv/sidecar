@@ -68,9 +68,9 @@ func TestForegroundShellReadyIgnoresInitAdoptedDaemonLive(t *testing.T) {
 			parts := strings.Split(strings.TrimSpace(string(out)), "\t")
 			if len(parts) == 2 && parts[1] == "zsh" {
 				pid, parseErr := strconv.Atoi(parts[0])
-				if parseErr == nil && hasInitAdoptedGroupMember(pid) && len(platformForegroundArgv0s(pid)) == 1 {
+				if parseErr == nil && hasInitAdoptedGroupMember(pid) && len(platformForegroundProcesses(pid)) == 1 {
 					if !ForegroundShellReady(pid, parts[1]) {
-						t.Fatalf("idle zsh with an init-adopted group member was refused: pid=%d argv0s=%v", pid, platformForegroundArgv0s(pid))
+						t.Fatalf("idle zsh with an init-adopted group member was refused: pid=%d job=%v", pid, platformForegroundProcesses(pid))
 					}
 					return
 				}
@@ -99,8 +99,9 @@ func TestDarwinProcessArgvLayoutParserPreservesExecAPath(t *testing.T) {
 	data := make([]byte, 4)
 	binary.NativeEndian.PutUint32(data, 3)
 	data = append(data, []byte("/usr/local/bin/node\x00\x00\x00/Users/test/.local/bin/agent\x00--use-system-ca\x00index.js\x00")...)
-	if got := parseDarwinProcessArgv0(data); got != "/Users/test/.local/bin/agent" {
-		t.Fatalf("argv0 = %q", got)
+	argv := parseDarwinProcessArgv(data)
+	if len(argv) == 0 || argv[0] != "/Users/test/.local/bin/agent" {
+		t.Fatalf("argv = %q, want the exec -a argv[0] first", argv)
 	}
 }
 
@@ -120,5 +121,117 @@ func TestForegroundAgentLiveProbe(t *testing.T) {
 	want := os.Getenv("SIDECAR_FOREGROUND_PROBE_WANT")
 	if got := ResolveForegroundAgent(pid); got != want {
 		t.Fatalf("ResolveForegroundAgent(%d) = %q, want %q", pid, got, want)
+	}
+}
+
+// buildProcargs2 assembles the kern.procargs2 layout the kernel produces:
+// [argc][exec path\0][NUL padding][argv...][env...]. It mirrors upstream's
+// `build_procargs2` test helper (src/platform/macos.rs at d08e4468).
+func buildProcargs2(execPath string, argv, env []string) []byte {
+	buf := make([]byte, 4)
+	binary.NativeEndian.PutUint32(buf, uint32(len(argv)))
+	buf = append(buf, execPath...)
+	buf = append(buf, 0, 0, 0)
+	for _, arg := range argv {
+		buf = append(buf, arg...)
+		buf = append(buf, 0)
+	}
+	for _, entry := range env {
+		buf = append(buf, entry...)
+		buf = append(buf, 0)
+	}
+	return buf
+}
+
+// TestDarwinProcargs2ArgvExcludesTheEnvironment is upstream's
+// procargs2_argv_excludes_environment_entries. argv and the environment are
+// adjacent in the buffer with nothing between them but argc, so a parser that
+// read to the end would report every environment variable as an argument — and
+// PATH on a stock macOS contains the string "codex.system", which would then
+// name a provider that is not running.
+func TestDarwinProcargs2ArgvExcludesTheEnvironment(t *testing.T) {
+	buf := buildProcargs2("/usr/bin/node",
+		[]string{"node", "/Users/can/.local/bin/pi"},
+		[]string{
+			"PATH=/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin",
+			"TERM=tmux-256color",
+		})
+
+	argv := parseDarwinProcessArgv(buf)
+	if len(argv) != 2 || argv[0] != "node" || argv[1] != "/Users/can/.local/bin/pi" {
+		t.Fatalf("argv = %q, want the two arguments and nothing else", argv)
+	}
+	if strings.Contains(strings.Join(argv, " "), "codex.system") {
+		t.Fatalf("argv leaked the environment: %q", argv)
+	}
+}
+
+// TestDarwinProcargs2ArgvSurvivesAPathWithSpaces is why this parser exists at
+// all rather than a `ps` command-text split.
+func TestDarwinProcargs2ArgvSurvivesAPathWithSpaces(t *testing.T) {
+	buf := buildProcargs2("/usr/bin/node",
+		[]string{"/Applications/My Tools/node", "/Users/can/My Scripts/qwen"},
+		[]string{"PATH=/usr/bin"})
+	argv := parseDarwinProcessArgv(buf)
+	if len(argv) != 2 || argv[1] != "/Users/can/My Scripts/qwen" {
+		t.Fatalf("argv = %q, want the spaced path intact", argv)
+	}
+}
+
+// TestDarwinProcargs2EnvironReadsTheHintAfterArgv is upstream's
+// procargs2_env_reads_agent_hint_after_argv and
+// procargs2_env_does_not_treat_argv_as_environment, together. The pair is the
+// point: a wrapper whose *arguments* mention SIDECAR_AGENT has not exported
+// anything, and reading argv as environment would let any command line claim to
+// be any agent.
+func TestDarwinProcargs2EnvironReadsTheHintAfterArgv(t *testing.T) {
+	exported := buildProcargs2("/opt/homebrew/bin/sandbox",
+		[]string{"sandbox", "run", "SIDECAR_AGENT=codex", "--", "claude"},
+		[]string{"PATH=/usr/bin", "SIDECAR_AGENT=claude", "TERM=xterm-256color"})
+	if got := parseAgentEnvHint(parseDarwinProcessEnviron(exported)); got != "claude" {
+		t.Fatalf("exported hint = %q, want claude (the environment, not the argument)", got)
+	}
+
+	argumentOnly := buildProcargs2("/opt/homebrew/bin/sandbox",
+		[]string{"sandbox", "run", "SIDECAR_AGENT=claude"},
+		[]string{"PATH=/usr/bin"})
+	if got := parseAgentEnvHint(parseDarwinProcessEnviron(argumentOnly)); got != "" {
+		t.Fatalf("argument-only hint = %q, want no hint", got)
+	}
+}
+
+// TestDarwinProcargs2RejectsTruncatedBuffers: sysctl can hand back a short or
+// malformed buffer for a process that exits mid-read, and neither parser may
+// index past it.
+func TestDarwinProcargs2RejectsTruncatedBuffers(t *testing.T) {
+	full := buildProcargs2("/usr/bin/node", []string{"node", "/usr/local/bin/pi"}, []string{"PATH=/usr/bin"})
+	for _, bad := range [][]byte{nil, {}, {1, 2, 3}, full[:4], full[:6], full[:len(full)-40]} {
+		if argv := parseDarwinProcessArgv(bad); len(argv) == 2 && argv[1] == "/usr/local/bin/pi" {
+			t.Fatalf("a truncated buffer parsed as a complete argv: %q", argv)
+		}
+		if hint := parseAgentEnvHint(parseDarwinProcessEnviron(bad)); hint != "" {
+			t.Fatalf("a truncated buffer produced a hint: %q", hint)
+		}
+	}
+	// A zero argc is a process the kernel has nothing to say about, not an
+	// empty argv.
+	zero := make([]byte, 4)
+	if argv := parseDarwinProcessArgv(zero); argv != nil {
+		t.Fatalf("argc 0 = %q, want nil", argv)
+	}
+}
+
+// TestDarwinCommIsTheNulTerminatedPrefix: p_comm is a fixed-width field padded
+// with NULs, and carrying the padding into processPriority would make every
+// comparison against a resolved name fail, silently promoting every process to
+// the top rung.
+func TestDarwinCommIsTheNulTerminatedPrefix(t *testing.T) {
+	padded := make([]byte, 17)
+	copy(padded, "node")
+	if got := darwinComm(padded); got != "node" {
+		t.Fatalf("darwinComm = %q, want node", got)
+	}
+	if got := darwinComm(make([]byte, 17)); got != "" {
+		t.Fatalf("darwinComm of an empty field = %q, want empty", got)
 	}
 }

@@ -57,23 +57,22 @@ func TestParseRejectsMalformedStat(t *testing.T) {
 // TestParseArgv0UsesArgvNotExe is the property that makes this worth doing at
 // all: a launcher running node via `exec -a claude` must be reported as claude.
 func TestParseArgv0UsesArgvNotExe(t *testing.T) {
-	cmdline := []byte("claude\x00--resume\x00")
-	if got := parseLinuxArgv0(cmdline); got != "claude" {
-		t.Errorf("argv0 = %q, want claude", got)
+	if got := parseLinuxArgv([]byte("claude\x00--resume\x00")); len(got) != 2 || got[0] != "claude" {
+		t.Errorf("argv = %q, want claude first", got)
 	}
-	if got := parseLinuxArgv0([]byte("")); got != "" {
+	if got := parseLinuxArgv([]byte("")); len(got) != 0 {
 		t.Errorf("empty cmdline (a kernel thread) = %q, want empty", got)
 	}
 	// A single argument with no trailing NUL still parses.
-	if got := parseLinuxArgv0([]byte("/usr/bin/node")); got != "/usr/bin/node" {
-		t.Errorf("argv0 = %q", got)
+	if got := parseLinuxArgv([]byte("/usr/bin/node")); len(got) != 1 || got[0] != "/usr/bin/node" {
+		t.Errorf("argv = %q", got)
 	}
 }
 
-// TestForegroundArgv0sReadsAFixtureProcTree exercises the directory scan
+// TestForegroundProcessesReadAFixtureProcTree exercises the directory scan
 // against a fake /proc, so the traversal is covered without depending on what
 // happens to be running.
-func TestForegroundArgv0sReadsAFixtureProcTree(t *testing.T) {
+func TestForegroundProcessesReadAFixtureProcTree(t *testing.T) {
 	root := t.TempDir()
 	original := linuxProcRoot
 	linuxProcRoot = root
@@ -103,14 +102,20 @@ func TestForegroundArgv0sReadsAFixtureProcTree(t *testing.T) {
 	if got := platformForegroundProcessGroup(100); got != 200 {
 		t.Fatalf("foreground group = %d, want 200", got)
 	}
-	argv0s := platformForegroundArgv0s(200)
-	if len(argv0s) != 2 {
-		t.Fatalf("argv0s = %v, want 2 entries", argv0s)
+	members := platformForegroundProcesses(200)
+	if len(members) != 2 {
+		t.Fatalf("members = %v, want 2 entries", members)
 	}
 	// The leader must come first: it is the process the pane is actually
-	// running, and the caller takes the first recognisable name.
-	if argv0s[0] != "claude" {
-		t.Errorf("argv0s = %v, want the group leader first", argv0s)
+	// running, and scoring prefers it over every other member.
+	if members[0].Argv0 != "claude" {
+		t.Errorf("members = %v, want the group leader first", members)
+	}
+	// comm and argv[0] disagree here on purpose — that is the `exec -a` shape —
+	// and both must survive the scan, because processPriority scores exactly
+	// that disagreement.
+	if members[0].Comm != "node" {
+		t.Errorf("leader comm = %q, want node", members[0].Comm)
 	}
 }
 
@@ -178,5 +183,145 @@ func TestForegroundShellReadyLinuxFixtureMatrix(t *testing.T) {
 				t.Fatalf("ForegroundShellReady(%d, %q) = %v, want %v", tt.panePID, tt.currentCommand, got, tt.want)
 			}
 		})
+	}
+}
+
+// writeProcFixture lays down one /proc/<pid> directory with the three files the
+// adapter reads: stat, cmdline and environ. argv is written NUL-separated and
+// NUL-terminated, as the kernel writes it.
+func writeProcFixture(t *testing.T, root string, pid int, comm string, ppid, pgrp, tpgid int, argv []string, env []string) {
+	t.Helper()
+	dir := filepath.Join(root, strconv.Itoa(pid))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "stat"), []byte(statLine(pid, comm, ppid, pgrp, tpgid)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmdline := ""
+	for _, arg := range argv {
+		cmdline += arg + "\x00"
+	}
+	if err := os.WriteFile(filepath.Join(dir, "cmdline"), []byte(cmdline), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	environ := ""
+	for _, entry := range env {
+		environ += entry + "\x00"
+	}
+	if err := os.WriteFile(filepath.Join(dir, "environ"), []byte(environ), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestLinuxParseArgvKeepsEveryArgument: process-tree scoring reads argv[1], not
+// only argv[0], so the whole command line has to survive the NUL split — with
+// the terminating NUL's empty tail dropped, since an empty trailing argument
+// would make the script-argument walk read past the script it was looking for.
+func TestLinuxParseArgvKeepsEveryArgument(t *testing.T) {
+	argv := parseLinuxArgv([]byte("node\x00/usr/local/bin/qwen\x00--yolo\x00"))
+	if len(argv) != 3 || argv[0] != "node" || argv[1] != "/usr/local/bin/qwen" || argv[2] != "--yolo" {
+		t.Fatalf("argv = %q, want the three arguments", argv)
+	}
+	if got := parseLinuxArgv(nil); len(got) != 0 {
+		t.Fatalf("a kernel thread's empty cmdline = %q, want nothing", got)
+	}
+	// A single argument with no trailing NUL still parses.
+	if got := parseLinuxArgv([]byte("/usr/bin/node")); len(got) != 1 || got[0] != "/usr/bin/node" {
+		t.Fatalf("argv = %q", got)
+	}
+}
+
+// TestLinuxParseCommHandlesSpacesAndParens: comm is field 2 of stat, wrapped in
+// parentheses, and may itself contain both characters. Taking the nearest ')'
+// truncates a legal name, which would then differ from the resolved name and
+// promote every such process to the top scoring rung.
+func TestLinuxParseCommHandlesSpacesAndParens(t *testing.T) {
+	for _, comm := range []string{"node", "my (weird) name", "a b c", ")", "((("} {
+		if got := parseLinuxComm([]byte(statLine(42, comm, 7, 900, 901))); got != comm {
+			t.Errorf("parseLinuxComm(%q) = %q", comm, got)
+		}
+	}
+	if got := parseLinuxComm([]byte("no parens here")); got != "" {
+		t.Errorf("malformed stat comm = %q, want empty", got)
+	}
+}
+
+// TestLinuxForegroundProcessesResolveANodeShim is the measured case on the
+// Linux adapter: a pane whose foreground command is `node` running an agent's
+// `#!/usr/bin/env node` shim, resolved end to end through the fixture tree.
+func TestLinuxForegroundProcessesResolveANodeShim(t *testing.T) {
+	root := t.TempDir()
+	original := linuxProcRoot
+	linuxProcRoot = root
+	t.Cleanup(func() { linuxProcRoot = original })
+	resetForegroundIdentityCache()
+
+	writeProcFixture(t, root, 100, "bash", 10, 100, 200, []string{"bash"}, nil)
+	writeProcFixture(t, root, 200, "node", 100, 200, 200,
+		[]string{"node", "/home/user/.local/bin/qwen"}, []string{"PATH=/usr/bin"})
+
+	if got := ResolveForegroundProcess(100); got != "qwen" {
+		t.Fatalf("ResolveForegroundProcess = %q, want qwen", got)
+	}
+	resetForegroundIdentityCache()
+	if got := ResolveForegroundAgent(100); got != "qwen" {
+		t.Fatalf("ResolveForegroundAgent = %q, want qwen", got)
+	}
+}
+
+// TestLinuxAgentHintIsReadFromTheEnvironAndOnlyByTheHintedResolver drives both
+// halves of the hint seam against a real fixture tree: the environ file is
+// parsed, and ResolveForegroundProcess — which lifecycleenv.OccupantKind calls,
+// and which can refuse a hook report — does not consult it.
+func TestLinuxAgentHintIsReadFromTheEnvironAndOnlyByTheHintedResolver(t *testing.T) {
+	root := t.TempDir()
+	original := linuxProcRoot
+	linuxProcRoot = root
+	t.Cleanup(func() { linuxProcRoot = original })
+	resetForegroundIdentityCache()
+
+	// A sandbox wrapper: nothing in the process table names an agent, and the
+	// only evidence is the exported hint.
+	writeProcFixture(t, root, 100, "bash", 10, 100, 200, []string{"bash"}, nil)
+	writeProcFixture(t, root, 200, "sandbox", 100, 200, 200,
+		[]string{"sandbox", "--net=none", "run"}, []string{"PATH=/usr/bin", "SIDECAR_AGENT=cline"})
+
+	if got := platformProcessAgentHint(200); got != "cline" {
+		t.Fatalf("platformProcessAgentHint = %q, want cline", got)
+	}
+	if got := ResolveForegroundAgent(100); got != "cline" {
+		t.Fatalf("ResolveForegroundAgent = %q, want cline", got)
+	}
+	resetForegroundIdentityCache()
+	if got := ResolveForegroundProcess(100); got != "" {
+		t.Fatalf("ResolveForegroundProcess = %q; process evidence must not see the hint", got)
+	}
+
+	// An unknown value is no hint, not an error.
+	writeProcFixture(t, root, 200, "sandbox", 100, 200, 200,
+		[]string{"sandbox", "run"}, []string{"SIDECAR_AGENT=not-an-agent"})
+	resetForegroundIdentityCache()
+	if got := ResolveForegroundAgent(100); got != "" {
+		t.Fatalf("ResolveForegroundAgent with an unknown hint = %q, want empty", got)
+	}
+}
+
+// TestLinuxUnreadableEnvironIsNoHint: /proc/<pid>/environ is unreadable for
+// another user's process, and that must be silence rather than a failure — a
+// pane Sidecar cannot read is a pane it cannot speak for anyway.
+func TestLinuxUnreadableEnvironIsNoHint(t *testing.T) {
+	root := t.TempDir()
+	original := linuxProcRoot
+	linuxProcRoot = root
+	t.Cleanup(func() { linuxProcRoot = original })
+	if err := os.MkdirAll(filepath.Join(root, "200"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := platformProcessAgentHint(200); got != "" {
+		t.Fatalf("missing environ = %q, want empty", got)
+	}
+	if got := platformProcessAgentHint(0); got != "" {
+		t.Fatalf("pid 0 = %q, want empty", got)
 	}
 }
