@@ -45,10 +45,24 @@ type Explain struct {
 	// Agent is the agent the caller asked about, from Input.Agent, which is
 	// what Herdr reports here too. It is not the loaded manifest's id: see the
 	// note on Input.Agent.
-	Agent           string       `json:"agent,omitempty"`
-	State           State        `json:"state"`
-	ManifestSource  string       `json:"manifest_source"`
-	ManifestVersion string       `json:"manifest_version"`
+	Agent           string `json:"agent,omitempty"`
+	State           State  `json:"state"`
+	ManifestSource  string `json:"manifest_source"`
+	ManifestVersion string `json:"manifest_version"`
+	// CachedRemoteVersion is the version in the runtime fetch cache, or "" when
+	// detection.remoteManifests is off, nothing has been fetched yet, or the
+	// cached file was refused. Herdr emits the same field under the same name
+	// (manifest.rs:43).
+	CachedRemoteVersion string `json:"cached_remote_version"`
+	// VendoredVersion and ActiveSource are Sidecar's own. Herdr's bundled
+	// manifest is the binary, so it has no separate version to report and its
+	// `manifest_source` label is the only statement of which file won. Sidecar
+	// reports both as fields because "am I ahead of the vendored tree?" is the
+	// question opting in to a runtime fetch creates, and an agent reading this
+	// record should not have to parse a human-readable label to answer it.
+	// ActiveSource is "bundled", "remote", or "local override".
+	VendoredVersion string       `json:"vendored_version"`
+	ActiveSource    string       `json:"active_source"`
 	OverlayApplied  bool         `json:"overlay_applied"`
 	MatchedRule     *MatchedRule `json:"matched_rule"`
 	VisibleIdle     bool         `json:"visible_idle"`
@@ -215,6 +229,9 @@ func (c *Compiled) explainRecord(agent string, v Verdict, evaluated []EvaluatedR
 		State:               v.State,
 		ManifestSource:      c.Source,
 		ManifestVersion:     c.Manifest.Version,
+		CachedRemoteVersion: c.CachedRemoteVersion,
+		VendoredVersion:     c.VendoredVersion,
+		ActiveSource:        c.ActiveSource,
 		OverlayApplied:      c.OverlayApplied,
 		MatchedRule:         v.MatchedRule,
 		VisibleIdle:         v.VisibleIdle,

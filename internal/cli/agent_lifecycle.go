@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/marcus/sidecar/internal/agentactivity"
+	"github.com/marcus/sidecar/internal/agentactivity/manifests"
 	"github.com/marcus/sidecar/internal/agentintegration"
 	"github.com/marcus/sidecar/internal/agentlifecycle"
 	"github.com/marcus/sidecar/internal/agentlifecycle/lifecycleenv"
@@ -96,7 +97,7 @@ func agentExplainExitCodes() []ExitCode {
 	}
 }
 
-func lifecycleCommands() (report, end, release, explain *Command) {
+func lifecycleCommands() (report, end, release, explain, manifests *Command) {
 	common := []Flag{
 		{Name: "--source", Arg: "SOURCE", Summary: "Integration source identifier (required)"},
 		{Name: "--source-version", Arg: "VERSION", Summary: "Installed integration asset version"},
@@ -193,7 +194,32 @@ func lifecycleCommands() (report, end, release, explain *Command) {
 		Agent: AgentDoc{Invocation: "sidecar agent explain [--current | --shell TARGET | --file PATH --agent KIND] --json", Summary: "See why a pane is in the state it is, why hooks are or are not driving it, and which manifest rule the screen lane matched"},
 		Run:   runAgentExplain,
 	}
-	return report, end, release, explain
+
+	manifests = &Command{
+		Name:    "manifests",
+		Summary: "List every detection manifest, its version, and which source is active",
+		Usage:   "sidecar agent manifests [--json]",
+		Long: "Prints the table `explain` reports for one agent, for every agent Sidecar vendors a manifest for: which of the three sources is active, the version that source carries, the version vendored into this binary, the version in the runtime fetch cache, whether the Sidecar overlay was merged in, and any file that was found and refused.\n\n" +
+			"Precedence is a local override in ~/.config/sidecar/agent-detection, then the newer of the runtime fetch cache and the vendored manifest, with the Sidecar overlay merged onto whichever upstream file won.\n\n" +
+			"The runtime fetch is off unless `detection.remoteManifests` in ~/.config/sidecar/config.json is set to \"herdr.dev\" or to a catalog index URL. When it is on, Sidecar checks at most once a day, after the first frame, and a check that fails is reported here rather than shown to the user. With it off, this command reads no network and the cache columns are empty.\n\n" +
+			"This command is read-only. It never fetches, and it never writes the cache or its status file.",
+		Flags: []Flag{
+			{Name: "--json", Summary: "Write stable structured JSON", Bool: true},
+			{Name: "--help", Short: "-h", Summary: "Show this help", Bool: true},
+		},
+		ExitCodes: []ExitCode{
+			{Code: 0, Summary: "success"},
+			{Code: 1, Summary: "the vendored manifest tree could not be read"},
+			{Code: 2, Summary: "usage error"},
+		},
+		Examples: []Example{
+			{Command: "sidecar agent manifests"},
+			{Command: "sidecar agent manifests --json"},
+		},
+		Agent: AgentDoc{Invocation: "sidecar agent manifests --json", Summary: "See every detection manifest's active source and version, and whether a runtime fetch is ahead of the vendored tree"},
+		Run:   runAgentManifests,
+	}
+	return report, end, release, explain, manifests
 }
 
 func parseLifecycleFlags(env Env, args []string, help string, kind agentlifecycle.Kind) (lifecycleFlags, int) {
@@ -869,6 +895,13 @@ func writeExplanationText(env Env, e agentlifecycle.Explanation) {
 	// a file in ~/.config/sidecar/agent-detection has to be able to see here
 	// whether it is the one running, and if not, why not.
 	_, _ = fmt.Fprintf(env.Stdout, "manifest    %s\n", e.ScreenExplain.ManifestSource)
+	// The same rule as `explain --file`: printed only once a runtime fetch has
+	// cached something, because otherwise it is the vendored version restated.
+	if e.ScreenExplain.CachedRemoteVersion != "" {
+		_, _ = fmt.Fprintf(env.Stdout, "versions    vendored=%s remote=%s active=%s (%s)\n",
+			dashIfEmpty(e.ScreenExplain.VendoredVersion), e.ScreenExplain.CachedRemoteVersion,
+			dashIfEmpty(e.ScreenExplain.ManifestVersion), dashIfEmpty(e.ScreenExplain.ActiveSource))
+	}
 	if rule := e.ScreenExplain.MatchedRule; rule != nil {
 		_, _ = fmt.Fprintf(env.Stdout, "rule        %s (region=%s priority=%d)\n",
 			rule.ID, rule.Region, rule.Priority)
@@ -876,4 +909,216 @@ func writeExplanationText(env Env, e agentlifecycle.Explanation) {
 	if e.ScreenExplain.Warning != "" {
 		_, _ = fmt.Fprintf(env.Stdout, "warning     %s\n", e.ScreenExplain.Warning)
 	}
+}
+
+// `sidecar agent manifests` is the whole-corpus form of the three lines
+// `explain` prints about one agent's manifest. It exists because the question a
+// runtime fetch creates -- "am I ahead of the vendored tree, and where?" -- is
+// per agent, and answering it by running `explain --file` twenty-one times with
+// a fixture for each is not an answer anyone would get.
+//
+// It never fetches. A verb that both reports and mutates would make the report
+// impossible to trust as a description of the state a running Sidecar is in;
+// the fetch belongs to the app, after the first frame, at most once a day.
+
+// manifestsResult is the JSON contract of `sidecar agent manifests`.
+//
+// It carries everything the text form does and two things the text form has no
+// room for: the full per-agent fetch status from the last check, and the raw
+// setting value alongside the URL it resolved to. Agents read this, not the
+// table.
+type manifestsResult struct {
+	SchemaVersion int `json:"schemaVersion"`
+	// RemoteManifests is the configured value, verbatim, and CatalogURL is what
+	// it resolved to, empty when fetching is off. A value that resolved to
+	// neither is reported in SettingError, because the config loader has
+	// already replaced it with the default and the log line it wrote is not
+	// somewhere a user will look.
+	RemoteManifests string `json:"remoteManifests"`
+	CatalogURL      string `json:"catalogUrl,omitempty"`
+	SettingError    string `json:"settingError,omitempty"`
+	// CacheDir is where a fetched manifest is cached, and OverrideDir is where
+	// a local override is read from. Both are reported whether or not anything
+	// is in them, because "where do I put the file" is the other question this
+	// command gets asked.
+	CacheDir    string                 `json:"cacheDir,omitempty"`
+	OverrideDir string                 `json:"overrideDir,omitempty"`
+	Fetch       manifests.FetchStatus  `json:"fetch"`
+	Agents      []manifestAgentSummary `json:"agents"`
+}
+
+// manifestAgentSummary is one row of the table.
+type manifestAgentSummary struct {
+	Agent string `json:"agent"`
+	// ManifestID is the id the active manifest declares, which differs from
+	// Agent for the two agents whose file name and Herdr label disagree
+	// (antigravity.toml declares "agy", github-copilot.toml declares
+	// "copilot"). Agent is the key every path here is built from.
+	ManifestID string `json:"manifestId,omitempty"`
+	// ActiveSource is "bundled", "remote", or "local override".
+	ActiveSource string `json:"activeSource"`
+	// ActiveVersion is the version of the file that answered; VendoredVersion
+	// is always this binary's copy; CachedRemoteVersion is the fetch cache's,
+	// or "" when nothing usable is cached.
+	ActiveVersion       string `json:"activeVersion,omitempty"`
+	VendoredVersion     string `json:"vendoredVersion,omitempty"`
+	CachedRemoteVersion string `json:"cachedRemoteVersion,omitempty"`
+	OverlayApplied      bool   `json:"overlayApplied"`
+	// Path is the file a local override or a cached remote manifest was read
+	// from, empty for a bundled source.
+	Path string `json:"path,omitempty"`
+	// Warning is any file that was found and refused, and why. Never fatal.
+	Warning string `json:"warning,omitempty"`
+	// Error is set when the agent has no usable manifest at all, which can only
+	// mean the vendored file failed to load.
+	Error string `json:"error,omitempty"`
+	// Fetch is the last check's result for this agent, absent when there has
+	// never been one.
+	Fetch *manifests.AgentFetchStatus `json:"fetch,omitempty"`
+}
+
+func runAgentManifests(env Env, args []string) int {
+	cmd := RootCommand().FindSubcommand("agent").FindSubcommand("manifests")
+	help := RenderHelp(cmd)
+	jsonOutput := false
+	for _, arg := range args {
+		switch {
+		case isHelp(arg):
+			_, _ = fmt.Fprint(env.Stdout, help)
+			return 0
+		case arg == "--json":
+			jsonOutput = true
+		default:
+			cliErrf(env.Stderr, "unknown flag %q\n\n%s", arg, help)
+			return 2
+		}
+	}
+
+	agents, err := manifests.Agents()
+	if err != nil {
+		// The vendored tree is embedded in the binary, so this is a build
+		// problem rather than anything the caller did: exit 1.
+		cliErrln(env.Stderr, err.Error())
+		return 1
+	}
+
+	res := manifestsResult{
+		SchemaVersion:   agentlifecycle.SchemaVersion,
+		RemoteManifests: config.RemoteManifestsOff,
+		CacheDir:        manifests.RemoteDir(),
+		OverrideDir:     manifests.OverrideDir(),
+		Fetch:           manifests.LoadFetchStatus(),
+		Agents:          make([]manifestAgentSummary, 0, len(agents)),
+	}
+	// A config that cannot be read is not a reason to refuse the table: every
+	// other column is answerable without it, and "detection.remoteManifests is
+	// off" is the safe thing to report about a config nobody could load.
+	if cfg, cfgErr := config.Load(); cfgErr == nil && cfg != nil {
+		res.RemoteManifests = cfg.Detection.RemoteManifests
+		if res.RemoteManifests == "" {
+			res.RemoteManifests = config.RemoteManifestsOff
+		}
+		if url, urlErr := cfg.Detection.RemoteCatalogURL(); urlErr != nil {
+			res.SettingError = urlErr.Error()
+		} else {
+			res.CatalogURL = url
+		}
+	}
+
+	for _, agent := range agents {
+		row := manifestAgentSummary{Agent: agent}
+		compiled, source, loadErr := manifests.Load(agent)
+		row.ActiveSource = string(source.Kind)
+		if row.ActiveSource == "" {
+			row.ActiveSource = string(manifests.KindBundled)
+		}
+		row.ActiveVersion = source.Version
+		row.VendoredVersion = source.VendoredVersion
+		row.CachedRemoteVersion = source.CachedRemoteVersion
+		row.OverlayApplied = source.OverlayApplied
+		row.Path = source.Path
+		row.Warning = source.Diagnostic
+		if loadErr != nil {
+			row.Error = loadErr.Error()
+		} else if compiled != nil && compiled.Manifest != nil {
+			row.ManifestID = compiled.Manifest.ID
+		}
+		if status, ok := res.Fetch.Agents[agent]; ok {
+			row.Fetch = &status
+		}
+		res.Agents = append(res.Agents, row)
+	}
+
+	if jsonOutput {
+		return encodeStdout(env, res)
+	}
+	writeManifestsText(env, res)
+	return 0
+}
+
+func writeManifestsText(env Env, res manifestsResult) {
+	_, _ = fmt.Fprintf(env.Stdout, "remote manifests  %s\n", res.RemoteManifests)
+	if res.SettingError != "" {
+		_, _ = fmt.Fprintf(env.Stdout, "setting refused   %s\n", res.SettingError)
+	}
+	if res.CatalogURL != "" {
+		_, _ = fmt.Fprintf(env.Stdout, "catalog           %s\n", res.CatalogURL)
+	}
+	if res.CacheDir != "" {
+		_, _ = fmt.Fprintf(env.Stdout, "cache             %s\n", res.CacheDir)
+	}
+	if res.OverrideDir != "" {
+		_, _ = fmt.Fprintf(env.Stdout, "overrides         %s\n", res.OverrideDir)
+	}
+	if res.Fetch.LastCheckUnix > 0 {
+		_, _ = fmt.Fprintf(env.Stdout, "last check        %s (%s)\n",
+			time.Unix(res.Fetch.LastCheckUnix, 0).Format(time.RFC3339), res.Fetch.LastResult)
+		if res.Fetch.LastError != "" {
+			_, _ = fmt.Fprintf(env.Stdout, "last error        %s\n", res.Fetch.LastError)
+		}
+	} else if res.CatalogURL != "" {
+		_, _ = fmt.Fprintln(env.Stdout, "last check        never")
+	}
+	_, _ = fmt.Fprintln(env.Stdout)
+
+	// A fixed-width table rather than tabwriter, because this output is read by
+	// eye and by `awk`, and a column that moves when one version string grows
+	// is worse for both than a column that is always in the same place.
+	_, _ = fmt.Fprintf(env.Stdout, "%-18s %-14s %-14s %-14s %-14s %s\n",
+		"AGENT", "ACTIVE", "VERSION", "VENDORED", "REMOTE", "OVERLAY")
+	for _, row := range res.Agents {
+		_, _ = fmt.Fprintf(env.Stdout, "%-18s %-14s %-14s %-14s %-14s %s\n",
+			row.Agent, row.ActiveSource,
+			dashIfEmpty(row.ActiveVersion), dashIfEmpty(row.VendoredVersion),
+			dashIfEmpty(row.CachedRemoteVersion), yesNo(row.OverlayApplied))
+	}
+
+	// Warnings go under the table rather than in it: they are sentences, and a
+	// sentence in a column turns the table into something no width fits.
+	for _, row := range res.Agents {
+		if row.Error != "" {
+			_, _ = fmt.Fprintf(env.Stdout, "\nerror   %s: %s\n", row.Agent, row.Error)
+		}
+		if row.Warning != "" {
+			_, _ = fmt.Fprintf(env.Stdout, "\nwarning %s: %s\n", row.Agent, row.Warning)
+		}
+		if row.Fetch != nil && row.Fetch.LastError != "" {
+			_, _ = fmt.Fprintf(env.Stdout, "\nfetch   %s: %s (%s)\n",
+				row.Agent, row.Fetch.LastError, row.Fetch.LastResult)
+		}
+	}
+}
+
+func dashIfEmpty(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
+}
+
+func yesNo(b bool) string {
+	if b {
+		return "yes"
+	}
+	return "no"
 }

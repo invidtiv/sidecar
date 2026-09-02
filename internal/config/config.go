@@ -1,7 +1,10 @@
 package config
 
 import (
+	"fmt"
+	"net/url"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/marcus/sidecar/internal/tty"
@@ -39,6 +42,78 @@ type Config struct {
 	// host contributes rows to the global Sessions browser, which belongs to
 	// the shell rather than to any project or plugin.
 	Hosts HostsConfig `json:"hosts,omitempty"`
+	// Detection configures the agent screen-detection lane. App-level because
+	// the detection manifests answer for every surface that shows an agent
+	// state, and for `sidecar agent explain` in a process that loads no
+	// plugins at all.
+	Detection DetectionConfig `json:"detection,omitempty"`
+}
+
+// The values detection.remoteManifests takes, besides an arbitrary catalog URL.
+const (
+	// RemoteManifestsOff is the default. The manifests vendored into the binary
+	// are the only upstream source and Sidecar never reaches the network for
+	// one.
+	RemoteManifestsOff = "off"
+	// RemoteManifestsHerdrDev is Herdr's own published catalog.
+	RemoteManifestsHerdrDev = "herdr.dev"
+)
+
+// HerdrCatalogURL is the index RemoteManifestsHerdrDev resolves to. It is
+// Herdr's own DEFAULT_CATALOG_URL (src/detect/manifest_update.rs:17).
+const HerdrCatalogURL = "https://herdr.dev/agent-detection/index.toml"
+
+// DetectionConfig configures the screen-detection lane.
+type DetectionConfig struct {
+	// RemoteManifests names where, if anywhere, Sidecar may fetch newer
+	// agent-detection manifests from while it is running: "off" (the default),
+	// "herdr.dev", or the http(s) URL of a catalog index.
+	//
+	// Anything else is refused rather than guessed at. An unrecognised value
+	// could plausibly mean "the user wanted this on and mistyped it" or "the
+	// user wanted it off and mistyped it", and only one of those two readings
+	// can be wrong quietly: silently reading a typo as "on" would put a network
+	// fetch behind a setting nobody successfully turned on. So a value this
+	// package cannot resolve is reported and the default stands. The loader
+	// warns and keeps "off"; RemoteCatalogURL returns an error so a caller that
+	// built the value by hand cannot fetch on it either.
+	RemoteManifests string `json:"remoteManifests,omitempty"`
+}
+
+// RemoteCatalogURL resolves the setting to the catalog index URL to fetch, or
+// "" when fetching is off. An unrecognised value is an error, never a URL and
+// never a silent "on".
+func (c DetectionConfig) RemoteCatalogURL() (string, error) {
+	value := strings.TrimSpace(c.RemoteManifests)
+	switch {
+	case value == "" || strings.EqualFold(value, RemoteManifestsOff):
+		return "", nil
+	case strings.EqualFold(value, RemoteManifestsHerdrDev):
+		return HerdrCatalogURL, nil
+	}
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return "", fmt.Errorf("detection.remoteManifests %q is not %q, %q, or a URL: %w",
+			c.RemoteManifests, RemoteManifestsOff, RemoteManifestsHerdrDev, err)
+	}
+	// http as well as https, because the only way to point this at a local
+	// catalog -- a mirror, a test server, a file being tuned before it is
+	// published -- is a plain http URL, and refusing those would leave no way
+	// to exercise the feature without a certificate. The default is https and
+	// the setting is off unless someone turns it on, so choosing http is a
+	// choice the operator makes explicitly about their own catalog.
+	if parsed.Scheme != "http" && parsed.Scheme != "https" || parsed.Host == "" {
+		return "", fmt.Errorf("detection.remoteManifests %q is not %q, %q, or an http(s) URL",
+			c.RemoteManifests, RemoteManifestsOff, RemoteManifestsHerdrDev)
+	}
+	return value, nil
+}
+
+// RemoteManifestsEnabled reports whether a runtime fetch is configured and
+// resolvable.
+func (c DetectionConfig) RemoteManifestsEnabled() bool {
+	url, err := c.RemoteCatalogURL()
+	return err == nil && url != ""
 }
 
 // HostsConfig registers remote machines running Sidecar.
@@ -423,6 +498,7 @@ func Default() *Config {
 			Flags: make(map[string]bool),
 		},
 		Notifications: DefaultNotificationsConfig(),
+		Detection:     DetectionConfig{RemoteManifests: RemoteManifestsOff},
 	}
 }
 

@@ -84,6 +84,13 @@ type rawConfig struct {
 	// what happened to `hosts` the first time, and the symptom was a
 	// correctly-written config that produced no hosts and no error.
 	Hosts *HostsConfig `json:"hosts"`
+	// Detection is a pointer for the same reason: an absent section leaves the
+	// default (remoteManifests off) alone, and an explicitly empty one says so.
+	Detection *rawDetectionConfig `json:"detection"`
+}
+
+type rawDetectionConfig struct {
+	RemoteManifests string `json:"remoteManifests"`
 }
 
 type rawShellsConfig struct {
@@ -581,6 +588,23 @@ func mergeConfig(cfg *Config, raw *rawConfig) {
 	}
 	if raw.Shells != nil && strings.TrimSpace(raw.Shells.TombstoneRetention) != "" {
 		cfg.Shells.TombstoneRetention = strings.TrimSpace(raw.Shells.TombstoneRetention)
+	}
+
+	// Detection
+	//
+	// An unrecognised value keeps the default and says so in the log rather
+	// than being read as "on". A typo must not be able to turn a network fetch
+	// on, and the log line is what tells the user their setting did nothing;
+	// `sidecar agent manifests` reports the effective value beside it.
+	if raw.Detection != nil {
+		if value := strings.TrimSpace(raw.Detection.RemoteManifests); value != "" {
+			if _, err := (DetectionConfig{RemoteManifests: value}).RemoteCatalogURL(); err != nil {
+				slog.Warn("config: detection.remoteManifests not understood, runtime manifest fetch stays off",
+					"value", value, "error", err)
+			} else {
+				cfg.Detection.RemoteManifests = value
+			}
+		}
 	}
 
 	// Features

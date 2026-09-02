@@ -3,11 +3,15 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/marcus/sidecar/internal/agentactivity/manifest"
+	"github.com/marcus/sidecar/internal/agentactivity/manifests"
 	"github.com/marcus/sidecar/internal/agentlifecycle"
+	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/shellstate"
 )
 
@@ -253,5 +257,110 @@ func TestLiveExplainTextPrintsTheManifestWarning(t *testing.T) {
 	text := out.String()
 	if !strings.Contains(text, "warning") || !strings.Contains(text, "/tmp/cursor.toml") {
 		t.Fatalf("live explain text does not carry the warning:\n%s", text)
+	}
+}
+
+// `sidecar agent manifests`. The property under test is parity between the two
+// output forms: the JSON is the interface an agent reads, and a column that
+// exists only in the table is a column an agent cannot see.
+
+func TestAgentManifestsListsEveryVendoredAgentInBothForms(t *testing.T) {
+	config.SetTestConfigPath(filepath.Join(t.TempDir(), "config.json"))
+	t.Cleanup(config.ResetTestConfigPath)
+	config.SetTestStateDir(t.TempDir())
+	t.Cleanup(config.ResetTestStateDir)
+
+	agents, err := manifests.Agents()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	code, out, errOut := runLifecycleCLI(t, "agent", "manifests", "--json")
+	if code != 0 {
+		t.Fatalf("exit %d (stderr: %s)", code, errOut)
+	}
+	var res manifestsResult
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("output is not the manifests record: %v\n%s", err, out)
+	}
+	if len(res.Agents) != len(agents) {
+		t.Fatalf("reported %d agents, want %d", len(res.Agents), len(agents))
+	}
+	if res.RemoteManifests != config.RemoteManifestsOff {
+		t.Fatalf("remoteManifests = %q, want %q by default", res.RemoteManifests, config.RemoteManifestsOff)
+	}
+	if res.CatalogURL != "" {
+		t.Fatalf("catalogUrl = %q with fetching off", res.CatalogURL)
+	}
+	for _, row := range res.Agents {
+		if row.Error != "" {
+			t.Fatalf("%s: %s", row.Agent, row.Error)
+		}
+		if row.ActiveSource != string(manifests.KindBundled) {
+			t.Fatalf("%s active source = %q, want %q", row.Agent, row.ActiveSource, manifests.KindBundled)
+		}
+		if row.ActiveVersion == "" || row.VendoredVersion != row.ActiveVersion {
+			t.Fatalf("%s versions = active %q vendored %q", row.Agent, row.ActiveVersion, row.VendoredVersion)
+		}
+		if row.CachedRemoteVersion != "" {
+			t.Fatalf("%s reports a cached remote version with fetching off", row.Agent)
+		}
+		if row.OverlayApplied != manifests.HasOverlay(row.Agent) {
+			t.Fatalf("%s overlayApplied = %v, want %v", row.Agent, row.OverlayApplied, manifests.HasOverlay(row.Agent))
+		}
+	}
+
+	// Every fact the table shows must also be in the JSON, which is checked by
+	// looking for each row's own values in the text form.
+	code, text, errOut := runLifecycleCLI(t, "agent", "manifests")
+	if code != 0 {
+		t.Fatalf("exit %d (stderr: %s)", code, errOut)
+	}
+	if !strings.Contains(text, "remote manifests  off") {
+		t.Fatalf("text form does not report the setting:\n%s", text)
+	}
+	for _, row := range res.Agents {
+		if !strings.Contains(text, row.Agent) || !strings.Contains(text, row.ActiveVersion) {
+			t.Fatalf("text form is missing %s %s:\n%s", row.Agent, row.ActiveVersion, text)
+		}
+	}
+}
+
+// TestAgentManifestsReportsARefusedSetting: the config loader warns to the log
+// and keeps the default, and the log is not somewhere anyone looks. This is
+// where a user finds out their setting did nothing.
+func TestAgentManifestsReportsARefusedSetting(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(path, []byte(`{"detection":{"remoteManifests":"yes please"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config.SetTestConfigPath(path)
+	t.Cleanup(config.ResetTestConfigPath)
+	config.SetTestStateDir(t.TempDir())
+	t.Cleanup(config.ResetTestStateDir)
+
+	code, out, errOut := runLifecycleCLI(t, "agent", "manifests", "--json")
+	if code != 0 {
+		t.Fatalf("exit %d (stderr: %s)", code, errOut)
+	}
+	var res manifestsResult
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatal(err)
+	}
+	// The loader replaced the value, so the effective setting is off and there
+	// is no catalog. That is the safe direction and the table says so.
+	if res.RemoteManifests != config.RemoteManifestsOff || res.CatalogURL != "" {
+		t.Fatalf("a refused value did not resolve to off: %+v", res)
+	}
+}
+
+func TestAgentManifestsRejectsUnknownFlags(t *testing.T) {
+	code, _, errOut := runLifecycleCLI(t, "agent", "manifests", "--fetch")
+	if code != 2 {
+		t.Fatalf("exit %d, want 2", code)
+	}
+	if !strings.Contains(errOut, "--fetch") {
+		t.Fatalf("stderr does not name the flag: %s", errOut)
 	}
 }

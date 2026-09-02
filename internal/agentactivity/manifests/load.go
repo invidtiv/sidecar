@@ -14,13 +14,13 @@ var sidecarFiles embed.FS
 
 // SourceKind names which of the manifest sources produced a compiled manifest.
 // It is Herdr's ManifestSource::kind (manifest.rs:64 at e2b85c7) with Sidecar's
-// third source folded in as a flag on the bundled kind rather than a kind of
-// its own, because an overlay amends a bundled file rather than replacing it.
+// overlay folded in as a flag on the upstream kinds rather than a kind of its
+// own, because an overlay amends an upstream file rather than replacing it.
 //
-// Phase 5 of docs/plans/active/herdr-detection-parity.md adds a fourth source,
-// a manifest fetched from the published catalog, which slots in between the
-// bundled file and the local override: an override still wins over it. Adding
-// it is a constant here and a branch in load, not a change to this contract.
+// The fourth source the Phase 3 comment reserved is KindRemote, added in
+// Phase 5: a manifest fetched from the published catalog, which slots in
+// between the bundled file and the local override. An override still wins over
+// it, exactly as it does in Herdr.
 type SourceKind string
 
 // The kinds a Source takes.
@@ -31,6 +31,11 @@ type SourceKind string
 const (
 	// KindBundled is the vendored Herdr manifest, alone or with its overlay.
 	KindBundled SourceKind = "bundled"
+	// KindRemote is a manifest fetched from the published catalog and cached
+	// under the state directory, alone or with its overlay. It appears only
+	// when detection.remoteManifests is on and the cached copy is at least as
+	// new as the vendored one.
+	KindRemote SourceKind = "remote"
 	// KindLocalOverride is ~/.config/sidecar/agent-detection/<agent>.toml.
 	KindLocalOverride SourceKind = "local override"
 )
@@ -45,14 +50,24 @@ type Source struct {
 	// caller that only cares about the vendored path can leave it unset.
 	Kind SourceKind
 	// Version is the loaded manifest's version: the vendored one for a bundled
-	// source, the override's own for a local override.
+	// source, the cached one for a remote source, the override's own for a
+	// local override.
 	Version string
+	// VendoredVersion is always the version of the manifest vendored into this
+	// binary, whichever source won. It is what makes "am I ahead of the
+	// vendored tree?" answerable from one record.
+	VendoredVersion string
+	// CachedRemoteVersion is the version in the runtime fetch cache, or "" when
+	// nothing is cached or the cache was refused. Herdr reports the same field
+	// under the same name (manifest.rs:43).
+	CachedRemoteVersion string
 	// OverlayApplied records that sidecar/<agent>.toml was merged in. It is
-	// never true for a local override, which replaces the overlay along with
-	// the vendored file.
+	// true for a bundled or a remote source that took the overlay, and never
+	// for a local override, which replaces the overlay along with the file it
+	// is named after.
 	OverlayApplied bool
-	// Path is the file a local override was read from. Empty for every other
-	// kind.
+	// Path is the file a local override or a cached remote manifest was read
+	// from. Empty for a bundled source.
 	Path string
 	// Diagnostic is a human-readable note about something that went wrong but
 	// did not stop the load: an overlay that failed to parse, merge, or
@@ -72,7 +87,11 @@ func (s Source) Label() string {
 	if s.Kind == KindLocalOverride {
 		return string(KindLocalOverride) + " " + s.Path
 	}
-	label := "bundled " + s.Agent
+	kind := s.Kind
+	if kind == "" {
+		kind = KindBundled
+	}
+	label := string(kind) + " " + s.Agent
 	if s.Version != "" {
 		label += " " + s.Version
 	}
@@ -154,25 +173,41 @@ func load(agent string) loaded {
 		return loaded{err: fmt.Errorf("vendored %s.toml is invalid: %w", agent, err)}
 	}
 
-	// Precedence, from the plan's "Local overrides": a valid local override wins
-	// over vendored-plus-overlay for that agent. Phase 5's cached remote manifest
-	// goes between these two, and loses to the override just as it does in Herdr.
+	// The runtime fetch cache, read before the override so that its version is
+	// on the record whichever source wins. A user who turned fetching on and
+	// then put an override in front of it has to be able to see both.
+	remote, remotePath, remoteDiagnostic := readCachedRemote(agent, upstream)
+	cachedRemoteVersion := ""
+	if remote != nil {
+		cachedRemoteVersion = remote.Version
+	}
+
+	// Precedence, from the plan's "Local overrides" and Phase 5: a valid local
+	// override wins over everything; below it, the newer of the cached remote
+	// manifest and the vendored one, with the Sidecar overlay merged onto
+	// whichever of those two won.
 	override, overridePath, diagnostic := readOverride(agent, upstream)
+	if diagnostic == "" {
+		diagnostic = remoteDiagnostic
+	} else if remoteDiagnostic != "" {
+		diagnostic += "; " + remoteDiagnostic
+	}
 	if override != nil {
 		// An override can load *and* have something wrong with it -- a rule RE2
 		// cannot compile is the case that exists -- so the diagnostic travels
 		// onto the source of the file that won, not only onto the fallback.
 		source := Source{
-			Agent:      agent,
-			Kind:       KindLocalOverride,
-			Version:    override.Version,
-			Path:       overridePath,
-			Diagnostic: diagnostic,
+			Agent:               agent,
+			Kind:                KindLocalOverride,
+			Version:             override.Version,
+			VendoredVersion:     upstream.Version,
+			CachedRemoteVersion: cachedRemoteVersion,
+			Path:                overridePath,
+			Diagnostic:          diagnostic,
 		}
 		compiled, compileErr := manifest.Compile(override)
 		if compileErr == nil {
-			compiled.Source = source.Label()
-			compiled.Warning = source.Diagnostic
+			applySource(compiled, source)
 			return loaded{compiled: compiled, source: source}
 		}
 		// Compile refuses only a region spec the validator would already have
@@ -183,14 +218,54 @@ func load(agent string) loaded {
 			overridePath, compileErr)
 	}
 
-	source := Source{Agent: agent, Kind: KindBundled, Version: upstream.Version, Diagnostic: diagnostic}
-	merged := upstream
+	// Herdr's read_remote_manifest (manifest.rs:754): a cached copy older than
+	// the bundled one is ignored with a note, and one at least as new is used.
+	// The tie going to the cached copy is upstream's own -- it compares only
+	// `remote_version < bundled_version` -- and it is worth keeping, because at
+	// equal versions the two files are the same file and reporting which one
+	// answered is more useful than pretending the fetch did nothing.
+	base := upstream
+	kind := KindBundled
+	basePath := ""
+	if remote != nil {
+		if manifest.CompareVersions(remote.Version, upstream.Version) < 0 {
+			diagnostic = note(diagnostic, fmt.Sprintf(
+				"ignored cached manifest %s because cached version %s is older than vendored %s",
+				remotePath, remote.Version, upstream.Version))
+		} else {
+			base = remote
+			kind = KindRemote
+			basePath = remotePath
+		}
+	}
 
+	source := Source{
+		Agent:               agent,
+		Kind:                kind,
+		Version:             base.Version,
+		VendoredVersion:     upstream.Version,
+		CachedRemoteVersion: cachedRemoteVersion,
+		Path:                basePath,
+		Diagnostic:          diagnostic,
+	}
+	merged := base
+
+	// The overlay merges onto whichever upstream file won, not only onto the
+	// vendored one. That is the whole point of an overlay being data in the
+	// same grammar: the four `\p{Alphabetic}` RE2 rewrites and the seventeen
+	// Sidecar-owned rules are amendments to *upstream's file for this agent*,
+	// and a newer copy of that file is still that file. Dropping them on the
+	// day a fetch succeeds would make turning the setting on a detection
+	// regression, which is the opposite of what it is for.
+	//
+	// An overlay that no longer fits -- it disables a rule id upstream renamed,
+	// say -- fails Merge, and the note below is what tells a maintainer to
+	// re-cut it. The remote file is still used; only the overlay is dropped.
 	if overlayBytes, overlayErr := sidecarFiles.ReadFile("sidecar/" + agent + ".toml"); overlayErr == nil {
 		overlay, parseErr := manifest.ParseOverlay(overlayBytes)
 		if parseErr != nil {
 			source.note("ignored sidecar/%s.toml: %v", agent, parseErr)
-		} else if candidate, mergeErr := manifest.Merge(upstream, overlay); mergeErr != nil {
+		} else if candidate, mergeErr := manifest.Merge(base, overlay); mergeErr != nil {
 			source.note("ignored sidecar/%s.toml: %v", agent, mergeErr)
 		} else {
 			merged = candidate
@@ -206,22 +281,41 @@ func load(agent string) loaded {
 		// agent with no manifest at all, and Compile's contract may widen.
 		//
 		// A merged manifest that will not compile is the overlay's fault: the
-		// vendored file compiles in CI. Fall back to upstream alone rather than
-		// leaving the agent with no manifest at all.
+		// vendored file compiles in CI. Fall back to the upstream file alone
+		// rather than leaving the agent with no manifest at all.
 		if !source.OverlayApplied {
 			return loaded{source: source, err: err}
 		}
 		source.note("ignored sidecar/%s.toml: merged manifest did not compile: %v", agent, err)
 		source.OverlayApplied = false
-		compiled, err = manifest.Compile(upstream)
+		compiled, err = manifest.Compile(base)
 		if err != nil {
 			return loaded{source: source, err: err}
 		}
 	}
-	compiled.Source = source.Label()
-	compiled.OverlayApplied = source.OverlayApplied
-	compiled.Warning = source.Diagnostic
+	applySource(compiled, source)
 	return loaded{compiled: compiled, source: source}
+}
+
+// applySource copies the loader's answer onto the compiled manifest, which is
+// where the engine's explain record reads it from. It exists so the three
+// return paths in load cannot drift into setting different subsets of it.
+func applySource(compiled *manifest.Compiled, source Source) {
+	compiled.Source = source.Label()
+	compiled.ActiveSource = string(source.Kind)
+	compiled.OverlayApplied = source.OverlayApplied
+	compiled.VendoredVersion = source.VendoredVersion
+	compiled.CachedRemoteVersion = source.CachedRemoteVersion
+	compiled.Warning = source.Diagnostic
+}
+
+// note appends to a diagnostic string that is not yet on a Source, keeping any
+// already recorded, with the same separator Source.note uses.
+func note(existing, msg string) string {
+	if existing == "" {
+		return msg
+	}
+	return existing + "; " + msg
 }
 
 // SidecarOverlays returns the overlay files as a filesystem rooted at the

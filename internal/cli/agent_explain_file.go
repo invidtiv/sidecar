@@ -175,6 +175,16 @@ func writeManifestExplainText(env Env, e *manifest.Explain) {
 	_, _ = fmt.Fprintf(env.Stdout, "agent: %s\n", e.Agent)
 	_, _ = fmt.Fprintf(env.Stdout, "state: %s\n", e.State)
 	_, _ = fmt.Fprintf(env.Stdout, "manifest: %s %s\n", e.ManifestSource, e.ManifestVersion)
+	// Which versions were available and which one answered. The line is printed
+	// only when a runtime fetch has actually cached something, because with
+	// detection.remoteManifests off -- the default -- the vendored version and
+	// the active version are the same number twice, and a line that says nothing
+	// on every ordinary run is a line nobody reads on the run where it matters.
+	if e.CachedRemoteVersion != "" {
+		_, _ = fmt.Fprintf(env.Stdout, "versions: vendored=%s remote=%s active=%s (%s)\n",
+			dashIfEmpty(e.VendoredVersion), e.CachedRemoteVersion,
+			dashIfEmpty(e.ManifestVersion), dashIfEmpty(e.ActiveSource))
+	}
 	if e.Warning != "" {
 		// A local override or an overlay that was found and refused. It goes
 		// directly under the manifest line because it is the answer to "why is

@@ -405,6 +405,40 @@ Usage: sidecar agent list [--project NAME] [--include-session-ref] [--json]
 sidecar agent list --json
 ```
 
+### `sidecar agent manifests`
+
+List every detection manifest, its version, and which source is active
+
+Prints the table `explain` reports for one agent, for every agent Sidecar vendors a manifest for: which of the three sources is active, the version that source carries, the version vendored into this binary, the version in the runtime fetch cache, whether the Sidecar overlay was merged in, and any file that was found and refused.
+
+Precedence is a local override in ~/.config/sidecar/agent-detection, then the newer of the runtime fetch cache and the vendored manifest, with the Sidecar overlay merged onto whichever upstream file won.
+
+The runtime fetch is off unless `detection.remoteManifests` in ~/.config/sidecar/config.json is set to "herdr.dev" or to a catalog index URL. When it is on, Sidecar checks at most once a day, after the first frame, and a check that fails is reported here rather than shown to the user. With it off, this command reads no network and the cache columns are empty.
+
+This command is read-only. It never fetches, and it never writes the cache or its status file.
+
+```
+Usage: sidecar agent manifests [--json]
+```
+
+**Options:**
+
+- `--json`: Write stable structured JSON
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: success
+- `1`: the vendored manifest tree could not be read
+- `2`: usage error
+
+**Examples:**
+
+```bash
+sidecar agent manifests
+sidecar agent manifests --json
+```
+
 ### `sidecar agent prompt`
 
 Send a prompt to a managed agent, optionally waiting for it to settle
