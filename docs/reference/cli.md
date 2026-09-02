@@ -2114,6 +2114,240 @@ sidecar open --project sidecar README.md
 sidecar open --sessions README.md
 ```
 
+## `sidecar project`
+
+Inspect, add, edit, and switch Sidecar projects
+
+Manage Sidecar's configured projects and switch between project workspaces.
+
+A Sidecar-managed shell is born in a project and cannot change projects for its
+lifetime. `sidecar project switch` and `add --switch` change what the running
+Sidecar TUI displays to the user; work in the new project occurs in a newly created
+shell (`sidecar create shell --project`).
+
+```
+Usage: sidecar project <command>
+```
+
+### `sidecar project add`
+
+Add a new project to Sidecar
+
+Add a project to Sidecar's configuration.
+
+The directory specified by --path must already exist and will not be created.
+Adding a project does not initialize a Git repository or a td project.
+
+With --switch, also switch the running Sidecar TUI to the new project immediately
+after writing configuration. If no Sidecar instance is running, add still succeeds.
+A landing shell is a separate `sidecar create shell --project` command.
+
+```
+Usage: sidecar project add <name> --path PATH [--theme NAME] [--open-in APP] [--switch] [--json]
+```
+
+**Options:**
+
+- `--path PATH`: Directory path for the project (required)
+- `--theme NAME`: Set a project-specific theme override
+- `--open-in APP`: Set the default editor or IDE to open this project in
+- `--switch`: Switch the running Sidecar TUI to the new project after adding
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: added (and switched, if requested and Sidecar is running)
+- `1`: configuration I/O failure
+- `2`: usage error (missing name or --path)
+- `5`: a value was rejected (path does not exist, not a directory, or project name/path already exists)
+
+**Examples:**
+
+```bash
+sidecar project add "vacuum-simulator" --path ~/code/vacuum-simulator
+sidecar project add "vacuum-simulator" --path ~/code/vacuum-simulator --switch
+sidecar project add "vacuum-simulator" --path ~/code/vacuum-simulator --theme "Catppuccin Mocha" --json
+```
+
+### `sidecar project current`
+
+Print the calling shell's project and the visible project
+
+Print the Sidecar project owning this shell and the project currently visible in
+the running Sidecar TUI.
+
+Human output names the shell's project first and mentions the visible one when
+it differs. JSON reports both and whether they are aligned.
+
+```
+Usage: sidecar project current [--json]
+```
+
+**Options:**
+
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: success (even when no TUI is running)
+- `1`: not a managed shell and current directory is not a configured project
+- `2`: usage error
+
+**Examples:**
+
+```bash
+sidecar project current
+sidecar project current --json
+```
+
+### `sidecar project list`
+
+List configured Sidecar projects
+
+List all Sidecar projects from configuration in list order. Marks the project
+owning this shell and the project currently visible in the running Sidecar TUI.
+
+This reads configuration directly and does not require a managed shell or a
+running Sidecar instance.
+
+```
+Usage: sidecar project list [--json]
+```
+
+**Options:**
+
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: success
+- `1`: configuration read failure
+- `2`: usage error
+
+**Examples:**
+
+```bash
+sidecar project list
+sidecar project list --json
+```
+
+### `sidecar project remove`
+
+Remove a project from Sidecar's configuration
+
+Remove a project from Sidecar's configuration.
+
+--yes is required. Removing a project does not delete the project directory,
+its Git repository, or its session history. If the project is currently visible
+in a running Sidecar instance, removal is refused; switch to another project
+with `sidecar project switch` first.
+
+```
+Usage: sidecar project remove <name> --yes [--json]
+```
+
+**Options:**
+
+- `--yes`: Confirm removal (required for non-interactive safety)
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: removed
+- `1`: configuration I/O failure
+- `2`: usage error (missing --yes)
+- `3`: ambiguous project name
+- `5`: a value was rejected (unknown project, or project is currently visible in Sidecar)
+
+**Examples:**
+
+```bash
+sidecar project remove "vacuum-simulator" --yes
+sidecar project remove "vacuum-simulator" --yes --json
+```
+
+### `sidecar project set`
+
+Update configuration for an existing project
+
+Change settings for an existing project in Sidecar's configuration. At least one
+setting flag is required.
+
+Path changes must point to an existing directory and re-validate uniqueness.
+Editing a project notifies running Sidecar instances without switching the visible
+project.
+
+```
+Usage: sidecar project set <name> [--name NEW] [--path PATH] [--theme NAME] [--open-in APP] [--clear-theme] [--json]
+```
+
+**Options:**
+
+- `--name NEW`: Rename the project
+- `--path PATH`: Change the project directory path
+- `--theme NAME`: Set or change the project theme
+- `--clear-theme`: Remove project theme override (use global theme)
+- `--open-in APP`: Set the default editor or IDE to open this project in
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: updated
+- `1`: configuration I/O failure
+- `2`: usage error (no change flags specified or conflicting flags)
+- `3`: ambiguous project name
+- `5`: a value was rejected (unknown project, path does not exist, or name already taken)
+
+**Examples:**
+
+```bash
+sidecar project set "vacuum-simulator" --name "Vacuum Sim"
+sidecar project set "vacuum-simulator" --theme "Nord"
+sidecar project set "vacuum-simulator" --clear-theme
+```
+
+### `sidecar project switch`
+
+Switch the running Sidecar TUI to a project
+
+Switch the running Sidecar TUI to another configured project.
+
+This changes what the user is looking at in the Sidecar window; it does not move
+or retarget the calling shell. Unlike `sidecar open`, switch is an intentional
+view change that updates visible project context and restores the last active
+worktree for that project.
+
+```
+Usage: sidecar project switch <name> [--wait DURATION] [--json]
+```
+
+**Options:**
+
+- `--wait DURATION`: Time to wait for instance to acknowledge (default 1200ms; 0 = fire and forget)
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: switched or already showing project
+- `1`: state or communication failure
+- `2`: usage error
+- `3`: no running Sidecar instance, or multiple instances running
+- `4`: running instance declined the switch
+- `5`: unknown project
+
+**Examples:**
+
+```bash
+sidecar project switch vacuum-simulator
+sidecar project switch "vacuum-simulator" --json
+```
+
 ## `sidecar repo`
 
 Read-only repository contract a viewing Sidecar invokes on a host

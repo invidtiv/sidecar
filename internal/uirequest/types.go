@@ -34,6 +34,8 @@ const (
 	// ack carries per-pane verdicts (Items) and, for get, the layout report
 	// itself (Layout).
 	ActionLayout Action = "layout"
+	// ActionSwitchProject switches the running Sidecar TUI to a configured project.
+	ActionSwitchProject Action = "switch-project"
 )
 
 // Layout modes. Get answers with the current layout; apply opens panes; move
