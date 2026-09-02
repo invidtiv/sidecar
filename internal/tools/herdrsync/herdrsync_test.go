@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -337,6 +339,49 @@ func TestSyncFailsWhenSidecarSourceCannotBeRead(t *testing.T) {
 	}
 }
 
+// TestSyncRefusesAnOutputDirectoryOutsideTheRepository. Both output roots are
+// emptied of everything the run did not write, and the integration side does it
+// recursively: `--integration-out ~` would delete everything under ~/upstream.
+// The flag is checked against the assumption the rest of the tool already makes,
+// which is that it is standing in the Sidecar repository.
+func TestSyncRefusesAnOutputDirectoryOutsideTheRepository(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("no home directory: %v", err)
+	}
+	root, err := sidecarRepoRoot()
+	if err != nil {
+		t.Fatalf("sidecarRepoRoot: %v", err)
+	}
+	outside := filepath.Join(home, "not-a-sidecar-output-dir")
+	if err := checkOutputDir(root, "--integration-out", outside); err == nil {
+		t.Fatalf("checkOutputDir accepted %s, which the prune would empty recursively", outside)
+	}
+	if err := checkOutputDir(root, "--out", ""); err == nil {
+		t.Error("checkOutputDir accepted an empty output directory")
+	}
+	// The two places a sync is meant to write.
+	for _, dir := range []string{
+		filepath.Join(root, "internal", "agentintegration"),
+		t.TempDir(),
+	} {
+		if err := checkOutputDir(root, "--out", dir); err != nil {
+			t.Errorf("checkOutputDir refused %s: %v", dir, err)
+		}
+	}
+	// And the whole way through sync, before anything is written.
+	if _, err := sync(options{
+		ref: "e2b85c7", releaseTag: "v0.8.2", catalogURL: defaultCatalogURL,
+		sourceDir: herdrCheckout, offline: true,
+		out: t.TempDir(), integrationOut: outside,
+	}); err == nil {
+		t.Error("sync wrote an integration tree outside the repository")
+	}
+	if _, err := os.Stat(outside); err == nil {
+		t.Errorf("%s was created although the sync was refused", outside)
+	}
+}
+
 func TestSyncRefusesOfflineWithoutACheckout(t *testing.T) {
 	if _, err := sync(options{offline: true, out: t.TempDir(), integrationOut: t.TempDir()}); err == nil {
 		t.Fatal("sync accepted --offline with no --source-dir")
@@ -542,6 +587,38 @@ func TestExtractAuthorityFailsOnAnUnmappedDisplayName(t *testing.T) {
 		"| Claude Code |", "| Brand New Agent |", 1)
 	if _, err := stubAuthority(src); err == nil {
 		t.Fatal("extractAuthority accepted a display name with no agent id mapping")
+	}
+}
+
+// TestANestedProviderAssetDirectoryIsRefusedRatherThanDropped: src.list returns
+// blobs only, so a provider that moved a file into a subdirectory would vendor
+// as a provider with fewer files, or none, and the report would show a version
+// rollback nobody made. Refusing says which directory changed shape.
+func TestANestedProviderAssetDirectoryIsRefusedRatherThanDropped(t *testing.T) {
+	src := stubAssets()
+	src.dirs[assetsDir+"/pi"] = []string{"hooks"}
+	src.files[assetsDir+"/pi/hooks/herdr-agent-state.ts"] = "// HERDR_INTEGRATION_VERSION=8\n"
+	_, _, err := integrationAssets(src)
+	if err == nil {
+		t.Fatal("integrationAssets vendored a provider directory with a nested asset tree")
+	}
+	if !strings.Contains(err.Error(), "hooks") {
+		t.Errorf("the refusal does not name the subdirectory it found: %v", err)
+	}
+}
+
+// TestAProviderWithNoAssetFilesIsRefused is the invariant behind the one above:
+// zero files is never a legitimate outcome for a provider directory, and left
+// alone it is a silent rollback rather than a failure.
+func TestAProviderWithNoAssetFilesIsRefused(t *testing.T) {
+	src := stubAssets()
+	delete(src.files, assetsDir+"/pi/herdr-agent-state.ts")
+	_, _, err := integrationAssets(src)
+	if err == nil {
+		t.Fatal("integrationAssets accepted a provider directory holding no files")
+	}
+	if !strings.Contains(err.Error(), assetsDir+"/pi") {
+		t.Errorf("the refusal does not name the empty provider directory: %v", err)
 	}
 }
 
@@ -853,6 +930,120 @@ func TestPortDiffShowsTheWholeFileWhenTheStartingPointIsUnknown(t *testing.T) {
 	}
 }
 
+// readAtSource replaces readAt on a real source, which is the only method the
+// port diff uses to reach upstream.
+type readAtSource struct {
+	source
+	err error
+}
+
+func (s readAtSource) readAt(string, string) ([]byte, error) { return nil, s.err }
+
+// TestAFailedReadAtThePortedCommitIsSkippedRatherThanCalledNew is the
+// difference between an observation and a fabrication. The sync workflow runs
+// with no --source-dir, so each of these reads is an unauthenticated
+// raw.githubusercontent.com request; one 429 or one timeout must not put "this
+// file is new since the port" in a pull request body, and neither must a
+// shallow clone that cannot resolve the ported commit at all.
+func TestAFailedReadAtThePortedCommitIsSkippedRatherThanCalledNew(t *testing.T) {
+	_, integrationOut, _, lock, source := syncIntoTempFull(t)
+	src, err := newDirSource(source, "e2b85c7")
+	if err != nil {
+		t.Fatalf("newDirSource: %v", err)
+	}
+
+	diffs := integrationPortDiffs(readAtSource{source: src, err: errors.New("429 Too Many Requests")},
+		integrationOut, lock)
+	if len(diffs) == 0 {
+		t.Fatal("no port diffs were computed")
+	}
+	for _, entry := range diffs {
+		if len(entry.Files) == 0 {
+			t.Errorf("%s reported no files at all", entry.Ported.Provider)
+		}
+		for _, file := range entry.Files {
+			if !file.Skipped {
+				t.Errorf("%s %s was not marked skipped although the read failed", entry.Ported.Provider, file.Path)
+			}
+			if file.Changed {
+				t.Errorf("%s %s claims to have changed although nothing was compared", entry.Ported.Provider, file.Path)
+			}
+			if strings.Contains(file.Body, "new since the port") {
+				t.Errorf("%s %s calls a failed read a new file: %s", entry.Ported.Provider, file.Path, file.Body)
+			}
+			if !strings.Contains(file.Body, "429") {
+				t.Errorf("%s %s does not say why it was skipped: %s", entry.Ported.Provider, file.Path, file.Body)
+			}
+		}
+	}
+
+	// The other side of the same coin: upstream's tree saying the file was not
+	// there is evidence, and it still reads as new since the port.
+	absent := integrationPortDiffs(readAtSource{source: src,
+		err: fmt.Errorf("x at y: %w", errFileAbsent)}, integrationOut, lock)
+	for _, entry := range absent {
+		for _, file := range entry.Files {
+			if file.Skipped || !file.Changed || !file.Whole {
+				t.Errorf("%s %s: a file absent upstream at the ported commit rendered as %+v",
+					entry.Ported.Provider, file.Path, file)
+			}
+			if !strings.Contains(file.Body, "new since the port") {
+				t.Errorf("%s %s does not say the file is new since the port: %s",
+					entry.Ported.Provider, file.Path, file.Body)
+			}
+		}
+	}
+}
+
+// TestASkippedComparisonIsNamedInTheReport: a file nothing was compared for
+// must not disappear behind "no upstream change", which is what a reviewer
+// merges on.
+func TestASkippedComparisonIsNamedInTheReport(t *testing.T) {
+	_, integrationOut, _, lock, source := syncIntoTempFull(t)
+	src, err := newDirSource(source, "e2b85c7")
+	if err != nil {
+		t.Fatalf("newDirSource: %v", err)
+	}
+	report := &syncReport{
+		IntegrationOut: integrationOut,
+		Integration:    lock,
+		IntegrationDiffs: integrationPortDiffs(
+			readAtSource{source: src, err: errors.New("timeout awaiting headers")}, integrationOut, lock),
+	}
+	var b strings.Builder
+	report.renderIntegrationPorts(&b)
+	body := b.String()
+	if !strings.Contains(body, "was **not compared**") {
+		t.Errorf("the report does not name the comparisons it could not make:\n%s", body)
+	}
+	if strings.Contains(body, "No upstream change") {
+		t.Errorf("the report claims no upstream change although nothing was compared:\n%s", body)
+	}
+}
+
+// TestGitReadsSeparateAnAbsentFileFromAFailedRead is the source-level half of
+// the rule above, against a real checkout.
+func TestGitReadsSeparateAnAbsentFileFromAFailedRead(t *testing.T) {
+	dir := herdrSource(t)
+	src, err := newDirSource(dir, "e2b85c7")
+	if err != nil {
+		t.Skipf("checkout at %s does not have e2b85c7: %v", dir, err)
+	}
+	if _, err := src.readAt("e2b85c7", "src/detect/no-such-file.rs"); !errors.Is(err, errFileAbsent) {
+		t.Errorf("a path the tree does not hold returned %v, want errFileAbsent", err)
+	}
+	if _, err := src.readAt("no-such-ref-0000000", licenseSource); err == nil {
+		t.Error("readAt accepted a ref the checkout cannot resolve")
+	} else if errors.Is(err, errFileAbsent) {
+		t.Errorf("a ref the checkout does not have was reported as an absent file: %v", err)
+	}
+	if _, err := src.readAt("e2b85c7", "src/detect"); errors.Is(err, errFileAbsent) {
+		t.Errorf("a directory was reported as an absent file: %v", err)
+	} else if err == nil {
+		t.Error("readAt returned bytes for a directory")
+	}
+}
+
 func TestUnifiedDiffShowsOnlyWhatChanged(t *testing.T) {
 	before := []byte("one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\n")
 	after := []byte("one\ntwo\nthree\nfour\nfive\nSIX\nseven\neight\nnine\nten\n")
@@ -871,8 +1062,42 @@ func TestUnifiedDiffShowsOnlyWhatChanged(t *testing.T) {
 	}
 	long := []byte(strings.Repeat("x\n", 200) + "tail\n")
 	body, _ = unifiedDiff("before", "after", before, long, 20)
-	if !strings.Contains(body, "diff truncated at 20 lines") {
-		t.Errorf("an oversized diff was not truncated:\n%s", body)
+	if !strings.Contains(body, "diff truncated at 20 of ") {
+		t.Errorf("an oversized diff was not truncated with its total:\n%s", body)
+	}
+	// The rest of a diff is in neither file, so the vendored file is the wrong
+	// place to send a reader.
+	if strings.Contains(body, "read the vendored file") {
+		t.Errorf("the truncation notice sends the reader to the vendored file:\n%s", body)
+	}
+}
+
+// TestUnifiedDiffSaysWhenOnlyTheTrailingNewlineMoved is the case that used to
+// render as a heading over an empty diff: splitLines drops the trailing newline,
+// so two files differing only there split identically and every op is context.
+// An upstream formatter pass is the ordinary way it happens.
+func TestUnifiedDiffSaysWhenOnlyTheTrailingNewlineMoved(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		old, fresh string
+	}{
+		{"a newline added at the end of the file", "one\ntwo", "one\ntwo\n"},
+		{"a newline removed from the end of the file", "one\ntwo\n", "one\ntwo"},
+		{"an empty file against a newline", "", "\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body, changed := unifiedDiff("before", "after", []byte(tc.old), []byte(tc.fresh), diffLineBudget)
+			if !changed {
+				t.Fatal("unifiedDiff reported no change between files whose bytes differ")
+			}
+			lines := strings.Split(body, "\n")
+			if len(lines) <= 2 {
+				t.Fatalf("the body is the two header lines and nothing else:\n%s", body)
+			}
+			if !strings.Contains(body, "no line differs") {
+				t.Errorf("the body does not say what the difference is:\n%s", body)
+			}
+		})
 	}
 }
 

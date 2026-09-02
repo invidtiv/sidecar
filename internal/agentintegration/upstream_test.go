@@ -183,26 +183,50 @@ func TestEveryPortedFromNamesAVendoredUpstreamVersion(t *testing.T) {
 			t.Errorf("%s names version %s but no commit, so a sync cannot diff against it",
 				record.Provider, record.Version)
 		}
+		// The field is a string only so UnknownPortedVersion fits in it, and
+		// every other value is a HERDR_INTEGRATION_VERSION. An empty or
+		// malformed one renders in the report as "ported from herdr claude
+		// version" with nothing after it, and it used to pass this test because
+		// the comparison below treats anything it cannot parse as "not newer".
+		version, ok := portedVersionNumber(record.Version)
+		if !ok {
+			t.Errorf("%s records ported-from version %q, which is neither a HERDR_INTEGRATION_VERSION "+
+				"nor %q", record.Provider, record.Version, UnknownPortedVersion)
+			continue
+		}
 		// The version the port was written against is not required to equal the
 		// vendored one -- upstream bumping is the normal case, and the whole
 		// point of the record -- but it may never be ahead of it.
-		if versionAbove(record.Version, provider.Version) {
+		if version > provider.Version {
 			t.Errorf("%s claims to be ported from herdr %s version %s, which is newer than the vendored %d",
 				record.Provider, record.UpstreamID, record.Version, provider.Version)
 		}
 	}
 }
 
-// versionAbove reports whether a decimal version string is greater than n. An
-// unparseable string is not above anything; the field is a string only so
-// UnknownPortedVersion fits in it, and that case is handled by the caller.
-func versionAbove(version string, n int) bool {
+// portedVersionNumber parses a HERDR_INTEGRATION_VERSION as the assets carry it:
+// a non-empty run of digits. Anything else is not a version.
+func portedVersionNumber(version string) (int, bool) {
+	if version == "" {
+		return 0, false
+	}
 	value := 0
 	for _, r := range version {
 		if r < '0' || r > '9' {
-			return false
+			return 0, false
 		}
 		value = value*10 + int(r-'0')
 	}
-	return value > n
+	return value, true
+}
+
+func TestPortedVersionNumberRejectsWhatIsNotAVersion(t *testing.T) {
+	for _, version := range []string{"", " ", "unknown", "9 ", "v9", "9.1", "-1"} {
+		if value, ok := portedVersionNumber(version); ok {
+			t.Errorf("portedVersionNumber(%q) = %d, true; want it rejected", version, value)
+		}
+	}
+	if value, ok := portedVersionNumber("10"); !ok || value != 10 {
+		t.Errorf(`portedVersionNumber("10") = %d, %v; want 10, true`, value, ok)
+	}
 }

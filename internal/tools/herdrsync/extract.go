@@ -385,9 +385,28 @@ func integrationAssets(src source) ([]integrationAssetDir, []integrationAsset, e
 	var dirs []integrationAssetDir
 	versioned := 0
 	for _, dir := range subdirs {
-		names, err := src.list(path.Join(assetsDir, dir))
+		providerDir := path.Join(assetsDir, dir)
+		names, err := src.list(providerDir)
 		if err != nil {
-			return nil, nil, fmt.Errorf("list %s: %w", path.Join(assetsDir, dir), err)
+			return nil, nil, fmt.Errorf("list %s: %w", providerDir, err)
+		}
+		// A provider directory is flat upstream and the vendoring assumes it:
+		// list returns blobs only, so a subdirectory would be dropped without a
+		// word, the provider would lock fewer files than it has -- possibly none
+		// -- and the report would show a version rollback for a provider that
+		// only moved a file down a level. Refusing is the honest answer: it
+		// costs one sync run and makes the next one a deliberate change to the
+		// vendoring, where recursing silently would quietly unpin a ported
+		// provider's asset and prune the copy the port was written against.
+		nested, err := src.listDirs(providerDir)
+		if err != nil {
+			return nil, nil, fmt.Errorf("list subdirectories of %s: %w", providerDir, err)
+		}
+		if len(nested) > 0 {
+			return nil, nil, fmt.Errorf("%s has subdirectories (%s); the vendoring reads one flat "+
+				"directory per provider, so a nested asset tree needs herdrsync taught about it "+
+				"rather than vendored half",
+				providerDir, strings.Join(nested, ", "))
 		}
 		entry := integrationAssetDir{dir: dir, id: dir}
 		if mapped, ok := assetDirAgent[dir]; ok {
@@ -406,6 +425,11 @@ func integrationAssets(src source) ([]integrationAssetDir, []integrationAsset, e
 				entry.version = asset.version
 			}
 			entry.files = append(entry.files, asset)
+		}
+		if len(entry.files) == 0 {
+			return nil, nil, fmt.Errorf("%s holds no files; a provider that vendors nothing rolls its "+
+				"version back to 0, drops out of the authority table and has its vendored copy pruned, "+
+				"which is a sync to refuse rather than to publish", providerDir)
 		}
 		if entry.version > 0 {
 			versioned++

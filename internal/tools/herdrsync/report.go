@@ -517,6 +517,15 @@ func (r *syncReport) renderIntegrationPorts(b *strings.Builder) {
 		"A comparison is made on bytes rather than on the version number, so a file upstream edited " +
 		"without bumping still shows here.\n\n")
 
+	// The whole section is bounded, not only each diff. Today's worst case is
+	// about 34 KB against GitHub's 65536-character body limit, but Phase 6's
+	// exit gate is a port per provider in Herdr's authority list, and seventeen
+	// ported providers at today's per-provider size lands near 100 KB. Eliding
+	// per provider here keeps the sections after this one -- the fixture flips
+	// and the overlay rules, which are the ones a reviewer merges on -- inside
+	// the body rather than under boundReport's cut.
+	budget := integrationDiffSectionBudget
+
 	for _, entry := range r.IntegrationDiffs {
 		fmt.Fprintf(b, "#### `%s` — ported from herdr `%s` version %s\n\n",
 			entry.Ported.Provider, entry.Ported.UpstreamID, entry.Ported.Version)
@@ -527,29 +536,58 @@ func (r *syncReport) renderIntegrationPorts(b *strings.Builder) {
 		if entry.Note != "" {
 			fmt.Fprintf(b, "> %s\n\n", entry.Note)
 		}
-		changed := 0
+		changed, skipped := 0, 0
 		for _, file := range entry.Files {
-			if file.Changed {
+			switch {
+			case file.Skipped:
+				skipped++
+			case file.Changed:
 				changed++
 			}
 		}
-		if changed == 0 && len(entry.Files) > 0 {
-			fmt.Fprintf(b, "No upstream change: all %d file(s) are byte-identical to the copy this port was written against. "+
-				"Nothing to re-port.\n\n", len(entry.Files))
+		// A skipped file is a comparison that did not happen, so it is named
+		// before any claim about the rest: "no upstream change" is only true of
+		// the files that were actually compared.
+		for _, file := range entry.Files {
+			if file.Skipped {
+				fmt.Fprintf(b, "> `%s` was **not compared**: %s\n\n", file.Path, file.Body)
+			}
+		}
+		if changed == 0 && len(entry.Files) > skipped {
+			fmt.Fprintf(b, "No upstream change: all %d compared file(s) are byte-identical to the copy this port "+
+				"was written against. Nothing to re-port.\n\n", len(entry.Files)-skipped)
 			continue
 		}
 		for _, file := range entry.Files {
-			if !file.Changed {
+			if !file.Changed || file.Skipped {
 				continue
 			}
 			label := "diff"
 			if file.Whole {
 				label = "current upstream file"
 			}
-			fmt.Fprintf(b, "`%s` (%s):\n\n```diff\n%s\n```\n\n", file.Path, label, file.Body)
+			if budget <= 0 {
+				fmt.Fprintf(b, "`%s` (%s) is not shown: this section is capped at %d lines to keep the "+
+					"report inside GitHub's pull request body limit. Re-run "+
+					"`go run ./internal/tools/herdrsync` locally to read it.\n\n",
+					file.Path, label, integrationDiffSectionBudget)
+				continue
+			}
+			body := file.Body
+			if file.Whole {
+				body = truncateLines(body, budget)
+			} else {
+				body = truncateDiffLines(body, budget)
+			}
+			budget -= strings.Count(file.Body, "\n") + 1
+			fmt.Fprintf(b, "`%s` (%s):\n\n```diff\n%s\n```\n\n", file.Path, label, body)
 		}
 	}
 }
+
+// integrationDiffSectionBudget bounds the rendered diffs across every ported
+// provider, where diffLineBudget bounds only one file's.
+const integrationDiffSectionBudget = 600
 
 // corpusComparison is the fixture corpus run against both sides of the sync,
 // with the overlays that a sync never touches applied to both. It backs the two

@@ -122,7 +122,8 @@ func sync(opts options) (*syncReport, error) {
 	// The report compares upstream aliases against Sidecar's own source, so a
 	// working directory outside this repository is a failure worth catching
 	// before anything is written.
-	if _, err := sidecarRepoRoot(); err != nil {
+	root, err := sidecarRepoRoot()
+	if err != nil {
 		return nil, err
 	}
 	if opts.integrationOut == "" {
@@ -130,6 +131,12 @@ func sync(opts options) (*syncReport, error) {
 		// different packages, and guessing a second output root from the first
 		// is how a sync writes a vendored tree somewhere nobody is looking.
 		return nil, fmt.Errorf("no integration output directory; pass --integration-out")
+	}
+	if err := checkOutputDir(root, "--out", opts.out); err != nil {
+		return nil, err
+	}
+	if err := checkOutputDir(root, "--integration-out", opts.integrationOut); err != nil {
+		return nil, err
 	}
 
 	src, err := openSource(opts)
@@ -223,6 +230,65 @@ func sync(opts options) (*syncReport, error) {
 	}
 	report.Body = body
 	return report, nil
+}
+
+// checkOutputDir refuses an output directory outside the places a sync is meant
+// to write.
+//
+// It is not a tidiness rule. Both output roots are emptied of anything the run
+// did not produce, and the integration side does that recursively, directories
+// included: `--integration-out ~` from the repository root would delete
+// everything under ~/upstream. The flag is the only unvalidated path in a tool
+// that otherwise assumes it is standing in the Sidecar repository, so it is
+// checked against that assumption before anything is written.
+//
+// The system temp directory is allowed as well, because that is where the tests
+// and every rehearsal sync write, and refusing it would mean the destructive
+// path could only be exercised against the repository itself.
+func checkOutputDir(root, flag, dir string) error {
+	if strings.TrimSpace(dir) == "" {
+		return fmt.Errorf("no output directory for %s", flag)
+	}
+	abs, err := expandPath(dir)
+	if err != nil {
+		return fmt.Errorf("%s %s: %w", flag, dir, err)
+	}
+	for _, base := range []string{root, os.TempDir()} {
+		if withinDir(base, abs) {
+			return nil
+		}
+	}
+	return fmt.Errorf("%s %s resolves to %s, which is outside the Sidecar repository at %s. "+
+		"A sync removes everything under its output directories that it did not write, "+
+		"so it refuses to write anywhere else", flag, dir, abs, root)
+}
+
+// withinDir reports whether target is base or sits under it, comparing paths
+// with symlinks resolved so /var and /private/var are one place.
+func withinDir(base, target string) bool {
+	rel, err := filepath.Rel(resolveExisting(base), resolveExisting(target))
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
+// resolveExisting resolves symlinks on the deepest part of p that exists and
+// re-joins the rest, so an output directory a sync has not created yet still
+// compares against a resolved base.
+func resolveExisting(p string) string {
+	rest := ""
+	for {
+		if resolved, err := filepath.EvalSymlinks(p); err == nil {
+			return filepath.Join(resolved, rest)
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return filepath.Join(p, rest)
+		}
+		rest = filepath.Join(filepath.Base(p), rest)
+		p = parent
+	}
 }
 
 // chosenManifest is one agent's winning copy plus why it won.
@@ -334,6 +400,15 @@ func chooseManifests(bundled map[string]sourceFile, catalog *catalogSet) ([]chos
 func writeTree(opts options, src source, catalog *catalogSet, choices []chosenManifest,
 	aliases *manifests.Aliases, authority *manifests.Authority) (*manifests.Lock, error) {
 
+	// Read before write, for the reason writeIntegrationTree gives: a LICENSE
+	// fetch that fails after the manifests are on disk leaves the tree updated
+	// with no matching lock, and the digest test then fails in the repository
+	// until someone re-runs the sync.
+	license, err := src.read(licenseSource)
+	if err != nil {
+		return nil, fmt.Errorf("read Herdr LICENSE: %w", err)
+	}
+
 	upstream := filepath.Join(opts.out, "upstream")
 	if err := os.MkdirAll(upstream, 0o755); err != nil {
 		return nil, err
@@ -403,10 +478,6 @@ func writeTree(opts options, src source, catalog *catalogSet, choices []chosenMa
 
 	if err := os.WriteFile(filepath.Join(upstream, "index.toml"), catalog.indexData, 0o644); err != nil {
 		return nil, err
-	}
-	license, err := src.read(licenseSource)
-	if err != nil {
-		return nil, fmt.Errorf("read Herdr LICENSE: %w", err)
 	}
 	if err := os.WriteFile(filepath.Join(upstream, "LICENSE"), license, 0o644); err != nil {
 		return nil, err

@@ -1,13 +1,13 @@
 # Herdr detection sync report
 
-Generated 2026-09-01T20:39:34Z by `go run ./internal/tools/herdrsync`.
+Generated 2026-09-02T06:09:09Z by `go run ./internal/tools/herdrsync`.
 
 | Field | Value |
 | --- | --- |
 | Herdr repository | https://github.com/herdrdev/herdr |
 | Ref vendored | `e2b85c7` |
 | Commit | `e2b85c73615b37a483eefa839923d9aff8e629b3` |
-| Pinned release for the differential harness | `v0.8.2` |
+| Pinned release for the differential harness | `preview-2026-08-31-b1ff4582e968` |
 | Catalog | https://herdr.dev/agent-detection/index.toml |
 | Catalog ETag | `W/"d78b183cb570f3f343ba80777bbf579d"` |
 | Sidecar manifest engine version | 3 |
@@ -99,30 +99,93 @@ Herdr's published authority is a *target*. Sidecar tiers are earned by traces an
 | `qodercli` | session_identity | — | yes |
 | `qwen` | session_identity | — | yes |
 
-## Integration asset versions
+## Integration assets
 
-Vendoring the assets themselves is Phase 3; these are the `HERDR_INTEGRATION_VERSION` values upstream carries today, so a bump is visible before the assets land here.
+Vendored verbatim from `src/integration/assets` into `internal/agentintegration/upstream/`, pinned by `upstream.lock.json` there. They are reference material: Sidecar installs its own assets and these exist so a re-port is a diff.
 
-| Agent | Asset directory | Version |
-| --- | --- | --- |
-| `agy` | `antigravity_cli` | 3 |
-| `claude` | `claude` | 9 |
-| `codex` | `codex` | 8 |
-| `copilot` | `copilot` | 3 |
-| `cursor` | `cursor` | 1 |
-| `devin` | `devin` | 2 |
-| `droid` | `droid` | 3 |
-| `grok` | `grok` | 1 |
-| `hermes` | `hermes` | 5 |
-| `kilo` | `kilo` | 4 |
-| `kimi` | `kimi` | 7 |
-| `mastracode` | `mastracode` | 2 |
-| `omp` | `omp` | 9 |
-| `opencode` | `opencode` | 10 |
-| `pi` | `pi` | 8 |
-| `qodercli` | `qodercli` | 3 |
-| `qwen` | `qwen` | 1 |
+| Agent | Asset directory | Version | Previous | Change | Sidecar port |
+| --- | --- | --- | --- | --- | --- |
+| `agy` | `antigravity_cli` | 3 | 3 | unchanged | not ported |
+| `claude` | `claude` | 9 | 9 | unchanged | `claude` from version 9 |
+| `codex` | `codex` | 8 | 8 | unchanged | `codex` from version 8 |
+| `copilot` | `copilot` | 3 | 3 | unchanged | not ported |
+| `cursor` | `cursor` | 1 | 1 | unchanged | not ported |
+| `devin` | `devin` | 2 | 2 | unchanged | not ported |
+| `droid` | `droid` | 3 | 3 | unchanged | not ported |
+| `grok` | `grok` | 1 | 1 | unchanged | not ported |
+| `hermes` | `hermes` | 5 | 5 | unchanged | not ported |
+| `kilo` | `kilo` | 4 | 4 | unchanged | not ported |
+| `kimi` | `kimi` | 7 | 7 | unchanged | not ported |
+| `mastracode` | `mastracode` | 2 | 2 | unchanged | not ported |
+| `omp` | `omp` | 9 | 9 | unchanged | not ported |
+| `opencode` | `opencode` | 10 | 10 | unchanged | `opencode` from version 10 |
+| `pi` | `pi` | 8 | 8 | unchanged | not ported |
+| `qodercli` | `qodercli` | 3 | 3 | unchanged | not ported |
+| `qwen` | `qwen` | 1 | 1 | unchanged | not ported |
+
+### Upstream changes since each Sidecar port
+
+`ported-from` is recorded in `internal/agentintegration/portedfrom.go`, not in an asset header: two of the three Sidecar assets are Go values with no header to carry it. A comparison is made on bytes rather than on the version number, so a file upstream edited without bumping still shows here.
+
+#### `opencode` — ported from herdr `opencode` version 10
+
+Compared against `4a3b04f5`; upstream is now at version 10.
+
+No upstream change: all 4 compared file(s) are byte-identical to the copy this port was written against. Nothing to re-port.
+
+#### `codex` — ported from herdr `codex` version 8
+
+Compared against `4a3b04f5`; upstream is now at version 8.
+
+No upstream change: all 2 compared file(s) are byte-identical to the copy this port was written against. Nothing to re-port.
+
+#### `claude` — ported from herdr `claude` version 9
+
+Compared against `4a3b04f5`; upstream is now at version 9.
+
+No upstream change: all 2 compared file(s) are byte-identical to the copy this port was written against. Nothing to re-port.
 
 ## Fixture verdict flips
 
-Engine not yet wired; see Phase 1.
+Every fixture in `internal/agentactivity/testdata` with a `screen:` block, classified against the manifests this sync replaced and against the ones it wrote. A verdict is the state, the matched rule id, and the fallback reason: the same triple `scripts/herdr-diff.sh` compares. The Sidecar overlays are applied to **both** sides, because a sync never touches them and applying them to one side would report every overlay rule as a flip. Sidecar's process gate is not applied: it reads the pane's process name and never the manifest, so its answer is the same on both sides and it cannot create or hide a flip.
+
+**No fixture changed verdict.** 61 fixture(s) reach the same state, the same matched rule and the same fallback reason under the new manifests as under the old ones. That is the expected result and it is what the review gate is for.
+
+## Overlay rules
+
+Each rule is removed on its own from the manifests this sync wrote, and the corpus is reclassified. A rule that changes no verdict has stopped earning its place, which is the signal that upstream has adopted the same idea and the rule can go. Redundancy is judged on the state and the fallback reason alone, never on the rule id: a `sidecar.` id can never equal the upstream id that would win without it, so folding the id in would make the check unreachable.
+
+A rule carrying an **upstream** id is not in that bucket and is never a deletion candidate. It replaces upstream's rule rather than adding one, so removing it leaves a rule that is dead (the `\p{Alphabetic}` rewrites RE2 cannot compile) or differently flagged (the copies that only add `visible_blocker`), which is a regression rather than a cleanup. Those rows are judged on the matched rule id and the visible flags as well, and say when no fixture covers them at all.
+
+| Overlay | Rule | Kind | Effect |
+| --- | --- | --- | --- |
+| `antigravity` | `spinner_working` | replaces upstream | no fixture covers it; upstream's own rule stands without it |
+| `antigravity` | `sidecar.trust_prompt_blocked` | addition | changes 1 fixture(s): `blocked.txt` |
+| `antigravity` | `sidecar.permission_prompt_blocked` | addition | changes 1 fixture(s): `permission_prompt.txt` |
+| `antigravity` | `sidecar.status_footer_working` | addition | changes 1 fixture(s): `working.txt` |
+| `claude` | `sidecar.overlay_retain` | addition | changes 1 fixture(s): `overlay.txt` |
+| `claude` | `sidecar.allow_prompt_blocker` | addition | changes 1 fixture(s): `allow_prompt.txt` |
+| `claude` | `sidecar.background_agents_waiting` | addition | **changes nothing: deletion candidate**; without it working via `sidecar.background_agents_footer_working` |
+| `claude` | `sidecar.background_agents_footer_working` | addition | changes 1 fixture(s): `background_agents_footer.txt` |
+| `claude` | `legacy_no_prompt_blocker` | replaces upstream | changes 1 fixture(s): `legacy_permission_wait.txt` |
+| `codex` | `sidecar.background_terminal_working` | addition | changes 1 fixture(s): `background_terminal.txt` |
+| `codex` | `osc_title_idle` | disables upstream | changes 3 fixture(s): `completed.txt`, `interrupted.txt`, `startup_idle.txt` |
+| `codex` | `sidecar.composer_idle` | addition | changes 3 fixture(s): `completed.txt`, `interrupted.txt`, `startup_idle.txt` |
+| `codex` | `sidecar.working_chrome` | addition | changes 1 fixture(s): `tool_running_composer.txt` |
+| `codex` | `sidecar.approval_blocker` | addition | changes 1 fixture(s): `approval_prompt.txt` |
+| `codex` | `weak_blocker` | replaces upstream | changes 1 fixture(s): `weak_blocker.txt` |
+| `cursor` | `spinner_working` | replaces upstream | changes 1 fixture(s): `working_spinner.txt` |
+| `cursor` | `sidecar.decision_blocked` | addition | changes 1 fixture(s): `blocked_decision.txt` |
+| `cursor` | `sidecar.finished_background_tasks_idle` | addition | changes 1 fixture(s): `false_positive_finished_background.txt` |
+| `cursor` | `sidecar.background_suffix_working` | addition | changes 1 fixture(s): `working_background.txt` |
+| `grok` | `sidecar.background_subagent_working` | addition | changes 1 fixture(s): `background_subagent.txt` |
+| `grok` | `sidecar.overlay_retain` | addition | changes 1 fixture(s): `overlay.txt` |
+| `grok` | `sidecar.working_footer` | addition | changes nothing, and the overlay declares it `harness-exempt`: no fixture holds the screen it is for, and its case is a Go test |
+| `grok` | `sidecar.idle_footer` | addition | changes 1 fixture(s): `stale_working_scrollback.txt` |
+| `grok` | `sidecar.allow_prompt_blocked` | addition | changes 1 fixture(s): `allow_prompt.txt` |
+| `kiro` | `tool_spinner_working` | replaces upstream | changes 1 fixture(s): `tool_spinner_working.txt` |
+| `muse` | `sidecar.thinking_working` | addition | changes 1 fixture(s): `thinking.txt` |
+| `qodercli` | `spinner_working` | replaces upstream | changes 1 fixture(s): `spinner_working.txt` |
+
+1 overlay rule(s) changed no fixture verdict. Delete the rule, or record why it stays and add the fixture that proves it. Deleting one is a separate change with a fixture attached, so this report flags it rather than making it.
+

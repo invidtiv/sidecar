@@ -38,6 +38,15 @@ func unifiedDiff(oldName, newName string, oldData, newData []byte, budget int) (
 		return fmt.Sprintf("%s and %s differ; both are too large to diff here (%d and %d lines).",
 			oldName, newName, len(oldLines), len(newLines)), true
 	}
+	// splitLines drops the trailing newline, so two files that differ only in
+	// whether they have one split identically: every op would be context and the
+	// body would be the two header lines and nothing else. It is a real change to
+	// the bytes -- an upstream formatter pass is the ordinary way it happens -- so
+	// say what it is rather than printing an empty diff or calling it unchanged.
+	if sameLines(oldLines, newLines) {
+		return fmt.Sprintf("--- %s\n+++ %s\n(no line differs; the files differ only at the end: the old %s, the new %s)",
+			oldName, newName, fileEnding(oldData), fileEnding(newData)), true
+	}
 
 	ops := diffOps(oldLines, newLines)
 	var out []string
@@ -85,6 +94,7 @@ func unifiedDiff(oldName, newName string, oldData, newData []byte, budget int) (
 		i = stop
 	}
 
+	total := len(out)
 	truncated := false
 	if budget > 0 && len(out) > budget {
 		out = out[:budget]
@@ -92,9 +102,41 @@ func unifiedDiff(oldName, newName string, oldData, newData []byte, budget int) (
 	}
 	body := strings.Join(out, "\n")
 	if truncated {
-		body += fmt.Sprintf("\n... diff truncated at %d lines; read the vendored file for the rest.", budget)
+		// Not "read the vendored file": the rest of a diff is in neither file.
+		// The two commits are named in the header lines above, which is what a
+		// reader needs to reproduce it.
+		body += fmt.Sprintf("\n... diff truncated at %d of %d lines; "+
+			"run `git diff` between the two commits named above in a Herdr checkout for the rest.",
+			budget, total)
 	}
 	return body, true
+}
+
+// sameLines reports whether two files split to the same lines, which after
+// splitLines means they can differ only in how the file ends.
+func sameLines(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// fileEnding describes how a file ends, for the one difference a line diff
+// cannot show.
+func fileEnding(data []byte) string {
+	switch {
+	case len(data) == 0:
+		return "file is empty"
+	case data[len(data)-1] == '\n':
+		return "file ends with a newline"
+	default:
+		return "file ends without a trailing newline"
+	}
 }
 
 type diffOp struct {
@@ -150,6 +192,10 @@ func diffOps(a, b []string) []diffOp {
 // splitLines splits on newlines and drops the empty piece a trailing newline
 // leaves behind, so a file and the same file differ only where their content
 // does.
+//
+// It splits on "\n" only, so a file converted to CRLF renders as a whole-file
+// diff of lines that look identical. No vendored asset has CRLF today; if one
+// arrives, the fix belongs here rather than in a reader's head.
 func splitLines(data []byte) []string {
 	text := strings.TrimSuffix(string(data), "\n")
 	if text == "" {
@@ -160,10 +206,21 @@ func splitLines(data []byte) []string {
 
 // truncateLines bounds a rendered file to budget lines, saying so when it cut.
 func truncateLines(text string, budget int) string {
+	return truncateWithNote(text, budget, "read the vendored file for the rest")
+}
+
+// truncateDiffLines is truncateLines for a rendered diff, where the advice has
+// to differ: the rest of a diff is in neither of the two files.
+func truncateDiffLines(text string, budget int) string {
+	return truncateWithNote(text, budget,
+		"run `git diff` between the two commits named above in a Herdr checkout for the rest")
+}
+
+func truncateWithNote(text string, budget int, note string) string {
 	lines := strings.Split(strings.TrimSuffix(text, "\n"), "\n")
 	if len(lines) <= budget {
 		return strings.Join(lines, "\n")
 	}
 	return strings.Join(lines[:budget], "\n") +
-		fmt.Sprintf("\n... truncated at %d of %d lines; read the vendored file for the rest.", budget, len(lines))
+		fmt.Sprintf("\n... truncated at %d of %d lines; %s.", budget, len(lines), note)
 }

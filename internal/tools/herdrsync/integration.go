@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -31,6 +32,17 @@ import (
 // It writes only under opts.integrationOut.
 func writeIntegrationTree(opts options, src source, dirs []integrationAssetDir,
 	shared []integrationAsset) (*agentintegration.UpstreamLock, error) {
+
+	// Apache-2.0 requires the licence to travel with the copied files, so it is
+	// read here, before anything is written: a fetch that fails after the assets
+	// are on disk leaves the tree updated with no matching lock, and
+	// TestVendoredIntegrationAssetsMatchLock then fails in the repository until
+	// someone re-runs the sync. Read first, write second, like the rest of the
+	// tool.
+	license, err := src.read(licenseSource)
+	if err != nil {
+		return nil, fmt.Errorf("read Herdr LICENSE: %w", err)
+	}
 
 	upstream := filepath.Join(opts.integrationOut, "upstream")
 	if err := os.MkdirAll(upstream, 0o755); err != nil {
@@ -98,14 +110,9 @@ func writeIntegrationTree(opts options, src source, dirs []integrationAssetDir,
 		})
 	}
 
-	// Apache-2.0 requires the licence and the notice to travel with the copied
-	// files, so this tree carries its own pair rather than pointing at the
-	// manifests tree's: the two are vendored from different upstream
+	// This tree carries its own licence and notice pair rather than pointing at
+	// the manifests tree's: the two are vendored from different upstream
 	// directories and can be synced at different refs.
-	license, err := src.read(licenseSource)
-	if err != nil {
-		return nil, fmt.Errorf("read Herdr LICENSE: %w", err)
-	}
 	if err := write("LICENSE", license); err != nil {
 		return nil, err
 	}
@@ -222,7 +229,12 @@ type integrationFileDiff struct {
 	// Whole is true when Body is the current file rather than a diff, which is
 	// what an unknown starting point earns.
 	Whole bool
-	Body  string
+	// Skipped is true when no comparison could be made and Body says why. It is
+	// deliberately not Changed: a read that failed is evidence about the read,
+	// never about upstream, and "this file is new since the port" is a claim a
+	// rate-limited fetch must never be allowed to make.
+	Skipped bool
+	Body    string
 }
 
 // integrationPortDiffs compares each ported provider's vendored assets against
@@ -272,8 +284,8 @@ func integrationPortDiffsFor(src source, outDir string, lock *agentintegration.U
 				body, err := read(file.Path)
 				if err != nil {
 					entry.Files = append(entry.Files, integrationFileDiff{
-						Path: file.Path, Changed: true, Whole: true,
-						Body: fmt.Sprintf("could not read the vendored file: %v", err),
+						Path: file.Path, Skipped: true,
+						Body: fmt.Sprintf("the vendored copy could not be read: %v", err),
 					})
 					continue
 				}
@@ -288,17 +300,37 @@ func integrationPortDiffsFor(src source, outDir string, lock *agentintegration.U
 
 		for _, file := range provider.Files {
 			before, err := src.readAt(ported.Commit, file.Origin)
-			if err != nil {
+			switch {
+			case errors.Is(err, errFileAbsent):
+				// Upstream's tree at that commit says so: the file arrived
+				// afterwards, and the whole of it is new since the port.
 				entry.Files = append(entry.Files, integrationFileDiff{
 					Path: file.Path, Changed: true, Whole: true,
-					Body: fmt.Sprintf("not readable at %s (%v); this file is new since the port.",
-						shortCommit(ported.Commit), err),
+					Body: fmt.Sprintf("upstream had no %s at %s; this file is new since the port.",
+						file.Origin, shortCommit(ported.Commit)),
+				})
+				continue
+			case err != nil:
+				// Anything else -- a 429, a timeout, a shallow clone with no
+				// such commit -- is a comparison that did not happen. Saying
+				// "new since the port" here is how a network blip becomes a
+				// re-port request in a pull request body.
+				entry.Files = append(entry.Files, integrationFileDiff{
+					Path: file.Path, Skipped: true,
+					Body: fmt.Sprintf("%s could not be read at %s, so no comparison was made: %v",
+						file.Origin, shortCommit(ported.Commit), err),
 				})
 				continue
 			}
 			after, err := read(file.Path)
 			if err != nil {
-				entry.Note = fmt.Sprintf("could not read the vendored copy of %s: %v", file.Path, err)
+				// Per file, not per entry: a Note written in this loop is
+				// overwritten by the next failure, and the first one then
+				// vanishes from the report with nothing to say it happened.
+				entry.Files = append(entry.Files, integrationFileDiff{
+					Path: file.Path, Skipped: true,
+					Body: fmt.Sprintf("the vendored copy could not be read, so no comparison was made: %v", err),
+				})
 				continue
 			}
 			body, changed := unifiedDiff(
