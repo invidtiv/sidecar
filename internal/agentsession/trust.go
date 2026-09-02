@@ -18,19 +18,28 @@ import (
 //
 // "Ships" is the whole test, and it is checked against the adapters rather than
 // against intent. This list once carried "sidecar.pi.extension" alongside a
-// capability entry for Pi, and neither was backed by anything: Sidecar has no
+// capability entry for Pi, and neither was backed by anything: there was no
 // PiAdapter, no asset under internal/agentintegration/assets/pi, and no code
-// path that installs an extension Pi would load. Nothing Sidecar writes could
+// path that installed an extension Pi would load. Nothing Sidecar wrote could
 // ever produce a report carrying that source, so the only caller it could have
 // had was a hook somebody wrote by hand, and trusting one of those is exactly
 // the "resume a conversation nobody proved was the right one" the paragraph
-// above refuses. Both were retracted; Pi comes back here when the port in
-// docs/plans/active/herdr-parity-close-the-gap.md, Slice 1, ships an asset.
+// above refuses. Both were retracted, and Pi is back here now that the port in
+// docs/plans/active/herdr-parity-close-the-gap.md, Slice 1, has shipped
+// PiAdapter and internal/agentintegration/assets/pi/sidecar-lifecycle.js, which
+// is what does the reporting.
+//
+// Being here is a statement about provenance and nothing else: it says Sidecar
+// wrote the thing that sent the report, so the conversation reference may be
+// resumed without a human confirming it. It is not a tier. Pi's capability entry
+// is session-identity on docs-only evidence, and that is what decides how much
+// its *state* reports are trusted; the two are deliberately separate registers.
 func OfficialSources() []string {
 	return []string{
 		"sidecar.codex.hooks",
 		"sidecar.claude.hooks",
 		"sidecar.opencode.plugin",
+		"sidecar.pi.extension",
 	}
 }
 
@@ -43,11 +52,10 @@ func OfficialSources() []string {
 //
 // A provider with no shipped integration returns the empty string, and the
 // report-session command turns that into a refusal naming the cause rather than
-// letting the validator complain that the source is blank. That is the correct
-// answer for Pi until an adapter exists: a hand-written Pi hook can still report
-// by naming --source explicitly, and what it gets is an untrusted reference,
-// which is the honest amount of authority for an integration Sidecar did not
-// write.
+// letting the validator complain that the source is blank. A hand-written hook
+// for such a provider can still report by naming --source explicitly, and what
+// it gets is an untrusted reference, which is the honest amount of authority for
+// an integration Sidecar did not write.
 func OfficialSourceFor(kind string) string {
 	switch strings.TrimSpace(kind) {
 	case "codex":
@@ -56,6 +64,8 @@ func OfficialSourceFor(kind string) string {
 		return "sidecar.claude.hooks"
 	case "opencode":
 		return "sidecar.opencode.plugin"
+	case "pi":
+		return "sidecar.pi.extension"
 	default:
 		return ""
 	}
@@ -138,6 +148,30 @@ func (r Roots) For(kind string) []string {
 			base = filepath.Join(r.Home, ".local", "share")
 		}
 		return []string{filepath.Join(base, "opencode")}
+	case "pi":
+		// Pi keeps its conversations at getAgentDir()/sessions (dist/config.js:455-457),
+		// where getAgentDir is PI_CODING_AGENT_DIR, tilde-expanded, and ~/.pi/agent
+		// otherwise (dist/config.js:420-426). Verified against pi 0.84.3.
+		//
+		// This root is what makes Pi's session binding more than decoration: the
+		// installed extension reports the session FILE, because a path names the
+		// exact transcript a restore would resume where an id alone does not, and
+		// a path reference outside every approved root is refused rather than
+		// stored. Without an entry here the binding would be refused on every
+		// report and the session-identity tier would be a claim about nothing.
+		base := r.env("PI_CODING_AGENT_DIR")
+		if base == "" {
+			if r.Home == "" {
+				return nil
+			}
+			base = filepath.Join(r.Home, ".pi", "agent")
+		} else if base == "~" || strings.HasPrefix(base, "~/") {
+			if r.Home == "" {
+				return nil
+			}
+			base = filepath.Join(r.Home, strings.TrimPrefix(strings.TrimPrefix(base, "~"), "/"))
+		}
+		return []string{filepath.Join(base, "sessions")}
 	case "muse":
 		base := r.env("XDG_DATA_HOME")
 		if base == "" {

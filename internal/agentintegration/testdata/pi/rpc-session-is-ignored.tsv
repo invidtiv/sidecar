@@ -1,0 +1,4 @@
+# offset_ms	event	reason	mode	idle	session_path	session_id	blocked_active	blocked_label
+0	session_start	startup	rpc	true	-	-	-	-
+10	agent_start	-	rpc	true	-	-	-	-
+20	agent_settled	-	rpc	true	-	-	-	-

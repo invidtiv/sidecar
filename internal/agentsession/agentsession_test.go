@@ -389,10 +389,10 @@ func TestPolicyVocabulary(t *testing.T) {
 }
 
 func TestOfficialSourcesAreTheOnesAdaptersShip(t *testing.T) {
-	// The three that ship. This list is exactly agentintegration.DefaultAdapters,
+	// The four that ship. This list is exactly agentintegration.DefaultAdapters,
 	// and it is spelled out rather than derived so that adding a source here
 	// without adding the adapter that produces it fails.
-	for _, kind := range []string{"codex", "claude", "opencode"} {
+	for _, kind := range []string{"codex", "claude", "opencode", "pi"} {
 		source := OfficialSourceFor(kind)
 		if source == "" {
 			t.Fatalf("no official source is recorded for %q", kind)
@@ -401,19 +401,18 @@ func TestOfficialSourcesAreTheOnesAdaptersShip(t *testing.T) {
 			t.Fatalf("OfficialSourceFor(%q) returned %q, which Official() does not trust", kind, source)
 		}
 	}
-	// grok has no Sidecar integration and never had one. pi is the case that
-	// matters more: it carried an official source and a capability entry ahead
-	// of any adapter, so nothing Sidecar installed could produce a report
-	// bearing it, and the only reference it could ever have marked resumable
-	// came from a hook Sidecar did not write. Both were retracted; pi earns its
-	// source back when a PiAdapter ships.
-	for _, kind := range []string{"grok", "pi"} {
+	// grok has no Sidecar integration and never had one, and it is the standing
+	// example of what this list refuses. pi is the cautionary one: it carried an
+	// official source and a capability entry ahead of any adapter, so nothing
+	// Sidecar installed could produce a report bearing it, and the only reference
+	// it could ever have marked resumable came from a hook Sidecar did not write.
+	// Both were retracted, and pi earned its source back only once PiAdapter and
+	// assets/pi/sidecar-lifecycle.js shipped -- which is exactly the rule the
+	// loop above enforces.
+	for _, kind := range []string{"grok", "cursor", "amp"} {
 		if OfficialSourceFor(kind) != "" {
 			t.Fatalf("%q has no shipped integration but reported an official source", kind)
 		}
-	}
-	if Official("sidecar.pi.extension") {
-		t.Fatal("the retracted Pi source is still trusted, so a hand-written hook could still mark a reference resumable")
 	}
 	if Official("") || Official("sidecar.codex.hooks.evil") {
 		t.Fatal("Official() trusted a source it should not")

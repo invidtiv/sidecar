@@ -92,6 +92,35 @@
   },
   {
     "schemaVersion": 1,
+    "provider": "pi",
+    "source": "sidecar.pi.extension",
+    "assetVersion": "1",
+    "tier": "session-identity",
+    "evidence": "docs-only",
+    "minProviderVersion": "0.84.0",
+    "testedProviderRange": "",
+    "covered": [
+      "session_identity"
+    ],
+    "knownGaps": [
+      "NOT TRACED. Every statement in this entry is read from the released type definitions and shipped bundle of pi 0.84.3, plus Herdr's own integration at version 8, and no capture of a live Pi session backs any of it. That is why the tier is session-identity on docs-only evidence rather than the advisory ceiling: the lifecycle plan caps an untraced source at advisory in three separate places, and a source with no traces at all has earned the identity claim its own code demonstrably makes and nothing more.",
+      "TRACE AGENT: revisit tier, evidence, testedProviderRange, covered and sourceVersionNote together once traces of pi 0.84.3 are captured and checked into internal/agentlifecycle/testdata/traces/pi/. work_start (agent_start) and turn_complete (agent_settled) are what the shipped asset reports and what a trace would earn; advisory is the ceiling and full is unreachable. Nothing else in this entry moves on a trace.",
+      "The blocked lane is structurally unreachable, not merely untraced, so `full` can never be earned. Pi ships no permission system, so there is nothing to be blocked on. The only shape a Pi block could have is a cooperative extension-to-extension protocol on Pi's untyped event bus, which is what Herdr's asset listens for and what Sidecar's listens for on its own namespace -- and nothing publishes either channel. The string \"herdr\" does not appear in pi 0.84.3's shipped bundle at all; ExtensionAPI.on enumerates thirty events and not one is a permission, approval or prompt event; and Herdr's four occurrences of its own channel name are two listeners and two test drivers. The branch is kept and driven by a fixture so the ladder stays identical to upstream's, and the transition is not claimed.",
+      "Turn completion must come from agent_settled and never from agent_end. agent_end means \"this attempt stopped\" and Pi can follow it with an automatic retry or a compaction (_willRetryAfterAgentEnd, dist/core/agent-session.js:369), so an adapter that reported idle on it would announce a finished turn in the middle of one. The shipped asset does not subscribe to agent_end at all, and upstream's fixture asserts that absence directly.",
+      "process_exit is NOT claimed and the asset does not subscribe to session_shutdown. That event fires with reason quit, reload, new, resume or fork, so three of its five reasons are a session swap rather than an exit, and releasing the lane on those would hand a live pane back to screen detection mid-run. Sidecar already owns process liveness for every provider. If a future version reads the reason and releases only on \"quit\", this gap and `covered` move together.",
+      "tool_use is NOT claimed. Pi has a tool_execution_* event family, and the shipped asset deliberately subscribes to none of it: tool use is a refinement of work_start rather than a separate lane, and every subscription is another event whose ordering has to be reasoned about.",
+      "Cancellation has no event. It is inferable only from a StopReason of \"aborted\" on the final assistant message, and agent_settled is emitted from a finally block so it arrives however the turn ended -- which means a cancelled turn and a completed one are the same event to this integration.",
+      "There are no subagent events. An agent an extension spawns is a separate process, so nothing in Pi's event stream describes it and a parent's lane can never be derived from a child's.",
+      "The extension API publishes no version or stability guarantee, and Pi's changelog records breaking changes that have already shipped. An integration written against 0.84.3 has no contractual reason to keep working on 0.85, which is why minProviderVersion is recorded and testedProviderRange is empty until something is actually tested.",
+      "Pi loads extensions from a project-local <cwd>/.pi/extensions as well as the user-level directory. Sidecar installs only into the user-level one: a per-project copy would follow a checkout into other people's clones and would report from panes Sidecar never set up.",
+      "PI_CODING_AGENT_DIR relocates Pi's whole agent directory, and OMP is a rebranded fork of the same codebase reading the same variable. With it set, Pi and OMP collapse onto one extension directory. Sidecar ships no OMP adapter yet, so nothing collides today; whichever adapter lands second has to refuse the collision the way Herdr's install_omp does."
+    ],
+    "orderingGuaranteed": false,
+    "sourceDoc": "https://github.com/earendil-works/pi",
+    "sourceVersionNote": "pi 0.84.3 on darwin/arm64, read 2026-09-02 and NOT traced. Contract taken from the released package's own dist/core/extensions/types.d.ts (the event set, ctx.mode, ctx.isIdle, sessionManager.getSessionFile/getSessionId), dist/core/agent-session.js (the settle ordering that makes the isIdle guard correct) and dist/config.js (PI_CODING_AGENT_DIR, tilde-expanded, defaulting to ~/.pi/agent, with extensions loaded from <that>/extensions). The event mapping is ported from Herdr's pi integration at HERDR_INTEGRATION_VERSION=8; see internal/agentintegration/portedfrom.go."
+  },
+  {
+    "schemaVersion": 1,
     "provider": "grok",
     "source": "",
     "assetVersion": "",

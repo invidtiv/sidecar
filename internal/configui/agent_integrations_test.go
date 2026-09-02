@@ -206,15 +206,15 @@ func TestTheRouteShowsEveryProviderAndItsHonestState(t *testing.T) {
 	m, _, _ := integrationsFixture(t)
 	view := openIntegrations(t, m)
 	// grok is the unsupported exemplar: a recorded capability with no bundled
-	// adapter, so the route has to show it and say so. It took that job from pi,
-	// whose capability entry was retracted because nothing Sidecar ships could
-	// produce a report for it.
-	for _, want := range []string{"opencode", "codex", "claude", "grok", "unsupported"} {
+	// adapter, so the route has to show it and say so. It took that job from pi
+	// while pi's capability entry was retracted, and keeps it now that pi ships
+	// an adapter of its own.
+	for _, want := range []string{"opencode", "codex", "claude", "pi", "grok", "unsupported"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("the route does not mention %q:\n%s", want, view)
 		}
 	}
-	if !strings.Contains(view, "0 of 3 installed") {
+	if !strings.Contains(view, "0 of 4 installed") {
 		t.Fatalf("the summary is wrong:\n%s", view)
 	}
 }
@@ -342,7 +342,7 @@ func TestInstallingIsConfirmedByNamingTheFilesAndThenActuallyInstalls(t *testing
 	// The route re-reads rather than assuming, so what it shows is what is on
 	// disk.
 	view = ansi.Strip(m.View(160, 45))
-	if !strings.Contains(view, "current") || !strings.Contains(view, "1 of 3 installed") {
+	if !strings.Contains(view, "current") || !strings.Contains(view, "1 of 4 installed") {
 		t.Fatalf("the route did not refresh after the mutation:\n%s", view)
 	}
 }

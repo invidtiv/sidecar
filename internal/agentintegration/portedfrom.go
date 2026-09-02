@@ -59,6 +59,14 @@ type PortedFrom struct {
 // assets/opencode/sidecar-lifecycle.js, claude_install.go and codex_install.go.
 const herdrInspectedCommit = "4a3b04f59ba3b7d8a15cea187b23e1e80c343b0c"
 
+// herdrVendoredCommit is the Herdr commit upstream.lock.json pins, and therefore
+// the exact bytes of upstream/pi/herdr-agent-state.ts that the Pi port was read
+// against. It is a different commit from herdrInspectedCommit because the Pi
+// port was written months later, from the vendored tree rather than from a
+// separate inspection, and naming the wrong one would make the next sync report
+// diff against a file nobody read.
+const herdrVendoredCommit = "d08e44686d8b19bd9555cc99ec9068d9fde05f16"
+
 // portedFrom is the recorded provenance of every Sidecar integration asset.
 //
 // Adding an adapter adds a row here, and TestEveryAdapterRecordsWhatItWasPortedFrom
@@ -97,6 +105,27 @@ var portedFrom = []PortedFrom{
 			"entry is session-identity only for the reason the lifecycle plan records from the same " +
 			"inspection: Herdr removed its own Claude lifecycle hook set, and tracing Claude Code " +
 			"2.1.220 reproduced both halves of its stated reason.",
+	},
+	{
+		Provider:    PiProvider,
+		UpstreamID:  "pi",
+		UpstreamDir: "pi",
+		Version:     "8",
+		Commit:      herdrVendoredCommit,
+		Evidence: "Ported line by line from the vendored upstream/pi/herdr-agent-state.ts at that commit, " +
+			"where it carries HERDR_INTEGRATION_VERSION=8. The provider half is kept verbatim in " +
+			"behavior: the desiredState ladder, the rootSession guard, the mode!=\"tui\" gate rather " +
+			"than hasUI, the forced publish and isIdle()===false reload recovery on session_start, the " +
+			"session report emitted before the first state report, the per-turn re-binding on " +
+			"agent_start, and the isIdle()!==true discard on agent_settled. Every event, ctx field and " +
+			"guard was re-checked against the released type definitions in Pi 0.84.3's own package " +
+			"(dist/core/extensions/types.d.ts, dist/core/agent-session.js, dist/config.js) rather than " +
+			"taken on trust. Four deliberate differences, each with its reason in the asset: the " +
+			"transport is Sidecar's; the blocked channel is sidecar:blocked rather than Herdr's " +
+			"namespace; the state queue serializes instead of coalescing; and the upstream bug that " +
+			"discards a Windows session path is fixed, as Herdr's own OMP variant already had. NOT " +
+			"traced: no capture of a live Pi session backs any of it, which is why the capability " +
+			"entry is docs-only at session-identity.",
 	},
 }
 

@@ -1,0 +1,6 @@
+# offset_ms	event	reason	mode	idle	session_path	session_id	blocked_active	blocked_label
+0	session_start	startup	tui	true	-	-	-	-
+10	agent_start	-	tui	false	-	-	-	-
+20	blocked	-	-	-	-	-	true	approval
+30	agent_settled	-	tui	true	-	-	-	-
+40	blocked	-	-	-	-	-	false	-

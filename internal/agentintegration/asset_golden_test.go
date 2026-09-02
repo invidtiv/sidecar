@@ -40,6 +40,7 @@ var assetGoldens = []assetGolden{
 	{provider: CodexProvider, name: "hooks.json", version: "1", checksum: "bed1991b2721f08148a2089600ae09d6328b244317355ea66e16c4b4a8de26d0"},
 	{provider: CodexProvider, name: "config.toml", version: "1", checksum: "380d955d0141f00dd10fe9d3e769c7d5e31fec036e356a0583e0f4b91d64615f"},
 	{provider: ClaudeProvider, name: "settings.json", version: "1", checksum: "0d2ca7075dff1faab0645c82e8fd5a04f5982e4be27667b9afa19e2ab05e6f3d"},
+	{provider: PiProvider, name: "sidecar-lifecycle.js", version: "1", checksum: "d0f19dc75a1771ce2e98c7453df0cf7fd7b025864d7fab387718dc686311029a"},
 }
 
 // bumpInstructions is the whole point of the guard: a failure here has to tell
@@ -49,7 +50,7 @@ const bumpInstructions = `
 An asset's bytes changed. Before updating the golden below, do this in order:
 
   1. Bump the asset's version constant (OpenCodeAssetVersion, CodexAssetVersion,
-     or ClaudeAssetVersion) if it has not already moved. An installed copy is
+     ClaudeAssetVersion, or PiAssetVersion) if it has not already moved. An installed copy is
      recognised as outdated by its version, so without this every existing
      install keeps reporting itself current while running different code.
   2. Update the matching AssetVersion in internal/agentlifecycle/capabilities.json,
