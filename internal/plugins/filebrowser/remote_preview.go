@@ -44,7 +44,7 @@ func (p *Plugin) loadRemotePreview(path string, epoch uint64) tea.Cmd {
 		return nil
 	}
 	srcCtx := p.remoteSourceContext()
-	revision := p.previewRevisions[path]
+	revision := p.heldPreviewRevision(path)
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), remotePreviewTimeout)
 		defer cancel()
@@ -88,14 +88,32 @@ type remotePreviewUnchangedMsg struct {
 // GetEpoch implements plugin.EpochMessage.
 func (m remotePreviewUnchangedMsg) GetEpoch() uint64 { return m.Epoch }
 
+// heldPreviewRevision is the revision to make a read of path conditional
+// against: the host's revision for the bytes the pane is holding for that same
+// file, and otherwise nothing. Asking conditionally about bytes this pane no
+// longer has earns a NotModified answer it cannot render.
+func (p *Plugin) heldPreviewRevision(path string) string {
+	if path == "" || path != p.previewRevisionPath {
+		return ""
+	}
+	return p.previewRevision
+}
+
+// rememberPreviewRevision records the revision of the bytes just installed in
+// the preview pane. Callers invoke it after the payload lands, never before.
 func (p *Plugin) rememberPreviewRevision(path, revision string) {
 	if path == "" || revision == "" {
 		return
 	}
-	if p.previewRevisions == nil {
-		p.previewRevisions = make(map[string]string)
-	}
-	p.previewRevisions[path] = revision
+	p.previewRevisionPath = path
+	p.previewRevision = revision
+}
+
+// forgetPreviewRevision drops the remembered revision because the bytes it
+// described are no longer on screen.
+func (p *Plugin) forgetPreviewRevision() {
+	p.previewRevisionPath = ""
+	p.previewRevision = ""
 }
 
 // contentSource is the host document adapter, or nil when this surface is

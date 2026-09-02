@@ -335,6 +335,11 @@ func (p *Plugin) syncTreeSelection(path string) {
 }
 
 func (p *Plugin) applyPreviewResult(result PreviewResult) {
+	// New bytes in the pane invalidate the revision describing the old ones.
+	// A remote load re-records it right after this returns; nothing else does,
+	// so a locally-cached tab result or an error page never leaves a revision
+	// behind that a later read would ask the host about.
+	p.forgetPreviewRevision()
 	p.selection.Clear()
 	p.previewLines = result.Lines
 	p.previewHighlighted = result.HighlightedLines
@@ -393,6 +398,7 @@ func (p *Plugin) resetPreviewModes() {
 }
 
 func (p *Plugin) resetPreviewContent() {
+	p.forgetPreviewRevision()
 	p.previewLines = nil
 	p.previewHighlighted = nil
 	p.previewError = nil

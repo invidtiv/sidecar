@@ -61,7 +61,14 @@ func (p *Plugin) refreshPreview() tea.Cmd {
 		case PreviewLoadedMsg:
 			return previewRefreshedMsg{Path: path, Epoch: epoch, Result: msg.Result}
 		case remotePreviewLoadedMsg:
-			return previewRefreshedMsg{Path: path, Epoch: epoch, Result: msg.Msg.Result}
+			return previewRefreshedMsg{Path: path, Epoch: epoch, Result: msg.Msg.Result, Revision: msg.Revision}
+		case remotePreviewUnchangedMsg:
+			// A conditional refresh that had nothing to send still has to come
+			// back. The Refresher claimed its single in-flight slot in Begin,
+			// and only applyPreviewRefresh releases it: dropping this message
+			// would leave a bound preview believing a re-read is forever in
+			// flight and stop it refreshing for the rest of the session.
+			return previewRefreshedMsg{Path: path, Epoch: epoch, Unchanged: true, Revision: msg.Revision}
 		}
 		return nil
 	}
@@ -75,6 +82,11 @@ type previewRefreshedMsg struct {
 	Path   string
 	Epoch  uint64
 	Result filepreview.PreviewResult
+	// Revision is the host's revision for Result, empty for a local read.
+	Revision string
+	// Unchanged marks a conditional host read the host declined to answer
+	// because the pane already holds the current bytes. It carries no Result.
+	Unchanged bool
 }
 
 // GetEpoch implements plugin.EpochMessage.
@@ -97,6 +109,13 @@ func (p *Plugin) applyPreviewRefresh(msg previewRefreshedMsg) tea.Cmd {
 	if msg.Path != p.previewFile {
 		return followUp
 	}
+	// The host declined to resend bytes the pane still holds. Nothing to
+	// apply, and the fingerprint on file is by definition still the one on
+	// screen, so the no-change gate is left exactly as it is.
+	if msg.Unchanged {
+		p.rememberPreviewRevision(msg.Path, msg.Revision)
+		return followUp
+	}
 	// A file caught mid-write reads as empty or truncated. Holding the last good
 	// content for the moment it takes the writer to finish beats flickering
 	// through nothing; the write that follows produces another signal.
@@ -109,6 +128,7 @@ func (p *Plugin) applyPreviewRefresh(msg previewRefreshedMsg) tea.Cmd {
 
 	scroll := p.previewScroll
 	p.applyPreviewResult(msg.Result)
+	p.rememberPreviewRevision(msg.Path, msg.Revision)
 	p.updateActiveTabResult(msg.Result)
 	p.previewScroll = scroll
 	p.clampPreviewScroll()

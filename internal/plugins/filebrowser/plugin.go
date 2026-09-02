@@ -158,9 +158,18 @@ type Plugin struct {
 	// contentSourceOverride replaces the host document adapter, for the same
 	// reason and on the same terms.
 	contentSourceOverride contentpanes.Source
-	// previewRevisions is the last revision the host reported per path, so a
-	// re-read of an unchanged file is one round trip and no repaint.
-	previewRevisions map[string]string
+	// previewRevision is the host revision of the bytes the preview pane is
+	// holding right now, and previewRevisionPath the file they came from.
+	//
+	// It is deliberately one entry rather than a per-path cache. A conditional
+	// read is only honest while the pane still holds the bytes the host would
+	// decline to resend; the pane holds one file at a time. Remembering a
+	// revision for a file that has since been navigated away from is how a
+	// revisited file came back as a filename over an empty pane (td-94d7f7).
+	// It is set only immediately after the bytes it describes are installed,
+	// and cleared by everything that replaces or drops them.
+	previewRevision     string
+	previewRevisionPath string
 
 	// Pane state
 	activePane       FocusPane
@@ -1102,19 +1111,28 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, p.requestAutoRefresh()
 
 	case remotePreviewLoadedMsg:
-		// A host read is the same payload with a revision attached. Recording
-		// it and re-entering as the ordinary message is what keeps one preview
+		// A host read is the same payload with a revision attached.
+		// Re-entering as the ordinary message is what keeps one preview
 		// pipeline rather than two.
 		if plugin.IsStale(p.ctx, msg) {
 			return p, nil
 		}
-		p.rememberPreviewRevision(msg.Msg.Path, msg.Revision)
-		return p.update(msg.Msg)
+		next, cmd := p.update(msg.Msg)
+		// The revision describes bytes, so it is recorded after those bytes
+		// land and only if they did. A read the user navigated away from
+		// leaves nothing behind for a later read to be conditional against.
+		if msg.Msg.Path == p.previewFile {
+			p.rememberPreviewRevision(msg.Msg.Path, msg.Revision)
+		}
+		return next, cmd
 
 	case remotePreviewUnchangedMsg:
 		// The pane already holds these bytes: no repaint, and the refresh gate
 		// still counts the read so a later signal is not reported as a change.
 		if plugin.IsStale(p.ctx, msg) {
+			return p, nil
+		}
+		if msg.Path != p.previewFile {
 			return p, nil
 		}
 		p.rememberPreviewRevision(msg.Path, msg.Revision)
