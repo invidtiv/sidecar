@@ -77,6 +77,25 @@ func agentLifecycleExitCodes() []ExitCode {
 	}
 }
 
+// agentExplainExitCodes is explain's own table rather than the shared lifecycle
+// one, because explain stores nothing: "the report could not be stored" can
+// never be why it failed, and reusing that summary told a caller with an
+// unreadable --file to go looking at a store the command never opens.
+//
+// So exit 1 is narrowed here to a true internal failure, and the two things a
+// caller actually gets wrong -- a file that is not there and an agent kind
+// Sidecar has no manifest for -- take exitInputRejected, which is what the rest
+// of the CLI uses for "the command parsed and a value inside it was refused"
+// and what lifecycleExitFor already returns for every non-store error.
+func agentExplainExitCodes() []ExitCode {
+	return []ExitCode{
+		{Code: 0, Summary: "success, or no-op outside a Sidecar-managed shell"},
+		{Code: 1, Summary: "internal failure: the explanation could not be produced or written"},
+		{Code: 2, Summary: "usage error"},
+		{Code: 5, Summary: "invalid context, or a rejected value: an unreadable --file, an unknown --agent"},
+	}
+}
+
 func lifecycleCommands() (report, end, release, explain *Command) {
 	common := []Flag{
 		{Name: "--source", Arg: "SOURCE", Summary: "Integration source identifier (required)"},
@@ -160,12 +179,12 @@ func lifecycleCommands() (report, end, release, explain *Command) {
 			{Name: "--file", Arg: "PATH", Summary: "Explain a saved capture offline, with no tmux and no lifecycle store"},
 			{Name: "--agent", Arg: "KIND", Summary: "Which agent's manifest to evaluate --file against (required with --file)"},
 			{Name: "--title", Arg: "TEXT", Summary: "Pane title for --file when the capture carries no header"},
-			{Name: "--rows", Arg: "N", Summary: "Pane height for --file; the detection read window. Defaults to the fixture header, else 24"},
+			{Name: "--rows", Arg: "N", Summary: "Pane height for --file; the detection read window. Must be positive; defaults to the fixture header, else 24"},
 			{Name: "--print-window", Summary: "With --file, print the detection read window instead of a verdict", Bool: true},
 			{Name: "--json", Summary: "Write stable structured JSON", Bool: true},
 			{Name: "--help", Short: "-h", Summary: "Show this help", Bool: true},
 		},
-		ExitCodes: agentLifecycleExitCodes(),
+		ExitCodes: agentExplainExitCodes(),
 		Examples: []Example{
 			{Command: "sidecar agent explain --current --json"},
 			{Command: "sidecar agent explain --file internal/agentactivity/testdata/claude/blocked.txt --agent claude --json"},
@@ -275,8 +294,13 @@ func parseLifecycleFlags(env Env, args []string, help string, kind agentlifecycl
 				return f, usage("--rows requires a value")
 			}
 			rows, err := strconv.Atoi(v)
-			if err != nil || rows < 0 {
-				return f, usage("--rows must be a non-negative integer, got %q", v)
+			if err != nil || rows < 1 {
+				// Zero is refused rather than accepted and ignored. It used to
+				// parse and then lose to the fixture header or the 24-row
+				// default, so `--rows 0` silently meant something other than
+				// what it says -- the worst available answer for a flag whose
+				// whole job is to pin the read window.
+				return f, usage("--rows must be a positive integer; omit it for the fixture header, else the 24-row fallback")
 			}
 			f.rows, i = rows, n
 		case strings.HasPrefix(arg, "--seq"):

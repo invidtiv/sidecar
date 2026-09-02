@@ -97,6 +97,14 @@ func Merge(upstream, overlay *Manifest) (*Manifest, error) {
 		clone.Rules = append([]Rule(nil), upstream.Rules...)
 		return &clone, nil
 	}
+	// An overlay names the manifest it amends. A mismatch is a file in the wrong
+	// place — sidecar/claude.toml declaring `id = "codex"` — and merging it
+	// anyway would apply Codex's rules to Claude panes with nothing to say so,
+	// since the merged manifest keeps upstream's id. The loader keys on the file
+	// name, so the id is the only place this can be caught.
+	if strings.TrimSpace(overlay.ID) != "" && overlay.ID != upstream.ID {
+		return nil, fmt.Errorf("overlay declares id %q but amends the %q manifest", overlay.ID, upstream.ID)
+	}
 
 	merged := *upstream
 	merged.Rules = append([]Rule(nil), upstream.Rules...)

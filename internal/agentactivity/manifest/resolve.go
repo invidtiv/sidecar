@@ -3,6 +3,8 @@ package manifest
 import (
 	"strings"
 	"unicode"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 // Region resolution, ported line by line from Herdr's src/detect/manifest.rs
@@ -39,10 +41,18 @@ type regionText struct {
 func newResolver(in Input) *resolver {
 	window := ReadWindow(in.Screen, in.rows())
 	return &resolver{
-		window:   window,
-		lines:    splitLines(window),
-		title:    in.Title,
-		progress: in.Progress,
+		window: window,
+		lines:  splitLines(window),
+		// Herdr's osc_title is the decoded OSC 0/2 payload, which carries no SGR
+		// by construction. Sidecar's equivalent is tmux `#{pane_title}`, and tmux
+		// hands that back with whatever bytes the program wrote — a provider that
+		// colours its spinner glyph ships an ESC sequence ahead of it. Every
+		// osc_title rule upstream writes is anchored (`^[\x{2800}-…] `), so an
+		// unstripped escape turns the rule into a permanent no-match and a
+		// working pane reads as idle. Stripping here is what makes the two
+		// engines see the same title; on a title with no escapes it is identity.
+		title:    ansi.Strip(in.Title),
+		progress: ansi.Strip(in.Progress),
 		cache:    make(map[string]regionText, 8),
 	}
 }
@@ -68,7 +78,10 @@ func (r *resolver) lowerRegion(spec Region) string {
 		cached = regionText{text: r.resolve(spec)}
 	}
 	if !cached.folded {
-		cached.lower = strings.ToLower(cached.text)
+		// foldLower, not strings.ToLower: `contains` is compared against
+		// needles folded the same way, and the two disagree on İ and final
+		// sigma. See compile.go.
+		cached.lower = foldLower(cached.text)
 		cached.folded = true
 	}
 	r.cache[spec.Spec] = cached

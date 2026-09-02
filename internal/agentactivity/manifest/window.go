@@ -61,15 +61,22 @@ func ReadWindow(screen string, rows int) string {
 	if rows <= 0 {
 		rows = DefaultDetectionRows
 	}
+	// The strip comes first so a row holding nothing but escape bytes counts as
+	// the blank it renders as, at every step below.
 	lines := strings.Split(ansi.Strip(screen), "\n")
-	// The strip precedes the trim so a row holding nothing but escape bytes
-	// counts as the padding it renders as.
-	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
-		lines = lines[:len(lines)-1]
-	}
-	if len(lines) == 0 {
-		return ""
-	}
+
+	// Order matters here and it is the order Herdr uses, not the tidier one.
+	// Select the last N rows *first*, then trim: a blank row inside the window
+	// spends a row of the budget, and the window is never extended upward to
+	// replace one. Trimming first and windowing after reaches further up the
+	// buffer than the pane can show, which is how a resolved historical prompt
+	// gets back into view.
+	//
+	// The empty final piece a terminating newline produces is a real row, not an
+	// artifact: it is the pane's cursor row. Counting it is what reproduces the
+	// measurement in docs/reference/herdr-detection-parity.md ("Read window") —
+	// a pane printing 2000 numbered lines at 39 rows returns lines 1963-2000,
+	// 38 rows, because the 39th is the cursor sitting below them.
 	if len(lines) > rows {
 		lines = lines[len(lines)-rows:]
 	}
@@ -78,6 +85,14 @@ func ReadWindow(screen string, rows int) string {
 		// Herdr right-trims with Rust's trim_end(), which is Unicode
 		// White_Space, not an ASCII pair (ghostty_screen_row, :2864).
 		out[i] = strings.TrimRightFunc(line, unicode.IsSpace)
+	}
+	// Trailing blank rows go last, after the window is fixed and each row is
+	// trimmed (terminal.rs:3357-3369). Interior blanks survive.
+	for len(out) > 0 && out[len(out)-1] == "" {
+		out = out[:len(out)-1]
+	}
+	if len(out) == 0 {
+		return ""
 	}
 	return strings.Join(out, "\n") + "\n"
 }

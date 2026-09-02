@@ -29,11 +29,21 @@ func TestReadWindowIsTheTailOfTheBufferAtThePaneHeight(t *testing.T) {
 	}
 	got := manifest.ReadWindow(b.String(), 39)
 	lines := strings.Split(strings.TrimSuffix(got, "\n"), "\n")
-	if len(lines) != 39 {
-		t.Fatalf("window has %d rows, want the pane's own 39", len(lines))
+	// This is the measurement in docs/reference/herdr-detection-parity.md
+	// ("Read window"), reproduced exactly: herdr 0.8.2 on a 39-row pane printing
+	// 2000 numbered lines returned lines 1963-2000. Thirty-eight rows, not
+	// thirty-nine, because the thirty-ninth row of the grid is the cursor
+	// sitting blank below the output — the empty piece the terminating newline
+	// leaves behind, which is a row and spends a row of the budget.
+	//
+	// Selecting the window before trimming is what makes that true. Trimming
+	// first and windowing after returns 1962-2000, one row further up the
+	// buffer than the pane can show.
+	if len(lines) != 38 {
+		t.Fatalf("window has %d rows, want the 38 herdr 0.8.2 returned", len(lines))
 	}
-	if lines[0] != "line 1962" || lines[len(lines)-1] != "line 2000" {
-		t.Fatalf("window spans %q..%q", lines[0], lines[len(lines)-1])
+	if lines[0] != "line 1963" || lines[len(lines)-1] != "line 2000" {
+		t.Fatalf("window spans %q..%q, want line 1963..line 2000", lines[0], lines[len(lines)-1])
 	}
 }
 
@@ -46,8 +56,14 @@ func TestReadWindowFallsBackToTwentyFourRows(t *testing.T) {
 	}
 	for _, rows := range []int{0, -1} {
 		got := manifest.ReadWindow(b.String(), rows)
-		if n := strings.Count(got, "\n"); n != manifest.DefaultDetectionRows {
-			t.Fatalf("rows=%d produced %d lines, want %d", rows, n, manifest.DefaultDetectionRows)
+		lines := strings.Split(strings.TrimSuffix(got, "\n"), "\n")
+		// Twenty-four grid rows, of which the last is the blank cursor row, so
+		// twenty-three carry text: rows 78 through 100.
+		if len(lines) != manifest.DefaultDetectionRows-1 {
+			t.Fatalf("rows=%d produced %d lines, want %d", rows, len(lines), manifest.DefaultDetectionRows-1)
+		}
+		if lines[0] != "row 78" || lines[len(lines)-1] != "row 100" {
+			t.Fatalf("rows=%d window spans %q..%q", rows, lines[0], lines[len(lines)-1])
 		}
 	}
 }
@@ -57,10 +73,21 @@ func TestReadWindowTrimsTrailingBlanksWithoutExtendingUpward(t *testing.T) {
 	// extra history down to fill the gap, so the window can be shorter than the
 	// pane. A window that grew back to full height would let a resolved
 	// historical prompt back into view.
+	//
+	// Seven grid rows: three of text, then a blank, a whitespace-only row, a
+	// blank, and the cursor row the terminating newline leaves.
 	screen := "keep 1\nkeep 2\nkeep 3\n\n   \n\n"
-	got := manifest.ReadWindow(screen, 3)
-	if got != "keep 1\nkeep 2\nkeep 3\n" {
+	if got := manifest.ReadWindow(screen, 7); got != "keep 1\nkeep 2\nkeep 3\n" {
 		t.Fatalf("window = %q", got)
+	}
+
+	// And the cost of not backfilling, which is the half that matters: on a
+	// three-row pane the last three rows are all blank, so the window is empty
+	// and the text three rows above it is simply not on screen. Trimming before
+	// windowing would return the three keeps here, which is a pane state the
+	// user cannot see.
+	if got := manifest.ReadWindow(screen, 3); got != "" {
+		t.Fatalf("three-row window = %q, want empty", got)
 	}
 }
 
@@ -152,6 +179,26 @@ func TestOSCRegionsReadTheirOwnStringsNotTheScreen(t *testing.T) {
 	// unmatched with empty evidence.
 	if got, _ := manifest.RegionText(manifest.Input{Screen: "x"}, "osc_progress"); got != "" {
 		t.Fatalf("osc_progress under tmux = %q, want empty", got)
+	}
+}
+
+// Herdr's osc_title is a decoded OSC 0/2 payload and carries no SGR by
+// construction. Sidecar's is tmux `#{pane_title}`, which hands back whatever
+// bytes the program wrote, so a provider that colours its spinner ships an
+// escape ahead of the glyph. Every upstream osc_title rule is anchored at the
+// start of the title (`^[\x{2800}-\x{28FF}\x{25D0}-\x{25D3}] ` in claude.toml),
+// so an unstripped escape turns the rule into a permanent no-match and a
+// working pane reads as idle.
+func TestOSCTitleIsStrippedOfSGRBeforeAnyRuleSeesIt(t *testing.T) {
+	in := manifest.Input{Screen: "screen text\n", Title: "\x1b[33m⠋\x1b[0m project"}
+	if got, _ := manifest.RegionText(in, "osc_title"); got != "⠋ project" {
+		t.Fatalf("osc_title = %q, want the stripped title", got)
+	}
+	// Stripping a title with no escapes is identity, so nothing upstream
+	// evaluates differently because of this.
+	plain := manifest.Input{Title: "⠋ project"}
+	if got, _ := manifest.RegionText(plain, "osc_title"); got != "⠋ project" {
+		t.Fatalf("plain osc_title = %q", got)
 	}
 }
 
@@ -253,6 +300,52 @@ regex = ["Do You Want To Proceed"]
 	for _, rule := range explain.EvaluatedRules {
 		if rule.ID == "literal" && rule.Matched {
 			t.Fatal("regex must not fold case unless the pattern says (?i)")
+		}
+	}
+}
+
+// Herdr folds `contains` with Rust's str::to_lowercase, which is the full
+// Unicode lowercase algorithm: SpecialCasing (İ lowers to two runes) and the
+// Final_Sigma condition (a Σ ending a word lowers to ς). Go's strings.ToLower
+// folds each rune with the simple mapping and does neither, so a needle and a
+// screen that Herdr separates would match here. Both splits below were verified
+// against herdr 0.8.2.
+//
+// No vendored needle diverges today. This pins the fold so a sync that adds one
+// cannot introduce a silent verdict difference between the two engines.
+func TestContainsFoldsCaseTheWayRustDoes(t *testing.T) {
+	compiled := compileSource(t, `
+id = "codex"
+
+[[rules]]
+id = "dotted_i"
+state = "blocked"
+priority = 1
+contains = ["istanbul"]
+
+[[rules]]
+id = "final_sigma"
+state = "working"
+priority = 1
+contains = ["\u03a0\u03a3"]
+`)
+	// "İSTANBUL" lowers to "i" + U+0307 + "stanbul" under the full algorithm, so
+	// the needle "istanbul" is not in it. Under a simple per-rune fold it is.
+	for _, tt := range []struct {
+		screen string
+		want   string
+	}{
+		{"\u0130STANBUL\n", ""},
+		{"istanbul\n", "dotted_i"},
+		// "ΠΣΒ" keeps a medial sigma (πσβ); the needle "ΠΣ" ends in one, so it
+		// folds to "πς" and does not occur in "πσβ".
+		{"\u03a0\u03a3\u0392\n", ""},
+		// The same needle against the same word ending the sigma matches.
+		{"\u03a0\u03a3\n", "final_sigma"},
+	} {
+		verdict, _ := compiled.Explain(manifest.Input{Screen: tt.screen})
+		if got := matchedID(verdict); got != tt.want {
+			t.Fatalf("screen %q matched %q, want %q", tt.screen, got, tt.want)
 		}
 	}
 }
@@ -518,6 +611,32 @@ contains = ["anything"]
 	}
 	if _, err := manifest.Merge(upstream, overlay); err == nil {
 		t.Fatalf("accepted a new overlay rule without the %q prefix", manifest.OverlayIDPrefix)
+	}
+}
+
+// An overlay names the manifest it amends, and the loader keys on the file name
+// instead, so the id is the only place a misfiled overlay can be caught.
+func TestOverlayRefusesToAmendADifferentManifest(t *testing.T) {
+	upstream, err := manifest.ParseAndValidate([]byte(overlayUpstream))
+	if err != nil {
+		t.Fatal(err)
+	}
+	overlay, err := manifest.ParseOverlay([]byte(`
+id = "codex"
+
+[[rules]]
+id = "sidecar.extra"
+state = "working"
+priority = 2
+contains = ["busy"]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manifest.Merge(upstream, overlay); err == nil {
+		t.Fatal("an overlay declaring another agent's id was merged")
+	} else if !strings.Contains(err.Error(), "amends") {
+		t.Fatalf("error = %v", err)
 	}
 }
 

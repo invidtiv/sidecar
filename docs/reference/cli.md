@@ -82,7 +82,7 @@ Usage: sidecar agent explain [--current | --shell TARGET | --file PATH --agent K
 - `--file PATH`: Explain a saved capture offline, with no tmux and no lifecycle store
 - `--agent KIND`: Which agent's manifest to evaluate --file against (required with --file)
 - `--title TEXT`: Pane title for --file when the capture carries no header
-- `--rows N`: Pane height for --file; the detection read window. Defaults to the fixture header, else 24
+- `--rows N`: Pane height for --file; the detection read window. Must be positive; defaults to the fixture header, else 24
 - `--print-window`: With --file, print the detection read window instead of a verdict
 - `--json`: Write stable structured JSON
 - `-h, --help`: Show this help
@@ -90,9 +90,9 @@ Usage: sidecar agent explain [--current | --shell TARGET | --file PATH --agent K
 **Exit codes:**
 
 - `0`: success, or no-op outside a Sidecar-managed shell
-- `1`: the report could not be stored
+- `1`: internal failure: the explanation could not be produced or written
 - `2`: usage error
-- `5`: invalid context, stale sequence, or run mismatch
+- `5`: invalid context, or a rejected value: an unreadable --file, an unknown --agent
 
 **Examples:**
 

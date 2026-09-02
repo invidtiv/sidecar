@@ -68,13 +68,21 @@ func explainFile(env Env, f lifecycleFlags, help string) int {
 		return 2
 	}
 	if !agentactivity.Supports(f.agent) {
+		// A rejected value, not a malformed command line: --agent was spelled
+		// correctly and carried a kind Sidecar has no manifest for. Exit 2 would
+		// tell a caller on another machine that its Sidecar is too old to
+		// understand the flag, which is what exit 2 means everywhere else here.
 		cliErrf(env.Stderr, "no screen detection for agent %q; Sidecar knows codex, claude, grok, antigravity, pi, copilot, cursor, opencode, amp, muse\n", f.agent)
-		return 2
+		return exitInputRejected
 	}
 	data, err := os.ReadFile(f.file)
 	if err != nil {
+		// Same class: the path is the value that was refused. Exit 1 is reserved
+		// for a failure inside the command, and this command's documented exit 1
+		// used to read "the report could not be stored" -- about a store that
+		// --file never opens.
 		cliErrln(env.Stderr, err.Error())
-		return 1
+		return exitInputRejected
 	}
 
 	fixture := parseFixture(data)
@@ -117,6 +125,9 @@ func explainFile(env Env, f lifecycleFlags, help string) int {
 
 	result, explain := agentactivity.DetectManifest(ob)
 	if explain == nil {
+		// A true internal failure, and the only one left: the agent is
+		// supported, the file was read, and the engine still could not produce a
+		// record -- a manifest that failed to load or compile. That is exit 1.
 		cliErrf(env.Stderr, "could not evaluate %s as %s: %s\n", f.file, f.agent, result.Evidence)
 		return 1
 	}

@@ -87,27 +87,47 @@ func TestExplainFileTitleFlagSuppliesWhatTheHeaderWouldHave(t *testing.T) {
 // harness feeds to both engines.
 func TestExplainFilePrintWindowIsTheTextDetectionSaw(t *testing.T) {
 	t.Setenv(shellstate.ManagedEnv, "")
-	var b strings.Builder
-	b.WriteString("pane_current_command: codex\nscreen:\n")
-	for i := 1; i <= 40; i++ {
-		b.WriteString("row ")
-		b.WriteString(strings.Repeat("x", 0))
-		b.WriteString(string(rune('0'+i%10)) + "\n")
+	rows := func(trailing string) string {
+		var b strings.Builder
+		b.WriteString("pane_current_command: codex\nscreen:\n")
+		for i := 1; i <= 40; i++ {
+			b.WriteString("row ")
+			b.WriteString(string(rune('0'+i%10)) + "\n")
+		}
+		b.WriteString(trailing)
+		return b.String()
 	}
-	b.WriteString("\n\n   \n")
-	path := writeFixture(t, b.String())
+	window := func(t *testing.T, fixture string) []string {
+		t.Helper()
+		path := writeFixture(t, fixture)
+		code, out, errOut := runLifecycleCLI(t, "agent", "explain", "--file", path, "--agent", "codex",
+			"--rows", "5", "--print-window")
+		if code != 0 {
+			t.Fatalf("exit %d (stderr: %s)", code, errOut)
+		}
+		if out == "" {
+			return nil
+		}
+		return strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+	}
 
-	code, out, errOut := runLifecycleCLI(t, "agent", "explain", "--file", path, "--agent", "codex",
-		"--rows", "5", "--print-window")
-	if code != 0 {
-		t.Fatalf("exit %d (stderr: %s)", code, errOut)
+	// Forty rows of output ending on the cursor row: a five-row pane shows the
+	// last four of them plus that blank cursor row, which trims away.
+	lines := window(t, rows(""))
+	if len(lines) != 4 {
+		t.Fatalf("window has %d rows, want 4:\n%q", len(lines), lines)
 	}
-	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
-	if len(lines) != 5 {
-		t.Fatalf("window has %d rows, want the 5 requested:\n%q", len(lines), out)
+	if lines[len(lines)-1] != "row 0" || lines[0] != "row 7" {
+		t.Fatalf("window spans %q..%q, want row 7..row 0", lines[0], lines[len(lines)-1])
 	}
-	if lines[len(lines)-1] != "row 0" {
-		t.Fatalf("window does not end at the last non-blank row: %q", lines[len(lines)-1])
+
+	// The same output with three blank rows below it. Those rows are inside the
+	// five-row window and are not backfilled, so the window is one row long —
+	// which is what the pane shows. A window that trimmed before selecting would
+	// still print five rows here, reaching four rows further up than the pane
+	// can display, and that is how a resolved historical prompt wins a rule.
+	if lines := window(t, rows("\n\n   \n")); len(lines) != 1 || lines[0] != "row 0" {
+		t.Fatalf("padded window = %q, want the single row the pane still shows", lines)
 	}
 }
 
@@ -136,10 +156,17 @@ func TestExplainFileRefusals(t *testing.T) {
 		code int
 	}{
 		{"no agent", []string{"agent", "explain", "--file", path}, 2},
-		{"unknown agent", []string{"agent", "explain", "--file", path, "--agent", "nosuch"}, 2},
 		{"file with current", []string{"agent", "explain", "--file", path, "--agent", "codex", "--current"}, 2},
 		{"agent without file", []string{"agent", "explain", "--agent", "codex"}, 2},
-		{"missing file", []string{"agent", "explain", "--file", filepath.Join(t.TempDir(), "absent.txt"), "--agent", "codex"}, 1},
+		{"rows without a value", []string{"agent", "explain", "--file", path, "--agent", "codex", "--rows"}, 2},
+		{"rows is not a number", []string{"agent", "explain", "--file", path, "--agent", "codex", "--rows", "wide"}, 2},
+
+		// The command line is well formed in these two; a value inside it was
+		// refused. That is exitInputRejected everywhere else in the CLI, and
+		// exit 1 here would point a caller at the store this command never
+		// opens.
+		{"unknown agent", []string{"agent", "explain", "--file", path, "--agent", "nosuch"}, exitInputRejected},
+		{"missing file", []string{"agent", "explain", "--file", filepath.Join(t.TempDir(), "absent.txt"), "--agent", "codex"}, exitInputRejected},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -151,5 +178,41 @@ func TestExplainFileRefusals(t *testing.T) {
 				t.Fatal("refused without saying why")
 			}
 		})
+	}
+}
+
+// TestExplainFileRejectsZeroRows closes a gap that made --rows lie. Zero parsed
+// and was then silently ignored -- the read window fell back to the fixture
+// header or to 24 -- so a caller pinning the window to nothing got a verdict
+// from a window it did not ask for and no indication of it.
+func TestExplainFileRejectsZeroRows(t *testing.T) {
+	t.Setenv(shellstate.ManagedEnv, "")
+	path := writeFixture(t, "pane_current_command: codex\nscreen:\nquiet\n")
+
+	code, _, errOut := runLifecycleCLI(t, "agent", "explain", "--file", path, "--agent", "codex", "--rows", "0")
+	if code != 2 {
+		t.Fatalf("exit %d, want a usage error (stderr: %s)", code, errOut)
+	}
+	if !strings.Contains(errOut, "--rows must be a positive integer") {
+		t.Fatalf("refusal does not say what is wrong: %s", errOut)
+	}
+	if !strings.Contains(errOut, "24-row fallback") {
+		t.Fatalf("refusal does not say how to get the fallback: %s", errOut)
+	}
+}
+
+// TestExplainExitCodesAreDocumented keeps the published table honest about the
+// two codes this command actually returns for a rejected input.
+func TestExplainExitCodesAreDocumented(t *testing.T) {
+	cmd := RootCommand().FindSubcommand("agent").FindSubcommand("explain")
+	byCode := map[int]string{}
+	for _, ec := range cmd.ExitCodes {
+		byCode[ec.Code] = ec.Summary
+	}
+	if summary, ok := byCode[1]; !ok || strings.Contains(summary, "stored") {
+		t.Fatalf("exit 1 = %q; explain stores nothing, so it must not claim a store failure", summary)
+	}
+	if _, ok := byCode[exitInputRejected]; !ok {
+		t.Fatalf("exit %d is undocumented for explain: %+v", exitInputRejected, cmd.ExitCodes)
 	}
 }

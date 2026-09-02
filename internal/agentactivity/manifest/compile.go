@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
 
 // RegexIncompatibleNote is the evidence note an Explain carries for a rule the
@@ -14,7 +17,34 @@ import (
 // note is how `explain` says so instead of the rule silently reading as a
 // well-considered no-match. See docs/reference/herdr-detection-parity.md
 // ("Regex compatibility").
-const RegexIncompatibleNote = "regex_incompatible"
+//
+// "Dead" is the accurate word and it is deliberately not "unmatched": the whole
+// rule is skipped, not just the pattern. Where the pattern sits inside a `not`
+// gate that is the opposite of Herdr's behaviour — upstream would evaluate the
+// pattern, fail to match it, and so satisfy the `not`, usually firing the rule.
+// Skipping is the safer direction (a rule that cannot be evaluated asserts
+// nothing) and it is unreachable today: all four incompatible patterns are
+// positive `line_regex` matchers, and each has an overlay carrying an RE2
+// rewrite. TestOverlaysMakeEveryRuleCompilable is what keeps it unreachable.
+const RegexIncompatibleNote = "regex_incompatible: rule is dead"
+
+// foldLower is Rust's `str::to_lowercase()`, which Herdr's compile_gate and
+// compiled_rule_matches both use for `contains`.
+//
+// It is not `strings.ToLower`. Go's folds each rune independently with the
+// simple mappings; Rust's applies the full Unicode lowercase algorithm,
+// including SpecialCasing (U+0130 LATIN CAPITAL LETTER I WITH DOT ABOVE lowers
+// to "i" + U+0307, two runes) and the Final_Sigma condition (a Σ ending a word
+// lowers to ς, not σ). Verified against herdr 0.8.2: needle "istanbul" against
+// a screen reading "İSTANBUL" matches here and not upstream under the simple
+// fold, and needle "ΠΣ" against "ΠΣΒ" splits the other way.
+//
+// No needle in any vendored manifest diverges today, so this changes no
+// verdict; it removes a class of divergence a future sync could introduce
+// silently. A Caser is stateful and must not be shared between goroutines, so
+// one is built per call — needles fold once per manifest compile, and a region
+// folds at most once per observation, so the cost is bounded.
+func foldLower(s string) string { return cases.Lower(language.Und).String(s) }
 
 // Compiled is a manifest with every pattern compiled and every `contains`
 // needle folded, ready to evaluate. Compilation happens once per manifest;
@@ -90,7 +120,7 @@ func compileGate(gate *Gate) (compiledGate, string) {
 		}
 	}
 	for _, needle := range gate.Contains {
-		out.contains = append(out.contains, strings.ToLower(needle))
+		out.contains = append(out.contains, foldLower(needle))
 	}
 	for _, pattern := range gate.Regex {
 		re, err := CompileRegex(pattern)

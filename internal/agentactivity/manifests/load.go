@@ -117,6 +117,11 @@ func load(agent string) loaded {
 
 	compiled, err := manifest.Compile(merged)
 	if err != nil {
+		// Unreachable today: Compile fails only on a nil manifest or a region
+		// spec, and Merge has already run the full validator over the merged
+		// rules. It is kept because the alternative to a wrong belief here is an
+		// agent with no manifest at all, and Compile's contract may widen.
+		//
 		// A merged manifest that will not compile is the overlay's fault: the
 		// vendored file compiles in CI. Fall back to upstream alone rather than
 		// leaving the agent with no manifest at all.
