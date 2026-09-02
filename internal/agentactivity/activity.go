@@ -314,6 +314,14 @@ func identifyProcessName(command string) string {
 // kern.proc.all on macOS) behind a two-second cache. So it names the runtimes
 // that hide an agent and nothing else.
 //
+// It is no longer a gate any caller of ResolveForegroundAgent applies: it is the
+// top rung of that resolver's own cost ladder (agentIdentityEffort), because
+// duplicating it at each call site is what kept AgentHintEnv permanently out of
+// reach of the sandbox panes it exists for — a `docker` pane answers false here
+// and so never reached the hint. It survives as an exported predicate for the
+// other question it answers: whether a pane needs live UI chrome captured to
+// name its provider (workspace's shellNeedsIdentityScreen).
+//
 // It is therefore a strict subset of isGenericRuntimeOrShell, and the three
 // exclusions are deliberate:
 //

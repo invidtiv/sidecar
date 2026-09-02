@@ -10,14 +10,21 @@ import (
 //
 // Ported from Herdr's src/detect/mod.rs at d08e4468 — `identify_agent_in_job`
 // and the helper chain beneath it. Sidecar previously matched argv[0] basenames
-// only, which is enough for an agent that renames its own process (Claude Code)
-// and useless for the common npm install shape: a `#!/usr/bin/env node` shim
-// leaves the *interpreter* in argv[0], tmux reports `node`, and neither identity
-// input names the agent. The pane is then never claimed at all — no badge, and
-// `sidecar agent start --kind pi` runs to its full timeout because
-// agentcontrol's detector consults Detect and nothing else. That was measured on
-// Pi 0.84.3; see docs/plans/active/herdr-parity-close-the-gap.md, Slice 1's
-// result and Slice 3.
+// only, which is enough for an agent that renames its own process and useless
+// for the common npm install shape: a `#!/usr/bin/env node` shim leaves the
+// *interpreter* in argv[0], tmux reports `node`, and neither identity input
+// names the agent, so the pane is never claimed at all.
+//
+// The measured case is a synthetic `#!/usr/bin/env node` shim named `qwen`
+// (comm `node`, argv `["node", ".../bin/qwen"]`), which went from
+// `evidence=provider-not-identified` to `kind=qwen status=idle`. Pi is *not*
+// that case: it rewrites its own process title, so argv[0] and comm are both
+// `pi` and only tmux's pane_current_command says `node`. Pi was already
+// identified here and was refused one step later, by the gate — which is why
+// `sidecar agent start --kind pi` ran to its full timeout, and why widening this
+// resolver alone would not have fixed it. See
+// docs/plans/active/herdr-parity-close-the-gap.md, Slice 3's result, for both
+// measurements.
 //
 // The shape of the fix is upstream's: when a process is a generic runtime,
 // unwrap it using its own argv; otherwise take argv[0]/comm as the identity;

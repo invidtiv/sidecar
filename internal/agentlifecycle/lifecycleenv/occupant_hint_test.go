@@ -82,13 +82,19 @@ func TestAnAgentHintCannotChangeTheOccupant(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = exec.Command("tmux", "-S", socket, "kill-server").Run() })
 
+	// The pane's command is read alongside its pid because the display resolver
+	// takes both: pane_current_command is what decides how hard it may look, and
+	// this pane's command — a test binary — is exactly the unrecognised-wrapper
+	// shape the hint exists for, resolved with no process-table walk.
 	var panePID int
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		out, inspectErr := exec.Command("tmux", "-S", socket, "display-message", "-p", "-t", session, "#{pane_pid}").Output()
+		out, inspectErr := exec.Command("tmux", "-S", socket, "display-message", "-p", "-t", session,
+			"#{pane_pid} #{pane_current_command}").Output()
 		if inspectErr == nil {
-			if pid, parseErr := strconv.Atoi(strings.TrimSpace(string(out))); parseErr == nil && pid > 0 {
-				if agentactivity.ResolveForegroundAgent(pid) == "codex" {
+			rawPID, command, _ := strings.Cut(strings.TrimSpace(string(out)), " ")
+			if pid, parseErr := strconv.Atoi(rawPID); parseErr == nil && pid > 0 {
+				if agentactivity.ResolveForegroundAgent(pid, command) == "codex" {
 					panePID = pid
 					break
 				}

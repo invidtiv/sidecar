@@ -10,12 +10,94 @@ import (
 
 const foregroundIdentityTTL = 2 * time.Second
 
+// foregroundIdentityEntry is one pane's cached answer. Its two halves are
+// stamped independently, and that is the point rather than bookkeeping: the
+// evidence half is filled by a process-table walk, the agent half may be filled
+// with no walk at all, and either caller may arrive first.
+//
+// The scan's raw member list is kept alongside its answer so the hint pass can
+// run against it later without walking again. Before that, an evidence-only
+// resolve and a hint-aware resolve of the same pane overwrote each other's
+// entry and each forced the other to re-walk inside the same TTL window —
+// roughly doubling the process-table walks for any pane that both
+// agentcontrol's observer and the workspace poll were looking at.
 type foregroundIdentityEntry struct {
-	group      int
-	identity   string
-	hinted     string
-	hintsRead  bool
-	resolvedAt time.Time
+	group int
+
+	// The evidence half: what the process table said, and the members it said
+	// it about. Valid while scannedAt is fresh.
+	identity  string
+	processes []foregroundProcess
+	scannedAt time.Time
+
+	// The hint-aware half: evidence when evidence names an agent, otherwise a
+	// hint. Valid while agentAt is fresh. It can be filled without scannedAt
+	// ever being set — that is the cheap path, and it is the only path a pane
+	// running an unrecognised wrapper gets.
+	agent   string
+	agentAt time.Time
+}
+
+// foregroundIdentityFresh is the TTL check, applied per half rather than per
+// entry so a cheap hint read never extends the life of a stale scan.
+func foregroundIdentityFresh(at, now time.Time) bool {
+	return !at.IsZero() && now.Sub(at) < foregroundIdentityTTL
+}
+
+// foregroundIdentityEffort is how much work a pane's tmux command justifies
+// spending to name the program behind it. The ladder lives here, in the
+// resolver, rather than in each caller: "what can this pane afford" is one
+// question with one answer, and it was previously duplicated as a
+// NeedsProcessIdentity gate at every call site — which is what kept a hint
+// permanently out of reach of the panes it exists for. See ResolveForegroundAgent.
+type foregroundIdentityEffort int
+
+const (
+	// identityEffortNone reads nothing at all. pane_current_command already
+	// names the program (a `claude` pane is Claude), or it names an interactive
+	// shell, which is the overwhelmingly common pane and must stay free.
+	identityEffortNone foregroundIdentityEffort = iota
+
+	// identityEffortLeaderHint looks up the pane's foreground process group and
+	// reads that group leader's environment: two per-process reads, and no
+	// process-table walk. This is what an unrecognised command gets — `docker`,
+	// `bwrap`, `sandbox-exec`, `firejail`, `nix`, `ssh` — which are the wrapper
+	// shapes AgentHintEnv exists for and the ones that never reached it while
+	// each caller gated on NeedsProcessIdentity.
+	identityEffortLeaderHint
+
+	// identityEffortEvidenceScan walks the foreground job and answers from
+	// process evidence only. ResolveForegroundProcess, and nothing else.
+	identityEffortEvidenceScan
+
+	// identityEffortAgentScan walks the foreground job and falls back to a hint
+	// when the walk names nothing. Reserved for the runtimes that genuinely
+	// hide an agent (NeedsProcessIdentity), because the walk is a full
+	// kern.proc.all on macOS and a /proc ReadDir on linux.
+	identityEffortAgentScan
+)
+
+// agentIdentityEffort maps tmux's pane_current_command onto the ladder.
+//
+// The two ends are the cost argument. A pane whose command already names an
+// agent or a shell learns nothing from either read, so it pays nothing; a pane
+// running node/bun/agent/python is the one shape where the program's own name
+// is provably absent from every cheap input, so it pays for the walk. Everything
+// in between — anything the alias table cannot place — is a possible sandbox
+// wrapper, and it gets the leader's hint and no walk.
+func agentIdentityEffort(command string) foregroundIdentityEffort {
+	name := normalizeProcessName(command)
+	if name == "" {
+		return identityEffortNone
+	}
+	if NeedsProcessIdentity(name) {
+		return identityEffortAgentScan
+	}
+	if identifyProcessName(name) != "" {
+		// A known agent, or a shell. Both are already answered.
+		return identityEffortNone
+	}
+	return identityEffortLeaderHint
 }
 
 // foregroundProcess is the platform-neutral slice of process-table state the
@@ -98,6 +180,15 @@ var foregroundIdentities = struct {
 // It is a hint and never a claim. See ResolveForegroundAgent for the seam that
 // keeps it away from lifecycle authority, and why that seam must not be
 // collapsed.
+//
+// Reading it means reading another process's environment, which both adapters
+// can do and neither can do unconditionally: Linux denies another user's
+// /proc/<pid>/environ, and macOS withholds the environment of a *restricted*
+// binary from everyone, including the same user. The macOS half is the
+// surprising one and is measured in platformProcessAgentHint
+// (process_identity_darwin.go) — read it before concluding from a live proof
+// that the hint does not work, because a proof whose stand-in wrapper is a
+// system binary sees nothing for that reason alone.
 const AgentHintEnv = "SIDECAR_AGENT"
 
 // parseAgentEnvHint reads AgentHintEnv out of a raw NUL-separated environment
@@ -138,8 +229,22 @@ func validatedAgentHint(value string) string {
 // all. Production always holds the platform implementation.
 var readProcessAgentHint = platformProcessAgentHint
 
+// readForegroundProcessGroup and readForegroundProcesses are the platform seams
+// for "which group owns the terminal" and "walk the process table".
+//
+// They are variables for the same reason readProcessAgentHint is: the ladder's
+// cost claim is the part most likely to rot, and the only mechanical way to pin
+// "this pane does not walk the process table" is to substitute a walk that fails
+// the test when it is called. Production always holds the platform
+// implementations.
+var (
+	readForegroundProcessGroup = platformForegroundProcessGroup
+	readForegroundProcesses    = platformForegroundProcesses
+)
+
 // ResolveForegroundAgent names the agent running in a pane, for detection and
-// display. It is the hint-aware resolver.
+// display. It is the hint-aware resolver. currentCommand is tmux's
+// pane_current_command, which decides how much the answer is allowed to cost.
 //
 // # Why this is a different function from ResolveForegroundProcess
 //
@@ -158,30 +263,32 @@ var readProcessAgentHint = platformProcessAgentHint
 // Do not "simplify" these two back into one function. If a caller needs both
 // answers it should ask for both.
 //
-// # Precedence
+// # Precedence, and a deliberate divergence from upstream
 //
-// Upstream's, from `probe_foreground_process_from_jobs` (src/pane.rs:608 at
-// d08e4468):
+// Upstream's `probe_foreground_process_from_jobs` (src/pane.rs:608 at d08e4468)
+// reads the process group leader's hint *before* identifying the leader, so a
+// hint outranks process evidence. This port inverts that: evidence first, hint
+// only when evidence names nothing.
 //
-//  1. a hint on the process group leader,
-//  2. identification of the leader alone,
-//  3. a hint on any non-leader member of the job,
-//  4. scored identification across the whole job.
+// The difference is who can write the hint. Herdr's `HERDR_AGENT` is set by
+// Herdr's own wrapper, so trusting it over evidence is trusting itself.
+// Sidecar's `SIDECAR_AGENT` is a bare environment variable that Sidecar reads
+// and never writes (see the Slice 3 result in
+// docs/plans/active/herdr-parity-close-the-gap.md), so anything in the session
+// can set it. Under upstream's order, `export SIDECAR_AGENT=codex` in a Claude
+// pane would relabel that pane — the display-side echo of exactly the failure
+// the resolver split exists to prevent, and the hint's only observable effect on
+// a pane whose evidence already answers.
 //
-// A hint on the leader beats identification precisely because the case it exists
-// for is the one where identification is about to answer "the sandbox". A hint
-// deeper in the job ranks below the leader's own identity, because there the
-// leader is real evidence and the member's hint may be inherited from an
-// unrelated ancestor.
+// Inverting it also removes a cost: upstream's order forces a hint read on every
+// trivially identified leader, once per pane per poll.
 //
-// Steps 2 and 4 are both identifyAgentInJob, which already prefers the leader;
-// they are written out separately only because step 3 sits between them.
-func ResolveForegroundAgent(panePID int) string {
-	entry := resolveForegroundIdentity(panePID, true)
-	if entry.hinted == "shell" {
-		return ""
-	}
-	return entry.hinted
+// So the ladder is: identifyAgentInJob across the job (which already prefers the
+// leader, then scores members), then the leader's hint, then any other member's
+// hint. Hints keep upstream's leader-before-members order among themselves,
+// because a member's hint may have been inherited from an unrelated ancestor.
+func ResolveForegroundAgent(panePID int, currentCommand string) string {
+	return resolveForegroundIdentity(panePID, agentIdentityEffort(currentCommand)).agent
 }
 
 // ResolveForegroundProcess identifies the known program in the pane's actual
@@ -191,66 +298,81 @@ func ResolveForegroundAgent(panePID int) string {
 // lifecycleenv's occupant check.
 //
 // Process evidence only. It never reads an environment; see ResolveForegroundAgent.
+// It also takes no command, and therefore no cost ladder: its callers ask about
+// one pane deliberately (agent start, the occupant check), not about every row
+// on screen, so it always scans.
 func ResolveForegroundProcess(panePID int) string {
-	return resolveForegroundIdentity(panePID, false).identity
+	return resolveForegroundIdentity(panePID, identityEffortEvidenceScan).identity
 }
 
-// resolveForegroundIdentity scans the pane's foreground job once and answers
-// both questions from it, caching by pane PID and foreground group so
-// active-agent polling does not scan the process table on every frame while a
-// new foreground job still invalidates the cache immediately.
+// resolveForegroundIdentity answers as much of the pane's identity as the
+// caller's effort allows, filling the cache entry's two halves independently.
 //
-// withHint controls whether the environment is read at all. The evidence answer
-// is always computed and always cached, so an evidence-only caller hits a cache
-// entry a hinted caller warmed; the reverse misses once, which is the price of
-// never paying the hint's cost on a path that is not allowed to use it.
-func resolveForegroundIdentity(panePID int, withHint bool) foregroundIdentityEntry {
-	if panePID <= 0 {
+// Caching is keyed by pane PID and validated against the foreground group, so a
+// new foreground job invalidates immediately while steady-state polling does
+// not re-read. Each half is computed only if the caller needs it and the cache
+// does not already hold it fresh, which is what lets an evidence-only resolve
+// and a hint-aware resolve of the same pane cooperate instead of evicting each
+// other: the hint pass re-uses the members the scan already collected.
+func resolveForegroundIdentity(panePID int, effort foregroundIdentityEffort) foregroundIdentityEntry {
+	if panePID <= 0 || effort == identityEffortNone {
 		return foregroundIdentityEntry{}
 	}
-	group := platformForegroundProcessGroup(panePID)
+	group := readForegroundProcessGroup(panePID)
 	if group <= 0 {
 		return foregroundIdentityEntry{}
 	}
 	now := time.Now()
+	entry := cachedForegroundIdentity(panePID, group, now)
+
+	if effort != identityEffortLeaderHint && entry.scannedAt.IsZero() {
+		entry.processes = readForegroundProcesses(group)
+		entry.identity = foregroundEvidenceIdentity(group, entry.processes)
+		entry.scannedAt = now
+	}
+	if effort != identityEffortEvidenceScan && entry.agentAt.IsZero() {
+		// On the leader-hint path there are no members to pass — unless a scan
+		// happens to be cached, in which case they are free — so this reads one
+		// environment: the group leader's. The process group id is the leader's
+		// pid, which is why the cheap path needs no scan to find it.
+		entry.agent = foregroundAgentIdentity(group, entry.identity, entry.processes)
+		entry.agentAt = now
+	}
+
+	entry.group = group
+	storeForegroundIdentity(panePID, entry, now)
+	return entry
+}
+
+// cachedForegroundIdentity returns the pane's entry with any expired half
+// cleared, or a zero entry when the foreground group has changed.
+func cachedForegroundIdentity(panePID, group int, now time.Time) foregroundIdentityEntry {
 	foregroundIdentities.Lock()
 	entry, ok := foregroundIdentities.entries[panePID]
 	foregroundIdentities.Unlock()
-	if ok && entry.group == group && now.Sub(entry.resolvedAt) < foregroundIdentityTTL &&
-		(!withHint || entry.hintsRead) {
-		return entry
+	if !ok || entry.group != group {
+		return foregroundIdentityEntry{}
 	}
+	if !foregroundIdentityFresh(entry.scannedAt, now) {
+		entry.identity, entry.processes, entry.scannedAt = "", nil, time.Time{}
+	}
+	if !foregroundIdentityFresh(entry.agentAt, now) {
+		entry.agent, entry.agentAt = "", time.Time{}
+	}
+	return entry
+}
 
-	processes := platformForegroundProcesses(group)
-	entry = foregroundIdentityEntry{
-		group:      group,
-		identity:   foregroundEvidenceIdentity(group, processes),
-		hintsRead:  withHint,
-		resolvedAt: now,
-	}
-	if withHint {
-		entry.hinted = foregroundHintedIdentity(group, processes)
-		if entry.hinted == "" {
-			// No hint anywhere and nothing the scoring pass could name: fall
-			// back to the evidence answer so a hinted caller is never told less
-			// than an unhinted one. In practice these agree; they differ only
-			// for "shell", which the evidence answer carries and the hinted
-			// path has no notion of.
-			entry.hinted = entry.identity
-		}
-	}
-
+func storeForegroundIdentity(panePID int, entry foregroundIdentityEntry, now time.Time) {
 	foregroundIdentities.Lock()
+	defer foregroundIdentities.Unlock()
 	if len(foregroundIdentities.entries) > 256 {
 		for pid, cached := range foregroundIdentities.entries {
-			if now.Sub(cached.resolvedAt) >= foregroundIdentityTTL {
+			if !foregroundIdentityFresh(cached.scannedAt, now) && !foregroundIdentityFresh(cached.agentAt, now) {
 				delete(foregroundIdentities.entries, pid)
 			}
 		}
 	}
 	foregroundIdentities.entries[panePID] = entry
-	foregroundIdentities.Unlock()
-	return entry
 }
 
 // foregroundEvidenceIdentity is the process-only answer: scored identification
@@ -274,23 +396,28 @@ func foregroundEvidenceIdentity(group int, processes []foregroundProcess) string
 	return ""
 }
 
-// foregroundHintedIdentity applies the precedence documented on
-// ResolveForegroundAgent. It reads an environment only where the precedence
-// requires it: the leader's hint is read before the leader is identified, so
-// that read cannot be skipped, but a member's hint is read only after
-// identification of the leader has already failed.
-func foregroundHintedIdentity(group int, processes []foregroundProcess) string {
-	for _, process := range processes {
-		if process.PID != group {
-			continue
-		}
-		if hint := readProcessAgentHint(process.PID); hint != "" {
-			return hint
-		}
-		if agent, _ := identifyAgentInJob(group, []foregroundProcess{process}); agent != "" {
-			return agent
-		}
-		break
+// foregroundAgentIdentity applies the precedence documented on
+// ResolveForegroundAgent: process evidence, then the group leader's hint, then
+// any other member's hint.
+//
+// identity is the evidence answer the caller already has, and processes are the
+// job members it was computed from — both empty on the cheap path, where no
+// scan was run. That is why the leader's hint is read by group id rather than by
+// looking the leader up in processes: the process group id *is* the leader's
+// pid, so the one caller with no member list still asks the right process.
+//
+// "shell" is not an agent name here. It says an interactive shell owns the job,
+// which is precisely the case where a hint may still name what is running under
+// it, so it does not block the hint the way a real identification does.
+//
+// No environment is read at all when evidence already names an agent, which is
+// the common case on the scanning path.
+func foregroundAgentIdentity(group int, identity string, processes []foregroundProcess) string {
+	if identity != "" && identity != "shell" {
+		return identity
+	}
+	if hint := readProcessAgentHint(group); hint != "" {
+		return hint
 	}
 	for _, process := range processes {
 		if process.PID == group {
@@ -300,8 +427,7 @@ func foregroundHintedIdentity(group int, processes []foregroundProcess) string {
 			return hint
 		}
 	}
-	agent, _ := identifyAgentInJob(group, processes)
-	return agent
+	return ""
 }
 
 // ForegroundShellReady is the strict launch gate for a managed tmux pane. It
@@ -315,10 +441,10 @@ func foregroundHintedIdentity(group int, processes []foregroundProcess) string {
 // turns out to be an agent, and a hint is irrelevant because nobody launches
 // into a hint.
 func ForegroundShellReady(panePID int, currentCommand string) bool {
-	if panePID <= 0 || platformForegroundProcessGroup(panePID) != panePID {
+	if panePID <= 0 || readForegroundProcessGroup(panePID) != panePID {
 		return false
 	}
-	processes := platformForegroundProcesses(panePID)
+	processes := readForegroundProcesses(panePID)
 	if len(processes) != 1 || identifyArgv0(processes[0].Argv0) != "shell" {
 		return false
 	}

@@ -61,6 +61,43 @@ func platformForegroundProcesses(group int) []foregroundProcess {
 // members, and only when identification did not already answer. Storing it
 // eagerly would make every ForegroundShellReady and every evidence-only resolve
 // carry a process environment they are forbidden to look at.
+//
+// # It works here, but not for every process, and the exception is a trap
+//
+// macOS hands another process's environment to the same uid — but not when the
+// target is a *restricted* executable. For those the kernel truncates the
+// buffer after argv and reports success: no error, a well-formed layout, and
+// parseDarwinProcessEnviron correctly reporting that there is nothing after the
+// last argument. It is the same protection that stops DYLD_* being inherited
+// into a protected binary, and every observation below fits that rule.
+//
+// Measured on Darwin 25.6.0, same uid, same session:
+//
+//   - our own pid: ~11KB, contains `PATH=`;
+//   - an ordinary (locally built, unsigned) binary this process spawned, with
+//     SIDECAR_AGENT=claude in its environment: ~11KB, and this function returns
+//     "claude". So does the same binary as a live tmux pane's foreground
+//     process, started with `tmux -e SIDECAR_AGENT=codex`: 11156 bytes, hint
+//     read back through the resolver;
+//   - a `/bin/sleep 120` child of this same process, spawned identically with
+//     the same variable exported: 35 bytes. The entire buffer is argc, the exec
+//     path and the two argv strings. No hint, no PATH. `/bin/sleep` is a
+//     SIP-protected platform binary and that is the only difference.
+//
+// The consequence for the hint is a bound, not a hole: what publishes
+// AgentHintEnv is the wrapper the pane is running, and a wrapper installed by
+// the user — docker, colima, a nix or Homebrew shim — is readable. A wrapper
+// that ships with the OS is not, which on macOS means `/usr/bin/sandbox-exec`,
+// `/usr/bin/ssh` and the system shells cannot be hinted through.
+//
+// The trap is for proofs rather than for users, and it has already cost one
+// investigation: a stand-in sandbox that execs `/bin/sleep`, or a hint published
+// on a `/bin/sh` pane, reads back empty — which looks exactly like the hint
+// being broken on macOS rather than like the one process shape where it is.
+// Prove this with a binary you built (TestAnAgentHintCannotChangeTheOccupant in
+// internal/agentlifecycle/lifecycleenv re-execs the test binary for this reason,
+// and TestDarwinReadsAnotherProcessesHintUnlessTheBinaryIsRestricted below pins
+// both directions as measured facts).
 func platformProcessAgentHint(pid int) string {
 	if pid <= 0 {
 		return ""
@@ -98,6 +135,25 @@ func darwinProcessArgv(pid int) []string {
 // procargs2ArgvStart finds where argv begins: past the executable path and the
 // NUL padding the kernel writes after it. Upstream: `procargs2_argv_start`,
 // src/platform/macos.rs:807 at d08e4468.
+//
+// # Known limitation, inherited from upstream
+//
+// It skips every NUL after the exec path, and an empty argv[0] is a bare NUL,
+// so a process whose argv[0] is empty has its terminator swallowed as padding.
+// Both readers below then start one string late: parseDarwinProcessArgv's
+// argc-bounded loop takes its last element from the environment block, and
+// parseDarwinProcessEnviron skips the first environment record. A hint in that
+// first record is missed, and the returned argv may end with a `KEY=value`
+// string.
+//
+// There is no honest structural fix here: padding and an empty argv[0] are the
+// same bytes, and a content rule ("that looks like KEY=value") would misfire on
+// a real `env FOO=bar` argument. So it is documented and pinned rather than
+// guessed at — TestDarwinAnEmptyArgv0IsIndistinguishableFromPadding records the
+// bound. Nothing observed in the wild produces it: a process that rewrites its
+// title blanks the slots it stops using (Pi 0.84.3 blanks argv[1], not
+// argv[0]), and an exec with an empty argv[0] is not an install shape any agent
+// uses.
 func procargs2ArgvStart(rest []byte) int {
 	execEnd := bytes.IndexByte(rest, 0)
 	if execEnd < 0 {
@@ -156,10 +212,13 @@ func parseDarwinProcessArgv(data []byte) []string {
 			// unidentified — a regression against the argv[0]-only parser this
 			// replaced, on the exact provider Slice 3 exists to reach.
 			//
-			// Keeping the prefix is safe for the reason argc is honoured at
-			// all: the environment cannot be reached, because the loop still
-			// stops at or before argc strings and this break only stops it
-			// sooner. TestDarwinArgvSurvivesAProcessTitleRewrite pins it.
+			// Keeping the prefix reads no further than the old parser did:
+			// the loop is still bounded by argc and this break only ever
+			// stops it sooner. That bound is what normally keeps the
+			// environment out of argv; the one case where it does not is an
+			// empty argv[0], which is procargs2ArgvStart's inherited
+			// limitation and is described there.
+			// TestDarwinArgvSurvivesAProcessTitleRewrite pins this direction.
 			break
 		}
 		argv = append(argv, string(rest[current:end]))
@@ -172,6 +231,10 @@ func parseDarwinProcessArgv(data []byte) []string {
 }
 
 // parseDarwinProcessEnviron returns the environment block that follows argv.
+//
+// An empty result means the kernel sent no environment section, not that the
+// parse failed — see platformProcessAgentHint for when that happens and why the
+// two are worth telling apart.
 //
 // Upstream: `procargs2_env`, src/platform/macos.rs:858 at d08e4468. It skips
 // exactly argc NUL-terminated strings from the argv start, which is what stops

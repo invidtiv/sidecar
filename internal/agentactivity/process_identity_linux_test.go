@@ -4,9 +4,13 @@ package agentactivity
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // statLine builds a /proc/<pid>/stat line with the fields this code reads.
@@ -265,7 +269,7 @@ func TestLinuxForegroundProcessesResolveANodeShim(t *testing.T) {
 		t.Fatalf("ResolveForegroundProcess = %q, want qwen", got)
 	}
 	resetForegroundIdentityCache()
-	if got := ResolveForegroundAgent(100); got != "qwen" {
+	if got := ResolveForegroundAgent(100, "node"); got != "qwen" {
 		t.Fatalf("ResolveForegroundAgent = %q, want qwen", got)
 	}
 }
@@ -274,6 +278,10 @@ func TestLinuxForegroundProcessesResolveANodeShim(t *testing.T) {
 // halves of the hint seam against a real fixture tree: the environ file is
 // parsed, and ResolveForegroundProcess — which lifecycleenv.OccupantKind calls,
 // and which can refuse a hook report — does not consult it.
+//
+// The pane's command is `sandbox`, which the alias table cannot place, so this
+// is also the end-to-end shape of the case the hint exists for: no scan is run
+// and the answer comes from the group leader's environment alone.
 func TestLinuxAgentHintIsReadFromTheEnvironAndOnlyByTheHintedResolver(t *testing.T) {
 	root := t.TempDir()
 	original := linuxProcRoot
@@ -290,7 +298,7 @@ func TestLinuxAgentHintIsReadFromTheEnvironAndOnlyByTheHintedResolver(t *testing
 	if got := platformProcessAgentHint(200); got != "cline" {
 		t.Fatalf("platformProcessAgentHint = %q, want cline", got)
 	}
-	if got := ResolveForegroundAgent(100); got != "cline" {
+	if got := ResolveForegroundAgent(100, "sandbox"); got != "cline" {
 		t.Fatalf("ResolveForegroundAgent = %q, want cline", got)
 	}
 	resetForegroundIdentityCache()
@@ -302,7 +310,7 @@ func TestLinuxAgentHintIsReadFromTheEnvironAndOnlyByTheHintedResolver(t *testing
 	writeProcFixture(t, root, 200, "sandbox", 100, 200, 200,
 		[]string{"sandbox", "run"}, []string{"SIDECAR_AGENT=not-an-agent"})
 	resetForegroundIdentityCache()
-	if got := ResolveForegroundAgent(100); got != "" {
+	if got := ResolveForegroundAgent(100, "sandbox"); got != "" {
 		t.Fatalf("ResolveForegroundAgent with an unknown hint = %q, want empty", got)
 	}
 }
@@ -323,5 +331,94 @@ func TestLinuxUnreadableEnvironIsNoHint(t *testing.T) {
 	}
 	if got := platformProcessAgentHint(0); got != "" {
 		t.Fatalf("pid 0 = %q, want empty", got)
+	}
+}
+
+// TestLinuxReadsAnotherProcessesHintFromTheRealProcTree closes the same gap
+// darwin's TestDarwinReadsAnotherProcessesHintUnlessTheBinaryIsRestricted
+// closes: every other test of this adapter points linuxProcRoot at a fixture
+// tree, which proves the parse and says nothing about whether the kernel hands
+// the file over.
+//
+// That distinction is not academic. On macOS the analogous call returns argv but
+// withholds the environment of a restricted binary, and a suite of synthetic
+// buffers could not have told anyone. So this one reads real /proc for a child
+// it spawned itself.
+func TestLinuxReadsAnotherProcessesHintFromTheRealProcTree(t *testing.T) {
+	if _, err := os.ReadFile("/proc/self/environ"); err != nil {
+		t.Skipf("/proc/self/environ unreadable: %v", err)
+	}
+
+	// The fixture tests move linuxProcRoot; this one needs the real thing.
+	original := linuxProcRoot
+	linuxProcRoot = "/proc"
+	t.Cleanup(func() { linuxProcRoot = original })
+
+	child := exec.Command("/bin/sleep", "120")
+	child.Env = append(os.Environ(), AgentHintEnv+"=claude")
+	if err := child.Start(); err != nil {
+		t.Fatalf("spawn child: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = child.Process.Kill()
+		_ = child.Wait()
+	})
+
+	// environ is empty between fork and exec, so wait for it rather than racing.
+	deadline := time.Now().Add(3 * time.Second)
+	var got string
+	for time.Now().Before(deadline) {
+		if got = platformProcessAgentHint(child.Process.Pid); got != "" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got != "claude" {
+		t.Fatalf("platformProcessAgentHint for our own same-uid child = %q, want claude. "+
+			"If the kernel has stopped handing over /proc/<pid>/environ, AgentHintEnv answers "+
+			"nothing here and this adapter must stop pretending it does", got)
+	}
+}
+
+// TestLinuxForegroundProcessesWalkTheRealProcTree is the same argument applied
+// to the walk rather than to the hint.
+//
+// Every other test of this adapter reads a fixture tree built by statLine in
+// this file, so the parser is only ever checked against a /proc that a test
+// author wrote from proc(5). A misreading shared by both would pass. This one
+// walks the kernel's own /proc for the group this process is in and expects to
+// find this process, with the argv it was started with.
+func TestLinuxForegroundProcessesWalkTheRealProcTree(t *testing.T) {
+	if _, err := os.ReadFile("/proc/self/stat"); err != nil {
+		t.Skipf("/proc/self/stat unreadable: %v", err)
+	}
+	original := linuxProcRoot
+	linuxProcRoot = "/proc"
+	t.Cleanup(func() { linuxProcRoot = original })
+
+	group, err := syscall.Getpgid(os.Getpid())
+	if err != nil {
+		t.Skipf("getpgid: %v", err)
+	}
+	var self *foregroundProcess
+	for _, process := range platformForegroundProcesses(group) {
+		if process.PID == os.Getpid() {
+			self = &process
+			break
+		}
+	}
+	if self == nil {
+		t.Fatalf("walking the real /proc for group %d did not find this process (pid %d)", group, os.Getpid())
+	}
+	if self.Argv0 != os.Args[0] {
+		t.Errorf("argv[0] = %q, want %q: /proc/<pid>/cmdline is argv as executed", self.Argv0, os.Args[0])
+	}
+	if self.Comm == "" || !strings.HasPrefix(filepath.Base(os.Args[0]), self.Comm) {
+		// comm is the kernel's short name, truncated to TASK_COMM_LEN-1, so it
+		// is a prefix of the executable's basename rather than equal to it.
+		t.Errorf("comm = %q, want a prefix of %q", self.Comm, filepath.Base(os.Args[0]))
+	}
+	if self.ParentPID != os.Getppid() {
+		t.Errorf("ppid = %d, want %d", self.ParentPID, os.Getppid())
 	}
 }

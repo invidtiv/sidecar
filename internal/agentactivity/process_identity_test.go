@@ -469,16 +469,22 @@ func TestAgentEnvHintIsValidatedThroughTheAliasTable(t *testing.T) {
 	}
 }
 
-// TestHintedIdentityPrecedenceMatchesUpstream pins the four-rung precedence
-// documented on ResolveForegroundAgent, using a stubbed hint reader so the rungs
-// can be driven independently of a live process table.
+// TestAgentIdentityPrefersEvidenceOverAHint pins the precedence documented on
+// ResolveForegroundAgent, using a stubbed hint reader so each rung can be driven
+// independently of a live process table.
 //
-// The ordering is upstream's `probe_foreground_process_from_jobs`
-// (src/pane.rs:608 at d08e4468): leader hint, leader identity, member hint,
-// scored identity. It matters because the case the hint exists for — a sandbox
-// wrapper hiding the agent — is exactly the case where identification is about
-// to confidently answer "the sandbox".
-func TestHintedIdentityPrecedenceMatchesUpstream(t *testing.T) {
+// It deliberately diverges from upstream's `probe_foreground_process_from_jobs`
+// (src/pane.rs:608 at d08e4468), which reads the leader's hint *before*
+// identifying the leader. Herdr's `HERDR_AGENT` is written by Herdr's own
+// wrapper; Sidecar's `SIDECAR_AGENT` is a bare environment variable Sidecar only
+// ever reads, so under upstream's order `export SIDECAR_AGENT=codex` in a Claude
+// pane would relabel it. Here evidence wins and the hint answers only where
+// evidence is silent — which is the case the hint exists for.
+//
+// "shell" is not evidence of an agent, so it does not block a hint: an
+// interactive shell owning the job is exactly where something under it may still
+// have published one.
+func TestAgentIdentityPrefersEvidenceOverAHint(t *testing.T) {
 	restore := readProcessAgentHint
 	t.Cleanup(func() { readProcessAgentHint = restore })
 
@@ -490,11 +496,13 @@ func TestHintedIdentityPrecedenceMatchesUpstream(t *testing.T) {
 		want      string
 	}{
 		{
-			name:      "a leader hint outranks the leader's own identity",
+			// The divergence, stated as a case: a hint cannot rename a pane
+			// whose process evidence already names an agent.
+			name:      "the leader's own identity outranks a conflicting leader hint",
 			group:     10,
 			processes: []foregroundProcess{job(10, "node", "node", "/usr/local/bin/qwen")},
 			hints:     map[int]string{10: "pi"},
-			want:      "pi",
+			want:      "qwen",
 		},
 		{
 			name:      "the leader's identity outranks a member's hint",
@@ -504,17 +512,41 @@ func TestHintedIdentityPrecedenceMatchesUpstream(t *testing.T) {
 			want:      "qwen",
 		},
 		{
-			name:      "a member hint is used once the leader names nothing",
+			name:      "scored identification outranks a member hint too",
+			group:     10,
+			processes: []foregroundProcess{job(10, "sandbox", "sandbox"), job(11, "node", "node", "/usr/local/bin/qwen")},
+			hints:     map[int]string{11: "pi"},
+			want:      "qwen",
+		},
+		{
+			name:      "the leader's hint answers once nothing is identified",
+			group:     10,
+			processes: []foregroundProcess{job(10, "sandbox", "sandbox"), job(11, "helper", "helper")},
+			hints:     map[int]string{10: "claude"},
+			want:      "claude",
+		},
+		{
+			name:      "a member hint is used once the leader publishes none",
 			group:     10,
 			processes: []foregroundProcess{job(10, "sandbox", "sandbox"), job(11, "helper", "helper")},
 			hints:     map[int]string{11: "cline"},
 			want:      "cline",
 		},
 		{
-			name:      "scored identification is the last rung",
+			name:      "the leader's hint outranks a member's",
 			group:     10,
-			processes: []foregroundProcess{job(10, "sandbox", "sandbox"), job(11, "node", "node", "/usr/local/bin/qwen")},
-			want:      "qwen",
+			processes: []foregroundProcess{job(10, "sandbox", "sandbox"), job(11, "helper", "helper")},
+			hints:     map[int]string{10: "claude", 11: "cline"},
+			want:      "claude",
+		},
+		{
+			// An interactive shell owning the job is not an agent identity, so
+			// it must not swallow the hint the way `qwen` above does.
+			name:      "a hint still answers over a shell",
+			group:     10,
+			processes: []foregroundProcess{job(10, "zsh", "-zsh")},
+			hints:     map[int]string{10: "claude"},
+			want:      "claude",
 		},
 		{
 			name:      "an unknown hint value does not displace real evidence",
@@ -534,8 +566,9 @@ func TestHintedIdentityPrecedenceMatchesUpstream(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			readProcessAgentHint = func(pid int) string { return tt.hints[pid] }
-			if got := foregroundHintedIdentity(tt.group, tt.processes); got != tt.want {
-				t.Fatalf("foregroundHintedIdentity = %q, want %q", got, tt.want)
+			identity := foregroundEvidenceIdentity(tt.group, tt.processes)
+			if got := foregroundAgentIdentity(tt.group, identity, tt.processes); got != tt.want {
+				t.Fatalf("foregroundAgentIdentity = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -566,6 +599,117 @@ func TestEvidenceIdentityNeverReadsAHint(t *testing.T) {
 	if got := foregroundEvidenceIdentity(10, []foregroundProcess{job(10, "mystery", "mystery")}); got != "" {
 		t.Fatalf("foregroundEvidenceIdentity for an unknown program = %q, want empty", got)
 	}
+
+	// The same guard one level up, because the cost ladder now decides who
+	// reads what: ResolveForegroundProcess must take the evidence rung and
+	// nothing else, whatever is in the pane's environment.
+	groupRestore, processRestore := readForegroundProcessGroup, readForegroundProcesses
+	t.Cleanup(func() {
+		readForegroundProcessGroup, readForegroundProcesses = groupRestore, processRestore
+		resetForegroundIdentityCache()
+	})
+	resetForegroundIdentityCache()
+	readForegroundProcessGroup = func(int) int { return 10 }
+	readForegroundProcesses = func(int) []foregroundProcess {
+		return []foregroundProcess{job(10, "sandbox", "sandbox")}
+	}
+	if got := ResolveForegroundProcess(200); got != "" {
+		t.Fatalf("ResolveForegroundProcess = %q, want empty", got)
+	}
+}
+
+// stubForegroundPlatform replaces the three platform seams for one test: the
+// foreground group of a pane, the process-table walk, and the per-process hint
+// read. walks counts the walks, which is the only mechanical way to hold the
+// cost ladder to its claim.
+func stubForegroundPlatform(t *testing.T, group int, processes []foregroundProcess, hints map[int]string) (walks *int) {
+	t.Helper()
+	groupRestore, processRestore, hintRestore := readForegroundProcessGroup, readForegroundProcesses, readProcessAgentHint
+	t.Cleanup(func() {
+		readForegroundProcessGroup, readForegroundProcesses, readProcessAgentHint = groupRestore, processRestore, hintRestore
+		resetForegroundIdentityCache()
+	})
+	resetForegroundIdentityCache()
+
+	count := 0
+	readForegroundProcessGroup = func(int) int { return group }
+	readForegroundProcesses = func(int) []foregroundProcess {
+		count++
+		return processes
+	}
+	readProcessAgentHint = func(pid int) string { return hints[pid] }
+	return &count
+}
+
+// TestASandboxPaneReachesTheHintWithoutAWalk is the deliverable of the hint's
+// redesign, stated as the case it exists for.
+//
+// A pane whose pane_current_command is `docker` — or bwrap, sandbox-exec,
+// firejail, nix, ssh — hides its agent behind a wrapper the alias table cannot
+// place. It used to reach the hint never: both callers gated on
+// NeedsProcessIdentity, which is true only for node/bun/agent/python, so the
+// only panes that could read a hint were the ones process evidence already
+// answered. The pane now pays two per-process reads and no process-table walk,
+// because the foreground process group id is the group leader's pid.
+//
+// This is the Linux shape and only the Linux shape: stubForegroundPlatform
+// declares a platform that has hints, because macOS returns another process's
+// environment to nobody. There the same pane reads nothing at all, which
+// TestTheTwoResolversShareOneScan is the regression for a cache that used to
+// thrash. One entry per pane carried a single "hints were read" bit, so an
+// evidence-only resolve overwrote a hinted one and the next hinted resolve
+// re-walked the process table — roughly doubling the walks for any pane that
+// both agentcontrol's observer and the workspace poll were watching, inside a
+// window meant to hold them to one.
+//
+// The entry now carries the members the walk collected, so the hint pass runs
+// against them instead of walking again, in either arrival order.
+func TestTheTwoResolversShareOneScan(t *testing.T) {
+	processes := []foregroundProcess{job(10, "sandbox", "sandbox"), job(11, "helper", "helper")}
+
+	t.Run("evidence first", func(t *testing.T) {
+		walks := stubForegroundPlatform(t, 10, processes, map[int]string{11: "cline"})
+		if got := ResolveForegroundProcess(200); got != "" {
+			t.Fatalf("ResolveForegroundProcess = %q, want empty", got)
+		}
+		if got := ResolveForegroundAgent(200, "node"); got != "cline" {
+			t.Fatalf("ResolveForegroundAgent = %q, want cline", got)
+		}
+		if *walks != 1 {
+			t.Fatalf("walks = %d, want 1: the hint pass must re-use the members the scan collected", *walks)
+		}
+	})
+
+	t.Run("hint first", func(t *testing.T) {
+		walks := stubForegroundPlatform(t, 10, processes, map[int]string{11: "cline"})
+		if got := ResolveForegroundAgent(200, "node"); got != "cline" {
+			t.Fatalf("ResolveForegroundAgent = %q, want cline", got)
+		}
+		if got := ResolveForegroundProcess(200); got != "" {
+			t.Fatalf("ResolveForegroundProcess = %q, want empty", got)
+		}
+		if *walks != 1 {
+			t.Fatalf("walks = %d, want 1: the evidence answer is cached by the same scan", *walks)
+		}
+	})
+
+	// A cheap leader-hint resolve must not evict a scan's evidence either: the
+	// halves are stamped independently.
+	t.Run("a cheap resolve does not evict the evidence half", func(t *testing.T) {
+		walks := stubForegroundPlatform(t, 10, processes, map[int]string{10: "claude"})
+		if got := ResolveForegroundProcess(200); got != "" {
+			t.Fatalf("ResolveForegroundProcess = %q, want empty", got)
+		}
+		if got := ResolveForegroundAgent(200, "docker"); got != "claude" {
+			t.Fatalf("ResolveForegroundAgent = %q, want claude", got)
+		}
+		if got := ResolveForegroundProcess(200); got != "" {
+			t.Fatalf("ResolveForegroundProcess = %q, want empty", got)
+		}
+		if *walks != 1 {
+			t.Fatalf("walks = %d, want 1", *walks)
+		}
+	})
 }
 
 // TestNeedsProcessIdentityStaysCheapForIdleShells pins the cost gate. Answering
