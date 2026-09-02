@@ -356,6 +356,10 @@ func (p *Plugin) Name() string { return pluginName }
 // Icon returns the plugin icon character.
 func (p *Plugin) Icon() string { return pluginIcon }
 
+func (p *Plugin) remoteBound() bool {
+	return p.ctx != nil && p.ctx.HostID != ""
+}
+
 // Init initializes the plugin with context.
 func (p *Plugin) Init(ctx *plugin.Context) error {
 	// Project switches normally call Stop first, but Init is defensive: kill
@@ -418,12 +422,15 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	// Pane state
 	p.activePane = PaneList
 	p.viewFilter = FilterActive
-	// Load persisted list width
-	notesState := state.GetNotesState(ctx.ProjectRoot)
-	if notesState.ListWidth > 0 {
-		p.listWidth = notesState.ListWidth
+	if p.remoteBound() {
+		p.listWidth = 0
 	} else {
-		p.listWidth = 0 // calculated on render
+		notesState := state.GetNotesState(ctx.ProjectRoot)
+		if notesState.ListWidth > 0 {
+			p.listWidth = notesState.ListWidth
+		} else {
+			p.listWidth = 0
+		}
 	}
 
 	// Mouse state
@@ -455,6 +462,11 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 
 	p.editorTextarea = newEditorTextarea()
 
+	if p.remoteBound() {
+		p.store = nil
+		return nil
+	}
+
 	// Construct the lazy td CLI adapter. The first load runs asynchronously.
 	store, err := NewStore(ctx.ProjectRoot, "")
 	if err != nil {
@@ -476,6 +488,12 @@ func (p *Plugin) Start() tea.Cmd {
 		session := tty.EditorSession{Name: p.orphanEditSession}
 		p.orphanEditSession = ""
 		cmds = append(cmds, session.KillCmd())
+	}
+	if p.remoteBound() {
+		if len(cmds) == 0 {
+			return nil
+		}
+		return tea.Batch(cmds...)
 	}
 	if p.store != nil {
 		cmds = append(cmds, p.loadNotes())
@@ -719,6 +737,12 @@ func (p *Plugin) persistOrderedLocked(store noteStore, projectRoot, noteID, cont
 
 // Update handles messages.
 func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
+	if p.remoteBound() {
+		if _, ok := msg.(app.ThemeChangedMsg); ok {
+			p.applyEditorTextTheme()
+		}
+		return p, nil
+	}
 	if _, ok := msg.(app.ThemeChangedMsg); ok {
 		p.applyEditorTextTheme()
 		return p, nil
@@ -2854,6 +2878,11 @@ func (p *Plugin) View(width, height int) string {
 	p.width = width
 	p.height = height
 
+	if p.remoteBound() {
+		content := styles.Title.Render(pluginName) + "\n\n" + styles.Muted.Render(plugin.FormatRemoteUnavailable(pluginName, p.ctx.HostID))
+		return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(content)
+	}
+
 	if p.showSetupModal {
 		p.ensureSetupModal()
 		content := p.renderSetupModal()
@@ -3037,6 +3066,9 @@ func (p *Plugin) SetFocused(f bool) {
 
 // Commands returns the available commands.
 func (p *Plugin) Commands() []plugin.Command {
+	if p.remoteBound() {
+		return nil
+	}
 	// Info modal commands
 	if p.showInfoModal {
 		return []plugin.Command{
@@ -3227,6 +3259,9 @@ func (p *Plugin) Commands() []plugin.Command {
 
 // FocusContext returns the current focus context.
 func (p *Plugin) FocusContext() string {
+	if p.remoteBound() {
+		return "notes"
+	}
 	if p.showSetupModal {
 		return "notes-setup-modal"
 	}

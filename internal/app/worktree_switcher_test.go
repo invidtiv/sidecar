@@ -123,12 +123,12 @@ func TestInitWorktreeSwitcherReusesCachedInventory(t *testing.T) {
 		{Path: "/repo-feature", Branch: "feature"},
 	}
 	m.initWorktreeSwitcher()
-	if len(m.worktreeSwitcherAll) != 2 || m.worktreeSwitcherAll[1].Branch != "feature" {
+	if len(m.worktreeSwitcherAll) != 2 || m.worktreeSwitcherAll[1].Local.Branch != "feature" {
 		t.Fatalf("switcher inventory = %+v", m.worktreeSwitcherAll)
 	}
 	// The switcher owns a copy; filtering/resetting it cannot mutate the cache
 	// that is passed into the switch operation.
-	m.worktreeSwitcherAll[1].Branch = "changed"
+	m.worktreeSwitcherAll[1].Local.Branch = "changed"
 	if m.cachedWorktreeInventory[1].Branch != "feature" {
 		t.Fatal("switcher mutated cached immutable inventory")
 	}

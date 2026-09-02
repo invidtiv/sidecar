@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -453,6 +455,32 @@ func SplitScopedKey(key string) (hostID, rest string, ok bool) {
 		return key[:index], key[index+1:], true
 	}
 	return "", key, false
+}
+
+// OriginNamesProject reports that a relayed request's origin project key names
+// the same project as a bound destination's inventory key.
+//
+// The two strings are not the same kind of identifier and rarely compare equal.
+// A request's Origin.ProjectKey is the directory name the originating machine
+// filed the project under in its own state tree ("sidecar"); an inventory key
+// is canonical(root) on that machine ("/home/me/code/sidecar"). Matching by
+// last path element is therefore the primary comparison, not a fallback — and
+// it is the right one under the plan's rule that names join projects across
+// machines while keys never do (docs/plans/active/remote-project-switcher.md,
+// decision 10).
+//
+// It is deliberately not the whole gate. Both callers additionally require the
+// origin's tmux session to be present in that project's host inventory, which
+// is what keeps two same-named projects on one host from claiming each other's
+// requests.
+func OriginNamesProject(originKey, projectKey string) bool {
+	if originKey == "" || projectKey == "" {
+		return originKey == projectKey
+	}
+	if originKey == projectKey {
+		return true
+	}
+	return path.Base(filepath.ToSlash(originKey)) == path.Base(filepath.ToSlash(projectKey))
 }
 
 func workspace(hostID string, item hostproto.Item, stale bool) workspaceinventory.Workspace {

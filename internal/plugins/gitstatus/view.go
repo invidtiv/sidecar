@@ -70,7 +70,11 @@ func (p *Plugin) renderDiffModal() string {
 		highlighter := p.getHighlighter(p.diffFile)
 		switch p.diffViewMode {
 		case DiffViewFullFile:
-			if p.fullFileDiff != nil {
+			if p.remoteBound() {
+				sb.WriteString(styles.Muted.Render(boundFullFileNotice(p.ctx.HostID)))
+				sb.WriteString("\n\n")
+				sb.WriteString(RenderLineDiff(p.parsedDiff, contentWidth, p.diffScroll, noticeContentHeight(visibleLines), p.diffHorizOff, highlighter, p.diffWrapEnabled))
+			} else if p.fullFileDiff != nil {
 				diffW := contentWidth - MinimapWidth
 				mmStr := ""
 				if !p.diffWrapEnabled {
@@ -257,7 +261,12 @@ func (p *Plugin) renderFullDiffContent(visibleHeight int) string {
 	var diffContent string
 	switch p.diffViewMode {
 	case DiffViewFullFile:
-		if p.fullFileDiff != nil {
+		if p.remoteBound() {
+			// The host answers patches, not the file contents a full-file view
+			// is built from, so the pane says so and renders the patch.
+			diffContent = styles.Muted.Render(boundFullFileNotice(p.ctx.HostID)) + "\n\n" +
+				RenderLineDiff(p.parsedDiff, diffWidth, p.diffScroll, noticeContentHeight(contentHeight), p.diffHorizOff, highlighter, p.diffWrapEnabled)
+		} else if p.fullFileDiff != nil {
 			diffW := diffWidth - MinimapWidth
 			mmStr := ""
 			if !p.diffWrapEnabled {
@@ -366,7 +375,8 @@ func (p *Plugin) renderDiffBreadcrumb(maxWidth int, scrollIndicator string) (str
 		viewModeStr = "unified"
 	}
 	modePart := styles.Muted.Render("[" + viewModeStr + "]")
-	modeWidth := lipgloss.Width(modePart) + lipgloss.Width(scrollIndicator)
+	cutPart := truncationLabel(p.diffTruncated)
+	modeWidth := lipgloss.Width(modePart) + lipgloss.Width(scrollIndicator) + lipgloss.Width(cutPart)
 
 	// Budget for the middle content (commit info + filename)
 	budget := maxWidth - backWidth - sepWidth - modeWidth
@@ -417,6 +427,7 @@ func (p *Plugin) renderDiffBreadcrumb(maxWidth int, scrollIndicator string) (str
 	sb.WriteString(" ")
 	sb.WriteString(modePart)
 	sb.WriteString(scrollIndicator)
+	sb.WriteString(cutPart)
 
 	return sb.String(), backWidth
 }

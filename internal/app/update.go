@@ -84,7 +84,7 @@ func (m *Model) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 	case ModalWorktreeSwitcher:
 		var cmd tea.Cmd
 		m.worktreeSwitcherInput, cmd = m.worktreeSwitcherInput.Update(msg)
-		m.worktreeSwitcherFiltered = filterWorktrees(m.worktreeSwitcherAll, m.worktreeSwitcherInput.Value())
+		m.worktreeSwitcherFiltered = filterWorktreeRows(m.worktreeSwitcherAll, m.worktreeSwitcherInput.Value())
 		m.clearWorktreeSwitcherModal()
 		return m, cmd
 
@@ -232,6 +232,10 @@ func (m Model) Update(msg tea.Msg) (result tea.Model, command tea.Cmd) {
 }
 
 func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Rebound every Update so HostWorkspaces / RelayedLanding see this copy's
+	// bind and scope, not the Model New captured. boundDestination is a value
+	// field; Update is a value receiver.
+	m.installPluginHostSeams()
 	// Remote-host stream messages reach the global browser whatever is on
 	// screen. See overview.IsHostMessage: each delivery is what schedules the
 	// next read of the update channel, so dropping one on a focus check would
@@ -247,7 +251,31 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.configOpen() {
 			m.config.SetRemoteHosts(m.configRemoteHosts())
 		}
-		return m, cmd
+		var cmds []tea.Cmd
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		if m.showProjectSwitcher {
+			m.refreshOpenProjectSwitcher()
+		}
+		if m.showWorktreeSwitcher {
+			m.refreshOpenWorktreeSwitcher()
+		}
+		if m.boundDestination.HostID != "" && m.registry != nil {
+			m.syncBoundHostIncarnation()
+			// Every bound plugin hears that its host moved, not just the one
+			// that lists shells. It is the only change signal that crosses the
+			// boundary: livewatch is a filesystem watch and stays on the
+			// machine that owns the files.
+			for i, p := range m.registry.Plugins() {
+				updated, extra := p.Update(plugin.HostInventoryMsg{})
+				m.registry.Replace(i, updated)
+				if extra != nil {
+					cmds = append(cmds, extra)
+				}
+			}
+		}
+		return m, tea.Batch(cmds...)
 	}
 	var cmds []tea.Cmd
 	// A terminal-default cell belongs to the terminal hosting Sidecar, not to
@@ -583,7 +611,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var inventoryCmd tea.Cmd
 		if m.worktreeInventoryCounter >= worktreeInventoryTicks {
 			m.worktreeInventoryCounter = 0
-			inventoryCmd = refreshWorktreeInventoryCmd(m.ui.WorkDir)
+			if m.ui.WorkDir != "" {
+				inventoryCmd = refreshWorktreeInventoryCmd(m.ui.WorkDir)
+			}
 		}
 		// Resync the tab title against the freshly refreshed worktree cache, so
 		// a branch switched outside sidecar shows up within a second. Every
@@ -960,12 +990,14 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, cmd)
 			return m, tea.Batch(cmds...)
 		}
-		if m.overview != nil {
+		landing := m.uiRequestLanding(msg.Request)
+		relayed := msg.Request.Origin.HostID != ""
+		if m.overview != nil && (!relayed || landing != uiRequestLandingBoundWorkspace) {
 			if cmd := m.overview.Update(msg); cmd != nil {
 				cmds = append(cmds, cmd)
 			}
 		}
-		if m.sessionsOwnsCreateSplit(msg.Request) {
+		if m.sessionsOwnsCreateSplit(msg.Request) || (relayed && landing != uiRequestLandingBoundWorkspace) {
 			return m, tea.Batch(cmds...)
 		}
 	}
@@ -1410,12 +1442,11 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 		switch msg.Code {
 		case tea.KeyEnter:
-			// Select worktree and switch to it
 			if m.worktreeSwitcherCursor >= 0 && m.worktreeSwitcherCursor < len(worktrees) {
-				selectedPath := worktrees[m.worktreeSwitcherCursor].Path
+				selected := worktrees[m.worktreeSwitcherCursor]
 				m.resetWorktreeSwitcher()
 				m.updateContext()
-				return m, m.switchWorktree(selectedPath)
+				return m, m.activateWorktreeSwitcherRow(selected)
 			}
 			return m, nil
 
@@ -1477,7 +1508,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.worktreeSwitcherInput, cmd = m.worktreeSwitcherInput.Update(msg)
 
 		// Re-filter on input change
-		m.worktreeSwitcherFiltered = filterWorktrees(m.worktreeSwitcherAll, m.worktreeSwitcherInput.Value())
+		m.worktreeSwitcherFiltered = filterWorktreeRows(m.worktreeSwitcherAll, m.worktreeSwitcherInput.Value())
 		m.clearWorktreeSwitcherModal() // Clear modal cache on filter change
 		// Reset cursor if it's beyond filtered list
 		if m.worktreeSwitcherCursor >= len(m.worktreeSwitcherFiltered) {
@@ -2138,22 +2169,12 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.toggleOverview()
 	case "W":
 		// Toggle worktree switcher modal (capital W)
-		// Only enable if we're in a git repo with worktrees
-		worktrees := m.worktreeInventory()
-		if len(worktrees) <= 1 {
-			// No worktrees or only main repo. Why the key did nothing is worth
-			// saying once, but not worth keeping (audit row 14).
-			return m, ShowFlash("No worktrees found")
-		}
-		m.showWorktreeSwitcher = !m.showWorktreeSwitcher
 		if m.showWorktreeSwitcher {
-			m.activeContext = "worktree-switcher"
-			m.initWorktreeSwitcher()
-		} else {
 			m.resetWorktreeSwitcher()
 			m.updateContext()
+			return m, nil
 		}
-		return m, nil
+		return m, m.openWorktreeSwitcher()
 	case "#":
 		// Toggle theme switcher modal
 		m.showThemeSwitcher = !m.showThemeSwitcher

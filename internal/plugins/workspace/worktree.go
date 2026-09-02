@@ -35,6 +35,10 @@ type WorkDirDeletedMsg struct {
 
 // refreshWorktrees returns a command to refresh the worktree list.
 func (p *Plugin) refreshWorktrees() tea.Cmd {
+	if p.remoteBound() {
+		p.applyHostInventory()
+		return nil
+	}
 	workDir := p.ctx.WorkDir
 	ctx, scope := p.newOperationScope(nil)
 	p.refreshOperationID = scope.OperationID
@@ -245,6 +249,9 @@ func parseWorktreeList(output, mainWorkdir string) ([]*Worktree, error) {
 // resolveCreatePlan performs the non-mutating Git-plumbing preflight. The
 // returned plan is shown verbatim before beginCreateWorktree can mutate Git.
 func (p *Plugin) resolveCreatePlan() tea.Cmd {
+	if p.remoteBound() {
+		return p.refuseRemoteCreate("worktree")
+	}
 	ctx, scope := p.newLifecycleScope(nil)
 	name, baseBranch, agentType, skipPerms := p.createFormValues()
 
@@ -268,6 +275,9 @@ func (p *Plugin) resolveCreatePlan() tea.Cmd {
 // one-command result shape. The interactive creation journey uses the explicit
 // preflight/add/setup state machine above.
 func (p *Plugin) createWorktree() tea.Cmd {
+	if p.remoteBound() {
+		return p.refuseRemoteCreate("worktree")
+	}
 	ctx, scope := p.newLifecycleScope(nil)
 	name, base, agentType, skipPerms := p.createFormValues()
 	workDir, projectRoot := p.ctx.WorkDir, p.ctx.ProjectRoot

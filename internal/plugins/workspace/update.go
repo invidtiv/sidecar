@@ -193,7 +193,15 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			cmds = append(cmds, p.refreshWorktrees())
 		}
 
+	case plugin.HostInventoryMsg:
+		return p.handleHostInventory()
+
 	case RefreshMsg:
+		if p.remoteBound() {
+			p.applyHostInventory()
+			cmds = append(cmds, p.reconcileTerminalModels()...)
+			return p, tea.Batch(cmds...)
+		}
 		if !p.refreshing {
 			p.refreshing = true
 			cmds = append(cmds, p.refreshWorktrees())

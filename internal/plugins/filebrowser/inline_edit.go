@@ -474,7 +474,7 @@ func (p *Plugin) loadCurrentTreeItemPreview() tea.Cmd {
 	}
 	// Update previewFile so PreviewLoadedMsg is accepted
 	p.previewFile = node.Path
-	return LoadPreview(p.ctx.WorkDir, node.Path, p.ctx.Epoch)
+	return p.loadPreview(node.Path)
 }
 
 // calculateInlineEditorMouseCoords converts screen coordinates to editor-relative
@@ -574,7 +574,7 @@ func (p *Plugin) selectTreeItem(idx int) (*Plugin, tea.Cmd) {
 		return p, nil
 	}
 
-	return p, LoadPreview(p.ctx.WorkDir, node.Path, p.ctx.Epoch)
+	return p, p.loadPreview(node.Path)
 }
 
 // enterInlineEditModeAtCurrentLine starts inline editing at the current preview line.

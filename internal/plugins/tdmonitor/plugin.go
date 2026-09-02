@@ -181,6 +181,12 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.lastDBIdentityAt = time.Time{}
 	p.pendingTDMessage = nil
 
+	if ctx != nil && ctx.HostID != "" {
+		p.loadingModel = false
+		p.tdOnPath = false
+		return nil
+	}
+
 	// Check if .todos exists as a file instead of a directory (#194).
 	// This must happen before attempting to create the monitor or showing
 	// the setup modal, since td init will fail in this state.
@@ -202,6 +208,9 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 
 // Start begins plugin operation.
 func (p *Plugin) Start() tea.Cmd {
+	if p.ctx != nil && p.ctx.HostID != "" {
+		return nil
+	}
 	if p.loadingModel {
 		return p.buildMonitor()
 	}
@@ -601,7 +610,9 @@ func (p *Plugin) View(width, height int) string {
 	p.height = height
 
 	var content string
-	if p.todosConflict {
+	if p.ctx != nil && p.ctx.HostID != "" {
+		content = styles.Title.Render(pluginName) + "\n\n" + styles.Muted.Render(plugin.FormatRemoteUnavailable(pluginName, p.ctx.HostID))
+	} else if p.todosConflict {
 		content = renderConflictView(width)
 	} else if p.model == nil {
 		if p.setupModal != nil {
@@ -646,6 +657,9 @@ const notInstalledContext = "td-not-installed"
 
 // Commands returns the available commands by consuming TD's exported command metadata.
 func (p *Plugin) Commands() []plugin.Command {
+	if p.ctx != nil && p.ctx.HostID != "" {
+		return nil
+	}
 	if p.notInstalled != nil && p.model == nil {
 		if p.notInstalled.installer == nil || !p.notInstalled.installer.CanInstall() {
 			return nil

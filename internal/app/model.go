@@ -19,6 +19,8 @@ import (
 	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/gitinit"
+	"github.com/marcus/sidecar/internal/hostproto"
+	"github.com/marcus/sidecar/internal/hosts"
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/livewatch"
@@ -156,10 +158,26 @@ type projectAddState struct {
 }
 
 type projectSwitcherDestination struct {
-	Kind    string
-	Name    string
-	Path    string
-	Project *config.ProjectConfig
+	Kind           string
+	Name           string
+	Path           string
+	Project        *config.ProjectConfig
+	Destination    Destination
+	DisabledReason string
+}
+
+func (d projectSwitcherDestination) isRemote() bool {
+	return d.Destination.HostID != ""
+}
+
+func (d projectSwitcherDestination) identityKey() string {
+	if d.Kind == destinationOverview {
+		return "overview"
+	}
+	if d.isRemote() {
+		return "host\x1f" + d.Destination.HostID + "\x1f" + d.Destination.ProjectKey + "\x1f" + d.Destination.WorktreeKey
+	}
+	return "local\x1f" + d.Path
 }
 
 const (
@@ -218,6 +236,11 @@ type Model struct {
 	projectSwitcherMouseHandler *mouse.Handler
 	projectSwitcherAddFocused   bool // the + (add project) button holds focus
 	projectSwitcherBar          switcherBarState
+	// boundDestination is the host-qualified project this TUI is currently
+	// bound to. Empty HostID means a local project (today's path identity).
+	boundDestination Destination
+	// testHostCatalog, when non-nil, replaces overview.HostCatalog in tests.
+	testHostCatalog []overview.HostCatalogEntry
 
 	// Project add sub-mode (within project switcher)
 	projectAddMode         bool
@@ -238,8 +261,8 @@ type Model struct {
 	worktreeSwitcherCursor       int
 	worktreeSwitcherScroll       int
 	worktreeSwitcherInput        textinput.Model
-	worktreeSwitcherFiltered     []WorktreeInfo
-	worktreeSwitcherAll          []WorktreeInfo
+	worktreeSwitcherFiltered     []worktreeSwitcherRow
+	worktreeSwitcherAll          []worktreeSwitcherRow
 	worktreeSwitcherModal        *modal.Modal
 	worktreeSwitcherModalWidth   int
 	worktreeSwitcherMouseHandler *mouse.Handler
@@ -250,6 +273,10 @@ type Model struct {
 	// Worktree info cache (avoids git subprocess forks on every View render)
 	cachedWorktreeInfo      *WorktreeInfo
 	cachedWorktreeInventory []WorktreeInfo
+	// localWorktreeCache is last-captured local inventory keyed by normalized
+	// main path and by project name. W while bound remotely reads this instead
+	// of spawning git worktree list.
+	localWorktreeCache map[string][]WorktreeInfo
 
 	// Open In modal
 	showOpenIn         bool
@@ -592,6 +619,7 @@ func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentV
 		km.RegisterPluginBinding(terminal.CopyKey, "copy-selection", "global-workspaces-terminal")
 		km.RegisterPluginBinding(terminal.PasteKey, "paste", "global-workspaces-terminal")
 	}
+	m.installPluginHostSeams()
 	if features.IsEnabled(features.TasksPlugin.Name) {
 		// Tasks is a global tab, so its host is built here rather than
 		// registered as a project plugin. Constructing it does no I/O.
@@ -626,28 +654,42 @@ func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentV
 	return m
 }
 
-func announceInstanceCmd(workDir, projectRoot string) tea.Cmd {
+func announceInstanceCmd(workDir, projectRoot, hostID string) tea.Cmd {
 	return func() tea.Msg {
 		inst := uirequest.Instance{
 			PID:       os.Getpid(),
 			Host:      uirequest.HostName(),
-			WorkDir:   workDir,
+			HostID:    hostID,
 			StartedAt: time.Now().UTC(),
 		}
-		if projectRoot != "" {
-			inst.Project = filepath.Base(projectRoot)
-			if dir, ok := projectdir.Lookup(projectRoot); ok {
-				inst.ProjectKey = filepath.Base(dir)
+		if hostID == "" {
+			inst.WorkDir = workDir
+			if projectRoot != "" {
+				inst.Project = filepath.Base(projectRoot)
+				if dir, ok := projectdir.Lookup(projectRoot); ok {
+					inst.ProjectKey = filepath.Base(dir)
+				}
+				if inst.WorkDir == "" {
+					inst.WorkDir = projectRoot
+				}
+			} else if workDir != "" {
+				inst.Project = filepath.Base(workDir)
 			}
-			if inst.WorkDir == "" {
-				inst.WorkDir = projectRoot
-			}
-		} else if workDir != "" {
-			inst.Project = filepath.Base(workDir)
 		}
 		_ = uirequest.Announce(config.StateDir(), inst)
 		return nil
 	}
+}
+
+func (m Model) announcePresenceCmd() tea.Cmd {
+	if m.boundDestination.HostID != "" {
+		return announceInstanceCmd("", "", m.boundDestination.HostID)
+	}
+	workDir, projectRoot := "", ""
+	if m.ui != nil {
+		workDir, projectRoot = m.ui.WorkDir, m.ui.ProjectRoot
+	}
+	return announceInstanceCmd(workDir, projectRoot, "")
 }
 
 func listenForUIRequests(ch <-chan tea.Msg) tea.Cmd {
@@ -668,7 +710,7 @@ func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		tickCmd(),
 		IntroTick(),
-		announceInstanceCmd(m.ui.WorkDir, m.ui.ProjectRoot),
+		m.announcePresenceCmd(),
 		func() tea.Msg { return attentionRefreshMsg{} },
 		func() tea.Msg {
 			return notify.SeedLaneTrackersMsg{Notifications: append([]notify.Notification(nil), m.notificationCache...)}
@@ -951,11 +993,7 @@ func (m *Model) initProjectSwitcher() {
 			m.projectSwitcherCursor = i
 			break
 		}
-		matchesCurrent := destination.Path == m.ui.WorkDir
-		if m.overview != nil {
-			matchesCurrent = matchesCurrent || destination.Path == m.ui.ProjectRoot
-		}
-		if !m.inGlobalScope() && destination.Kind == destinationProject && matchesCurrent {
+		if !m.inGlobalScope() && destination.Kind == destinationProject && m.isCurrentSwitcherDestination(destination) {
 			m.projectSwitcherCursor = i
 			break
 		}
@@ -974,7 +1012,132 @@ func (m *Model) projectSwitcherDestinations(query string) []projectSwitcherDesti
 		project := projects[i]
 		result = append(result, projectSwitcherDestination{Kind: destinationProject, Name: project.Name, Path: project.Path, Project: &project})
 	}
+	// Remote destinations require sidecar_remote_hosts AND cross_project_overview
+	// (decision 11): the registry lives on the Overview model, so with Overview
+	// off there is nothing to read without inventing a second registry.
+	if m.overview != nil || m.testHostCatalog != nil {
+		result = append(result, m.remoteProjectSwitcherDestinations(query)...)
+	}
 	return result
+}
+
+func (m *Model) currentHostCatalog() []overview.HostCatalogEntry {
+	if m.testHostCatalog != nil {
+		return m.testHostCatalog
+	}
+	if m.overview == nil {
+		return nil
+	}
+	return m.overview.HostCatalog()
+}
+
+func (m *Model) remoteProjectSwitcherDestinations(query string) []projectSwitcherDestination {
+	catalog := m.currentHostCatalog()
+	if len(catalog) == 0 {
+		return nil
+	}
+	var result []projectSwitcherDestination
+	for _, entry := range catalog {
+		reason := destinationDisabledReason(entry.Health)
+		for _, project := range entry.Projects {
+			dest := Destination{
+				HostID:          entry.ID,
+				HostIncarnation: entry.Incarnation,
+				ProjectKey:      project.Key,
+				ProjectName:     project.Name,
+				Root:            project.Root,
+			}
+			if !DestinationMatches(dest, query) {
+				continue
+			}
+			result = append(result, projectSwitcherDestination{
+				Kind:           destinationProject,
+				Name:           FormatDestination(dest),
+				Destination:    dest,
+				DisabledReason: reason,
+			})
+		}
+	}
+	return result
+}
+
+func destinationDisabledReason(health hosts.Health) string {
+	if health.State.Healthy() {
+		return ""
+	}
+	if health.State == hosts.StateConnecting {
+		if d := strings.TrimSpace(health.Detail); d != "" {
+			return "connecting… · " + firstLine(d)
+		}
+		return "connecting…"
+	}
+	status := string(health.State)
+	if fix := health.Fix(); fix != "" {
+		status += " · " + fix
+	}
+	if d := strings.TrimSpace(health.Detail); d != "" {
+		status += " · " + firstLine(d)
+	}
+	return status
+}
+
+func firstLine(s string) string {
+	if index := strings.IndexByte(s, '\n'); index >= 0 {
+		return strings.TrimSpace(s[:index])
+	}
+	return s
+}
+
+func (m *Model) isCurrentSwitcherDestination(destination projectSwitcherDestination) bool {
+	if destination.Kind == destinationOverview {
+		return m.inGlobalScope()
+	}
+	if m.boundDestination.HostID != "" {
+		return destination.Destination.HostID == m.boundDestination.HostID &&
+			destination.Destination.ProjectKey == m.boundDestination.ProjectKey &&
+			destination.Destination.WorktreeKey == m.boundDestination.WorktreeKey
+	}
+	if destination.isRemote() {
+		return false
+	}
+	matchesCurrent := destination.Path == m.ui.WorkDir
+	if m.overview != nil {
+		matchesCurrent = matchesCurrent || destination.Path == m.ui.ProjectRoot
+	}
+	return destination.Kind == destinationProject && matchesCurrent
+}
+
+func (m *Model) refreshOpenProjectSwitcher() {
+	if !m.showProjectSwitcher {
+		return
+	}
+	var highlighted projectSwitcherDestination
+	if m.projectSwitcherCursor >= 0 && m.projectSwitcherCursor < len(m.projectSwitcherFiltered) {
+		highlighted = m.projectSwitcherFiltered[m.projectSwitcherCursor]
+	}
+	m.projectSwitcherFiltered = m.projectSwitcherDestinations(m.projectSwitcherInput.Value())
+	m.projectSwitcherCursor = indexOfSwitcherDestination(m.projectSwitcherFiltered, highlighted)
+	if m.projectSwitcherCursor < 0 {
+		m.projectSwitcherCursor = 0
+	}
+	m.projectSwitcherScroll = projectSwitcherEnsureCursorVisible(m.projectSwitcherCursor, m.projectSwitcherScroll, 8)
+	m.clearProjectSwitcherModal()
+}
+
+func indexOfSwitcherDestination(destinations []projectSwitcherDestination, target projectSwitcherDestination) int {
+	if target.identityKey() == "" && target.Kind == "" {
+		return 0
+	}
+	key := target.identityKey()
+	for i, destination := range destinations {
+		if destination.identityKey() == key {
+			return i
+		}
+	}
+	if len(destinations) == 0 {
+		return 0
+	}
+	return 0
 }
 
 // filterProjects filters projects by name or path using a case-insensitive substring match.
@@ -1032,11 +1195,19 @@ func (m *Model) switchProject(projectPath string) tea.Cmd {
 }
 
 func (m *Model) activateProjectSwitcherDestination(destination projectSwitcherDestination) tea.Cmd {
+	if destination.DisabledReason != "" {
+		return func() tea.Msg {
+			return ToastMsg{Message: destination.DisabledReason, Duration: 4 * time.Second, IsError: true}
+		}
+	}
 	m.resetProjectSwitcher()
 	// The user picked a destination by hand, which outranks any parked jump.
 	m.clearPendingActivation()
 	if destination.Kind == destinationOverview && m.globalScopeAvailable() {
 		return m.enterOverview()
+	}
+	if destination.isRemote() {
+		return m.bindRemoteDestination(destination.Destination)
 	}
 	// The switcher can name the project already covered by global scope. That is
 	// a return, not a switch: switchProjectWithSelection deliberately no-ops for
@@ -1052,6 +1223,255 @@ func (m *Model) activateProjectSwitcherDestination(destination projectSwitcherDe
 	m.leaveOverview(false)
 	m.updateContext()
 	return m.switchProject(destination.Path)
+}
+
+func (m *Model) bindRemoteDestination(dest Destination) tea.Cmd {
+	if dest.HostID == "" {
+		return nil
+	}
+	if dest.WorktreeKey == "" {
+		dest = m.applyLastRemoteWorktree(dest)
+	} else {
+		_ = state.SetLastRemoteWorktree(dest.HostID, dest.ProjectKey, dest.WorktreeKey)
+	}
+	m.leaveOverview(false)
+
+	if m.ui != nil && m.ui.WorkDir != "" {
+		if main := GetMainWorktreePath(m.ui.WorkDir); main != "" {
+			normalizedMain, _ := normalizePath(main)
+			normalizedWork, _ := normalizePath(m.ui.WorkDir)
+			_ = state.SetLastWorktreePath(normalizedMain, normalizedWork)
+		}
+		if active := m.ActivePlugin(); active != nil {
+			_ = state.SetActivePlugin(m.ui.WorkDir, active.ID())
+		}
+	}
+
+	m.boundDestination = dest
+	m.installPluginHostSeams()
+	_ = state.SetLastBoundLocation(state.BoundLocation{
+		HostID:      dest.HostID,
+		ProjectKey:  dest.ProjectKey,
+		WorktreeKey: dest.WorktreeKey,
+	})
+
+	if m.ui != nil {
+		m.ui.WorkDir = ""
+		m.ui.ProjectRoot = ""
+	}
+	m.cachedWorktreeInventory = nil
+	m.cachedWorktreeInfo = nil
+	m.intro.RepoName = BoundDestinationNavbarLabel(dest)
+
+	themeCmd := m.applyResolvedTheme(theme.ResolveTheme(m.cfg, ""))
+	var startCmds []tea.Cmd
+	if m.registry != nil {
+		startCmds = m.registry.ReinitHost("", "", plugin.HostBind{
+			HostID:      dest.HostID,
+			Incarnation: dest.HostIncarnation,
+			ProjectKey:  dest.ProjectKey,
+			WorktreeKey: dest.WorktreeKey,
+		})
+		startCmds = append(startCmds, func() tea.Msg {
+			return notify.SeedLaneTrackersMsg{Notifications: append([]notify.Notification(nil), m.notificationCache...)}
+		})
+		if cmd := m.publishResourceProviders(); cmd != nil {
+			startCmds = append(startCmds, cmd)
+		}
+	}
+	if themeCmd != nil {
+		startCmds = append(startCmds, themeCmd)
+	}
+	startCmds = append(startCmds, m.emitContentSize()...)
+	m.focusPluginByIDWithoutNotice(workspacePluginID)
+	m.claimBoundProjectLeases()
+
+	return tea.Batch(
+		tea.Batch(startCmds...),
+		m.refreshConfigContext(),
+		m.syncTerminalTitle(false),
+		m.announcePresenceCmd(),
+		ShowFlash(fmt.Sprintf("Switched to %s", FormatDestination(dest))),
+	)
+}
+
+func (m *Model) clearBoundDestination() {
+	m.boundDestination = Destination{}
+	_ = state.ClearLastBoundLocation()
+}
+
+func (m *Model) applyLastRemoteWorktree(dest Destination) Destination {
+	saved := state.GetLastRemoteWorktree(dest.HostID, dest.ProjectKey)
+	if saved == "" {
+		return dest
+	}
+	name, ok := m.catalogLinkedWorktreeName(dest.HostID, dest.ProjectKey, saved)
+	if !ok {
+		return dest
+	}
+	dest.WorktreeKey = saved
+	dest.WorktreeName = name
+	return dest
+}
+
+func (m *Model) catalogLinkedWorktreeName(hostID, projectKey, worktreeKey string) (string, bool) {
+	for _, entry := range m.currentHostCatalog() {
+		if entry.ID != hostID {
+			continue
+		}
+		for _, project := range entry.Projects {
+			if project.Key != projectKey {
+				continue
+			}
+			for _, ws := range project.Workspaces {
+				if ws.Kind != workspaceinventory.KindWorktree {
+					continue
+				}
+				key := unscopedWorktreeKey(ws)
+				if key != worktreeKey {
+					continue
+				}
+				if ws.IsMain || key == project.Key || (project.Root != "" && key == project.Root) {
+					return "", false
+				}
+				return catalogWorktreeDisplayName(ws), true
+			}
+		}
+	}
+	return "", false
+}
+
+func (m *Model) installPluginHostSeams() {
+	if m.registry == nil {
+		return
+	}
+	ctx := m.registry.Context()
+	if ctx == nil {
+		return
+	}
+	ctx.HostWorkspaces = func() []plugin.HostWorkspace {
+		return m.boundHostWorkspaces()
+	}
+	ctx.RemoteControlSpawner = func() tty.ControlSpawner {
+		if m.overview == nil || ctx.HostID == "" {
+			return nil
+		}
+		return m.overview.HostControlSpawner(ctx.HostID)
+	}
+	ctx.RemoteRunner = func(c context.Context, hostID string, args []string, out any) error {
+		if m.overview == nil {
+			return fmt.Errorf("no host registry")
+		}
+		return m.overview.RunHostSidecar(c, hostID, args, out)
+	}
+	ctx.HostVerbs = func() hostproto.VerbCapabilities {
+		if m.overview == nil || ctx.HostID == "" {
+			return hostproto.VerbCapabilities{}
+		}
+		return m.overview.HostVerbs(ctx.HostID)
+	}
+	ctx.HostShows = func() bool {
+		if m.overview == nil || ctx.HostID == "" {
+			return false
+		}
+		return m.overview.HostShows(ctx.HostID)
+	}
+	if m.overview != nil {
+		m.overview.RelayedLanding = func(req uirequest.Request) bool {
+			return m.uiRequestLanding(req) != uiRequestLandingBoundWorkspace
+		}
+	}
+}
+
+func (m *Model) boundHostWorkspaces() []plugin.HostWorkspace {
+	// Read bound identity from the app model, not registry.Context().
+	// Workspace Start calls this during ReinitHost, which already holds the
+	// registry lock; taking Context()'s RLock on the same goroutine deadlocks
+	// (RWMutex is not reentrant) and freezes the TUI on Enter of a remote row.
+	hostID := m.boundDestination.HostID
+	projectKey := m.boundDestination.ProjectKey
+	if hostID == "" {
+		return nil
+	}
+	for _, entry := range m.currentHostCatalog() {
+		if entry.ID != hostID {
+			continue
+		}
+		for _, project := range entry.Projects {
+			if project.Key == projectKey {
+				out := make([]plugin.HostWorkspace, 0, len(project.Workspaces))
+				for _, ws := range project.Workspaces {
+					out = append(out, plugin.HostWorkspace{
+						ID:         unscopedHostWorkspaceID(ws.ID),
+						Kind:       string(ws.Kind),
+						Name:       ws.Name,
+						Key:        ws.Key,
+						Path:       ws.Path,
+						TmuxName:   ws.TmuxName,
+						PaneID:     ws.PaneID,
+						Provider:   ws.Provider,
+						Branch:     ws.Branch,
+						TaskID:     ws.TaskID,
+						Live:       ws.Live,
+						IsMain:     ws.IsMain,
+						IsMissing:  ws.IsMissing,
+						IsBare:     ws.IsBare,
+						IsDetached: ws.IsDetached,
+						IsLocked:   ws.IsLocked,
+						IsPrunable: ws.IsPrunable,
+						CreatedAt:  ws.CreatedAt,
+					})
+				}
+				return out
+			}
+		}
+	}
+	return nil
+}
+
+func unscopedHostWorkspaceID(id string) string {
+	if _, rest, ok := hosts.SplitScopedKey(id); ok {
+		return rest
+	}
+	return id
+}
+
+// claimGeometryLease is the bind-time lease seam. Production claims through
+// tty; tests replace it so a bind can be proven without talking to tmux.
+var claimGeometryLease = tty.ClaimGeometryLease
+
+func (m *Model) claimBoundProjectLeases() {
+	for _, ws := range m.boundHostWorkspaces() {
+		if !ws.Live || ws.TmuxName == "" {
+			continue
+		}
+		claimGeometryLease(ws.TmuxName)
+	}
+}
+
+func (m *Model) syncBoundHostIncarnation() {
+	hostID := m.boundDestination.HostID
+	if hostID == "" || m.registry == nil {
+		return
+	}
+	var incarnation uint64
+	for _, entry := range m.currentHostCatalog() {
+		if entry.ID == hostID {
+			incarnation = entry.Incarnation
+			break
+		}
+	}
+	if incarnation == 0 {
+		return
+	}
+	if m.boundDestination.HostIncarnation == incarnation {
+		ctx := m.registry.Context()
+		if ctx != nil && ctx.HostIncarnation == incarnation {
+			return
+		}
+	}
+	m.boundDestination.HostIncarnation = incarnation
+	m.registry.SetHostIncarnation(incarnation)
 }
 
 func (m *Model) overviewProjects() []overview.Project {
@@ -1179,6 +1599,8 @@ func (m *Model) switchProjectWithSelection(projectPath string, inventory []Workt
 	if pending != nil {
 		m.setPendingActivation(pendingActivation{selection: pending})
 	}
+
+	m.clearBoundDestination()
 
 	// Save the active plugin state for the old project root
 	oldWorkDir := m.ui.WorkDir
@@ -1322,7 +1744,7 @@ func (m *Model) switchProjectWithSelection(projectPath string, inventory []Workt
 		m.refreshConfigContext(),
 		titleCmd,
 		inventoryRefresh,
-		announceInstanceCmd(m.ui.WorkDir, m.ui.ProjectRoot),
+		m.announcePresenceCmd(),
 		// Routine confirmation of a switch the user just made and can see:
 		// a flash, not a stored notification (audit row 18).
 		ShowFlash(fmt.Sprintf("Switched to %s", GetRepoName(targetPath))),
@@ -1397,7 +1819,7 @@ func (m *Model) previewProjectTheme() tea.Cmd {
 	destinations := m.projectSwitcherFiltered
 	if m.projectSwitcherCursor >= 0 && m.projectSwitcherCursor < len(destinations) {
 		destination := destinations[m.projectSwitcherCursor]
-		if destination.Kind == destinationOverview {
+		if destination.Kind == destinationOverview || destination.isRemote() {
 			return m.applyResolvedTheme(theme.ResolveTheme(m.cfg, ""))
 		}
 		return m.applyResolvedTheme(theme.ResolveTheme(m.cfg, destination.Path))
@@ -1716,14 +2138,7 @@ func (m *Model) runHostCommand(id string) (tea.Cmd, bool) {
 		m.activeContext = "project-switcher"
 		return nil, true
 	case "switch-worktree":
-		worktrees := m.worktreeInventory()
-		if len(worktrees) > 1 {
-			m.showWorktreeSwitcher = true
-			m.initWorktreeSwitcher()
-			m.activeContext = "worktree-switcher"
-			return nil, true
-		}
-		return ShowFlash("No worktrees found"), true
+		return m.openWorktreeSwitcher(), true
 	case "switch-theme":
 		m.showThemeSwitcher = true
 		m.initThemeSwitcher()

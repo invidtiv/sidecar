@@ -182,6 +182,27 @@ type VerbCapabilities struct {
 	// than guess, and must not infer ordering from version strings.
 	ContentReadV1 bool `json:"contentReadV1,omitempty"`
 
+	// ContentTreeV1 is `sidecar content tree --json`, the read-only directory
+	// listing a viewer's file tree is built from. A host that predates the verb
+	// is read as false and the viewer refuses, naming the host, rather than
+	// falling back to a tree of its own disk — a same-named checkout is a
+	// different project, and showing it under a remote label is the failure the
+	// remote-project work exists to prevent. Never inferred from a version
+	// string.
+	ContentTreeV1 bool `json:"contentTreeV1,omitempty"`
+
+	// RepoReadV1 is the `sidecar repo status|diff|history|commit|refs --json`
+	// family, the read-only repository contract a viewer's Git pane is built
+	// from. One bit rather than one per sub-verb: they ship together, and a
+	// host that has one has all of them.
+	//
+	// A host that predates them is read as false and the viewer refuses,
+	// naming the host, rather than falling back to a repository on its own
+	// disk — a same-named checkout is a different project, and staging a file
+	// in it under a remote label is the failure the remote-project work exists
+	// to prevent. Never inferred from a version string.
+	RepoReadV1 bool `json:"repoReadV1,omitempty"`
+
 	// UIRequestRelayV1 is serve observing host `uirequest` files and announcing
 	// them as KindUIRequest. A host that predates it is read as false; the
 	// viewer must not expect announcements. Serve still does not apply the
@@ -635,9 +656,36 @@ func (e *Encoder) Encode(msg Message) error {
 	return nil
 }
 
+// MaxPreludeLines and MaxPreludeBytes bound the non-protocol output a decoder
+// will skip before the first message.
+//
+// A login profile writes a banner, a version nag, or a motd, and it writes it
+// once, at the top. Skipping it is not leniency about garbage: it is the
+// difference between working on an ordinary machine and not. The bound is what
+// keeps that from becoming "read anything forever" — a stream that is simply
+// not this protocol has to fail, and fail saying so, rather than being
+// consumed in silence.
+const (
+	MaxPreludeLines = 64
+	MaxPreludeBytes = 64 << 10
+
+	// maxPreludeQuoteBytes clips the line quoted back in the failure. Enough
+	// to recognise a banner, short enough for one row of a health panel.
+	maxPreludeQuoteBytes = 200
+)
+
 // Decoder reads a JSONL message stream with a bounded line length.
 type Decoder struct {
 	scanner *bufio.Scanner
+
+	// started records that a protocol message has been decoded. Prelude
+	// skipping applies only before it: a banner is something a shell prints on
+	// the way in, so output that appears after the stream has proven itself is
+	// a fault and is reported as one.
+	started      bool
+	preludeLines int
+	preludeBytes int
+	firstPrelude string
 }
 
 // NewDecoder wraps r.
@@ -651,10 +699,22 @@ func NewDecoder(r io.Reader) *Decoder {
 //
 // Blank lines are skipped rather than treated as errors: a remote login shell
 // that prints a stray newline before exec'ing sidecar is a real and common
-// condition, and it must not look like a protocol violation. Anything that is
-// non-blank and not valid JSON is a genuine error — most often a shell banner
-// or an ssh warning on the same pipe — and the message says so, because that
-// is the failure a first-time user of this feature will actually hit.
+// condition, and it must not look like a protocol violation.
+//
+// So is a banner. Before the first protocol message, non-protocol output is
+// skipped up to MaxPreludeLines / MaxPreludeBytes — a motd, a version nag, a
+// wrapper's log line — because a machine whose profile prints one line to
+// stdout is an ordinary machine, not a broken one, and refusing it meant no
+// snapshot, no rows, and an error naming the very cause it would not handle.
+// JSON that is not a protocol message is prelude too: a profile logging
+// `{"level":"info"}` parses cleanly and must not be mistaken for the stream
+// starting (the same rule the run path applies to a --json result).
+//
+// After the first message the stream has proven itself, and anything
+// unparseable is a genuine fault reported as one. Exhausting the prelude
+// budget, or reaching end of stream having skipped output and never seen a
+// message, is also a failure — and it quotes what the host actually wrote,
+// because that line is the whole diagnosis.
 func (d *Decoder) Next() (Message, error) {
 	for {
 		if !d.scanner.Scan() {
@@ -664,6 +724,9 @@ func (d *Decoder) Next() (Message, error) {
 				}
 				return Message{}, err
 			}
+			if !d.started && d.preludeLines > 0 {
+				return Message{}, d.preludeFailure()
+			}
 			return Message{}, io.EOF
 		}
 		line := d.scanner.Bytes()
@@ -671,17 +734,65 @@ func (d *Decoder) Next() (Message, error) {
 			continue
 		}
 		var msg Message
-		if err := json.Unmarshal(line, &msg); err != nil {
+		err := json.Unmarshal(line, &msg)
+		if err == nil && (d.started || isProtocolMessage(msg)) {
+			d.started = true
+			// Bounds are checked before the caller ever sees the payload, so a
+			// message that violates the schema cannot be stored, rendered, or
+			// delivered on the strength of having parsed.
+			if err := msg.Validate(); err != nil {
+				return Message{}, err
+			}
+			return msg, nil
+		}
+		if d.started {
 			return Message{}, fmt.Errorf("hostproto: unparseable line (remote output is not the protocol; a shell banner on stdout is the usual cause): %w", err)
 		}
-		// Bounds are checked before the caller ever sees the payload, so a
-		// message that violates the schema cannot be stored, rendered, or
-		// delivered on the strength of having parsed.
-		if err := msg.Validate(); err != nil {
-			return Message{}, err
+		if skipped := d.skipPrelude(line); skipped != nil {
+			return Message{}, skipped
 		}
-		return msg, nil
 	}
+}
+
+// isProtocolMessage reports that a decoded line is this protocol rather than
+// something that merely happens to be JSON.
+//
+// Proto and Kind together are the test. Proto is stamped on every message the
+// Encoder writes, so a zero one is not ours; a version this viewer refuses
+// still has to reach the caller, which is why this does not compare it to
+// Version. Kind is not checked against the known set for the same reason: a
+// host one version ahead may name a kind this build has never heard of, and
+// that is a compatibility answer to give, not a line to swallow.
+func isProtocolMessage(msg Message) bool {
+	return msg.Proto > 0 && msg.Kind != ""
+}
+
+// skipPrelude records one non-protocol line, or returns the failure when the
+// budget is spent.
+func (d *Decoder) skipPrelude(line []byte) error {
+	if d.firstPrelude == "" {
+		d.firstPrelude = quotePrelude(line)
+	}
+	d.preludeLines++
+	d.preludeBytes += len(line)
+	if d.preludeLines > MaxPreludeLines || d.preludeBytes > MaxPreludeBytes {
+		return d.preludeFailure()
+	}
+	return nil
+}
+
+func (d *Decoder) preludeFailure() error {
+	return fmt.Errorf("hostproto: %d lines of remote output are not the protocol "+
+		"(a shell banner or a wrapper writing to stdout is the usual cause); the host wrote: %s",
+		d.preludeLines, d.firstPrelude)
+}
+
+func quotePrelude(line []byte) string {
+	text := string(trimSpace(line))
+	if len(text) > maxPreludeQuoteBytes {
+		text = text[:maxPreludeQuoteBytes] + "…"
+	}
+	return text
 }
 
 func trimSpace(b []byte) []byte {

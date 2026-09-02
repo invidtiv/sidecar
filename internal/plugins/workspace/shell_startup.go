@@ -155,7 +155,7 @@ func stopShellWatcherCmd(watcher shellManifestWatcher) tea.Cmd {
 // loadShellStartup returns immediately. Every filesystem and tmux operation is
 // confined to the returned command, which only constructs result data.
 func (p *Plugin) loadShellStartup() tea.Cmd {
-	if p == nil || p.ctx == nil {
+	if p == nil || p.ctx == nil || p.remoteBound() {
 		return nil
 	}
 	scope := p.currentShellStartupScope()

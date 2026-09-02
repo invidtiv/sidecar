@@ -483,3 +483,38 @@ func TestForwardHostUIRequestOpensIssueThroughAnnouncement(t *testing.T) {
 	}
 	assertRemoteAck(t, stub, "opened", "--id req-relay-issue-fwd")
 }
+
+func TestRelayedOpenSkippedWhenBoundWorkspaceOwnsLanding(t *testing.T) {
+	m, _, _ := showingRemoteTwinModel(t, nil)
+	stub := &remoteRunnerStub{}
+	stub.install(t)
+	m.RelayedLanding = func(uirequest.Request) bool { return false }
+	selected, ok := m.SelectedWorkspace()
+	if !ok {
+		t.Fatal("no selected workspace")
+	}
+	req := requestFromAnnouncement(relayedFileAnnouncement(selected.TmuxName, "twin.txt", 0))
+	if cmd := m.handleUIRequest(req); cmd != nil {
+		t.Fatalf("overview handled a request the bound workspace owns: %v", cmd)
+	}
+	if len(stub.calls) != 0 {
+		t.Fatalf("overview acked a request the bound workspace owns: %v", stub.calls)
+	}
+	if m.preview.doc != nil {
+		t.Fatal("overview opened a document for a bound-workspace request")
+	}
+
+	event := relayedFileAnnouncement(selected.TmuxName, "twin.txt", 0)
+	cmd := m.forwardHostUIRequests(hosts.Update{HostID: "mac-mini", UIRequest: []hostproto.UIRequest{event}})
+	if cmd == nil {
+		t.Fatal("forwarded bound-workspace request produced no RequestMsg")
+	}
+	msg := cmd()
+	reqMsg, ok := msg.(uirequest.RequestMsg)
+	if !ok {
+		t.Fatalf("forwarded msg = %T, want RequestMsg", msg)
+	}
+	if reqMsg.Request.Origin.HostID != "mac-mini" || reqMsg.Request.Origin.TmuxSession != selected.TmuxName {
+		t.Fatalf("forwarded request = %+v", reqMsg.Request)
+	}
+}

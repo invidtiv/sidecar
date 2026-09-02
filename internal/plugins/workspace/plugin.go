@@ -243,8 +243,12 @@ type Plugin struct {
 	// Preview pane tree state. A nil root retains the legacy path while the
 	// feature is disabled. Phase 1 intentionally creates only one terminal leaf;
 	// document registry and load-request state arrive with the open-doc journey.
-	paneRoot        *PaneNode
-	contentDeck     *contentpanes.Deck
+	paneRoot    *PaneNode
+	contentDeck *contentpanes.Deck
+	// contentSource, when set, is the Document adapter for bound remote
+	// workspaces. Tests inject a fake; production builds RemoteSource from
+	// ctx.RemoteRunner and ctx.HostVerbs.
+	contentSource   contentpanes.Source
 	paneFocus       int
 	paneNextID      int
 	paneDragSplitID int
@@ -1119,6 +1123,10 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 
 // Start begins async operations.
 func (p *Plugin) Start() tea.Cmd {
+	if p.remoteBound() {
+		p.applyHostInventory()
+		return tea.Batch(p.reconcileTerminalModels()...)
+	}
 	// Refresh worktrees - reconnectAgents will be called after worktrees are loaded
 	return tea.Batch(
 		p.refreshWorktrees(),

@@ -260,6 +260,10 @@ type Model struct {
 	hostCtx      context.Context
 	hostCancel   context.CancelFunc
 	hostResults  map[string][]workspaceinventory.ProjectResult
+	// hostLastKnown retains the last snapshot that actually showed, so `@`
+	// can list unreachable hosts as disabled rows. Sessions still drops
+	// hostResults when !Shows() and paints a health row instead.
+	hostLastKnown map[string][]workspaceinventory.ProjectResult
 	// hostRegistered is the set of host IDs config currently names, so a final
 	// update from a client that has just been stopped cannot resurrect a
 	// de-registered machine as a permanent error row.
@@ -276,6 +280,11 @@ type Model struct {
 	// contentSource, when set, is the Document adapter for remote rows. Tests
 	// inject a fake; production leaves it nil and documentSource builds one.
 	contentSource contentpanes.Source
+	// RelayedLanding, when set, reports whether Sessions should handle a
+	// relayed open/layout (apply or decline). False means the bound project
+	// workspace owns it: handleUIRequest returns without acking. Nil means
+	// Sessions always considers itself the screen (existing package tests).
+	RelayedLanding func(uirequest.Request) bool
 
 	// docFinderCaches holds one file list per pane root, so the file finder a
 	// document pane opens walks a tree once rather than once per ctrl+p.

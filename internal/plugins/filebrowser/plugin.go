@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/app"
+	"github.com/marcus/sidecar/internal/contentpanes"
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/filefind"
@@ -149,6 +150,26 @@ type Plugin struct {
 	ctx     *plugin.Context
 	tree    *FileTree
 	focused bool
+
+	// treeSourceOverride replaces the listing seam. Tests bind a fake so a
+	// bound tree can be proven without ssh or a second machine; production
+	// leaves it nil and treeSource builds one from the context.
+	treeSourceOverride TreeSource
+	// contentSourceOverride replaces the host document adapter, for the same
+	// reason and on the same terms.
+	contentSourceOverride contentpanes.Source
+	// previewRevision is the host revision of the bytes the preview pane is
+	// holding right now, and previewRevisionPath the file they came from.
+	//
+	// It is deliberately one entry rather than a per-path cache. A conditional
+	// read is only honest while the pane still holds the bytes the host would
+	// decline to resend; the pane holds one file at a time. Remembering a
+	// revision for a file that has since been navigated away from is how a
+	// revisited file came back as a filename over an empty pane (td-94d7f7).
+	// It is set only immediately after the bytes it describes are installed,
+	// and cleared by everything that replaces or drops them.
+	previewRevision     string
+	previewRevisionPath string
 
 	// Pane state
 	activePane       FocusPane
@@ -406,6 +427,35 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	}
 	p.edit.Host = p
 	p.ctx = ctx
+	if ctx != nil && ctx.HostID != "" {
+		// The caches, the search, and the drag all describe the project being
+		// left. Reset them exactly as a local reinit does, then build a tree
+		// only when the bind can actually list the host; when it cannot, the
+		// unavailable view says which of the three reasons applies.
+		p.stateRestored = false
+		p.stopped = false
+		p.pendingAutoRefresh = false
+		p.searchScrollOff = -1
+		p.clearDragState()
+		p.quickOpen.Reset()
+		p.dirCache.Reset()
+		p.quickOpenMode = false
+		p.closeProjectSearch()
+		p.tree = nil
+		if source := p.treeSource(); source != nil {
+			p.tree = NewFileTreeWithSource(p.remoteRoot(), source)
+		}
+		renderer, err := markdown.NewRenderer()
+		if err != nil && ctx.Logger != nil {
+			ctx.Logger.Warn("markdown renderer init failed", "error", err)
+		}
+		p.markdownRenderer = renderer
+		if saved := state.GetFileBrowserTreeWidth(); saved > 0 {
+			p.treeWidth = saved
+		}
+		p.previewWrapEnabled = state.GetLineWrapEnabled()
+		return nil
+	}
 	p.tree = NewFileTree(ctx.WorkDir)
 
 	// Reset state flags for reinit support (project switching)
@@ -441,6 +491,13 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 
 // Start begins plugin operation.
 func (p *Plugin) Start() tea.Cmd {
+	if p.remoteBound() {
+		// No watcher: internal/livewatch is a filesystem signal and does not
+		// cross the host boundary. A bound tree refreshes on request and on
+		// the host snapshot the viewer already receives, and says nothing
+		// about being live that it cannot keep.
+		return p.refresh()
+	}
 	return tea.Batch(
 		p.refresh(),
 		p.startWatcher(),
@@ -677,12 +734,16 @@ func (p *Plugin) refresh() tea.Cmd {
 	if p.tree == nil {
 		return nil
 	}
+	if p.remoteBound() && !p.remoteAvailable() {
+		return nil
+	}
 
 	spec := BuildSpec{
 		RootDir:       p.tree.RootDir,
 		SortMode:      p.tree.SortMode,
 		ShowIgnored:   p.tree.ShowIgnored,
 		ExpandedPaths: p.tree.GetExpandedPaths(),
+		Source:        p.treeSource(),
 	}
 
 	var cursorPath string
@@ -795,6 +856,9 @@ func (p *Plugin) reresolveFileOpTarget() {
 // inline editor was open is flushed here, once the message that closed it has
 // been handled.
 func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
+	if p.remoteBound() && (p.tree == nil || !p.remoteAvailable()) {
+		return p, nil
+	}
 	updated, cmd := p.update(msg)
 	if p.pendingAutoRefresh && !p.autoRefreshBlocked() {
 		if refreshCmd := p.requestAutoRefresh(); refreshCmd != nil {
@@ -849,7 +913,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			p.exitInlineEditMode()
 			// Refresh preview to show updated file
 			if editedFile != "" {
-				return p, LoadPreview(p.ctx.WorkDir, editedFile, p.ctx.Epoch)
+				return p, p.loadPreview(editedFile)
 			}
 			return p, p.refresh()
 		}
@@ -1023,7 +1087,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			p.previewFile = p.tabs[p.activeTab].Path
 			p.previewScroll = p.tabs[p.activeTab].Scroll
 			p.updateWatchedFile()
-			return p, LoadPreview(p.ctx.WorkDir, p.previewFile, p.ctx.Epoch)
+			return p, p.loadPreview(p.previewFile)
 		}
 
 		p.previewFile = ""
@@ -1034,6 +1098,45 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			return p, nil
 		}
 		return p, p.applyPreviewRefresh(msg)
+
+	case plugin.HostInventoryMsg:
+		// The host's snapshot moved. That is the whole of a bound tree's live
+		// refresh: there is no filesystem watch across the boundary, so this
+		// signal and an explicit r are what it has, and the auto-refresh gate
+		// defers it while a modal or an open search is on screen exactly as a
+		// local watcher signal is deferred.
+		if !p.remoteBound() {
+			return p, nil
+		}
+		return p, p.requestAutoRefresh()
+
+	case remotePreviewLoadedMsg:
+		// A host read is the same payload with a revision attached.
+		// Re-entering as the ordinary message is what keeps one preview
+		// pipeline rather than two.
+		if plugin.IsStale(p.ctx, msg) {
+			return p, nil
+		}
+		next, cmd := p.update(msg.Msg)
+		// The revision describes bytes, so it is recorded after those bytes
+		// land and only if they did. A read the user navigated away from
+		// leaves nothing behind for a later read to be conditional against.
+		if msg.Msg.Path == p.previewFile {
+			p.rememberPreviewRevision(msg.Msg.Path, msg.Revision)
+		}
+		return next, cmd
+
+	case remotePreviewUnchangedMsg:
+		// The pane already holds these bytes: no repaint, and the refresh gate
+		// still counts the read so a later signal is not reported as a change.
+		if plugin.IsStale(p.ctx, msg) {
+			return p, nil
+		}
+		if msg.Path != p.previewFile {
+			return p, nil
+		}
+		p.rememberPreviewRevision(msg.Path, msg.Revision)
+		return p, nil
 
 	case PreviewLoadedMsg:
 		// Check for stale message from previous project context
@@ -1241,7 +1344,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		// Normal exit - refresh preview after editing
 		if msg.FilePath != "" {
-			return p, LoadPreview(p.ctx.WorkDir, msg.FilePath, p.ctx.Epoch)
+			return p, p.loadPreview(msg.FilePath)
 		}
 
 	case tea.KeyPressMsg:
@@ -1290,6 +1393,17 @@ func (p *Plugin) SetFocused(f bool) {
 
 // Commands returns the available commands.
 func (p *Plugin) Commands() []plugin.Command {
+	if p.remoteBound() {
+		// The footer says what this surface can do, not what Files can do
+		// somewhere else. A hint for a command that answers "unavailable on
+		// [aerie]" is worse than no hint.
+		return p.remoteCommands()
+	}
+	return p.localCommands()
+}
+
+// localCommands is the full command set, for a project on this machine.
+func (p *Plugin) localCommands() []plugin.Command {
 	return []plugin.Command{
 		// Tree pane commands
 		{ID: "quick-open", Name: "Find", Description: "Find a file by name", Category: plugin.CategorySearch, Context: "file-browser-tree", Priority: 1},

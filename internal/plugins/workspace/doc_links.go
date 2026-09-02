@@ -52,10 +52,7 @@ func (p *Plugin) prepareDocFrame(doc *docPane) {
 	src := contentpanes.SourceContext{Root: doc.root}
 	var source contentpanes.Source = contentpanes.LocalSource{}
 	if p.contentDeck != nil {
-		ctx := p.contentDeck.Context()
-		if ctx.Source.Root != "" || ctx.Source.WorkspaceID != "" {
-			src = ctx.Source
-		}
+		src = p.contentDeck.Context().Source
 		source = p.contentDeck.ContentSource()
 	}
 	docview.BeginResolutions(index, doc.root, frame, func(request contentlink.ResolutionRequest) {

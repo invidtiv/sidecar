@@ -1,9 +1,12 @@
 package workspace
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -11,6 +14,8 @@ import (
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/features"
+	"github.com/marcus/sidecar/internal/hosts"
+	"github.com/marcus/sidecar/internal/layoutapply"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/projectdir"
@@ -32,6 +37,8 @@ func hostInstanceID() string {
 	return uirequest.InstanceID("workspace")
 }
 
+const relayedOpenNotOnScreenReason = "the origin shell is not on screen, and relayed open requests are never queued"
+
 func (p *Plugin) handleUIRequest(req uirequest.Request) tea.Cmd {
 	if req.Action == uirequest.ActionRenameWorktree {
 		p.applyWorktreeRenameRequest(req)
@@ -43,6 +50,9 @@ func (p *Plugin) handleUIRequest(req uirequest.Request) tea.Cmd {
 	}
 	if req.Action == uirequest.ActionCreate {
 		return p.applyCreateRequest(req)
+	}
+	if req.Origin.HostID != "" {
+		return p.handleRelayedUIRequest(req)
 	}
 	if req.Action == uirequest.ActionLayout {
 		if req.Origin.Sessions || !tty.ThisInstanceOwnsSession(req.Origin.TmuxSession) {
@@ -97,15 +107,111 @@ func (p *Plugin) handleUIRequest(req uirequest.Request) tea.Cmd {
 		TTLMs:     req.TTLMs,
 	}
 
-	_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
-		Instance: hostInstanceID(),
-		Host:     uirequest.HostName(),
-		PID:      os.Getpid(),
-		Status:   uirequest.StatusQueued,
-		Surface:  "shell:" + targetShell.TmuxName,
-		At:       time.Now().UTC(),
-	})
+	p.writeLocalAck(req, uirequest.StatusQueued, "", "shell:"+targetShell.TmuxName, 0)
 	return nil
+}
+
+func (p *Plugin) handleRelayedUIRequest(req uirequest.Request) tea.Cmd {
+	if req.Origin.Sessions {
+		return nil
+	}
+	if !p.remoteBound() || p.ctx.HostID != req.Origin.HostID {
+		return nil
+	}
+	// Bound to this host: always ack. Returning nil with no ack while the app
+	// has already skipped Sessions is a dropped request the host CLI waits on.
+	if req.Action != uirequest.ActionLayout && req.Action != uirequest.ActionOpen {
+		return p.ackRelayedDeclined(req, "unsupported relayed action")
+	}
+	if !p.ownsRelayedOrigin(req) {
+		reason := relayedOpenNotOnScreenReason
+		if req.Action == uirequest.ActionLayout {
+			reason = layoutapply.NotOnScreenReason
+		}
+		return p.ackRelayedDeclined(req, reason)
+	}
+	if req.Action == uirequest.ActionLayout {
+		return p.applyRelayedLayoutRequest(req)
+	}
+	return p.applyRelayedOpenRequest(req)
+}
+
+func (p *Plugin) ackRelayedDeclined(req uirequest.Request, reason string) tea.Cmd {
+	if req.Action == uirequest.ActionLayout {
+		return p.ackLayout(req, uirequest.StatusDeclined, reason, nil, nil)
+	}
+	surface := ""
+	if req.Origin.TmuxSession != "" {
+		surface = "shell:" + req.Origin.TmuxSession
+	}
+	p.ackOpen(req, uirequest.StatusDeclined, reason, surface, 0)
+	return nil
+}
+
+func (p *Plugin) ownsRelayedOrigin(req uirequest.Request) bool {
+	if !p.remoteBound() || p.ctx.HostID != req.Origin.HostID {
+		return false
+	}
+	if !tty.ThisInstanceOwnsSession(req.Origin.TmuxSession) {
+		return false
+	}
+	if req.Origin.ProjectKey != "" && !hosts.OriginNamesProject(req.Origin.ProjectKey, p.ctx.ProjectKey) {
+		return false
+	}
+	return p.shellByTmux(req.Origin.TmuxSession) != nil || p.worktreeIndexForSession(req.Origin.TmuxSession) >= 0
+}
+
+func (p *Plugin) shellByTmux(session string) *ShellSession {
+	if session == "" {
+		return nil
+	}
+	for _, sh := range p.shells {
+		if sh != nil && sh.TmuxName == session {
+			return sh
+		}
+	}
+	return nil
+}
+
+func (p *Plugin) applyRelayedOpenRequest(req uirequest.Request) tea.Cmd {
+	root, surface, ok := p.selectedRelayedSurface(req.Origin.TmuxSession)
+	if !ok {
+		surface = "shell:" + req.Origin.TmuxSession
+		p.ackOpen(req, uirequest.StatusDeclined, relayedOpenNotOnScreenReason, surface, 0)
+		return nil
+	}
+	return p.applyOpenRequest(req, root, surface)
+}
+
+func (p *Plugin) applyRelayedLayoutRequest(req uirequest.Request) tea.Cmd {
+	root, surface, ok := p.selectedRelayedSurface(req.Origin.TmuxSession)
+	if !ok {
+		return p.ackLayout(req, uirequest.StatusDeclined, layoutapply.NotOnScreenReason, nil, nil)
+	}
+	payload, err := uirequest.DecodeLayoutPayload(req.Payload)
+	if err != nil {
+		return p.ackLayout(req, uirequest.StatusDeclined, "invalid layout payload: "+err.Error(), nil, nil)
+	}
+	return p.answerLayout(req, payload, root, surface)
+}
+
+func (p *Plugin) selectedRelayedSurface(session string) (root, surface string, ok bool) {
+	root, surface, ok = p.selectedTerminalSurface()
+	if !ok {
+		return "", "", false
+	}
+	if session == "" {
+		return root, surface, true
+	}
+	if surface == "shell:"+session {
+		return root, surface, true
+	}
+	if p.worktreeIndexForSession(session) >= 0 {
+		if wt := p.selectedWorktree(); wt != nil && (worktreeTmuxSession(wt) == session || (wt.Agent != nil && wt.Agent.TmuxSession == session)) {
+			return root, surface, true
+		}
+	}
+	return "", "", false
 }
 
 func (p *Plugin) applyWorktreeRenameRequest(req uirequest.Request) {
@@ -406,27 +512,60 @@ func (p *Plugin) openOnSelectedSurface(req uirequest.Request) tea.Cmd {
 func (p *Plugin) applyOpenRequest(req uirequest.Request, root, surface string) tea.Cmd {
 	outcome, cmd := p.performTargetOpen(req, root, surface)
 	if outcome.status == uirequest.StatusDeclined {
-		_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
-			Instance: hostInstanceID(),
-			Host:     uirequest.HostName(),
-			PID:      os.Getpid(),
-			Status:   uirequest.StatusDeclined,
-			Reason:   outcome.reason,
-			Surface:  surface,
-			At:       time.Now().UTC(),
-		})
+		p.ackOpen(req, uirequest.StatusDeclined, outcome.reason, surface, 0)
 		return nil
 	}
+	p.ackOpen(req, outcome.status, "", surface, p.paneFocus)
+	return cmd
+}
+
+func (p *Plugin) ackOpen(req uirequest.Request, status uirequest.Status, reason, surface string, pane int) {
+	if req.Origin.HostID == "" {
+		p.writeLocalAck(req, status, reason, surface, pane)
+		return
+	}
+	p.ackRemote(req, status, reason, surface, pane, nil, nil)
+}
+
+func (p *Plugin) writeLocalAck(req uirequest.Request, status uirequest.Status, reason, surface string, pane int) {
 	_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
 		Instance: hostInstanceID(),
 		Host:     uirequest.HostName(),
 		PID:      os.Getpid(),
-		Status:   outcome.status,
+		Status:   status,
+		Reason:   reason,
 		Surface:  surface,
-		Pane:     p.paneFocus,
+		Pane:     pane,
 		At:       time.Now().UTC(),
 	})
-	return cmd
+}
+
+func (p *Plugin) ackRemote(req uirequest.Request, status uirequest.Status, reason, surface string, pane int, layout json.RawMessage, items []uirequest.AckItem) {
+	if p.ctx == nil || p.ctx.RemoteRunner == nil || req.Origin.HostID == "" {
+		return
+	}
+	args := []string{"request", "ack", "--id", req.ID, "--action", string(req.Action), "--status", string(status), "--json"}
+	if reason != "" {
+		args = append(args, "--reason", reason)
+	}
+	if surface != "" {
+		args = append(args, "--surface", surface)
+	}
+	if pane != 0 {
+		args = append(args, "--pane", strconv.Itoa(pane))
+	}
+	if len(layout) > 0 {
+		args = append(args, "--layout", string(layout))
+	}
+	if len(items) > 0 {
+		if raw, err := json.Marshal(items); err == nil {
+			args = append(args, "--items", string(raw))
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var result uirequest.AckResult
+	_ = p.ctx.RemoteRunner(ctx, req.Origin.HostID, args, &result)
 }
 
 // openOutcome is what one target's open earned. The pane tree, not the returned

@@ -218,3 +218,45 @@ func shrinkUTF8(s string, n int) string {
 func encodedFitsUnderCap() bool {
 	return MaxEncodedBytes < transportOutputCap
 }
+
+// EncodeTreeResult writes the compact JSON object for a tree listing,
+// shrinking the largest directory until the encoded form fits under
+// MaxEncodedBytes.
+//
+// It halves rather than dropping a directory: a viewer that asked for eight
+// directories and got seven has a tree with a silently empty branch, while one
+// that got eight truncated listings can say so on the branch it happened to.
+func EncodeTreeResult(result TreeResult) ([]byte, error) {
+	if result.Kind == "" {
+		result.Kind = KindTree
+	}
+	for {
+		raw, err := marshalJSON(result)
+		if err != nil {
+			return nil, Internal("encode tree result", err)
+		}
+		if len(raw) <= MaxEncodedBytes {
+			return raw, nil
+		}
+		if !shrinkLargestTreeDir(result.Dirs) {
+			return nil, Rejected("encoded tree result exceeds %d bytes", MaxEncodedBytes)
+		}
+	}
+}
+
+// shrinkLargestTreeDir halves the entry list of the biggest directory,
+// reporting whether there was anything left to shrink.
+func shrinkLargestTreeDir(dirs []TreeDir) bool {
+	biggest := -1
+	for i := range dirs {
+		if len(dirs[i].Entries) > 1 && (biggest < 0 || len(dirs[i].Entries) > len(dirs[biggest].Entries)) {
+			biggest = i
+		}
+	}
+	if biggest < 0 {
+		return false
+	}
+	dirs[biggest].Entries = dirs[biggest].Entries[:len(dirs[biggest].Entries)/2]
+	dirs[biggest].Truncated = true
+	return true
+}

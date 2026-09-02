@@ -54,6 +54,9 @@ func TestContentUsageErrors(t *testing.T) {
 		{[]string{"content", "read", "--workspace", "x:shell:y", "--kind", "file", "--operation", "exec", "--target", "a.md", "--json"}, 2, "unknown content operation"},
 		{[]string{"content", "catalog"}, 2, "--workspace is required"},
 		{[]string{"content", "catalog", "--workspace", "x:shell:y", "--kind", "resource", "--json"}, 2, "unknown content kind"},
+		{[]string{"content", "tree"}, 2, "--workspace is required"},
+		{[]string{"content", "tree", "--workspace", "x:worktree:y", "--path"}, 2, "--path requires a directory"},
+		{[]string{"content", "tree", "--workspace", "x:worktree:y", "internal"}, 2, "takes no positional arguments"},
 	} {
 		t.Run(strings.Join(tt.args, " "), func(t *testing.T) {
 			var out, errOut bytes.Buffer
@@ -236,6 +239,73 @@ func TestContentCatalogJSON(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("files = %v, want HOST-ONLY.md", catalog.Files)
+	}
+}
+
+func TestContentTreeJSON(t *testing.T) {
+	repo, id, cfgPath := setupContentCLI(t)
+	if err := os.MkdirAll(filepath.Join(repo, "internal", "cli"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "internal", "cli", "HOST-ONLY.go"), []byte("package cli\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("*.log\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "noise.log"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"-config", cfgPath, "content", "tree", "--workspace", id, "--path", ".", "--path", "internal/cli", "--json"}, &out, &errOut)
+	if !handled || code != 0 {
+		t.Fatalf("tree = %v %d stderr %q", handled, code, errOut.String())
+	}
+	var tree contentservice.TreeResult
+	if err := json.Unmarshal(out.Bytes(), &tree); err != nil {
+		t.Fatalf("tree json: %v (%q)", err, out.String())
+	}
+	if !tree.ValidRemoteResult() || len(tree.Dirs) != 2 {
+		t.Fatalf("tree = %+v", tree)
+	}
+	if tree.Dirs[0].Path != "" || tree.Dirs[1].Path != "internal/cli" {
+		t.Fatalf("listings came back out of request order: %+v", tree.Dirs)
+	}
+	var sawIgnored, sawDir bool
+	for _, entry := range tree.Dirs[0].Entries {
+		if entry.Name == "noise.log" && entry.Ignored {
+			sawIgnored = true
+		}
+		if entry.Name == "internal" && entry.Dir {
+			sawDir = true
+		}
+	}
+	if !sawIgnored || !sawDir {
+		t.Fatalf("root listing = %+v, want an ignored log and a directory", tree.Dirs[0].Entries)
+	}
+	if len(tree.Dirs[1].Entries) != 1 || tree.Dirs[1].Entries[0].Name != "HOST-ONLY.go" {
+		t.Fatalf("internal/cli = %+v", tree.Dirs[1].Entries)
+	}
+}
+
+func TestContentTreeRejectsEscapeAndUnknownWorkspace(t *testing.T) {
+	_, id, cfgPath := setupContentCLI(t)
+	for _, tt := range []struct {
+		name string
+		args []string
+	}{
+		{"escape", []string{"-config", cfgPath, "content", "tree", "--workspace", id, "--path", "../..", "--json"}},
+		{"absolute", []string{"-config", cfgPath, "content", "tree", "--workspace", id, "--path", "/etc", "--json"}},
+		{"unknown workspace", []string{"-config", cfgPath, "content", "tree", "--workspace", "nope:worktree:/nowhere", "--json"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			handled, code := Run(tt.args, &out, &errOut)
+			if !handled || code != 5 {
+				t.Fatalf("Run = %v %d, want exit 5; stderr %q", handled, code, errOut.String())
+			}
+		})
 	}
 }
 

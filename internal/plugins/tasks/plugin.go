@@ -116,11 +116,19 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.loading = true
 	p.generation++
 
+	if ctx != nil && ctx.HostID != "" {
+		p.unavailable = plugin.FormatRemoteUnavailable(pluginName, ctx.HostID)
+		p.loading = false
+	}
+
 	return nil
 }
 
 // Start begins plugin operation.
 func (p *Plugin) Start() tea.Cmd {
+	if p.ctx != nil && p.ctx.HostID != "" {
+		return nil
+	}
 	if p.loading {
 		return p.buildModel()
 	}
@@ -582,6 +590,9 @@ func (p *Plugin) registerBindings() {
 // palette. Commands for other contexts are kept: CommandAvailable answers for
 // the live focus only, and the palette's other layers are still real help.
 func (p *Plugin) Commands() []plugin.Command {
+	if p.ctx != nil && p.ctx.HostID != "" {
+		return nil
+	}
 	exported := tasksui.ExportCommands()
 	current := p.FocusContext()
 	commands := make([]plugin.Command, 0, len(exported))

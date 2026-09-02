@@ -30,7 +30,11 @@ func (m Model) terminalTitle() string {
 	// Only a linked worktree is worth naming — on the main worktree the branch
 	// is just noise, which is the same call renderHeader makes.
 	worktree := ""
-	if wtInfo := m.currentWorktreeInfo(); wtInfo != nil && !wtInfo.IsMain {
+	project := m.intro.RepoName
+	if m.boundDestination.HostID != "" {
+		project = BoundDestinationTitleProject(m.boundDestination)
+		worktree = BoundDestinationTitleWorktree(m.boundDestination)
+	} else if wtInfo := m.currentWorktreeInfo(); wtInfo != nil && !wtInfo.IsMain {
 		worktree = wtInfo.Branch
 		if worktree == "" {
 			worktree = "worktree"
@@ -50,7 +54,7 @@ func (m Model) terminalTitle() string {
 	}
 
 	vars := termtitle.Vars{
-		Project:  m.intro.RepoName,
+		Project:  project,
 		Worktree: worktree,
 		Plugin:   pluginName,
 		Dir:      dir,

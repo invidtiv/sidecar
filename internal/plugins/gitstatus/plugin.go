@@ -1,6 +1,7 @@
 package gitstatus
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -96,6 +97,10 @@ type Plugin struct {
 	diffPaneParsedDiff   *ParsedDiff   // Parsed diff for inline view
 	diffPaneViewMode     DiffViewMode  // Unified, side-by-side, or full-file for inline diff
 	diffPaneFullFileDiff *FullFileDiff // Full-file diff for inline view (loaded on demand)
+	// diffPaneTruncated marks a patch the source had to cut. A short patch
+	// rendered as if it were whole is a lie about the change, so the pane
+	// labels it.
+	diffPaneTruncated bool
 
 	// Commit preview state (for three-pane view when on commit)
 	previewCommit       *Commit // Commit being previewed in right pane
@@ -119,6 +124,7 @@ type Plugin struct {
 	parsedDiff          *ParsedDiff   // Parsed diff for enhanced rendering
 	diffReturnMode      ViewMode      // View mode to return to on esc
 	diffLoaded          bool          // True once diff load completes (distinguishes loading vs empty)
+	diffTruncated       bool          // The source cut this patch; the breadcrumb says so
 	diffWrapEnabled     bool          // Wrap long lines instead of truncating
 	diffBackWidth       int           // Width of back button for hit region (set during render)
 	fullFileDiff        *FullFileDiff // Full-file diff for full-screen view (loaded on demand)
@@ -154,6 +160,21 @@ type Plugin struct {
 	watcherError string
 	statusError  string
 	historyError string
+
+	// repoState names an in-progress operation on the repository being shown
+	// (merge, rebase, cherry-pick, revert, bisect). Only a source that reports
+	// it fills it; an ordinary working tree leaves it empty.
+	repoState string
+	// repoRemoteURL is origin's URL for the repository being shown, as the
+	// status read answered it. Only a source that returns it fills it; a local
+	// project's GitHub link still asks git at the moment it is wanted.
+	repoRemoteURL string
+	// remoteRefusal is the host's own reason this bound pane has nothing to
+	// show, learned from an answer rather than from the connection.
+	remoteRefusal string
+	// repoSourceOverride lets a test drive the pane from a fixed answer, the
+	// way filebrowser's treeSourceOverride does.
+	repoSourceOverride RepoSource
 
 	statusLoader           func(string) (*FileTree, error)
 	nextStatusRequestID    uint64
@@ -294,7 +315,7 @@ func resolveGitRoot(dir string) (string, error) {
 }
 
 func (p *Plugin) inNoRepoMode() bool {
-	return p.ctx != nil && !p.hasRepo
+	return p.ctx != nil && p.ctx.HostID == "" && !p.hasRepo
 }
 
 func (p *Plugin) activateRepo(root string) {
@@ -311,25 +332,28 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	// Preserve resources that are expensive to recreate or have no project-specific state
 	mouseHandler := p.mouseHandler
 	truncateCache := p.truncateCache
+	repoSourceOverride := p.repoSourceOverride
 	width, height := p.width, p.height
 
 	// Reset ALL state by zeroing the struct, then restore preserved fields
 	// Note: Epoch is now handled by plugin.Context, incremented in Registry.Reinit()
 	*p = Plugin{
-		mouseHandler:   mouseHandler,
-		truncateCache:  truncateCache,
-		width:          width,
-		height:         height,
-		sidebarVisible: true,
-		activePane:     PaneSidebar,
-		sidebarRestore: PaneSidebar,
+		mouseHandler:       mouseHandler,
+		truncateCache:      truncateCache,
+		repoSourceOverride: repoSourceOverride,
+		width:              width,
+		height:             height,
+		sidebarVisible:     true,
+		activePane:         PaneSidebar,
+		sidebarRestore:     PaneSidebar,
 	}
 
 	// Set up context and repo
 	p.ctx = ctx
-	p.tree = NewFileTree(ctx.WorkDir)
 
-	// Load user preferences from state
+	// Load user preferences from state. These are this viewer's presentation
+	// rules and apply to whichever machine owns the project, so they are read
+	// before the bound branch returns.
 	switch state.GetGitDiffMode() {
 	case "side-by-side":
 		p.diffViewMode = DiffViewSideBySide
@@ -344,11 +368,24 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.showCommitGraph = state.GetGitGraphEnabled()
 	p.diffWrapEnabled = state.GetLineWrapEnabled()
 
+	if p.remoteBound() {
+		// repoRoot and hasRepo stay zero: the host's repository has no path on
+		// this disk, and leaving them empty means no later call has a directory
+		// to run git in. The tree arrives from the first status answer.
+		return nil
+	}
+	p.tree = NewFileTree(ctx.WorkDir)
+
 	return nil
 }
 
 // Start begins plugin operation.
 func (p *Plugin) Start() tea.Cmd {
+	if p.remoteBound() {
+		// A bound pane has no repository to discover: the host owns it, and the
+		// only question is whether this Sidecar can read it.
+		return p.reload()
+	}
 	// Repository discovery invokes Git, so it must remain inside the command.
 	// Existing repositories are never mutated merely by opening Sidecar.
 	return p.detectRepo()
@@ -363,6 +400,9 @@ func (p *Plugin) Stop() {
 
 // Update handles messages.
 func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
+	if p.remoteBound() {
+		return p.updateRemote(msg)
+	}
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
 		if p.inNoRepoMode() {
@@ -503,66 +543,10 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		if p.inNoRepoMode() || plugin.IsStale(p.ctx, msg) || msg.RequestID != p.activeStatusRequestID {
 			return p, nil
 		}
-		p.activeStatusRequestID = 0
-		if msg.Err == nil && msg.Tree != nil {
-			p.tree = msg.Tree
-			p.statusError = ""
-		}
-		var followUp tea.Cmd
-		if p.statusRefreshDirty {
-			p.statusRefreshDirty = false
-			followUp = p.refresh()
-		}
-		if msg.Err != nil {
-			p.statusError = msg.Err.Error()
-			return p, tea.Batch(followUp, func() tea.Msg {
-				return app.ToastMsg{Message: "Git status refresh failed: " + msg.Err.Error(), Duration: 4 * time.Second, IsError: true}
-			})
-		}
-		// Clamp cursor to valid range if files changed
-		maxCursor := p.totalSelectableItems() - 1
-		if maxCursor < 0 {
-			maxCursor = 0
-		}
-		if p.cursor > maxCursor {
-			p.cursor = maxCursor
-		}
-		p.restoreOperationSelection()
-		// Auto-load preview for current cursor position after refresh
-		if p.viewMode == ViewModeStatus {
-			return p, tea.Batch(p.autoLoadPreview(true), followUp)
-		}
-		return p, followUp
+		return p, p.applyStatusSnapshot(msg)
 
 	case DiffLoadedMsg:
-		if plugin.IsStale(p.ctx, msg) || msg.RequestID != p.fullScreenPreviewRequestID {
-			return p, nil // Ignore stale message from previous project
-		}
-		p.diffContent = msg.Content
-		p.diffRaw = msg.Raw
-		p.diffLoaded = true
-		if msg.Err != nil {
-			p.diffContent = ""
-			p.diffRaw = ""
-			p.parsedDiff = nil
-			return p, func() tea.Msg {
-				return app.ToastMsg{Message: "Diff load failed: " + msg.Err.Error(), Duration: 4 * time.Second, IsError: true}
-			}
-		}
-		// Always parse diff for built-in rendering (even if delta is available)
-		// This allows toggling between delta and built-in rendering at runtime
-		p.parsedDiff, _ = ParseUnifiedDiff(msg.Raw)
-		// Auto-load full-file content when in full-file view mode
-		if p.diffViewMode == DiffViewFullFile && p.diffFile != "" {
-			p.fullFileDiff = nil // Invalidate stale data
-			if entry := p.currentWorkingTreeDiffEntry(); entry != nil {
-				return p, p.loadFullFileDiff(entry.Path, entry.Staged, entry.Status, p.diffCommit, false)
-			}
-			if p.diffCommit != "" {
-				return p, p.loadFullFileDiff(p.diffFile, false, "", p.diffCommit, false)
-			}
-		}
-		return p, nil
+		return p, p.applyDiffLoaded(msg)
 
 	case CommitSuccessMsg:
 		if plugin.IsStale(p.ctx, msg) {
@@ -600,30 +584,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, nil
 
 	case InlineDiffLoadedMsg:
-		if plugin.IsStale(p.ctx, msg) || msg.RequestID != p.inlinePreviewRequestID {
-			return p, nil // Ignore stale message from previous project
-		}
-		// Only update if this is still the selected file
-		if msg.File == p.selectedDiffFile && msg.Staged == p.selectedDiffStaged {
-			p.diffPaneParsedDiff = msg.Parsed
-			// Clamp scroll to new content length (diff may have shrunk after stage/unstage).
-			// In full-file view mode, clamp against the full-file line count (which includes
-			// all context lines), not the parsed hunk-only count. Otherwise the watcher
-			// refresh cycle snaps scroll back to a much smaller value.
-			p.clampDiffPaneScroll()
-			// Auto-load full-file content when in full-file view mode.
-			// Always reload (not just when nil) so content refreshes after stage/unstage/discard.
-			// The old diffPaneFullFileDiff is kept until the new one arrives to avoid flicker.
-			if p.diffPaneViewMode == DiffViewFullFile {
-				entries := p.tree.AllEntries()
-				for _, entry := range entries {
-					if entry.Path == msg.File && entry.Staged == msg.Staged {
-						return p, p.loadFullFileDiff(entry.Path, entry.Staged, entry.Status, "", true)
-					}
-				}
-			}
-		}
-		return p, nil
+		return p, p.applyInlineDiffLoaded(msg)
 
 	case FullFileDiffLoadedMsg:
 		if plugin.IsStale(p.ctx, msg) {
@@ -652,67 +613,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, nil
 
 	case RecentCommitsLoadedMsg:
-		if plugin.IsStale(p.ctx, msg) || msg.RequestID != p.activeHistoryRequestID {
-			return p, nil // Ignore stale message from previous project
-		}
-		p.activeHistoryRequestID = 0
-		if msg.Err != nil {
-			p.historyError = msg.Err.Error()
-		} else {
-			p.historyError = ""
-		}
-		var historyFollowUp tea.Cmd
-		if p.historyRefreshDirty {
-			p.historyRefreshDirty = false
-			historyFollowUp = p.loadRecentCommits()
-		}
-		if msg.Commits == nil {
-			if msg.PushStatus != nil {
-				p.pushStatus = msg.PushStatus
-				PopulatePushStatus(p.recentCommits, p.pushStatus)
-			}
-			return p, historyFollowUp
-		}
-
-		p.moreCommitsAvailable = len(msg.Commits) >= commitHistoryPageSize
-
-		// Determine which commit hash to restore cursor to
-		// Priority: pushPreservedCommitHash (set before push) > computed from current state
-		prevCommitHash := p.pushPreservedCommitHash
-		if prevCommitHash == "" && !p.historyFilterActive && p.cursorOnCommit() {
-			commits := p.activeCommits()
-			commitIdx := p.selectedCommitIndex()
-			if commitIdx >= 0 && commitIdx < len(commits) {
-				prevCommitHash = commits[commitIdx].Hash
-			}
-		}
-		// Clear the preserved hash after use
-		p.pushPreservedCommitHash = ""
-
-		p.recentCommits = mergeRecentCommits(p.recentCommits, msg.Commits)
-		p.pushStatus = msg.PushStatus
-		PopulatePushStatus(p.recentCommits, p.pushStatus)
-		// Recompute graph for new commits
-		if p.showCommitGraph && len(p.recentCommits) > 0 {
-			p.commitGraphLines = ComputeGraphForCommits(p.recentCommits)
-		}
-		if prevCommitHash != "" {
-			if idx := indexOfCommitHash(p.recentCommits, prevCommitHash); idx >= 0 {
-				p.cursor = len(p.tree.AllEntries()) + idx
-			}
-		}
-		if !p.historyFilterActive {
-			p.clampCommitScroll()
-		}
-		// Clamp cursor to valid range if commits changed
-		maxCursor := p.totalSelectableItems() - 1
-		if maxCursor < 0 {
-			maxCursor = 0
-		}
-		if p.cursor > maxCursor {
-			p.cursor = maxCursor
-		}
-		return p, tea.Batch(p.ensureCommitListFilled(), historyFollowUp)
+		return p, p.applyRecentCommits(msg)
 
 	case CommitCountLoadedMsg:
 		if plugin.IsStale(p.ctx, msg) || msg.RequestID != p.activeCountRequestID {
@@ -731,46 +632,10 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, countFollowUp
 
 	case MoreCommitsLoadedMsg:
-		if plugin.IsStale(p.ctx, msg) {
-			return p, nil // Ignore stale message from previous project
-		}
-		p.loadingMoreCommits = false
-		if len(msg.Commits) > 0 {
-			if len(msg.Commits) < commitHistoryPageSize {
-				p.moreCommitsAvailable = false
-			}
-			p.recentCommits = append(p.recentCommits, msg.Commits...)
-			// Recompute entire graph when commits are added
-			if p.showCommitGraph {
-				commits := p.activeCommits()
-				p.commitGraphLines = ComputeGraphForCommits(commits)
-			}
-			return p, p.ensureCommitListFilled()
-		}
-		p.moreCommitsAvailable = false
-		return p, nil
+		return p, p.applyMoreCommits(msg)
 
 	case FilteredCommitsLoadedMsg:
-		if plugin.IsStale(p.ctx, msg) {
-			return p, nil // Ignore stale message from previous project
-		}
-		if msg.Commits != nil {
-			p.filteredCommits = msg.Commits
-			p.pushStatus = msg.PushStatus
-			// Recompute graph for filtered commits
-			if p.showCommitGraph && len(p.filteredCommits) > 0 {
-				p.commitGraphLines = ComputeGraphForCommits(p.filteredCommits)
-			} else if len(p.filteredCommits) == 0 {
-				p.commitGraphLines = nil // Clear graph cache
-			}
-			// Reset cursor to first commit when filter applied
-			entries := p.tree.AllEntries()
-			if len(p.filteredCommits) > 0 {
-				p.cursor = len(entries)
-				p.commitScrollOff = 0
-			}
-		}
-		return p, nil
+		return p, p.applyFilteredCommits(msg)
 
 	case CommitStatsLoadedMsg:
 		if plugin.IsStale(p.ctx, msg) {
@@ -793,39 +658,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, nil
 
 	case CommitPreviewLoadedMsg:
-		if plugin.IsStale(p.ctx, msg) || msg.RequestID != p.commitPreviewRequestID {
-			return p, nil // Ignore stale message from previous project
-		}
-		if msg.Err != nil {
-			p.previewCommit = nil
-			p.previewCommitError = msg.Err.Error()
-			return p, func() tea.Msg {
-				return app.ToastMsg{Message: "Commit preview failed: " + msg.Err.Error(), Duration: 4 * time.Second, IsError: true}
-			}
-		}
-		// Commit preview loaded for right pane (in status view)
-		p.previewCommit = msg.Commit
-		p.previewCommitError = ""
-		p.previewCommitCursor = 0
-		p.previewCommitScroll = 0
-		p.commitBodyExpanded = false
-		p.commitBodyScroll = 0
-		// Copy stats to the commit in the list for inline display
-		if msg.Commit != nil {
-			for _, c := range p.recentCommits {
-				if c.Hash == msg.Commit.Hash {
-					c.Stats = msg.Commit.Stats
-					break
-				}
-			}
-			for _, c := range p.filteredCommits {
-				if c.Hash == msg.Commit.Hash {
-					c.Stats = msg.Commit.Stats
-					break
-				}
-			}
-		}
-		return p, nil
+		return p, p.applyCommitPreview(msg)
 
 	case PushSuccessMsg:
 		if plugin.IsStale(p.ctx, msg) {
@@ -877,14 +710,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		if plugin.IsStale(p.ctx, msg) {
 			return p, nil // Ignore stale message from previous project
 		}
-		p.branches = msg.Branches
-		// Position cursor on current branch
-		for i, b := range p.branches {
-			if b.IsCurrent {
-				p.branchCursor = i
-				break
-			}
-		}
+		p.applyBranchList(msg)
 		return p, nil
 
 	case BranchSwitchSuccessMsg:
@@ -1079,7 +905,9 @@ func (p *Plugin) View(width, height int) string {
 	p.height = height
 
 	var content string
-	if p.inNoRepoMode() {
+	if p.remoteBound() {
+		content = p.renderBoundView()
+	} else if p.inNoRepoMode() {
 		content = p.renderNoRepoView()
 	} else {
 		switch p.viewMode {
@@ -1135,6 +963,9 @@ func (p *Plugin) SetFocused(f bool) { p.focused = f }
 
 // Commands returns the available commands.
 func (p *Plugin) Commands() []plugin.Command {
+	if p.remoteBound() {
+		return p.remoteCommands()
+	}
 	commands := []plugin.Command{
 		// git-no-repo context
 		{ID: "init-repo", Name: "Init", Description: "Initialize a git repository on main", Category: plugin.CategoryGit, Context: "git-no-repo", Priority: 1},
@@ -1246,6 +1077,29 @@ func (p *Plugin) Commands() []plugin.Command {
 
 // FocusContext returns the current focus context.
 func (p *Plugin) FocusContext() string {
+	if p.remoteBound() {
+		// Only the reads this build performs are reachable while bound, so the
+		// context names one of those rather than falling through to the modes
+		// that own a write.
+		switch {
+		case p.historySearchMode:
+			return "git-history-search"
+		case p.pathFilterMode:
+			return "git-path-filter"
+		case p.viewMode == ViewModeDiff:
+			return "git-diff"
+		case p.activePane == PaneDiff && p.previewCommit != nil && p.cursorOnCommit():
+			return "git-commit-preview"
+		case p.activePane == PaneDiff && p.selectedDiffFile != "":
+			return "git-status-diff"
+		case p.hasSelectedCommit():
+			// A real commit row, not the empty-list boundary: a bound pane can
+			// be on screen before its first answer arrives, and a footer of
+			// commit gestures over no commits is a footer that lies.
+			return "git-status-commits"
+		}
+		return "git-status"
+	}
 	if p.inNoRepoMode() {
 		return "git-no-repo"
 	}
@@ -1303,7 +1157,38 @@ func (p *Plugin) BlocksGlobalKeys() bool {
 
 // Diagnostics returns plugin health info.
 func (p *Plugin) Diagnostics() []plugin.Diagnostic {
+	if p.remoteBound() {
+		if reason := p.unavailableReason(); reason != "" {
+			return []plugin.Diagnostic{
+				{ID: "git-status", Status: "warn", Detail: pluginName + " is unavailable: " + reason},
+			}
+		}
+		if p.tree == nil {
+			return []plugin.Diagnostic{
+				{ID: "git-status", Status: "warn", Detail: "Loading [" + p.ctx.HostID + "]…"},
+			}
+		}
+		status := "ok"
+		if p.tree.TotalCount() == 0 {
+			status = "clean"
+		}
+		diagnostics := []plugin.Diagnostic{
+			{ID: "git-status", Status: status, Detail: "[" + p.ctx.HostID + "] " + p.tree.Summary()},
+		}
+		if p.historyError != "" {
+			// A log the host would not serve is its own row: the sidebar says
+			// "No commits" for an empty history and for a failed read alike,
+			// and only one of those is the repository's own answer.
+			diagnostics = append(diagnostics, plugin.Diagnostic{ID: "git-history", Status: "warn", Detail: p.historyError})
+		}
+		return diagnostics
+	}
 	if p.inNoRepoMode() {
+		return []plugin.Diagnostic{
+			{ID: "git-status", Status: "warn", Detail: "No git repository"},
+		}
+	}
+	if p.tree == nil {
 		return []plugin.Diagnostic{
 			{ID: "git-status", Status: "warn", Detail: "No git repository"},
 		}
@@ -1328,9 +1213,11 @@ func (p *Plugin) Diagnostics() []plugin.Diagnostic {
 	return diagnostics
 }
 
-// refresh reloads the git status.
+// refresh reloads repository status through the seam, from whichever machine
+// owns this project.
 func (p *Plugin) refresh() tea.Cmd {
-	if !p.hasRepo || p.tree == nil {
+	source := p.repoSource()
+	if source == nil {
 		return nil
 	}
 	if p.activeStatusRequestID != 0 {
@@ -1341,14 +1228,316 @@ func (p *Plugin) refresh() tea.Cmd {
 	requestID := p.nextStatusRequestID
 	p.activeStatusRequestID = requestID
 	epoch := p.ctx.Epoch
-	workDir := p.repoRoot
-	loader := p.statusLoader
-	if loader == nil {
-		loader = LoadFileTree
-	}
 	return func() tea.Msg {
-		tree, err := loader(workDir)
-		return StatusSnapshotLoadedMsg{Epoch: epoch, RequestID: requestID, Tree: tree, Err: err}
+		status, err := source.Status(context.Background())
+		return StatusSnapshotLoadedMsg{
+			Epoch:     epoch,
+			RequestID: requestID,
+			Tree:      status.Tree,
+			Push:      status.Push,
+			State:     status.State,
+			RemoteURL: status.RemoteURL,
+			Err:       err,
+		}
+	}
+}
+
+// reload is one whole read of the project a refresh means: the working tree,
+// and the first page of the log above it.
+func (p *Plugin) reload() tea.Cmd {
+	return tea.Batch(p.refresh(), p.loadRecentCommits())
+}
+
+// applyDiffLoaded lands one full-screen patch. Both message loops end here, so
+// a bound pane cannot drift into its own rules about what a loaded patch means.
+func (p *Plugin) applyDiffLoaded(msg DiffLoadedMsg) tea.Cmd {
+	if plugin.IsStale(p.ctx, msg) || msg.RequestID != p.fullScreenPreviewRequestID {
+		return nil // Ignore stale message from previous project
+	}
+	p.diffContent = msg.Content
+	p.diffRaw = msg.Raw
+	p.diffLoaded = true
+	p.diffTruncated = msg.Truncated
+	if msg.Err != nil {
+		p.diffContent = ""
+		p.diffRaw = ""
+		p.parsedDiff = nil
+		return func() tea.Msg {
+			return app.ToastMsg{Message: "Diff load failed: " + msg.Err.Error(), Duration: 4 * time.Second, IsError: true}
+		}
+	}
+	// Always parse diff for built-in rendering (even if delta is available)
+	// This allows toggling between delta and built-in rendering at runtime
+	p.parsedDiff, _ = ParseUnifiedDiff(msg.Raw)
+	// Auto-load full-file content when in full-file view mode
+	if p.diffViewMode == DiffViewFullFile && p.diffFile != "" {
+		p.fullFileDiff = nil // Invalidate stale data
+		if entry := p.currentWorkingTreeDiffEntry(); entry != nil {
+			return p.loadFullFileDiff(entry.Path, entry.Staged, entry.Status, p.diffCommit, false)
+		}
+		if p.diffCommit != "" {
+			return p.loadFullFileDiff(p.diffFile, false, "", p.diffCommit, false)
+		}
+	}
+	return nil
+}
+
+// applyInlineDiffLoaded lands one inline patch, for whichever machine answered.
+func (p *Plugin) applyInlineDiffLoaded(msg InlineDiffLoadedMsg) tea.Cmd {
+	if plugin.IsStale(p.ctx, msg) || msg.RequestID != p.inlinePreviewRequestID {
+		return nil // Ignore stale message from previous project
+	}
+	// Only update if this is still the selected file
+	if msg.File != p.selectedDiffFile || msg.Staged != p.selectedDiffStaged {
+		return nil
+	}
+	p.diffPaneParsedDiff = msg.Parsed
+	p.diffPaneTruncated = msg.Truncated
+	// Clamp scroll to new content length (diff may have shrunk after stage/unstage).
+	// In full-file view mode, clamp against the full-file line count (which includes
+	// all context lines), not the parsed hunk-only count. Otherwise the watcher
+	// refresh cycle snaps scroll back to a much smaller value.
+	p.clampDiffPaneScroll()
+	// Auto-load full-file content when in full-file view mode.
+	// Always reload (not just when nil) so content refreshes after stage/unstage/discard.
+	// The old diffPaneFullFileDiff is kept until the new one arrives to avoid flicker.
+	if p.diffPaneViewMode == DiffViewFullFile {
+		for _, entry := range p.treeEntries() {
+			if entry.Path == msg.File && entry.Staged == msg.Staged {
+				return p.loadFullFileDiff(entry.Path, entry.Staged, entry.Status, "", true)
+			}
+		}
+	}
+	return nil
+}
+
+// applyStatusSnapshot lands one status answer. Both the local and the bound
+// message loops end here, so a bound pane cannot drift into its own rules about
+// what a refresh means.
+func (p *Plugin) applyStatusSnapshot(msg StatusSnapshotLoadedMsg) tea.Cmd {
+	p.activeStatusRequestID = 0
+	if msg.Err == nil && msg.Tree != nil {
+		p.tree = msg.Tree
+		p.statusError = ""
+		p.remoteRefusal = ""
+		p.repoState = msg.State
+		p.repoRemoteURL = msg.RemoteURL
+		// A source that answers the branch row in the read it was already
+		// making fills it here; locally it still arrives with the history load.
+		if msg.Push != nil {
+			p.pushStatus = msg.Push
+		}
+	}
+	var followUp tea.Cmd
+	if p.statusRefreshDirty {
+		p.statusRefreshDirty = false
+		followUp = p.refresh()
+	}
+	if msg.Err != nil {
+		if p.remoteBound() {
+			// A bound failure is a state of the pane, not an event: the reason
+			// replaces the sidebar and stays until a read succeeds. Toasting it
+			// on every refresh would be one alert per snapshot generation.
+			p.remoteRefusal = msg.Err.Error()
+			p.statusError = msg.Err.Error()
+			return followUp
+		}
+		p.statusError = msg.Err.Error()
+		return tea.Batch(followUp, func() tea.Msg {
+			return app.ToastMsg{Message: "Git status refresh failed: " + msg.Err.Error(), Duration: 4 * time.Second, IsError: true}
+		})
+	}
+	// Clamp cursor to valid range if files changed
+	maxCursor := p.totalSelectableItems() - 1
+	if maxCursor < 0 {
+		maxCursor = 0
+	}
+	if p.cursor > maxCursor {
+		p.cursor = maxCursor
+	}
+	if p.remoteBound() {
+		// The patch or the commit detail for the row the cursor is on comes
+		// through the same seam the status did. The write selection restored
+		// below belongs to operations a bound pane does not perform.
+		if p.viewMode == ViewModeStatus {
+			return tea.Batch(p.autoLoadPreview(true), followUp)
+		}
+		return followUp
+	}
+	p.restoreOperationSelection()
+	// Auto-load preview for current cursor position after refresh
+	if p.viewMode == ViewModeStatus {
+		return tea.Batch(p.autoLoadPreview(true), followUp)
+	}
+	return followUp
+}
+
+// applyRecentCommits lands one page of history. Both message loops end here,
+// for the same reason the status and patch handlers do: which machine answered
+// is decided at the seam and nowhere above it.
+func (p *Plugin) applyRecentCommits(msg RecentCommitsLoadedMsg) tea.Cmd {
+	if plugin.IsStale(p.ctx, msg) || msg.RequestID != p.activeHistoryRequestID {
+		return nil // Ignore stale message from previous project
+	}
+	p.activeHistoryRequestID = 0
+	if msg.Err != nil {
+		p.historyError = msg.Err.Error()
+	} else {
+		p.historyError = ""
+	}
+	var historyFollowUp tea.Cmd
+	if p.historyRefreshDirty {
+		p.historyRefreshDirty = false
+		historyFollowUp = p.loadRecentCommits()
+	}
+	if msg.Commits == nil {
+		if msg.PushStatus != nil {
+			p.pushStatus = msg.PushStatus
+			PopulatePushStatus(p.recentCommits, p.pushStatus)
+		}
+		return historyFollowUp
+	}
+
+	p.moreCommitsAvailable = len(msg.Commits) >= commitHistoryPageSize
+
+	// Determine which commit hash to restore cursor to
+	// Priority: pushPreservedCommitHash (set before push) > computed from current state
+	prevCommitHash := p.pushPreservedCommitHash
+	if prevCommitHash == "" && !p.historyFilterActive && p.cursorOnCommit() {
+		commits := p.activeCommits()
+		commitIdx := p.selectedCommitIndex()
+		if commitIdx >= 0 && commitIdx < len(commits) {
+			prevCommitHash = commits[commitIdx].Hash
+		}
+	}
+	// Clear the preserved hash after use
+	p.pushPreservedCommitHash = ""
+
+	p.recentCommits = mergeRecentCommits(p.recentCommits, msg.Commits)
+	// A source that answered the branch row in this read owns it. One that did
+	// not — a host, which answered it with the status instead and stamped each
+	// row's own pushed state — must not blank what is already on screen.
+	if msg.PushStatus != nil {
+		p.pushStatus = msg.PushStatus
+		PopulatePushStatus(p.recentCommits, p.pushStatus)
+	}
+	// Recompute graph for new commits
+	if p.showCommitGraph && len(p.recentCommits) > 0 {
+		p.commitGraphLines = ComputeGraphForCommits(p.recentCommits)
+	}
+	if prevCommitHash != "" {
+		if idx := indexOfCommitHash(p.recentCommits, prevCommitHash); idx >= 0 {
+			p.cursor = len(p.tree.AllEntries()) + idx
+		}
+	}
+	if !p.historyFilterActive {
+		p.clampCommitScroll()
+	}
+	// Clamp cursor to valid range if commits changed
+	maxCursor := p.totalSelectableItems() - 1
+	if maxCursor < 0 {
+		maxCursor = 0
+	}
+	if p.cursor > maxCursor {
+		p.cursor = maxCursor
+	}
+	return tea.Batch(p.ensureCommitListFilled(), historyFollowUp)
+}
+
+// applyMoreCommits lands the page a scroll past the end asked for.
+func (p *Plugin) applyMoreCommits(msg MoreCommitsLoadedMsg) tea.Cmd {
+	if plugin.IsStale(p.ctx, msg) {
+		return nil // Ignore stale message from previous project
+	}
+	p.loadingMoreCommits = false
+	if len(msg.Commits) > 0 {
+		if len(msg.Commits) < commitHistoryPageSize {
+			p.moreCommitsAvailable = false
+		}
+		p.recentCommits = append(p.recentCommits, msg.Commits...)
+		// Recompute entire graph when commits are added
+		if p.showCommitGraph {
+			commits := p.activeCommits()
+			p.commitGraphLines = ComputeGraphForCommits(commits)
+		}
+		return p.ensureCommitListFilled()
+	}
+	p.moreCommitsAvailable = false
+	return nil
+}
+
+// applyFilteredCommits lands a page the source narrowed by author or path.
+func (p *Plugin) applyFilteredCommits(msg FilteredCommitsLoadedMsg) tea.Cmd {
+	if plugin.IsStale(p.ctx, msg) {
+		return nil // Ignore stale message from previous project
+	}
+	if msg.Commits != nil {
+		p.filteredCommits = msg.Commits
+		if msg.PushStatus != nil {
+			p.pushStatus = msg.PushStatus
+		}
+		// Recompute graph for filtered commits
+		if p.showCommitGraph && len(p.filteredCommits) > 0 {
+			p.commitGraphLines = ComputeGraphForCommits(p.filteredCommits)
+		} else if len(p.filteredCommits) == 0 {
+			p.commitGraphLines = nil // Clear graph cache
+		}
+		// Reset cursor to first commit when filter applied
+		entries := p.tree.AllEntries()
+		if len(p.filteredCommits) > 0 {
+			p.cursor = len(entries)
+			p.commitScrollOff = 0
+		}
+	}
+	return nil
+}
+
+// applyCommitPreview lands one commit's detail for the right pane.
+func (p *Plugin) applyCommitPreview(msg CommitPreviewLoadedMsg) tea.Cmd {
+	if plugin.IsStale(p.ctx, msg) || msg.RequestID != p.commitPreviewRequestID {
+		return nil // Ignore stale message from previous project
+	}
+	if msg.Err != nil {
+		p.previewCommit = nil
+		p.previewCommitError = msg.Err.Error()
+		return func() tea.Msg {
+			return app.ToastMsg{Message: "Commit preview failed: " + msg.Err.Error(), Duration: 4 * time.Second, IsError: true}
+		}
+	}
+	// Commit preview loaded for right pane (in status view)
+	p.previewCommit = msg.Commit
+	p.previewCommitError = ""
+	p.previewCommitCursor = 0
+	p.previewCommitScroll = 0
+	p.commitBodyExpanded = false
+	p.commitBodyScroll = 0
+	// Copy stats to the commit in the list for inline display
+	if msg.Commit != nil {
+		for _, c := range p.recentCommits {
+			if c.Hash == msg.Commit.Hash {
+				c.Stats = msg.Commit.Stats
+				break
+			}
+		}
+		for _, c := range p.filteredCommits {
+			if c.Hash == msg.Commit.Hash {
+				c.Stats = msg.Commit.Stats
+				break
+			}
+		}
+	}
+	return nil
+}
+
+// applyBranchList lands the branch picker's list and puts the cursor on the
+// current branch.
+func (p *Plugin) applyBranchList(msg BranchListLoadedMsg) {
+	p.branches = msg.Branches
+	for i, b := range p.branches {
+		if b.IsCurrent {
+			p.branchCursor = i
+			break
+		}
 	}
 }
 
@@ -1462,6 +1651,11 @@ type StatusSnapshotLoadedMsg struct {
 	Epoch     uint64
 	RequestID uint64
 	Tree      *FileTree
+	// Push, State, and RemoteURL are set only by a source that answers them in
+	// the same read; see RepoStatus.
+	Push      *PushStatus
+	State     string
+	RemoteURL string
 	Err       error
 }
 
@@ -1505,6 +1699,7 @@ type DiffLoadedMsg struct {
 	RequestID uint64
 	Content   string // Rendered content (may be from delta)
 	Raw       string // Raw diff for built-in rendering
+	Truncated bool   // The source cut this patch; the view must say so
 	Err       error
 }
 
@@ -1559,6 +1754,7 @@ type InlineDiffLoadedMsg struct {
 	Staged    bool
 	Raw       string
 	Parsed    *ParsedDiff
+	Truncated bool // The source cut this patch; the view must say so
 }
 
 // GetEpoch implements plugin.EpochMessage.
@@ -1741,15 +1937,17 @@ func (p *Plugin) initCommitTextarea() {
 	p.commitModalWidthCache = 0
 }
 
-// confirmStashPop fetches the latest stash and shows the confirm modal.
+// confirmStashPop fetches the latest stash and shows the confirm modal. The
+// list is read through the seam like every other repository read; popping it is
+// a write and belongs to whichever machine owns the repository.
 func (p *Plugin) confirmStashPop() tea.Cmd {
-	workDir := p.repoRoot
+	fetch := p.fetchRefs()
 	return func() tea.Msg {
-		stashList, err := GetStashList(workDir)
-		if err != nil || len(stashList.Stashes) == 0 {
+		refs, err := fetch()
+		if err != nil || len(refs.Stashes) == 0 {
 			return StashErrorMsg{Err: fmt.Errorf("no stashes available")}
 		}
-		return StashPopConfirmMsg{Stash: stashList.Stashes[0]}
+		return StashPopConfirmMsg{Stash: refs.Stashes[0]}
 	}
 }
 

@@ -77,6 +77,10 @@ func (p *Plugin) handleKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	if key == "ctrl+p" {
 		return p.openQuickOpen()
 	}
+	if what, refused := p.remoteRefusal(key); refused {
+		return p, p.refuseRemoteKey(what)
+	}
+
 	if key == "f" {
 		return p.openProjectSearch()
 	}

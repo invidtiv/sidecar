@@ -4,9 +4,11 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/hosts"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/plugins/tasks"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/uirequest"
 )
 
@@ -424,6 +426,64 @@ func (m Model) globalWorkspacesVisible() bool {
 // is looking at the path-prefixed Sessions surface.
 func (m Model) sessionsOwnsCreateSplit(req uirequest.Request) bool {
 	return m.globalWorkspacesVisible() && req.Action == uirequest.ActionCreate && strings.TrimSpace(req.Options.Split) != ""
+}
+
+// uiRequestLanding names which surface is the screen for a uirequest.
+type uiRequestLanding int
+
+const (
+	uiRequestLandingNone uiRequestLanding = iota
+	uiRequestLandingSessions
+	uiRequestLandingBoundWorkspace
+)
+
+// uiRequestLanding reports which surface is the screen for req. Relayed
+// open/layout (Origin.HostID set) never queue: Sessions wins when its matching
+// row is on screen, otherwise the bound project workspace wins when this TUI
+// is looking at that host project and holds the lease, otherwise nobody.
+func (m Model) uiRequestLanding(req uirequest.Request) uiRequestLanding {
+	if req.Origin.HostID == "" {
+		return uiRequestLandingNone
+	}
+	if m.globalWorkspacesVisible() && m.overview != nil && m.overview.RelayedRowOnScreen(req) {
+		return uiRequestLandingSessions
+	}
+	if m.boundWorkspaceIsRelayedScreen(req) {
+		return uiRequestLandingBoundWorkspace
+	}
+	return uiRequestLandingNone
+}
+
+func (m Model) boundWorkspaceIsRelayedScreen(req uirequest.Request) bool {
+	if m.scope != ScopeProject || m.boundDestination.HostID == "" {
+		return false
+	}
+	if req.Origin.HostID != m.boundDestination.HostID {
+		return false
+	}
+	if req.Origin.ProjectKey != "" && !hosts.OriginNamesProject(req.Origin.ProjectKey, m.boundDestination.ProjectKey) {
+		return false
+	}
+	if req.Origin.TmuxSession == "" || !m.boundInventoryHasSession(req.Origin.TmuxSession) {
+		return false
+	}
+	if !tty.ThisInstanceOwnsSession(req.Origin.TmuxSession) {
+		return false
+	}
+	active := m.ActivePlugin()
+	return active != nil && active.ID() == workspacePluginID
+}
+
+func (m Model) boundInventoryHasSession(session string) bool {
+	if session == "" {
+		return false
+	}
+	for _, ws := range m.boundHostWorkspaces() {
+		if ws.TmuxName == session {
+			return true
+		}
+	}
+	return false
 }
 
 // globalWorkspacesFilterFocused reports that the browser's inline filter is

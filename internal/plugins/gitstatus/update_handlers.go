@@ -28,6 +28,76 @@ func (p *Plugin) toggleSidebar() {
 	}
 }
 
+// Sidebar movement over one list of files followed by commits.
+//
+// These four are the whole of what a bound pane's movement is too, so they live
+// apart from the key switch that owns stage, discard, and push. Two copies of
+// "which row is the cursor on, and does reaching it need another page" is how
+// one surface quietly stops paging.
+
+func (p *Plugin) cursorDown() tea.Cmd {
+	if p.cursor >= p.totalSelectableItems()-1 {
+		return nil
+	}
+	p.cursor++
+	p.ensureCursorVisible()
+	if p.cursorOnCommit() {
+		commitIdx := p.selectedCommitIndex()
+		p.ensureCommitVisible(commitIdx)
+		// Trigger load-more when within 3 commits of end (only for unfiltered view)
+		var loadMoreCmd tea.Cmd
+		commits := p.activeCommits()
+		if !p.historyFilterActive && p.moreCommitsAvailable && commitIdx >= len(commits)-3 && !p.loadingMoreCommits {
+			loadMoreCmd = p.loadMoreCommits()
+		}
+		return tea.Batch(p.autoLoadCommitPreview(), loadMoreCmd)
+	}
+	return p.autoLoadDiff()
+}
+
+func (p *Plugin) cursorUp() tea.Cmd {
+	if p.cursor <= 0 {
+		return nil
+	}
+	p.cursor--
+	p.ensureCursorVisible()
+	if p.cursorOnCommit() {
+		p.ensureCommitVisible(p.selectedCommitIndex())
+		return p.autoLoadCommitPreview()
+	}
+	return p.autoLoadDiff()
+}
+
+func (p *Plugin) cursorToTop() tea.Cmd {
+	p.cursor = 0
+	p.scrollOff = 0
+	p.commitScrollOff = 0 // Reset commit scroll when jumping to top
+	if p.cursorOnCommit() {
+		return p.autoLoadCommitPreview()
+	}
+	return p.autoLoadDiff()
+}
+
+func (p *Plugin) cursorToBottom() tea.Cmd {
+	totalItems := p.totalSelectableItems()
+	if totalItems <= 0 {
+		return nil
+	}
+	p.cursor = totalItems - 1
+	p.ensureCursorVisible()
+	if p.cursorOnCommit() {
+		commitIdx := p.selectedCommitIndex()
+		p.ensureCommitVisible(commitIdx)
+		// Trigger load-more when jumping to end
+		var loadMoreCmd tea.Cmd
+		if p.moreCommitsAvailable && commitIdx >= len(p.recentCommits)-3 && !p.loadingMoreCommits {
+			loadMoreCmd = p.loadMoreCommits()
+		}
+		return tea.Batch(p.autoLoadCommitPreview(), loadMoreCmd)
+	}
+	return p.autoLoadDiff()
+}
+
 // updateStatus handles key events in the status view.
 func (p *Plugin) updateStatus(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	// Handle diff pane keys when focused on diff
@@ -36,69 +106,22 @@ func (p *Plugin) updateStatus(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	}
 
 	entries := p.tree.AllEntries()
-	totalItems := p.totalSelectableItems()
 	if p.writeInProgress() && isStatusMutationKey(msg.String()) {
 		return p, p.writeBusyToast()
 	}
 
 	switch msg.String() {
 	case "j", "down":
-		if p.cursor < totalItems-1 {
-			p.cursor++
-			p.ensureCursorVisible()
-			if p.cursorOnCommit() {
-				commitIdx := p.selectedCommitIndex()
-				p.ensureCommitVisible(commitIdx)
-				// Trigger load-more when within 3 commits of end (only for unfiltered view)
-				var loadMoreCmd tea.Cmd
-				commits := p.activeCommits()
-				if !p.historyFilterActive && p.moreCommitsAvailable && commitIdx >= len(commits)-3 && !p.loadingMoreCommits {
-					loadMoreCmd = p.loadMoreCommits()
-				}
-				return p, tea.Batch(p.autoLoadCommitPreview(), loadMoreCmd)
-			}
-			return p, p.autoLoadDiff()
-		}
-		return p, nil
+		return p, p.cursorDown()
 
 	case "k", "up":
-		if p.cursor > 0 {
-			p.cursor--
-			p.ensureCursorVisible()
-			if p.cursorOnCommit() {
-				p.ensureCommitVisible(p.selectedCommitIndex())
-				return p, p.autoLoadCommitPreview()
-			}
-			return p, p.autoLoadDiff()
-		}
-		return p, nil
+		return p, p.cursorUp()
 
 	case "g":
-		p.cursor = 0
-		p.scrollOff = 0
-		p.commitScrollOff = 0 // Reset commit scroll when jumping to top
-		if p.cursorOnCommit() {
-			return p, p.autoLoadCommitPreview()
-		}
-		return p, p.autoLoadDiff()
+		return p, p.cursorToTop()
 
 	case "G":
-		if totalItems > 0 {
-			p.cursor = totalItems - 1
-			p.ensureCursorVisible()
-			if p.cursorOnCommit() {
-				commitIdx := p.selectedCommitIndex()
-				p.ensureCommitVisible(commitIdx)
-				// Trigger load-more when jumping to end
-				var loadMoreCmd tea.Cmd
-				if p.moreCommitsAvailable && commitIdx >= len(p.recentCommits)-3 && !p.loadingMoreCommits {
-					loadMoreCmd = p.loadMoreCommits()
-				}
-				return p, tea.Batch(p.autoLoadCommitPreview(), loadMoreCmd)
-			}
-			return p, p.autoLoadDiff()
-		}
-		return p, nil
+		return p, p.cursorToBottom()
 
 	case "l", "right":
 		// Focus diff pane (when on a file) or commit preview pane (when on a commit)
@@ -221,7 +244,7 @@ func (p *Plugin) updateStatus(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 				// Reload diff for this folder
 				return p, p.autoLoadDiff()
 			}
-			return p, p.openFile(entry.Path)
+			return p, p.openFileEntry(entry.Path)
 		}
 
 	case "r":
@@ -808,6 +831,7 @@ func (p *Plugin) closeDiffView() {
 	p.parsedDiff = nil
 	p.fullFileDiff = nil
 	p.diffLoaded = false
+	p.diffTruncated = false
 	p.diffHorizOff = 0
 	p.diffCommit = ""
 	p.diffCommitSubject = ""

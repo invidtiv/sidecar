@@ -95,6 +95,112 @@ func TestDecoderNamesShellContamination(t *testing.T) {
 	}
 }
 
+// A machine whose login profile prints a line to stdout is an ordinary
+// machine. Refusing it meant no hello, no snapshot, no rows, and an error
+// naming the exact cause it would not handle.
+func TestDecoderSkipsALoginBanner(t *testing.T) {
+	stream := "Welcome to aerie\nLast login: Tue\n" +
+		`{"proto":2,"kind":"hello","seq":1,"hello":{"proto":2}}` + "\n" +
+		`{"proto":2,"kind":"snapshot","seq":2}` + "\n"
+	decoder := NewDecoder(strings.NewReader(stream))
+
+	msg, err := decoder.Next()
+	if err != nil {
+		t.Fatalf("hello after a banner: %v", err)
+	}
+	if msg.Kind != KindHello {
+		t.Fatalf("kind = %q, want hello", msg.Kind)
+	}
+	if msg, err := decoder.Next(); err != nil || msg.Kind != KindSnapshot {
+		t.Fatalf("second message = %v %v", msg.Kind, err)
+	}
+	if _, err := decoder.Next(); err != io.EOF {
+		t.Errorf("end of stream: %v, want EOF", err)
+	}
+}
+
+// A profile that logs structured JSON parses cleanly and must not be mistaken
+// for the stream starting — the same rule the run path applies to a --json
+// result. Accepting it would set the started flag on a log line and make every
+// later banner a hard failure.
+func TestDecoderTreatsNonProtocolJSONAsPrelude(t *testing.T) {
+	stream := `{"level":"info","msg":"nvm loaded"}` + "\n" +
+		`{"proto":2,"kind":"hello","seq":1,"hello":{"proto":2}}` + "\n"
+	decoder := NewDecoder(strings.NewReader(stream))
+
+	msg, err := decoder.Next()
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if msg.Kind != KindHello {
+		t.Fatalf("kind = %q, want the hello rather than the log line", msg.Kind)
+	}
+}
+
+// A version this viewer refuses is a compatibility answer to give, not a line
+// to swallow: it must reach the caller so the row can say which end is old.
+func TestDecoderDoesNotSkipAnIncompatibleVersion(t *testing.T) {
+	decoder := NewDecoder(strings.NewReader(`{"proto":99,"kind":"hello","seq":1}` + "\n"))
+	msg, err := decoder.Next()
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if msg.Proto != 99 || Compatible(msg.Proto) {
+		t.Fatalf("msg = %+v, want the incompatible version delivered", msg)
+	}
+}
+
+// Once the stream has proven itself a banner is no longer plausible, so garbage
+// after the first message is a fault rather than more prelude.
+func TestDecoderRefusesGarbageAfterTheStreamStarts(t *testing.T) {
+	stream := `{"proto":2,"kind":"hello","seq":1,"hello":{"proto":2}}` + "\n" +
+		"Broken pipe warning\n"
+	decoder := NewDecoder(strings.NewReader(stream))
+	if _, err := decoder.Next(); err != nil {
+		t.Fatalf("hello: %v", err)
+	}
+	_, err := decoder.Next()
+	if err == nil || err == io.EOF {
+		t.Fatalf("mid-stream garbage = %v, want a failure", err)
+	}
+	if !strings.Contains(err.Error(), "not the protocol") {
+		t.Errorf("error %q does not explain what went wrong", err)
+	}
+}
+
+// Skipping must not become "read anything forever": a stream that is simply
+// not this protocol has to fail, and say so.
+func TestDecoderRefusesAnEndlessPrelude(t *testing.T) {
+	var stream strings.Builder
+	for i := 0; i <= MaxPreludeLines; i++ {
+		stream.WriteString("chatty profile line\n")
+	}
+	stream.WriteString(`{"proto":2,"kind":"hello","seq":1}` + "\n")
+	_, err := NewDecoder(strings.NewReader(stream.String())).Next()
+	if err == nil {
+		t.Fatal("an unbounded prelude was accepted")
+	}
+	if !strings.Contains(err.Error(), "not the protocol") {
+		t.Errorf("error %q does not explain what went wrong", err)
+	}
+	if !strings.Contains(err.Error(), "chatty profile line") {
+		t.Errorf("error %q does not quote what the host wrote", err)
+	}
+}
+
+// Banner then nothing is how "sidecar is not installed there" arrives. It must
+// stay a named failure rather than becoming a silent clean disconnect.
+func TestDecoderReportsABannerWithNoStream(t *testing.T) {
+	_, err := NewDecoder(strings.NewReader("bash: sidecar: command not found\n")).Next()
+	if err == nil || err == io.EOF {
+		t.Fatalf("banner-only stream = %v, want a named failure", err)
+	}
+	if !strings.Contains(err.Error(), "not the protocol") ||
+		!strings.Contains(err.Error(), "command not found") {
+		t.Errorf("error %q does not quote the host's own words", err)
+	}
+}
+
 func TestDecoderRejectsOversizedLine(t *testing.T) {
 	huge := `{"proto":1,"kind":"snapshot","x":"` + strings.Repeat("a", MaxLineBytes+16) + `"}`
 	decoder := NewDecoder(strings.NewReader(huge))

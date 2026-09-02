@@ -9,6 +9,7 @@ import (
 	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/contentpanes"
 	"github.com/marcus/sidecar/internal/docview"
+	"github.com/marcus/sidecar/internal/hostproto"
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/noteview"
 	"github.com/marcus/sidecar/internal/panecodec"
@@ -35,19 +36,40 @@ func (p *Plugin) workspaceDeckContext(root, surface string) contentpanes.Surface
 func (p *Plugin) workspaceSourceContext(root, surface string) contentpanes.SourceContext {
 	src := contentpanes.SourceContext{Root: root, WorkspaceID: surface}
 	if p.ctx != nil {
+		src.HostID = p.ctx.HostID
+		src.HostIncarnation = p.ctx.HostIncarnation
 		src.ProjectRoot = p.ctx.ProjectRoot
-		src.ProjectKey = workspaceinventory.CanonicalPath(p.ctx.ProjectRoot)
+		src.ProjectKey = p.ctx.ProjectKey
+		if src.ProjectKey == "" && !p.remoteBound() {
+			src.ProjectKey = workspaceinventory.CanonicalPath(p.ctx.ProjectRoot)
+		}
 	}
 	if p.selectingShell() {
 		src.WorkspaceKind = workspaceinventory.KindShell
 		if shell := p.getSelectedShell(); shell != nil {
 			src.WorkspaceKey = shell.TmuxName
+			if p.remoteBound() {
+				src.WorkspaceID = remoteWorkspaceID(shell)
+			}
 		}
 	} else if wt := p.selectedWorktree(); wt != nil {
 		src.WorkspaceKind = workspaceinventory.KindWorktree
 		src.WorkspaceKey = wt.Key
+		if p.remoteBound() && p.ctx != nil && p.ctx.ProjectKey != "" && wt.Key != "" {
+			src.WorkspaceID = p.ctx.ProjectKey + ":worktree:" + wt.Key
+		}
 	}
 	return src
+}
+
+func remoteWorkspaceID(shell *ShellSession) string {
+	if shell == nil {
+		return ""
+	}
+	if shell.InventoryID != "" {
+		return shell.InventoryID
+	}
+	return shell.TmuxName
 }
 
 func (p *Plugin) workspaceDeckConfig() contentpanes.Config {
@@ -55,8 +77,22 @@ func (p *Plugin) workspaceDeckConfig() contentpanes.Config {
 		Renderer:         p.markdownRenderer,
 		ResourceResolver: p.resolveResource,
 		ConfigureViewer:  p.configureDeckViewer,
-		Source:           contentpanes.LocalSource{},
+		Source:           p.documentSource(),
 	}
+}
+
+func (p *Plugin) documentSource() contentpanes.Source {
+	if p.contentSource != nil {
+		return p.contentSource
+	}
+	if !p.remoteBound() || p.ctx == nil || p.ctx.RemoteRunner == nil {
+		return contentpanes.LocalSource{}
+	}
+	var verbs hostproto.VerbCapabilities
+	if p.ctx.HostVerbs != nil {
+		verbs = p.ctx.HostVerbs()
+	}
+	return contentpanes.NewRemoteSource(p.ctx.HostID, verbs, p.ctx.RemoteRunner)
 }
 
 func (p *Plugin) configureDeckViewer(kind panelayout.Kind, model any) {

@@ -6,6 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/contentpanes"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/layoutapply"
 	"github.com/marcus/sidecar/internal/layoutreport"
@@ -72,7 +73,11 @@ func (p *Plugin) answerLayout(req uirequest.Request, payload uirequest.LayoutPay
 }
 
 func (p *Plugin) ackLayout(req uirequest.Request, status uirequest.Status, reason string, items []uirequest.AckItem, layout json.RawMessage) tea.Cmd {
-	layoutapply.WriteAck(config.StateDir(), hostInstanceID(), req, status, reason, items, layout)
+	if req.Origin.HostID == "" {
+		layoutapply.WriteAck(config.StateDir(), hostInstanceID(), req, status, reason, items, layout)
+		return nil
+	}
+	p.ackRemote(req, status, reason, "", 0, layout, items)
 	return nil
 }
 
@@ -159,7 +164,24 @@ func (h workspaceLayoutHost) Ack(req uirequest.Request, status uirequest.Status,
 }
 
 func (p *Plugin) resolveLayoutTargets(kind panelayout.Kind, spec uirequest.LayoutPane, root string) ([]uirequest.Target, string) {
+	if p.remoteBound() {
+		return p.resolveRemoteLayoutTargets(kind, spec)
+	}
 	return layoutapply.ResolveTargets(kind, spec, root, p.resourceMatchers)
+}
+
+// resolveRemoteLayoutTargets classifies a relayed descriptor against the bound
+// host's content Source. The rule lives in layoutapply so this surface and the
+// Sessions preview cannot drift apart.
+func (p *Plugin) resolveRemoteLayoutTargets(kind panelayout.Kind, spec uirequest.LayoutPane) ([]uirequest.Target, string) {
+	if kind == panelayout.Resource {
+		return layoutapply.ResolveTargets(kind, spec, "", p.resourceMatchers)
+	}
+	var sourceCtx contentpanes.SourceContext
+	if root, surface, ok := p.selectedTerminalSurface(); ok {
+		sourceCtx = p.workspaceSourceContext(root, surface)
+	}
+	return layoutapply.ResolveRemoteTargets(kind, spec, p.documentSource(), sourceCtx, p.resourceMatchers)
 }
 
 func (p *Plugin) planPassiveItem(screen, deckTrial *PaneNode, item layoutItemPlan, boxes map[int]Box) (panelayout.OpenPlan, string) {

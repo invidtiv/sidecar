@@ -79,7 +79,7 @@ func (p *Plugin) handleNoRepoMouse(msg tea.MouseMsg) (plugin.Plugin, tea.Cmd) {
 
 // detectRepo checks whether the current working directory is now inside a git repo.
 func (p *Plugin) detectRepo() tea.Cmd {
-	if p.ctx == nil {
+	if p.ctx == nil || p.ctx.HostID != "" {
 		return nil
 	}
 	workDir := p.ctx.WorkDir
@@ -97,7 +97,7 @@ func (p *Plugin) detectRepo() tea.Cmd {
 // initRepo initializes a git repository at the current workdir and ensures
 // sidecar local-state paths are ignored.
 func (p *Plugin) initRepo() tea.Cmd {
-	if p.ctx == nil {
+	if p.ctx == nil || p.ctx.HostID != "" {
 		return nil
 	}
 	workDir := p.ctx.WorkDir

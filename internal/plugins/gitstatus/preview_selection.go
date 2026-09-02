@@ -18,19 +18,25 @@ func (p *Plugin) getHighlighter(filename string) *SyntaxHighlighter {
 	return p.syntaxHighlighter
 }
 
+func (p *Plugin) treeEntries() []*FileEntry {
+	if p.tree == nil {
+		return nil
+	}
+	return p.tree.AllEntries()
+}
+
 // totalSelectableItems returns the count of all selectable items (files + commits).
 func (p *Plugin) totalSelectableItems() int {
-	entries := p.tree.AllEntries()
 	commits := p.recentCommits
 	if p.historyFilterActive && p.filteredCommits != nil {
 		commits = p.filteredCommits
 	}
-	return len(entries) + len(commits)
+	return len(p.treeEntries()) + len(commits)
 }
 
 // cursorOnCommit returns true if cursor is on a commit (past all files).
 func (p *Plugin) cursorOnCommit() bool {
-	return p.cursor >= len(p.tree.AllEntries())
+	return p.cursor >= len(p.treeEntries())
 }
 
 // activeCommits returns filtered commits if filter active, otherwise recent commits.
@@ -43,8 +49,7 @@ func (p *Plugin) activeCommits() []*Commit {
 
 // selectedCommitIndex returns the index into active commits when cursor is on commit.
 func (p *Plugin) selectedCommitIndex() int {
-	entries := p.tree.AllEntries()
-	return p.cursor - len(entries)
+	return p.cursor - len(p.treeEntries())
 }
 
 // hasSelectedCommit distinguishes a real commit row from the empty-list
@@ -59,7 +64,7 @@ func (p *Plugin) hasSelectedCommit() bool {
 
 // autoLoadDiff triggers loading the diff for the currently selected file or folder.
 func (p *Plugin) autoLoadDiff() tea.Cmd {
-	entries := p.tree.AllEntries()
+	entries := p.treeEntries()
 	if len(entries) == 0 || p.cursor >= len(entries) {
 		p.selectedDiffFile = ""
 		p.selectedDiffStaged = false
@@ -72,6 +77,9 @@ func (p *Plugin) autoLoadDiff() tea.Cmd {
 	if !isNewFile && !p.forceNextDiffReload {
 		return nil // Already loaded
 	}
+	// The label belongs to the patch that is on screen, not to the row that
+	// asked for the next one.
+	p.diffPaneTruncated = false
 
 	p.selectedDiffFile = entry.Path
 	p.selectedDiffStaged = entry.Staged
@@ -95,6 +103,12 @@ func (p *Plugin) autoLoadDiff() tea.Cmd {
 
 	// Handle folder entries
 	if entry.IsFolder {
+		if p.remoteBound() {
+			// Nothing will arrive for this row, so the previous file's patch
+			// must not stay on screen under the folder's name.
+			p.diffPaneParsedDiff = nil
+			return nil
+		}
 		return p.loadFolderDiff(entry)
 	}
 

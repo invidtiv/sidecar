@@ -1,8 +1,6 @@
 package filebrowser
 
 import (
-	"github.com/marcus/sidecar/internal/filefind"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -56,30 +54,40 @@ type FileNode struct {
 
 // FileTree manages the hierarchical file structure.
 type FileTree struct {
-	Root        *FileNode
-	RootDir     string
-	FlatList    []*FileNode // Flattened visible nodes for cursor navigation
-	gitIgnore   *filefind.GitIgnore
-	SortMode    SortMode // Current sort mode
-	ShowIgnored bool     // Whether to include ignored files in FlatList
+	Root     *FileNode
+	RootDir  string
+	FlatList []*FileNode // Flattened visible nodes for cursor navigation
+	// source lists directories. Local and remote trees differ here and only
+	// here; see TreeSource.
+	source      TreeSource
+	listings    map[string]DirListing // batched answers not yet consumed
+	SortMode    SortMode              // Current sort mode
+	ShowIgnored bool                  // Whether to include ignored files in FlatList
 }
 
-// NewFileTree creates a new file tree rooted at the given directory.
+// NewFileTree creates a new file tree rooted at the given directory on this
+// machine.
 func NewFileTree(rootDir string) *FileTree {
+	return NewFileTreeWithSource(rootDir, newLocalTreeSource(rootDir))
+}
+
+// NewFileTreeWithSource creates a tree that lists through source. RootDir is
+// still the identity the rest of the plugin uses for a path; for a remote tree
+// it is the host's root and must never be handed to a local os or git call.
+func NewFileTreeWithSource(rootDir string, source TreeSource) *FileTree {
 	return &FileTree{
 		RootDir:     rootDir,
 		FlatList:    make([]*FileNode, 0),
-		gitIgnore:   filefind.NewGitIgnore(),
+		source:      source,
 		ShowIgnored: true, // Show ignored files by default
 	}
 }
 
 // Build initializes the tree by loading the root directory's children.
 func (t *FileTree) Build() error {
-	// Load .gitignore from root
-	t.gitIgnore = filefind.NewGitIgnore()
-	_ = t.gitIgnore.LoadFile(filepath.Join(t.RootDir, ".gitignore"))
-
+	if t.source == nil {
+		t.source = newLocalTreeSource(t.RootDir)
+	}
 	t.Root = &FileNode{
 		Name:       filepath.Base(t.RootDir),
 		Path:       "",
@@ -104,15 +112,27 @@ type BuildSpec struct {
 	SortMode      SortMode
 	ShowIgnored   bool
 	ExpandedPaths map[string]bool // Directories to re-expand after loading
+	// Source lists the directories. Nil means this machine's filesystem, which
+	// keeps every existing caller and test valid.
+	Source TreeSource
 }
 
 // BuildTree constructs a brand-new tree from spec. It shares no state with any
 // existing FileTree, which is what makes it safe to call off the UI goroutine:
 // the caller swaps the result in when the resulting message is handled.
 func BuildTree(spec BuildSpec) (*FileTree, error) {
-	t := NewFileTree(spec.RootDir)
+	source := spec.Source
+	if source == nil {
+		source = newLocalTreeSource(spec.RootDir)
+	}
+	t := NewFileTreeWithSource(spec.RootDir, source)
 	t.SortMode = spec.SortMode
 	t.ShowIgnored = spec.ShowIgnored
+
+	// One batched listing for the root plus everything that was expanded. A
+	// per-level walk is a handful of ReadDirs locally and a round trip per
+	// level over ssh, which is the whole reason ListDirs takes a batch.
+	t.prefetch(spec.ExpandedPaths)
 
 	if err := t.Build(); err != nil {
 		return nil, err
@@ -120,6 +140,22 @@ func BuildTree(spec BuildSpec) (*FileTree, error) {
 
 	t.RestoreExpandedPaths(spec.ExpandedPaths)
 	return t, nil
+}
+
+// prefetch asks the source for the root and every remembered expanded path at
+// once. Paths that turn out to be unreachable cost nothing: the answers are
+// consumed by path as loadChildren reaches them, and whatever is left over is
+// dropped with the map.
+func (t *FileTree) prefetch(expanded map[string]bool) {
+	rels := make([]string, 0, len(expanded)+1)
+	rels = append(rels, "")
+	for path := range expanded {
+		if path != "" {
+			rels = append(rels, filepath.ToSlash(path))
+		}
+	}
+	sort.Strings(rels)
+	t.listings = t.source.ListDirs(rels)
 }
 
 // isSystemFile returns true for OS-generated files that clutter file browsers.
@@ -138,44 +174,53 @@ func isSystemFile(name string) bool {
 	return false
 }
 
-// loadChildren populates a node's children from the filesystem.
+// loadChildren populates a node's children from the tree's source.
+//
+// Which entries a tree hides is decided here and nowhere else. A remote
+// listing reports what is on the host's disk; skipping OS clutter is this
+// viewer's presentation rule, and applying it half on each side of the wire is
+// how two surfaces come to disagree about what a directory contains.
 func (t *FileTree) loadChildren(node *FileNode) error {
-	fullPath := filepath.Join(t.RootDir, node.Path)
-
-	entries, err := os.ReadDir(fullPath)
+	listing, err := t.listingFor(node.Path)
 	if err != nil {
 		return err
 	}
 
-	node.Children = make([]*FileNode, 0, len(entries))
-
-	for _, entry := range entries {
-		if isSystemFile(entry.Name()) {
+	node.Children = make([]*FileNode, 0, len(listing.Entries))
+	for _, entry := range listing.Entries {
+		if isSystemFile(entry.Name) {
 			continue
 		}
-
-		info, err := entry.Info()
-		if err != nil {
-			continue // Skip files we can't stat
-		}
-
-		childPath := filepath.Join(node.Path, entry.Name())
-		child := &FileNode{
-			Name:      entry.Name(),
-			Path:      childPath,
-			IsDir:     entry.IsDir(),
-			IsIgnored: t.gitIgnore.IsIgnored(childPath, entry.IsDir()),
+		node.Children = append(node.Children, &FileNode{
+			Name:      entry.Name,
+			Path:      filepath.Join(node.Path, entry.Name),
+			IsDir:     entry.IsDir,
+			IsIgnored: entry.IsIgnored,
 			Parent:    node,
 			Depth:     node.Depth + 1,
-			Size:      info.Size(),
-			ModTime:   info.ModTime(),
-		}
-
-		node.Children = append(node.Children, child)
+			Size:      entry.Size,
+			ModTime:   entry.ModTime,
+		})
 	}
 
 	sortChildren(node.Children, t.SortMode)
 	return nil
+}
+
+// listingFor consumes a prefetched answer when there is one, and otherwise
+// asks the source for this directory alone — the shape a user expanding an
+// unvisited directory produces.
+func (t *FileTree) listingFor(rel string) (DirListing, error) {
+	key := filepath.ToSlash(rel)
+	if listing, ok := t.listings[key]; ok {
+		delete(t.listings, key)
+		return listing, listing.Err
+	}
+	if t.source == nil {
+		t.source = newLocalTreeSource(t.RootDir)
+	}
+	listing := t.source.ListDirs([]string{key})[key]
+	return listing, listing.Err
 }
 
 // sortChildren sorts nodes according to the given mode.
