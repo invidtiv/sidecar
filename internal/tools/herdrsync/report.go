@@ -12,6 +12,7 @@ import (
 
 	"github.com/marcus/sidecar/internal/agentactivity/manifest"
 	"github.com/marcus/sidecar/internal/agentactivity/manifests"
+	"github.com/marcus/sidecar/internal/agentintegration"
 )
 
 // syncReport is what the workflow puts in a pull request body. It is written
@@ -19,17 +20,25 @@ import (
 // review surface for a sync, and a diff of it is the fastest way to see what
 // changed upstream since the last one.
 type syncReport struct {
-	Ref        string
-	ReleaseTag string
-	Out        string
-	StartedAt  time.Time
-	FinishedAt time.Time
+	Ref            string
+	ReleaseTag     string
+	Out            string
+	IntegrationOut string
+	StartedAt      time.Time
+	FinishedAt     time.Time
 
 	Lock     *manifests.Lock
 	Previous *manifests.Lock
 
 	Aliases   *manifests.Aliases
 	Authority *manifests.Authority
+
+	// Integration is the lock for the vendored Herdr integration assets, and
+	// PreviousIntegration is the one this sync replaced.
+	Integration         *agentintegration.UpstreamLock
+	PreviousIntegration *agentintegration.UpstreamLock
+	// IntegrationDiffs is what changed upstream since each Sidecar port.
+	IntegrationDiffs []integrationPortDiff
 
 	Notes []string
 	Body  string
@@ -43,6 +52,14 @@ func (r *syncReport) summary() string {
 		incompatible += len(agent.RegexIncompatibilities)
 	}
 	fmt.Fprintf(&b, "catalog etag %s; %d regex patterns need an RE2 rewrite\n", r.Lock.Catalog.ETag, incompatible)
+	if r.Integration != nil {
+		files := len(r.Integration.Files)
+		for _, provider := range r.Integration.Providers {
+			files += len(provider.Files)
+		}
+		fmt.Fprintf(&b, "vendored %d integration assets for %d providers into %s\n",
+			files, len(r.Integration.Providers), filepath.Join(r.IntegrationOut, "upstream"))
+	}
 	fmt.Fprintf(&b, "wrote %s\n", filepath.Join(r.Out, "report.md"))
 	return b.String()
 }
@@ -373,26 +390,130 @@ func sidecarTiers() map[string]string {
 }
 
 func (r *syncReport) renderIntegrationAssets(b *strings.Builder) {
-	b.WriteString("## Integration asset versions\n\n")
-	if r.Authority == nil {
-		b.WriteString("Authority extraction did not run.\n\n")
+	b.WriteString("## Integration assets\n\n")
+	if r.Integration == nil {
+		b.WriteString("Integration assets were not vendored.\n\n")
 		return
 	}
-	b.WriteString("Vendoring the assets themselves is Phase 3; these are the `HERDR_INTEGRATION_VERSION` values " +
-		"upstream carries today, so a bump is visible before the assets land here.\n\n")
-	b.WriteString("| Agent | Asset directory | Version |\n| --- | --- | --- |\n")
-	ids := make([]string, 0, len(r.Authority.Agents))
-	for id, agent := range r.Authority.Agents {
-		if agent.IntegrationVersion > 0 {
-			ids = append(ids, id)
-		}
+	fmt.Fprintf(b, "Vendored verbatim from `%s` into `%s/upstream/`, pinned by `upstream.lock.json` there. "+
+		"They are reference material: Sidecar installs its own assets and these exist so a re-port is a diff.\n\n",
+		r.Integration.Herdr.AssetsDir, filepath.ToSlash(r.IntegrationOut))
+
+	ported := map[string]agentintegration.PortedFrom{}
+	for _, record := range agentintegration.PortedFromRecords() {
+		ported[record.UpstreamID] = record
 	}
-	sort.Strings(ids)
-	for _, id := range ids {
-		agent := r.Authority.Agents[id]
-		fmt.Fprintf(b, "| `%s` | `%s` | %d |\n", id, agent.IntegrationAssetDir, agent.IntegrationVersion)
+
+	b.WriteString("| Agent | Asset directory | Version | Previous | Change | Sidecar port |\n")
+	b.WriteString("| --- | --- | --- | --- | --- | --- |\n")
+	var bumps []agentintegration.UpstreamProvider
+	for _, provider := range r.Integration.Providers {
+		before, known := previousIntegrationVersion(r.PreviousIntegration, provider.ID)
+		change := "unchanged"
+		previous := fmt.Sprintf("%d", before)
+		switch {
+		case r.PreviousIntegration == nil:
+			change, previous = "first sync", "—"
+		case !known:
+			change, previous = "added", "—"
+			bumps = append(bumps, provider)
+		case before < provider.Version:
+			change = "**bumped**"
+			bumps = append(bumps, provider)
+		case before > provider.Version:
+			change = "**rolled back**"
+			bumps = append(bumps, provider)
+		}
+		port := "not ported"
+		if record, ok := ported[provider.ID]; ok {
+			port = fmt.Sprintf("`%s` from version %s", record.Provider, record.Version)
+		}
+		fmt.Fprintf(b, "| `%s` | `%s` | %d | %s | %s | %s |\n",
+			provider.ID, provider.Directory, provider.Version, previous, change, port)
 	}
 	b.WriteString("\n")
+
+	// A provider Sidecar has not ported gets the bump alone: a heads-up that
+	// the provider's hook payload changed, and nothing for anyone to do yet.
+	var heads []string
+	for _, provider := range bumps {
+		if _, ok := ported[provider.ID]; ok {
+			continue
+		}
+		before, known := previousIntegrationVersion(r.PreviousIntegration, provider.ID)
+		if !known {
+			heads = append(heads, fmt.Sprintf("- `%s` now ships an integration at version %d.", provider.ID, provider.Version))
+			continue
+		}
+		heads = append(heads, fmt.Sprintf("- `%s` moved %d to %d. Sidecar has not ported it; the hook payload changed upstream.",
+			provider.ID, before, provider.Version))
+	}
+	if len(heads) > 0 {
+		b.WriteString("### Bumps for providers Sidecar has not ported\n\n")
+		b.WriteString(strings.Join(heads, "\n"))
+		b.WriteString("\n\n")
+	}
+
+	r.renderIntegrationPorts(b)
+}
+
+func previousIntegrationVersion(lock *agentintegration.UpstreamLock, id string) (int, bool) {
+	if lock == nil {
+		return 0, false
+	}
+	provider, ok := lock.Provider(id)
+	if !ok {
+		return 0, false
+	}
+	return provider.Version, true
+}
+
+// renderIntegrationPorts is the half of the section that costs a maintainer
+// something: for each provider Sidecar has already ported, what upstream did to
+// that asset since the version the port was written against.
+func (r *syncReport) renderIntegrationPorts(b *strings.Builder) {
+	b.WriteString("### Upstream changes since each Sidecar port\n\n")
+	if len(r.IntegrationDiffs) == 0 {
+		b.WriteString("Sidecar has ported no provider yet.\n\n")
+		return
+	}
+	b.WriteString("`ported-from` is recorded in `internal/agentintegration/portedfrom.go`, not in an asset header: " +
+		"two of the three Sidecar assets are Go values with no header to carry it. " +
+		"A comparison is made on bytes rather than on the version number, so a file upstream edited " +
+		"without bumping still shows here.\n\n")
+
+	for _, entry := range r.IntegrationDiffs {
+		fmt.Fprintf(b, "#### `%s` — ported from herdr `%s` version %s\n\n",
+			entry.Ported.Provider, entry.Ported.UpstreamID, entry.Ported.Version)
+		if entry.Ported.Commit != "" {
+			fmt.Fprintf(b, "Compared against `%s`; upstream is now at version %d.\n\n",
+				shortCommit(entry.Ported.Commit), entry.CurrentVersion)
+		}
+		if entry.Note != "" {
+			fmt.Fprintf(b, "> %s\n\n", entry.Note)
+		}
+		changed := 0
+		for _, file := range entry.Files {
+			if file.Changed {
+				changed++
+			}
+		}
+		if changed == 0 && len(entry.Files) > 0 {
+			fmt.Fprintf(b, "No upstream change: all %d file(s) are byte-identical to the copy this port was written against. "+
+				"Nothing to re-port.\n\n", len(entry.Files))
+			continue
+		}
+		for _, file := range entry.Files {
+			if !file.Changed {
+				continue
+			}
+			label := "diff"
+			if file.Whole {
+				label = "current upstream file"
+			}
+			fmt.Fprintf(b, "`%s` (%s):\n\n```diff\n%s\n```\n\n", file.Path, label, file.Body)
+		}
+	}
 }
 
 func (r *syncReport) renderFixtureFlips(b *strings.Builder) {

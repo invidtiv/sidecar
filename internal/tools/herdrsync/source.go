@@ -27,6 +27,11 @@ import (
 type source interface {
 	// read returns one file's bytes, capped at maxFetchBytes.
 	read(relPath string) ([]byte, error)
+	// readAt returns one file's bytes at an arbitrary ref rather than the
+	// pinned one. It exists for a single question the report has to answer:
+	// what changed in an upstream asset since the commit a Sidecar port was
+	// written against. Everything vendored still comes from read.
+	readAt(ref, relPath string) ([]byte, error)
 	// list returns the names of the regular files directly under relPath.
 	list(relPath string) ([]string, error)
 	// listDirs returns the names of the subdirectories directly under relPath.
@@ -104,6 +109,21 @@ func newDirSource(dir, ref string) (*dirSource, error) {
 
 func (s *dirSource) read(relPath string) ([]byte, error) {
 	out, err := gitOutput(s.dir, "show", s.sha+":"+relPath)
+	if err != nil {
+		return nil, err
+	}
+	return readCapped(bytes.NewReader(out), relPath)
+}
+
+// readAt resolves ref itself rather than reusing the pinned sha, so a caller
+// asking about an older commit gets that commit's bytes and a ref the checkout
+// does not have is an error rather than a silent fall back to the pin.
+func (s *dirSource) readAt(ref, relPath string) ([]byte, error) {
+	sha, err := gitRevParse(s.dir, ref)
+	if err != nil {
+		return nil, fmt.Errorf("%s cannot resolve ref %s: %w", s.dir, ref, err)
+	}
+	out, err := gitOutput(s.dir, "show", sha+":"+relPath)
 	if err != nil {
 		return nil, err
 	}
@@ -196,6 +216,11 @@ type githubSource struct {
 
 func (s *githubSource) read(relPath string) ([]byte, error) {
 	url := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s", repoSlug, s.ref, relPath)
+	return httpGetCapped(url, relPath)
+}
+
+func (s *githubSource) readAt(ref, relPath string) ([]byte, error) {
+	url := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s", repoSlug, ref, relPath)
 	return httpGetCapped(url, relPath)
 }
 

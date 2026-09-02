@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/marcus/sidecar/internal/agentactivity/manifests"
+	"github.com/marcus/sidecar/internal/agentintegration"
 )
 
 // herdrCheckout is where the Herdr source is expected during development. The
@@ -28,24 +29,35 @@ func herdrSource(t *testing.T) string {
 	return dir
 }
 
-// syncIntoTemp runs a full offline sync into a temp directory and returns the
-// output directory plus the lock it wrote.
+// syncIntoTemp runs a full offline sync into temp directories and returns the
+// manifest output directory plus the lock it wrote.
 func syncIntoTemp(t *testing.T) (string, *manifests.Lock, string) {
 	t.Helper()
+	out, _, lock, _, source := syncIntoTempFull(t)
+	return out, lock, source
+}
+
+// syncIntoTempFull is syncIntoTemp with both output roots and both locks, for
+// the tests that care about the integration tree.
+func syncIntoTempFull(t *testing.T) (string, string, *manifests.Lock, *agentintegration.UpstreamLock, string) {
+	t.Helper()
 	source := herdrSource(t)
-	out := t.TempDir()
+	root := t.TempDir()
+	out := filepath.Join(root, "manifests")
+	integrationOut := filepath.Join(root, "agentintegration")
 	report, err := sync(options{
-		ref:        "e2b85c7",
-		releaseTag: "v0.8.2",
-		catalogURL: defaultCatalogURL,
-		sourceDir:  source,
-		offline:    true,
-		out:        out,
+		ref:            "e2b85c7",
+		releaseTag:     "v0.8.2",
+		catalogURL:     defaultCatalogURL,
+		sourceDir:      source,
+		offline:        true,
+		out:            out,
+		integrationOut: integrationOut,
 	})
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
-	return out, report.Lock, source
+	return out, integrationOut, report.Lock, report.Integration, source
 }
 
 func TestSyncFromLocalCheckoutWritesTheExpectedTree(t *testing.T) {
@@ -248,12 +260,13 @@ func TestDirSourceRefusesARefTheCheckoutDoesNotHave(t *testing.T) {
 		t.Fatal("newDirSource accepted a ref the checkout cannot resolve")
 	}
 	if _, err := sync(options{
-		ref:        "no-such-ref-0000000",
-		releaseTag: "v0.8.2",
-		catalogURL: defaultCatalogURL,
-		sourceDir:  dir,
-		offline:    true,
-		out:        t.TempDir(),
+		ref:            "no-such-ref-0000000",
+		releaseTag:     "v0.8.2",
+		catalogURL:     defaultCatalogURL,
+		sourceDir:      dir,
+		offline:        true,
+		out:            t.TempDir(),
+		integrationOut: t.TempDir(),
 	}); err == nil {
 		t.Fatal("sync vendored bytes for a ref the checkout cannot resolve")
 	}
@@ -295,7 +308,8 @@ func fileChangedBetween(t *testing.T, dir, from, to string) string {
 }
 
 func TestSyncRefusesAnUnreadableSourceDir(t *testing.T) {
-	if _, err := sync(options{sourceDir: filepath.Join(t.TempDir(), "nope"), offline: true, out: t.TempDir()}); err == nil {
+	if _, err := sync(options{sourceDir: filepath.Join(t.TempDir(), "nope"), offline: true,
+		out: t.TempDir(), integrationOut: t.TempDir()}); err == nil {
 		t.Fatal("sync accepted a source dir that does not exist")
 	}
 }
@@ -309,19 +323,20 @@ func TestSyncFailsWhenSidecarSourceCannotBeRead(t *testing.T) {
 		t.Error("the alias gap scan reported no gaps although it could not read internal/agentactivity/activity.go")
 	}
 	if _, err := sync(options{
-		ref:        "e2b85c7",
-		releaseTag: "v0.8.2",
-		catalogURL: defaultCatalogURL,
-		sourceDir:  herdrCheckout,
-		offline:    true,
-		out:        t.TempDir(),
+		ref:            "e2b85c7",
+		releaseTag:     "v0.8.2",
+		catalogURL:     defaultCatalogURL,
+		sourceDir:      herdrCheckout,
+		offline:        true,
+		out:            t.TempDir(),
+		integrationOut: t.TempDir(),
 	}); err == nil {
 		t.Error("sync wrote a report from a working directory outside the Sidecar repository")
 	}
 }
 
 func TestSyncRefusesOfflineWithoutACheckout(t *testing.T) {
-	if _, err := sync(options{offline: true, out: t.TempDir()}); err == nil {
+	if _, err := sync(options{offline: true, out: t.TempDir(), integrationOut: t.TempDir()}); err == nil {
 		t.Fatal("sync accepted --offline with no --source-dir")
 	}
 }
@@ -353,6 +368,11 @@ func (s *stubSource) list(p string) ([]string, error) {
 	}
 	return names, nil
 }
+
+// readAt ignores the ref: the stub has one version of every file, which is all
+// the extractor tests need. The port-diff path is exercised against the real
+// checkout instead, where a ref means something.
+func (s *stubSource) readAt(_ string, p string) ([]byte, error) { return s.read(p) }
 
 func (s *stubSource) listDirs(p string) ([]string, error) { return s.dirs[p], nil }
 func (s *stubSource) commit() string                      { return "stub" }
@@ -472,8 +492,17 @@ func stubAssets() *stubSource {
 	}
 }
 
+// stubAuthority reads the stub's assets the way sync does, then extracts.
+func stubAuthority(src source) (*manifests.Authority, error) {
+	dirs, _, err := integrationAssets(src)
+	if err != nil {
+		return nil, err
+	}
+	return extractAuthority(src, "stub", dirs)
+}
+
 func TestExtractAuthorityFromAnInlineSnippet(t *testing.T) {
-	authority, err := extractAuthority(stubAssets(), "stub")
+	authority, err := stubAuthority(stubAssets())
 	if err != nil {
 		t.Fatalf("extractAuthority: %v", err)
 	}
@@ -509,7 +538,7 @@ func TestExtractAuthorityFailsOnAnUnmappedDisplayName(t *testing.T) {
 	src := stubAssets()
 	src.files[authoritySource] = strings.Replace(stubAgentsMDX,
 		"| Claude Code |", "| Brand New Agent |", 1)
-	if _, err := extractAuthority(src, "stub"); err == nil {
+	if _, err := stubAuthority(src); err == nil {
 		t.Fatal("extractAuthority accepted a display name with no agent id mapping")
 	}
 }
@@ -517,7 +546,7 @@ func TestExtractAuthorityFailsOnAnUnmappedDisplayName(t *testing.T) {
 func TestExtractAuthorityFailsOnDisagreeingAssetVersions(t *testing.T) {
 	src := stubAssets()
 	src.files[assetsDir+"/claude/herdr-agent-state.ps1"] = "# HERDR_INTEGRATION_VERSION=7\n"
-	if _, err := extractAuthority(src, "stub"); err == nil {
+	if _, err := stubAuthority(src); err == nil {
 		t.Fatal("extractAuthority accepted two versions in one asset directory")
 	}
 }
@@ -550,7 +579,11 @@ func TestExtractorsRunAgainstTheRealHerdrSource(t *testing.T) {
 		}
 	}
 
-	authority, err := extractAuthority(src, "e2b85c7")
+	assetDirs, _, err := integrationAssets(src)
+	if err != nil {
+		t.Fatalf("integrationAssets against the real source: %v", err)
+	}
+	authority, err := extractAuthority(src, "e2b85c7", assetDirs)
 	if err != nil {
 		t.Fatalf("extractAuthority against the real source: %v", err)
 	}
@@ -606,5 +639,237 @@ func TestLockIsValidJSONWithSortedAgents(t *testing.T) {
 		if lock.Agents[i-1].ID >= lock.Agents[i].ID {
 			t.Fatalf("lock agents are not sorted by id: %s then %s", lock.Agents[i-1].ID, lock.Agents[i].ID)
 		}
+	}
+}
+
+// --- integration assets ------------------------------------------------------------
+
+// TestSyncVendorsTheIntegrationAssetsByteForByte is the step-5 equivalent of the
+// manifest round trip: every file under Herdr's src/integration/assets is
+// vendored verbatim, in upstream's own directory shape, and pinned.
+func TestSyncVendorsTheIntegrationAssetsByteForByte(t *testing.T) {
+	_, integrationOut, _, lock, source := syncIntoTempFull(t)
+	if lock == nil {
+		t.Fatal("the sync produced no integration lock")
+	}
+	if lock.SchemaVersion != agentintegration.UpstreamLockSchemaVersion {
+		t.Errorf("schema_version = %d, want %d", lock.SchemaVersion, agentintegration.UpstreamLockSchemaVersion)
+	}
+	if lock.Herdr.AssetsDir != assetsDir {
+		t.Errorf("assets_dir = %q, want %q", lock.Herdr.AssetsDir, assetsDir)
+	}
+	if len(lock.Providers) != 17 {
+		t.Errorf("vendored %d providers, want the 17 Herdr asset directories", len(lock.Providers))
+	}
+
+	pinned := 0
+	for _, provider := range lock.Providers {
+		if provider.Directory == "" || provider.ID == "" {
+			t.Errorf("provider %+v is missing an id or a directory", provider)
+		}
+		for _, file := range provider.Files {
+			pinned++
+			assertVendoredCopy(t, integrationOut, source, file)
+		}
+	}
+	for _, file := range lock.Files {
+		if file.Origin == agentintegration.UpstreamGeneratedNotice {
+			continue
+		}
+		pinned++
+		assertVendoredCopy(t, integrationOut, source, file)
+	}
+	// 34 upstream assets plus the LICENSE that has to travel with them.
+	if pinned != 35 {
+		t.Errorf("pinned %d upstream files, want 35", pinned)
+	}
+
+	// The one directory name that is not its agent id.
+	if provider, ok := lock.Provider("agy"); !ok || provider.Directory != "antigravity_cli" {
+		t.Errorf("agy is vendored as %+v, want directory antigravity_cli", provider)
+	}
+	// The shared test file lives at the root of the assets directory upstream
+	// and must land at the root here, not inside a provider.
+	if _, ok := lock.File("upstream/herdr-agent-state.test.ts"); !ok {
+		t.Error("the shared herdr-agent-state.test.ts is not pinned at the root of the vendored tree")
+	}
+	for _, want := range []string{"upstream/LICENSE", "upstream/NOTICE"} {
+		if _, ok := lock.File(want); !ok {
+			t.Errorf("the integration lock does not pin %s", want)
+		}
+	}
+}
+
+// assertVendoredCopy proves one locked file is the byte-for-byte upstream file
+// its Origin names, and that the digest in the lock describes those same bytes.
+func assertVendoredCopy(t *testing.T, out, source string, file agentintegration.UpstreamFile) {
+	t.Helper()
+	got, err := os.ReadFile(filepath.Join(out, filepath.FromSlash(file.Path)))
+	if err != nil {
+		t.Errorf("read %s: %v", file.Path, err)
+		return
+	}
+	want := showAt(t, source, "e2b85c7", file.Origin)
+	if !bytes.Equal(got, want) {
+		t.Errorf("%s is not a byte-for-byte copy of %s", file.Path, file.Origin)
+	}
+	if file.SHA256 != sha256Hex(want) {
+		t.Errorf("%s lock digest does not match the upstream bytes", file.Path)
+	}
+	if file.Bytes != len(want) {
+		t.Errorf("%s is locked at %d bytes, upstream has %d", file.Path, file.Bytes, len(want))
+	}
+}
+
+// TestIntegrationVersionsComeFromTheAssetsThemselves pins the numbers the report
+// and the authority table both read, so a half-bumped upstream directory is a
+// failing sync rather than a coin toss.
+func TestIntegrationVersionsComeFromTheAssetsThemselves(t *testing.T) {
+	_, _, _, lock, _ := syncIntoTempFull(t)
+	for id, want := range map[string]int{
+		"claude": 9, "codex": 8, "opencode": 10, "pi": 8, "kimi": 7, "hermes": 5, "agy": 3,
+	} {
+		provider, ok := lock.Provider(id)
+		if !ok {
+			t.Errorf("no vendored provider %s", id)
+			continue
+		}
+		if provider.Version != want {
+			t.Errorf("%s integration version = %d, want %d", id, provider.Version, want)
+		}
+	}
+	// A file that declares no version is still vendored and still pinned; it
+	// just contributes nothing to the directory's version.
+	hermes, _ := lock.Provider("hermes")
+	var sawUnversioned bool
+	for _, file := range hermes.Files {
+		if strings.HasSuffix(file.Path, "plugin.yaml") && file.Version == 0 {
+			sawUnversioned = true
+		}
+	}
+	if !sawUnversioned {
+		t.Error("hermes/plugin.yaml is not pinned as a version-free file")
+	}
+}
+
+// TestSyncPrunesAVendoredAssetUpstreamNoLongerShips: an unpinned file is one the
+// lock test cannot protect, so a dropped provider has to leave the tree.
+func TestSyncPrunesAVendoredAssetUpstreamNoLongerShips(t *testing.T) {
+	_, integrationOut, _, _, source := syncIntoTempFull(t)
+	stale := filepath.Join(integrationOut, "upstream", "gone", "herdr-agent-state.sh")
+	if err := os.MkdirAll(filepath.Dir(stale), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stale, []byte("# dropped upstream\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sync(options{
+		ref: "e2b85c7", releaseTag: "v0.8.2", catalogURL: defaultCatalogURL,
+		sourceDir: source, offline: true, out: t.TempDir(), integrationOut: integrationOut,
+	}); err != nil {
+		t.Fatalf("second sync: %v", err)
+	}
+	if _, err := os.Stat(stale); err == nil {
+		t.Error("a vendored asset upstream no longer ships survived the sync")
+	}
+	if _, err := os.Stat(filepath.Dir(stale)); err == nil {
+		t.Error("the directory the pruning emptied was left behind")
+	}
+	// Pruning must not take the live tree with it.
+	if _, err := os.Stat(filepath.Join(integrationOut, "upstream", "claude", "herdr-agent-state.sh")); err != nil {
+		t.Errorf("pruning removed a file the sync still produces: %v", err)
+	}
+}
+
+// TestReportShowsIntegrationBumpsAndPortDiffs is the review surface this phase
+// exists for: a bump for a provider nobody has ported is a heads-up line, and a
+// ported provider gets the comparison against what its port was written from.
+func TestReportShowsIntegrationBumpsAndPortDiffs(t *testing.T) {
+	out, _, _, _, _ := syncIntoTempFull(t)
+	body, err := os.ReadFile(filepath.Join(out, "report.md"))
+	if err != nil {
+		t.Fatalf("read report.md: %v", err)
+	}
+	text := string(body)
+	for _, want := range []string{
+		"## Integration assets",
+		"### Upstream changes since each Sidecar port",
+		"| `opencode` | `opencode` | 10 |",
+		"#### `claude` — ported from herdr `claude` version 9",
+		"#### `codex` — ported from herdr `codex` version 8",
+		"#### `opencode` — ported from herdr `opencode` version 10",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("report.md does not contain %q", want)
+		}
+	}
+	if strings.Contains(text, "Vendoring the assets themselves is Phase 3") {
+		t.Error("report.md still carries the pre-Phase-3 caveat")
+	}
+}
+
+// TestPortDiffShowsTheWholeFileWhenTheStartingPointIsUnknown is the plan's rule
+// for a port nobody can attribute: with nothing to diff against, the report owes
+// the reader the file.
+func TestPortDiffShowsTheWholeFileWhenTheStartingPointIsUnknown(t *testing.T) {
+	_, integrationOut, _, lock, source := syncIntoTempFull(t)
+	src, err := newDirSource(source, "e2b85c7")
+	if err != nil {
+		t.Fatalf("newDirSource: %v", err)
+	}
+	diffs := integrationPortDiffs(src, integrationOut, lock)
+	if len(diffs) == 0 {
+		t.Fatal("no port diffs were computed")
+	}
+	for _, entry := range diffs {
+		if entry.Ported.Version == agentintegration.UnknownPortedVersion {
+			continue
+		}
+		for _, file := range entry.Files {
+			if file.Whole {
+				t.Errorf("%s rendered %s as a whole file although its port names version %s",
+					entry.Ported.Provider, file.Path, entry.Ported.Version)
+			}
+		}
+	}
+
+	// Force the unknown case, which no shipped record uses today.
+	unknown := integrationPortDiffsFor(src, integrationOut, lock, []agentintegration.PortedFrom{{
+		Provider: "opencode", UpstreamID: "opencode", UpstreamDir: "opencode",
+		Version: agentintegration.UnknownPortedVersion, Evidence: "test",
+	}})
+	if len(unknown) != 1 || len(unknown[0].Files) == 0 {
+		t.Fatalf("unknown-version diff produced %+v", unknown)
+	}
+	for _, file := range unknown[0].Files {
+		if !file.Whole || !file.Changed {
+			t.Errorf("%s was not rendered as a whole file for an unknown ported-from version", file.Path)
+		}
+	}
+	if unknown[0].Note == "" {
+		t.Error("an unknown ported-from version was rendered without saying why")
+	}
+}
+
+func TestUnifiedDiffShowsOnlyWhatChanged(t *testing.T) {
+	before := []byte("one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\n")
+	after := []byte("one\ntwo\nthree\nfour\nfive\nSIX\nseven\neight\nnine\nten\n")
+	body, changed := unifiedDiff("before", "after", before, after, diffLineBudget)
+	if !changed {
+		t.Fatal("unifiedDiff reported no change between two different files")
+	}
+	if !strings.Contains(body, "-six") || !strings.Contains(body, "+SIX") {
+		t.Errorf("diff does not show the changed line:\n%s", body)
+	}
+	if strings.Contains(body, " one") {
+		t.Errorf("diff carried a line far outside the hunk:\n%s", body)
+	}
+	if _, changed := unifiedDiff("a", "b", before, before, diffLineBudget); changed {
+		t.Error("unifiedDiff reported a change between identical files")
+	}
+	long := []byte(strings.Repeat("x\n", 200) + "tail\n")
+	body, _ = unifiedDiff("before", "after", before, long, 20)
+	if !strings.Contains(body, "diff truncated at 20 lines") {
+		t.Errorf("an oversized diff was not truncated:\n%s", body)
 	}
 }

@@ -1,10 +1,13 @@
 // Command herdrsync refreshes Sidecar's vendored copy of Herdr's
-// agent-detection manifests, the lock that pins them, and the alias and
-// authority tables extracted from Herdr's source.
+// agent-detection manifests, the lock that pins them, the alias and authority
+// tables extracted from Herdr's source, and Herdr's provider integration
+// assets.
 //
-// It writes only under the output directory (internal/agentactivity/manifests
-// by default). Vendored files are byte-for-byte copies; nothing here rewrites
-// upstream content.
+// It writes under two output directories and nowhere else:
+// internal/agentactivity/manifests for the detection lane and
+// internal/agentintegration for the hooks lane, each with its own lock.
+// Vendored files are byte-for-byte copies; nothing here rewrites upstream
+// content.
 //
 // Usage:
 //
@@ -19,8 +22,7 @@
 // bytes and the commit recorded in the lock are always the same object; a ref
 // that does not resolve in that checkout fails the run.
 //
-// Steps 1 to 4 and 6 of the plan's sync design are implemented. Step 5,
-// vendoring src/integration/assets, is Phase 3 work and is marked TODO below.
+// All six steps of the plan's sync design are implemented.
 package main
 
 import (
@@ -72,6 +74,12 @@ type options struct {
 	sourceDir  string
 	offline    bool
 	out        string
+	// integrationOut is the second output root, for the vendored integration
+	// assets and their own lock. It is deliberately separate from out: the two
+	// trees are embedded into different packages, and a lock that described
+	// files outside its own directory could not be checked by the package that
+	// embeds it.
+	integrationOut string
 }
 
 func main() {
@@ -90,7 +98,8 @@ func run(args []string, out *os.File) error {
 	fs.StringVar(&opts.catalogURL, "catalog", defaultCatalogURL, "published catalog index URL")
 	fs.StringVar(&opts.sourceDir, "source-dir", "", "read Herdr files from a local checkout instead of fetching them")
 	fs.BoolVar(&opts.offline, "offline", false, "do not touch the network; take published copies from the source checkout's distribution directory")
-	fs.StringVar(&opts.out, "out", filepath.Join("internal", "agentactivity", "manifests"), "output directory")
+	fs.StringVar(&opts.out, "out", filepath.Join("internal", "agentactivity", "manifests"), "output directory for the manifests and their lock")
+	fs.StringVar(&opts.integrationOut, "integration-out", filepath.Join("internal", "agentintegration"), "output directory for the vendored integration assets and their lock")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -116,6 +125,12 @@ func sync(opts options) (*syncReport, error) {
 	if _, err := sidecarRepoRoot(); err != nil {
 		return nil, err
 	}
+	if opts.integrationOut == "" {
+		// Nothing derives this from opts.out. The two trees are embedded into
+		// different packages, and guessing a second output root from the first
+		// is how a sync writes a vendored tree somewhere nobody is looking.
+		return nil, fmt.Errorf("no integration output directory; pass --integration-out")
+	}
 
 	src, err := openSource(opts)
 	if err != nil {
@@ -123,10 +138,11 @@ func sync(opts options) (*syncReport, error) {
 	}
 
 	report := &syncReport{
-		Ref:        opts.ref,
-		ReleaseTag: opts.releaseTag,
-		Out:        opts.out,
-		StartedAt:  time.Now().UTC(),
+		Ref:            opts.ref,
+		ReleaseTag:     opts.releaseTag,
+		Out:            opts.out,
+		IntegrationOut: opts.integrationOut,
+		StartedAt:      time.Now().UTC(),
 	}
 
 	// Step 1: fetch both manifest sets.
@@ -151,24 +167,31 @@ func sync(opts options) (*syncReport, error) {
 		return nil, err
 	}
 
-	// Step 4: extract the alias and authority tables.
+	// Step 4: extract the alias and authority tables. The integration assets are
+	// read here rather than inside the authority extractor because step 5
+	// vendors the same bytes, and reading the tree twice would cost 34 more
+	// reads to learn what is already in hand.
 	aliases, err := extractAliases(src, opts.ref)
 	if err != nil {
 		return nil, fmt.Errorf("extract aliases: %w", err)
 	}
-	authority, err := extractAuthority(src, opts.ref)
+	assetDirs, sharedAssets, err := integrationAssets(src)
+	if err != nil {
+		return nil, fmt.Errorf("read integration assets: %w", err)
+	}
+	authority, err := extractAuthority(src, opts.ref, assetDirs)
 	if err != nil {
 		return nil, fmt.Errorf("extract authority: %w", err)
 	}
 
-	// Step 5 (integration assets under internal/agentintegration/upstream) is
-	// Phase 3 work. TODO(phase3): vendor src/integration/assets with the same
-	// lock discipline, recording each file's digest and its
-	// HERDR_INTEGRATION_VERSION, and report every version bump. The version
-	// numbers themselves are already extracted into authority.upstream.json,
-	// so the report can name a bump before the assets are vendored.
-
 	previous := readPreviousLock(opts.out)
+	previousIntegration := readPreviousIntegrationLock(opts.integrationOut)
+
+	// Step 5: vendor the integration assets and lock them.
+	integrationLock, err := writeIntegrationTree(opts, src, assetDirs, sharedAssets)
+	if err != nil {
+		return nil, fmt.Errorf("vendor integration assets: %w", err)
+	}
 
 	// Step 6: write the tree, the lock, and the report.
 	lock, err := writeTree(opts, src, catalog, choices, aliases, authority)
@@ -179,6 +202,9 @@ func sync(opts options) (*syncReport, error) {
 	report.Previous = previous
 	report.Aliases = aliases
 	report.Authority = authority
+	report.Integration = integrationLock
+	report.PreviousIntegration = previousIntegration
+	report.IntegrationDiffs = integrationPortDiffs(src, opts.integrationOut, integrationLock)
 	report.FinishedAt = time.Now().UTC()
 
 	body, err := report.render()

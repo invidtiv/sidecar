@@ -213,7 +213,11 @@ var (
 // extractAuthority reads the per-agent authority table out of Herdr's published
 // agents.mdx and pairs it with the HERDR_INTEGRATION_VERSION each provider's
 // integration assets carry.
-func extractAuthority(src source, ref string) (*manifests.Authority, error) {
+//
+// The assets are read by the caller and passed in, because the same tree is
+// vendored in the same run and reading it twice would be 34 more `git show`
+// invocations to learn what is already in hand.
+func extractAuthority(src source, ref string, assets []integrationAssetDir) (*manifests.Authority, error) {
 	data, err := src.read(authoritySource)
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", authoritySource, err)
@@ -225,20 +229,19 @@ func extractAuthority(src source, ref string) (*manifests.Authority, error) {
 		return nil, err
 	}
 
-	versions, dirs, err := integrationVersions(src)
-	if err != nil {
-		return nil, err
-	}
-	for id, version := range versions {
-		entry, ok := agents[id]
+	for _, dir := range assets {
+		if dir.version <= 0 {
+			continue
+		}
+		entry, ok := agents[dir.id]
 		if !ok {
 			// An integration for an agent the table does not list is a real
 			// change in Herdr; say so rather than silently discarding it.
-			return nil, fmt.Errorf("integration assets exist for %q but the agent table does not list it", id)
+			return nil, fmt.Errorf("integration assets exist for %q but the agent table does not list it", dir.id)
 		}
-		entry.IntegrationVersion = version
-		entry.IntegrationAssetDir = dirs[id]
-		agents[id] = entry
+		entry.IntegrationVersion = dir.version
+		entry.IntegrationAssetDir = dir.dir
+		agents[dir.id] = entry
 	}
 
 	return &manifests.Authority{
@@ -325,54 +328,107 @@ func splitAndList(text string) []string {
 	return out
 }
 
-// integrationVersions reads HERDR_INTEGRATION_VERSION from every asset file and
-// returns one version per agent. Files in the same directory must agree; a
-// disagreement means Herdr shipped a half-bumped integration and is worth
-// failing on rather than picking a side.
-func integrationVersions(src source) (map[string]int, map[string]string, error) {
+// integrationAsset is one file under Herdr's src/integration/assets.
+type integrationAsset struct {
+	// path is the upstream path, e.g. src/integration/assets/claude/herdr-agent-state.sh.
+	path string
+	// name is the base name, which is also the name the file is vendored under.
+	name string
+	data []byte
+	// version is the HERDR_INTEGRATION_VERSION this file declares, or 0 when it
+	// declares none. Herdr's shared test files declare none.
+	version int
+}
+
+// integrationAssetDir is one provider directory and the version its files agree
+// on.
+type integrationAssetDir struct {
+	// dir is the directory name under src/integration/assets.
+	dir string
+	// id is the Herdr agent id, which differs from dir for antigravity_cli.
+	id string
+	// version is 0 when no file in the directory declares one.
+	version int
+	files   []integrationAsset
+}
+
+// integrationAssets reads Herdr's whole integration-asset tree once and returns
+// the per-provider directories plus the files that sit directly under the
+// assets root, which today is the shared herdr-agent-state.test.ts.
+//
+// It is the one place HERDR_INTEGRATION_VERSION is read: the authority table
+// pairs each agent with its version and the vendoring locks each file with the
+// version it declares, and both take those numbers from here. Files in the same
+// directory must agree; a disagreement means Herdr shipped a half-bumped
+// integration and is worth failing on rather than picking a side.
+func integrationAssets(src source) ([]integrationAssetDir, []integrationAsset, error) {
+	read := func(rel string) (integrationAsset, error) {
+		data, err := src.read(rel)
+		if err != nil {
+			return integrationAsset{}, fmt.Errorf("read %s: %w", rel, err)
+		}
+		asset := integrationAsset{path: rel, name: path.Base(rel), data: data}
+		if match := integrationVersion.FindStringSubmatch(string(data)); match != nil {
+			value, err := strconv.Atoi(match[1])
+			if err != nil {
+				return integrationAsset{}, fmt.Errorf("%s has a non-numeric HERDR_INTEGRATION_VERSION %q", rel, match[1])
+			}
+			asset.version = value
+		}
+		return asset, nil
+	}
+
 	subdirs, err := src.listDirs(assetsDir)
 	if err != nil {
 		return nil, nil, fmt.Errorf("list %s: %w", assetsDir, err)
 	}
-	versions := map[string]int{}
-	assetDirs := map[string]string{}
+	var dirs []integrationAssetDir
+	versioned := 0
 	for _, dir := range subdirs {
-		files, err := src.list(path.Join(assetsDir, dir))
+		names, err := src.list(path.Join(assetsDir, dir))
 		if err != nil {
 			return nil, nil, fmt.Errorf("list %s: %w", path.Join(assetsDir, dir), err)
 		}
-		found := -1
-		for _, name := range files {
-			body, err := src.read(path.Join(assetsDir, dir, name))
-			if err != nil {
-				return nil, nil, fmt.Errorf("read %s: %w", path.Join(assetsDir, dir, name), err)
-			}
-			match := integrationVersion.FindStringSubmatch(string(body))
-			if match == nil {
-				continue
-			}
-			value, err := strconv.Atoi(match[1])
-			if err != nil {
-				return nil, nil, fmt.Errorf("%s has a non-numeric HERDR_INTEGRATION_VERSION %q", name, match[1])
-			}
-			if found >= 0 && found != value {
-				return nil, nil, fmt.Errorf("%s carries HERDR_INTEGRATION_VERSION %d and %d in the same directory",
-					dir, found, value)
-			}
-			found = value
-		}
-		if found < 0 {
-			continue
-		}
-		id := dir
+		entry := integrationAssetDir{dir: dir, id: dir}
 		if mapped, ok := assetDirAgent[dir]; ok {
-			id = mapped
+			entry.id = mapped
 		}
-		versions[id] = found
-		assetDirs[id] = dir
+		for _, name := range names {
+			asset, err := read(path.Join(assetsDir, dir, name))
+			if err != nil {
+				return nil, nil, err
+			}
+			if asset.version > 0 {
+				if entry.version > 0 && entry.version != asset.version {
+					return nil, nil, fmt.Errorf("%s carries HERDR_INTEGRATION_VERSION %d and %d in the same directory",
+						dir, entry.version, asset.version)
+				}
+				entry.version = asset.version
+			}
+			entry.files = append(entry.files, asset)
+		}
+		if entry.version > 0 {
+			versioned++
+		}
+		dirs = append(dirs, entry)
 	}
-	if len(versions) == 0 {
+	if versioned == 0 {
 		return nil, nil, fmt.Errorf("no HERDR_INTEGRATION_VERSION found under %s; the asset shape changed", assetsDir)
 	}
-	return versions, assetDirs, nil
+
+	rootNames, err := src.list(assetsDir)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list %s: %w", assetsDir, err)
+	}
+	var shared []integrationAsset
+	for _, name := range rootNames {
+		asset, err := read(path.Join(assetsDir, name))
+		if err != nil {
+			return nil, nil, err
+		}
+		shared = append(shared, asset)
+	}
+
+	sort.Slice(dirs, func(i, j int) bool { return dirs[i].id < dirs[j].id })
+	return dirs, shared, nil
 }
