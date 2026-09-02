@@ -1,0 +1,25 @@
+# ms	event	session	turn	tool	fields
+0	before_agent_start	session-1	-	-	images,prompt,systemPrompt,systemPromptOptions,type=before_agent_start,ctx.mode=tui,ctx.isIdle=true,ctx.sessionFile=present,ctx.sessionId=present
+2	agent_start	session-1	-	-	type=agent_start,ctx.mode=tui,ctx.isIdle=false,ctx.sessionFile=present,ctx.sessionId=present
+2	turn_start	session-1	-	-	timestamp,turnIndex,type=turn_start,ctx.mode=tui,ctx.isIdle=false,ctx.sessionFile=present,ctx.sessionId=present
+2	message_start	session-1	-	-	message,type=message_start,ctx.mode=tui,ctx.isIdle=false,ctx.sessionFile=present,ctx.sessionId=present
+3	message_end	session-1	-	-	message,type=message_end,ctx.mode=tui,ctx.isIdle=false,ctx.sessionFile=present,ctx.sessionId=present
+193	message_start	session-1	-	-	message,type=message_start,ctx.mode=tui,ctx.isIdle=false,ctx.sessionFile=present,ctx.sessionId=present
+194	message_end	session-1	-	-	message,type=message_end,ctx.mode=tui,ctx.isIdle=false,ctx.sessionFile=present,ctx.sessionId=present
+194	turn_end	session-1	-	-	message,toolResults,turnIndex,type=turn_end,ctx.mode=tui,ctx.isIdle=false,ctx.sessionFile=present,ctx.sessionId=present
+194	agent_end	session-1	-	-	messages,type=agent_end,ctx.mode=tui,ctx.isIdle=false,ctx.sessionFile=present,ctx.sessionId=present
+197	agent_settled	session-1	-	-	type=agent_settled,ctx.mode=tui,ctx.isIdle=true,ctx.sessionFile=present,ctx.sessionId=present
+32694	session_shutdown	session-1	-	-	reason=quit,type=session_shutdown,ctx.mode=tui,ctx.isIdle=true,ctx.sessionFile=present,ctx.sessionId=present
+# The turn failed: the configured model had been retired and the provider
+# answered 404. The ladder is unchanged -- agent_start then agent_settled --
+# so a failed turn resolves to idle rather than latching the pane on working,
+# which is the failure mode the resolver has to survive. No event carries the
+# failure: as with cancellation, the field names are identical to a successful
+# turn's.
+#
+# The final row is the session_shutdown that ended this run, emitted when the
+# user typed /quit. Its reason IS readable and IS "quit", which is the fact
+# that keeps process_exit an unclaimed-by-choice gap rather than an impossible
+# one: a future asset that subscribed and released the lane only on reason=quit
+# could claim it. The shipped asset does not subscribe, so no report followed
+# this event.

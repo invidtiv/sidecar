@@ -53,6 +53,16 @@ Captured 2026-08-30 on darwin/arm64.
 | `traces/opencode/session-error-turn.tsv` | opencode | 1.18.23 | google/gemini-2.5-flash | provider auth error | Phase A |
 | `traces/opencode/cancelled-turn.tsv` | opencode | 1.18.25 | openai/gpt-4o-mini | user cancellation | Phase B |
 | `traces/opencode/provider-error-named.tsv` | opencode | 1.18.25 | google/gemini-2.5-flash | provider auth error | Phase B |
+| `traces/pi/simple-turn.tsv` | pi | 0.84.3 | openrouter z-ai/glm-5.3-flash | success | Slice 1 |
+| `traces/pi/tool-turn.tsv` | pi | 0.84.3 | openrouter z-ai/glm-5.3-flash | success, one bash tool call | Slice 1 |
+| `traces/pi/cancelled-turn.tsv` | pi | 0.84.3 | openrouter z-ai/glm-5.3-flash | user cancellation | Slice 1 |
+| `traces/pi/error-turn-and-quit.tsv` | pi | 0.84.3 | openrouter stealth/ox-alpha | provider 404, then /quit | Slice 1 |
+
+The Pi traces were captured 2026-09-02 on darwin/arm64; the four rows above are
+one Pi 0.84.3 process each for the first three and a second process for the
+fourth. Their capture procedure and their extra sanitization rule are in the Pi
+section below, because they are the first traces in this directory to record any
+event *value*.
 
 The error trace is kept deliberately. A failed turn is a real lifecycle path,
 and it is the one that shows `session.error` resolving to `session.idle` rather
@@ -125,6 +135,64 @@ which is what makes it safe to record where a message would not be.
 Phase B traces additionally drop `message.part.delta`. The TUI streams one of
 those per token, so a single cancelled turn produced 1604 of them; they carry no
 lifecycle information and would bury the fixture.
+
+## Pi
+
+Pi's traces use the six-column hook layout — `offset_ms`, `event`, `session`,
+`turn`, `tool`, `fields` — that `readHookTrace` in `hooktrace_test.go` reads, the
+same one Codex and Claude use. Pi is bus-shaped rather than hook-shaped, but the
+columns carry the same evidence and a second reader would have bought nothing.
+`turn` is always `-`: Pi's `turn_start` carries a `turnIndex`, which is a
+position rather than an identifier, and it is recorded as a field name only.
+
+### How they were captured, and what was not touched
+
+A tracer extension was installed into a **temporary** `PI_CODING_AGENT_DIR`
+created under the run's scratch directory. Pi resolves both its extension
+directory and its sessions directory from that variable
+(`dist/config.js:420-426`, `:455-457`), so the whole agent tree moved with it.
+The user's real `~/.pi` — which holds their own extensions, including Herdr's —
+was read once to see what a run needs and never written, moved, or deleted.
+Only `settings.json`, `models.json`, `models-store.json` and `trust.json` were
+copied *out*, and the copy's `defaultModel` was pointed at a live cheap model
+after the configured one turned out to have been retired. `auth.json` is empty
+on this machine: Pi reads its OpenRouter credential from the environment, so
+nothing secret was copied anywhere.
+
+Sidecar's own asset was installed beside the tracer with
+`sidecar agent integration install pi`, not by hand, so the run also proves the
+installer. Pi was driven in a real TUI inside a Sidecar-managed shell on a
+**private tmux server** (`tmux -S` on a dedicated socket, never the machine's
+default server), with `XDG_STATE_HOME`, `-config` and `SIDECAR_ISOLATED_STATE=1`
+holding Sidecar's own state off the real tree. `HERDR_ENV` was never set: with it
+set, Herdr's extension and Sidecar's would both claim the pane.
+
+One trap is worth recording for whoever recaptures. The `sidecar` **CLI**
+dispatches in `cmd/sidecar/main.go` before `main` unsets `TMUX`, deliberately and
+by comment. A CLI-driven proof run started from inside a tmux pane therefore
+talks to the socket named in `$TMUX` — the machine's default server — no matter
+what `TMUX_TMPDIR` says. Unset `TMUX` in the harness. `scripts/tmux-drive.sh` is
+unaffected because it launches the TUI, which does reach the unset.
+
+### Sanitization
+
+Sanitization is by construction, as everywhere else in this directory: the
+tracer recorded event names, `ctx` discriminators, and payload field **names**,
+and never had prompt text, response text, tool arguments, tool results, file
+contents, or environment values. Session identifiers were mapped to
+`session-N` placeholders inside the tracer process, so no real identifier ever
+reached a file.
+
+Pi's traces are the first here to record event **values**, and the rule is
+narrow. A value is recorded only for a key whose vocabulary is closed and chosen
+by Pi's own source — `reason`, `type`, `mode`, `status` and their siblings — which
+is the same rule that let the OpenCode Phase B traces record a bounded error
+class name. Those appear in the `fields` column as `key=value`; every other key
+appears as a bare name. Two derived observations are recorded the same way
+because the asset's guards are built on them and a field name alone would not
+show whether a guard was correct: `ctx.mode`, `ctx.isIdle`, and the presence
+booleans `ctx.sessionFile` and `ctx.sessionId`. A path or an id is never written,
+only `present` or `absent`.
 
 ## Re-capturing
 

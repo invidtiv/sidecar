@@ -401,12 +401,15 @@ func TestPiReportArgsCarryTheAssetVersionAndOmitTheBlockedLabel(t *testing.T) {
 // the resolver actually consults. An asset with no capability entry would
 // install, report, and be ignored.
 //
-// The tier is asserted at exactly what the port earned, and no higher. Pi has no
-// traces, and the lifecycle plan caps an untraced source at advisory in three
-// separate places; a source with no traces at all gets the identity claim its
-// own code demonstrably makes and nothing more. When traces land, this
-// expectation and capabilities.json move together, which is the point of
-// asserting it here rather than leaving the registry to say it alone.
+// The tier is asserted at exactly what the port earned, and no higher. It was
+// session-identity on docs-only evidence until a live Pi 0.84.3 was traced; it
+// is now advisory on real-trace evidence, which is the ceiling, because
+// `full` needs blocked_on_request and unblocked and no released Pi can produce
+// either. The traces themselves are asserted next door, in
+// agentlifecycle/hooktrace_test.go, where each claimed transition is re-derived
+// from the fixture that earned it. This test is the asset's half of the same
+// contract: what the shipped file reports, and what it must therefore never
+// claim.
 func TestPiCapabilityIsRegisteredForTheBundledSource(t *testing.T) {
 	cap, ok := agentlifecycle.CapabilityForSource(PiSource)
 	if !ok {
@@ -415,19 +418,26 @@ func TestPiCapabilityIsRegisteredForTheBundledSource(t *testing.T) {
 	if cap.Provider != PiProvider {
 		t.Fatalf("capability provider = %q", cap.Provider)
 	}
-	if cap.Evidence != agentlifecycle.EvidenceDocsOnly {
-		t.Fatalf("pi claims %q evidence; nothing has traced a live Pi session", cap.Evidence)
+	if cap.Evidence != agentlifecycle.EvidenceRealTrace {
+		t.Fatalf("pi claims %q evidence; a live Pi 0.84.3 session is traced in agentlifecycle/testdata/traces/pi", cap.Evidence)
+	}
+	if cap.TestedProviderRange == "" {
+		t.Fatal("pi records no tested provider range, so its traces are attached to no version")
 	}
 	tier, reason := cap.TierFor(agentlifecycle.StatusCurrent, true)
-	if tier != agentlifecycle.TierSessionIdentity {
-		t.Fatalf("pi exercises %q (%s), want session-identity until traces exist", tier, reason)
+	if tier != agentlifecycle.TierAdvisory {
+		t.Fatalf("pi exercises %q (%s), want advisory: the traces cover work start and turn completion, and advisory is the ceiling", tier, reason)
 	}
-	// The transitions the asset does not report must not be claimed. tool_use
-	// has no subscription, and process_exit is deliberately absent because
-	// session_shutdown fires for three reasons that are not an exit.
+	// The transitions the asset does not report must not be claimed, and this
+	// list does not shrink when a tier goes up. tool_use has no subscription
+	// even though tool_execution_* demonstrably fire; process_exit is
+	// deliberately absent because session_shutdown fires for three reasons that
+	// are not an exit; cancellation produces the same events as completion; and
+	// the two blocked transitions are structurally unreachable.
 	for _, absent := range []agentlifecycle.Transition{
 		agentlifecycle.TransitionToolUse,
 		agentlifecycle.TransitionProcessExit,
+		agentlifecycle.TransitionCancelled,
 		agentlifecycle.TransitionBlockedOnRequest,
 		agentlifecycle.TransitionUnblocked,
 	} {
@@ -435,8 +445,15 @@ func TestPiCapabilityIsRegisteredForTheBundledSource(t *testing.T) {
 			t.Fatalf("pi claims %q, which the shipped asset does not report", absent)
 		}
 	}
-	if !cap.Covers(agentlifecycle.TransitionSessionIdentity) {
-		t.Fatal("pi does not claim session_identity, which is the whole of what it earned")
+	// What the asset does report, and what the traces earned.
+	for _, covered := range []agentlifecycle.Transition{
+		agentlifecycle.TransitionSessionIdentity,
+		agentlifecycle.TransitionWorkStart,
+		agentlifecycle.TransitionTurnComplete,
+	} {
+		if !cap.Covers(covered) {
+			t.Fatalf("pi does not claim %q, which the shipped asset reports and the traces cover", covered)
+		}
 	}
 	// Full is structurally unreachable, so the entry must never be typed up to
 	// it by accident.

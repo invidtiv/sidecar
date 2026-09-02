@@ -39,7 +39,7 @@ Herdr ships 17 installable provider integrations, 33 asset files, all vendored u
 | Agent | Herdr integration | Sidecar tier | Sidecar adapter |
 | --- | --- | --- | --- |
 | `opencode` | v10, plugin | `full` | yes |
-| `pi` | v8, extension | `session-identity` | **no adapter exists** (see open question 1) |
+| `pi` | v8, extension | `advisory` (traced 0.84.3, 2026-09-02; the ceiling — `full` is structurally unreachable) | yes |
 | `kimi` | v7, hooks | none | no |
 | `kilo` | v4, plugin | none | no |
 | `omp` | v9, hooks | none | no |
@@ -112,6 +112,28 @@ Then port Pi as the steel thread for every port that follows, because it is the 
 
 **Exit gate:** a live Pi pane reports `working` and `idle` through hooks, with the screen lane still the fallback; `agent start` on Pi no longer times out; the blocked branch exists, is driven by a fixture, and is recorded as unreachable with its evidence; the tier is whatever the traces prove and not more.
 
+#### Result, 2026-09-02 (`td-f44647`)
+
+**Shipped, and three of the four gate clauses are met.** The port landed in two halves: the offline half (asset, Go mirror, adapter, nine fixtures translated from upstream's own test, three node harnesses) and then a live proof against Pi 0.84.3 in a Sidecar-managed shell on a private tmux server, with `PI_CODING_AGENT_DIR`, `XDG_STATE_HOME` and `-config` all under a scratch tree. Sidecar's asset was installed by `sidecar agent integration install pi` rather than by hand, so the run proves the installer too. The user's real `~/.pi` was never written.
+
+**The hooks lane drives a live pane.** One turn, read through `sidecar agent explain --shell`: `state=idle authority=lifecycle tier=advisory reportReason=turn_complete` → `state=working authority=lifecycle reportReason=turn_start` → `state=idle authority=lifecycle reportReason=turn_complete`, with `screenState=unknown` throughout. The verdict was authored by hooks and by nothing else. The store shows the reports it came from, sourced `sidecar.pi.extension`, with the pane bound to its transcript by path.
+
+**The tier moved to `advisory` on `real-trace` evidence, `testedProviderRange` 0.84.3, covering `work_start`, `turn_complete` and `session_identity` — and nothing else.** Four sanitized traces are checked in under `internal/agentlifecycle/testdata/traces/pi/` with a provenance row, and six tests in `hooktrace_test.go` re-derive each claim from the fixture that earned it. `advisory` is the ceiling, as predicted. What the traces added beyond the tier:
+
+- **The blocked lane is unreachable, now measured from the emitter side.** A `bash` tool ran unconditionally with no permission, approval or prompt event anywhere around it, and nothing published either `sidecar:blocked` or `herdr:blocked` across the whole run. The docs-only reading was right.
+- **The `agent_end` trap is real and mechanical.** `ctx.isIdle` is `false` on `agent_end` and `true` on `agent_settled` three milliseconds later. An asset that closed a turn on `agent_end` would report idle mid-run.
+- **`turn_end` is not turn completion either.** One agent run that calls a tool emits `turn_start`/`turn_end` twice. A "turn" in Pi's vocabulary is a provider round trip.
+- **Cancellation is unknowable, not merely untraced.** An Escape-interrupted turn produces byte-identical events and field names to a completed one. The lane still resolves correctly, because `agent_settled` comes from a `finally` block; only the outcome is lost. `cancelled` stays unclaimed.
+- **`session_shutdown`'s reason is readable and was `quit`.** So `process_exit` is unclaimed *by choice*, and a future asset that released the lane only on that reason could claim it.
+
+**The screen lane is still the fallback, but the gate's mechanism was wrong.** Uninstalling the asset alone does not flip the lane. `StoreSource.Evidence` derives `integrationStatus` from the *record* — source known, asset version matching — and never from the installed files, so stored reports keep authority while `sidecar agent integration status pi` already reports `not-installed`/`screen-fallback`. Uninstalling *and* restarting Pi does flip it: `authority=screen`, `fallbackReason=process_generation_mismatch`, `freshness=none`. That is arbitration working exactly as designed — a stored claim is checked against the live world — but "stop the integration and watch the lane change" needs the run to end as well, and that is worth knowing before the same proof is written for the next four providers.
+
+**`agent start` on Pi still times out, and this slice could never have fixed it.** Exit 1, `code=timeout`, before and after the tier promotion. The cause recorded above — Pi's manifest has one rule and it is a *working* rule, so an idle pane never matches — is not what happens. The refusal is one step earlier: `sidecar agent list` reports `evidence=pi.process-mismatch`. Pi installs as a `#!/usr/bin/env node` shim, tmux reports the pane's foreground command as `node`, and `DetectPi` refuses before any manifest rule is evaluated. The screen lane by itself answers `idle` for the very same capture — `sidecar agent explain --file <idle capture> --agent pi` gives `state=idle`, `fallback_reason=default_known_agent_idle_fallback` — so **widening the process gate is the whole fix, and it is Slice 3's first item.** No tier promotion reaches it: `agentcontrol`'s detector (`service.go:363`) calls `agentactivity.Detect` only and never consults the lifecycle store. This clause moves to Slice 3's exit gate, and Pi is the concrete case Slice 3 should be measured against.
+
+**One hazard found the hard way, and it belongs in every future proof run.** `cmd/sidecar/main.go` dispatches `cli.Run` before `main` unsets `TMUX`, deliberately and by comment. A **CLI**-driven proof started from inside a tmux pane therefore talks to the socket named in `$TMUX` — the machine's default server — no matter what `TMUX_TMPDIR` says, and the first `sidecar create shell` of this run created a session on the developer's live server before it was caught and removed. State isolation was never at risk (`internal/cli/cli.go:94` does check it on the CLI path). `scripts/tmux-drive.sh` is unaffected because it launches the TUI, which does reach the unset. Unset `TMUX` in any CLI-driven harness. Recorded in `internal/agentlifecycle/testdata/README.md`.
+
+A second, smaller finding for the same audience: an asset spawns `$SIDECAR_BIN agent report` with no `-config`, and `ConfigPath()` has no environment override, so a bare report under `SIDECAR_ISOLATED_STATE=1` refuses. This proof used a one-line shim at `SIDECAR_BIN` that adds `-config` and passes the argv through unchanged. A real user needs none of it, but every future hooks-lane proof will hit it.
+
 ### Slice 2 — The remaining hooks-authority providers (medium)
 
 `kimi`, `kilo`, `omp`, `mastracode`, in that order. Each follows Slice 1's shape. `omp` and `mastracode` also gain their first Sidecar identity here: an alias case and a catalog family, detection-only in the sense of Phase 4 except that their state comes from hooks rather than from a screen manifest, since upstream ships none for them.
@@ -127,7 +149,7 @@ Independent of Slices 1 and 2 and possibly worth doing first, because it makes b
 - `SIDECAR_AGENT` as the process-identity hint, a hint only and never a lifecycle claim.
 - Widen the process gate in step, per open question 4.
 
-**Exit gate:** a Qwen or Cline pane installed as a plain `env node` shim shows a state badge. A test pins that one agent's manifest is never evaluated against another agent's pane.
+**Exit gate:** a Qwen or Cline pane installed as a plain `env node` shim shows a state badge. A test pins that one agent's manifest is never evaluated against another agent's pane. **And `sidecar agent start --kind pi` stops timing out**, inherited from Slice 1: Pi is the measured case, and its refusal is `pi.process-mismatch` from exactly this gate. Slice 1 established that the screen lane already answers `idle` for a real idle Pi capture once the gate lets it through, so nothing else is needed for that one.
 
 ### Slice 4 — Session-identity ports, as many as earn their place (small each)
 
