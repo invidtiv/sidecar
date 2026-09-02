@@ -134,9 +134,9 @@ type Explanation struct {
 	// ScreenExplain is the manifest engine's full record for the screen lane:
 	// the manifest source and version, the matched rule, and every rule that was
 	// evaluated with the region text it saw. It is populated only when the
-	// manifest engine actually ran (shadow mode today, and the live screen lane
-	// after the Phase 2 cutover); nil means the Go rule tables answered alone and
-	// there is no manifest record to show.
+	// manifest engine actually ran; nil means it did not — the process gate
+	// refused before any rule was evaluated, or no screen observation reached
+	// this explanation at all.
 	ScreenExplain *manifest.Explain `json:"screenExplain,omitempty"`
 
 	// Identity is the live pane and run this explanation is about.

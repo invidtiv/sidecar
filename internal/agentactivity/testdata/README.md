@@ -64,3 +64,34 @@ prefix while busy, U+2733 (`✳`) once fully idle. That matches the Herdr
 manifest keeps the narrow ten-frame dots set. Sidecar previously shared one
 eleven-glyph pattern across Claude, Codex and Grok; each provider now owns its
 own. See the package doc in `activity.go` before adding another.
+
+## After the Phase 2 manifest cutover (2026-09-01)
+
+Every fixture here is now classified by Herdr's vendored manifest for its agent
+(plus Sidecar's overlay), not by a Go rule table. `TestFixtureCensus` walks this
+whole directory, prints what each screen resolves to and which rule id said so,
+and fails when a fixture's own `state:` header disagrees with the verdict.
+`sidecar agent explain --file <fixture> --agent <kind>` reproduces any row, and
+`--print-window` prints the exact text detection saw.
+
+Four fixtures were added during the cutover, and what each of them is for is the
+point of adding it:
+
+- `codex/trust_directory.txt` (synthetic) — the only upstream rule that reads
+  the *top* of the read window. It is padded out to its declared 40 rows the way
+  `tmux capture-pane` pads a real capture, which is what makes it able to catch a
+  window that starts one row too low.
+- `codex/approval_prompt.txt` (synthetic) — the same screen as `blocked.txt` with
+  an ordinary title. Upstream's two screen blockers are both defined relative to
+  the Codex prompt marker and this prompt puts the marker on its own option line,
+  so neither can fire and only `sidecar.approval_blocker` catches it.
+- `claude/allow_prompt.txt` (synthetic) — the tool-permission prompt that carries
+  none of the literals upstream's three permission rules are gated on.
+- `muse/trust_workspace.txt` (**real**, 2026-09-01, isolated socket, 120x40) — an
+  unanswered "Do you trust this workspace?" prompt, captured live. This is the
+  clearest thing the cutover buys: the deleted Go rule table read it as idle, so
+  a pane sitting on a question Sidecar could not answer showed as a finished turn.
+
+A synthetic fixture says so in its own header and says why it could not be
+captured. That convention predates the cutover and still holds: an unavailable
+real state is never represented as a real capture.

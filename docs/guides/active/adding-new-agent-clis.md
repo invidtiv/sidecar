@@ -102,10 +102,10 @@ Adding a family to `internal/agentcatalog` automatically wires:
    case command == "muse" || strings.HasPrefix(command, "muse-"):
        return "muse"
    ```
-2. Update `Detect(ob Observation) Result`:
+2. Add the provider to `processGate` in `internal/agentactivity/manifest_detect.go`:
    ```go
    case "muse":
-       return DetectMuse(ob)
+       return museProcess(command)
    ```
 3. Update `Supports(agent string) bool`:
    ```go
@@ -114,102 +114,36 @@ Adding a family to `internal/agentcatalog` automatically wires:
    ```
 4. If the CLI runs under a generic runtime wrapper like Node, Bun, or Python, check `NeedsProcessIdentity()` and screen identity heuristics in `Identify()`.
 
-### 2.2 Create Provider Detection Rules in `internal/agentactivity/<provider>.go`
+### 2.2 Vendor the detection manifest, not a Go rule table
 
-> This step is being replaced. Claude Code and Codex no longer have a Go rule table: they execute Herdr's vendored detection manifest through `internal/agentactivity/manifest`, and anything Sidecar knows that upstream does not is a data overlay under `internal/agentactivity/manifests/sidecar/`. The remaining eight providers still work as described below. Rewriting this step into "vendor a manifest, add the alias, mint a fixture with `sidecar agent explain --file`" is Phase 4 of `docs/plans/active/herdr-detection-parity.md`; check whether the agent you are adding already has a manifest under `internal/agentactivity/manifests/upstream/` before writing a rule table by hand.
+There are no Go rule tables left. Every provider Sidecar claims executes Herdr's vendored detection manifest through `internal/agentactivity/manifest`, and anything Sidecar knows that upstream does not is a data overlay under `internal/agentactivity/manifests/sidecar/`. `internal/agentactivity/<provider>.go` holds the process gate, a comment recording what the deleted rule table knew and where it went, and nothing else. See `docs/plans/active/herdr-detection-parity.md` and `docs/reference/herdr-detection-parity.md`.
 
-Create `internal/agentactivity/muse.go` (harvested from Muse Code 1.0.1 live tmux, 2026-08-31, darwin/arm64, echo provider with `--echo-delay-ms` to expose `◈ Thinking`):
+1. **Check whether the manifest is already vendored.** `ls internal/agentactivity/manifests/upstream/` lists 21 agents; Herdr's catalog is likely to have the one you are adding. If it does, the detection half of this step is already done — the loader keys on the file name, so `ManifestAgentID` is the only place a Sidecar family name that differs from Herdr's file name is written down (today: `copilot` → `github-copilot`).
 
-```go
-package agentactivity
+2. **If it is not vendored, sync rather than write.** `scripts/sync-herdr.sh` refreshes the whole vendored tree from a Herdr ref, updates `upstream.lock.json`, and renders `report.md`. Never hand-edit a file under `upstream/`: `TestVendoredManifestsMatchLock` fails on any edit, which is what keeps a re-sync a clean file replacement.
 
-import (
-	"regexp"
-	"strings"
-)
+3. **Write the process gate.** `<provider>Process(command string) bool` is Sidecar's own refusal and is stricter than Herdr's: it declines to evaluate the manifest at all unless the pane's foreground command is the provider or a permitted runtime wrapper. Register it in `processGate` in `manifest_detect.go` and give the provider a `Detect<Provider>` wrapper that refuses with `<provider>.process-mismatch` and otherwise calls `DetectManifestResult`.
 
-// Muse Spark: braille title spinner `⠹ sidecar-muse-spark-adapter` while working,
-// screen `◈ Thinking (0s · esc to interrupt)` / `Working…`, idle `⟩` prompt.
-// Voice input separator `── Voice input ──` is permanent chrome, not an overlay.
-var (
-	museTitleWorking = regexp.MustCompile(`^[\x{2800}-\x{28FF}]\s`)
-	museRules        = []Rule{
-		{
-			ID:     "muse.screen.blocked",
-			State:  StateBlocked,
-			Region: RegionCurrent,
-			LastN:  24,
-			Regexp: regexp.MustCompile(`(?im)(Do you want to proceed\?|Allow command\?|Would you like to run|Proceed\?|Yes.*No|Enter to confirm.*Esc to cancel|Allow.*\?|approve)`),
-		},
-		{
-			ID:     "muse.overlay.retain",
-			State:  StateUnknown,
-			Region: RegionLastLines,
-			LastN:  24,
-			Regexp: regexp.MustCompile(`(?im)(esc to close|model picker|select.*model)`),
-			Skip:   true,
-		},
-		// Note: do NOT add a Voice input skip — `── Voice input (⌥ + v to start) ──`
-		// is permanent chrome on idle screens and would suppress the idle rule.
-		{
-			ID:     "muse.title.working",
-			State:  StateWorking,
-			Region: RegionTitle,
-			Regexp: museTitleWorking,
-		},
-		{
-			ID:     "muse.screen.working",
-			State:  StateWorking,
-			Region: RegionCurrent,
-			LastN:  16,
-			Regexp: regexp.MustCompile(`(?i)Thinking|Working`),
-		},
-		{
-			ID:     "muse.screen.cancel-working",
-			State:  StateWorking,
-			Region: RegionCurrent,
-			LastN:  16,
-			Regexp: regexp.MustCompile(`(?i)esc to interrupt`),
-		},
-		{
-			ID:     "muse.screen.thinking-glyph",
-			State:  StateWorking,
-			Region: RegionCurrent,
-			LastN:  16,
-			Regexp: regexp.MustCompile(`◈\s*Thinking`),
-		},
-		{
-			ID:     "muse.screen.idle",
-			State:  StateIdle,
-			Region: RegionLastLines,
-			LastN:  12,
-			Regexp: regexp.MustCompile(`(?m)^⟩(?:\s| |$)`), // U+27E9, not ❯
-			Not:    []string{"esc to interrupt"},
-		},
-	}
-)
+4. **Mint a fixture and read which rule matched.**
 
-func DetectMuse(ob Observation) Result {
-	if ob.Agent != "muse" || !museProcess(ob.CurrentCommand) {
-		return Result{State: StateUnknown, Evidence: "muse.process-mismatch"}
-	}
-	result := Evaluate(ob, museRules)
-	if result.State == StateUnknown && !result.SkipStateUpdate {
-		return Result{State: StateIdle, Evidence: "muse.known-live-fallback", FallbackIdle: true}
-	}
-	return result
-}
+   ```bash
+   tmux -L probe -f /dev/null new-session -d -s cap -c "$PWD" -x 120 -y 40
+   tmux -L probe send-keys -t cap 'muse' Enter && sleep 12
+   tmux -L probe capture-pane -p -e -N -t cap > /tmp/muse.txt
+   tmux -L probe kill-server
+   sidecar agent explain --file /tmp/muse.txt --agent muse
+   sidecar agent explain --file /tmp/muse.txt --agent muse --print-window   # what detection saw
+   ```
 
-func museProcess(command string) bool {
-	return command == "muse" || strings.HasPrefix(command, "muse-") // also muse-bin-1.0.1-*
-}
-```
+   Save the capture under `internal/agentactivity/testdata/<provider>/` in the header format the other fixtures use (`pane_title:`, `pane_current_command:`, `pane_height:`, an optional `state:` the census checks, then a line reading exactly `screen:`). `TestFixtureCensus` classifies every fixture and fails when one declares a state it does not reach.
 
-### 2.3 Critical Activity Detection Rules
+5. **Only then consider an overlay.** An overlay rule is a claim that upstream is wrong or silent about a screen you have captured, and every one of them costs something on the next sync. Write it in `internal/agentactivity/manifests/sidecar/<herdr-agent-id>.toml`, prefix new rule ids `sidecar.`, state which upstream priorities it sits between and why, and prove it with the fixture. `scripts/herdr-diff.sh` reports a rule that reaches the verdict Herdr reaches without it as **redundant** and fails, which is how an overlay rule that has stopped earning its place gets deleted.
 
-- **Spinners are provider-owned**: Never share spinner regexes across providers. Codex uses standard braille dots; Claude, Grok, and Cursor cycle the entire U+2800–U+28FF block.
-- **Overlays must use `Skip: true`**: Splash screens, model pickers, and transcript viewers must retain the prior semantic state rather than prematurely reporting `idle` or `unknown`.
-- **Verify with tests**: Run `go test ./internal/agentactivity/...` to ensure `TestTheProcessNameVocabularyMatchesTheAgentCatalog` passes.
+### 2.3 Critical activity detection rules
+
+- **Do not reintroduce a Go rule table.** If a screen is misread, the fix is an overlay rule with a fixture, or a pull request to Herdr.
+- **Overlays that retain state need corroborating chrome.** A rule keyed on a bare word ("transcript", "resume session") freezes the badge for `SkipRetentionCap` whenever a turn merely discusses one. Two such rules were deleted in the Phase 2 cutover for exactly this reason.
+- **Verify with tests**: `go test ./internal/agentactivity/...`, and `TestTheProcessNameVocabularyMatchesTheAgentCatalog` for the identity half.
 
 ---
 

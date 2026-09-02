@@ -1,34 +1,39 @@
 package agentactivity
 
-import "regexp"
+// Antigravity's screen rules are Herdr's, executed from the vendored
+// `manifests/upstream/antigravity.toml` by the manifest engine (Phase 2 of
+// docs/plans/active/herdr-detection-parity.md), with two Sidecar rules layered
+// over them in `manifests/sidecar/antigravity.toml` plus the RE2 rewrite of
+// upstream's `spinner_working`. This file is what remains that is Sidecar's:
+// the process gate, and the fallback exception below.
+//
+// Upstream has three rules and Sidecar's captures match none of them, so both
+// the trust prompt and the working footer are overlay rules with a fixture
+// each. Two rules from the Go table were dropped instead of carried:
+//
+//   - `antigravity.overlay.viewer` and `antigravity.overlay.retain` retained
+//     the prior state on "conversation history", "transcript", "esc to close"
+//     or "select a model". Neither had a fixture, and nothing in
+//     testdata/antigravity shows the CLI rendering any of those overlays; both
+//     were copies of Claude's rules written before the provider was harvested
+//     (see testdata/antigravity/availability.txt, which records that no runtime
+//     states were captured in Phase 1). A retain rule fires on a screen and then
+//     holds the badge for SkipRetentionCap with no way to tell it is wrong, so a
+//     speculative one is worse than none. If a capture of either overlay turns
+//     up, it is one rule in the overlay file.
+//   - the wider half of `antigravity.screen.blocked`, which alternated over
+//     "Proceed", "Amend" and "enter.*Confirm" as well as the trust question.
+//     Any one of those words anywhere in the last twenty-four lines called a
+//     pane blocked; "Proceed" is a word an agent writes about its own plan.
 
-var antigravityRules = []Rule{
-	{ID: "antigravity.screen.resolved-idle", State: StateIdle, Region: RegionCurrent, LastN: 24, Regexp: regexp.MustCompile(`(?ims)(Generating\.\.\.|esc to cancel).*\? for shortcuts`)},
-	{ID: "antigravity.screen.blocked", State: StateBlocked, Region: RegionCurrent, LastN: 24, Regexp: regexp.MustCompile(`(?im)(requesting permission for:|Do you trust the contents of this project\?|Yes, I trust this folder|Proceed|Amend|enter.*Confirm)`)},
-	// Viewer words only retain when viewer chrome accompanies them; otherwise a
-	// turn that discusses a transcript would freeze the badge indefinitely.
-	{ID: "antigravity.overlay.viewer", State: StateUnknown, Region: RegionCurrent, LastN: 6, Regexp: regexp.MustCompile(`(?im)(conversation history|transcript)`), Any: [][]string{
-		{"esc", "close"},
-		{"↑↓"},
-		{"scroll"},
-	}, Skip: true},
-	{ID: "antigravity.overlay.retain", State: StateUnknown, Region: RegionLastLines, LastN: 24, Regexp: regexp.MustCompile(`(?im)(esc to close|select a model)`), Skip: true},
-	{ID: "antigravity.screen.working", State: StateWorking, Region: RegionCurrent, LastN: 24, Regexp: regexp.MustCompile(`(?im)(Generating\.\.\.|esc to cancel|background tasks?:\s*[1-9]|[\x{2801}-\x{28FF}].*(?:ing|running|working))`)},
-}
-
+// DetectAntigravity classifies an Antigravity pane. The process gate runs first
+// and refuses before any manifest is evaluated; everything after it is
+// upstream's, plus the two overlay rules.
 func DetectAntigravity(ob Observation) Result {
-	if ob.Agent != "antigravity" || !antigravityProcess(ob.CurrentCommand) {
+	if ob.Agent != "antigravity" {
 		return Result{State: StateUnknown, Evidence: "antigravity.process-mismatch"}
 	}
-	result := Evaluate(ob, antigravityRules)
-	if result.State == StateUnknown && !result.SkipStateUpdate {
-		// Deliberately NOT FallbackIdle: Antigravity has no stable explicit idle
-		// rule, so this fallback is its only route to reporting a completed
-		// turn. Marking it as low-evidence would make "done" unreachable for
-		// this provider. See TestRealAntigravityCompletedFallbackStillCreatesUnseenDone.
-		return Result{State: StateIdle, Evidence: "antigravity.known-live-fallback"}
-	}
-	return result
+	return DetectManifestResult(ob)
 }
 
 func antigravityProcess(command string) bool {

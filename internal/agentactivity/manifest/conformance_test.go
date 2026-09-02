@@ -43,13 +43,37 @@ import (
 	"github.com/marcus/sidecar/internal/agentactivity/manifests"
 )
 
-// bundled loads a vendored manifest the way production does, so the ported
-// tests exercise the same bytes a user's pane is classified against.
+// bundled compiles the *vendored upstream* manifest for an agent, with no
+// Sidecar overlay merged over it.
+//
+// That is deliberate and it is what makes these ports worth having. Every test
+// in this file is a port of one of Herdr's own inline tests, and what it
+// asserts is Herdr's behaviour on Herdr's bytes: it exists to say whether this
+// engine reads a manifest the way Herdr's engine reads it. Running them against
+// the merged manifest would conflate that question with a second one — whether
+// Sidecar's overlay changes the verdict — and a deliberate overlay would then
+// fail a test whose subject is the engine. Two of them would today:
+// `sidecar.composer_idle` and the `osc_title_idle` disable in
+// manifests/sidecar/codex.toml are exactly such a deliberate change, and
+// TestTheCodexOverlayReplacesTitleIdleWithComposerIdle in the agentactivity
+// package is what pins *that*.
+//
+// AllowIncompatibleRegex matches how production loads the vendored tree: four
+// upstream rules use `\p{Alphabetic}`, which RE2 cannot compile, and each has an
+// overlay carrying the rewrite. None of the four agents is exercised here.
 func bundled(t *testing.T, agent string) *manifest.Compiled {
 	t.Helper()
-	compiled, _, err := manifests.Load(agent)
+	data, err := manifests.UpstreamBytes(agent + ".toml")
 	if err != nil {
-		t.Fatalf("load %s: %v", agent, err)
+		t.Fatalf("read upstream %s: %v", agent, err)
+	}
+	m, err := manifest.ParseAndValidateWith(data, manifest.ValidateOptions{AllowIncompatibleRegex: true})
+	if err != nil {
+		t.Fatalf("parse upstream %s: %v", agent, err)
+	}
+	compiled, err := manifest.Compile(m)
+	if err != nil {
+		t.Fatalf("compile upstream %s: %v", agent, err)
 	}
 	return compiled
 }

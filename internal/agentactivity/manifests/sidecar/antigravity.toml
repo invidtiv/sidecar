@@ -26,3 +26,76 @@ priority = 100
 region = "whole_recent"
 visible_working = true
 line_regex = ['^\s*[\u2800-\u28FF]+\s+[\p{L}\p{Nl}]+\w*ing\b']
+
+# --- Sidecar's own rules ---
+#
+# Upstream's antigravity.toml has three rules: a permission prompt, a braille
+# spinner, and a background-task chip. It has no rule for either screen the
+# Antigravity CLI 1.1.11 captures in ../../testdata/antigravity actually show,
+# so both of them read as the no-match fallback — and this is the one provider
+# whose fallback is *not* low-evidence (see fallbackIsLowEvidence in
+# manifest_detect.go), so a blocked pane and a working pane both read as a
+# completed turn rather than merely as an unknown one.
+
+# The first-run trust prompt. Upstream's `permission_prompt` is gated on the
+# literal "requesting permission for:", which this screen does not contain:
+#
+#   Do you trust the contents of this project?
+#   Antigravity CLI requires permission to read, edit, and execute files here.
+#   > Yes, I trust this folder
+#     No, exit
+#   ↑/↓ Navigate · enter Confirm
+#
+# testdata/antigravity/blocked.txt is that capture. The gate is the question
+# plus one of its own two options, which is much narrower than the rule it
+# replaces: `antigravity.screen.blocked` alternated over six phrases including
+# the bare words "Proceed" and "Amend", any one of which was enough to call a
+# pane blocked.
+#
+# Priority 310 sits just above upstream's `permission_prompt` (300) so a screen
+# carrying both reports through the more specific one; both outrank every
+# working rule.
+[[rules]]
+id = "sidecar.trust_prompt_blocked"
+state = "blocked"
+priority = 310
+region = "whole_recent"
+visible_blocker = true
+contains = ["do you trust the contents of this project?"]
+any = [
+  { contains = ["yes, i trust this folder"] },
+  { contains = ["no, exit"] },
+]
+
+# The working footer. Antigravity's status line is the last row of the pane and
+# it is one of two shapes:
+#
+#   esc to cancel · Gemini 3.6 Flash · high     while a turn runs
+#   ? for shortcuts · Gemini 3.6 Flash · high   when it has finished
+#
+# Upstream reads neither: its `spinner_working` needs a braille frame on the
+# line and its `background_tasks_working` needs a "· N task" chip, and the CLI
+# renders "Generating..." with no spinner glyph at all in
+# testdata/antigravity/working.txt.
+#
+# The `not` gate is what the deleted `antigravity.screen.resolved-idle` rule
+# existed for and is the whole reason this reads the bottom of the pane rather
+# than the whole window. "esc to cancel" and "Generating..." both stay on screen
+# in the scrollback after the turn ends; the footer is what changes. Requiring
+# the shortcuts footer to be absent is how a finished turn stops reading as a
+# live one — TestResolvedHistoricalPhase2StateDoesNotOverrideCurrentIdle is the
+# case.
+#
+# Priority 100 is upstream's own working tier, so a tie with `spinner_working`
+# on a screen carrying both keeps upstream's rule, and every blocker outranks it.
+[[rules]]
+id = "sidecar.status_footer_working"
+state = "working"
+priority = 100
+region = "bottom_non_empty_lines(3)"
+visible_working = true
+any = [
+  { contains = ["esc to cancel"] },
+  { contains = ["generating..."] },
+]
+not = [{ contains = ["? for shortcuts"] }]

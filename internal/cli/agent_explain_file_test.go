@@ -111,23 +111,27 @@ func TestExplainFilePrintWindowIsTheTextDetectionSaw(t *testing.T) {
 		return strings.Split(strings.TrimSuffix(out, "\n"), "\n")
 	}
 
-	// Forty rows of output ending on the cursor row: a five-row pane shows the
-	// last four of them plus that blank cursor row, which trims away.
+	// Forty rows of output and nothing below them: a five-row pane shows the
+	// last five. The newline that terminates the capture is not a row — it is
+	// the terminator — so counting it would drop "row 6" here and, on a real
+	// tmux capture, the topmost visible row of every pane.
 	lines := window(t, rows(""))
-	if len(lines) != 4 {
-		t.Fatalf("window has %d rows, want 4:\n%q", len(lines), lines)
+	if len(lines) != 5 {
+		t.Fatalf("window has %d rows, want 5:\n%q", len(lines), lines)
 	}
-	if lines[len(lines)-1] != "row 0" || lines[0] != "row 7" {
-		t.Fatalf("window spans %q..%q, want row 7..row 0", lines[0], lines[len(lines)-1])
+	if lines[len(lines)-1] != "row 0" || lines[0] != "row 6" {
+		t.Fatalf("window spans %q..%q, want row 6..row 0", lines[0], lines[len(lines)-1])
 	}
 
-	// The same output with three blank rows below it. Those rows are inside the
-	// five-row window and are not backfilled, so the window is one row long —
-	// which is what the pane shows. A window that trimmed before selecting would
-	// still print five rows here, reaching four rows further up than the pane
-	// can display, and that is how a resolved historical prompt wins a rule.
-	if lines := window(t, rows("\n\n   \n")); len(lines) != 1 || lines[0] != "row 0" {
-		t.Fatalf("padded window = %q, want the single row the pane still shows", lines)
+	// The same output with three blank rows below it — a pane whose cursor has
+	// moved down past the output, which is what tmux pads a capture out to.
+	// Those rows are inside the five-row window and are not backfilled, so the
+	// window is two rows long, which is what the pane shows. A window that
+	// trimmed before selecting would still print five rows here, reaching three
+	// rows further up than the pane can display, and that is how a resolved
+	// historical prompt wins a rule.
+	if lines := window(t, rows("\n\n   \n")); len(lines) != 2 || lines[0] != "row 9" || lines[1] != "row 0" {
+		t.Fatalf("padded window = %q, want the two rows the pane still shows", lines)
 	}
 }
 
@@ -139,7 +143,12 @@ func TestExplainFileTextOutputFollowsHerdrsLayout(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d (stderr: %s)", code, errOut)
 	}
-	for _, want := range []string{"agent: codex", "state: idle", "manifest: bundled codex ", "rule: osc_title_idle", "evaluated_rules:"} {
+	// The rule is "none" and the state idle from the fallback: the Sidecar
+	// overlay disables upstream's `osc_title_idle`, whose whole matcher is `\S`
+	// on the title, because tmux seeds `#{pane_title}` and would make every
+	// unmatched Codex screen an explicit idle. `quiet` carries no composer, so
+	// nothing matches. See manifests/sidecar/codex.toml.
+	for _, want := range []string{"agent: codex", "state: idle", "manifest: bundled codex ", "rule: none", "fallback_reason: default_known_agent_idle_fallback", "evaluated_rules:"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("output is missing %q:\n%s", want, out)
 		}

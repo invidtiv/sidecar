@@ -1,7 +1,22 @@
 # Sidecar overlay for cursor.
 #
-# Sole purpose: carry an RE2 spelling of the one upstream rule Go's regexp
-# cannot compile. Rust's regex crate supports Unicode binary properties by
+# Two jobs. The first rule below is an RE2 rewrite of an upstream rule; the
+# three `sidecar.` rules after it are Sidecar's own, kept through the Phase 2
+# cutover because upstream is silent or wrong about the screens they read. Each
+# has a fixture in ../../testdata/cursor.
+#
+# The working/idle priority ladder the three of them sit in, upstream's numbers
+# included, because the order is the whole design:
+#
+#   100  stop_hint_working                      (upstream) "ctrl+c to stop"
+#    96  sidecar.finished_background_tasks_idle a Finished group is not work
+#    95  background_task_status_working         (upstream) "N background tasks"
+#    94  sidecar.background_suffix_working      the live "(background)" suffix
+#    90  spinner_working                        (upstream, rewritten below)
+#
+# --- The RE2 rewrite ---
+#
+# Rust's regex crate supports Unicode binary properties by
 # name, so upstream writes \p{Alphabetic}; RE2 supports only general
 # categories and scripts, so it rejects the pattern outright and the engine
 # would evaluate the rule as a permanent no-match.
@@ -14,7 +29,7 @@
 # docs/reference/herdr-detection-parity.md ("Regex compatibility").
 #
 # The rule id matches upstream's, so this replaces that rule in place rather
-# than adding one. Delete this file the day upstream stops using the property
+# than adding one. Delete that rule the day upstream stops using the property
 # or RE2 grows it.
 
 id = "cursor"
@@ -25,4 +40,81 @@ state = "working"
 priority = 90
 region = "bottom_non_empty_lines(8)"
 visible_working = true
-line_regex = ['^\s*(⬡|⬢|[\u2800-\u28FF]+)\s+[\p{L}\p{Nl}]+\w*ing\b']
+line_regex = ['^\s*(⬡|⬢|[⠀-⣿]+)\s+[\p{L}\p{Nl}]+\w*ing\b']
+
+# --- Sidecar's own rules ---
+
+# Cursor asks for a decision without any of the approval chrome upstream's
+# `approval_prompt` is gated on: no "(y)" control, no "skip (esc or n)", just
+# "Waiting for decision (y/n/p)..." on its own line. Upstream classifies that
+# screen through the fallback, as idle, which is a pane sitting on an unanswered
+# question reading as a finished turn. The four shapes here are the ones
+# harvested from cursor-cli 2026.08.04-aaa8809's strings; the pre-manifest rule
+# (`cursor.screen.decision-blocked`) carried the same four and
+# testdata/cursor/blocked_decision.txt is the fixture.
+#
+# Priority 300 is upstream's own approval tier. A tie there keeps the earlier
+# rule, which is upstream's `approval_prompt` — the right default, since a
+# screen carrying both is an approval prompt that also happens to say "waiting
+# for confirmation".
+[[rules]]
+id = "sidecar.decision_blocked"
+state = "blocked"
+priority = 300
+region = "bottom_non_empty_lines(10)"
+visible_blocker = true
+line_regex = ['(?i)waiting for decision \(y/n/p\)|approve mode switch \(y/n\)|waiting for confirmation|enter password\.\.\.']
+
+# Upstream's `background_task_status_working` reads any "N background tasks"
+# line in the bottom five non-empty lines as live work. In cursor-cli 2026.08.04
+# that string is also the *title of the Finished completion group*, so a pane
+# that has just finished three background tasks reads as working and never
+# reports the turn as done. That is the census disagreement recorded against
+# testdata/cursor/false_positive_finished_background.txt.
+#
+# The honest fix is a `not` gate on upstream's own rule, and that is the upstream
+# pull request this is a candidate for. It cannot be done here: an overlay rule
+# carrying an upstream id replaces that rule on Sidecar's side only, and the
+# differential harness would then read a real disagreement with Herdr where
+# there is only a local edit. So the shape is an addition instead — an idle rule
+# one priority step above the working rule it displaces.
+#
+# All three conditions are load-bearing, and the third most of all. "Finished"
+# and the task count identify the completion group; `plan, search, build
+# anything` is Cursor's *empty composer placeholder*, which a live turn never
+# renders (it shows "→ Add a follow-up" beside "ctrl+c to stop" instead, which
+# is testdata/cursor/working_stop.txt). Without it this rule would outrank
+# `spinner_working` on a pane where a finished group is still on screen above a
+# live spinner, and turn a working pane idle.
+#
+# This is Cursor's only explicit idle rule: upstream has none, so every other
+# idle Cursor pane still resolves through the low-evidence fallback and cannot
+# announce a completion. This one can, and the screen it reads says so in words.
+[[rules]]
+id = "sidecar.finished_background_tasks_idle"
+state = "idle"
+priority = 96
+region = "bottom_non_empty_lines(5)"
+visible_idle = true
+contains = ["finished", "plan, search, build anything"]
+line_regex = ['(?i)\b[1-9][0-9]*\s+background\s+tasks?\b']
+
+# The live "(background)" suffix on the status line — "Running command 12s
+# (background)" — which upstream has no rule for at all. Kept from the
+# pre-manifest `cursor.screen.background-working`, gate unchanged: the suffix in
+# the bottom six non-empty lines, and not while the Finished completion group is
+# on screen, because that group lists background tasks that have already ended.
+# testdata/cursor/working_background.txt is the fixture and
+# testdata/cursor/false_positive_finished_background.txt is what the `not` gate
+# is for.
+#
+# Priority 94 keeps the pre-manifest order: below upstream's own background rule
+# at 95, above `spinner_working` at 90.
+[[rules]]
+id = "sidecar.background_suffix_working"
+state = "working"
+priority = 94
+region = "bottom_non_empty_lines(6)"
+visible_working = true
+regex = ['(?i)\(\s*background\s*\)']
+not = [{ contains = ["finished"] }]

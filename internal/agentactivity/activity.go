@@ -1,24 +1,31 @@
 // Package agentactivity classifies live agent terminal observations without
 // depending on tmux, Bubble Tea, or persistent conversation storage.
 //
-// # Spinner glyph sets are provider-owned
+// # Where the rules live
 //
-// Every provider file declares its own spinner pattern, even where two of them
-// would look identical today. Sharing one is a standing bug: the sets are not
-// the same and they drift independently as each CLI ships. Codex animates the
-// classic ten braille dots frames; Claude, Grok and Cursor cycle the whole
-// Braille block (U+2800–U+28FF).
+// Not here. Every provider is classified by Herdr's vendored detection manifest
+// for it, executed by internal/agentactivity/manifest; anything Sidecar knows
+// that upstream does not is a data overlay under manifests/sidecar/. This
+// package owns what surrounds that: a stricter-than-Herdr process gate per
+// provider, the identity resolver, the two evidence strings no manifest can
+// produce, the low-evidence fallback policy, and Tracker, which turns a stream
+// of verdicts into transitions. See docs/reference/herdr-detection-parity.md.
 //
-// A set that is too narrow does not merely miss activity, it inverts the
-// verdict. Claude shares one shared eleven-glyph pattern with Codex until this
-// was fixed, so the frames outside that set left the title rule unmatched;
-// evaluation fell through to the prompt-box idle rule while subagents were
-// still running, and the tracker turned that working→idle transition into a
-// completed turn. Sessions reported "done" with work in flight.
+// # Spinner glyph sets are provider-owned, and are upstream's problem now
 //
-// When adding or revising a provider, harvest the real frames rather than
-// assuming a set, and prefer anchoring the pattern to where the glyph actually
-// appears — braille elsewhere in a title or task name is not a spinner.
+// The rule tables that used to live here shared this failure mode, and it is
+// worth remembering because it is what the cutover bought. A spinner set that
+// is too narrow does not merely miss activity, it inverts the verdict: Claude
+// shared one eleven-glyph braille pattern with Codex, so the frames outside
+// that set left the title rule unmatched, evaluation fell through to the
+// prompt-box idle rule while subagents were still running, and Tracker turned
+// that working→idle transition into a completed turn. Sessions reported "done"
+// with work in flight. Claude Code 2.1.228 then switched to half-circle frames
+// (U+25D0–U+25D3), which Sidecar's hand-written pattern never learned and
+// upstream's `osc_title_working` already covered.
+//
+// If a spinner is missed today, the fix is a fixture and either an overlay rule
+// or a pull request to Herdr — never a regex added back into this package.
 package agentactivity
 
 import (
@@ -26,7 +33,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/agentactivity/manifest"
 )
 
 type State string
@@ -104,7 +111,7 @@ func Identify(ob Observation) string {
 	// Empty Identify lets callers retain a prior *positive* live identity — not
 	// a launch preference.
 	if command == "agent" || command == "node" || command == "bun" {
-		current := regionText(ob, Rule{Region: RegionCurrent, LastN: 24})
+		current := identityWindow(ob)
 		if command != "agent" {
 			if claudeScreenIdentity.MatchString(current) {
 				return "claude"
@@ -144,6 +151,19 @@ func Identify(ob Observation) string {
 // contains a version. TestOnlyClaudesOwnVersionArgv0ResolvesToAProvider and
 // TestTheProcessNameVocabularyMatchesTheAgentCatalog pin both halves of that:
 // the shape, and that no other catalog family could ever present this argv[0].
+// identityWindow is the bounded screen Identify reads when a pane's command
+// name is a shared runtime. It is deliberately not the detection window: the
+// detection window is the pane's own height, and identity is a cheaper, more
+// forgiving question than a verdict — a startup header twenty rows up still
+// names the program that painted it. Twenty-four rows is what the pre-manifest
+// RegionCurrent used and what this keeps.
+//
+// It is manifest.ReadWindow rather than a second implementation so identity and
+// detection strip SGR and trim rows the same way. Nothing here reads a rule.
+func identityWindow(ob Observation) string {
+	return manifest.ReadWindow(ob.Screen, manifest.DefaultDetectionRows)
+}
+
 func claudeVersionArgv0(command string) bool {
 	return semanticVersionCommand.MatchString(command)
 }
@@ -243,96 +263,18 @@ func NeedsProcessIdentity(command string) bool {
 	}
 }
 
-type Region string
-
-const (
-	RegionScreen    Region = "screen"
-	RegionLastLines Region = "last_lines"
-	RegionCurrent   Region = "current_bottom"
-	RegionTitle     Region = "pane_title"
-)
-
-type Rule struct {
-	ID       string
-	State    State
-	Region   Region
-	Contains []string
-	// Any holds alternative corroborating groups: the rule matches when at
-	// least one group has all of its literals present. It exists so a retain
-	// rule can demand a distinctive phrase *and* surrounding chrome, rather
-	// than firing on a word the agent might merely be discussing. Compared
-	// case-insensitively, since these are rendered UI hints.
-	Any    [][]string
-	Regexp *regexp.Regexp
-	Not    []string
-	LastN  int
-	Skip   bool
-}
-
-// Detect dispatches an observation to the expected provider probe. Keeping
-// dispatch here lets the workspace poll remain product-neutral while each
-// provider owns its evidence table.
+// Detect dispatches an observation to the vendored Herdr manifest for its
+// provider. Keeping dispatch here lets the workspace poll remain
+// product-neutral while each provider file owns only its process gate.
 //
-// Two lanes reach a verdict here. A provider listed in manifestDetection is
-// classified by the vendored Herdr manifest for it, through the ported engine;
-// every other provider still runs its Go rule table. While shadow mode is on
-// (features.manifest_detection, off by default) the not-yet-cut-over providers
-// additionally run the manifest lane and disagreements are logged, which is
-// what says when the next one is ready; see shadow.go.
-func Detect(ob Observation) Result {
-	if manifestDetection[ob.Agent] {
-		result, _ := DetectManifest(ob)
-		return result
-	}
-	result := detect(ob)
-	shadowMu.RLock()
-	sink := shadowSink
-	shadowMu.RUnlock()
-	if sink != nil {
-		compareInShadow(ob, result, sink)
-	}
-	return result
-}
-
-// manifestDetection lists the providers whose screen lane is the vendored Herdr
-// manifest rather than a Go rule table. It grows one provider at a time through
-// Phase 2 of docs/plans/active/herdr-detection-parity.md and disappears with the
-// last one, when there is no second lane left to select between.
-//
-// Membership is what turns shadow mode off for a provider: comparing the
-// manifest lane against itself would log nothing and cost a second evaluation
-// per frame.
-var manifestDetection = map[string]bool{
-	"claude": true,
-	"codex":  true,
-}
-
-func detect(ob Observation) Result {
-	switch ob.Agent {
-	case "codex":
-		return DetectCodex(ob)
-	case "claude":
-		return DetectClaude(ob)
-	case "grok":
-		return DetectGrok(ob)
-	case "antigravity":
-		return DetectAntigravity(ob)
-	case "pi":
-		return DetectPi(ob)
-	case "copilot":
-		return DetectCopilot(ob)
-	case "cursor":
-		return DetectCursor(ob)
-	case "opencode":
-		return DetectOpenCode(ob)
-	case "amp":
-		return DetectAmp(ob)
-	case "muse":
-		return DetectMuse(ob)
-	default:
-		return Result{State: StateUnknown, Evidence: "unsupported-agent"}
-	}
-}
+// There is one lane. Every provider Sidecar claims was cut over in Phase 2 of
+// docs/plans/active/herdr-detection-parity.md, so the Go rule tables, the
+// selector that used to choose between the two lanes, and the shadow mode that
+// compared them are all gone. What is left of each `<provider>.go` is the
+// process gate, plus an identity pattern for cursor and grok; Claude's and
+// Codex's identity patterns sit beside Identify above, because that is the only
+// thing that reads them.
+func Detect(ob Observation) Result { return DetectManifestResult(ob) }
 
 // Supports reports whether Sidecar has provider-owned activity evidence rules.
 func Supports(agent string) bool {
@@ -344,102 +286,7 @@ func Supports(agent string) bool {
 	}
 }
 
-// Evaluate applies rules in caller-supplied priority order. Rules are kept
-// deliberately small: provider files own their evidence and ordering.
-func Evaluate(ob Observation, rules []Rule) Result {
-	for _, rule := range rules {
-		text := regionText(ob, rule)
-		if !matches(text, rule) {
-			continue
-		}
-		result := Result{State: rule.State, Evidence: rule.ID, SkipStateUpdate: rule.Skip}
-		result.VisibleIdle = rule.State == StateIdle && !rule.Skip
-		result.VisibleWorking = rule.State == StateWorking && !rule.Skip
-		result.VisibleBlocker = rule.State == StateBlocked && !rule.Skip
-		return result
-	}
-	return Result{State: StateUnknown, Evidence: "no-match"}
-}
-
-// regionText strips SGR escapes before any rule sees the text. Captures are
-// taken with `capture-pane -e`, so styled chrome carries escape bytes inline —
-// and ESC is not \s, so a coloured prompt marker defeats every column-anchored
-// rule (`^❯`, `^\s*›`, `^[⠀-⣿] `). Stripping here keeps the provider tables
-// written against what a human sees rather than against tmux's byte stream.
-func regionText(ob Observation, rule Rule) string {
-	switch rule.Region {
-	case RegionTitle:
-		return ansi.Strip(ob.PaneTitle)
-	case RegionLastLines:
-		lines := strings.Split(ansi.Strip(ob.Screen), "\n")
-		n := rule.LastN
-		if n <= 0 {
-			n = 12
-		}
-		if len(lines) > n {
-			lines = lines[len(lines)-n:]
-		}
-		return strings.Join(lines, "\n")
-	case RegionCurrent:
-		// capture-pane includes historical scrollback and preserves a tall
-		// pane's trailing blank rows. Drop only that padding, then inspect a
-		// bounded current-bottom window so resolved historical UI cannot win.
-		// Stripping precedes the trim so a row holding nothing but escapes
-		// counts as the padding it renders as.
-		lines := strings.Split(ansi.Strip(ob.Screen), "\n")
-		for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
-			lines = lines[:len(lines)-1]
-		}
-		n := rule.LastN
-		if n <= 0 {
-			n = 24
-		}
-		if len(lines) > n {
-			lines = lines[len(lines)-n:]
-		}
-		return strings.Join(lines, "\n")
-	default:
-		return ansi.Strip(ob.Screen)
-	}
-}
-
-func matches(text string, rule Rule) bool {
-	for _, excluded := range rule.Not {
-		if strings.Contains(text, excluded) {
-			return false
-		}
-	}
-	for _, literal := range rule.Contains {
-		if !strings.Contains(text, literal) {
-			return false
-		}
-	}
-	if len(rule.Any) > 0 {
-		folded := strings.ToLower(text)
-		satisfied := false
-		for _, group := range rule.Any {
-			if containsAll(folded, group) {
-				satisfied = true
-				break
-			}
-		}
-		if !satisfied {
-			return false
-		}
-	}
-	return rule.Regexp == nil || rule.Regexp.MatchString(text)
-}
-
-func containsAll(folded string, literals []string) bool {
-	for _, literal := range literals {
-		if !strings.Contains(folded, strings.ToLower(literal)) {
-			return false
-		}
-	}
-	return true
-}
-
-// Tracker owns transition policy while Evaluate remains state-free.
+// Tracker owns transition policy while classification remains state-free.
 type Tracker struct {
 	State          State
 	Evidence       string

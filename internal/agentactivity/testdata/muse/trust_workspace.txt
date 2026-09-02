@@ -1,0 +1,57 @@
+source: real Muse Code live capture, 2026-09-01, isolated tmux socket (tmux -L
+        sidecar-musecap -f /dev/null, 120x40), `muse` launched in this
+        repository. The first two rows are the shell echo the pane still shows
+        above Muse's own UI, kept because that is what the pane showed.
+why: this is the screen the cutover exists for. Before it, the Go rule table
+     read an unanswered workspace-trust prompt as idle — none of its eight
+     blocked alternatives ("Yes.*No", "Allow.*?", "Proceed?", "approve") appear
+     on it — so a Muse pane parked on a question Sidecar could not answer showed
+     as a finished turn. Upstream's `workspace_trust_blocked` reads it correctly.
+     The live provider matrix (SIDECAR_LIVE_AGENT_MATRIX=muse) refuses to call
+     this pane ready for the same reason, which is the correct refusal.
+shape: 40 rows, padded by tmux and newline-terminated, exactly as captured.
+pane_title: muse
+pane_current_command: muse
+pane_height: 40
+state: blocked
+screen:
+muse
+sidecar-herdr-detection-parity herdr-detection-parity *✘!?❯ muse
+Do you trust this workspace?
+Workspace: /Users/marcus/code/sidecar-herdr-detection-parity
+
+Trusting allows project-local skills, rules, hooks, and plugin config to load before the model runs.
+Only trust this workspace when you trust its contents.
+
+
+
+
+> 1  Trust and continue
+  2  Quit
+
+Use Up/Down or 1/2, then Enter. Esc quits.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -27,14 +27,20 @@ func TestReadWindowIsTheTailOfTheBufferAtThePaneHeight(t *testing.T) {
 		b.WriteString(itoa(i))
 		b.WriteString("\n")
 	}
+	// The blank cursor row, written the way a capture carries it: its own empty
+	// row, and the capture still newline-terminated after it. That shape is what
+	// tmux hands back, and the distinction between the row and the terminator is
+	// what this measurement pins.
+	b.WriteString("\n")
 	got := manifest.ReadWindow(b.String(), 39)
 	lines := strings.Split(strings.TrimSuffix(got, "\n"), "\n")
 	// This is the measurement in docs/reference/herdr-detection-parity.md
 	// ("Read window"), reproduced exactly: herdr 0.8.2 on a 39-row pane printing
 	// 2000 numbered lines returned lines 1963-2000. Thirty-eight rows, not
 	// thirty-nine, because the thirty-ninth row of the grid is the cursor
-	// sitting blank below the output — the empty piece the terminating newline
-	// leaves behind, which is a row and spends a row of the budget.
+	// sitting blank below the output — a real row, which spends a row of the
+	// budget. The newline that terminates the capture is not a row and is
+	// dropped before the window is taken.
 	//
 	// Selecting the window before trimming is what makes that true. Trimming
 	// first and windowing after returns 1962-2000, one row further up the
@@ -54,6 +60,7 @@ func TestReadWindowFallsBackToTwentyFourRows(t *testing.T) {
 		b.WriteString(itoa(i))
 		b.WriteString("\n")
 	}
+	b.WriteString("\n") // the blank cursor row a capture carries below the output
 	for _, rows := range []int{0, -1} {
 		got := manifest.ReadWindow(b.String(), rows)
 		lines := strings.Split(strings.TrimSuffix(got, "\n"), "\n")
@@ -75,8 +82,9 @@ func TestReadWindowTrimsTrailingBlanksWithoutExtendingUpward(t *testing.T) {
 	// historical prompt back into view.
 	//
 	// Seven grid rows: three of text, then a blank, a whitespace-only row, a
-	// blank, and the cursor row the terminating newline leaves.
-	screen := "keep 1\nkeep 2\nkeep 3\n\n   \n\n"
+	// blank, and the blank cursor row — then the newline that terminates the
+	// capture, which is not a row.
+	screen := "keep 1\nkeep 2\nkeep 3\n\n   \n\n\n"
 	if got := manifest.ReadWindow(screen, 7); got != "keep 1\nkeep 2\nkeep 3\n" {
 		t.Fatalf("window = %q", got)
 	}
@@ -88,6 +96,30 @@ func TestReadWindowTrimsTrailingBlanksWithoutExtendingUpward(t *testing.T) {
 	// user cannot see.
 	if got := manifest.ReadWindow(screen, 3); got != "" {
 		t.Fatalf("three-row window = %q, want empty", got)
+	}
+}
+
+// TestReadWindowKeepsTheTopRowOfATmuxShapedCapture is the regression that
+// changed how the terminating newline is read.
+//
+// `tmux capture-pane -p -e -N -S -600` pads the visible region out to the full
+// pane height, so a 20-row pane showing three lines of output returns three
+// rows of text followed by seventeen empty rows — and the whole capture is
+// still newline-terminated. Counting that terminator as a row made the window
+// twenty-one pieces deep, so taking the last twenty dropped the topmost visible
+// row. On a real pane that silently removed the first line of every screen the
+// engine read, which is exactly where a header-anchored rule such as codex's
+// `trust_directory` lives.
+//
+// Proof this reproduces the live shape: 20-row pane, `clear; printf
+// "TOPROW\nb\nc\n"`, captured 25 lines deep and read at 20 rows, must print
+// TOPROW.
+func TestReadWindowKeepsTheTopRowOfATmuxShapedCapture(t *testing.T) {
+	const rows = 20
+	capture := "TOPROW\nb\nc\n" + strings.Repeat("\n", rows-3)
+	got := manifest.ReadWindow(capture, rows)
+	if got != "TOPROW\nb\nc\n" {
+		t.Fatalf("window = %q, want the whole visible output including its top row", got)
 	}
 }
 

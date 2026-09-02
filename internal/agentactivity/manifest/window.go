@@ -65,6 +65,22 @@ func ReadWindow(screen string, rows int) string {
 	// the blank it renders as, at every step below.
 	lines := strings.Split(ansi.Strip(screen), "\n")
 
+	// One trailing "" goes before anything else, and it is not a row. A capture
+	// is newline-*terminated*, so `strings.Split` always leaves an extra empty
+	// piece after the last row; counting it as a grid row would spend a row of
+	// the budget on nothing and drop the topmost visible row of every pane.
+	//
+	// That distinction is invisible on a synthetic screen and load-bearing on a
+	// real one. `tmux capture-pane -p -e -N -S -600` pads the visible region out
+	// to the full pane height, so the pane's blank cursor row arrives as a real
+	// (empty) row of its own *and* the capture still ends with "\n". Dropping
+	// exactly one piece keeps that row and discards the terminator: a 20-row
+	// pane showing three lines of output then returns all three, where counting
+	// the terminator returned only the last two.
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+
 	// Order matters here and it is the order Herdr uses, not the tidier one.
 	// Select the last N rows *first*, then trim: a blank row inside the window
 	// spends a row of the budget, and the window is never extended upward to
@@ -72,11 +88,11 @@ func ReadWindow(screen string, rows int) string {
 	// buffer than the pane can show, which is how a resolved historical prompt
 	// gets back into view.
 	//
-	// The empty final piece a terminating newline produces is a real row, not an
-	// artifact: it is the pane's cursor row. Counting it is what reproduces the
-	// measurement in docs/reference/herdr-detection-parity.md ("Read window") —
-	// a pane printing 2000 numbered lines at 39 rows returns lines 1963-2000,
-	// 38 rows, because the 39th is the cursor sitting below them.
+	// The blank cursor row a real pane carries is a row and does spend budget,
+	// which is what reproduces the measurement in
+	// docs/reference/herdr-detection-parity.md ("Read window"): a pane printing
+	// 2000 numbered lines at 39 rows returns lines 1963-2000, 38 rows, because
+	// the 39th is the cursor sitting blank below them.
 	if len(lines) > rows {
 		lines = lines[len(lines)-rows:]
 	}

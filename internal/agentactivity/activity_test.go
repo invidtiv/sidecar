@@ -162,6 +162,11 @@ func TestRealCodexFixtures(t *testing.T) {
 		{"tool_execution.txt", StateWorking, false},
 		{"background_terminal.txt", StateWorking, false},
 		{"blocked.txt", StateBlocked, false},
+		// The same screen as blocked.txt with an ordinary title, which is what
+		// upstream cannot see: both of its screen blockers are defined relative
+		// to the Codex prompt marker and this prompt puts the marker on its own
+		// option line. See manifests/sidecar/codex.toml (`sidecar.approval_blocker`).
+		{"approval_prompt.txt", StateBlocked, false},
 		{"interrupted.txt", StateIdle, false},
 		{"completed.txt", StateIdle, false},
 		{"transcript_viewer.txt", StateUnknown, true},
@@ -264,16 +269,25 @@ func TestCodexTrustDirectoryPromptReadsFromTheTopOfTheWindow(t *testing.T) {
 		t.Fatalf("fixture pane_height = %d, want the realistic 40 the header records", ob.PaneHeight)
 	}
 
-	// At the pane's own height, and at the 24-row fallback a pane whose height
-	// tmux could not report falls back to. The prompt is eleven rows, so both
-	// windows start at the same line and both must read blocked.
-	for _, rows := range []int{ob.PaneHeight, 0} {
-		probe := ob
-		probe.PaneHeight = rows
-		got := DetectCodex(probe)
-		if got.State != StateBlocked || got.Evidence != "trust_directory" || !got.VisibleBlocker {
-			t.Fatalf("pane_height %d: got %+v, want blocked/trust_directory", rows, got)
-		}
+	// The fixture is padded to its declared forty rows the way tmux pads a
+	// capture, so this also proves the window keeps the pane's topmost visible
+	// row: `\A> You are in` anchors at the start of the window or not at all.
+	got := DetectCodex(ob)
+	if got.State != StateBlocked || got.Evidence != "trust_directory" || !got.VisibleBlocker {
+		t.Fatalf("pane_height %d: got %+v, want blocked/trust_directory", ob.PaneHeight, got)
+	}
+
+	// The same prompt on a shorter pane, which is a capture with less padding
+	// rather than the same bytes read at a smaller N: a 40-row capture read as
+	// 24 rows shows only the bottom 24 of the 40, which on this screen is
+	// nothing but the padding. Eleven rows of prompt plus thirteen of padding is
+	// what a 24-row pane actually returns, and it must read the same.
+	prompt := strings.TrimRight(ob.Screen, "\n") + "\n"
+	short := ob
+	short.PaneHeight = 0 // Herdr's 24-row fallback for an unreadable pane height
+	short.Screen = prompt + strings.Repeat("\n", 13)
+	if got := DetectCodex(short); got.State != StateBlocked || got.Evidence != "trust_directory" {
+		t.Fatalf("24-row pane: got %+v, want blocked/trust_directory", got)
 	}
 
 	// The window bound is real, and this is what it costs. Push the prompt up
@@ -284,8 +298,8 @@ func TestCodexTrustDirectoryPromptReadsFromTheTopOfTheWindow(t *testing.T) {
 	// which is the graceful direction for this to degrade in.
 	scrolled := ob
 	scrolled.PaneHeight = 24
-	scrolled.Screen = strings.Repeat("• Ran a command\n", 30) + ob.Screen
-	got := DetectCodex(scrolled)
+	scrolled.Screen = strings.Repeat("• Ran a command\n", 30) + prompt
+	got = DetectCodex(scrolled)
 	if got.Evidence == "trust_directory" {
 		t.Fatal("the trust rule matched a header outside the read window; the bound is not being applied")
 	}
@@ -335,14 +349,58 @@ func TestRealPhase2ProviderFixtures(t *testing.T) {
 		{"claude", "blocked.txt", "live_blocked_form", StateBlocked, false},
 		{"claude", "interrupted.txt", "live_prompt_box", StateIdle, false},
 		{"claude", "overlay.txt", "sidecar.overlay_retain", StateUnknown, true},
-		{"grok", "idle.txt", "grok.title.idle", StateIdle, false},
-		{"grok", "working.txt", "grok.screen.working", StateWorking, false},
-		{"grok", "interrupted.txt", "grok.title.idle", StateIdle, false},
-		{"grok", "overlay.txt", "grok.overlay.retain", StateUnknown, true},
-		{"grok", "stale_working_scrollback.txt", "grok.footer.idle", StateIdle, false},
-		{"grok", "background_subagent.txt", "grok.screen.background-running", StateWorking, false},
-		{"antigravity", "blocked.txt", "antigravity.screen.blocked", StateBlocked, false},
-		{"antigravity", "working.txt", "antigravity.screen.working", StateWorking, false},
+		// allow_prompt.txt is the review finding folded into the cutover: a
+		// tool-permission prompt carrying none of the literals upstream's three
+		// permission rules are gated on falls through to `osc_title_idle` and
+		// reads as a *visible* idle, which the tracker turns into a completed
+		// turn. See manifests/sidecar/claude.toml (`sidecar.allow_prompt_blocker`).
+		{"claude", "allow_prompt.txt", "sidecar.allow_prompt_blocker", StateBlocked, false},
+		// Grok's six fixtures. Every verdict is unchanged. Per fixture,
+		// old → new and why:
+		//
+		//   idle.txt          grok.title.idle   → osc_title_idle
+		//   interrupted.txt   grok.title.idle   → osc_title_idle
+		//     Upstream rule better: the same "grok" / "<session> - grok" form
+		//     with the same braille exclusion, stated as a rule with a `not`
+		//     gate rather than as a hand-written resolver step.
+		//   working.txt       grok.screen.working → sidecar.working_footer
+		//     Sidecar behaviour preserved via overlay, and the one row where the
+		//     overlay reports a verdict upstream would have reached anyway
+		//     (`osc_title_working`, from the braille frame in the title). The
+		//     footer rule has to outrank `osc_title_idle` at 1100 to do its job,
+		//     which puts it above `osc_title_working` at 1000 as a side effect;
+		//     the alternative is a rule that cannot fire when the title lags.
+		//   overlay.txt       grok.overlay.retain → sidecar.overlay_retain
+		//     Sidecar-only behaviour preserved via overlay, narrower gate.
+		//   stale_working_scrollback.txt
+		//                     grok.footer.idle  → sidecar.idle_footer
+		//     Sidecar-only behaviour preserved via overlay. Upstream trusts the
+		//     title, which still carries a braille frame here.
+		//   background_subagent.txt
+		//                     grok.screen.background-running
+		//                                       → sidecar.background_subagent_working
+		//     Sidecar-only behaviour preserved via overlay.
+		{"grok", "idle.txt", "osc_title_idle", StateIdle, false},
+		{"grok", "working.txt", "sidecar.working_footer", StateWorking, false},
+		{"grok", "interrupted.txt", "osc_title_idle", StateIdle, false},
+		{"grok", "overlay.txt", "sidecar.overlay_retain", StateUnknown, true},
+		{"grok", "stale_working_scrollback.txt", "sidecar.idle_footer", StateIdle, false},
+		{"grok", "background_subagent.txt", "sidecar.background_subagent_working", StateWorking, false},
+		// Antigravity's four fixtures. Every verdict is unchanged. Upstream has
+		// no rule that matches any of these screens, so both non-fallback
+		// verdicts come from the overlay:
+		//
+		//   blocked.txt   antigravity.screen.blocked  → sidecar.trust_prompt_blocked
+		//   working.txt   antigravity.screen.working  → sidecar.status_footer_working
+		//     Sidecar-only behaviour preserved via overlay, both with narrower
+		//     gates than the rules they replace. See
+		//     manifests/sidecar/antigravity.toml.
+		//   idle_fallback.txt, interrupted.txt        unchanged
+		//     Antigravity is the one provider whose no-match fallback is not
+		//     low-evidence, which is why these two can still announce a
+		//     completed turn. See fallbackIsLowEvidence.
+		{"antigravity", "blocked.txt", "sidecar.trust_prompt_blocked", StateBlocked, false},
+		{"antigravity", "working.txt", "sidecar.status_footer_working", StateWorking, false},
 		{"antigravity", "idle_fallback.txt", "antigravity.known-live-fallback", StateIdle, false},
 		{"antigravity", "interrupted.txt", "antigravity.known-live-fallback", StateIdle, false},
 	}
@@ -372,21 +430,49 @@ func TestExpandedProviderCompatibilityRules(t *testing.T) {
 		want     State
 		evidence string
 	}{
-		{"pi working", Observation{Agent: "pi", CurrentCommand: "pi", Screen: "Working..."}, StateWorking, "pi.screen.working"},
+		// pi: `pi.screen.working` → `working_literal`. Upstream rule better in
+		// the trivial sense — Sidecar's one rule was a transcription of
+		// upstream's one rule.
+		{"pi working", Observation{Agent: "pi", CurrentCommand: "pi", Screen: "Working..."}, StateWorking, "working_literal"},
 		{"pi idle fallback", Observation{Agent: "pi", CurrentCommand: "pi", Screen: "ready"}, StateIdle, "pi.known-live-fallback"},
-		{"copilot blocked wins", Observation{Agent: "copilot", CurrentCommand: "copilot", Screen: "esc to cancel\nenter to confirm"}, StateBlocked, "copilot.screen.blocked"},
-		{"copilot cancel working", Observation{Agent: "copilot", CurrentCommand: "copilot", Screen: "esc again to cancel"}, StateWorking, "copilot.screen.working"},
-		{"cursor write blocked", Observation{Agent: "cursor", CurrentCommand: "cursor-agent", Screen: "Write to this file?\nProceed (y)\nreject & propose changes"}, StateBlocked, "cursor.screen.write-blocked"},
-		{"cursor shell blocked", Observation{Agent: "cursor", CurrentCommand: "cursor-agent", Screen: "Run this command?\nRun (once) (y)\nSkip (esc or n)"}, StateBlocked, "cursor.screen.approval-blocked"},
-		{"cursor working", Observation{Agent: "cursor", CurrentCommand: "cursor-agent", Screen: "ctrl+c to stop"}, StateWorking, "cursor.screen.stop-working"},
-		{"cursor spinner working", Observation{Agent: "cursor", CurrentCommand: "cursor-agent", Screen: "⬢ Thought 3s\n⬢ Reading 2 files"}, StateWorking, "cursor.screen.spinner-working"},
-		{"cursor background working", Observation{Agent: "cursor", CurrentCommand: "cursor-agent", Screen: "12s (background)"}, StateWorking, "cursor.screen.background-working"},
+		// copilot: `copilot.screen.blocked` → `selection_blocker` and
+		// `copilot.screen.working` → `working_cancel_hint`. Upstream rule
+		// better: the same conjunctions, plus spellings Sidecar did not carry
+		// ("esc cancel", "enter accept").
+		{"copilot blocked wins", Observation{Agent: "copilot", CurrentCommand: "copilot", Screen: "esc to cancel\nenter to confirm"}, StateBlocked, "selection_blocker"},
+		{"copilot cancel working", Observation{Agent: "copilot", CurrentCommand: "copilot", Screen: "esc again to cancel"}, StateWorking, "working_cancel_hint"},
+		// Cursor after the Phase 2 cutover. Every verdict is unchanged; the
+		// evidence is upstream's rule id, or a `sidecar.` overlay rule for the
+		// two screens upstream has no rule for.
+		//
+		//   write-blocked    → write_file_approval        upstream rule better
+		//   approval-blocked → approval_prompt            upstream rule better
+		//   stop-working     → stop_hint_working          upstream rule better
+		//   spinner-working  → spinner_working            upstream rule better
+		//   background-working → sidecar.background_suffix_working  overlay
+		//
+		// "Upstream rule better" means the same thing in all four: Sidecar had a
+		// regex per prompt shape, and upstream reaches the same screens through
+		// the control lines they share, so a prompt Cursor adds next release is
+		// already covered rather than needing its own alternation branch.
+		{"cursor write blocked", Observation{Agent: "cursor", CurrentCommand: "cursor-agent", Screen: "Write to this file?\nProceed (y)\nreject & propose changes"}, StateBlocked, "write_file_approval"},
+		{"cursor shell blocked", Observation{Agent: "cursor", CurrentCommand: "cursor-agent", Screen: "Run this command?\nRun (once) (y)\nSkip (esc or n)"}, StateBlocked, "approval_prompt"},
+		{"cursor working", Observation{Agent: "cursor", CurrentCommand: "cursor-agent", Screen: "ctrl+c to stop"}, StateWorking, "stop_hint_working"},
+		{"cursor spinner working", Observation{Agent: "cursor", CurrentCommand: "cursor-agent", Screen: "⬢ Thought 3s\n⬢ Reading 2 files"}, StateWorking, "spinner_working"},
+		{"cursor background working", Observation{Agent: "cursor", CurrentCommand: "cursor-agent", Screen: "12s (background)"}, StateWorking, "sidecar.background_suffix_working"},
 		{"cursor run everything not blocked", Observation{Agent: "cursor", CurrentCommand: "cursor-agent", Screen: "Run Everything\napproval mode"}, StateIdle, "cursor.known-live-fallback"},
-		{"opencode blocked", Observation{Agent: "opencode", CurrentCommand: "opencode", Screen: "△ Permission required"}, StateBlocked, "opencode.screen.blocked"},
-		{"opencode working", Observation{Agent: "opencode", CurrentCommand: "opencode", Screen: "■■⬝⬝"}, StateWorking, "opencode.screen.progress-working"},
-		{"amp title blocked", Observation{Agent: "amp", CurrentCommand: "amp", PaneTitle: "Plugin confirmation needed"}, StateBlocked, "amp.title.plugin-blocked"},
-		{"amp title working", Observation{Agent: "amp", CurrentCommand: "amp", PaneTitle: "⠼ repo - amp - task"}, StateWorking, "amp.title.working"},
-		{"amp title idle", Observation{Agent: "amp", CurrentCommand: "amp", PaneTitle: "repo - amp - task"}, StateIdle, "amp.title.idle"},
+		// Phase 2: `opencode.screen.blocked` → `permission_required` and
+		// `opencode.screen.progress-working` → `progress_bar_working`. Reason for
+		// both: upstream rule better in the trivial sense — Sidecar's table was
+		// transcribed from this manifest and upstream still carries the original.
+		{"opencode blocked", Observation{Agent: "opencode", CurrentCommand: "opencode", Screen: "△ Permission required"}, StateBlocked, "permission_required"},
+		{"opencode working", Observation{Agent: "opencode", CurrentCommand: "opencode", Screen: "■■⬝⬝"}, StateWorking, "progress_bar_working"},
+		// amp: the three title rules keep their verdicts and their precedence,
+		// which upstream states as priorities 1100 / 1050 / 50 where Sidecar got
+		// it from file order.
+		{"amp title blocked", Observation{Agent: "amp", CurrentCommand: "amp", PaneTitle: "Plugin confirmation needed"}, StateBlocked, "osc_title_plugin_confirmation_blocked"},
+		{"amp title working", Observation{Agent: "amp", CurrentCommand: "amp", PaneTitle: "⠼ repo - amp - task"}, StateWorking, "osc_title_working"},
+		{"amp title idle", Observation{Agent: "amp", CurrentCommand: "amp", PaneTitle: "repo - amp - task"}, StateIdle, "osc_title_idle"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -428,25 +514,71 @@ func TestExpandedPerProviderFixtures(t *testing.T) {
 		want                  State
 		skip                  bool
 	}{
-		{"pi", "working_compatibility.txt", "pi.screen.working", StateWorking, false},
+		{"pi", "working_compatibility.txt", "working_literal", StateWorking, false},
 		{"pi", "false_positive.txt", "pi.process-mismatch", StateUnknown, false},
-		{"copilot", "blocked_compatibility.txt", "copilot.screen.blocked", StateBlocked, false},
+		{"copilot", "blocked_compatibility.txt", "selection_blocker", StateBlocked, false},
 		{"copilot", "false_positive.txt", "copilot.process-mismatch", StateUnknown, false},
-		{"cursor", "blocked_compatibility.txt", "cursor.screen.write-blocked", StateBlocked, false},
-		{"cursor", "blocked_shell.txt", "cursor.screen.approval-blocked", StateBlocked, false},
-		{"cursor", "blocked_delete.txt", "cursor.screen.delete-blocked", StateBlocked, false},
-		{"cursor", "blocked_web.txt", "cursor.screen.web-edit-blocked", StateBlocked, false},
-		{"cursor", "blocked_decision.txt", "cursor.screen.decision-blocked", StateBlocked, false},
-		{"cursor", "working_stop.txt", "cursor.screen.stop-working", StateWorking, false},
-		{"cursor", "working_spinner.txt", "cursor.screen.spinner-working", StateWorking, false},
-		{"cursor", "working_background.txt", "cursor.screen.background-working", StateWorking, false},
+		// Cursor's twelve fixtures. Every verdict is unchanged. Per fixture,
+		// old → new and why:
+		//
+		//   blocked_compatibility.txt  write-blocked     → write_file_approval
+		//     Upstream rule better: the same two literals plus the same three
+		//     corroborating controls, stated as a gate rather than a regex.
+		//   blocked_shell.txt          approval-blocked  → approval_prompt
+		//   blocked_delete.txt         delete-blocked    → approval_prompt
+		//   blocked_web.txt            web-edit-blocked  → approval_prompt
+		//     Upstream rule better, and this is the shape of the improvement:
+		//     Sidecar carried one regex per prompt (shell, MCP, delete, web,
+		//     edit), each transcribed from the harvested strings of one CLI
+		//     build. Upstream carries one rule gated on the *control lines* every
+		//     one of those prompts renders — "keep (n)", "skip (esc or n)",
+		//     "run … (y)" — so a prompt Cursor adds next release is covered
+		//     without a new branch. The three fixtures land on it unchanged.
+		//   blocked_decision.txt       decision-blocked  → sidecar.decision_blocked
+		//     Sidecar-only behaviour preserved through the overlay. "Waiting for
+		//     decision (y/n/p)" carries none of upstream's control lines, so
+		//     upstream alone reads an unanswered question as idle.
+		//   working_stop.txt           stop-working      → stop_hint_working
+		//   working_spinner.txt        spinner-working   → spinner_working
+		//     Upstream rule better; `spinner_working` is the one rule the RE2
+		//     rewrite in manifests/sidecar/cursor.toml replaces in place, so what
+		//     matches here is upstream's pattern with `\p{Alphabetic}` spelled
+		//     `[\p{L}\p{Nl}]`.
+		//   working_background.txt     background-working → sidecar.background_suffix_working
+		//     Sidecar-only behaviour preserved through the overlay, gate
+		//     unchanged including the "not while Finished is on screen" guard.
+		//   false_positive_finished_background.txt
+		//                              cursor.known-live-fallback
+		//                                                → sidecar.finished_background_tasks_idle
+		//     The one verdict *flag* that moved: still idle, but now explicit
+		//     rather than FallbackIdle, so this screen can announce a completed
+		//     turn where before it could not. Upstream's
+		//     `background_task_status_working` reads the Finished group's own
+		//     title as live work, and the overlay rule that displaces it is an
+		//     idle rule because the grammar has no way to spell "and this one
+		//     does not count" as an addition. The screen says "Finished" beside
+		//     Cursor's empty-composer placeholder, so idle is what it is.
+		//   idle_fallback.txt, false_positive_run_everything.txt, false_positive.txt
+		//     Unchanged. Upstream has no idle rule for Cursor at all, so an idle
+		//     pane still resolves through the low-evidence fallback.
+		{"cursor", "blocked_compatibility.txt", "write_file_approval", StateBlocked, false},
+		{"cursor", "blocked_shell.txt", "approval_prompt", StateBlocked, false},
+		{"cursor", "blocked_delete.txt", "approval_prompt", StateBlocked, false},
+		{"cursor", "blocked_web.txt", "approval_prompt", StateBlocked, false},
+		{"cursor", "blocked_decision.txt", "sidecar.decision_blocked", StateBlocked, false},
+		{"cursor", "working_stop.txt", "stop_hint_working", StateWorking, false},
+		{"cursor", "working_spinner.txt", "spinner_working", StateWorking, false},
+		{"cursor", "working_background.txt", "sidecar.background_suffix_working", StateWorking, false},
 		{"cursor", "idle_fallback.txt", "cursor.known-live-fallback", StateIdle, false},
 		{"cursor", "false_positive.txt", "cursor.process-mismatch", StateUnknown, false},
 		{"cursor", "false_positive_run_everything.txt", "cursor.known-live-fallback", StateIdle, false},
-		{"cursor", "false_positive_finished_background.txt", "cursor.known-live-fallback", StateIdle, false},
-		{"opencode", "blocked_compatibility.txt", "opencode.screen.blocked", StateBlocked, false},
+		{"cursor", "false_positive_finished_background.txt", "sidecar.finished_background_tasks_idle", StateIdle, false},
+		// opencode/blocked_compatibility.txt: blocked / `opencode.screen.blocked`
+		// → blocked / `permission_required`. Upstream rule better; same banner,
+		// upstream's id.
+		{"opencode", "blocked_compatibility.txt", "permission_required", StateBlocked, false},
 		{"opencode", "false_positive.txt", "opencode.process-mismatch", StateUnknown, false},
-		{"amp", "title_compatibility.txt", "amp.title.plugin-blocked", StateBlocked, false},
+		{"amp", "title_compatibility.txt", "osc_title_plugin_confirmation_blocked", StateBlocked, false},
 		{"amp", "false_positive.txt", "amp.process-mismatch", StateUnknown, false},
 	}
 	for _, tt := range tests {
@@ -650,13 +782,15 @@ func TestExplicitIdleEvidenceStillCreatesDone(t *testing.T) {
 }
 
 func TestGrokUsesTitleMetadataWithoutOSCProgress(t *testing.T) {
+	// Phase 2: `grok.title.idle` → `osc_title_idle` and `grok.title.working` →
+	// `osc_title_working`. Upstream's two title rules, same forms.
 	got := DetectGrok(Observation{Agent: "grok", CurrentCommand: "grok-1.0.0-maco", PaneTitle: "repo - grok"})
-	if got.State != StateIdle || got.Evidence != "grok.title.idle" || !got.VisibleIdle {
+	if got.State != StateIdle || got.Evidence != "osc_title_idle" || !got.VisibleIdle {
 		t.Fatalf("got %+v", got)
 	}
 	// Busy title alone (no idle footer) still means working — OSC 9;4 is unavailable via tmux.
 	got = DetectGrok(Observation{Agent: "grok", CurrentCommand: "grok-1.0.0-maco", PaneTitle: "⠼ Working - grok"})
-	if got.State != StateWorking || got.Evidence != "grok.title.working" {
+	if got.State != StateWorking || got.Evidence != "osc_title_working" {
 		t.Fatalf("got %+v", got)
 	}
 }
@@ -669,7 +803,7 @@ func TestGrokIdleFooterBeatsStickyBrailleTitle(t *testing.T) {
 		PaneTitle: "⠼ session title - grok",
 		Screen:    "Enter:send  │  Shift+Tab:mode  │  Ctrl+x:shortcuts\n",
 	})
-	if got.State != StateIdle || got.Evidence != "grok.footer.idle" {
+	if got.State != StateIdle || got.Evidence != "sidecar.idle_footer" {
 		t.Fatalf("sticky title should lose to idle footer: %+v", got)
 	}
 }
@@ -685,7 +819,7 @@ func TestGrokBackgroundSubagentBeatsIdleTitleAndFooter(t *testing.T) {
 			"│ ❯ │\n" +
 			"Shift+Tab:mode  │  Ctrl+x:shortcuts\n",
 	})
-	if got.State != StateWorking || got.Evidence != "grok.screen.background-running" {
+	if got.State != StateWorking || got.Evidence != "sidecar.background_subagent_working" {
 		t.Fatalf("background subagent got %+v", got)
 	}
 }
@@ -712,7 +846,7 @@ func TestGrokIdleFooterBeatsResidualThinkingInViewport(t *testing.T) {
 			"Thinking… [stop]\n" +
 			"Enter:send  │  Shift+Tab:mode  │  Ctrl+x:shortcuts\n",
 	})
-	if got.State != StateIdle || got.Evidence != "grok.footer.idle" {
+	if got.State != StateIdle || got.Evidence != "sidecar.idle_footer" {
 		t.Fatalf("residual Thinking with idle footer got %+v", got)
 	}
 }
@@ -781,14 +915,14 @@ func TestPhase2FullScreenFormsSurviveTallPanePadding(t *testing.T) {
 		t.Fatalf("Claude tall-pane blocker got %+v", claude)
 	}
 	antigravity := DetectAntigravity(Observation{
-		Agent: "antigravity", CurrentCommand: "agy",
+		Agent: "antigravity", CurrentCommand: "agy", PaneHeight: 40,
 		Screen: "Do you trust the contents of this project?\nYes, I trust this folder" + padding,
 	})
 	if antigravity.State != StateBlocked {
 		t.Fatalf("Antigravity tall-pane blocker got %+v", antigravity)
 	}
 	antigravity = DetectAntigravity(Observation{
-		Agent: "antigravity", CurrentCommand: "agy",
+		Agent: "antigravity", CurrentCommand: "agy", PaneHeight: 40,
 		Screen: "⣽  Generating...\nesc to cancel" + padding,
 	})
 	if antigravity.State != StateWorking {
@@ -860,16 +994,15 @@ func TestCodexWorkingIdleAndViewer(t *testing.T) {
 		},
 		{
 			// Old: idle / codex.screen.idle. New: idle /
-			// codex.known-live-fallback, with FallbackIdle set. Reason: engine
-			// semantics. Upstream has no composer rule; it reaches idle through
-			// `osc_title_idle`, which asks only that the title be non-empty and
-			// carry no spinner, and this observation has no title at all. Under
-			// tmux a pane title is effectively always non-empty, so a live pane
-			// still lands on the explicit rule; a title-less one now resolves
-			// idle conservatively and cannot announce a completed turn.
+			// sidecar.composer_idle. Reason: Sidecar behaviour preserved via
+			// overlay. Upstream reaches idle through `osc_title_idle`, whose
+			// matcher is `\S` on the title — but tmux seeds `#{pane_title}`, so
+			// that would make every unmatched Codex screen an explicit idle. The
+			// overlay disables it and restores the composer rule; see
+			// manifests/sidecar/codex.toml.
 			"idle composer with no title",
 			Observation{Agent: "codex", CurrentCommand: "node", Screen: "\n› \n  gpt-5"},
-			StateIdle, "codex.known-live-fallback", false,
+			StateIdle, "sidecar.composer_idle", false,
 		},
 		{
 			// Same fixture as testdata/codex/transcript_viewer.txt. Upstream's
@@ -943,5 +1076,42 @@ func TestSnapshotRoundTrip(t *testing.T) {
 	restored := Restore(original.Snapshot())
 	if restored.State != original.State || !restored.ChangedAt.Equal(now) || restored.Seen || !restored.IdleInferred {
 		t.Fatalf("Restore(Snapshot()) = %#v, want %#v", restored, original)
+	}
+}
+
+// TestMuseIsClassifiedByItsBundledOnlyManifest pins the one vendored manifest
+// Herdr does not publish. muse.toml ships bundled only, because Herdr will not
+// publish a manifest for an agent whose process it cannot yet identify
+// reliably; the loader reads the vendored file by name and never consults the
+// published catalog, so "unpublished" costs nothing here. Sidecar's own
+// identity resolver is what gates it, and it is a superset of upstream's
+// aliases.
+func TestMuseIsClassifiedByItsBundledOnlyManifest(t *testing.T) {
+	for _, command := range []string{"muse", "muse-code", "muse-cli", "muse-bin-1"} {
+		if got := identifyProcessName(command); got != "muse" {
+			t.Fatalf("identifyProcessName(%q) = %q, want muse", command, got)
+		}
+	}
+
+	// The composer prompt with no interrupt hint is upstream's `idle_prompt`.
+	idle := Detect(Observation{Agent: "muse", CurrentCommand: "muse-code", Screen: "⟩ \n"})
+	if idle.State != StateIdle || idle.Evidence != "idle_prompt" || !idle.VisibleIdle {
+		t.Fatalf("idle composer = %+v, want idle/idle_prompt", idle)
+	}
+	// The interrupt hint is `working_esc_interrupt`.
+	working := Detect(Observation{Agent: "muse", CurrentCommand: "muse", Screen: "◆ Working (3s · esc to interrupt)\n"})
+	if working.State != StateWorking || working.Evidence != "working_esc_interrupt" {
+		t.Fatalf("working = %+v, want working/working_esc_interrupt", working)
+	}
+	// A finished turn that merely *says* "Working" is not working. This is the
+	// case the deleted `muse.screen.working` got wrong: it matched the bare word
+	// anywhere in the last sixteen lines.
+	narrated := Detect(Observation{Agent: "muse", CurrentCommand: "muse", Screen: "I finished working on the parser.\n⟩ \n"})
+	if narrated.State != StateIdle || narrated.Evidence != "idle_prompt" {
+		t.Fatalf("narrated work = %+v, want idle/idle_prompt", narrated)
+	}
+	// The process gate still refuses a pane that is not running Muse.
+	if got := Detect(Observation{Agent: "muse", CurrentCommand: "zsh", Screen: "⟩ \n"}); got.Evidence != "muse.process-mismatch" {
+		t.Fatalf("process gate = %+v", got)
 	}
 }

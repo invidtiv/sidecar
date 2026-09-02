@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
@@ -41,10 +42,23 @@ const RegexIncompatibleNote = "regex_incompatible: rule is dead"
 //
 // No needle in any vendored manifest diverges today, so this changes no
 // verdict; it removes a class of divergence a future sync could introduce
-// silently. A Caser is stateful and must not be shared between goroutines, so
-// one is built per call — needles fold once per manifest compile, and a region
-// folds at most once per observation, so the cost is bounded.
-func foldLower(s string) string { return cases.Lower(language.Und).String(s) }
+// silently.
+//
+// A Caser is stateful and must not be shared between goroutines, so they are
+// pooled rather than shared or rebuilt. Rebuilding one per call was measurable:
+// this runs on the live poll path — once per `contains` region per pane per
+// frame, every 200ms while a pane is active — and building a Caser allocates a
+// transformer chain each time.
+var lowerCasers = sync.Pool{New: func() any {
+	caser := cases.Lower(language.Und)
+	return &caser
+}}
+
+func foldLower(s string) string {
+	caser := lowerCasers.Get().(*cases.Caser)
+	defer lowerCasers.Put(caser)
+	return caser.String(s)
+}
 
 // Compiled is a manifest with every pattern compiled and every `contains`
 // needle folded, ready to evaluate. Compilation happens once per manifest;

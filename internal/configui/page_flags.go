@@ -149,13 +149,6 @@ var previewCopy = map[string]preview{
 		help:    "Show every configured project's workspaces in Activity.",
 		restart: true,
 	},
-	features.ManifestDetection.Name: {
-		label: "Herdr manifest shadow",
-		help:  "Run Herdr's detection rules beside ours and log any difference.",
-		// The sink is installed once when Sidecar starts, so turning this on
-		// takes effect on the next launch rather than the next poll.
-		restart: true,
-	},
 	features.WorkspaceDocPanes.Name: {
 		label: "Document panes",
 		help:  "Open files, issues, and diffs in panes beside the workspace.",

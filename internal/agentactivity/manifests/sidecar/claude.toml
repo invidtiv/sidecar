@@ -41,3 +41,49 @@ priority = 900
 region = "bottom_non_empty_lines(5)"
 skip_state_update = true
 line_regex = ['(?i)esc to close\s*$']
+# The same guards upstream puts on `model_picker_menu`, and for the same reason.
+# At priority 900 this rule outranks `bash_permission_prompt` (850) and
+# `generic_permission_prompt` (840), so without them a permission prompt that
+# happened to carry an "esc to close" footer would retain the prior state
+# instead of reporting a blocker — the one direction a retain rule must never
+# fail in, because a retained state has no expiry short of SkipRetentionCap.
+not = [
+  { contains = ["do you want to proceed?"] },
+  { contains = ["yes, allow"] },
+]
+
+# The tool-permission prompt Claude paints without the words upstream is gated
+# on.
+#
+#   Allow Claude to use WebFetch?
+#   ❯ 1. Yes, allow
+#     2. No, and tell Claude what to do differently
+#
+# There is no "do you want to proceed?" anywhere on it, which is the literal
+# every one of upstream's three permission rules requires: `bash_permission_prompt`
+# (850) and `generic_permission_prompt` (840) demand it outright, and
+# `legacy_no_prompt_blocker` (300) reaches it only through "do you want to" or
+# "would you like to". So an unanswered permission prompt falls all the way
+# through to `osc_title_idle` (250) — Claude's title is "✳ Claude Code" while it
+# waits — and reads as a visible idle, which the tracker turns into a completed
+# turn. The deleted `claude.screen.blocked` matched `Allow .*\?` and
+# "Yes, allow"; testdata/claude/allow_prompt.txt is the fixture.
+#
+# Both conditions are required together. "Yes, allow" alone appears in ordinary
+# transcript text about permissions, and a question beginning "Allow" alone is a
+# sentence Claude writes; the pair is the control line beside its own heading.
+# The heading pattern tolerates the box gutter Claude draws around the prompt,
+# which is why the anchor is "no letters before Allow, none after the question
+# mark" rather than "^\s*...\s*$": the row arrives right-trimmed but still
+# carries the box's closing gutter.
+#
+# Priority 845 sits between upstream's two "do you want to proceed?" prompts, so
+# a screen carrying both still reports through upstream's more specific rule.
+[[rules]]
+id = "sidecar.allow_prompt_blocker"
+state = "blocked"
+priority = 845
+region = "bottom_non_empty_lines(12)"
+visible_blocker = true
+contains = ["yes, allow"]
+line_regex = ['(?i)^[^\p{L}]*Allow\b[^\n]*\?[^\p{L}]*$']

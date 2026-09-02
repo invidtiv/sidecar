@@ -9,6 +9,11 @@ why: it is the only upstream rule that reads `top_non_empty_lines`, so it is the
      falling back to 24, so the same screen inside a taller pane and inside a
      scrolled buffer are different regions. See
      TestCodexTrustDirectoryPromptReadsFromTheTopOfTheWindow.
+shape: the screen below is padded out to the declared 40 rows with blank lines,
+       which is what `tmux capture-pane -p -e -N` returns: it pads the visible
+       region to the full pane height and still terminates the capture with a
+       newline. An unpadded fixture cannot catch the off-by-one that dropped the
+       topmost visible row of every window, and this rule anchors on that row.
 pane_title: sidecar-agent-status
 pane_current_command: codex
 pane_height: 40
@@ -25,3 +30,32 @@ screen:
   2. No, choose a different directory
 
   Press enter to confirm or esc to cancel
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

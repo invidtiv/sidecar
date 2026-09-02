@@ -30,8 +30,7 @@ func DetectCodex(ob Observation) Result {
 	if ob.Agent != "codex" {
 		return Result{State: StateUnknown, Evidence: "codex.process-mismatch"}
 	}
-	result, _ := DetectManifest(ob)
-	return result
+	return DetectManifestResult(ob)
 }
 
 func codexProcess(command string) bool {

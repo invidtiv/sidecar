@@ -36,3 +36,68 @@ priority = 500
 region = "bottom_non_empty_lines(12)"
 visible_working = true
 regex = ['(?ims)^\s*[•◦]?\s*Waiting for background terminal\b.*[1-9][0-9]* background terminals? running\b.*(?:/ps to view.*?/stop to close|/stop to close.*?/ps to view)']
+
+# --- Codex idle must be the composer, not the pane title ---
+#
+# Upstream reaches idle through `osc_title_idle`, whose whole matcher is
+# `regex = ['\S']` on the title: any non-empty title with no spinner frame and
+# no "Action Required" in it is an explicit, visible idle. That is sound on
+# Herdr's input, where `osc_title` is a decoded OSC 0/2 payload and genuinely
+# empty until the program writes one. It is not sound on Sidecar's input. tmux
+# seeds `#{pane_title}` with the host name, so a Sidecar pane's title is
+# effectively never empty — which turns "no rule matched" into "explicitly
+# idle", visible flag and all, on every unmatched Codex screen. The tracker
+# turns a visible idle out of working into a completed turn, so any screen
+# upstream has no rule for would announce a completion that never happened.
+#
+# The two rules below put that back the way it was before the cutover: explicit
+# idle needs the composer on screen, and everything else falls through to
+# `codex.known-live-fallback`, which is low-evidence and cannot announce a
+# completion. `sidecar.composer_idle` is the deleted `codex.screen.idle`,
+# unchanged, at upstream's own idle priority.
+#
+# Delete both the day Sidecar can hand the engine a real OSC title rather than
+# tmux's `#{pane_title}` — at that point upstream's rule is correct here too.
+
+[[rules]]
+id = "osc_title_idle"
+disable = true
+
+[[rules]]
+id = "sidecar.composer_idle"
+state = "idle"
+priority = 100
+region = "bottom_non_empty_lines(8)"
+visible_idle = true
+line_regex = ['^\s*›(?:\s|$)']
+
+# The approval prompt Codex paints with its own composer glyph on the option
+# line, which is the one blocker shape upstream cannot see.
+#
+# Upstream has two blockers below the title: `live_strong_blocker` reads
+# `after_last_prompt_marker` and `weak_blocker` reads
+# `whole_recent_without_current_prompt_marker`. Both are defined relative to the
+# Codex prompt marker, and this screen puts a `›` on the *option* line:
+#
+#   Would you like to run the following command?
+#   › 1. Yes, proceed (y)
+#     2. No, and tell Codex what to do differently (esc)
+#
+# So the last prompt marker is the option itself — nothing is below it, and the
+# without-marker region is empty. Both regions are blank and neither blocker can
+# fire. Before the cutover `codex.screen.blocked` matched this alternation
+# anywhere in the last eighteen lines and Sidecar read it as blocked;
+# testdata/codex/approval_prompt.txt is the fixture, and
+# testdata/codex/blocked.txt is the same screen with "Action Required" in the
+# title, which is the only reason upstream catches that one.
+#
+# Priority 700 is between `live_strong_blocker` (900) and `weak_blocker` (600):
+# a stronger, more specific blocker still wins, and this still outranks every
+# working and idle rule. The alternation is the deleted rule's, verbatim.
+[[rules]]
+id = "sidecar.approval_blocker"
+state = "blocked"
+priority = 700
+region = "bottom_non_empty_lines(12)"
+visible_blocker = true
+regex = ['(?i)(Action Required|Would you like to run|Press enter to confirm|Allow command)']

@@ -10,63 +10,74 @@ import (
 	"testing"
 )
 
-// TestManifestCensus runs both screen-lane classifiers over every real fixture
-// and prints the table. It is a *report*, not a gate: for a provider that has
-// not been cut over the Go rule table still authors the user-visible verdict,
-// and a disagreement here is the input to that provider's cutover decision
-// rather than a failure.
+// TestFixtureCensus classifies every real fixture and prints the table: what
+// each screen resolves to, and which rule id said so.
 //
-// A provider already cut over (manifestDetection) has only one lane left, so
-// its rows report "cutover" rather than an agreement: both columns are the
-// manifest, and the fixture expectations in activity_test.go are what pin it.
+//	go test ./internal/agentactivity/ -run TestFixtureCensus -v
 //
-//	go test ./internal/agentactivity/ -run TestManifestCensus -v
+// Through Phase 2 this ran *two* classifiers — the Go rule tables beside the
+// manifest engine — and a disagreement was the input to the next provider's
+// cutover decision. All ten providers are cut over, so there is one lane left
+// and nothing to compare it against inside this package; the differential
+// harness (scripts/herdr-diff.sh) is what compares it against Herdr now.
 //
-// It fails only when a fixture cannot be read or classified at all, because
-// that means the census itself is not measuring what it claims to.
-func TestManifestCensus(t *testing.T) {
+// What is left is worth keeping for two reasons. It is the only place every
+// fixture is classified, including the ones no expectation table names, so a
+// fixture added without a test still shows up here. And it is a gate for the
+// `state:` header a fixture declares: a fixture that says what it is and then
+// reads as something else is either a broken rule or a lying fixture, and both
+// are worth failing over.
+func TestFixtureCensus(t *testing.T) {
 	rows := censusRows(t)
 	if len(rows) == 0 {
 		t.Fatal("no fixtures found; the census is measuring nothing")
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "\n%-12s %-36s %-9s %-38s %-9s %-30s %s\n",
-		"AGENT", "FIXTURE", "GO", "GO EVIDENCE", "MANIFEST", "MANIFEST RULE", "AGREE")
-	agreed := 0
-	cutover := 0
+	fmt.Fprintf(&b, "\n%-12s %-38s %-9s %-40s %s\n",
+		"AGENT", "FIXTURE", "STATE", "RULE", "DECLARED")
+	declared := 0
 	for _, row := range rows {
-		agree := "yes"
+		note := row.declared
 		switch {
-		case manifestDetection[row.agent]:
-			agree = "cutover"
-			cutover++
-			agreed++
-		case !row.agrees():
-			agree = "NO"
+		case note == "":
+			note = "-"
+		case row.declaredMatches():
+			declared++
 		default:
-			agreed++
+			note += " MISMATCH"
+			t.Errorf("%s/%s declares state %q and classifies as %q via %s",
+				row.agent, row.fixture, row.declared, row.state, row.rule)
 		}
-		fmt.Fprintf(&b, "%-12s %-36s %-9s %-38s %-9s %-30s %s\n",
-			row.agent, row.fixture, row.goState, row.goEvidence,
-			row.manifestState, row.manifestRule, agree)
+		fmt.Fprintf(&b, "%-12s %-38s %-9s %-40s %s\n",
+			row.agent, row.fixture, row.state, row.rule, note)
 	}
-	fmt.Fprintf(&b, "\n%d fixtures, %d agree (%d of them on a cut-over provider), %d disagree\n",
-		len(rows), agreed, cutover, len(rows)-agreed)
+	fmt.Fprintf(&b, "\n%d fixtures, %d of them declaring the state they expect\n",
+		len(rows), declared)
 	t.Log(b.String())
 }
 
 type censusRow struct {
-	agent, fixture             string
-	goState, goEvidence        string
-	manifestState              string
-	manifestRule               string
-	goSkip, manifestSkip       bool
-	goFallback, manifestFallbk bool
+	agent, fixture string
+	state, rule    string
+	skip           bool
+	// declared is the fixture header's own `state:` line, empty when it has
+	// none. Its vocabulary is the fixture author's, not State's: "retain" means
+	// a skip_state_update rule matched, and a value naming neither a state nor
+	// "retain" (such as codex/exit.txt's "exited-outside-detector") is prose and
+	// is not checked.
+	declared string
 }
 
-func (r censusRow) agrees() bool {
-	return r.goState == r.manifestState && r.goSkip == r.manifestSkip
+func (r censusRow) declaredMatches() bool {
+	switch r.declared {
+	case "idle", "working", "blocked", "unknown":
+		return r.state == r.declared
+	case "retain":
+		return r.skip
+	default:
+		return true
+	}
 }
 
 func censusRows(t *testing.T) []censusRow {
@@ -109,6 +120,7 @@ func censusRows(t *testing.T) []censusRow {
 				continue
 			}
 			ob := Observation{Agent: agent, Screen: screen}
+			declaredState := ""
 			for _, line := range strings.Split(head, "\n") {
 				key, value, ok := strings.Cut(line, ": ")
 				if !ok {
@@ -121,25 +133,20 @@ func censusRows(t *testing.T) []censusRow {
 					ob.CurrentCommand = value
 				case "pane_height":
 					ob.PaneHeight, _ = strconv.Atoi(strings.TrimSpace(value))
+				case "state":
+					declaredState = strings.TrimSpace(value)
 				}
 			}
 
-			goResult := Detect(ob)
-			manifestResult, explain := DetectManifest(ob)
-			rule := ""
-			if explain != nil && explain.MatchedRule != nil {
-				rule = explain.MatchedRule.ID
-			} else if explain != nil {
+			result, explain := DetectManifest(ob)
+			rule := result.Evidence
+			if explain != nil && explain.MatchedRule == nil {
 				rule = "(" + explain.FallbackReason + ")"
-			} else {
-				rule = "(no manifest evaluated: " + manifestResult.Evidence + ")"
 			}
 			rows = append(rows, censusRow{
 				agent: agent, fixture: name,
-				goState: string(goResult.State), goEvidence: goResult.Evidence,
-				manifestState: string(manifestResult.State), manifestRule: rule,
-				goSkip: goResult.SkipStateUpdate, manifestSkip: manifestResult.SkipStateUpdate,
-				goFallback: goResult.FallbackIdle, manifestFallbk: manifestResult.FallbackIdle,
+				state: string(result.State), rule: rule,
+				skip: result.SkipStateUpdate, declared: declaredState,
 			})
 		}
 	}

@@ -19,8 +19,7 @@ func DetectClaude(ob Observation) Result {
 	if ob.Agent != "claude" {
 		return Result{State: StateUnknown, Evidence: "claude.process-mismatch"}
 	}
-	result, _ := DetectManifest(ob)
-	return result
+	return DetectManifestResult(ob)
 }
 
 // claudeProcess is Sidecar's refusal, and it is stricter than Herdr's: Herdr

@@ -45,14 +45,10 @@ func (t *cliAgentTerminal) Inspect(_ context.Context, target agentcontrol.Target
 		snapshot.CurrentCommand = "codex"
 		snapshot.ProcessIdentity = "codex"
 		snapshot.ShellReady = false
-		// A launched pane always has a title, and since the Phase 2 manifest
-		// cutover Codex's idle verdict depends on it: the vendored Herdr
-		// manifest reaches idle through `osc_title_idle` (a non-empty title
-		// with no spinner frame) where Sidecar's deleted rule table read the
-		// `›` composer off the screen. Without a title an idle Codex pane
-		// resolves through the debounced low-evidence fallback and never
-		// reports ready inside a test's timeout. This is the title the codex
-		// fixtures these screens come from were captured with.
+		// A launched pane always has a title, and the manifest engine reads it:
+		// Codex's blocked and working rules are both `osc_title` rules. This is
+		// the title the codex fixtures these screens come from were captured
+		// with, so a screen and its title describe the same pane.
 		snapshot.Title = "sidecar-agent-status"
 		snapshot.Screen = t.screen
 		if len(t.screens) > 0 {
