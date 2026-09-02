@@ -90,7 +90,7 @@ func TestSnapshotJSONContract(t *testing.T) {
 // pipeline, so adding or removing a name flips whole workspaces between the
 // semantic and the legacy projection.
 func TestSupportedProviderSetIsFrozen(t *testing.T) {
-	supported := []string{"codex", "claude", "grok", "antigravity", "pi", "copilot", "cursor", "opencode", "amp"}
+	supported := []string{"codex", "claude", "grok", "antigravity", "pi", "copilot", "cursor", "opencode", "amp", "muse"}
 	for _, agent := range supported {
 		if !Supports(agent) {
 			t.Fatalf("Supports(%q) = false", agent)
@@ -121,7 +121,7 @@ func TestDetectFallsBackForUnsupportedAgentsAndProcessMismatches(t *testing.T) {
 	// Every provider gates on the live process before it reads any UI, so a
 	// screen full of another agent's chrome cannot claim it. The evidence is
 	// uniformly "<agent>.process-mismatch".
-	for _, agent := range []string{"codex", "claude", "grok", "antigravity", "pi", "copilot", "cursor", "opencode", "amp"} {
+	for _, agent := range []string{"codex", "claude", "grok", "antigravity", "pi", "copilot", "cursor", "opencode", "amp", "muse"} {
 		t.Run(agent+"/process-mismatch", func(t *testing.T) {
 			got := Detect(Observation{
 				Agent:          agent,

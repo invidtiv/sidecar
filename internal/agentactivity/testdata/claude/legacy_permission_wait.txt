@@ -1,0 +1,19 @@
+source: synthetic. The last-resort permission wait upstream's
+        `legacy_no_prompt_blocker` is written for, transcribed from that rule's
+        own literal ("waiting for permission") rather than captured: it is the
+        shape Claude leaves on screen when a tool is held pending approval and
+        the prompt itself has not been drawn.
+why: this is the fixture the `legacy_no_prompt_blocker` overlay is kept for.
+     Upstream declares the rule blocked with no `visible_blocker`, so the pane
+     lands on the blocked lane with no attention flag and every surface that
+     keys an alert on `Tracker.VisibleBlocker` stays quiet — which before the
+     manifest cutover it did not. The overlay in manifests/sidecar/claude.toml
+     replaces the rule by id, verbatim plus `visible_blocker = true`, so the
+     verdict and the rule id are unchanged and only the nag comes back.
+pane_title: ✳ Claude Code
+pane_current_command: 2.1.220
+pane_height: 24
+state: blocked
+screen:
+● Bash(npm run release)
+  ⎿  Waiting for permission…

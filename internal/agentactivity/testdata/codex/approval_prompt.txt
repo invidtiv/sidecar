@@ -1,0 +1,18 @@
+source: synthetic. The same screen as blocked.txt, with an ordinary pane title
+        instead of one carrying "Action Required" — which is what a terminal
+        that does not relay Codex's OSC 0 title shows, and what tmux shows for
+        a pane whose title has not been rewritten this turn.
+why: upstream's two screen blockers are both defined relative to the Codex
+     prompt marker, and this screen puts the marker on the option line, so
+     `after_last_prompt_marker` and `whole_recent_without_current_prompt_marker`
+     are both empty and neither can fire. Without the title, upstream alone
+     reads an unanswered approval prompt as idle. See
+     manifests/sidecar/codex.toml (`sidecar.approval_blocker`).
+pane_title: sidecar-agent-status
+pane_current_command: node
+pane_height: 24
+state: blocked
+screen:
+Would you like to run the following command?
+› 1. Yes, proceed (y)
+  3. No, and tell Codex what to do differently (esc)

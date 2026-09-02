@@ -1,0 +1,198 @@
+# Sidecar overlay for antigravity.
+#
+# Sole purpose: carry an RE2 spelling of the one upstream rule Go's regexp
+# cannot compile. Rust's regex crate supports Unicode binary properties by
+# name, so upstream writes \p{Alphabetic}; RE2 supports only general
+# categories and scripts, so it rejects the pattern outright and the engine
+# would evaluate the rule as a permanent no-match.
+#
+# `Alphabetic` is `L + Nl + Other_Alphabetic`. RE2 has no Other_Alphabetic,
+# whose members are combining marks and a handful of symbols, so
+# [\p{L}\p{Nl}] is the closest sound rewrite. It differs from upstream only
+# for a word that *starts* with a combining mark, which no agent renders as
+# the first character of a status word. See
+# docs/reference/herdr-detection-parity.md ("Regex compatibility").
+#
+# The rule id matches upstream's, so this replaces that rule in place rather
+# than adding one. Delete this file the day upstream stops using the property
+# or RE2 grows it.
+
+id = "agy"
+
+[[rules]]
+id = "spinner_working"
+state = "working"
+priority = 100
+region = "whole_recent"
+visible_working = true
+line_regex = ['^\s*[\u2800-\u28FF]+\s+[\p{L}\p{Nl}]+\w*ing\b']
+
+# --- Sidecar's own rules ---
+#
+# Upstream's antigravity.toml has three rules: a permission prompt, a braille
+# spinner, and a background-task chip. It has no rule for either screen the
+# Antigravity CLI 1.1.11 captures in ../../testdata/antigravity actually show,
+# so both of them read as the no-match fallback — and this is the one provider
+# whose fallback is *not* low-evidence (see fallbackIsLowEvidence in
+# manifest_detect.go), so a blocked pane and a working pane both read as a
+# completed turn rather than merely as an unknown one.
+
+# The first-run trust prompt. Upstream's `permission_prompt` is gated on the
+# literal "requesting permission for:", which this screen does not contain:
+#
+#   Do you trust the contents of this project?
+#   Antigravity CLI requires permission to read, edit, and execute files here.
+#   > Yes, I trust this folder
+#     No, exit
+#   ↑/↓ Navigate · enter Confirm
+#
+# testdata/antigravity/blocked.txt is that capture. The gate is the question
+# plus one of its own two options, which is much narrower than the rule it
+# replaces: `antigravity.screen.blocked` alternated over six phrases including
+# the bare words "Proceed" and "Amend", any one of which was enough to call a
+# pane blocked.
+#
+# The region is the bottom twelve non-empty lines rather than `whole_recent`,
+# and that is the Phase 2 review's finding rather than the original shape. The
+# trust prompt is five lines and it is the only thing on the pane when it is
+# live, so twelve lines is generous; over `whole_recent` an *answered* trust
+# prompt still in the scrollback kept firing above a turn that had since
+# started, which is a blocker announced on a pane nobody is waiting on. There is
+# no capture of that screen — the prompt is a first-run one — so the bound is
+# argued from the prompt's own size rather than measured, and
+# TestAntigravityTrustPromptDoesNotFireAboveALiveTurn is the case.
+#
+# Priority 310 sits just above upstream's `permission_prompt` (300) so a screen
+# carrying both reports through the more specific one; both outrank every
+# working rule.
+[[rules]]
+id = "sidecar.trust_prompt_blocked"
+state = "blocked"
+priority = 310
+region = "bottom_non_empty_lines(12)"
+visible_blocker = true
+contains = ["do you trust the contents of this project?"]
+any = [
+  { contains = ["yes, i trust this folder"] },
+  { contains = ["no, exit"] },
+]
+
+# The tool-permission prompt, which upstream sees only when it carries one of
+# two corroborating phrases the Antigravity CLI 1.1.11 does not render.
+#
+# Upstream's `permission_prompt` requires "requesting permission for:" *and*
+# either "do you want to proceed?" or the pair "tab amend" + "edit command".
+# The prompt this provider actually paints is a selection list with the same
+# footer its trust prompt uses:
+#
+#   requesting permission for: rm -rf ./build
+#   > Allow once
+#     Allow always
+#     Deny
+#   ↑/↓ Navigate · enter Confirm
+#
+# None of upstream's three corroborators is on it, so upstream alone falls
+# through — and Antigravity is the one provider whose no-match fallback is *not*
+# low-evidence (see fallbackIsLowEvidence), so that fallback is a full-evidence
+# visible idle and the tracker turns it into a completed turn. A pane sitting on
+# an unanswered "rm -rf" approval reported as done is the worst failure this
+# corpus has. The deleted `antigravity.screen.blocked` caught it on the bare
+# phrase; this catches it on the phrase plus a control line.
+#
+# The literal is upstream's own, so the screen shape is upstream-attested; what
+# is Sidecar's is the corroborator, and half of it is captured — "enter Confirm"
+# is the footer of testdata/antigravity/blocked.txt, the one real capture of
+# this CLI's selection chrome. The option spellings are not captured, which is
+# why testdata/antigravity/permission_prompt.txt is labelled synthetic. Requiring
+# the pair rather than the phrase alone is what keeps a turn that merely quotes
+# "requesting permission for:" from reading as a live prompt.
+#
+# Priority 305 is between upstream's `permission_prompt` (300) and
+# `sidecar.trust_prompt_blocked` (310): a screen carrying both a trust prompt
+# and a permission prompt reports through the trust prompt, which is the one
+# that has to be answered first.
+#
+# Two narrowings the spot-check of the first cut asked for, and they are the
+# same two the review had already applied to `sidecar.trust_prompt_blocked`,
+# arrived at the same way.
+#
+#   1. The option line has to look like an option. The first cut ended its
+#      alternative at `\b`, so any line *beginning* with one of the three words
+#      satisfied it — "Deny the change if the diff looks wrong, and say why."
+#      is a sentence a turn writes, and above a quoted "requesting permission
+#      for:" it read as an unanswered prompt. The line now has to be the option
+#      and nothing else: at most two columns of indent, at most one selection
+#      glyph, then the option, then end of line. `enter confirm` stays as the
+#      alternative, because that is the half of the control line
+#      `blocked.txt` actually captures.
+#   2. `not` gates on the two literals `sidecar.status_footer_working` fires on.
+#      An *answered* permission prompt stays on screen the way an answered trust
+#      prompt does, and read over twelve non-empty lines it went on reporting a
+#      blocker above the turn that followed it. The gates are exactly that
+#      working rule's own `any` list, so the two rules are complements: whenever
+#      Antigravity is painting live chrome the blocker stands down and the pane
+#      reports working, and whenever it is not the blocker is free to fire.
+#      `TestAntigravityPermissionPromptDoesNotFireAboveALiveTurn` is the case,
+#      mirroring the trust prompt's.
+#
+# Both literals are transient chrome rather than scrollback, which is what makes
+# the gates safe on an *unanswered* prompt: `esc to cancel` is the footer row,
+# repainted rather than scrolled, and `Generating...` is a status line the
+# response replaces — `working.txt` and `idle_fallback.txt` are the same turn
+# before and after, and the word is gone from the second. A stale copy of either
+# sitting above a live prompt would suppress this rule, and neither provider
+# capture shows one.
+#
+# What is left un-narrowed, deliberately: an answered prompt above a *finished*
+# turn still reports blocked, because nothing live is on screen for the gates to
+# see. That is the same conservative direction `sidecar.approval_blocker` takes
+# for Codex — an attention badge on a pane that no longer needs one, rather than
+# a missed prompt on one that does.
+[[rules]]
+id = "sidecar.permission_prompt_blocked"
+state = "blocked"
+priority = 305
+region = "bottom_non_empty_lines(12)"
+visible_blocker = true
+contains = ["requesting permission for:"]
+any = [
+  { line_regex = ['(?i)^\s{0,2}[>›❯]?\s*(?:allow once|allow always|deny)\s*$'] },
+  { contains = ["enter confirm"] },
+]
+not = [
+  { contains = ["esc to cancel"] },
+  { contains = ["generating..."] },
+]
+
+# The working footer. Antigravity's status line is the last row of the pane and
+# it is one of two shapes:
+#
+#   esc to cancel · Gemini 3.6 Flash · high     while a turn runs
+#   ? for shortcuts · Gemini 3.6 Flash · high   when it has finished
+#
+# Upstream reads neither: its `spinner_working` needs a braille frame on the
+# line and its `background_tasks_working` needs a "· N task" chip, and the CLI
+# renders "Generating..." with no spinner glyph at all in
+# testdata/antigravity/working.txt.
+#
+# The `not` gate is what the deleted `antigravity.screen.resolved-idle` rule
+# existed for and is the whole reason this reads the bottom of the pane rather
+# than the whole window. "esc to cancel" and "Generating..." both stay on screen
+# in the scrollback after the turn ends; the footer is what changes. Requiring
+# the shortcuts footer to be absent is how a finished turn stops reading as a
+# live one — TestResolvedHistoricalPhase2StateDoesNotOverrideCurrentIdle is the
+# case.
+#
+# Priority 100 is upstream's own working tier, so a tie with `spinner_working`
+# on a screen carrying both keeps upstream's rule, and every blocker outranks it.
+[[rules]]
+id = "sidecar.status_footer_working"
+state = "working"
+priority = 100
+region = "bottom_non_empty_lines(3)"
+visible_working = true
+any = [
+  { contains = ["esc to cancel"] },
+  { contains = ["generating..."] },
+]
+not = [{ contains = ["? for shortcuts"] }]

@@ -1,0 +1,230 @@
+# Sidecar overlay for claude.
+#
+# Five rules. Two carry overlay and permission shapes upstream is silent about,
+# two carry the background-agents signal upstream reads in a place Claude Code
+# 2.1.257 no longer puts it, and one replaces an upstream rule by id to restore
+# Sidecar's pre-manifest attention nag.
+#
+# The first exists because upstream's overlay-retain coverage is narrower than
+# the shapes Claude actually paints.
+#
+# Upstream has `model_picker_menu` (priority 900, skip_state_update), gated on
+# the literal trio "select model" + "enter to set as default" + "esc to cancel".
+# That is one spelling of one overlay. Claude Code 2.1.x renders the model
+# picker Sidecar captured (testdata/claude/overlay.txt) as "Select a model" over
+# an "Enter to select · Esc to close" footer, which carries none of those three
+# literals, so upstream classifies it from the title alone — `osc_title_idle`,
+# idle. An idle verdict on an overlay is not merely a wrong badge: the tracker
+# turns working → idle into a completed turn, so opening the model picker
+# mid-turn announces a completion that never happened. Sidecar's pre-manifest
+# rule (`claude.overlay.retain`) retained the prior state instead, and that is
+# the behaviour this rule carries forward.
+#
+# It is deliberately narrower than the rule it replaces. That one matched
+# `esc to close` anywhere in the last 24 lines; this one requires the hint to
+# close a line inside the bottom five non-empty lines, which is the same footer
+# shape upstream itself gates `btw_overlay_working` on. A turn that merely
+# prints the words in its output no longer freezes the badge.
+#
+# Priority 900 puts it in upstream's own overlay tier: below every blocker
+# (`live_blocked_form` 980, `bash_permission_prompt` 850 is lower but demands
+# "do you want to proceed?", which no overlay footer carries) and below
+# `live_prompt_box` (950), so a live prompt box still reads as idle; above
+# `osc_title_idle` (250), which is the verdict this rule exists to displace. It
+# also sits below `btw_overlay_working` (975), so upstream's decision that the
+# /btw overlay means *working* survives untouched.
+#
+# Delete this rule the day upstream's `model_picker_menu` grows the "esc to
+# close" footer, and the sync report's overlay-off comparison will say so.
+
+id = "claude"
+
+[[rules]]
+id = "sidecar.overlay_retain"
+state = "unknown"
+priority = 900
+region = "bottom_non_empty_lines(5)"
+skip_state_update = true
+line_regex = ['(?i)esc to close\s*$']
+# The same guards upstream puts on `model_picker_menu`, and for the same reason.
+# At priority 900 this rule outranks `bash_permission_prompt` (850) and
+# `generic_permission_prompt` (840), so without them a permission prompt that
+# happened to carry an "esc to close" footer would retain the prior state
+# instead of reporting a blocker — the one direction a retain rule must never
+# fail in, because a retained state has no expiry short of SkipRetentionCap.
+not = [
+  { contains = ["do you want to proceed?"] },
+  { contains = ["yes, allow"] },
+]
+
+# The tool-permission prompt Claude paints without the words upstream is gated
+# on.
+#
+#   Allow Claude to use WebFetch?
+#   ❯ 1. Yes, allow
+#     2. No, and tell Claude what to do differently
+#
+# There is no "do you want to proceed?" anywhere on it, which is the literal
+# every one of upstream's three permission rules requires: `bash_permission_prompt`
+# (850) and `generic_permission_prompt` (840) demand it outright, and
+# `legacy_no_prompt_blocker` (300) reaches it only through "do you want to" or
+# "would you like to". So an unanswered permission prompt falls all the way
+# through to `osc_title_idle` (250) — Claude's title is "✳ Claude Code" while it
+# waits — and reads as a visible idle, which the tracker turns into a completed
+# turn. The deleted `claude.screen.blocked` matched `Allow .*\?` and
+# "Yes, allow"; testdata/claude/allow_prompt.txt is the fixture.
+#
+# Both conditions are required together. "Yes, allow" alone appears in ordinary
+# transcript text about permissions, and a question beginning "Allow" alone is a
+# sentence Claude writes; the pair is the control line beside its own heading.
+# The heading pattern tolerates the box gutter Claude draws around the prompt,
+# which is why the anchor is "no letters before Allow, none after the question
+# mark" rather than "^\s*...\s*$": the row arrives right-trimmed but still
+# carries the box's closing gutter.
+#
+# Priority 845 sits between upstream's two "do you want to proceed?" prompts, so
+# a screen carrying both still reports through upstream's more specific rule.
+[[rules]]
+id = "sidecar.allow_prompt_blocker"
+state = "blocked"
+priority = 845
+region = "bottom_non_empty_lines(12)"
+visible_blocker = true
+contains = ["yes, allow"]
+line_regex = ['(?i)^[^\p{L}]*Allow\b[^\n]*\?[^\p{L}]*$']
+
+# The main loop parked on background subagents, which Claude Code 2.1.257 paints
+# in two places and upstream reads in neither of them.
+#
+# The capture (testdata/claude/waiting_background_agents.txt, a real 2.1.257 pane
+# reported by the user) is:
+#
+#   ✻ Waiting for 1 background agent to finish
+#                                     ✔ Update installed · Restart to update
+#   ──────────────────────────────────────────────────────────────────────────
+#   ❯
+#   ──────────────────────────────────────────────────────────────────────────
+#     ⏵⏵ auto mode on (shift+tab to cycle) · ← 3 agents · ↓ to manage
+#
+# Upstream has both signals and misses both. `background_agents_working` (965)
+# carries this exact waiting pattern but reads
+# `last_non_empty_above_prompt_box`, and on this screen that line is the update
+# banner. `background_shell_working` (965) reads the footer for `· N shells ·`,
+# and 2.1.257 spells the agents form of the same footer `· ← 3 agents ·`, with
+# an arrow and the word "agents". With neither firing the pane falls through to
+# `live_prompt_box` (950) — an *explicit visible* idle — and the tracker turns
+# a visible idle out of working into a completed turn. So a pane whose subagents
+# are still running announces that it is done, which is the exact failure this
+# whole plan opened with.
+#
+# The pattern is upstream's own, copied verbatim from `background_agents_working`
+# and re-anchored, because the disagreement is about the region and not about the
+# line. What is added is the bound: the waiting line must be the last non-empty
+# line above the prompt box, or the one before it. That is upstream's region
+# generalised by exactly one row, which is the row the capture shows, and it is
+# what stops a *previous* turn's waiting line from firing. `above_prompt_box` is
+# unbounded upward, and the capture itself carries two older
+# `✻ Waiting for 2 background agents to finish` lines further up its scrollback:
+# without the tail anchor this rule would keep reporting working over every turn
+# that followed them, and a working verdict has no expiry. Widen the one
+# intervening row only with a capture that needs it.
+#
+# Priority 966 rather than 965. The engine breaks a tie in favour of the rule it
+# reaches first, and the merged file is upstream's rules then the overlay's, so
+# at 965 this rule's verdict would depend on merge order rather than on the
+# manifest. 966 makes it deterministic while keeping it in upstream's own
+# background tier and below everything that matters: every blocker
+# (`live_blocked_form` 980, `dynamic_workflow_prompt` 980,
+# `mcp_elicitation_prompt` 980), `btw_overlay_working` (975),
+# `live_turn_working` (970) and `osc_title_working` (1100).
+#
+# The cost of 966 is worth stating, because it is the one place this rule
+# displaces upstream. On a screen where the waiting line *is* the last non-empty
+# row above the box, `background_agents_working` matches too and this rule
+# outranks it. Both report working with `visible_working`, so nothing a user or
+# the tracker sees changes; only the evidence string does. But
+# `scripts/herdr-diff.sh` compares a `sidecar.` rule's state against the verdict
+# Herdr reaches without the overlay and calls an equal one REDUNDANT, so a
+# fixture of that plain screen would fail the harness. If one is ever added, the
+# fix is to move this rule to 964 and let upstream report where it can see —
+# which is the convention the rest of these overlays follow — not to delete the
+# fixture. No such fixture exists today.
+#
+# Delete this rule the day upstream's `background_agents_working` reads more
+# than the single last non-empty line above the box.
+[[rules]]
+id = "sidecar.background_agents_waiting"
+state = "working"
+priority = 966
+region = "above_prompt_box"
+visible_working = true
+regex = ['(?m)^[ \t]*[\x{002A}\x{00B7}\x{2722}\x{2736}\x{273B}\x{273D}][ \t]+Waiting for [1-9][0-9]* background agents? to finish[ \t]*\n(?:[ \t]*\n)*(?:[^\n]*\n)?(?:[ \t]*\n)*\z']
+
+# The same signal read from the footer, which is where it survives after the
+# waiting line has scrolled out of the read window.
+#
+# This mirrors upstream's `background_shell_working` exactly — same region, same
+# priority tier, same `[⏸⏵]` footer anchor, same `· N <noun> ·` shape — and
+# differs only in the noun and in the arrow 2.1.257 draws before the count:
+# `· 1 shell ·` against `· ← 3 agents ·`. The arrow is optional in the pattern
+# because 2.1.220's footer (testdata/claude/background-agents.txt) writes
+# `· ← for agents ·` with no count at all, and that screen must *not* fire this
+# rule: a footer advertising the agents key is not a footer reporting live
+# agents. The `[1-9]` is what separates them.
+#
+# Priority 965 is upstream's own, deliberately: this rule is the weaker of the
+# pair, and where both it and `sidecar.background_agents_waiting` (966) match —
+# testdata/claude/waiting_background_agents.txt is such a screen — the rule
+# reading the transcript row rather than the footer is the better evidence.
+#
+# Delete it the day upstream's `background_shell_working` grows an agents form.
+[[rules]]
+id = "sidecar.background_agents_footer_working"
+state = "working"
+priority = 965
+region = "bottom_non_empty_lines(5)"
+visible_working = true
+line_regex = ['^\s*[⏸⏵].*·\s+←?\s*[1-9]\d*\s+agents?\s+(?:·|$)']
+
+# Upstream's rule, verbatim, with `visible_blocker = true` added.
+#
+# The engine takes the visible flags from the matched rule rather than from the
+# state, which is Herdr's semantics and is what the cutover adopted. Upstream
+# declares `legacy_no_prompt_blocker` blocked with no `visible_blocker`, so a
+# pane matching it lands on the blocked lane carrying no attention flag and the
+# surfaces that key an alert on `Tracker.VisibleBlocker` stay quiet. That is a
+# deliberate upstream choice — the rule is weak and high-recall, meant to
+# classify rather than to interrupt — and it is a behaviour change here: before
+# the cutover every blocked verdict Sidecar minted nagged. The screens this rule
+# is the last resort for are "waiting for permission", "do you want to …" and
+# "do you want to allow this connection?", which are questions a user has to
+# answer; a blocked lane nobody is told about is a pane sitting on a question.
+#
+# Nothing else about the rule is changed: same priority, same region, same
+# gates, same `not`. `scripts/herdr-diff.sh` therefore still requires this rule
+# to AGREE with Herdr on state and rule id — the harness does not compare the
+# visible flags — which is what keeps the copy honest against a re-sync.
+#
+# Delete this overlay if a captured screen shows the nag is wrong: a shape this
+# rule reaches that is not a question waiting on the user. testdata/claude/
+# legacy_permission_wait.txt is the fixture it is kept for.
+[[rules]]
+id = "legacy_no_prompt_blocker"
+state = "blocked"
+priority = 300
+region = "whole_recent"
+visible_blocker = true
+any = [
+  { contains = ["do you want to"], any = [{ contains = ["yes"] }, { contains = ["❯"] }] },
+  { contains = ["would you like to"], any = [{ contains = ["yes"] }, { contains = ["❯"] }] },
+  { contains = ["waiting for permission"] },
+  { contains = ["do you want to allow this connection?"] },
+  { contains = ["tab to amend"] },
+  { contains = ["ctrl+e to explain"] },
+  { contains = ["do you want to proceed?", "esc to cancel"] },
+  { contains = ["review your answers"] },
+  { contains = ["skip interview and plan immediately"] },
+]
+not = [
+  { regex = ['(?m)^\s*❯\s*$'] },
+]

@@ -1,0 +1,126 @@
+{
+  "schema_version": 1,
+  "generated_from": "src/detect/mod.rs",
+  "herdr_ref": "e2b85c7",
+  "agents": {
+    "agy": [
+      "agy",
+      "antigravity",
+      "antigravity-cli"
+    ],
+    "amp": [
+      "amp",
+      "amp-local"
+    ],
+    "claude": [
+      "claude",
+      "claude-code"
+    ],
+    "cline": [
+      "cline"
+    ],
+    "codex": [
+      "codex"
+    ],
+    "copilot": [
+      "copilot",
+      "ghcs",
+      "github-copilot"
+    ],
+    "cursor": [
+      "cursor",
+      "cursor-agent"
+    ],
+    "devin": [
+      "devin",
+      "devin cli",
+      "devin-cli"
+    ],
+    "droid": [
+      "droid"
+    ],
+    "gemini": [
+      "gemini"
+    ],
+    "grok": [
+      "grok",
+      "grok-build"
+    ],
+    "hermes": [
+      "hermes",
+      "hermes-agent"
+    ],
+    "kilo": [
+      "kilo",
+      "kilo code",
+      "kilo-code"
+    ],
+    "kimi": [
+      "kimi",
+      "kimi code",
+      "kimi-code"
+    ],
+    "kiro": [
+      "kiro",
+      "kiro-cli"
+    ],
+    "maki": [
+      "maki"
+    ],
+    "mastracode": [
+      "mastra code",
+      "mastra-code",
+      "mastracode"
+    ],
+    "muse": [
+      "muse",
+      "muse-cli",
+      "muse-code"
+    ],
+    "omp": [
+      "omp"
+    ],
+    "opencode": [
+      "open-code",
+      "opencode",
+      "opencode2"
+    ],
+    "pi": [
+      "pi"
+    ],
+    "qodercli": [
+      "qoder",
+      "qodercli",
+      "qoderclicn",
+      "qodercn"
+    ],
+    "qwen": [
+      "qwen",
+      "qwen code",
+      "qwen-code"
+    ]
+  },
+  "generic_runtimes": [
+    "bash",
+    "bun",
+    "cmd",
+    "fish",
+    "node",
+    "powershell",
+    "pwsh",
+    "sh",
+    "tmux",
+    "zsh"
+  ],
+  "python_runtime_rule": "python, or python\u003csegment\u003e[.\u003csegment\u003e...] where every dot-separated segment after the prefix is a non-empty run of ASCII digits (is_python_runtime)",
+  "versioned_binary_prefixes": {
+    "muse": "muse-bin-"
+  },
+  "normalized_suffixes": [
+    ".exe",
+    ".cmd",
+    ".bat",
+    ".ps1",
+    ".js"
+  ]
+}

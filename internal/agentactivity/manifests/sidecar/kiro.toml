@@ -1,0 +1,29 @@
+# Sidecar overlay for kiro.
+#
+# Sole purpose: carry an RE2 spelling of the one upstream rule Go's regexp
+# cannot compile. Rust's regex crate supports Unicode binary properties by
+# name, so upstream writes \p{Alphabetic}; RE2 supports only general
+# categories and scripts, so it rejects the pattern outright and the engine
+# would evaluate the rule as a permanent no-match.
+#
+# `Alphabetic` is `L + Nl + Other_Alphabetic`. RE2 has no Other_Alphabetic,
+# whose members are combining marks and a handful of symbols, so
+# [\p{L}\p{Nl}] is the closest sound rewrite. It differs from upstream only
+# for a word that *starts* with a combining mark, which no agent renders as
+# the first character of a status word. See
+# docs/reference/herdr-detection-parity.md ("Regex compatibility").
+#
+# The rule id matches upstream's, so this replaces that rule in place rather
+# than adding one. Delete this file the day upstream stops using the property
+# or RE2 grows it.
+
+id = "kiro"
+
+[[rules]]
+id = "tool_spinner_working"
+state = "working"
+priority = 90
+region = "whole_recent"
+visible_working = true
+contains = ["esc to cancel"]
+line_regex = ['^\s*(◔|◑|◕|●)\s+[\p{L}\p{Nl}]']
