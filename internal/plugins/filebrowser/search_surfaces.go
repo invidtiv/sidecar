@@ -18,7 +18,7 @@ import (
 // pointed at the current project. It shares the plugin's file cache, which the
 // tree search filters too, so a scan serves both.
 func (p *Plugin) fileFinder() *filefind.Finder {
-	root, epoch := p.contextRoot()
+	root, epoch := p.finderRoot()
 	if p.finder == nil {
 		p.finder = filefind.NewFinder(&p.quickOpen, root, epoch)
 		return p.finder
@@ -37,6 +37,22 @@ func (p *Plugin) projectSearchSurface() *projectsearch.Search {
 	p.projectSearch.SetRoot(root, epoch)
 	p.projectSearch.SetSize(p.width, p.height)
 	return p.projectSearch
+}
+
+// finderRoot is the root the find-by-name index belongs to. While bound it is
+// the host's, and the cache's scanner is the host's catalog verb — the finder
+// itself does not know or care which machine answered.
+//
+// It is deliberately not contextRoot: project search runs ripgrep on that
+// root, and a remote path handed to a local process is exactly the failure
+// this area exists to prevent.
+func (p *Plugin) finderRoot() (string, uint64) {
+	if !p.remoteBound() {
+		p.quickOpen.Scan = nil
+		return p.contextRoot()
+	}
+	p.quickOpen.Scan = p.scanRemoteCandidates
+	return p.remoteRoot(), p.ctx.Epoch
 }
 
 func (p *Plugin) contextRoot() (string, uint64) {

@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/app"
+	"github.com/marcus/sidecar/internal/contentpanes"
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/filefind"
@@ -154,6 +155,12 @@ type Plugin struct {
 	// bound tree can be proven without ssh or a second machine; production
 	// leaves it nil and treeSource builds one from the context.
 	treeSourceOverride TreeSource
+	// contentSourceOverride replaces the host document adapter, for the same
+	// reason and on the same terms.
+	contentSourceOverride contentpanes.Source
+	// previewRevisions is the last revision the host reported per path, so a
+	// re-read of an unchanged file is one round trip and no repaint.
+	previewRevisions map[string]string
 
 	// Pane state
 	activePane       FocusPane
@@ -897,7 +904,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			p.exitInlineEditMode()
 			// Refresh preview to show updated file
 			if editedFile != "" {
-				return p, LoadPreview(p.ctx.WorkDir, editedFile, p.ctx.Epoch)
+				return p, p.loadPreview(editedFile)
 			}
 			return p, p.refresh()
 		}
@@ -1071,7 +1078,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			p.previewFile = p.tabs[p.activeTab].Path
 			p.previewScroll = p.tabs[p.activeTab].Scroll
 			p.updateWatchedFile()
-			return p, LoadPreview(p.ctx.WorkDir, p.previewFile, p.ctx.Epoch)
+			return p, p.loadPreview(p.previewFile)
 		}
 
 		p.previewFile = ""
@@ -1082,6 +1089,25 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			return p, nil
 		}
 		return p, p.applyPreviewRefresh(msg)
+
+	case remotePreviewLoadedMsg:
+		// A host read is the same payload with a revision attached. Recording
+		// it and re-entering as the ordinary message is what keeps one preview
+		// pipeline rather than two.
+		if plugin.IsStale(p.ctx, msg) {
+			return p, nil
+		}
+		p.rememberPreviewRevision(msg.Msg.Path, msg.Revision)
+		return p.update(msg.Msg)
+
+	case remotePreviewUnchangedMsg:
+		// The pane already holds these bytes: no repaint, and the refresh gate
+		// still counts the read so a later signal is not reported as a change.
+		if plugin.IsStale(p.ctx, msg) {
+			return p, nil
+		}
+		p.rememberPreviewRevision(msg.Path, msg.Revision)
+		return p, nil
 
 	case PreviewLoadedMsg:
 		// Check for stale message from previous project context
@@ -1289,7 +1315,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		// Normal exit - refresh preview after editing
 		if msg.FilePath != "" {
-			return p, LoadPreview(p.ctx.WorkDir, msg.FilePath, p.ctx.Epoch)
+			return p, p.loadPreview(msg.FilePath)
 		}
 
 	case tea.KeyPressMsg:

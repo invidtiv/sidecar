@@ -36,6 +36,12 @@ type Cache struct {
 	// arriving while that scan is in flight re-sets it and the landing result
 	// cannot pass itself off as current.
 	Dirty bool
+
+	// Scan produces the path list. Nil walks this machine's filesystem, which
+	// is every local caller. A surface bound to another machine binds its own
+	// so the candidate list is that machine's files and this process never
+	// walks a same-named path here.
+	Scan func(root string, dirs bool) ([]string, string)
 }
 
 // Ensure starts a background scan of root's files when the cache is missing or
@@ -66,8 +72,12 @@ func (c *Cache) ensure(root string, epoch uint64, dirs bool) tea.Cmd {
 	// Everything the walk touches is passed by value: it loads its own gitignore
 	// rather than sharing a live tree's, whose match cache is not safe for
 	// concurrent use.
+	scan := c.Scan
+	if scan == nil {
+		scan = ScanPaths
+	}
 	return func() tea.Msg {
-		paths, errText := ScanPaths(root, dirs)
+		paths, errText := scan(root, dirs)
 		return ScannedMsg{Dirs: dirs, Files: paths, ErrText: errText, Epoch: epoch}
 	}
 }
@@ -85,5 +95,7 @@ func (c *Cache) Apply(msg ScannedMsg) {
 func (c *Cache) MarkDirty() { c.Dirty = true }
 
 // Reset drops the cache contents and all bookkeeping. Use it when the root
-// changes, e.g. on a project switch.
+// changes, e.g. on a project switch. The scanner goes with it: a cache that
+// kept a remote scanner across a switch back to a local project would answer
+// for the wrong machine.
 func (c *Cache) Reset() { *c = Cache{} }

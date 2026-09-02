@@ -198,3 +198,22 @@ func remoteTreeUnavailable(hostID, workspaceID string, verbs hostproto.VerbCapab
 	}
 	return ""
 }
+
+// remoteCatalogFiles is the host's find-by-name index, from the picker catalog
+// verb Sessions already uses. It is deliberately not derived from the tree: a
+// tree is only as complete as the directories the user happened to expand,
+// while the catalog is the host's own bounded, gitignore-filtered list.
+func remoteCatalogFiles(ctx context.Context, run func(context.Context, string, []string, any) error, hostID, workspaceID string) ([]string, error) {
+	if run == nil || hostID == "" || workspaceID == "" {
+		return nil, nil
+	}
+	args := []string{"content", "catalog", "--workspace", workspaceID, "--kind", contentservice.KindFile, "--json"}
+	var result contentservice.CatalogResult
+	if err := run(ctx, hostID, args, &result); err != nil {
+		return nil, err
+	}
+	if !result.ValidRemoteResult() {
+		return nil, fmt.Errorf("%s did not answer content catalog", hostID)
+	}
+	return result.Files, nil
+}

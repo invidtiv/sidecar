@@ -51,14 +51,19 @@ func (p *Plugin) refreshPreview() tea.Cmd {
 	if !p.previewLive.Begin(p.previewRefreshSuppressed()) {
 		return nil
 	}
-	path, workDir, epoch := p.previewFile, p.ctx.WorkDir, p.ctx.Epoch
-	load := LoadPreview(workDir, path, epoch)
+	path, epoch := p.previewFile, p.ctx.Epoch
+	load := p.loadPreview(path)
+	if load == nil {
+		return nil
+	}
 	return func() tea.Msg {
-		msg, ok := load().(PreviewLoadedMsg)
-		if !ok {
-			return nil
+		switch msg := load().(type) {
+		case PreviewLoadedMsg:
+			return previewRefreshedMsg{Path: path, Epoch: epoch, Result: msg.Result}
+		case remotePreviewLoadedMsg:
+			return previewRefreshedMsg{Path: path, Epoch: epoch, Result: msg.Msg.Result}
 		}
-		return previewRefreshedMsg{Path: path, Epoch: epoch, Result: msg.Result}
+		return nil
 	}
 }
 
