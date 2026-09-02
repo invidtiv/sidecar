@@ -222,6 +222,26 @@ func (h *loopbackHost) startHostSession(name string, extraEnv ...string) {
 	}
 }
 
+// managedShellEnv is the whole managed-shell environment contract, which the
+// fixture publishes itself and must therefore never inherit.
+//
+// Dropping only some of it is how this fixture used to fail for one developer
+// and pass for everyone else: run the suite from inside a Sidecar shell and
+// that shell's SIDECAR_TMUX_SERVER reached the host-local hook, which
+// lifecycleenv.Resolve correctly rejected as a claim that did not match the
+// fixture's own tmux server. The environment is a cue and tmux is the
+// authority, so a leaked cue is a real mismatch, not a false alarm — the fix
+// belongs here, in the fixture that should not have carried it.
+var managedShellEnv = []string{
+	shellstate.NameEnv,
+	shellstate.SessionEnv,
+	shellstate.ManagedEnv,
+	shellstate.ServerEnv,
+	shellstate.HostEnv,
+	shellstate.BinEnv,
+	shellstate.NamespaceEnv,
+}
+
 // processEnv is the environment a process running "on the host" gets. It is the
 // same set the registration carries, applied to a local exec.
 func (h *loopbackHost) processEnv() []string {
@@ -232,8 +252,9 @@ func (h *loopbackHost) processEnv() []string {
 		key, _, _ := strings.Cut(entry, "=")
 		drop[key] = true
 	}
-	drop["SIDECAR_SHELL"] = true
-	drop["SIDECAR_MANAGED_SHELL"] = true
+	for _, key := range managedShellEnv {
+		drop[key] = true
+	}
 	for _, entry := range env {
 		key, _, _ := strings.Cut(entry, "=")
 		if drop[key] {
@@ -1346,6 +1367,19 @@ func (h *loopbackHost) panePID(session string) string {
 	return strings.TrimSpace(string(out))
 }
 
+// serverPID is the pid of the fixture's own tmux server, as a managed shell's
+// SIDECAR_TMUX_SERVER carries it.
+func (h *loopbackHost) serverPID() string {
+	h.t.Helper()
+	cmd := exec.Command("tmux", "-S", h.hostSocket, "display-message", "-p", "#{pid}")
+	cmd.Env = h.processEnv()
+	out, err := cmd.Output()
+	if err != nil {
+		h.t.Fatalf("host tmux server pid: %v", err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // localAsHook runs a lifecycle verb the way a provider hook does: on the host,
 // with the managed-shell environment the pane carries.
 func (h *loopbackHost) localAsHook(paneID, session string, args ...string) runResult {
@@ -1355,6 +1389,10 @@ func (h *loopbackHost) localAsHook(paneID, session string, args ...string) runRe
 	cmd.Env = append(h.processEnv(),
 		shellstate.ManagedEnv+"=1",
 		shellstate.SessionEnv+"="+session,
+		// The real thing carries the server it was created under, and
+		// lifecycleenv verifies it against the live server. Publishing the
+		// fixture's own PID keeps that check exercised rather than skipped.
+		shellstate.ServerEnv+"="+h.serverPID(),
 		"TMUX_PANE="+paneID,
 	)
 	cmd.Dir = h.hostWork
