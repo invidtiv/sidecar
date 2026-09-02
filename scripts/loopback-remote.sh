@@ -4,7 +4,7 @@
 # Two isolated Sidecar trees on this machine, joined by scripts/loopback-ssh.sh.
 # No named workstation, no live ~/.local/state/sidecar, no default tmux server.
 #
-#   ./scripts/loopback-remote.sh up [--delay 40ms] [--no-drive]
+#   ./scripts/loopback-remote.sh up [--delay 40ms] [--no-drive] [--quiet-banner]
 #   ./scripts/loopback-remote.sh paths
 #   ./scripts/loopback-remote.sh status
 #   ./scripts/loopback-remote.sh down
@@ -418,8 +418,15 @@ cmd_down() {
     echo "loopback down"
 }
 
+# --quiet-banner drops the fake ssh's stdout banner for this run.
+#
+# The `host serve` stream has no banner tolerance (td-055768), so a fixture that
+# always prints one can never reach `online` and the TUI half of the loopback
+# journeys cannot be driven at all. Pass it to drive the TUI, and know that it
+# hides exactly the failure a real chatty login shell produces. When td-055768
+# lands, delete the flag: the banner is the regression test.
 cmd_up() {
-    local delay="" delay_sec="" no_drive=0
+    local delay="" delay_sec="" no_drive=0 quiet_banner=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --delay)
@@ -434,9 +441,13 @@ cmd_up() {
                 no_drive=1
                 shift
                 ;;
+            --quiet-banner)
+                quiet_banner=1
+                shift
+                ;;
             *)
                 echo "unknown flag: $1" >&2
-                echo "usage: $0 up [--delay 40ms] [--no-drive]" >&2
+                echo "usage: $0 up [--delay 40ms] [--no-drive] [--quiet-banner]" >&2
                 exit 2
                 ;;
         esac
@@ -507,6 +518,7 @@ cmd_up() {
         SIDECAR_BIN="$BIN" \
         SIDECAR_DRIVE_REPO="$VIEWER_PROJECT_CANON" \
         SIDECAR_LOOPBACK_SSH_DELAY="${delay_sec:-}" \
+        SIDECAR_LOOPBACK_SSH_QUIET="$([ "$quiet_banner" -eq 1 ] && echo 1 || echo "")" \
         SIDECAR_ISOLATED_STATE=1 \
             "$DRIVE" start
         echo "loopback up at $ROOT"

@@ -8,14 +8,24 @@
 # /bin/sh re-parse the quoting.
 #
 # Environment:
+#   SIDECAR_LOOPBACK_SSH_QUIET  suppress the stdout banner (see below)
 #   SIDECAR_LOOPBACK_SSH_DELAY  spawn delay before the command (Go duration or seconds)
 #   SIDECAR_LOOPBACK_SSH_EXIT   when set, print a version-skew-style refusal after
 #                               the banners and exit with that code (no command)
 
 # A login profile that prints on both pipes is the first thing a real host
-# does, and it is what the banner-tolerant decoder and the stderr envelope
+# does, and it is what the run-verb banner recovery and the stderr envelope
 # recovery exist for. Emit one on each, every time.
-printf 'Welcome to loopback -- stdout banner\n'
+#
+# SIDECAR_LOOPBACK_SSH_QUIET drops the STDOUT banner only. It exists for one
+# reason: the `host serve` stream has no banner tolerance (td-055768), so a
+# fixture that always prints one can never reach `online`, and the TUI half of
+# the loopback journeys cannot be driven at all. Set it to drive the TUI, and
+# understand that doing so hides the very failure a real chatty host produces.
+# Delete this switch when td-055768 lands; the banner is the regression test.
+if [ -z "${SIDECAR_LOOPBACK_SSH_QUIET:-}" ]; then
+    printf 'Welcome to loopback -- stdout banner\n'
+fi
 printf 'Last login: Tue -- stderr banner\n' >&2
 
 loopback_delay_seconds() {

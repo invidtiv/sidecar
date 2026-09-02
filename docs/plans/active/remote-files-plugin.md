@@ -1,6 +1,6 @@
 # Files on a remote-bound project
 
-Status: **active; nothing implemented.** This is slice 4 of [Remote destinations in `@` and `W`](remote-project-switcher.md), split out because it adds a host verb and a plugin-wide source seam rather than a landing rule. **Created:** 2026-09-01 **Verified against the tree on 2026-09-01.**
+Status: **active; slices 4a–4e implemented** on `remote-viewer-screen` (td-bc57bb: td-ce0701, td-33dd8a, td-4ff672, td-635f93, td-cea79d). This is slice 4 of [Remote destinations in `@` and `W`](remote-project-switcher.md), split out because it adds a host verb and a plugin-wide source seam rather than a landing rule. **Created:** 2026-09-01 **Verified against the tree on 2026-09-01.**
 
 Related: [Sidecar as its own remote host runtime](sidecar-remote-hosts.md) is the ssh transport and the `hostproto` hello. [Remote host content-pane parity](../implemented/remote-host-content-pane-parity.md) is the `contentpanes.Source` read path this plan reuses for previews. [The viewer owns the screen](../implemented/remote-host-viewer-screen.md) is the lease.
 
@@ -42,13 +42,15 @@ A refusal that names the host is a finished state, not a gap. A tree that silent
 
 ## Current behavior
 
-`internal/plugins/filebrowser` refuses wholesale while `ctx.HostID != ""`, at six points: `Init` returns after clearing state without building a tree (`plugin.go:409`), `Start` returns nil (`plugin.go:457`), `refresh` returns nil (`plugin.go:693`), `Update` swallows every message (`plugin.go:814`), `Commands` returns nil (`plugin.go:1312`), and `View` paints `plugin.FormatRemoteUnavailable` (`view.go:61`).
+`sidecar content tree --workspace ID [--path REL]... --json` (`internal/contentservice/tree.go`, `internal/cli/content.go`) lists one or more directories under a durable workspace identity. `--path` is repeatable and `.` names the root. Entries carry name, directory and symlink flags, git's ignored verdict, size, and mtime; symlinks are not followed. A path that escapes the root fails the whole call; a directory that has gone missing is reported on that directory alone. `MaxTreePaths` bounds one request and `MaxTreeEntries` bounds one listing, and `EncodeTreeResult` halves the largest listing until the payload fits `MaxEncodedBytes`. Hosts advertise it as `ContentTreeV1` (`internal/hostserve/serve.go`).
 
-`FileTree.loadChildren` (`internal/plugins/filebrowser/tree.go:142`) is the plugin's only filesystem read for structure: `os.ReadDir` plus `entry.Info()` plus the gitignore matcher. `BuildTree(BuildSpec)` already runs off the UI goroutine and shares no state with the rendered tree, which is what makes a network round trip acceptable in that position. Previews load through `filepreview.LoadPreview(rootDir, path, epoch)` and arrive as `filepreview.PreviewLoadedMsg{Epoch, Path, Result}`.
+`FileTree` lists through `TreeSource` (`internal/plugins/filebrowser/tree_source.go`): `localTreeSource` reads this machine, `remoteTreeSource` runs the host verb over `ctx.RemoteRunner`. `BuildTree` prefetches the root plus every remembered expanded path in one `ListDirs` call and `loadChildren` consumes it, falling back to a single-path call for a directory the user expands later. Everything above the seam — sorting, flattening, expansion memory, hiding OS clutter, the cursor, the view — is unchanged and cannot tell which machine answered.
 
-`sidecar content` (`internal/cli/content.go`) has `describe`, `resolve`, `catalog`, and `read`. `catalog --kind file` returns a flat gitignore-filtered path list from `filefind.ScanPaths`. There is no directory listing and no entry metadata. Hosts advertise `ContentReadV1` and `UIRequestRelayV1` in `serveVerbCapabilities` (`internal/hostserve/serve.go:604`).
+`plugin.Context` carries `HostID`, `HostIncarnation`, `ProjectKey`, `HostWorktreeKey`, `HostWorkspaces`, `RemoteControlSpawner`, `RemoteRunner`, `HostVerbs`, and `HostShows`; `ReinitHost` takes a `plugin.HostBind`. The plugin composes `projectKey:worktree:key` from those rather than remembering a workspace id.
 
-`plugin.Context` carries `HostID`, `HostIncarnation`, `ProjectKey`, `HostWorkspaces`, `RemoteControlSpawner`, `RemoteRunner`, and `HostVerbs`. It does not carry the bound worktree, so a plugin cannot currently name the workspace it should browse.
+Previews go through `p.loadPreview` (`remote_preview.go`): local keeps `filepreview.LoadPreview`, bound reads `contentpanes.Source.LoadDocument` with the remembered revision and produces the same `PreviewLoadedMsg`. Find-by-name binds `filefind.Cache.Scan` to `content catalog --kind file`, cleared the moment the surface is local again.
+
+Writes, blame, file info, project search, and reveal-in-file-manager answer from `remoteRefusals` (`remote_refusals.go`) naming the host; drag-to-move is refused at the arm; `Commands()` returns the reachable subset of the local set. A bound Files starts no watcher and refreshes on `plugin.HostInventoryMsg` — now broadcast to every bound plugin — and on `r`.
 
 ## Settled decisions
 
@@ -72,16 +74,17 @@ A refusal that names the host is a finished state, not a gap. A tree that silent
 
 10. **Git decoration is out of scope.** The tree carries no git status today, so nothing is lost. When the Git plugin's own slice adds a host status verb, the tree can decorate from it.
 
-## Open questions
+## Settled while implementing
 
-- **Per-directory entry cap.** `content read` is capped under 768KiB of encoded JSON. A directory with tens of thousands of entries needs its own bound and a `truncated` flag the tree can render honestly. The number is not settled; pick it when the wire type is written, and make it a named constant with the reason in its comment.
-- **Symlink presentation.** The local tree follows `os.ReadDir`'s `IsDir` and does not distinguish a symlink. Whether the remote listing reports symlinks separately is worth deciding at the wire type rather than inheriting an accident.
+- **Per-directory entry cap.** `MaxTreeEntries` is 5000 with the reason in its comment: a directory that large is not navigable in a tree pane, and a truncated listing the viewer can label beats a payload that pushes the call past `MaxEncodedBytes` and returns nothing.
+- **Symlinks are reported distinctly.** `Dir` follows `os.ReadDir`, so a symlink to a directory is a `Symlink` and not a `Dir`, and the listing does not follow links. A viewer cannot be walked out of the workspace by one.
+- **Presentation stays with the viewer.** The host reports what is on disk and what git ignores. Which entries a tree hides (`isSystemFile`) and how they sort are the file browser's rules, applied once to either source rather than half on each side of the wire.
 
 ## Slices
 
 Each sub-slice is independently testable and leaves the tree in a shippable state. Every commit references its td task.
 
-### 4a — the `content tree` host verb
+### 4a — the `content tree` host verb — implemented (`332f24bd`, td-ce0701)
 
 `internal/contentservice`: a `Tree` method over one or more relative paths under a workspace root, returning per-path entry listings with name, directory flag, size, modification time, ignored flag, and a per-listing truncation flag. Containment is enforced the way the other verbs enforce it: a path that escapes the workspace root is rejected, not clamped.
 
@@ -91,7 +94,7 @@ Each sub-slice is independently testable and leaves the tree in a shippable stat
 
 Proof: contentservice unit tests for containment, ignored marking, a truncated directory, and an unknown workspace; CLI tests for the JSON contract and each exit code.
 
-### 4b — the tree source seam and a remote tree
+### 4b — the tree source seam and a remote tree — implemented (`908acc25`, td-33dd8a)
 
 `internal/plugins/filebrowser`: a `TreeSource` interface consumed by `BuildSpec` / `loadChildren`, a local implementation that is today's code moved rather than rewritten, and a remote implementation over `ctx.RemoteRunner` gated on `ctx.HostVerbs().ContentTreeV1`.
 
@@ -101,13 +104,13 @@ Proof: contentservice unit tests for containment, ignored marking, a truncated d
 
 Proof: a bound plugin with a fake `TreeSource` builds and expands aerie's tree; a local twin directory containing `LOCAL-TWIN` is present on disk and never appears; a host without `ContentTreeV1` refuses naming the host; expanding an unfetched directory issues exactly one listing call.
 
-### 4c — remote previews and find-by-name
+### 4c — remote previews and find-by-name — implemented (`f3831e59`, td-4ff672)
 
 Preview loading becomes source-aware: local keeps `filepreview.LoadPreview`; bound produces the same `PreviewLoadedMsg` from `contentpanes.Source.LoadDocument`, carrying `IfRevision` so a refresh is one round trip. Quick open's candidate list comes from `content catalog --kind file` while bound.
 
 Proof: the preview pane shows `REMOTE-MARKER` and never `LOCAL-TWIN` for a twin path; a `notModified` answer leaves the rendered content in place; quick open lists the host's paths.
 
-### 4d — honest refusals for everything else
+### 4d — honest refusals for everything else — implemented (`a40e5a6d`, td-635f93)
 
 Narrow the blanket refusal to the gestures with no host verb, each answering with text naming the host: file operations, drag-drop, inline edit, external editor, blame, project content search. `Commands()` returns the reachable subset while bound rather than nil, so the footer tells the truth about what this surface can do.
 
@@ -115,16 +118,27 @@ Tree refresh binds to the host snapshot generation already delivered in project 
 
 Proof: each refused gesture is asserted to name the host and to leave both filesystems untouched; no `startWatcher` while bound.
 
-### 4e — proof and docs
+### 4e — proof and docs — implemented (td-cea79d)
 
-The slice 2.5 loopback fixture is the default proof: `./scripts/loopback-remote.sh up`, bind `[loopback] Loopback`, and confirm the tree, a preview, a refused write, and that the local twin is never shown. `docs/reference/cli.md` documents `content tree`. The controlling plan's slice 4 row moves to implemented.
+Run on the slice 2.5 loopback fixture. `docs/reference/cli.md` documents `content tree`.
+
+```bash
+./scripts/loopback-remote.sh up --quiet-banner
+# 8 (Sessions) until loopback is LIVE, then @ -> [loopback] Loopback -> 3 (Files)
+./scripts/loopback-remote.sh down
+```
+
+Observed: `@` lists `[loopback] Loopback` beside the unprefixed local twin; binding it shows the host's shells and worktrees; Files lists the host tree; `twin.txt` previews `REMOTE-MARKER` and never the viewer's `LOCAL-TWIN`; `D` answers `deleting is unavailable on [loopback]` and leaves both checkouts untouched; the footer offers only Find / Tab+ / Filter / Close; `ctrl+p` finds `twin.txt` from the host catalog. Nothing under `~/.local/state/sidecar` or `~/.config/sidecar` was written.
+
+`--quiet-banner` is required today and is not part of this plan's contract: the `host serve` stream has no banner tolerance (**td-055768**), so the fixture's deliberate stdout banner leaves the host permanently `not-protocol` and no remote row ever appears. Delete the flag when that lands — the banner is the regression test.
 
 ## Proof and isolation
 
-Same bar as every slice before it: private tmux sockets and private Sidecar state on both sides, `SIDECAR_ISOLATED_STATE=1`, no live workstation as a default. The specific tripwire this plan owes is the twin: the fixture plants a same-named project on the viewer with `LOCAL-TWIN` content, and a test that passes while showing those bytes has failed regardless of what it asserted.
+Same bar as every slice before it: private tmux sockets and private Sidecar state on both sides, `SIDECAR_ISOLATED_STATE=1`, no live workstation as a default. The specific tripwire this plan owes is the twin: the fixture plants a same-named project on the viewer with `LOCAL-TWIN` content, and a test that passes while showing those bytes has failed regardless of what it asserted. `internal/plugins/filebrowser` carries that tripwire as a unit test — a real twin directory on disk that the bound tree must never list.
 
 Packages: `internal/contentservice`, `internal/cli`, `internal/hostserve`, `internal/hostproto`, `internal/plugin`, `internal/plugins/filebrowser`, `internal/app`.
 
 ## Changelog
 
+- **2026-09-01** — Slices 4a–4e implemented. Proof run on the loopback fixture; it needed `--quiet-banner` because the serve stream cannot skip a login banner (td-055768), which is filed against the transport rather than fixed here.
 - **2026-09-01** — Created. Split out of remote-project-switcher.md slice 4 once it was clear Files needs a new host verb (`content tree`), a plugin-context addition (the bound worktree key), and a source seam at `loadChildren`, rather than a landing rule.
