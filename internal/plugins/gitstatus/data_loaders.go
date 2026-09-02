@@ -33,6 +33,40 @@ func (p *Plugin) fetchPatch(req DiffRequest) func() (RepoDiff, error) {
 	}
 }
 
+// fetchHistory is the one place a page of the log is read, and fetchRefs the
+// one place branches and stashes are. Both resolve the source when the command
+// is built, the way fetchPatch does, so a loader cannot reach past the seam.
+func (p *Plugin) fetchHistory(req HistoryRequest) func() (RepoHistory, error) {
+	source := p.repoSource()
+	return func() (RepoHistory, error) {
+		if source == nil {
+			return RepoHistory{}, errNoRepoSource
+		}
+		return source.History(context.Background(), req)
+	}
+}
+
+func (p *Plugin) fetchRefs() func() (RepoRefs, error) {
+	source := p.repoSource()
+	return func() (RepoRefs, error) {
+		if source == nil {
+			return RepoRefs{}, errNoRepoSource
+		}
+		return source.Refs(context.Background())
+	}
+}
+
+// historyPageRequest is where the viewer is in the log, said in both of the
+// ways a source may understand it: the rows already in hand, and the hash of
+// the last of them. See HistoryRequest.
+func (p *Plugin) historyPageRequest() HistoryRequest {
+	req := HistoryRequest{Limit: commitHistoryPageSize, Skip: len(p.recentCommits)}
+	if n := len(p.recentCommits); n > 0 {
+		req.Cursor = p.recentCommits[n-1].Hash
+	}
+	return req
+}
+
 // loadDiff loads the diff for a file.
 func (p *Plugin) loadDiff(path string, staged bool, status FileStatus) tea.Cmd {
 	requestID := p.nextPreviewID()
@@ -65,14 +99,16 @@ func (p *Plugin) loadInlineDiff(path string, staged bool, status FileStatus) tea
 	}
 }
 
-// loadRecentCommits loads recent commits for the sidebar with push status.
-// Also kicks off a separate total-commit-count load so a slow rev-list on a
-// huge monorepo cannot delay the commit list paint.
+// loadRecentCommits loads the first page of commits for the sidebar, from
+// whichever machine owns this project.
+//
+// It also kicks off a separate total-commit-count load so a slow rev-list on a
+// huge monorepo cannot delay the commit list paint. That count is a local
+// rev-list with no host verb behind it, and a bound pane has no directory to
+// run it in, so a bound header shows the page it has rather than a total it
+// would have to guess.
 func (p *Plugin) loadRecentCommits() tea.Cmd {
-	if p.ctx != nil && p.ctx.HostID != "" {
-		return nil
-	}
-	if p.repoRoot == "" {
+	if p.repoSource() == nil {
 		return nil
 	}
 	if p.activeHistoryRequestID != 0 {
@@ -83,17 +119,13 @@ func (p *Plugin) loadRecentCommits() tea.Cmd {
 	requestID := p.nextHistoryRequestID
 	p.activeHistoryRequestID = requestID
 	epoch := p.ctx.Epoch
-	workDir := p.repoRoot
-	loader := p.historyLoader
-	if loader == nil {
-		loader = GetCommitHistoryWithPushStatus
-	}
+	fetch := p.fetchHistory(HistoryRequest{Limit: commitHistoryPageSize})
 	historyCmd := func() tea.Msg {
-		commits, pushStatus, err := loader(workDir, commitHistoryPageSize)
+		page, err := fetch()
 		if err != nil {
 			return RecentCommitsLoadedMsg{Epoch: epoch, RequestID: requestID, Err: err}
 		}
-		return RecentCommitsLoadedMsg{Epoch: epoch, RequestID: requestID, Commits: commits, PushStatus: pushStatus}
+		return RecentCommitsLoadedMsg{Epoch: epoch, RequestID: requestID, Commits: page.Commits, PushStatus: page.Push}
 	}
 	return tea.Batch(historyCmd, p.loadCommitCount())
 }
@@ -131,32 +163,34 @@ func (p *Plugin) loadMoreCommits() tea.Cmd {
 	p.loadingMoreCommits = true
 
 	epoch := p.ctx.Epoch
-	workDir := p.repoRoot
-	skip := len(p.recentCommits)
+	fetch := p.fetchHistory(p.historyPageRequest())
 	return func() tea.Msg {
-		commits, pushStatus, err := GetCommitHistoryWithPushStatusOffset(workDir, commitHistoryPageSize, skip)
+		page, err := fetch()
 		if err != nil {
 			return MoreCommitsLoadedMsg{Epoch: epoch, Commits: nil, PushStatus: nil}
 		}
-		return MoreCommitsLoadedMsg{Epoch: epoch, Commits: commits, PushStatus: pushStatus}
+		return MoreCommitsLoadedMsg{Epoch: epoch, Commits: page.Commits, PushStatus: page.Push}
 	}
 }
 
 // loadFilteredCommits fetches commits with current filter options.
+//
+// Author and path go to the source, not to the rows in hand: a filter applied
+// to one page would narrow what is on screen while presenting itself as an
+// answer about the whole history.
 func (p *Plugin) loadFilteredCommits() tea.Cmd {
 	epoch := p.ctx.Epoch
-	workDir := p.repoRoot
-	opts := HistoryFilterOpts{
+	fetch := p.fetchHistory(HistoryRequest{
 		Author: p.historyFilterAuthor,
 		Path:   p.historyFilterPath,
 		Limit:  50,
-	}
+	})
 	return func() tea.Msg {
-		commits, pushStatus, err := GetCommitHistoryFilteredWithPushStatus(workDir, opts)
+		page, err := fetch()
 		if err != nil {
 			return FilteredCommitsLoadedMsg{Epoch: epoch, Commits: nil, PushStatus: nil}
 		}
-		return FilteredCommitsLoadedMsg{Epoch: epoch, Commits: commits, PushStatus: pushStatus}
+		return FilteredCommitsLoadedMsg{Epoch: epoch, Commits: page.Commits, PushStatus: page.Push}
 	}
 }
 
@@ -291,9 +325,12 @@ func (p *Plugin) loadCommitDetailForPreview(hash string) tea.Cmd {
 	requestID := p.nextPreviewID()
 	p.commitPreviewRequestID = requestID
 	epoch := p.ctx.Epoch
-	workDir := p.repoRoot
+	source := p.repoSource()
 	return func() tea.Msg {
-		commit, err := GetCommitDetail(workDir, hash)
+		if source == nil {
+			return CommitPreviewLoadedMsg{Epoch: epoch, RequestID: requestID, Err: errNoRepoSource}
+		}
+		commit, err := source.CommitDetail(context.Background(), hash)
 		if err != nil {
 			return CommitPreviewLoadedMsg{Epoch: epoch, RequestID: requestID, Err: err}
 		}

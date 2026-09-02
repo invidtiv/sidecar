@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/modal"
+	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/ui"
@@ -97,16 +98,16 @@ func (p *Plugin) doSwitchBranch(branchName string) tea.Cmd {
 	}
 }
 
-// loadBranches loads the branch list.
+// loadBranches loads the branch list from whichever machine owns this project.
 func (p *Plugin) loadBranches() tea.Cmd {
 	epoch := p.ctx.Epoch
-	workDir := p.repoRoot
+	fetch := p.fetchRefs()
 	return func() tea.Msg {
-		branches, err := GetBranches(workDir)
+		refs, err := fetch()
 		if err != nil {
 			return BranchErrorMsg{Epoch: epoch, Err: err}
 		}
-		return BranchListLoadedMsg{Epoch: epoch, Branches: branches}
+		return BranchListLoadedMsg{Epoch: epoch, Branches: refs.Branches}
 	}
 }
 
@@ -222,7 +223,14 @@ func (p *Plugin) branchPickerListUpdate(msg tea.Msg, focusID string) (string, te
 
 func (p *Plugin) branchPickerHintsSection() modal.Section {
 	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
-		return modal.RenderedSection{Content: styles.Muted.Render("  Enter to switch, j/k to navigate, Esc to cancel")}
+		hint := "  Enter to switch, j/k to navigate, Esc to cancel"
+		if p.remoteBound() {
+			// The picker is listing another machine's branches, and a checkout
+			// there is a write nothing here performs. The hint says so rather
+			// than offering a gesture that refuses.
+			hint = "  Listing [" + p.ctx.HostID + "] — switching is refused. j/k to navigate, Esc to close"
+		}
+		return modal.RenderedSection{Content: styles.Muted.Render(hint)}
 	}, nil)
 }
 
@@ -263,6 +271,12 @@ func (p *Plugin) switchBranchByIndex(idx int) tea.Cmd {
 	branch := p.branches[idx]
 	if branch.IsCurrent {
 		return nil
+	}
+	if p.remoteBound() {
+		// The picker lists the host's branches and stops there: a checkout is a
+		// write on another machine, and this build owns no host verb that
+		// performs one. Nothing moves on either side.
+		return appmsg.ShowFlash("Switching to " + branch.Name + " is refused: [" + p.ctx.HostID + "] is read-only from here")
 	}
 	return p.doSwitchBranch(branch.Name)
 }

@@ -380,7 +380,7 @@ func (p *Plugin) Start() tea.Cmd {
 	if p.remoteBound() {
 		// A bound pane has no repository to discover: the host owns it, and the
 		// only question is whether this Sidecar can read it.
-		return p.refresh()
+		return p.reload()
 	}
 	// Repository discovery invokes Git, so it must remain inside the command.
 	// Existing repositories are never mutated merely by opening Sidecar.
@@ -609,67 +609,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, nil
 
 	case RecentCommitsLoadedMsg:
-		if plugin.IsStale(p.ctx, msg) || msg.RequestID != p.activeHistoryRequestID {
-			return p, nil // Ignore stale message from previous project
-		}
-		p.activeHistoryRequestID = 0
-		if msg.Err != nil {
-			p.historyError = msg.Err.Error()
-		} else {
-			p.historyError = ""
-		}
-		var historyFollowUp tea.Cmd
-		if p.historyRefreshDirty {
-			p.historyRefreshDirty = false
-			historyFollowUp = p.loadRecentCommits()
-		}
-		if msg.Commits == nil {
-			if msg.PushStatus != nil {
-				p.pushStatus = msg.PushStatus
-				PopulatePushStatus(p.recentCommits, p.pushStatus)
-			}
-			return p, historyFollowUp
-		}
-
-		p.moreCommitsAvailable = len(msg.Commits) >= commitHistoryPageSize
-
-		// Determine which commit hash to restore cursor to
-		// Priority: pushPreservedCommitHash (set before push) > computed from current state
-		prevCommitHash := p.pushPreservedCommitHash
-		if prevCommitHash == "" && !p.historyFilterActive && p.cursorOnCommit() {
-			commits := p.activeCommits()
-			commitIdx := p.selectedCommitIndex()
-			if commitIdx >= 0 && commitIdx < len(commits) {
-				prevCommitHash = commits[commitIdx].Hash
-			}
-		}
-		// Clear the preserved hash after use
-		p.pushPreservedCommitHash = ""
-
-		p.recentCommits = mergeRecentCommits(p.recentCommits, msg.Commits)
-		p.pushStatus = msg.PushStatus
-		PopulatePushStatus(p.recentCommits, p.pushStatus)
-		// Recompute graph for new commits
-		if p.showCommitGraph && len(p.recentCommits) > 0 {
-			p.commitGraphLines = ComputeGraphForCommits(p.recentCommits)
-		}
-		if prevCommitHash != "" {
-			if idx := indexOfCommitHash(p.recentCommits, prevCommitHash); idx >= 0 {
-				p.cursor = len(p.tree.AllEntries()) + idx
-			}
-		}
-		if !p.historyFilterActive {
-			p.clampCommitScroll()
-		}
-		// Clamp cursor to valid range if commits changed
-		maxCursor := p.totalSelectableItems() - 1
-		if maxCursor < 0 {
-			maxCursor = 0
-		}
-		if p.cursor > maxCursor {
-			p.cursor = maxCursor
-		}
-		return p, tea.Batch(p.ensureCommitListFilled(), historyFollowUp)
+		return p, p.applyRecentCommits(msg)
 
 	case CommitCountLoadedMsg:
 		if plugin.IsStale(p.ctx, msg) || msg.RequestID != p.activeCountRequestID {
@@ -688,46 +628,10 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, countFollowUp
 
 	case MoreCommitsLoadedMsg:
-		if plugin.IsStale(p.ctx, msg) {
-			return p, nil // Ignore stale message from previous project
-		}
-		p.loadingMoreCommits = false
-		if len(msg.Commits) > 0 {
-			if len(msg.Commits) < commitHistoryPageSize {
-				p.moreCommitsAvailable = false
-			}
-			p.recentCommits = append(p.recentCommits, msg.Commits...)
-			// Recompute entire graph when commits are added
-			if p.showCommitGraph {
-				commits := p.activeCommits()
-				p.commitGraphLines = ComputeGraphForCommits(commits)
-			}
-			return p, p.ensureCommitListFilled()
-		}
-		p.moreCommitsAvailable = false
-		return p, nil
+		return p, p.applyMoreCommits(msg)
 
 	case FilteredCommitsLoadedMsg:
-		if plugin.IsStale(p.ctx, msg) {
-			return p, nil // Ignore stale message from previous project
-		}
-		if msg.Commits != nil {
-			p.filteredCommits = msg.Commits
-			p.pushStatus = msg.PushStatus
-			// Recompute graph for filtered commits
-			if p.showCommitGraph && len(p.filteredCommits) > 0 {
-				p.commitGraphLines = ComputeGraphForCommits(p.filteredCommits)
-			} else if len(p.filteredCommits) == 0 {
-				p.commitGraphLines = nil // Clear graph cache
-			}
-			// Reset cursor to first commit when filter applied
-			entries := p.tree.AllEntries()
-			if len(p.filteredCommits) > 0 {
-				p.cursor = len(entries)
-				p.commitScrollOff = 0
-			}
-		}
-		return p, nil
+		return p, p.applyFilteredCommits(msg)
 
 	case CommitStatsLoadedMsg:
 		if plugin.IsStale(p.ctx, msg) {
@@ -750,39 +654,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, nil
 
 	case CommitPreviewLoadedMsg:
-		if plugin.IsStale(p.ctx, msg) || msg.RequestID != p.commitPreviewRequestID {
-			return p, nil // Ignore stale message from previous project
-		}
-		if msg.Err != nil {
-			p.previewCommit = nil
-			p.previewCommitError = msg.Err.Error()
-			return p, func() tea.Msg {
-				return app.ToastMsg{Message: "Commit preview failed: " + msg.Err.Error(), Duration: 4 * time.Second, IsError: true}
-			}
-		}
-		// Commit preview loaded for right pane (in status view)
-		p.previewCommit = msg.Commit
-		p.previewCommitError = ""
-		p.previewCommitCursor = 0
-		p.previewCommitScroll = 0
-		p.commitBodyExpanded = false
-		p.commitBodyScroll = 0
-		// Copy stats to the commit in the list for inline display
-		if msg.Commit != nil {
-			for _, c := range p.recentCommits {
-				if c.Hash == msg.Commit.Hash {
-					c.Stats = msg.Commit.Stats
-					break
-				}
-			}
-			for _, c := range p.filteredCommits {
-				if c.Hash == msg.Commit.Hash {
-					c.Stats = msg.Commit.Stats
-					break
-				}
-			}
-		}
-		return p, nil
+		return p, p.applyCommitPreview(msg)
 
 	case PushSuccessMsg:
 		if plugin.IsStale(p.ctx, msg) {
@@ -834,14 +706,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		if plugin.IsStale(p.ctx, msg) {
 			return p, nil // Ignore stale message from previous project
 		}
-		p.branches = msg.Branches
-		// Position cursor on current branch
-		for i, b := range p.branches {
-			if b.IsCurrent {
-				p.branchCursor = i
-				break
-			}
-		}
+		p.applyBranchList(msg)
 		return p, nil
 
 	case BranchSwitchSuccessMsg:
@@ -1213,10 +1078,21 @@ func (p *Plugin) FocusContext() string {
 		// context names one of those rather than falling through to the modes
 		// that own a write.
 		switch {
+		case p.historySearchMode:
+			return "git-history-search"
+		case p.pathFilterMode:
+			return "git-path-filter"
 		case p.viewMode == ViewModeDiff:
 			return "git-diff"
+		case p.activePane == PaneDiff && p.previewCommit != nil && p.cursorOnCommit():
+			return "git-commit-preview"
 		case p.activePane == PaneDiff && p.selectedDiffFile != "":
 			return "git-status-diff"
+		case p.hasSelectedCommit():
+			// A real commit row, not the empty-list boundary: a bound pane can
+			// be on screen before its first answer arrives, and a footer of
+			// commit gestures over no commits is a footer that lies.
+			return "git-status-commits"
 		}
 		return "git-status"
 	}
@@ -1292,9 +1168,16 @@ func (p *Plugin) Diagnostics() []plugin.Diagnostic {
 		if p.tree.TotalCount() == 0 {
 			status = "clean"
 		}
-		return []plugin.Diagnostic{
+		diagnostics := []plugin.Diagnostic{
 			{ID: "git-status", Status: status, Detail: "[" + p.ctx.HostID + "] " + p.tree.Summary()},
 		}
+		if p.historyError != "" {
+			// A log the host would not serve is its own row: the sidebar says
+			// "No commits" for an empty history and for a failed read alike,
+			// and only one of those is the repository's own answer.
+			diagnostics = append(diagnostics, plugin.Diagnostic{ID: "git-history", Status: "warn", Detail: p.historyError})
+		}
+		return diagnostics
 	}
 	if p.inNoRepoMode() {
 		return []plugin.Diagnostic{
@@ -1352,6 +1235,12 @@ func (p *Plugin) refresh() tea.Cmd {
 			Err:       err,
 		}
 	}
+}
+
+// reload is one whole read of the project a refresh means: the working tree,
+// and the first page of the log above it.
+func (p *Plugin) reload() tea.Cmd {
+	return tea.Batch(p.refresh(), p.loadRecentCommits())
 }
 
 // applyDiffLoaded lands one full-screen patch. Both message loops end here, so
@@ -1461,12 +1350,11 @@ func (p *Plugin) applyStatusSnapshot(msg StatusSnapshotLoadedMsg) tea.Cmd {
 		p.cursor = maxCursor
 	}
 	if p.remoteBound() {
-		// The patch for the row the cursor is on comes through the same seam
-		// the status did. Commit previews are a later slice, and the write
-		// selection this restores below belongs to operations a bound pane
-		// does not perform.
+		// The patch or the commit detail for the row the cursor is on comes
+		// through the same seam the status did. The write selection restored
+		// below belongs to operations a bound pane does not perform.
 		if p.viewMode == ViewModeStatus {
-			return tea.Batch(p.autoLoadDiff(), followUp)
+			return tea.Batch(p.autoLoadPreview(true), followUp)
 		}
 		return followUp
 	}
@@ -1476,6 +1364,175 @@ func (p *Plugin) applyStatusSnapshot(msg StatusSnapshotLoadedMsg) tea.Cmd {
 		return tea.Batch(p.autoLoadPreview(true), followUp)
 	}
 	return followUp
+}
+
+// applyRecentCommits lands one page of history. Both message loops end here,
+// for the same reason the status and patch handlers do: which machine answered
+// is decided at the seam and nowhere above it.
+func (p *Plugin) applyRecentCommits(msg RecentCommitsLoadedMsg) tea.Cmd {
+	if plugin.IsStale(p.ctx, msg) || msg.RequestID != p.activeHistoryRequestID {
+		return nil // Ignore stale message from previous project
+	}
+	p.activeHistoryRequestID = 0
+	if msg.Err != nil {
+		p.historyError = msg.Err.Error()
+	} else {
+		p.historyError = ""
+	}
+	var historyFollowUp tea.Cmd
+	if p.historyRefreshDirty {
+		p.historyRefreshDirty = false
+		historyFollowUp = p.loadRecentCommits()
+	}
+	if msg.Commits == nil {
+		if msg.PushStatus != nil {
+			p.pushStatus = msg.PushStatus
+			PopulatePushStatus(p.recentCommits, p.pushStatus)
+		}
+		return historyFollowUp
+	}
+
+	p.moreCommitsAvailable = len(msg.Commits) >= commitHistoryPageSize
+
+	// Determine which commit hash to restore cursor to
+	// Priority: pushPreservedCommitHash (set before push) > computed from current state
+	prevCommitHash := p.pushPreservedCommitHash
+	if prevCommitHash == "" && !p.historyFilterActive && p.cursorOnCommit() {
+		commits := p.activeCommits()
+		commitIdx := p.selectedCommitIndex()
+		if commitIdx >= 0 && commitIdx < len(commits) {
+			prevCommitHash = commits[commitIdx].Hash
+		}
+	}
+	// Clear the preserved hash after use
+	p.pushPreservedCommitHash = ""
+
+	p.recentCommits = mergeRecentCommits(p.recentCommits, msg.Commits)
+	// A source that answered the branch row in this read owns it. One that did
+	// not — a host, which answered it with the status instead and stamped each
+	// row's own pushed state — must not blank what is already on screen.
+	if msg.PushStatus != nil {
+		p.pushStatus = msg.PushStatus
+		PopulatePushStatus(p.recentCommits, p.pushStatus)
+	}
+	// Recompute graph for new commits
+	if p.showCommitGraph && len(p.recentCommits) > 0 {
+		p.commitGraphLines = ComputeGraphForCommits(p.recentCommits)
+	}
+	if prevCommitHash != "" {
+		if idx := indexOfCommitHash(p.recentCommits, prevCommitHash); idx >= 0 {
+			p.cursor = len(p.tree.AllEntries()) + idx
+		}
+	}
+	if !p.historyFilterActive {
+		p.clampCommitScroll()
+	}
+	// Clamp cursor to valid range if commits changed
+	maxCursor := p.totalSelectableItems() - 1
+	if maxCursor < 0 {
+		maxCursor = 0
+	}
+	if p.cursor > maxCursor {
+		p.cursor = maxCursor
+	}
+	return tea.Batch(p.ensureCommitListFilled(), historyFollowUp)
+}
+
+// applyMoreCommits lands the page a scroll past the end asked for.
+func (p *Plugin) applyMoreCommits(msg MoreCommitsLoadedMsg) tea.Cmd {
+	if plugin.IsStale(p.ctx, msg) {
+		return nil // Ignore stale message from previous project
+	}
+	p.loadingMoreCommits = false
+	if len(msg.Commits) > 0 {
+		if len(msg.Commits) < commitHistoryPageSize {
+			p.moreCommitsAvailable = false
+		}
+		p.recentCommits = append(p.recentCommits, msg.Commits...)
+		// Recompute entire graph when commits are added
+		if p.showCommitGraph {
+			commits := p.activeCommits()
+			p.commitGraphLines = ComputeGraphForCommits(commits)
+		}
+		return p.ensureCommitListFilled()
+	}
+	p.moreCommitsAvailable = false
+	return nil
+}
+
+// applyFilteredCommits lands a page the source narrowed by author or path.
+func (p *Plugin) applyFilteredCommits(msg FilteredCommitsLoadedMsg) tea.Cmd {
+	if plugin.IsStale(p.ctx, msg) {
+		return nil // Ignore stale message from previous project
+	}
+	if msg.Commits != nil {
+		p.filteredCommits = msg.Commits
+		if msg.PushStatus != nil {
+			p.pushStatus = msg.PushStatus
+		}
+		// Recompute graph for filtered commits
+		if p.showCommitGraph && len(p.filteredCommits) > 0 {
+			p.commitGraphLines = ComputeGraphForCommits(p.filteredCommits)
+		} else if len(p.filteredCommits) == 0 {
+			p.commitGraphLines = nil // Clear graph cache
+		}
+		// Reset cursor to first commit when filter applied
+		entries := p.tree.AllEntries()
+		if len(p.filteredCommits) > 0 {
+			p.cursor = len(entries)
+			p.commitScrollOff = 0
+		}
+	}
+	return nil
+}
+
+// applyCommitPreview lands one commit's detail for the right pane.
+func (p *Plugin) applyCommitPreview(msg CommitPreviewLoadedMsg) tea.Cmd {
+	if plugin.IsStale(p.ctx, msg) || msg.RequestID != p.commitPreviewRequestID {
+		return nil // Ignore stale message from previous project
+	}
+	if msg.Err != nil {
+		p.previewCommit = nil
+		p.previewCommitError = msg.Err.Error()
+		return func() tea.Msg {
+			return app.ToastMsg{Message: "Commit preview failed: " + msg.Err.Error(), Duration: 4 * time.Second, IsError: true}
+		}
+	}
+	// Commit preview loaded for right pane (in status view)
+	p.previewCommit = msg.Commit
+	p.previewCommitError = ""
+	p.previewCommitCursor = 0
+	p.previewCommitScroll = 0
+	p.commitBodyExpanded = false
+	p.commitBodyScroll = 0
+	// Copy stats to the commit in the list for inline display
+	if msg.Commit != nil {
+		for _, c := range p.recentCommits {
+			if c.Hash == msg.Commit.Hash {
+				c.Stats = msg.Commit.Stats
+				break
+			}
+		}
+		for _, c := range p.filteredCommits {
+			if c.Hash == msg.Commit.Hash {
+				c.Stats = msg.Commit.Stats
+				break
+			}
+		}
+	}
+	return nil
+}
+
+// applyBranchList lands the branch picker's list and puts the cursor on the
+// current branch.
+func (p *Plugin) applyBranchList(msg BranchListLoadedMsg) {
+	p.branches = msg.Branches
+	for i, b := range p.branches {
+		if b.IsCurrent {
+			p.branchCursor = i
+			break
+		}
+	}
 }
 
 // startWatcher starts the file system watcher.
@@ -1873,15 +1930,17 @@ func (p *Plugin) initCommitTextarea() {
 	p.commitModalWidthCache = 0
 }
 
-// confirmStashPop fetches the latest stash and shows the confirm modal.
+// confirmStashPop fetches the latest stash and shows the confirm modal. The
+// list is read through the seam like every other repository read; popping it is
+// a write and belongs to whichever machine owns the repository.
 func (p *Plugin) confirmStashPop() tea.Cmd {
-	workDir := p.repoRoot
+	fetch := p.fetchRefs()
 	return func() tea.Msg {
-		stashList, err := GetStashList(workDir)
-		if err != nil || len(stashList.Stashes) == 0 {
+		refs, err := fetch()
+		if err != nil || len(refs.Stashes) == 0 {
 			return StashErrorMsg{Err: fmt.Errorf("no stashes available")}
 		}
-		return StashPopConfirmMsg{Stash: stashList.Stashes[0]}
+		return StashPopConfirmMsg{Stash: refs.Stashes[0]}
 	}
 }
 

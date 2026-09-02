@@ -92,6 +92,14 @@ func (p *Plugin) openCommitInGitHub() tea.Cmd {
 	if commit == nil {
 		return nil
 	}
+	if p.remoteBound() {
+		// The remote URL is the host's fact and `repo status` already returns
+		// it, but nothing carries it to this call yet. Reading it here would
+		// run git in whatever directory Sidecar was started from, because a
+		// bound pane deliberately has no repository root. The link arrives with
+		// the refusal table.
+		return nil
+	}
 
 	remoteURL := GetRemoteURL(p.repoRoot)
 	if remoteURL == "" {

@@ -2,26 +2,32 @@ package gitstatus
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/hostproto"
 	"github.com/marcus/sidecar/internal/hosts"
+	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/reposervice"
 )
 
 const (
-	remoteMarker   = "REMOTE-MARKER.md"
-	remoteBranch   = "host-branch"
-	twinMarker     = "LOCAL-TWIN.md"
-	twinBranchName = "local-twin-branch"
+	remoteMarker      = "REMOTE-MARKER.md"
+	remoteBranch      = "host-branch"
+	remoteTopicBranch = "host-topic"
+	twinMarker        = "LOCAL-TWIN.md"
+	twinBranchName    = "local-twin-branch"
+	twinCommitSubject = "LOCAL-TWIN-COMMIT"
 )
 
 // fakeRepoSource answers from a fixed status and a patch per mode, and records
@@ -34,6 +40,11 @@ type fakeRepoSource struct {
 	patches   map[string]RepoDiff
 	diffErr   error
 	diffCalls []DiffRequest
+
+	history      RepoHistory
+	historyCalls []HistoryRequest
+	commits      map[string]*Commit
+	refs         RepoRefs
 }
 
 func (s *fakeRepoSource) Status(context.Context) (RepoStatus, error) {
@@ -47,6 +58,19 @@ func (s *fakeRepoSource) Diff(_ context.Context, req DiffRequest) (RepoDiff, err
 		return RepoDiff{}, s.diffErr
 	}
 	return s.patches[req.Mode], nil
+}
+
+func (s *fakeRepoSource) History(_ context.Context, req HistoryRequest) (RepoHistory, error) {
+	s.historyCalls = append(s.historyCalls, req)
+	return s.history, nil
+}
+
+func (s *fakeRepoSource) CommitDetail(_ context.Context, hash string) (*Commit, error) {
+	return s.commits[hash], nil
+}
+
+func (s *fakeRepoSource) Refs(context.Context) (RepoRefs, error) {
+	return s.refs, nil
 }
 
 // plantLocalTwin creates a same-named checkout on this machine, with its own
@@ -64,16 +88,30 @@ func plantLocalTwin(t *testing.T) string {
 		}
 	}
 	git("init")
+	git("config", "user.email", "twin@example.com")
+	git("config", "user.name", "Twin")
 	git("checkout", "-b", twinBranchName)
-	if err := os.WriteFile(filepath.Join(root, twinMarker), []byte("this machine\n"), 0o644); err != nil {
-		t.Fatal(err)
+	write := func(content string) {
+		if err := os.WriteFile(filepath.Join(root, twinMarker), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
+	write("this machine\n")
+	git("add", twinMarker)
+	// The twin has its own history too, so a bound commit list showing it is
+	// visible rather than merely wrong.
+	git("commit", "-m", twinCommitSubject)
+	write("this machine, edited\n")
 	git("add", twinMarker)
 
 	// The twin is real: nothing asserted against it below is vacuous.
 	out, err := exec.Command("git", "-C", root, "status", "--porcelain").Output()
 	if err != nil || !strings.Contains(string(out), twinMarker) {
 		t.Fatalf("twin fixture is not a repository with a staged %s: %q %v", twinMarker, out, err)
+	}
+	log, err := exec.Command("git", "-C", root, "log", "--format=%s").Output()
+	if err != nil || !strings.Contains(string(log), twinCommitSubject) {
+		t.Fatalf("twin fixture has no %s commit: %q %v", twinCommitSubject, log, err)
 	}
 	return root
 }
@@ -129,6 +167,116 @@ func hostPatch(mode string) string {
 	}
 }
 
+// The host's log. Two pages of it, so paging is something a test can watch
+// happen, with a merge in the first page so the graph has a second column to
+// draw and one unpushed row so the push state has to survive the wire.
+const (
+	remoteCommitSubject = "REMOTE-COMMIT"
+	remoteCommitAuthor  = "Aerie Author"
+	remoteMergeParent   = "aeriemergeparent"
+	hostLogLength       = 2 * commitHistoryPageSize
+)
+
+func hostCommitHash(i int) string { return fmt.Sprintf("aerie%05d", i) }
+
+// hostLog is the host's whole log, newest first. Only ever served a page at a
+// time — a viewer that asked for all of it is the thing decision 9 forbids.
+func hostLog() []reposervice.CommitRow {
+	rows := make([]reposervice.CommitRow, 0, hostLogLength)
+	for i := 0; i < hostLogLength; i++ {
+		row := reposervice.CommitRow{
+			Hash:        hostCommitHash(i),
+			ShortHash:   hostCommitHash(i)[:7],
+			Subject:     fmt.Sprintf("%s %d", remoteCommitSubject, i),
+			Author:      remoteCommitAuthor,
+			AuthorEmail: "aerie@example.com",
+			Date:        time.Now().Add(-time.Duration(i) * time.Hour).UTC(),
+			Pushed:      i > 0,
+		}
+		if i+1 < hostLogLength {
+			row.Parents = []string{hostCommitHash(i + 1)}
+		}
+		if i == 1 {
+			row.Parents = append(row.Parents, remoteMergeParent)
+			row.Merge = true
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+// hostHistoryPage is the host's own paging rule: rows after the cursor, capped
+// at the limit that was asked for.
+func hostHistoryPage(cursor string, limit int) reposervice.HistoryResult {
+	rows := hostLog()
+	start := 0
+	if cursor != "" {
+		for i, row := range rows {
+			if row.Hash == cursor {
+				start = i + 1
+				break
+			}
+		}
+	}
+	if limit <= 0 {
+		limit = reposervice.DefaultHistoryLimit
+	}
+	end := start + limit
+	if end > len(rows) {
+		end = len(rows)
+	}
+	page := reposervice.HistoryResult{
+		Kind:      reposervice.KindHistory,
+		Workspace: hostWorkspaceID,
+		Limit:     limit,
+		Commits:   rows[start:end],
+	}
+	if end < len(rows) {
+		page.NextCursor = rows[end-1].Hash
+	}
+	return page
+}
+
+func hostCommitDetail(hash string) *reposervice.CommitDetail {
+	for _, row := range hostLog() {
+		if row.Hash != hash {
+			continue
+		}
+		return &reposervice.CommitDetail{
+			Hash:        row.Hash,
+			ShortHash:   row.ShortHash,
+			Subject:     row.Subject,
+			Body:        "REMOTE-COMMIT-BODY for " + row.Hash,
+			Author:      row.Author,
+			AuthorEmail: row.AuthorEmail,
+			Date:        row.Date,
+			Parents:     row.Parents,
+			Merge:       row.Merge,
+			Files: []reposervice.CommitFile{
+				{Path: remoteMarker, Status: "M", Additions: 4, Deletions: 2},
+			},
+		}
+	}
+	return nil
+}
+
+func hostRefsResult() reposervice.RefsResult {
+	return reposervice.RefsResult{
+		Kind:      reposervice.KindRefs,
+		Workspace: hostWorkspaceID,
+		Branches: []reposervice.Branch{
+			{Name: remoteBranch, Current: true, Upstream: "origin/" + remoteBranch, Ahead: 2, Behind: 1, ShortHash: "4f2b91c"},
+			{Name: remoteTopicBranch, ShortHash: "9ab3fe0"},
+		},
+		RemoteBranches: []reposervice.Branch{
+			{Name: "origin/" + remoteBranch, Remote: true},
+		},
+		Stashes: []reposervice.Stash{
+			{Index: 0, Ref: "stash@{0}", Branch: remoteBranch, Message: "REMOTE-STASH"},
+		},
+	}
+}
+
 // hostRepoRunner answers `sidecar repo` the way the host's CLI does, and
 // records every invocation so a test can read which verb, which path, and which
 // staging sense the viewer asked for.
@@ -154,11 +302,37 @@ func hostRepoRunner(t *testing.T, calls *[]string) func(context.Context, string,
 				Path:      verbFlag(args, "--path"),
 				Patch:     hostPatch(mode),
 			}
+		case *reposervice.HistoryResult:
+			limit, _ := strconv.Atoi(verbFlag(args, "--limit"))
+			page := hostHistoryPage(verbFlag(args, "--cursor"), limit)
+			if author := verbFlag(args, "--author"); author != "" && author != remoteCommitAuthor {
+				page.Commits = nil
+			}
+			*out = page
+		case *reposervice.CommitResult:
+			*out = reposervice.CommitResult{
+				Kind:      reposervice.KindCommit,
+				Workspace: hostWorkspaceID,
+				Commit:    hostCommitDetail(verbFlag(args, "--commit")),
+			}
+		case *reposervice.RefsResult:
+			*out = hostRefsResult()
 		default:
 			t.Fatalf("runner asked to decode into %T", out)
 		}
 		return nil
 	}
+}
+
+// verbCalls is every invocation of one `sidecar repo` sub-verb, in order.
+func verbCalls(calls []string, verb string) []string {
+	var out []string
+	for _, call := range calls {
+		if strings.HasPrefix(call, "repo "+verb+" ") {
+			out = append(out, call)
+		}
+	}
+	return out
 }
 
 func verbFlag(args []string, name string) string {
@@ -170,15 +344,7 @@ func verbFlag(args []string, name string) string {
 	return ""
 }
 
-func diffCalls(calls []string) []string {
-	var out []string
-	for _, call := range calls {
-		if strings.HasPrefix(call, "repo diff ") {
-			out = append(out, call)
-		}
-	}
-	return out
-}
+func diffCalls(calls []string) []string { return verbCalls(calls, "diff") }
 
 // boundGitPlugin binds a plugin to a host, with a local twin planted on this
 // disk and ctx still carrying the twin's paths — so a plugin that reached for
@@ -208,48 +374,51 @@ func connectedHostContext() *plugin.Context {
 	}
 }
 
-// applyStatus runs a load command and feeds its answer back, the way the app's
-// event loop does.
+// applyStatus runs a load command and feeds its answers back, the way the app's
+// event loop does. A bound load is a status read and the first page of history,
+// so the whole batch is driven and the status answer must be among it.
 func applyStatus(t *testing.T, p *Plugin, cmd tea.Cmd) {
 	t.Helper()
 	if cmd == nil {
 		t.Fatal("no status command")
 	}
-	msg := cmd()
-	if _, ok := msg.(StatusSnapshotLoadedMsg); !ok {
-		t.Fatalf("status load produced %#v", msg)
+	if !drive(t, p, cmd) {
+		t.Fatal("the load produced no status answer")
 	}
-	_, follow := p.Update(msg)
-	drive(t, p, follow)
 }
 
 // drive runs a command and feeds everything it produces back into the plugin,
 // following batches, so a test sees the same sequence the event loop would —
 // including the patch load a status answer schedules for the row the cursor is
-// on.
-func drive(t *testing.T, p *Plugin, cmd tea.Cmd) {
+// on. It reports whether a status answer passed through.
+func drive(t *testing.T, p *Plugin, cmd tea.Cmd) bool {
 	t.Helper()
 	if cmd == nil {
-		return
+		return false
 	}
 	msg := cmd()
 	if msg == nil {
-		return
+		return false
 	}
 	if batch, ok := msg.(tea.BatchMsg); ok {
+		status := false
 		for _, c := range batch {
-			drive(t, p, c)
+			if drive(t, p, c) {
+				status = true
+			}
 		}
-		return
+		return status
 	}
+	_, isStatus := msg.(StatusSnapshotLoadedMsg)
 	_, follow := p.Update(msg)
-	drive(t, p, follow)
+	return drive(t, p, follow) || isStatus
 }
 
 func TestBoundStatusPaneShowsTheHostAndNeverTheLocalTwin(t *testing.T) {
 	src := &fakeRepoSource{
 		status:  remoteRepoStatus(hostStatusResult()),
 		patches: map[string]RepoDiff{reposervice.ModeStaged: {Patch: hostPatch(reposervice.ModeStaged)}},
+		history: RepoHistory{Commits: remoteCommitRows(hostHistoryPage("", commitHistoryPageSize).Commits)},
 	}
 	p, twin := boundGitPlugin(t, connectedHostContext())
 	p.repoSourceOverride = src
@@ -257,20 +426,15 @@ func TestBoundStatusPaneShowsTheHostAndNeverTheLocalTwin(t *testing.T) {
 	applyStatus(t, p, p.Start())
 
 	view := p.View(160, 40)
-	for _, want := range []string{remoteMarker, "host-only.txt", remoteBranch, "rebasing"} {
+	for _, want := range []string{remoteMarker, "host-only.txt", remoteBranch, "rebasing", remoteCommitSubject} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view is missing the host's %q:\n%s", want, view)
 		}
 	}
-	for _, unwanted := range []string{twinMarker, twinBranchName} {
+	for _, unwanted := range []string{twinMarker, twinBranchName, twinCommitSubject} {
 		if strings.Contains(view, unwanted) {
 			t.Fatalf("bound pane showed this machine's twin %q:\n%s", unwanted, view)
 		}
-	}
-	// History is a later slice, and the pane says so rather than reporting an
-	// empty history.
-	if !strings.Contains(view, "Commits are not read from [aerie] yet") {
-		t.Errorf("view is missing the history sentence:\n%s", view)
 	}
 	// The patch for the row the cursor lands on is the host's, in the sense
 	// that row means.
@@ -280,8 +444,8 @@ func TestBoundStatusPaneShowsTheHostAndNeverTheLocalTwin(t *testing.T) {
 	if len(src.diffCalls) != 1 || src.diffCalls[0].Mode != reposervice.ModeStaged || src.diffCalls[0].Path != remoteMarker {
 		t.Errorf("diff calls = %+v, want one staged read of %s", src.diffCalls, remoteMarker)
 	}
-	if p.recentCommits != nil {
-		t.Errorf("recentCommits = %+v, want none", p.recentCommits)
+	if len(p.recentCommits) != commitHistoryPageSize {
+		t.Errorf("recentCommits = %d rows, want one page of the host's log", len(p.recentCommits))
 	}
 	if _, err := os.Stat(filepath.Join(twin, twinMarker)); err != nil {
 		t.Fatalf("twin fixture missing: %v", err)
@@ -308,34 +472,65 @@ func TestBoundStatusPaneRunsNoLocalGit(t *testing.T) {
 	if _, cmd := p.Update(app.PluginFocusedMsg{}); cmd != nil {
 		applyStatus(t, p, cmd)
 	}
-	// Movement, the patch surfaces the cursor reaches, and every write key the
-	// local pane binds.
-	for _, key := range "jkgGlvw,.nNd" + "sucSUPfLbDzZA" {
-		_, cmd := p.Update(tea.KeyPressMsg{Text: string(key), Code: key})
-		drive(t, p, cmd)
+	// The pane is showing the host before a key is pressed: its files and its
+	// patch for the row the cursor landed on.
+	opening := p.View(160, 40)
+	if !strings.Contains(opening, remoteMarker) {
+		t.Fatalf("the bound pane never showed the host:\n%s", opening)
 	}
-	for _, code := range []rune{tea.KeyEnter, tea.KeyEscape} {
-		_, cmd := p.Update(tea.KeyPressMsg{Code: code})
-		drive(t, p, cmd)
+	if !strings.Contains(opening, remoteStagedLine) {
+		t.Fatalf("the bound pane never rendered a host patch:\n%s", opening)
 	}
+
+	press := func(keys string) {
+		t.Helper()
+		for _, key := range keys {
+			_, cmd := p.Update(tea.KeyPressMsg{Text: string(key), Code: key})
+			_ = drive(t, p, cmd)
+		}
+	}
+	code := func(codes ...rune) {
+		t.Helper()
+		for _, c := range codes {
+			_, cmd := p.Update(tea.KeyPressMsg{Code: c})
+			_ = drive(t, p, cmd)
+		}
+	}
+
+	// Movement onto the commits, the graph, the yanks, and the commit link
+	// this build cannot answer.
+	press("jkgGlhvw,.nNyYo")
+	// A commit file's patch full-screen, then back.
+	press("d")
+	code(tea.KeyEnter, tea.KeyEscape)
+	// The search modal, the path filter modal, and clearing the filters.
+	press("/")
+	code(tea.KeyEscape)
+	press("p")
+	code(tea.KeyEscape)
+	press("F")
+	// The branch picker: listed, then a switch refused, then closed.
+	press("b")
+	code(tea.KeyEnter, tea.KeyEscape)
+	// Every write key the local pane binds.
+	press("sucSUPfLDzZA")
 	_ = p.View(160, 40)
 	_ = p.Diagnostics()
 	_ = p.Commands()
 	p.Stop()
 
 	assertNoLocalGit(t, log)
-	// Non-vacuousness: the pane read the host, and it read patches, so the
-	// assertion above was made against a pane that had every chance to run git.
+	// Non-vacuousness: every read this build performs was made against the
+	// host while the recorder stood in for git, so the assertion above was
+	// made by a pane that had every chance to run one.
 	view := p.View(160, 40)
-	if !strings.Contains(view, remoteMarker) {
-		t.Fatal("the bound pane never showed the host, so the assertion above proved nothing")
+	if !strings.Contains(view, remoteMarker) && !strings.Contains(view, remoteCommitSubject) {
+		t.Fatalf("the bound pane ended up showing nothing of the host:\n%s", view)
 	}
-	if !strings.Contains(view, remoteStagedLine) && !strings.Contains(view, remoteUnstagedLine) &&
-		!strings.Contains(view, remoteUntrackedLine) {
-		t.Fatalf("the bound pane never rendered a host patch:\n%s", view)
-	}
-	if len(diffCalls(calls)) == 0 {
-		t.Fatalf("no patch was read from the host: %v", calls)
+	for _, verb := range []string{"status", "diff", "history", "commit", "refs"} {
+		if len(verbCalls(calls, verb)) == 0 {
+			t.Fatalf("repo %s was never read from the host: %v", verb, calls)
+		}
 	}
 }
 
@@ -362,7 +557,7 @@ func TestBoundPatchesFollowTheRowsStagingSense(t *testing.T) {
 
 	// Row 1 is the same path, unstaged.
 	_, cmd := p.Update(tea.KeyPressMsg{Text: "j", Code: 'j'})
-	drive(t, p, cmd)
+	_ = drive(t, p, cmd)
 	view = p.View(160, 40)
 	if !strings.Contains(view, remoteUnstagedLine) || strings.Contains(view, remoteStagedLine) {
 		t.Fatalf("the unstaged row did not show the unstaged patch:\n%s", view)
@@ -370,7 +565,7 @@ func TestBoundPatchesFollowTheRowsStagingSense(t *testing.T) {
 
 	// Row 2 is the untracked file, which is its own mode.
 	_, cmd = p.Update(tea.KeyPressMsg{Text: "j", Code: 'j'})
-	drive(t, p, cmd)
+	_ = drive(t, p, cmd)
 	if view = p.View(160, 40); !strings.Contains(view, remoteUntrackedLine) {
 		t.Fatalf("the untracked row did not show the untracked patch:\n%s", view)
 	}
@@ -425,7 +620,7 @@ func TestBoundTruncatedPatchIsLabelled(t *testing.T) {
 	// The full-screen view carries the same label; a patch does not become
 	// whole by being opened.
 	_, cmd := p.Update(tea.KeyPressMsg{Text: "d", Code: 'd'})
-	drive(t, p, cmd)
+	_ = drive(t, p, cmd)
 	if !p.diffTruncated {
 		t.Fatal("the full-screen view lost the truncation flag")
 	}
@@ -487,7 +682,7 @@ func TestBoundFolderRowRefusesAndDoesNotLeaveAStalePatch(t *testing.T) {
 	// Down to the folder row: staged, modified, host-only.txt, then pkg/.
 	for i := 0; i < 3; i++ {
 		_, cmd := p.Update(tea.KeyPressMsg{Text: "j", Code: 'j'})
-		drive(t, p, cmd)
+		_ = drive(t, p, cmd)
 	}
 	entries := p.treeEntries()
 	if p.cursor >= len(entries) || !entries[p.cursor].IsFolder {
@@ -503,9 +698,9 @@ func TestBoundFolderRowRefusesAndDoesNotLeaveAStalePatch(t *testing.T) {
 
 	// Opening the folder puts its files in reach, and each reads its own patch.
 	_, cmd := p.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	drive(t, p, cmd)
+	_ = drive(t, p, cmd)
 	_, cmd = p.Update(tea.KeyPressMsg{Text: "j", Code: 'j'})
-	drive(t, p, cmd)
+	_ = drive(t, p, cmd)
 	last := src.diffCalls[len(src.diffCalls)-1]
 	if last.Path != "pkg/one.txt" || last.Mode != reposervice.ModeUntracked {
 		t.Errorf("a file inside the folder read %+v, want the untracked patch for pkg/one.txt", last)
@@ -730,11 +925,24 @@ func TestBoundWorkspaceThatIsNotARepository(t *testing.T) {
 	t.Run("host answers NoRepository", func(t *testing.T) {
 		ctx := connectedHostContext()
 		p, _ := boundGitPlugin(t, ctx)
+		// A workspace that is not a repository answers so for every verb, not
+		// only for the status the pane happens to ask for first.
 		ctx.RemoteRunner = func(_ context.Context, _ string, _ []string, out any) error {
-			*out.(*reposervice.StatusResult) = reposervice.StatusResult{
-				Kind:         reposervice.KindStatus,
-				Workspace:    "/home/me/sidecar:shell:notes",
-				NoRepository: true,
+			switch out := out.(type) {
+			case *reposervice.StatusResult:
+				*out = reposervice.StatusResult{
+					Kind:         reposervice.KindStatus,
+					Workspace:    "/home/me/sidecar:shell:notes",
+					NoRepository: true,
+				}
+			case *reposervice.HistoryResult:
+				*out = reposervice.HistoryResult{
+					Kind:         reposervice.KindHistory,
+					Workspace:    "/home/me/sidecar:shell:notes",
+					NoRepository: true,
+				}
+			default:
+				t.Fatalf("runner asked to decode into %T", out)
 			}
 			return nil
 		}
@@ -838,5 +1046,357 @@ func TestLocalRepoSourceKeepsTheInjectedLoader(t *testing.T) {
 	}
 	if p.repoState != "" {
 		t.Errorf("repoState = %q, want empty for a local read", p.repoState)
+	}
+}
+
+// boundHostPlugin binds a plugin to a host answered by the real verb runner,
+// with the twin planted, and returns the recorded call log.
+func boundHostPlugin(t *testing.T) (*Plugin, *[]string) {
+	t.Helper()
+	ctx := connectedHostContext()
+	p, _ := boundGitPlugin(t, ctx)
+	calls := &[]string{}
+	ctx.RemoteRunner = hostRepoRunner(t, calls)
+	return p, calls
+}
+
+// The commit list is the host's, and the graph is drawn from the parent hashes
+// the host sent — not from a walk of anything on this disk.
+func TestBoundCommitListAndGraphAreTheHosts(t *testing.T) {
+	p, calls := boundHostPlugin(t)
+	p.showCommitGraph = true
+
+	applyStatus(t, p, p.Start())
+	view := p.View(160, 40)
+
+	if !strings.Contains(view, remoteCommitSubject+" 0") {
+		t.Errorf("the sidebar is missing the host's newest commit:\n%s", view)
+	}
+	if strings.Contains(view, twinCommitSubject) {
+		t.Fatalf("the bound commit list showed this machine's twin history:\n%s", view)
+	}
+	if len(p.recentCommits) != commitHistoryPageSize {
+		t.Fatalf("recentCommits = %d, want one page", len(p.recentCommits))
+	}
+	if got := p.recentCommits[0]; got.Hash != hostCommitHash(0) || got.Author != remoteCommitAuthor {
+		t.Errorf("first row = %+v, want the host's newest commit", got)
+	}
+	// The host's own pushed state rides with the row; nothing here recomputes
+	// it against an upstream this machine cannot see.
+	if p.recentCommits[0].Pushed || !p.recentCommits[1].Pushed {
+		t.Errorf("pushed flags = %v/%v, want the host's", p.recentCommits[0].Pushed, p.recentCommits[1].Pushed)
+	}
+	if got := p.recentCommits[1].ParentHashes; !slices.Equal(got, []string{hostCommitHash(2), remoteMergeParent}) {
+		t.Errorf("parents = %v, want the host's merge parents", got)
+	}
+
+	if len(p.commitGraphLines) != len(p.recentCommits) {
+		t.Fatalf("graph lines = %d, commits = %d", len(p.commitGraphLines), len(p.recentCommits))
+	}
+	widest := 0
+	for _, line := range p.commitGraphLines {
+		if line.Width > widest {
+			widest = line.Width
+		}
+	}
+	// A second column exists only because a row the host sent has two parents.
+	if widest < 2 {
+		t.Errorf("graph width = %d, want the host's merge to open a second column", widest)
+	}
+	if len(verbCalls(*calls, "history")) != 1 {
+		t.Errorf("history calls = %v, want one page", verbCalls(*calls, "history"))
+	}
+}
+
+// Decision 9: scrolling past the first page asks for the next one, by cursor,
+// and asks for nothing else. A viewer that re-read the whole log on every
+// scroll would look identical on screen and cost the host everything.
+func TestBoundHistoryPagesInsteadOfRefetching(t *testing.T) {
+	p, calls := boundHostPlugin(t)
+	applyStatus(t, p, p.Start())
+	_ = p.View(160, 40)
+
+	if got := verbCalls(*calls, "history"); len(got) != 1 {
+		t.Fatalf("history calls after the first load = %v, want one", got)
+	}
+
+	// G lands on the last row of the page, which is what asks for the next one.
+	_, cmd := p.Update(tea.KeyPressMsg{Text: "G", Code: 'G'})
+	_ = drive(t, p, cmd)
+
+	want := []string{
+		"repo history --workspace " + hostWorkspaceID + " --limit 50 --json",
+		"repo history --workspace " + hostWorkspaceID + " --limit 50 --cursor " + hostCommitHash(commitHistoryPageSize-1) + " --json",
+	}
+	if got := verbCalls(*calls, "history"); !slices.Equal(got, want) {
+		t.Fatalf("history calls =\n%v\nwant\n%v", got, want)
+	}
+	if len(p.recentCommits) != hostLogLength {
+		t.Errorf("recentCommits = %d, want both pages", len(p.recentCommits))
+	}
+	if p.recentCommits[commitHistoryPageSize].Hash != hostCommitHash(commitHistoryPageSize) {
+		t.Errorf("the second page did not continue the first: %+v", p.recentCommits[commitHistoryPageSize])
+	}
+}
+
+// The commit under the cursor is read from the host, with its body and its file
+// list, and each of those files reads its own patch from the host too.
+func TestBoundCommitDetailIsTheHosts(t *testing.T) {
+	p, calls := boundHostPlugin(t)
+	applyStatus(t, p, p.Start())
+	_ = p.View(160, 40)
+
+	// h jumps from the files to the commits, which loads the first one.
+	_, cmd := p.Update(tea.KeyPressMsg{Text: "h", Code: 'h'})
+	_ = drive(t, p, cmd)
+
+	want := "repo commit --workspace " + hostWorkspaceID + " --commit " + hostCommitHash(0) + " --json"
+	if got := verbCalls(*calls, "commit"); !slices.Equal(got, []string{want}) {
+		t.Fatalf("commit calls = %v, want %q", got, want)
+	}
+	commit := p.previewCommit
+	if commit == nil {
+		t.Fatal("no commit preview loaded")
+	}
+	if commit.Subject != remoteCommitSubject+" 0" || !strings.Contains(commit.Body, "REMOTE-COMMIT-BODY") {
+		t.Errorf("preview = %+v, want the host's commit", commit)
+	}
+	if len(commit.Files) != 1 || commit.Files[0].Path != remoteMarker ||
+		commit.Files[0].Additions != 4 || commit.Files[0].Deletions != 2 {
+		t.Errorf("files = %+v, want the host's file list with its counts", commit.Files)
+	}
+	if commit.Stats != (CommitStats{FilesChanged: 1, Additions: 4, Deletions: 2}) {
+		t.Errorf("stats = %+v, want the sum of the host's file rows", commit.Stats)
+	}
+	view := p.View(160, 40)
+	if !strings.Contains(view, remoteCommitSubject+" 0") || !strings.Contains(view, remoteMarker) {
+		t.Errorf("the preview pane is missing the host's commit:\n%s", view)
+	}
+	if strings.Contains(view, twinCommitSubject) || strings.Contains(view, twinMarker) {
+		t.Fatalf("the preview pane showed this machine's twin:\n%s", view)
+	}
+}
+
+// The picker lists the host's branches and stops there. Enter on one refuses by
+// name; nothing is checked out on either machine.
+func TestBoundBranchPickerListsTheHostAndRefusesToSwitch(t *testing.T) {
+	p, calls := boundHostPlugin(t)
+	log := recordLocalGit(t)
+	applyStatus(t, p, p.Start())
+
+	_, cmd := p.Update(tea.KeyPressMsg{Text: "b", Code: 'b'})
+	_ = drive(t, p, cmd)
+
+	want := "repo refs --workspace " + hostWorkspaceID + " --json"
+	if got := verbCalls(*calls, "refs"); !slices.Equal(got, []string{want}) {
+		t.Fatalf("refs calls = %v, want %q", got, want)
+	}
+	if len(p.branches) != 2 || p.branches[0].Name != remoteBranch || !p.branches[0].IsCurrent {
+		t.Fatalf("branches = %+v, want the host's list with its current branch", p.branches)
+	}
+	view := p.View(160, 40)
+	if !strings.Contains(view, remoteTopicBranch) {
+		t.Errorf("the picker is missing the host's branches:\n%s", view)
+	}
+	if strings.Contains(view, twinBranchName) {
+		t.Fatalf("the picker listed this machine's twin branch:\n%s", view)
+	}
+	if !strings.Contains(view, "switching is refused") {
+		t.Errorf("the picker offered a switch it will not perform:\n%s", view)
+	}
+
+	// Down to the branch that is not checked out, then Enter.
+	_, cmd = p.Update(tea.KeyPressMsg{Text: "j", Code: 'j'})
+	_ = drive(t, p, cmd)
+	_, cmd = p.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Enter on a host branch answered nothing")
+	}
+	flash, ok := cmd().(appmsg.FlashMsg)
+	if !ok {
+		t.Fatalf("Enter produced %#v, want a refusal", flash)
+	}
+	if !strings.Contains(flash.Text, "aerie") || !strings.Contains(flash.Text, remoteTopicBranch) {
+		t.Errorf("refusal = %q, want the host and the branch named", flash.Text)
+	}
+	if p.viewMode != ViewModeBranchPicker {
+		t.Errorf("viewMode = %v, want the picker still open after a refusal", p.viewMode)
+	}
+	assertNoLocalGit(t, log)
+}
+
+// Refs is one read and carries both lists. The stash half has no read-only
+// surface in the Git tab yet — its only reader is the stash-pop confirm, which
+// is a write — so this proves the wire rather than a pane.
+func TestBoundRefsCarryTheHostsBranchesAndStashes(t *testing.T) {
+	var args []string
+	src := &remoteRepoSource{
+		hostID:      "aerie",
+		workspaceID: hostWorkspaceID,
+		run: func(_ context.Context, _ string, a []string, out any) error {
+			args = a
+			*out.(*reposervice.RefsResult) = hostRefsResult()
+			return nil
+		},
+	}
+
+	refs, err := src.Refs(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(args, " "); got != "repo refs --workspace "+hostWorkspaceID+" --json" {
+		t.Errorf("args = %q", got)
+	}
+	// The picker lists what a local one lists: this repository's own branches.
+	if len(refs.Branches) != 2 || refs.Branches[0].Upstream != "origin/"+remoteBranch ||
+		refs.Branches[0].Ahead != 2 || refs.Branches[0].Behind != 1 {
+		t.Errorf("branches = %+v, want the host's local branches with their tracking", refs.Branches[0])
+	}
+	if len(refs.Stashes) != 1 || refs.Stashes[0].Ref != "stash@{0}" ||
+		refs.Stashes[0].Branch != remoteBranch || refs.Stashes[0].Message != "REMOTE-STASH" {
+		t.Errorf("stashes = %+v, want the host's stash", refs.Stashes)
+	}
+}
+
+// Author and path narrow the log on the host, because a filter applied to the
+// page in hand would present itself as an answer about the whole history.
+// Subject search is the viewer's, over the rows it already has, and costs the
+// host nothing.
+func TestBoundAuthorFilterGoesToTheHostAndSearchStaysHere(t *testing.T) {
+	p, calls := boundHostPlugin(t)
+	applyStatus(t, p, p.Start())
+	_ = p.View(160, 40)
+
+	// Onto a commit, then f: filter by its author.
+	_, cmd := p.Update(tea.KeyPressMsg{Text: "h", Code: 'h'})
+	_ = drive(t, p, cmd)
+	_, cmd = p.Update(tea.KeyPressMsg{Text: "f", Code: 'f'})
+	_ = drive(t, p, cmd)
+
+	want := "repo history --workspace " + hostWorkspaceID + " --limit 50 --author " + remoteCommitAuthor + " --json"
+	history := verbCalls(*calls, "history")
+	if len(history) != 2 || history[1] != want {
+		t.Fatalf("history calls =\n%v\nwant the second to be\n%q", history, want)
+	}
+	if !p.historyFilterActive || len(p.filteredCommits) == 0 {
+		t.Errorf("the author filter produced no rows: active=%v rows=%d", p.historyFilterActive, len(p.filteredCommits))
+	}
+
+	// The path filter is the host's too.
+	_, cmd = p.Update(tea.KeyPressMsg{Text: "p", Code: 'p'})
+	_ = drive(t, p, cmd)
+	for _, key := range remoteMarker {
+		_, cmd = p.Update(tea.KeyPressMsg{Text: string(key), Code: key})
+		_ = drive(t, p, cmd)
+	}
+	_, cmd = p.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	_ = drive(t, p, cmd)
+	history = verbCalls(*calls, "history")
+	if len(history) != 3 || !strings.Contains(history[2], "--path "+remoteMarker) {
+		t.Fatalf("history calls =\n%v\nwant the third to carry --path", history)
+	}
+
+	// Search runs here: it reads no host verb at all.
+	before := len(*calls)
+	_, cmd = p.Update(tea.KeyPressMsg{Text: "/", Code: '/'})
+	_ = drive(t, p, cmd)
+	for _, key := range remoteCommitSubject {
+		_, cmd = p.Update(tea.KeyPressMsg{Text: string(key), Code: key})
+		_ = drive(t, p, cmd)
+	}
+	if p.historySearchState == nil || len(p.historySearchState.Matches) == 0 {
+		t.Fatalf("search over the loaded rows matched nothing: %+v", p.historySearchState)
+	}
+	if len(*calls) != before {
+		t.Errorf("searching asked the host for %v", (*calls)[before:])
+	}
+}
+
+// The branch row is answered once, by the status read, and the history load
+// leaves it alone. Two answers to one question is how a pane comes to show an
+// ahead/behind count from a different instant than the branch beside it.
+func TestBoundBranchRowIsReadOnceFromStatus(t *testing.T) {
+	p, calls := boundHostPlugin(t)
+	applyStatus(t, p, p.Start())
+
+	if got := len(verbCalls(*calls, "status")); got != 1 {
+		t.Errorf("status calls = %d, want one", got)
+	}
+	if got := len(verbCalls(*calls, "history")); got != 1 {
+		t.Errorf("history calls = %d, want one", got)
+	}
+	if p.pushStatus == nil || p.pushStatus.CurrentBranch != remoteBranch ||
+		p.pushStatus.Ahead != 2 || p.pushStatus.Behind != 1 {
+		t.Fatalf("pushStatus = %+v, want the host's branch row from the status read", p.pushStatus)
+	}
+	// The history answer must not blank what the status answered, and the rows
+	// keep the pushed state the host stamped on them.
+	if p.recentCommits[0].Pushed {
+		t.Error("the newest row lost the host's unpushed state")
+	}
+
+	// A refresh is still one of each.
+	_, cmd := p.Update(plugin.HostInventoryMsg{})
+	applyStatus(t, p, cmd)
+	if got, want := len(verbCalls(*calls, "status")), 2; got != want {
+		t.Errorf("status calls = %d, want %d", got, want)
+	}
+	if got, want := len(verbCalls(*calls, "history")), 2; got != want {
+		t.Errorf("history calls = %d, want %d", got, want)
+	}
+	if p.pushStatus.Ahead != 2 || p.pushStatus.CurrentBranch != remoteBranch {
+		t.Errorf("pushStatus after a refresh = %+v", p.pushStatus)
+	}
+}
+
+// The local half is today's code routed, not rewritten: the rows a local
+// sidebar lists are the rows the two log readers have always produced.
+func TestLocalHistoryLoadersKeepTodaysRows(t *testing.T) {
+	root, hash := localRepoFixture(t)
+	src := localRepoSource{root: root}
+
+	want, wantPush, err := GetCommitHistoryWithPushStatus(root, commitHistoryPageSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := src.History(context.Background(), HistoryRequest{Limit: commitHistoryPageSize})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Commits) != len(want) || len(want) == 0 {
+		t.Fatalf("history = %d rows, want %d", len(page.Commits), len(want))
+	}
+	if page.Commits[0].Hash != want[0].Hash || page.Commits[0].Subject != want[0].Subject {
+		t.Errorf("row = %+v, want %+v", page.Commits[0], want[0])
+	}
+	// The branch row still arrives with the local history load, exactly as it
+	// always has.
+	if page.Push == nil || page.Push.CurrentBranch != wantPush.CurrentBranch {
+		t.Errorf("push = %+v, want %+v", page.Push, wantPush)
+	}
+
+	wantDetail, err := GetCommitDetail(root, hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail, err := src.CommitDetail(context.Background(), hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail == nil || detail.Hash != wantDetail.Hash || len(detail.Files) != len(wantDetail.Files) {
+		t.Errorf("detail = %+v, want %+v", detail, wantDetail)
+	}
+
+	wantBranches, err := GetBranches(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs, err := src.Refs(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs.Branches) != len(wantBranches) || len(wantBranches) == 0 ||
+		refs.Branches[0].Name != wantBranches[0].Name {
+		t.Errorf("branches = %+v, want %+v", refs.Branches, wantBranches)
 	}
 }

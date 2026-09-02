@@ -2,6 +2,7 @@ package gitstatus
 
 import (
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -9,6 +10,7 @@ import (
 	"github.com/marcus/sidecar/internal/hostproto"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
@@ -108,7 +110,7 @@ func (p *Plugin) repoSource() RepoSource {
 	if !p.hasRepo || p.tree == nil || p.repoRoot == "" {
 		return nil
 	}
-	return localRepoSource{root: p.repoRoot, load: p.statusLoader}
+	return localRepoSource{root: p.repoRoot, load: p.statusLoader, history: p.historyLoader}
 }
 
 // updateRemote is the bound plugin's whole message loop.
@@ -123,16 +125,46 @@ func (p *Plugin) updateRemote(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	}
 	switch msg := msg.(type) {
 	case app.RefreshMsg:
-		return p, p.refresh()
+		return p, p.reload()
 
 	case app.PluginFocusedMsg:
-		return p, p.refresh()
+		return p, p.reload()
 
 	case plugin.HostInventoryMsg:
 		// The host's snapshot moved. That is the whole of a bound pane's live
 		// refresh: internal/livewatch is a filesystem signal and does not cross
 		// the boundary, so this and an explicit r are what it has.
-		return p, p.refresh()
+		return p, p.reload()
+
+	case RecentCommitsLoadedMsg:
+		return p, p.applyRecentCommits(msg)
+
+	case MoreCommitsLoadedMsg:
+		return p, p.applyMoreCommits(msg)
+
+	case FilteredCommitsLoadedMsg:
+		return p, p.applyFilteredCommits(msg)
+
+	case CommitPreviewLoadedMsg:
+		return p, p.applyCommitPreview(msg)
+
+	case BranchListLoadedMsg:
+		if plugin.IsStale(p.ctx, msg) {
+			return p, nil
+		}
+		p.applyBranchList(msg)
+		return p, nil
+
+	case BranchErrorMsg:
+		if plugin.IsStale(p.ctx, msg) {
+			return p, nil
+		}
+		// The local half opens an error modal, which is a view a bound pane does
+		// not render. A failed listing closes the picker and says so once.
+		p.closeBranchPicker()
+		return p, func() tea.Msg {
+			return app.ToastMsg{Message: "Branch list failed: " + msg.Err.Error(), Duration: 4 * time.Second, IsError: true}
+		}
 
 	case StatusSnapshotLoadedMsg:
 		if plugin.IsStale(p.ctx, msg) || msg.RequestID != p.activeStatusRequestID {
@@ -165,9 +197,21 @@ func (p *Plugin) updateRemote(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 // full-file view — refuse for a bound pane at their own door, so a key that
 // lands on one is a no-op rather than a local git invocation.
 func (p *Plugin) updateRemoteKeys(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
+	// The overlays are this viewer's own state over rows the host answered, so
+	// they route to the handlers themselves. Search runs here over the page in
+	// hand; the path filter goes back to the host as a query.
+	if p.historySearchMode {
+		return p.updateHistorySearch(msg)
+	}
+	if p.pathFilterMode {
+		return p.updatePathFilter(msg)
+	}
+	if p.viewMode == ViewModeBranchPicker {
+		return p.updateBranchPicker(msg)
+	}
 	if p.tree == nil {
 		if msg.String() == "r" {
-			return p, p.refresh()
+			return p, p.reload()
 		}
 		return p, nil
 	}
@@ -179,49 +223,58 @@ func (p *Plugin) updateRemoteKeys(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) 
 	}
 
 	entries := p.treeEntries()
-	total := p.totalSelectableItems()
 	switch msg.String() {
 	case "j", "down":
-		if p.cursor < total-1 {
-			p.cursor++
-			p.ensureCursorVisible()
-			return p, p.autoLoadDiff()
-		}
+		return p, p.cursorDown()
 
 	case "k", "up":
-		if p.cursor > 0 {
-			p.cursor--
-			p.ensureCursorVisible()
-			return p, p.autoLoadDiff()
-		}
+		return p, p.cursorUp()
 
 	case "g":
-		p.cursor = 0
-		p.scrollOff = 0
-		return p, p.autoLoadDiff()
+		return p, p.cursorToTop()
 
 	case "G":
-		if total > 0 {
-			p.cursor = total - 1
-			p.ensureCursorVisible()
-			return p, p.autoLoadDiff()
+		return p, p.cursorToBottom()
+
+	case "h":
+		// Jump to the commits section.
+		fileCount := len(entries)
+		if len(p.activeCommits()) > 0 && p.cursor < fileCount {
+			p.cursor = fileCount
+			p.ensureCommitVisible(0)
+			return p, p.autoLoadCommitPreview()
 		}
 
 	case "l", "right":
-		if p.sidebarVisible && p.selectedDiffFile != "" {
-			p.activePane = PaneDiff
+		if p.sidebarVisible {
+			if p.cursorOnCommit() && p.previewCommit != nil {
+				p.activePane = PaneDiff
+			} else if p.selectedDiffFile != "" {
+				p.activePane = PaneDiff
+			}
 		}
 
 	case "enter":
-		// Only a folder's expansion, which is this viewer's own display state.
-		// Enter on a file opens it in an editor locally; that is a host verb
-		// nothing answers, and it refuses with the rest of them in 4j.
-		if p.cursor < len(entries) && entries[p.cursor].IsFolder {
+		// A folder's expansion and a commit's preview pane are both this
+		// viewer's own display state. Enter on a file opens it in an editor
+		// locally; that is a host verb nothing answers, and it refuses with the
+		// rest of them in 4j.
+		if p.cursorOnCommit() {
+			if p.previewCommit != nil {
+				p.activePane = PaneDiff
+			}
+		} else if p.cursor < len(entries) && entries[p.cursor].IsFolder {
 			entries[p.cursor].IsExpanded = !entries[p.cursor].IsExpanded
 			return p, p.autoLoadDiff()
 		}
 
 	case "d":
+		if p.cursorOnCommit() {
+			if p.previewCommit != nil {
+				p.activePane = PaneDiff
+			}
+			return p, nil
+		}
 		if p.cursor < len(entries) && !entries[p.cursor].IsFolder {
 			entry := entries[p.cursor]
 			p.diffReturnMode = p.viewMode
@@ -236,6 +289,99 @@ func (p *Plugin) updateRemoteKeys(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) 
 			return p, p.loadDiff(entry.Path, entry.Staged, entry.Status)
 		}
 
+	case "b":
+		// The picker lists the host's branches. Switching to one is a write and
+		// refuses by name; the modal's own hint says so before it is tried.
+		p.branchReturnMode = p.viewMode
+		p.branchCursor = 0
+		p.viewMode = ViewModeBranchPicker
+		p.clearBranchPickerModal()
+		return p, p.loadBranches()
+
+	case "f":
+		// On a commit, filter the log by its author — a host filter, so the
+		// answer is about the whole log rather than about the page in hand.
+		if p.hasSelectedCommit() {
+			commits := p.activeCommits()
+			commit := commits[p.selectedCommitIndex()]
+			p.historyFilterAuthor = commit.Author
+			p.historyFilterActive = true
+			return p, p.loadFilteredCommits()
+		}
+
+	case "F":
+		if p.historyFilterActive {
+			p.historyFilterAuthor = ""
+			p.historyFilterPath = ""
+			p.historyFilterActive = false
+			p.filteredCommits = nil
+			if p.showCommitGraph && len(p.recentCommits) > 0 {
+				p.commitGraphLines = ComputeGraphForCommits(p.recentCommits)
+			}
+		}
+
+	case "p":
+		if p.cursorOnCommit() {
+			p.pathFilterMode = true
+			p.pathFilterInput = ""
+		}
+
+	case "/":
+		// Subject search is the viewer's: it runs over the rows the host
+		// already answered, and the sidebar header names the page it searched.
+		if p.cursorOnCommit() {
+			if p.historySearchState == nil {
+				p.historySearchState = NewHistorySearchState()
+			}
+			p.historySearchState.Reset()
+			p.historySearchMode = true
+		}
+
+	case "n":
+		if p.historySearchState != nil && p.historySearchState.Committed && len(p.historySearchState.Matches) > 0 {
+			p.historySearchState.Cursor++
+			if p.historySearchState.Cursor >= len(p.historySearchState.Matches) {
+				p.historySearchState.Cursor = 0
+			}
+			return p, p.jumpToSearchMatch()
+		}
+
+	case "N":
+		if p.historySearchState != nil && p.historySearchState.Committed && len(p.historySearchState.Matches) > 0 {
+			p.historySearchState.Cursor--
+			if p.historySearchState.Cursor < 0 {
+				p.historySearchState.Cursor = len(p.historySearchState.Matches) - 1
+			}
+			return p, p.jumpToSearchMatch()
+		}
+
+	case "esc":
+		if p.historySearchState != nil && p.historySearchState.Committed {
+			p.clearSearchState()
+		}
+
+	case "v":
+		// The graph is drawn from the parent hashes the rows carry, whichever
+		// machine answered them.
+		if p.cursorOnCommit() {
+			p.showCommitGraph = !p.showCommitGraph
+			_ = state.SetGitGraphEnabled(p.showCommitGraph)
+			if p.showCommitGraph {
+				p.commitGraphLines = ComputeGraphForCommits(p.activeCommits())
+			}
+		}
+
+	case "y":
+		// The commit is already in hand and the clipboard is this machine's.
+		if p.cursorOnCommit() {
+			return p, p.copyCommitToClipboard()
+		}
+
+	case "Y":
+		if p.cursorOnCommit() {
+			return p, p.copyCommitIDToClipboard()
+		}
+
 	case "\\":
 		p.toggleSidebar()
 		if !p.sidebarVisible {
@@ -243,7 +389,7 @@ func (p *Plugin) updateRemoteKeys(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) 
 		}
 
 	case "r":
-		return p, p.refresh()
+		return p, p.reload()
 	}
 	return p, nil
 }
@@ -263,13 +409,17 @@ func (p *Plugin) renderBoundView() string {
 		return styles.Title.Render(pluginName) + "\n\n" +
 			styles.Muted.Render("Loading ["+p.ctx.HostID+"]…")
 	}
-	// The full-screen diff is the same view it is locally: it renders a patch,
-	// and which machine produced it is below the renderer.
-	if p.viewMode == ViewModeDiff {
+	// The full-screen diff and the branch picker are the same views they are
+	// locally: one renders a patch and the other a list of branches, and which
+	// machine produced either is below the renderer.
+	switch p.viewMode {
+	case ViewModeDiff:
 		if p.sidebarVisible {
 			return p.renderDiffTwoPane()
 		}
 		return p.renderDiffModal()
+	case ViewModeBranchPicker:
+		return p.renderBranchPicker()
 	}
 	return p.renderThreePaneView()
 }
@@ -327,8 +477,39 @@ func (p *Plugin) remoteCommands() []plugin.Command {
 		return nil
 	}
 	return []plugin.Command{
-		{ID: "refresh", Name: "Refresh", Description: "Re-read the host's repository status", Category: plugin.CategoryActions, Context: "git-status", Priority: 1},
+		{ID: "refresh", Name: "Refresh", Description: "Re-read the host's repository status and history", Category: plugin.CategoryActions, Context: "git-status", Priority: 1},
 		{ID: "show-diff", Name: "Diff", Description: "View the host's patch for this file", Category: plugin.CategoryView, Context: "git-status", Priority: 2},
+		{ID: "show-history", Name: "History", Description: "Jump to the host's commit history", Category: plugin.CategoryNavigation, Context: "git-status", Priority: 3},
+		{ID: "branch-picker", Name: "Branch", Description: "List the host's branches (switching is refused)", Category: plugin.CategoryGit, Context: "git-status", Priority: 3},
+		{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Category: plugin.CategoryView, Context: "git-status", Priority: 5},
+		// git-status-commits context (the host's commits in the sidebar)
+		{ID: "view-commit", Name: "View", Description: "View commit details", Category: plugin.CategoryView, Context: "git-status-commits", Priority: 1},
+		{ID: "search-history", Name: "Search", Description: "Search the commits loaded from the host", Category: plugin.CategorySearch, Context: "git-status-commits", Priority: 2},
+		{ID: "toggle-graph", Name: "Graph", Description: "Toggle commit graph display", Category: plugin.CategoryView, Context: "git-status-commits", Priority: 2},
+		{ID: "filter-author", Name: "Author", Description: "Filter the host's history by author", Category: plugin.CategorySearch, Context: "git-status-commits", Priority: 3},
+		{ID: "filter-path", Name: "Path", Description: "Filter the host's history by file path", Category: plugin.CategorySearch, Context: "git-status-commits", Priority: 3},
+		{ID: "clear-filter", Name: "Clear", Description: "Clear history filters", Category: plugin.CategoryActions, Context: "git-status-commits", Priority: 3},
+		{ID: "yank-commit", Name: "Yank", Description: "Copy commit as markdown", Category: plugin.CategoryActions, Context: "git-status-commits", Priority: 3},
+		{ID: "yank-id", Name: "YankID", Description: "Copy commit ID", Category: plugin.CategoryActions, Context: "git-status-commits", Priority: 3},
+		{ID: "next-match", Name: "Next", Description: "Next search match", Category: plugin.CategoryNavigation, Context: "git-status-commits", Priority: 4},
+		{ID: "prev-match", Name: "Prev", Description: "Previous search match", Category: plugin.CategoryNavigation, Context: "git-status-commits", Priority: 4},
+		{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Category: plugin.CategoryView, Context: "git-status-commits", Priority: 5},
+		// git-history-search context (commit search modal)
+		{ID: "select", Name: "Select", Description: "Jump to selected match", Category: plugin.CategoryActions, Context: "git-history-search", Priority: 1},
+		{ID: "cancel", Name: "Cancel", Description: "Close search", Category: plugin.CategoryActions, Context: "git-history-search", Priority: 1},
+		{ID: "navigate", Name: "Nav", Description: "Move through matches", Category: plugin.CategoryNavigation, Context: "git-history-search", Priority: 2},
+		{ID: "toggle-regex", Name: "Regex", Description: "Toggle regex mode", Category: plugin.CategoryView, Context: "git-history-search", Priority: 3},
+		{ID: "toggle-case", Name: "Case", Description: "Toggle case sensitivity", Category: plugin.CategoryView, Context: "git-history-search", Priority: 3},
+		// git-path-filter context (path filter modal)
+		{ID: "apply-filter", Name: "Apply", Description: "Apply path filter", Category: plugin.CategorySearch, Context: "git-path-filter", Priority: 1},
+		{ID: "cancel", Name: "Cancel", Description: "Close path filter", Category: plugin.CategoryActions, Context: "git-path-filter", Priority: 1},
+		// git-commit-preview context (the host's commit in the right pane)
+		{ID: "view-diff", Name: "Diff", Description: "View the host's patch for this file", Category: plugin.CategoryView, Context: "git-commit-preview", Priority: 1},
+		{ID: "back", Name: "Back", Description: "Return to sidebar", Category: plugin.CategoryNavigation, Context: "git-commit-preview", Priority: 1},
+		{ID: "yank-commit", Name: "Yank", Description: "Copy commit as markdown", Category: plugin.CategoryActions, Context: "git-commit-preview", Priority: 3},
+		{ID: "yank-id", Name: "YankID", Description: "Copy commit ID", Category: plugin.CategoryActions, Context: "git-commit-preview", Priority: 3},
+		{ID: "open-in-file-browser", Name: "Browse", Description: "Open file in file browser", Category: plugin.CategoryNavigation, Context: "git-commit-preview", Priority: 3},
+		{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Category: plugin.CategoryView, Context: "git-commit-preview", Priority: 4},
 		// git-status-diff context (inline diff pane)
 		{ID: "toggle-diff-view", Name: "View", Description: "Toggle unified/split diff view", Category: plugin.CategoryView, Context: "git-status-diff", Priority: 2},
 		{ID: "toggle-wrap", Name: "Wrap", Description: "Toggle line wrapping", Category: plugin.CategoryView, Context: "git-status-diff", Priority: 3},

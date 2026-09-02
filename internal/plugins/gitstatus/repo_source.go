@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,6 +29,54 @@ type RepoSource interface {
 	// Diff is one patch: the change to one path, in the one sense the request
 	// names.
 	Diff(ctx context.Context, req DiffRequest) (RepoDiff, error)
+
+	// History is one page of the commit log, newest first. A whole log is
+	// never asked for: the viewer scrolls and asks for the next page.
+	History(ctx context.Context, req HistoryRequest) (RepoHistory, error)
+
+	// CommitDetail is one commit with its file list.
+	CommitDetail(ctx context.Context, hash string) (*Commit, error)
+
+	// Refs is the branch list the picker shows and the stash list, read-only.
+	Refs(ctx context.Context) (RepoRefs, error)
+}
+
+// HistoryRequest is one page of the commit log.
+//
+// The position in the log is expressed twice because the two machines number
+// one differently. A local walk takes an offset; a host takes the previous
+// page's last hash, so a commit landing between two pages cannot silently
+// repeat or skip a row (decision 9). The caller fills both from the list it
+// already holds and neither source sees the other's.
+//
+// Author and Path are the host's own filters — git narrows the log before it
+// is serialized either way. Subject search is not here: it runs in the viewer
+// over the rows already in hand, which is what it does for a local project.
+type HistoryRequest struct {
+	Limit  int
+	Cursor string
+	Skip   int
+	Author string
+	Path   string
+}
+
+// RepoHistory is one page.
+//
+// Push is filled only by a source that answered the branch row in the read it
+// was already making. A local history load asks git for it, exactly as it
+// always has; a host answered it with `repo status` in the same refresh and
+// stamps each row's Pushed itself, so a bound pane never pays for it twice.
+type RepoHistory struct {
+	Commits []*Commit
+	Push    *PushStatus
+}
+
+// RepoRefs is what `repo refs` names: the branches a picker lists and the
+// stash entries. Listing only — switching branches and touching the stash are
+// writes, and this seam has none.
+type RepoRefs struct {
+	Branches []*Branch
+	Stashes  []*Stash
 }
 
 // DiffRequest names exactly one patch.
@@ -89,8 +138,9 @@ type RepoStatus struct {
 // rather than rewritten, and load stays the injectable function the existing
 // tests drive.
 type localRepoSource struct {
-	root string
-	load func(string) (*FileTree, error)
+	root    string
+	load    func(string) (*FileTree, error)
+	history func(string, int) ([]*Commit, *PushStatus, error)
 }
 
 func (s localRepoSource) Status(context.Context) (RepoStatus, error) {
@@ -127,6 +177,57 @@ func (s localRepoSource) Diff(_ context.Context, req DiffRequest) (RepoDiff, err
 		return RepoDiff{}, err
 	}
 	return RepoDiff{Patch: patch}, nil
+}
+
+// History runs the log read the plugin has always run: the first page, a later
+// page by offset, and a filtered page are the same three functions chosen by
+// the same rule the call sites used, so a local sidebar lists the commits it
+// always did.
+func (s localRepoSource) History(_ context.Context, req HistoryRequest) (RepoHistory, error) {
+	var (
+		commits []*Commit
+		push    *PushStatus
+		err     error
+	)
+	switch {
+	case req.Author != "" || req.Path != "":
+		commits, push, err = GetCommitHistoryFilteredWithPushStatus(s.root, HistoryFilterOpts{
+			Author: req.Author,
+			Path:   req.Path,
+			Limit:  req.Limit,
+			Skip:   req.Skip,
+		})
+	case req.Skip > 0:
+		commits, push, err = GetCommitHistoryWithPushStatusOffset(s.root, req.Limit, req.Skip)
+	default:
+		load := s.history
+		if load == nil {
+			load = GetCommitHistoryWithPushStatus
+		}
+		commits, push, err = load(s.root, req.Limit)
+	}
+	if err != nil {
+		return RepoHistory{}, err
+	}
+	return RepoHistory{Commits: commits, Push: push}, nil
+}
+
+func (s localRepoSource) CommitDetail(_ context.Context, hash string) (*Commit, error) {
+	return GetCommitDetail(s.root, hash)
+}
+
+func (s localRepoSource) Refs(context.Context) (RepoRefs, error) {
+	branches, err := GetBranches(s.root)
+	if err != nil {
+		return RepoRefs{}, err
+	}
+	// A repository with no stashes is not an error, and GetStashList already
+	// answers one that way.
+	stashes, err := GetStashList(s.root)
+	if err != nil {
+		return RepoRefs{}, err
+	}
+	return RepoRefs{Branches: branches, Stashes: stashes.Stashes}, nil
 }
 
 // remoteRepoTimeout bounds one host read. A read that outlives the keypress
@@ -201,6 +302,96 @@ func (s *remoteRepoSource) Diff(ctx context.Context, req DiffRequest) (RepoDiff,
 		return RepoDiff{}, fmt.Errorf("%s answered the %s patch for a %s row", s.hostID, result.Mode, req.Mode)
 	}
 	return RepoDiff{Patch: result.Patch, Truncated: result.Truncated}, nil
+}
+
+// History asks the host for one page of its log.
+//
+// --cursor rather than an offset is the host's contract and the reason paging
+// is honest across a commit landing mid-scroll; the viewer sends the last hash
+// it holds and gets the rows after it. Each row carries the host's own pushed
+// state, so nothing here asks a second time what the upstream already knows.
+func (s *remoteRepoSource) History(ctx context.Context, req HistoryRequest) (RepoHistory, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.callTimeout())
+	defer cancel()
+
+	args := []string{"repo", "history", "--workspace", s.workspaceID}
+	if req.Limit > 0 {
+		args = append(args, "--limit", strconv.Itoa(req.Limit))
+	}
+	if req.Cursor != "" {
+		args = append(args, "--cursor", req.Cursor)
+	}
+	if req.Author != "" {
+		args = append(args, "--author", req.Author)
+	}
+	if req.Path != "" {
+		args = append(args, "--path", req.Path)
+	}
+	args = append(args, "--json")
+
+	var result reposervice.HistoryResult
+	if err := s.run(ctx, s.hostID, args, &result); err != nil {
+		// A rejected page is about this query — a filter or a cursor the host
+		// will not take — not about the repository. The status read is what
+		// answers whether the workspace is one.
+		var runErr *hosts.RunError
+		if errors.As(err, &runErr) && runErr.Failure == hosts.FailRejected {
+			return RepoHistory{}, fmt.Errorf("[%s] will not serve this page of history: %s", s.hostID, runErr.Detail)
+		}
+		return RepoHistory{}, err
+	}
+	if !result.ValidRemoteResult() {
+		return RepoHistory{}, fmt.Errorf("%s did not answer repo history", s.hostID)
+	}
+	if result.NoRepository {
+		return RepoHistory{}, &noRepositoryError{hostID: s.hostID}
+	}
+	// Push stays nil: `repo status` answered the branch row in this same
+	// refresh, and a second answer here would be a second round trip that could
+	// disagree with the one already on screen.
+	return RepoHistory{Commits: remoteCommitRows(result.Commits)}, nil
+}
+
+func (s *remoteRepoSource) CommitDetail(ctx context.Context, hash string) (*Commit, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.callTimeout())
+	defer cancel()
+
+	args := []string{"repo", "commit", "--workspace", s.workspaceID, "--commit", hash, "--json"}
+	var result reposervice.CommitResult
+	if err := s.run(ctx, s.hostID, args, &result); err != nil {
+		var runErr *hosts.RunError
+		if errors.As(err, &runErr) && runErr.Failure == hosts.FailRejected {
+			return nil, fmt.Errorf("[%s] will not serve commit %s: %s", s.hostID, hash, runErr.Detail)
+		}
+		return nil, err
+	}
+	if !result.ValidRemoteResult() {
+		return nil, fmt.Errorf("%s did not answer repo commit", s.hostID)
+	}
+	if result.NoRepository {
+		return nil, &noRepositoryError{hostID: s.hostID}
+	}
+	return remoteCommitDetail(result.Commit), nil
+}
+
+// Refs lists the host's branches and stashes. A rejection here is about the
+// workspace rather than about a query, because this verb takes none.
+func (s *remoteRepoSource) Refs(ctx context.Context) (RepoRefs, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.callTimeout())
+	defer cancel()
+
+	args := []string{"repo", "refs", "--workspace", s.workspaceID, "--json"}
+	var result reposervice.RefsResult
+	if err := s.run(ctx, s.hostID, args, &result); err != nil {
+		return RepoRefs{}, s.classify(err)
+	}
+	if !result.ValidRemoteResult() {
+		return RepoRefs{}, fmt.Errorf("%s did not answer repo refs", s.hostID)
+	}
+	if result.NoRepository {
+		return RepoRefs{}, &noRepositoryError{hostID: s.hostID}
+	}
+	return remoteRepoRefs(result), nil
 }
 
 func (s *remoteRepoSource) callTimeout() time.Duration {
@@ -299,6 +490,92 @@ func remoteRepoStatus(result reposervice.StatusResult) RepoStatus {
 		},
 		State: result.State,
 	}
+}
+
+// remoteCommitRows turns the host's log page into the rows the sidebar and the
+// graph already draw.
+//
+// An empty page stays nil rather than becoming an empty slice: the loaded
+// handler reads nil as "the source said nothing new", which is what a local
+// page with no rows means too.
+func remoteCommitRows(rows []reposervice.CommitRow) []*Commit {
+	var commits []*Commit
+	for _, row := range rows {
+		commits = append(commits, &Commit{
+			Hash:        row.Hash,
+			ShortHash:   row.ShortHash,
+			Author:      row.Author,
+			AuthorEmail: row.AuthorEmail,
+			// The instant is the host's; showing it in this viewer's zone is
+			// what the local path does with its own commits.
+			Date:         row.Date.Local(),
+			Subject:      row.Subject,
+			ParentHashes: row.Parents,
+			IsMerge:      row.Merge,
+			Pushed:       row.Pushed,
+		})
+	}
+	return commits
+}
+
+// remoteCommitDetail turns one host commit into the model the preview pane
+// renders. The aggregate stats are summed here because the host answers the
+// file rows and the viewer is what displays a total.
+func remoteCommitDetail(detail *reposervice.CommitDetail) *Commit {
+	if detail == nil {
+		return nil
+	}
+	commit := &Commit{
+		Hash:         detail.Hash,
+		ShortHash:    detail.ShortHash,
+		Author:       detail.Author,
+		AuthorEmail:  detail.AuthorEmail,
+		Date:         detail.Date.Local(),
+		Subject:      detail.Subject,
+		Body:         detail.Body,
+		ParentHashes: detail.Parents,
+		IsMerge:      detail.Merge,
+	}
+	for _, file := range detail.Files {
+		commit.Files = append(commit.Files, CommitFile{
+			Path:      file.Path,
+			OldPath:   file.OldPath,
+			Status:    FileStatus(file.Status),
+			Additions: file.Additions,
+			Deletions: file.Deletions,
+		})
+		commit.Stats.FilesChanged++
+		commit.Stats.Additions += file.Additions
+		commit.Stats.Deletions += file.Deletions
+	}
+	return commit
+}
+
+// remoteRepoRefs keeps the branch picker's list to the host's local branches,
+// which is the list a local picker shows. Remote-tracking branches are the
+// host's own remotes and belong to a surface that offers to check one out.
+func remoteRepoRefs(result reposervice.RefsResult) RepoRefs {
+	refs := RepoRefs{}
+	for _, branch := range result.Branches {
+		refs.Branches = append(refs.Branches, &Branch{
+			Name:       branch.Name,
+			IsCurrent:  branch.Current,
+			IsRemote:   branch.Remote,
+			Upstream:   branch.Upstream,
+			Ahead:      branch.Ahead,
+			Behind:     branch.Behind,
+			LastCommit: branch.ShortHash,
+		})
+	}
+	for _, stash := range result.Stashes {
+		refs.Stashes = append(refs.Stashes, &Stash{
+			Index:   stash.Index,
+			Ref:     stash.Ref,
+			Branch:  stash.Branch,
+			Message: stash.Message,
+		})
+	}
+	return refs
 }
 
 // remoteRepoUnavailable is why a bound Git tab cannot read a host, or "" when it

@@ -480,11 +480,6 @@ func (p *Plugin) renderRecentCommits(currentY *int, maxVisible int) string {
 	if len(commits) == 0 {
 		p.sidebarScroll.commits = sidebarBarSnapshot{}
 		switch {
-		case p.remoteBound():
-			// "No commits" would be a claim about the host's repository that
-			// this build has not made and cannot make: history reads land in
-			// their own slice.
-			sb.WriteString(styles.Muted.Render("Commits are not read from [" + p.ctx.HostID + "] yet"))
 		case p.historyFilterActive:
 			sb.WriteString(styles.Muted.Render("No matching commits"))
 		default:
