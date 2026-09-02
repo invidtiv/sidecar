@@ -53,6 +53,18 @@ type source interface {
 	commit() string
 	// localDir is the checkout path for a local source, or "".
 	localDir() string
+	// compare reports how head sits relative to base in upstream's history,
+	// which is what the rollback guard needs and nothing else asks for.
+	//
+	// An error means the question could not be answered -- a commit this
+	// checkout does not carry, a compare call that failed -- and that is never
+	// the same answer as ancestryDiverged. Confusing the two is how a network
+	// blip would become a claim about upstream's history.
+	compare(base, head string) (ancestry, error)
+	// pinTo returns a source reading the same upstream at another commit, for
+	// the one caller that needs it: the guard, holding the pin where the lock
+	// already had it.
+	pinTo(commit string) (source, error)
 }
 
 // sourceFile is one file read from a source.
@@ -206,6 +218,62 @@ func (s *dirSource) treeEntries(relPath, kind string) ([]string, error) {
 func (s *dirSource) commit() string   { return s.sha }
 func (s *dirSource) localDir() string { return s.dir }
 
+func (s *dirSource) pinTo(commit string) (source, error) {
+	return newDirSource(s.dir, commit)
+}
+
+// compare answers the ancestry question out of the checkout's own object
+// database, asking it in both directions: `merge-base --is-ancestor` answers
+// one, and only the pair separates "head is behind base" from "the two have
+// diverged".
+func (s *dirSource) compare(base, head string) (ancestry, error) {
+	if base == head {
+		return ancestryIdentical, nil
+	}
+	baseContained, err := s.isAncestor(base, head)
+	if err != nil {
+		return "", err
+	}
+	headContained, err := s.isAncestor(head, base)
+	if err != nil {
+		return "", err
+	}
+	switch {
+	case baseContained && headContained:
+		return ancestryIdentical, nil
+	case baseContained:
+		return ancestryAhead, nil
+	case headContained:
+		return ancestryBehind, nil
+	default:
+		return ancestryDiverged, nil
+	}
+}
+
+// isAncestor reports whether ancestor is reachable from descendant. Exit 1 is
+// git's "no"; anything else -- exit 128 for a commit a shallow clone does not
+// carry is the ordinary one -- is a question that could not be answered, and
+// stays an error rather than becoming a "no".
+func (s *dirSource) isAncestor(ancestor, descendant string) (bool, error) {
+	cmd := exec.Command("git", "-C", s.dir, "merge-base", "--is-ancestor",
+		"--end-of-options", ancestor, descendant)
+	if _, err := cmd.Output(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			if exitErr.ExitCode() == 1 {
+				return false, nil
+			}
+			if stderr := strings.TrimSpace(string(exitErr.Stderr)); stderr != "" {
+				return false, fmt.Errorf("git merge-base --is-ancestor %s %s in %s: %v: %s",
+					ancestor, descendant, s.dir, err, stderr)
+			}
+		}
+		return false, fmt.Errorf("git merge-base --is-ancestor %s %s in %s: %w",
+			ancestor, descendant, s.dir, err)
+	}
+	return true, nil
+}
+
 // gitRevParse resolves a ref to the commit it names. The ^{commit} peel makes
 // an annotated tag resolve to its commit and makes anything that is not a
 // commit fail, which is what `git show <commit>:<path>` needs.
@@ -344,6 +412,52 @@ func (s *githubSource) listing(relPath string) ([]githubEntry, error) {
 func (s *githubSource) commit() string   { return s.sha }
 func (s *githubSource) localDir() string { return "" }
 
+// pinTo resolves the commit rather than trusting it, so a lock carrying a
+// commit this repository no longer has fails here instead of turning into 404s
+// on every file the sync then tries to read.
+func (s *githubSource) pinTo(commit string) (source, error) {
+	sha, err := resolveRemoteCommit(commit)
+	if err != nil {
+		return nil, err
+	}
+	return &githubSource{ref: commit, sha: sha}, nil
+}
+
+// compare asks the compare API, which answers this question directly and is the
+// only way to answer it without a checkout.
+func (s *githubSource) compare(base, head string) (ancestry, error) {
+	if base == head {
+		return ancestryIdentical, nil
+	}
+	out, err := ghAPI(fmt.Sprintf("repos/%s/compare/%s...%s", repoSlug, base, head))
+	if err != nil {
+		return "", fmt.Errorf("compare %s...%s: %w", shortSHA(base), shortSHA(head), err)
+	}
+	state, err := ancestryFromCompare(out)
+	if err != nil {
+		return "", fmt.Errorf("compare %s...%s: %w", shortSHA(base), shortSHA(head), err)
+	}
+	return state, nil
+}
+
+// ancestryFromCompare reads the status the compare API reports for base...head.
+// An unrecognised status is an error: the four it documents are the four this
+// tool knows how to act on, and treating a fifth as "not behind" would be the
+// rollback the guard exists to stop.
+func ancestryFromCompare(data []byte) (ancestry, error) {
+	var result struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return "", fmt.Errorf("unexpected compare API shape: %w", err)
+	}
+	switch state := ancestry(result.Status); state {
+	case ancestryIdentical, ancestryAhead, ancestryBehind, ancestryDiverged:
+		return state, nil
+	}
+	return "", fmt.Errorf("unexpected compare status %q", result.Status)
+}
+
 func ghAPI(endpoint string) ([]byte, error) {
 	cmd := exec.Command("gh", "api", endpoint)
 	out, err := cmd.Output()
@@ -372,6 +486,54 @@ func resolveRemoteCommit(ref string) (string, error) {
 		return "", err
 	}
 	return commit.SHA, nil
+}
+
+// defaultRef is the source tree a sync vendors when --ref is not given.
+//
+// Sidecar takes Herdr's detection work as it lands rather than waiting for a
+// release: Sidecar ships faster than Herdr cuts tags, and an unreleased rule
+// change is upstream's own judgement about detection. The release tag is a
+// separate pin with a separate job (--release-tag, the binary the differential
+// harness downloads), and conflating the two is what pinned the vendored tree
+// to a commit behind itself.
+//
+// Offline there is nobody to ask which branch is the default, and a checkout
+// already carries an answer: the commit it is standing on.
+func defaultRef(opts options) string {
+	if opts.offline {
+		return "HEAD"
+	}
+	return defaultBranch()
+}
+
+// defaultBranch asks GitHub which branch Herdr develops on rather than assuming
+// it. Herdr's is `master`, which is neither the name GitHub defaults to nor the
+// one this repository's own docs assumed, so guessing has already been wrong
+// once. A failed call falls back to the name that is true today; if that ever
+// stops being true the sync fails resolving the ref, which is loud, rather than
+// vendoring some other branch.
+func defaultBranch() string {
+	out, err := ghAPI("repos/" + repoSlug)
+	if err != nil {
+		return fallbackDefaultBranch
+	}
+	if name := defaultBranchFrom(out); name != "" {
+		return name
+	}
+	return fallbackDefaultBranch
+}
+
+// defaultBranchFrom reads default_branch out of the repository API response,
+// returning "" when there is nothing to read, which is the caller's signal to
+// fall back.
+func defaultBranchFrom(data []byte) string {
+	var repo struct {
+		DefaultBranch string `json:"default_branch"`
+	}
+	if err := json.Unmarshal(data, &repo); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(repo.DefaultBranch)
 }
 
 // newestReleaseTag asks GitHub for the newest Herdr release of any kind,

@@ -51,9 +51,12 @@ jobs:
         with:
           node-version: "24"
 
-      # No flags: the tool defaults to the newest stable Herdr release tag, so
-      # the vendored manifests match the release binary the differential job
-      # downloads. It reads Herdr through `gh api` and raw.githubusercontent,
+      # No flags. The tool vendors from Herdr's own default branch, because
+      # Sidecar ships faster than Herdr tags and unreleased rule fixes are worth
+      # taking; --release-tag, which names the binary the differential job
+      # downloads, is a separate pin and still resolves to a real release. A
+      # sync never moves the vendored pin backwards past the commit the lock
+      # records. It reads Herdr through `gh api` and raw.githubusercontent,
       # which is why GH_TOKEN is set for the whole job.
       - name: Sync vendored Herdr manifests
         run: go run ./internal/tools/herdrsync

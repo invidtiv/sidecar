@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -424,6 +425,20 @@ func (s *stubSource) readAt(_ string, p string) ([]byte, error) { return s.read(
 func (s *stubSource) listDirs(p string) ([]string, error) { return s.dirs[p], nil }
 func (s *stubSource) commit() string                      { return "stub" }
 func (s *stubSource) localDir() string                    { return "" }
+
+// compare and pinTo exist so the stub satisfies source. It serves one version
+// of every file, so there is no history to compare and nowhere else to read
+// from; the guard is tested against sources that have both.
+func (s *stubSource) compare(base, head string) (ancestry, error) {
+	if base == head {
+		return ancestryIdentical, nil
+	}
+	return "", errors.New("a stub source has one commit")
+}
+
+func (s *stubSource) pinTo(string) (source, error) {
+	return nil, errors.New("a stub source cannot be re-pinned")
+}
 
 const stubModRS = `
 pub fn agent_label(agent: Agent) -> &'static str {
@@ -1434,5 +1449,426 @@ func TestNewestReleaseTagFallsBackWhenThereIsNothingToChoose(t *testing.T) {
 	// An offline run never asks GitHub anything.
 	if got := newestReleaseTag(true); got != fallbackReleaseTag {
 		t.Errorf("offline newestReleaseTag = %q, want %q", got, fallbackReleaseTag)
+	}
+}
+
+// TestDefaultRefTracksHerdrsOwnDefaultBranch covers the name this tool must not
+// guess. Herdr develops on `master`; `main` does not exist in that repository,
+// so the documented `--ref main` never resolved and a hardcoded default would
+// have been wrong the same way.
+func TestDefaultRefTracksHerdrsOwnDefaultBranch(t *testing.T) {
+	if got := defaultBranchFrom([]byte(`{"name": "herdr", "default_branch": "master"}`)); got != "master" {
+		t.Errorf("defaultBranchFrom = %q, want master", got)
+	}
+	for name, body := range map[string]string{
+		"not valid json":  `nope`,
+		"no such field":   `{"name": "herdr"}`,
+		"gh was not able": ``,
+	} {
+		if got := defaultBranchFrom([]byte(body)); got != "" {
+			t.Errorf("%s: defaultBranchFrom = %q, want the caller's fallback", name, got)
+		}
+	}
+	// Offline there is nobody to ask, and the checkout's own commit is the
+	// answer that needs no network.
+	if got := defaultRef(options{offline: true}); got != "HEAD" {
+		t.Errorf("offline defaultRef = %q, want HEAD", got)
+	}
+}
+
+// --- the rollback guard ----------------------------------------------------------
+
+// pinStub answers the two questions the guard asks and nothing else: how two
+// commits relate, and give me a source at another one.
+type pinStub struct {
+	source
+	sha   string
+	state ancestry
+	err   error
+
+	base, head string
+	pinnedTo   string
+}
+
+func (s *pinStub) commit() string { return s.sha }
+
+func (s *pinStub) compare(base, head string) (ancestry, error) {
+	s.base, s.head = base, head
+	if s.err != nil {
+		return "", s.err
+	}
+	return s.state, nil
+}
+
+func (s *pinStub) pinTo(commit string) (source, error) {
+	s.pinnedTo = commit
+	return &pinStub{sha: commit, state: ancestryIdentical}, nil
+}
+
+const (
+	pinLockedCommit   = "e2b85c73615b37a483eefa839923d9aff8e629b3"
+	pinResolvedCommit = "b1ff4582e968f0d1c4a29c5b0c7e2fbb51a9d0c3"
+)
+
+func lockPinnedAt(commit string) *manifests.Lock {
+	return &manifests.Lock{Herdr: manifests.LockUpstream{Ref: "master", Commit: commit}}
+}
+
+// TestTheGuardKeepsTheLockedCommitWhenTheResolvedRefIsBehindIt is pull request
+// 323 in one assertion: the ref resolved to a commit the lock's commit already
+// descends from, and vendoring it would have taken Herdr's source tree back to
+// before it documented Muse.
+func TestTheGuardKeepsTheLockedCommitWhenTheResolvedRefIsBehindIt(t *testing.T) {
+	src := &pinStub{sha: pinResolvedCommit, state: ancestryAhead}
+	held, decision, err := holdPin(src, lockPinnedAt(pinLockedCommit), "preview-2026-08-31", false)
+	if err != nil {
+		t.Fatalf("holdPin: %v", err)
+	}
+	if src.base != pinResolvedCommit || src.head != pinLockedCommit {
+		t.Errorf("compare was asked %s...%s, want the resolved commit as the base and the locked one as the head",
+			src.base, src.head)
+	}
+	if src.pinnedTo != pinLockedCommit {
+		t.Errorf("the source was re-pinned to %q, want the locked commit", src.pinnedTo)
+	}
+	if held.commit() != pinLockedCommit {
+		t.Errorf("vendoring from %s, want the locked commit", held.commit())
+	}
+	if decision == nil || !decision.keptPin {
+		t.Fatalf("decision = %+v, want a held pin", decision)
+	}
+	for _, want := range []string{shortSHA(pinLockedCommit), shortSHA(pinResolvedCommit), "preview-2026-08-31"} {
+		if !strings.Contains(decision.lockNote, want) {
+			t.Errorf("lock note does not name %s:\n%s", want, decision.lockNote)
+		}
+	}
+	if !strings.Contains(decision.reportNote, "--ref") {
+		t.Errorf("the report note does not say how to take it deliberately:\n%s", decision.reportNote)
+	}
+}
+
+// TestTheGuardLetsThePinMoveForward is the ordinary weekly run: the default ref
+// is a moving branch, so the commit it resolves descends from the locked one
+// and the guard has nothing to say about it.
+func TestTheGuardLetsThePinMoveForward(t *testing.T) {
+	src := &pinStub{sha: pinResolvedCommit, state: ancestryBehind}
+	moved, decision, err := holdPin(src, lockPinnedAt(pinLockedCommit), "master", false)
+	if err != nil {
+		t.Fatalf("holdPin: %v", err)
+	}
+	if moved != source(src) {
+		t.Error("a forward move re-pinned the source")
+	}
+	if decision != nil {
+		t.Errorf("a forward move produced a note: %+v", decision)
+	}
+}
+
+// TestTheGuardIsSilentWhenNothingMoved keeps a no-op run a no-op: a lock
+// already at the resolved commit must not add a note, because a note is a lock
+// change and a lock change is a pull request.
+func TestTheGuardIsSilentWhenNothingMoved(t *testing.T) {
+	same := &pinStub{sha: pinLockedCommit, err: errors.New("compare must not be called")}
+	if _, decision, err := holdPin(same, lockPinnedAt(pinLockedCommit), "master", false); err != nil || decision != nil {
+		t.Errorf("holdPin on the locked commit = %+v, %v; want no decision and no error", decision, err)
+	}
+	identical := &pinStub{sha: pinResolvedCommit, state: ancestryIdentical}
+	if _, decision, err := holdPin(identical, lockPinnedAt(pinLockedCommit), "master", false); err != nil || decision != nil {
+		t.Errorf("holdPin on an identical tree = %+v, %v; want no decision and no error", decision, err)
+	}
+}
+
+// TestTheGuardIsInertWithoutACommitToCompareAgainst covers the first sync into
+// an empty directory and a lock too old to record a commit: there is nothing to
+// move backwards from.
+func TestTheGuardIsInertWithoutACommitToCompareAgainst(t *testing.T) {
+	for name, previous := range map[string]*manifests.Lock{
+		"no previous lock": nil,
+		"no commit in it":  lockPinnedAt(""),
+	} {
+		src := &pinStub{sha: pinResolvedCommit, err: errors.New("compare must not be called")}
+		if _, decision, err := holdPin(src, previous, "master", false); err != nil || decision != nil {
+			t.Errorf("%s: holdPin = %+v, %v; want no decision and no error", name, decision, err)
+		}
+	}
+}
+
+// TestTheGuardRefusesASyncItCannotProveMovesForward is the deliberate choice
+// between the two ways of not knowing. Vendoring anyway is the rollback the
+// guard exists to stop; holding the pin quietly writes the tree that is already
+// committed, which opens no pull request and so tells nobody. Refusing is the
+// only outcome anybody sees.
+func TestTheGuardRefusesASyncItCannotProveMovesForward(t *testing.T) {
+	cases := map[string]*pinStub{
+		"the compare call failed":   {sha: pinResolvedCommit, err: errors.New("429 Too Many Requests")},
+		"upstream was rewritten":    {sha: pinResolvedCommit, state: ancestryDiverged},
+		"an ancestry it cannot use": {sha: pinResolvedCommit, state: ancestry("sideways")},
+	}
+	for name, src := range cases {
+		held, decision, err := holdPin(src, lockPinnedAt(pinLockedCommit), "master", false)
+		if err == nil {
+			t.Errorf("%s: holdPin returned no error", name)
+			continue
+		}
+		if held != nil || decision != nil {
+			t.Errorf("%s: a refused sync returned a source or a decision", name)
+		}
+		if !strings.Contains(err.Error(), shortSHA(pinLockedCommit)) {
+			t.Errorf("%s: the refusal does not name the locked commit: %v", name, err)
+		}
+	}
+}
+
+// TestAnExplicitRefIsObeyedAndSaidOutLoud: a maintainer who types --ref is
+// rehearsing or bisecting, and a flag that vendors something other than what it
+// names would be worse than the rollback. Every case warns in the lock, which
+// is committed, and in the report.
+func TestAnExplicitRefIsObeyedAndSaidOutLoud(t *testing.T) {
+	cases := map[string]*pinStub{
+		"behind the lock":        {sha: pinResolvedCommit, state: ancestryAhead},
+		"diverged from the lock": {sha: pinResolvedCommit, state: ancestryDiverged},
+		"ancestry unknown":       {sha: pinResolvedCommit, err: errors.New("no such commit in a shallow clone")},
+	}
+	for name, src := range cases {
+		vendored, decision, err := holdPin(src, lockPinnedAt(pinLockedCommit), "preview-2026-08-31", true)
+		if err != nil {
+			t.Errorf("%s: holdPin refused an explicit ref: %v", name, err)
+			continue
+		}
+		if vendored != source(src) {
+			t.Errorf("%s: an explicit ref was overridden", name)
+		}
+		if src.pinnedTo != "" {
+			t.Errorf("%s: an explicit ref was re-pinned to %s", name, src.pinnedTo)
+		}
+		if decision == nil || decision.keptPin {
+			t.Fatalf("%s: decision = %+v, want a warning that kept nothing", name, decision)
+		}
+		if !strings.Contains(decision.lockNote, "--ref") || decision.reportNote == "" {
+			t.Errorf("%s: the warning does not say the ref asked for it:\n%s\n%s",
+				name, decision.lockNote, decision.reportNote)
+		}
+	}
+}
+
+// TestDirSourceReadsAncestryBothWaysAndSaysWhenItCannotTell pins the local
+// half of the ancestry question, including the case that must never read as an
+// answer: a commit this checkout does not carry, which is what a shallow clone
+// gives you.
+func TestDirSourceReadsAncestryBothWaysAndSaysWhenItCannotTell(t *testing.T) {
+	dir, first, second, side := ancestryRepo(t)
+	src, err := newDirSource(dir, second)
+	if err != nil {
+		t.Fatalf("newDirSource: %v", err)
+	}
+	for _, tc := range []struct {
+		name       string
+		base, head string
+		want       ancestry
+	}{
+		{"the same commit", second, second, ancestryIdentical},
+		{"head descends from base", first, second, ancestryAhead},
+		{"head is an ancestor of base", second, first, ancestryBehind},
+		{"neither contains the other", second, side, ancestryDiverged},
+	} {
+		got, err := src.compare(tc.base, tc.head)
+		if err != nil {
+			t.Errorf("%s: compare: %v", tc.name, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("%s: compare = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+	absent := "0123456789012345678901234567890123456789"
+	if got, err := src.compare(absent, second); err == nil {
+		t.Errorf("compare against a commit the checkout does not have = %q, want an error", got)
+	}
+}
+
+// ancestryRepo builds a repository with two commits on one line and a third on
+// another, on a private path with no shared state.
+func ancestryRepo(t *testing.T) (dir, first, second, side string) {
+	t.Helper()
+	dir = t.TempDir()
+	run := func(args ...string) {
+		t.Helper()
+		full := append([]string{"-C", dir,
+			"-c", "user.email=herdrsync@example.invalid",
+			"-c", "user.name=herdrsync test",
+			"-c", "commit.gpgsign=false"}, args...)
+		if out, err := exec.Command("git", full...).CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
+		}
+	}
+	run("init", "-q")
+	run("commit", "-q", "--allow-empty", "-m", "first")
+	first = revParse(t, dir, "HEAD")
+	run("commit", "-q", "--allow-empty", "-m", "second")
+	second = revParse(t, dir, "HEAD")
+	run("checkout", "-q", "-b", "side", first)
+	run("commit", "-q", "--allow-empty", "-m", "another line of development")
+	side = revParse(t, dir, "HEAD")
+	return dir, first, second, side
+}
+
+// TestAncestryFromCompareReadsTheStatusGitHubReports is the remote half. The
+// four statuses the API documents are the four the guard acts on, and a fifth
+// must not read as "not behind".
+func TestAncestryFromCompareReadsTheStatusGitHubReports(t *testing.T) {
+	for status, want := range map[string]ancestry{
+		"identical": ancestryIdentical,
+		"ahead":     ancestryAhead,
+		"behind":    ancestryBehind,
+		"diverged":  ancestryDiverged,
+	} {
+		body := fmt.Sprintf(`{"status": %q, "ahead_by": 10, "behind_by": 0}`, status)
+		got, err := ancestryFromCompare([]byte(body))
+		if err != nil {
+			t.Errorf("%s: ancestryFromCompare: %v", status, err)
+			continue
+		}
+		if got != want {
+			t.Errorf("%s: ancestryFromCompare = %q, want %q", status, got, want)
+		}
+	}
+	for name, body := range map[string]string{
+		"an unknown status": `{"status": "sideways"}`,
+		"no status at all":  `{"ahead_by": 3}`,
+		"not valid json":    `<html>rate limited</html>`,
+	} {
+		if got, err := ancestryFromCompare([]byte(body)); err == nil {
+			t.Errorf("%s: ancestryFromCompare = %q, want an error", name, got)
+		}
+	}
+}
+
+// TestASyncWhoseRefIsBehindTheLockVendorsTheLockedCommit runs the whole tool
+// twice against a real Herdr history: once at the pinned commit, then again
+// with the default ref pointing at an older one. The second run must write the
+// first run's tree.
+func TestASyncWhoseRefIsBehindTheLockVendorsTheLockedCommit(t *testing.T) {
+	clone := shallowStandInFor(t, herdrSource(t))
+	root := t.TempDir()
+	out := filepath.Join(root, "manifests")
+	integrationOut := filepath.Join(root, "agentintegration")
+
+	first, err := sync(options{ref: "e2b85c7", releaseTag: "v0.8.2", catalogURL: defaultCatalogURL,
+		sourceDir: clone, offline: true, out: out, integrationOut: integrationOut})
+	if err != nil {
+		t.Fatalf("first sync: %v", err)
+	}
+	if first.Pin != nil {
+		t.Fatalf("the first sync into an empty directory made a pin decision: %+v", first.Pin)
+	}
+	pinned := first.Lock.Herdr.Commit
+
+	// An older commit whose vendored bytes really differ, so the run below is
+	// proving something: the parent of the last commit that touched a manifest.
+	lastManifestChange, err := gitOutput(clone, "log", "-1", "--format=%H", pinned, "--", bundledDir)
+	if err != nil {
+		t.Fatalf("git log: %v", err)
+	}
+	older := revParse(t, clone, strings.TrimSpace(string(lastManifestChange))+"^")
+	moved, err := gitOutput(clone, "diff", "--name-only", older, pinned, "--", bundledDir)
+	if err != nil || strings.TrimSpace(string(moved)) == "" {
+		t.Fatalf("no manifest differs between %s and %s, so this test proves nothing: %v", older, pinned, err)
+	}
+	// The default ref is what an unattended run uses, so that is what has to be
+	// guarded. Offline it is HEAD, which this stand-in checkout now holds at
+	// the older commit.
+	if _, err := gitOutput(clone, "update-ref", "HEAD", older); err != nil {
+		t.Fatalf("git update-ref: %v", err)
+	}
+
+	before := readVendoredManifests(filepath.Join(out, "upstream"))
+	authorityBefore := readFileForTest(t, filepath.Join(out, "authority.upstream.json"))
+	aliasesBefore := readFileForTest(t, filepath.Join(out, "aliases.upstream.json"))
+
+	second, err := sync(options{releaseTag: "v0.8.2", catalogURL: defaultCatalogURL,
+		sourceDir: clone, offline: true, out: out, integrationOut: integrationOut})
+	if err != nil {
+		t.Fatalf("second sync: %v", err)
+	}
+	if second.Pin == nil || !second.Pin.keptPin {
+		t.Fatalf("the guard did not hold the pin: %+v", second.Pin)
+	}
+	if second.Lock.Herdr.Commit != pinned {
+		t.Errorf("lock commit moved to %s, want the pinned %s", second.Lock.Herdr.Commit, pinned)
+	}
+	if second.Lock.Herdr.Ref != first.Lock.Herdr.Ref {
+		t.Errorf("lock ref moved to %q, want %q beside the commit it names",
+			second.Lock.Herdr.Ref, first.Lock.Herdr.Ref)
+	}
+	if len(second.Lock.Notes) == 0 {
+		t.Error("the lock records no note about the held pin")
+	}
+	// The manifests are only half of it. authority.upstream.json is extracted
+	// from Herdr's documentation and moves on its own, which is how a rollback
+	// dropped Muse from it while every manifest byte stayed the same.
+	if got := readFileForTest(t, filepath.Join(out, "authority.upstream.json")); !bytes.Equal(got, authorityBefore) {
+		t.Error("the authority table moved on a sync that was supposed to change nothing")
+	}
+	if got := readFileForTest(t, filepath.Join(out, "aliases.upstream.json")); !bytes.Equal(got, aliasesBefore) {
+		t.Error("the alias table moved on a sync that was supposed to change nothing")
+	}
+	after := readVendoredManifests(filepath.Join(out, "upstream"))
+	if len(after) != len(before) {
+		t.Fatalf("vendored %d manifests, want the %d already there", len(after), len(before))
+	}
+	for name, data := range before {
+		if !bytes.Equal(after[name], data) {
+			t.Errorf("%s.toml changed on a sync that was supposed to change nothing", name)
+		}
+	}
+	if !strings.Contains(second.Body, shortSHA(pinned)) {
+		t.Error("the report does not name the commit the sync held")
+	}
+}
+
+// shallowStandInFor is a throwaway clone of a Herdr checkout that shares its
+// objects and has no working tree: the tests move its HEAD around, and the real
+// checkout is not theirs to touch.
+func shallowStandInFor(t *testing.T, source string) string {
+	t.Helper()
+	clone := filepath.Join(t.TempDir(), "herdr")
+	if out, err := exec.Command("git", "clone", "--shared", "--no-checkout", "-q", source, clone).CombinedOutput(); err != nil {
+		t.Fatalf("git clone %s: %v: %s", source, err, out)
+	}
+	return clone
+}
+
+func readFileForTest(t *testing.T, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return data
+}
+
+// TestAManifestNeedingANewerEngineIsRefusedRatherThanVendored matters more now
+// that the default ref is Herdr's development branch: a rule grammar can land
+// there before any release can evaluate it, and the vendored tree has to stay
+// readable by the engine that ships. A refusal is the whole sync, so nothing
+// half-vendored reaches the repository.
+func TestAManifestNeedingANewerEngineIsRefusedRatherThanVendored(t *testing.T) {
+	body := fmt.Sprintf(`
+id = "muse"
+version = "2026.09.01.1"
+min_engine_version = %d
+[[rules]]
+id = "r1"
+contains = ["x"]
+`, manifest.EngineVersion+1)
+	bundled := map[string]sourceFile{
+		"muse": {path: bundledDir + "/muse.toml", data: []byte(body)},
+	}
+	_, err := chooseManifests(bundled, &catalogSet{files: map[string]sourceFile{}})
+	if err == nil {
+		t.Fatal("chooseManifests vendored a manifest this engine cannot evaluate")
+	}
+	if !strings.Contains(err.Error(), "cannot be vendored") {
+		t.Errorf("the refusal does not say the manifest cannot be vendored: %v", err)
 	}
 }
