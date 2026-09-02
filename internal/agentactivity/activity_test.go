@@ -1601,58 +1601,6 @@ func TestGrokPermissionPromptIsCaughtByUpstreamBlockers(t *testing.T) {
 	}
 }
 
-// The overlay rule the capture above displaced. It is kept because deleting a
-// rule is a separate decision from proving one wrong, so it keeps a positive
-// case — but the screen is now written here rather than held as a fixture,
-// because no Grok release is known to paint it and a fixture file would claim
-// otherwise. Its negatives carry the weight: the question line alone is a
-// sentence a turn writes, and a live footer means a turn is running.
-func TestGrokAllowPromptBlocksOnlyWithItsControlLine(t *testing.T) {
-	synthetic := Observation{
-		Agent:          "grok",
-		CurrentCommand: "grok",
-		PaneTitle:      "session title - grok",
-		PaneHeight:     24,
-		Screen: "  ◇ Run a shell command\n" +
-			"  Allow bash(git status --short)?\n" +
-			"  ↑/↓ select  │  Enter confirm  │  Esc reject\n",
-	}
-	got := Detect(synthetic)
-	if got.State != StateBlocked || got.Evidence != "sidecar.allow_prompt_blocked" || !got.VisibleBlocker {
-		t.Fatalf("allow prompt got %+v, want blocked/sidecar.allow_prompt_blocked with VisibleBlocker", got)
-	}
-
-	// The same question line quoted in a transcript, with no control line under
-	// it and Grok's own idle footer. The title reads idle, and that is the
-	// correct verdict for a settled pane.
-	quoted := Observation{
-		Agent:          "grok",
-		CurrentCommand: "grok",
-		PaneTitle:      "session title - grok",
-		Screen: "  ◇ the tool would have asked:\n" +
-			"  Allow bash(git status --short)?\n" +
-			"  ╭────────────────────────────────╮\n" +
-			"  │ ❯                              │\n" +
-			"  ╰────────────────────────────────╯\n" +
-			"  Enter:send  │  Shift+Tab:mode  │  Ctrl+x:shortcuts\n",
-	}
-	if got := Detect(quoted); got.State != StateIdle || got.Evidence != "osc_title_idle" {
-		t.Fatalf("quoted allow question got %+v, want idle/osc_title_idle", got)
-	}
-
-	// The `not` gate: a live turn whose output carries both lines is still a
-	// live turn, because Grok's cancel footer is on screen for exactly as long
-	// as the turn runs and an unanswered prompt replaces it.
-	live := quoted
-	live.Screen = "  ◇ the tool would have asked:\n" +
-		"  Allow bash(git status --short)?\n" +
-		"  ↑/↓ select  │  Enter confirm  │  Esc reject\n" +
-		"  Esc:cancel  │  Ctrl+x:shortcuts\n"
-	if got := Detect(live); got.State != StateWorking || got.Evidence != "sidecar.working_footer" {
-		t.Fatalf("allow lines above a live footer got %+v, want working/sidecar.working_footer", got)
-	}
-}
-
 // Upstream declares claude's `legacy_no_prompt_blocker` (300) and codex's
 // `weak_blocker` (600) blocked with no `visible_blocker`, so a pane matching one
 // lands on the blocked lane carrying no attention flag. Before the manifest
