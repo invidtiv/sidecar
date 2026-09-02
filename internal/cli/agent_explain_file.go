@@ -67,12 +67,19 @@ func explainFile(env Env, f lifecycleFlags, help string) int {
 		cliErrf(env.Stderr, "--file requires --agent KIND so the engine knows which manifest to evaluate\n\n%s", help)
 		return 2
 	}
-	if !agentactivity.Supports(f.agent) {
+	// A kind Sidecar claims as a provider is evaluated the way a live pane is,
+	// process gate and all. A kind it merely vendors a manifest for — `kiro`,
+	// `qodercli` — is evaluated as a manifest, with no gate and no verdict, so
+	// that the overlay rules in those two files have a fixture, a census row and
+	// a differential-harness row like every other rule. See
+	// agentactivity.ExplainVendoredManifest.
+	provider := agentactivity.Supports(f.agent)
+	if !provider && !agentactivity.HasVendoredManifest(f.agent) {
 		// A rejected value, not a malformed command line: --agent was spelled
 		// correctly and carried a kind Sidecar has no manifest for. Exit 2 would
 		// tell a caller on another machine that its Sidecar is too old to
 		// understand the flag, which is what exit 2 means everywhere else here.
-		cliErrf(env.Stderr, "no screen detection for agent %q; Sidecar knows codex, claude, grok, antigravity, pi, copilot, cursor, opencode, amp, muse\n", f.agent)
+		cliErrf(env.Stderr, "no screen detection for agent %q; Sidecar knows codex, claude, grok, antigravity, pi, copilot, cursor, opencode, amp, muse, and every other agent it vendors a Herdr manifest for\n", f.agent)
 		return exitInputRejected
 	}
 	data, err := os.ReadFile(f.file)
@@ -123,12 +130,20 @@ func explainFile(env Env, f lifecycleFlags, help string) int {
 		return 0
 	}
 
-	result, explain := agentactivity.DetectManifest(ob)
-	if explain == nil {
-		// A true internal failure, and the only one left: the agent is
-		// supported, the file was read, and the engine still could not produce a
-		// record -- a manifest that failed to load or compile. That is exit 1.
-		cliErrf(env.Stderr, "could not evaluate %s as %s: %s\n", f.file, f.agent, result.Evidence)
+	var explain *manifest.Explain
+	if provider {
+		var result agentactivity.Result
+		result, explain = agentactivity.DetectManifest(ob)
+		if explain == nil {
+			// A true internal failure, and the only one left: the agent is
+			// supported, the file was read, and the engine still could not
+			// produce a record -- a manifest that failed to load or compile.
+			// That is exit 1.
+			cliErrf(env.Stderr, "could not evaluate %s as %s: %s\n", f.file, f.agent, result.Evidence)
+			return 1
+		}
+	} else if explain, _ = agentactivity.ExplainVendoredManifest(f.agent, ob); explain == nil {
+		cliErrf(env.Stderr, "could not evaluate %s as %s: the vendored manifest did not compile\n", f.file, f.agent)
 		return 1
 	}
 

@@ -35,6 +35,17 @@ import (
 // counterpart, and every phrase in it is one a turn can print about its own
 // work — which is how a finished turn that narrated "running command" kept a
 // pane on the working lane.
+//
+// Two narrower branches went with it, and the Phase 2 review recorded why in
+// docs/reference/herdr-detection-parity.md rather than restoring them. The
+// write and web/edit prompts used to match on "Add to allowlist" or "reject &
+// propose changes" *without* the "(y)" control line upstream also requires: the
+// strings are in the cursor-cli 2026.08.04 harvest, but no captured screen
+// renders either without a control line, and Cursor's fallback is low-evidence
+// so the cost of being wrong is a missing badge rather than a false completion.
+// And `cursor.screen.spinner-working` matched past-tense steps ("⬢ Thought 3s")
+// beside the live one; a Cursor step list shows finished rows above the running
+// row, so matching them is how a settled pane stays on the working lane.
 
 // cursorScreenIdentity is a last-resort claim for the `agent` comm name
 // when PATH does not resolve the binary. Herdr identifies Cursor from the

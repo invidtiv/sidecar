@@ -90,6 +90,17 @@ line_regex = ['(?i)waiting for decision \(y/n/p\)|approve mode switch \(y/n\)|wa
 # This is Cursor's only explicit idle rule: upstream has none, so every other
 # idle Cursor pane still resolves through the low-evidence fallback and cannot
 # announce a completion. This one can, and the screen it reads says so in words.
+#
+# Which is why the `not` gate is here, and it is the Phase 2 review's finding.
+# The paragraph above argues that the placeholder cannot be on screen beside a
+# live spinner, and the argument is sound for the 2026.08.04 CLI — but the rule
+# was resting on it, and the cost of being wrong is not symmetric. This rule
+# outranks `spinner_working` (90), so if the two ever do co-occur the pane goes
+# idle *explicitly* and announces a completion with the spinner still turning.
+# The gate is upstream's own spinner pattern in the RE2 spelling this file
+# already carries; with it the screen falls to a working rule instead, which is
+# the direction that costs nothing when it is wrong.
+# testdata/cursor/working_spinner_over_finished_background.txt is the case.
 [[rules]]
 id = "sidecar.finished_background_tasks_idle"
 state = "idle"
@@ -98,6 +109,7 @@ region = "bottom_non_empty_lines(5)"
 visible_idle = true
 contains = ["finished", "plan, search, build anything"]
 line_regex = ['(?i)\b[1-9][0-9]*\s+background\s+tasks?\b']
+not = [{ line_regex = ['^\s*(⬡|⬢|[⠀-⣿]+)\s+[\p{L}\p{Nl}]+\w*ing\b'] }]
 
 # The live "(background)" suffix on the status line — "Running command 12s
 # (background)" — which upstream has no rule for at all. Kept from the

@@ -36,7 +36,15 @@ import (
 //     any one of which was enough. Upstream's four blockers each require a
 //     corroborating pair from the same footer, which is what stops a turn that
 //     merely quotes one of those phrases from reading as an unanswered prompt.
-//     The narrowing is the point; no fixture depended on the wider form.
+//     The narrowing is the point; no fixture depended on the wider form. The
+//     Phase 2 review reopened one branch of it — an `Allow …?` question above an
+//     `enter Confirm` footer is a corroborated pair rather than a bare phrase,
+//     and grok is the provider where an unseen prompt is expensive, because
+//     `osc_title_idle` is a *visible* idle and can announce a completion. It
+//     stays dropped only because nothing has captured that screen: upstream's
+//     blockers are written from Grok Build 0.2.101 pane reads and describe a
+//     different prompt entirely, and testdata/grok has no permission-prompt
+//     capture of any release. A live Grok 1.0 capture is what unblocks the rule.
 //
 // Two working phrases also went: `Thinking…` and `Waiting on ` matched anywhere
 // in the current-bottom window, where upstream's `spinner_status_working`
@@ -44,6 +52,17 @@ import (
 // finished turn's last status line still says "Thinking…" for as long as it
 // stays on screen, which is precisely the residual-working case
 // TestGrokIdleFooterBeatsResidualThinkingInViewport was written for.
+//
+// Two smaller narrowings the review asked to have written down. `grok.screen.idle`
+// made a bare prompt box (`│ ❯ │`) an *explicit* idle; it is now the
+// low-evidence fallback, because Grok draws that box under a title and above a
+// footer and both are read — a box with neither is a pane mid-repaint, and
+// calling that an explicit idle is how a repaint becomes a completed turn. And
+// the deleted footer resolver treated "esc to cancel" and "esc to interrupt" as
+// cancel hints alongside Grok's own "Esc:cancel"; `sidecar.idle_footer`'s `not`
+// gate carries only the spellings Grok renders, because in a `not` gate a wider
+// list is a longer list of phrases a transcript line can contain to suppress
+// the rule that corrects a stale braille title.
 
 // grokScreenIdentity is distinctive footer/composer chrome. It is used when
 // pane_current_command is a shared runtime (node/agent) so a Grok pane cannot be

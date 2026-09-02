@@ -138,6 +138,30 @@ func censusRows(t *testing.T) []censusRow {
 				}
 			}
 
+			// A directory named after an agent Sidecar vendors a manifest for but
+			// does not claim as a provider — kiro, qodercli — is classified as a
+			// manifest rather than as a pane: there is no process gate to apply
+			// and no verdict to mint, and going through Detect would report
+			// "unsupported-agent" for every row. Those two files carry two of the
+			// four `\p{Alphabetic}` overlay rewrites, so leaving them out of the
+			// census is how a dead rule there stays invisible.
+			if !Supports(agent) {
+				explain, ok := ExplainVendoredManifest(agent, ob)
+				if !ok {
+					t.Fatalf("%s/%s: no vendored manifest for agent %q", agent, name, agent)
+				}
+				rule := "(" + explain.FallbackReason + ")"
+				if explain.MatchedRule != nil {
+					rule = explain.MatchedRule.ID
+				}
+				rows = append(rows, censusRow{
+					agent: agent, fixture: name,
+					state: string(explain.State), rule: rule,
+					skip: explain.SkipStateUpdate, declared: declaredState,
+				})
+				continue
+			}
+
 			result, explain := DetectManifest(ob)
 			rule := result.Evidence
 			if explain != nil && explain.MatchedRule == nil {

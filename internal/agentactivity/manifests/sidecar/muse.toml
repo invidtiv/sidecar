@@ -1,0 +1,49 @@
+# Sidecar overlay for muse.
+#
+# One rule, and it exists because Muse is the provider where an unrecognised
+# working screen is not merely unknown: upstream carries two explicit idle rules
+# (`idle_prompt` at 700 and `idle_status_fallback` at 500), and both are
+# `visible_idle`. A live turn upstream cannot see does not fall through to the
+# low-evidence fallback here — it reads as an explicitly, visibly idle pane, and
+# the tracker turns a visible idle out of working into a completed turn.
+#
+# Upstream describes Muse's activity in terms of one hint: `working_esc_interrupt`
+# (900) reads "esc to interrupt", which Muse Code 0.2.1 renders beside the
+# elapsed timer on every active turn. Sidecar's own harvest is of Muse Code
+# 1.0.1, a year newer, and the rule table it produced carried a second shape —
+# a lozenge glyph in front of the activity word — as `muse.screen.thinking-glyph`.
+# That is what this restores, and the Phase 2 review is why: dropping it turned a
+# thinking pane whose composer is still drawn into a visible idle.
+
+id = "muse"
+
+# `◈ Thinking` with the composer still on screen.
+#
+# The gate is the deleted rule's, anchored to the head of a line rather than
+# matched anywhere in sixteen: the glyph is chrome Muse paints in a status
+# column, so a turn that merely writes the word "Thinking" mid-sentence cannot
+# reach it. That anchoring is the whole difference between this rule and
+# `muse.screen.working`, which matched the bare words "Thinking" or "Working"
+# anywhere in the window and was dropped on purpose — upstream's own evidence
+# note says Muse emits either phrase as ordinary assistant text after a
+# completed turn.
+#
+# It is deliberately not widened past the one glyph and the one verb the harvest
+# recorded. Upstream documents `◆ Working (… · esc to interrupt)` for 0.2.1, and
+# any screen carrying that hint is already `working_esc_interrupt` at 900; a
+# rule covering every glyph and every verb would be the speculative-rule mistake
+# this cutover removed elsewhere. testdata/muse/thinking.txt is the fixture and
+# it is labelled synthetic: the harvest that produced the pattern predates the
+# fixture corpus and no capture of the screen survives.
+#
+# Priority 750 sits above both idle rules and below every blocker
+# (`blocked_approval` 850, `pick_request_blocked` 950, `workspace_trust_blocked`
+# 970) and below `menu_overlay` (940), so an overlay the user opened mid-turn
+# still retains rather than reporting work.
+[[rules]]
+id = "sidecar.thinking_working"
+state = "working"
+priority = 750
+region = "bottom_non_empty_lines(8)"
+visible_working = true
+line_regex = ['^\s*◈\s*Thinking\b']

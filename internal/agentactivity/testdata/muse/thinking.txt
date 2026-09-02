@@ -1,0 +1,24 @@
+source: synthetic. The screen shape the deleted `muse.screen.thinking-glyph`
+        rule was written against, from the Muse Code 1.0.1 harvest recorded in
+        the pre-cutover muse.go header (2026-08-31, darwin/arm64). No capture of
+        it survives in this corpus, which is why this is a reconstruction rather
+        than a capture: the status row, the composer Muse keeps drawn during a
+        turn, and the model/effort/cwd footer.
+why: Muse is the provider where an unrecognised working screen is not merely
+     unknown. Upstream's `idle_prompt` (700) and `idle_status_fallback` (500)
+     are both `visible_idle`, and both match this screen — the composer is
+     drawn and the footer is there — so without a working rule a thinking pane
+     reads as an explicit visible idle and the tracker announces a completed
+     turn. Upstream reads Muse activity through the "esc to interrupt" hint,
+     which this shape does not carry. See manifests/sidecar/muse.toml
+     (`sidecar.thinking_working`).
+pane_title: muse
+pane_current_command: muse
+state: working
+screen:
+⟩ Refactor the tracker so a visible idle cannot manufacture a completion.
+
+◈ Thinking
+
+⟩
+gpt-5.6-sol · high · ~/code/sidecar

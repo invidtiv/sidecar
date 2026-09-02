@@ -171,8 +171,21 @@ PY
 # and this is where that list is read. It is deliberately a whitelist of exact
 # rule ids: it silences the redundancy check for those rules only, and every
 # other `sidecar.` rule still has to earn its place on a fixture.
-exempt=$(grep -ho '^# harness-exempt: sidecar\.[A-Za-z0-9_]*' "$SIDECAR_OVERLAYS"/*.toml 2>/dev/null |
-  sed 's/^# harness-exempt: //' | paste -sd, -)
+#
+# Each entry is keyed by the overlay file that declares it, because a rule id is
+# not unique across agents: `sidecar.overlay_retain` exists in both claude.toml
+# and grok.toml, and an unscoped whitelist would silence the redundancy check for
+# one agent's rule because another agent's rule of the same name is exempt. The
+# id pattern allows dots for the same reason it must: every id here begins
+# "sidecar." and a further dot in the name is legal.
+exempt=$(for overlay in "$SIDECAR_OVERLAYS"/*.toml; do
+  [ -e "$overlay" ] || continue
+  base=$(basename "$overlay" .toml)
+  # An overlay with no exemption is the normal case, and grep exits 1 on it;
+  # `|| true` keeps that from ending the run under `set -o pipefail`.
+  { grep -ho '^# harness-exempt: sidecar\.[A-Za-z0-9_.]*' "$overlay" 2>/dev/null || true; } |
+    sed "s/^# harness-exempt: /$base:/"
+done | paste -sd, -)
 
 classifier="$work/classify.py"
 cat > "$classifier" <<'PY'
@@ -196,7 +209,7 @@ if h_fallback == "unknown_agent":
     # there is nothing to compare against. muse is the standing case: Herdr
     # ships muse.toml bundled-only and 0.8.2 predates it.
     verdict = "NO-ORACLE"
-elif s_rule in exempt and os.environ["MERGED"] != "1":
+elif os.environ["OVERLAY_FILE_BASE"] + ":" + s_rule in exempt and os.environ["MERGED"] != "1":
     # A rule the overlay declares the harness structurally cannot judge. See
     # the harness-exempt block below.
     verdict = "TITLE-ONLY"
@@ -284,7 +297,8 @@ for dir in "$FIXTURES"/*/; do
       "$HERDR_BIN" agent explain --file "$window" --agent "$label" --json)
 
     read -r verdict sstate srule hstate hrule < <(
-      SIDECAR_JSON="$sc" HERDR_JSON="$hd" MERGED="$merged" EXEMPT="$exempt" python3 "$classifier")
+      SIDECAR_JSON="$sc" HERDR_JSON="$hd" MERGED="$merged" EXEMPT="$exempt" \
+        OVERLAY_FILE_BASE="$file" python3 "$classifier")
 
     total=$((total + 1))
     case "$verdict" in

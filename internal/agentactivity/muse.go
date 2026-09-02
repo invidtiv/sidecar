@@ -31,6 +31,15 @@ import "strings"
 // Upstream's own comment says why: Muse emits any one of those phrases as
 // ordinary assistant text after a completed turn.
 //
+// One rule from that table did survive, and the Phase 2 review is what brought
+// it back: `muse.screen.thinking-glyph` is `sidecar.thinking_working` in
+// `manifests/sidecar/muse.toml`. Muse is the provider where a working screen
+// upstream cannot see is not merely unclassified — `idle_prompt` and
+// `idle_status_fallback` are both `visible_idle` and both match a thinking pane,
+// because Muse keeps its composer and footer drawn during a turn, so the pane
+// reports an explicit idle and the tracker announces a completed turn. The
+// restored rule is narrower than the deleted one: the glyph has to open a line.
+//
 // Upstream also carries two things Sidecar had no equivalent for — `menu_overlay`
 // for the /theme and /skills menus, and `idle_status_fallback` for the
 // `model · effort · cwd` footer — and one thing it does not: a title rule.

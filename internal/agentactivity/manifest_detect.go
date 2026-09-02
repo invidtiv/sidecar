@@ -91,7 +91,8 @@ func processGate(agent, command string, ob Observation) bool {
 // marked FallbackIdle.
 //
 // It is true everywhere except Antigravity, and the exception is deliberate,
-// pre-existing, and was re-examined and kept in the Phase 2 cutover.
+// pre-existing, and was re-examined twice in Phase 2 — at the cutover and again
+// at its review, after the overlay gained a blocker for the permission prompt.
 //
 // Upstream `antigravity.toml` has three rules and none of them is an idle rule,
 // and neither Sidecar capture of an idle Antigravity pane matches anything at
@@ -100,12 +101,24 @@ func processGate(agent, command string, ob Observation) bool {
 // low-evidence would make "done" unreachable for it; see
 // TestRealAntigravityCompletedFallbackStillCreatesUnseenDone.
 //
+// The review's question was whether the two overlay blockers and the status
+// footer had bought enough coverage to flip it. They have not, and cannot: they
+// are working and blocked rules, and what would justify flipping this is an
+// *idle* rule — a screen this provider paints when a turn is finished that
+// something can match. Antigravity's finished screen is its composer plus the
+// "? for shortcuts" footer, which is also its startup screen, so there is no
+// rule to write that distinguishes a completed turn from a session that never
+// started one. Until upstream gains an idle rule, this stays the one provider
+// whose fallback can announce a completion.
+//
 // The cost is stated rather than hidden: an Antigravity screen nobody has
 // captured reads as a finished turn rather than as an unknown one. That is why
 // the two speculative retain rules its old rule table carried were deleted
-// rather than carried forward — see antigravity.go. Remove the exception the day
-// upstream gains an idle rule, or a captured idle screen justifies an overlay
-// one.
+// rather than carried forward — see antigravity.go — and why the permission
+// prompt got an overlay rule rather than being left to the fallback: on this
+// provider, "no rule matched" is not a quiet answer. Remove the exception the
+// day upstream gains an idle rule, or a captured idle screen justifies an
+// overlay one.
 func fallbackIsLowEvidence(agent string) bool { return agent != "antigravity" }
 
 // manifestInput is the observation as the engine takes it, and the two refusals
@@ -196,4 +209,41 @@ func DetectManifest(ob Observation) (Result, *manifest.Explain) {
 func ExplainManifest(ob Observation) *manifest.Explain {
 	_, explain := DetectManifest(ob)
 	return explain
+}
+
+// ExplainVendoredManifest evaluates a screen against the vendored manifest for a
+// Herdr agent id, with no provider gate and no Result.
+//
+// It exists for the agents Sidecar vendors a manifest for and does not claim as
+// providers — `kiro` and `qodercli`, which carry two of the four
+// `\p{Alphabetic}` overlay rewrites between them. Nothing on Sidecar's live path
+// ever reaches them, so before this the rewrites had no fixture, no census row
+// and no differential-harness row: a dead rule in either file would have gone on
+// being dead until someone read the TOML. `sidecar agent explain --file` is the
+// tool that closes that, and it is a debugging surface for a manifest rather
+// than a verdict for a pane, so refusing an id the binary carries the bytes for
+// was an arbitrary limit.
+//
+// It is deliberately not a second Detect: there is no Sidecar provider here, so
+// there is no process gate to apply, no evidence string to mint and no fallback
+// policy to choose. A caller that wants a verdict wants Detect and a supported
+// agent. The bool reports whether a manifest for the id exists at all.
+func ExplainVendoredManifest(agentID string, ob Observation) (*manifest.Explain, bool) {
+	compiled, _, err := manifests.Load(agentID)
+	if err != nil {
+		return nil, false
+	}
+	_, explain := compiled.Explain(manifest.Input{
+		Screen: ob.Screen,
+		Title:  ob.PaneTitle,
+		Rows:   ob.PaneHeight,
+	})
+	return explain, true
+}
+
+// HasVendoredManifest reports whether a Herdr agent id has a vendored manifest
+// that compiles, whether or not Sidecar claims it as a provider.
+func HasVendoredManifest(agentID string) bool {
+	_, _, err := manifests.Load(agentID)
+	return err == nil
 }

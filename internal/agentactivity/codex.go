@@ -10,17 +10,20 @@ package agentactivity
 // approval prompt is `live_strong_blocker`, the transcript viewer is
 // `transcript_viewer` — plus rules Sidecar never had: the trust-directory
 // prompt at the top of the buffer, and prompt-marker-relative regions that stop
-// a resolved historical prompt in the scrollback from producing a blocker. The
-// one thing upstream does not model is a turn parked on a background terminal;
-// that rule lives on in `manifests/sidecar/codex.toml`.
+// a resolved historical prompt in the scrollback from producing a blocker.
 //
-// One consequence is worth naming. Sidecar had an explicit composer-idle rule
-// (`^\s*›`); upstream reaches idle through `osc_title_idle`, which asks only
-// that the title be non-empty and carry no spinner. Under tmux a pane title is
-// effectively always non-empty, so this is the same verdict in practice — but a
-// pane whose title is genuinely empty now resolves idle through the fallback
-// instead, which is FallbackIdle and therefore cannot announce a completed
-// turn. That is the conservative direction, and it is upstream's call to make.
+// Four signals did not survive upstream unchanged, and all four live on in
+// `manifests/sidecar/codex.toml` rather than here: a turn parked on a
+// background terminal, which upstream does not model at all; the composer-idle
+// rule, because upstream reaches idle through `osc_title_idle` and that rule's
+// whole matcher is `\S` on a title tmux seeds with the host name, so under
+// tmux it is satisfied on essentially every pane and turns "no rule matched"
+// into "explicitly, visibly idle"; the `• Working (… esc to interrupt)` status
+// line, because upstream reads it three non-empty lines deep and one tool
+// call's output pushes it to the fourth; and the approval prompt whose option
+// line carries the composer glyph, which empties both of upstream's
+// prompt-marker-relative regions. The overlay states the priority each sits at
+// and why, and what would make it deletable.
 
 // DetectCodex classifies a Codex pane. The process gate runs first and refuses
 // before any manifest is evaluated; everything after it is upstream's. tmux

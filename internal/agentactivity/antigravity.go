@@ -2,14 +2,19 @@ package agentactivity
 
 // Antigravity's screen rules are Herdr's, executed from the vendored
 // `manifests/upstream/antigravity.toml` by the manifest engine (Phase 2 of
-// docs/plans/active/herdr-detection-parity.md), with two Sidecar rules layered
+// docs/plans/active/herdr-detection-parity.md), with three Sidecar rules layered
 // over them in `manifests/sidecar/antigravity.toml` plus the RE2 rewrite of
 // upstream's `spinner_working`. This file is what remains that is Sidecar's:
 // the process gate, and the fallback exception below.
 //
-// Upstream has three rules and Sidecar's captures match none of them, so both
-// the trust prompt and the working footer are overlay rules with a fixture
-// each. Two rules from the Go table were dropped instead of carried:
+// Upstream has three rules and Sidecar's captures match none of them, so the
+// trust prompt and the working footer are overlay rules with a fixture each.
+// The third overlay rule is the tool-permission prompt, added by the Phase 2
+// review: upstream's `permission_prompt` corroborates its literal with phrases
+// this CLI does not render, and on this provider — the one whose fallback is
+// full evidence — a prompt no rule matches is not an unknown pane but a
+// reported completion. Two rules from the Go table were dropped instead of
+// carried:
 //
 //   - `antigravity.overlay.viewer` and `antigravity.overlay.retain` retained
 //     the prior state on "conversation history", "transcript", "esc to close"
@@ -28,7 +33,7 @@ package agentactivity
 
 // DetectAntigravity classifies an Antigravity pane. The process gate runs first
 // and refuses before any manifest is evaluated; everything after it is
-// upstream's, plus the two overlay rules.
+// upstream's, plus the three overlay rules.
 func DetectAntigravity(ob Observation) Result {
 	if ob.Agent != "antigravity" {
 		return Result{State: StateUnknown, Evidence: "antigravity.process-mismatch"}

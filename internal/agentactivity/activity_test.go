@@ -161,6 +161,10 @@ func TestRealCodexFixtures(t *testing.T) {
 		{"working.txt", StateWorking, false},
 		{"tool_execution.txt", StateWorking, false},
 		{"background_terminal.txt", StateWorking, false},
+		// A turn whose status line has been pushed above upstream's three-line
+		// window by tool output, with the composer still drawn beneath it. See
+		// TestCodexRunningTurnBeatsTheComposerIdleRule.
+		{"tool_running_composer.txt", StateWorking, false},
 		{"blocked.txt", StateBlocked, false},
 		// The same screen as blocked.txt with an ordinary title, which is what
 		// upstream cannot see: both of its screen blockers are defined relative
@@ -573,6 +577,14 @@ func TestExpandedPerProviderFixtures(t *testing.T) {
 		{"cursor", "false_positive.txt", "cursor.process-mismatch", StateUnknown, false},
 		{"cursor", "false_positive_run_everything.txt", "cursor.known-live-fallback", StateIdle, false},
 		{"cursor", "false_positive_finished_background.txt", "sidecar.finished_background_tasks_idle", StateIdle, false},
+		// The negative for the rule above, added by the Phase 2 review. That
+		// rule outranks `spinner_working`, so if the Finished group and a live
+		// spinner ever do share a screen it would report an *explicit* idle with
+		// the spinner still turning. Its `not` gate is upstream's own spinner
+		// pattern, and with it the screen falls to upstream's working rule. The
+		// assertion that matters is the evidence: no `sidecar.` rule may fire
+		// here.
+		{"cursor", "working_spinner_over_finished_background.txt", "background_task_status_working", StateWorking, false},
 		// opencode/blocked_compatibility.txt: blocked / `opencode.screen.blocked`
 		// → blocked / `permission_required`. Upstream rule better; same banner,
 		// upstream's id.
@@ -1113,5 +1125,196 @@ func TestMuseIsClassifiedByItsBundledOnlyManifest(t *testing.T) {
 	// The process gate still refuses a pane that is not running Muse.
 	if got := Detect(Observation{Agent: "muse", CurrentCommand: "zsh", Screen: "⟩ \n"}); got.Evidence != "muse.process-mismatch" {
 		t.Fatalf("process gate = %+v", got)
+	}
+}
+
+// A Codex turn is live for as long as the interrupt hint is on screen, and the
+// composer is drawn the whole time. Before the Phase 2 review these two facts
+// met in the wrong place: `sidecar.composer_idle` saw the `›` at priority 100,
+// upstream's `screen_working_fallback` reads only the bottom three non-empty
+// lines and so could not see the status line one tool-output row higher, and a
+// pane in the middle of an apply_patch reported an explicit visible idle — which
+// Tracker turns into a completed turn.
+func TestCodexRunningTurnBeatsTheComposerIdleRule(t *testing.T) {
+	live := readObservationFixture(t, "codex", "tool_running_composer.txt")
+	got := DetectCodex(live)
+	if got.State != StateWorking || got.Evidence != "sidecar.working_chrome" || !got.VisibleWorking {
+		t.Fatalf("running turn got %+v, want working/sidecar.working_chrome", got)
+	}
+
+	// The tracker consequence, stated rather than implied: this screen arriving
+	// after a working turn must not publish a completion.
+	tracker := Tracker{State: StateWorking, Evidence: "osc_title_working"}
+	now := time.Unix(300, 0)
+	if tracker.Apply(got, now) && tracker.DisplayState() == "done" {
+		t.Fatalf("a running turn announced done: %+v", tracker)
+	}
+
+	// The same screen once the turn ends: Codex clears the hint and leaves the
+	// composer, which is the idle this rule is for.
+	ended := live
+	ended.Screen = strings.Replace(live.Screen,
+		"• Working (45s • esc to interrupt) · editing files",
+		"• Edited internal/agentactivity/activity.go", 1)
+	if got := DetectCodex(ended); got.State != StateIdle || got.Evidence != "sidecar.composer_idle" {
+		t.Fatalf("finished turn got %+v, want idle/sidecar.composer_idle", got)
+	}
+
+	// The new working rule must not displace the background-terminal rule one
+	// priority step above it, whose fixture also carries an interrupt hint.
+	if got := DetectCodex(readObservationFixture(t, "codex", "background_terminal.txt")); got.Evidence != "sidecar.background_terminal_working" {
+		t.Fatalf("background terminal got %+v, want sidecar.background_terminal_working", got)
+	}
+	// Nor upstream's own rule, on a screen upstream can see. An overlay rule
+	// that reports a verdict Herdr reaches without it is a rule to delete, and
+	// scripts/herdr-diff.sh fails the run when one does.
+	if got := DetectCodex(readObservationFixture(t, "codex", "working.txt")); got.Evidence == "sidecar.working_chrome" {
+		t.Fatalf("overlay displaced upstream's rule on a screen upstream can see: %+v", got)
+	}
+}
+
+// Antigravity is the one provider whose no-match fallback is not low-evidence,
+// so a permission prompt upstream cannot see is not merely unclassified — it is
+// a full-evidence visible idle, and the tracker announces a completed turn on a
+// pane sitting on an unanswered command.
+func TestAntigravityPermissionPromptIsBlockedNotIdle(t *testing.T) {
+	got := Detect(readObservationFixture(t, "antigravity", "permission_prompt.txt"))
+	if got.State != StateBlocked || got.Evidence != "sidecar.permission_prompt_blocked" || !got.VisibleBlocker {
+		t.Fatalf("permission prompt got %+v, want blocked/sidecar.permission_prompt_blocked", got)
+	}
+
+	// The phrase alone is not the prompt. A turn quoting it with no control
+	// line must not read as a live blocker.
+	quoted := Detect(Observation{
+		Agent: "antigravity", CurrentCommand: "agy",
+		Screen: "The log line to grep for is `requesting permission for:`.\n>\n? for shortcuts · Gemini 3.6 Flash · high\n",
+	})
+	if quoted.State == StateBlocked {
+		t.Fatalf("a quoted phrase read as a blocker: %+v", quoted)
+	}
+}
+
+// The trust prompt is answered once, at the top of a session, and then stays in
+// the scrollback. Read over `whole_recent` it went on reporting a blocker above
+// every turn that followed; the bound is the bottom twelve non-empty lines,
+// which is more than twice the prompt's own height.
+func TestAntigravityTrustPromptDoesNotFireAboveALiveTurn(t *testing.T) {
+	answered := "Do you trust the contents of this project?\n" +
+		"Antigravity CLI requires permission to read, edit, and execute files here.\n" +
+		"> Yes, I trust this folder\n  No, exit\n↑/↓ Navigate · enter Confirm\n"
+	turn := strings.Repeat("• read a file\n", 14)
+	live := Detect(Observation{
+		Agent: "antigravity", CurrentCommand: "agy", PaneHeight: 40,
+		Screen: answered + turn + "Generating...\n>\nesc to cancel · Gemini 3.6 Flash · high\n",
+	})
+	if live.State != StateWorking || live.Evidence != "sidecar.status_footer_working" {
+		t.Fatalf("live turn under an answered trust prompt got %+v, want working", live)
+	}
+
+	// The prompt still blocks while it is the screen, which is the fixture.
+	if got := Detect(readObservationFixture(t, "antigravity", "blocked.txt")); got.Evidence != "sidecar.trust_prompt_blocked" {
+		t.Fatalf("unanswered trust prompt got %+v", got)
+	}
+}
+
+// Muse carries two explicit `visible_idle` rules upstream, so a working screen
+// upstream cannot see does not degrade to the low-evidence fallback here — it
+// reads as an explicit idle and announces a completed turn mid-turn.
+func TestMuseThinkingGlyphBeatsTheVisibleIdlePrompt(t *testing.T) {
+	got := Detect(readObservationFixture(t, "muse", "thinking.txt"))
+	if got.State != StateWorking || got.Evidence != "sidecar.thinking_working" || !got.VisibleWorking {
+		t.Fatalf("thinking got %+v, want working/sidecar.thinking_working", got)
+	}
+
+	// Without the status row the same pane is upstream's `idle_prompt`, and it
+	// is visible — which is precisely why the row above has to outrank it.
+	idle := Detect(Observation{
+		Agent: "muse", CurrentCommand: "muse",
+		Screen: "⟩ Refactor the tracker.\n\n⟩\ngpt-5.6-sol · high · ~/code/sidecar\n",
+	})
+	if idle.State != StateIdle || idle.Evidence != "idle_prompt" || !idle.VisibleIdle {
+		t.Fatalf("settled pane got %+v, want visible idle/idle_prompt", idle)
+	}
+
+	// The glyph has to open a line. A turn narrating the word is not chrome,
+	// which is the whole difference between this rule and the deleted
+	// `muse.screen.working` it is a narrowing of.
+	narrated := Detect(Observation{
+		Agent: "muse", CurrentCommand: "muse",
+		Screen: "I marked the ◈ Thinking row as the one to match.\n⟩\n",
+	})
+	if narrated.State == StateWorking {
+		t.Fatalf("narrated glyph read as working: %+v", narrated)
+	}
+}
+
+// The four upstream rules RE2 cannot compile are replaced in place by overlay
+// rewrites. Two of them belong to agents Sidecar does not claim as providers, so
+// nothing on the live path ever evaluates them; without this test a dead pattern
+// in either file would stay dead until someone read the TOML.
+// TestOverlaysMakeEveryRuleCompilable proves the rewrites compile. This proves
+// they still match the screens the originals target.
+func TestRewrittenAlphabeticRulesMatchTheScreensTheyTarget(t *testing.T) {
+	// The two Sidecar claims run through the whole live path, gate included.
+	for _, tt := range []struct {
+		agent, command, screen string
+	}{
+		{"antigravity", "agy", "⠋ Generating files\n"},
+		{"cursor", "cursor-agent", "⬢ Reading 2 files, 1 directory\n"},
+	} {
+		got := Detect(Observation{Agent: tt.agent, CurrentCommand: tt.command, Screen: tt.screen})
+		if got.State != StateWorking || got.Evidence != "spinner_working" {
+			t.Fatalf("%s spinner got %+v, want working/spinner_working", tt.agent, got)
+		}
+	}
+
+	// The two it does not are evaluated as manifests, which is what the census
+	// and scripts/herdr-diff.sh do with their fixtures.
+	for _, tt := range []struct{ agent, fixture, rule string }{
+		{"kiro", "tool_spinner_working.txt", "tool_spinner_working"},
+		{"qodercli", "spinner_working.txt", "spinner_working"},
+	} {
+		ob := readObservationFixture(t, tt.agent, tt.fixture)
+		explain, ok := ExplainVendoredManifest(tt.agent, ob)
+		if !ok {
+			t.Fatalf("%s: no vendored manifest", tt.agent)
+		}
+		if explain.MatchedRule == nil || explain.MatchedRule.ID != tt.rule || State(explain.State) != StateWorking {
+			t.Fatalf("%s/%s got %+v, want working/%s", tt.agent, tt.fixture, explain.MatchedRule, tt.rule)
+		}
+	}
+
+	// A provider Sidecar does claim is still a provider: the manifest-only path
+	// is for ids with no provider, and must not become a second way to classify
+	// a pane without its process gate.
+	if Supports("kiro") || Supports("qodercli") {
+		t.Fatal("kiro/qodercli became providers; the census and CLI paths above assume they are not")
+	}
+}
+
+// Identify reads a bounded window for the same reason detection does, but it
+// trims the pane's trailing padding *before* taking the last rows rather than
+// after. manifest.ReadWindow does it the other way, which is Herdr's order and
+// correct for a verdict; using it here cost the identity of every tall pane
+// showing a short startup banner, because the last 24 rows of a freshly cleared
+// 40-row pane are 24 rows of padding.
+func TestIdentityWindowSurvivesTallPanePadding(t *testing.T) {
+	// A tmux-shaped capture: five rows of banner, then the pane padded out to
+	// its full height, newline-terminated.
+	banner := "OpenAI Codex (v0.147.0)\n" +
+		"model: gpt-5.6-sol\n" +
+		"directory: ~/code/sidecar\n" +
+		"\n" +
+		"› \n"
+	capture := banner + strings.Repeat("\n", 40)
+	if got := Identify(Observation{CurrentCommand: "node", Screen: capture, PaneHeight: 45}); got != "codex" {
+		t.Fatalf("tall padded pane identified as %q, want codex", got)
+	}
+
+	// The bound is still a bound: a banner pushed above the last 24 non-blank
+	// rows is out of the window, padding or no padding.
+	scrolled := banner + strings.Repeat("• ran a command\n", 30) + strings.Repeat("\n", 10)
+	if got := Identify(Observation{CurrentCommand: "node", Screen: scrolled, PaneHeight: 45}); got != "" {
+		t.Fatalf("scrolled banner identified as %q, want no identity", got)
 	}
 }

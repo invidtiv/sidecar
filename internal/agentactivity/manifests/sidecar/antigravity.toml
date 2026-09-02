@@ -52,6 +52,16 @@ line_regex = ['^\s*[\u2800-\u28FF]+\s+[\p{L}\p{Nl}]+\w*ing\b']
 # the bare words "Proceed" and "Amend", any one of which was enough to call a
 # pane blocked.
 #
+# The region is the bottom twelve non-empty lines rather than `whole_recent`,
+# and that is the Phase 2 review's finding rather than the original shape. The
+# trust prompt is five lines and it is the only thing on the pane when it is
+# live, so twelve lines is generous; over `whole_recent` an *answered* trust
+# prompt still in the scrollback kept firing above a turn that had since
+# started, which is a blocker announced on a pane nobody is waiting on. There is
+# no capture of that screen — the prompt is a first-run one — so the bound is
+# argued from the prompt's own size rather than measured, and
+# TestAntigravityTrustPromptDoesNotFireAboveALiveTurn is the case.
+#
 # Priority 310 sits just above upstream's `permission_prompt` (300) so a screen
 # carrying both reports through the more specific one; both outrank every
 # working rule.
@@ -59,13 +69,56 @@ line_regex = ['^\s*[\u2800-\u28FF]+\s+[\p{L}\p{Nl}]+\w*ing\b']
 id = "sidecar.trust_prompt_blocked"
 state = "blocked"
 priority = 310
-region = "whole_recent"
+region = "bottom_non_empty_lines(12)"
 visible_blocker = true
 contains = ["do you trust the contents of this project?"]
 any = [
   { contains = ["yes, i trust this folder"] },
   { contains = ["no, exit"] },
 ]
+
+# The tool-permission prompt, which upstream sees only when it carries one of
+# two corroborating phrases the Antigravity CLI 1.1.11 does not render.
+#
+# Upstream's `permission_prompt` requires "requesting permission for:" *and*
+# either "do you want to proceed?" or the pair "tab amend" + "edit command".
+# The prompt this provider actually paints is a selection list with the same
+# footer its trust prompt uses:
+#
+#   requesting permission for: rm -rf ./build
+#   > Allow once
+#     Allow always
+#     Deny
+#   ↑/↓ Navigate · enter Confirm
+#
+# None of upstream's three corroborators is on it, so upstream alone falls
+# through — and Antigravity is the one provider whose no-match fallback is *not*
+# low-evidence (see fallbackIsLowEvidence), so that fallback is a full-evidence
+# visible idle and the tracker turns it into a completed turn. A pane sitting on
+# an unanswered "rm -rf" approval reported as done is the worst failure this
+# corpus has. The deleted `antigravity.screen.blocked` caught it on the bare
+# phrase; this catches it on the phrase plus a control line.
+#
+# The literal is upstream's own, so the screen shape is upstream-attested; what
+# is Sidecar's is the corroborator, and half of it is captured — "enter Confirm"
+# is the footer of testdata/antigravity/blocked.txt, the one real capture of
+# this CLI's selection chrome. The option spellings are not captured, which is
+# why testdata/antigravity/permission_prompt.txt is labelled synthetic. Requiring
+# the pair rather than the phrase alone is what keeps a turn that merely quotes
+# "requesting permission for:" from reading as a live prompt.
+#
+# Priority 305 is between upstream's `permission_prompt` (300) and
+# `sidecar.trust_prompt_blocked` (310): a screen carrying both a trust prompt
+# and a permission prompt reports through the trust prompt, which is the one
+# that has to be answered first.
+[[rules]]
+id = "sidecar.permission_prompt_blocked"
+state = "blocked"
+priority = 305
+region = "bottom_non_empty_lines(12)"
+visible_blocker = true
+contains = ["requesting permission for:"]
+line_regex = ['(?i)^\s*[>›❯]?\s*(?:allow once|allow always|deny)\b|enter confirm']
 
 # The working footer. Antigravity's status line is the last row of the pane and
 # it is one of two shapes:

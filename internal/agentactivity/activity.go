@@ -33,6 +33,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/marcus/sidecar/internal/agentactivity/manifest"
 )
 
@@ -152,16 +154,32 @@ func Identify(ob Observation) string {
 // TestTheProcessNameVocabularyMatchesTheAgentCatalog pin both halves of that:
 // the shape, and that no other catalog family could ever present this argv[0].
 // identityWindow is the bounded screen Identify reads when a pane's command
-// name is a shared runtime. It is deliberately not the detection window: the
-// detection window is the pane's own height, and identity is a cheaper, more
-// forgiving question than a verdict — a startup header twenty rows up still
-// names the program that painted it. Twenty-four rows is what the pre-manifest
-// RegionCurrent used and what this keeps.
+// name is a shared runtime. It is deliberately not the detection window, and
+// the difference is the order of two steps rather than the depth: identity is a
+// cheaper, more forgiving question than a verdict — a startup header twenty
+// rows up still names the program that painted it — so the padding a tall pane
+// carries below its content must not be allowed to spend the budget.
 //
-// It is manifest.ReadWindow rather than a second implementation so identity and
-// detection strip SGR and trim rows the same way. Nothing here reads a rule.
+// Trailing blank rows are therefore dropped *before* the last 24 rows are
+// taken, which is what the pre-manifest RegionCurrent did and the opposite of
+// manifest.ReadWindow. ReadWindow is right for detection and was wrong here:
+// tmux pads a capture out to the full pane height, so on a real 40-row pane
+// showing a five-line Codex startup banner the last 24 rows are 24 rows of
+// padding and Identify saw an empty window. A fresh start or a `/clear` on any
+// pane taller than 24 rows silently stopped resolving `node` and `bun` to their
+// provider. TestIdentityWindowSurvivesTallPanePadding is the regression.
+//
+// The SGR strip is shared with the engine so the two lanes see the same bytes;
+// only the trim order differs, and it differs on purpose.
 func identityWindow(ob Observation) string {
-	return manifest.ReadWindow(ob.Screen, manifest.DefaultDetectionRows)
+	lines := strings.Split(ansi.Strip(ob.Screen), "\n")
+	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		lines = lines[:len(lines)-1]
+	}
+	if len(lines) > manifest.DefaultDetectionRows {
+		lines = lines[len(lines)-manifest.DefaultDetectionRows:]
+	}
+	return strings.Join(lines, "\n")
 }
 
 func claudeVersionArgv0(command string) bool {
