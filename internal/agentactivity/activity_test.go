@@ -1422,8 +1422,12 @@ func TestRewrittenAlphabeticRulesMatchTheScreensTheyTarget(t *testing.T) {
 		}
 	}
 
-	// The two it does not are evaluated as manifests, which is what the census
-	// and scripts/herdr-diff.sh do with their fixtures.
+	// The other two became detection-only families in Phase 4, so they now run
+	// through the same live path, gate included. Both routes are checked: the
+	// verdict must be the rule the rewrite carries either way, because
+	// ExplainVendoredManifest is still what the census and
+	// scripts/herdr-diff.sh use for an id with no provider, and a rewrite that
+	// only worked through one of the two would be half dead.
 	for _, tt := range []struct{ agent, fixture, rule string }{
 		{"kiro", "tool_spinner_working.txt", "tool_spinner_working"},
 		{"qodercli", "spinner_working.txt", "spinner_working"},
@@ -1436,13 +1440,20 @@ func TestRewrittenAlphabeticRulesMatchTheScreensTheyTarget(t *testing.T) {
 		if explain.MatchedRule == nil || explain.MatchedRule.ID != tt.rule || State(explain.State) != StateWorking {
 			t.Fatalf("%s/%s got %+v, want working/%s", tt.agent, tt.fixture, explain.MatchedRule, tt.rule)
 		}
+		if got := Detect(ob); got.State != StateWorking || got.Evidence != tt.rule {
+			t.Fatalf("%s/%s through Detect got %+v, want working/%s", tt.agent, tt.fixture, got, tt.rule)
+		}
 	}
 
-	// A provider Sidecar does claim is still a provider: the manifest-only path
-	// is for ids with no provider, and must not become a second way to classify
-	// a pane without its process gate.
-	if Supports("kiro") || Supports("qodercli") {
-		t.Fatal("kiro/qodercli became providers; the census and CLI paths above assume they are not")
+	// The manifest-only path is still for ids with no provider, and must not
+	// become a second way to classify a pane without its process gate. Gemini is
+	// the id that exercises it now: its manifest is vendored and Decision 4
+	// deliberately registers no family for it.
+	if Supports("gemini") {
+		t.Fatal("gemini became a provider; Decision 4 says Antigravity replaced it")
+	}
+	if !HasVendoredManifest("gemini") {
+		t.Fatal("gemini's manifest is no longer vendored; the manifest-only path has nothing left to exercise")
 	}
 }
 

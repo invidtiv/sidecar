@@ -89,16 +89,37 @@ func TestSnapshotJSONContract(t *testing.T) {
 // provider-owned evidence. Supports gates ProviderSupported throughout the
 // pipeline, so adding or removing a name flips whole workspaces between the
 // semantic and the legacy projection.
+//
+// The set grew from ten to twenty in Phase 4 of
+// docs/plans/active/herdr-detection-parity.md, and the reason is recorded here
+// rather than only in the list, because the list changing is the whole point of
+// freezing it. The ten added are Herdr's remaining screen-manifest agents, whose
+// manifests Sidecar already vendored and whose rules the engine already
+// executed; what they lacked was an identity, so `Detect` answered
+// "unsupported-agent" for every pane running one. They are detection-only: no
+// launch, no resume, no conversation adapter, no curated colour. Supports is a
+// statement about the screen lane alone and has always been read that way by its
+// four callers — workspaceinventory, agentcontrol, the workspace plugin, and
+// `agent explain --file` — each of which now treats these ten the way it already
+// treated Muse.
+//
+// Two upstream agents stay out and both are decisions, not omissions. `gemini`
+// is Decision 4: Antigravity replaced it and `agy` is already a full family.
+// `omp` has no screen manifest upstream at all, so there is nothing to execute.
 func TestSupportedProviderSetIsFrozen(t *testing.T) {
-	supported := []string{"codex", "claude", "grok", "antigravity", "pi", "copilot", "cursor", "opencode", "amp", "muse"}
-	for _, agent := range supported {
+	launchable := []string{"codex", "claude", "grok", "antigravity", "pi", "copilot", "cursor", "opencode", "amp", "muse"}
+	detectionOnly := []string{"cline", "devin", "droid", "hermes", "kilo", "kimi", "kiro", "maki", "qodercli", "qwen"}
+	for _, agent := range append(append([]string(nil), launchable...), detectionOnly...) {
 		if !Supports(agent) {
 			t.Fatalf("Supports(%q) = false", agent)
 		}
 	}
 	// Everything else, including the shell identity Identify can return and the
-	// shared runtimes that need a process probe, is unsupported.
-	for _, agent := range []string{"", "shell", "node", "bun", "agent", "Claude", "CODEX", "gemini", "aider", "unknown"} {
+	// shared runtimes that need a process probe, is unsupported. "gemini" and
+	// "omp" are in this list on purpose: they are the two Herdr agents Sidecar
+	// declines to register, and a sync that quietly registered one would show up
+	// here.
+	for _, agent := range []string{"", "shell", "node", "bun", "agent", "Claude", "CODEX", "gemini", "omp", "mastracode", "qoder", "aider", "unknown"} {
 		if Supports(agent) {
 			t.Fatalf("Supports(%q) = true", agent)
 		}

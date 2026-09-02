@@ -83,6 +83,21 @@ func processGate(agent, command string, ob Observation) bool {
 	case "muse":
 		return museProcess(command)
 	default:
+		// A detection-only family has no hand-written gate because it has no
+		// hand-written anything: the whole of its Sidecar code is one alias case
+		// in identifyProcessName. The refusal it owes the engine is the same one
+		// every provider above owes — evaluate qwen.toml only against a pane
+		// actually running Qwen — and identifyProcessName already answers that
+		// from Herdr's own alias table, so the gate is that answer.
+		//
+		// It is stricter than the launchable providers' gates in one direction
+		// and that is deliberate: several of these agents run under node, and a
+		// node-wrapped pane refuses rather than being evaluated. Refusing costs a
+		// missing badge; a runtime allowance for ten agents nobody here has
+		// captured would cost one agent's manifest reading another's screen.
+		if detectionOnly(agent) {
+			return identifyProcessName(command) == agent
+		}
 		return false
 	}
 }
