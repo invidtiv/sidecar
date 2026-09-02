@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/hostproto"
 	appmsg "github.com/marcus/sidecar/internal/msg"
@@ -139,41 +140,100 @@ func (p *Plugin) updateRemote(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		return p, p.applyStatusSnapshot(msg)
 
+	case InlineDiffLoadedMsg:
+		return p, p.applyInlineDiffLoaded(msg)
+
+	case DiffLoadedMsg:
+		return p, p.applyDiffLoaded(msg)
+
 	case tea.KeyPressMsg:
 		return p.updateRemoteKeys(msg)
 	}
 	return p, nil
 }
 
-// updateRemoteKeys is the bound status pane's keyboard: movement, the sidebar,
-// and an explicit refresh.
+// updateRemoteKeys is the bound pane's keyboard: movement, the sidebar, the
+// patch for the row the cursor is on, and an explicit refresh.
 //
-// It is deliberately the reachable subset. Patches, history, and the write
-// refusals arrive with their own slices; wiring a key here that has nothing
-// behind it would tell the user a gesture works when it does not.
+// It is deliberately the reachable subset. History and the write refusals
+// arrive with their own slices; wiring a key here that has nothing behind it
+// would tell the user a gesture works when it does not.
+//
+// The two diff surfaces are the local handlers themselves, not copies of them.
+// Everything they reach now reads through RepoSource, and the two loaders that
+// still take a directory on this disk — a folder's aggregate patch and a
+// full-file view — refuse for a bound pane at their own door, so a key that
+// lands on one is a no-op rather than a local git invocation.
 func (p *Plugin) updateRemoteKeys(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
+	if p.tree == nil {
+		if msg.String() == "r" {
+			return p, p.refresh()
+		}
+		return p, nil
+	}
+	if p.viewMode == ViewModeDiff {
+		return p.updateDiff(msg)
+	}
+	if p.activePane == PaneDiff {
+		return p.updateStatusDiffPane(msg)
+	}
+
+	entries := p.treeEntries()
 	total := p.totalSelectableItems()
 	switch msg.String() {
 	case "j", "down":
 		if p.cursor < total-1 {
 			p.cursor++
 			p.ensureCursorVisible()
+			return p, p.autoLoadDiff()
 		}
 
 	case "k", "up":
 		if p.cursor > 0 {
 			p.cursor--
 			p.ensureCursorVisible()
+			return p, p.autoLoadDiff()
 		}
 
 	case "g":
 		p.cursor = 0
 		p.scrollOff = 0
+		return p, p.autoLoadDiff()
 
 	case "G":
 		if total > 0 {
 			p.cursor = total - 1
 			p.ensureCursorVisible()
+			return p, p.autoLoadDiff()
+		}
+
+	case "l", "right":
+		if p.sidebarVisible && p.selectedDiffFile != "" {
+			p.activePane = PaneDiff
+		}
+
+	case "enter":
+		// Only a folder's expansion, which is this viewer's own display state.
+		// Enter on a file opens it in an editor locally; that is a host verb
+		// nothing answers, and it refuses with the rest of them in 4j.
+		if p.cursor < len(entries) && entries[p.cursor].IsFolder {
+			entries[p.cursor].IsExpanded = !entries[p.cursor].IsExpanded
+			return p, p.autoLoadDiff()
+		}
+
+	case "d":
+		if p.cursor < len(entries) && !entries[p.cursor].IsFolder {
+			entry := entries[p.cursor]
+			p.diffReturnMode = p.viewMode
+			p.viewMode = ViewModeDiff
+			p.diffFile = entry.Path
+			p.diffStaged = entry.Staged
+			p.diffCommit = ""
+			p.diffCommitSubject = ""
+			p.diffCommitShortHash = ""
+			p.diffScroll = 0
+			p.diffLoaded = false
+			return p, p.loadDiff(entry.Path, entry.Staged, entry.Status)
 		}
 
 	case "\\":
@@ -203,7 +263,58 @@ func (p *Plugin) renderBoundView() string {
 		return styles.Title.Render(pluginName) + "\n\n" +
 			styles.Muted.Render("Loading ["+p.ctx.HostID+"]…")
 	}
+	// The full-screen diff is the same view it is locally: it renders a patch,
+	// and which machine produced it is below the renderer.
+	if p.viewMode == ViewModeDiff {
+		if p.sidebarVisible {
+			return p.renderDiffTwoPane()
+		}
+		return p.renderDiffModal()
+	}
 	return p.renderThreePaneView()
+}
+
+// boundDiffPaneNotice is what a bound diff pane says when the selected row is
+// one this build cannot answer honestly, or "" when it can.
+//
+// It is derived at render time from the row itself rather than remembered, so
+// it cannot survive the selection that produced it.
+func (p *Plugin) boundDiffPaneNotice() string {
+	if !p.remoteBound() {
+		return ""
+	}
+	entries := p.treeEntries()
+	if p.cursor >= len(entries) || !entries[p.cursor].IsFolder {
+		return ""
+	}
+	// A folder row is an aggregate, not one repository read. Reading it from a
+	// host would be one round trip per file in the folder, on a cursor move.
+	return "A folder's combined patch is not read from [" + p.ctx.HostID + "]. Press enter to open it and read one file's patch."
+}
+
+// boundFullFileNotice names the one diff view a bound pane cannot draw.
+func boundFullFileNotice(hostID string) string {
+	return "Full-file view is not available on [" + hostID + "]: the host answers patches, not file contents."
+}
+
+// noticeContentHeight is the room left for a patch under a sentence explaining
+// what is missing from it. The pane's height is the app's, not this view's, so
+// the notice comes out of the content rather than growing past it.
+func noticeContentHeight(contentHeight int) int {
+	if contentHeight <= 2 {
+		return 1
+	}
+	return contentHeight - 2
+}
+
+// truncationLabel marks a patch the source had to cut, in the header where the
+// view mode is. A short patch rendered as if it were whole is a lie about the
+// change, and it is not one the reader can see for themselves.
+func truncationLabel(truncated bool) string {
+	if !truncated {
+		return ""
+	}
+	return " " + lipgloss.NewStyle().Foreground(styles.Warning).Render("(truncated)")
 }
 
 // remoteCommands is the footer while bound.
@@ -217,5 +328,19 @@ func (p *Plugin) remoteCommands() []plugin.Command {
 	}
 	return []plugin.Command{
 		{ID: "refresh", Name: "Refresh", Description: "Re-read the host's repository status", Category: plugin.CategoryActions, Context: "git-status", Priority: 1},
+		{ID: "show-diff", Name: "Diff", Description: "View the host's patch for this file", Category: plugin.CategoryView, Context: "git-status", Priority: 2},
+		// git-status-diff context (inline diff pane)
+		{ID: "toggle-diff-view", Name: "View", Description: "Toggle unified/split diff view", Category: plugin.CategoryView, Context: "git-status-diff", Priority: 2},
+		{ID: "toggle-wrap", Name: "Wrap", Description: "Toggle line wrapping", Category: plugin.CategoryView, Context: "git-status-diff", Priority: 3},
+		{ID: "reset-hscroll", Name: "Col 0", Description: "Snap horizontal scroll back to column 0", Category: plugin.CategoryNavigation, Context: "git-status-diff", Priority: 4},
+		{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Category: plugin.CategoryView, Context: "git-status-diff", Priority: 3},
+		// git-diff context (full-screen patch)
+		{ID: "close-diff", Name: "Close", Description: "Close diff view", Category: plugin.CategoryView, Context: "git-diff", Priority: 1},
+		{ID: "scroll", Name: "Scroll", Description: "Scroll diff content", Category: plugin.CategoryNavigation, Context: "git-diff", Priority: 2},
+		{ID: "toggle-diff-view", Name: "View", Description: "Toggle unified/split diff view", Category: plugin.CategoryView, Context: "git-diff", Priority: 3},
+		{ID: "toggle-wrap", Name: "Wrap", Description: "Toggle line wrapping", Category: plugin.CategoryView, Context: "git-diff", Priority: 3},
+		{ID: "prev-file", Name: "Prev", Description: "Previous changed file", Category: plugin.CategoryNavigation, Context: "git-diff", Priority: 4},
+		{ID: "next-file", Name: "Next", Description: "Next changed file", Category: plugin.CategoryNavigation, Context: "git-diff", Priority: 4},
+		{ID: "open-in-file-browser", Name: "Browse", Description: "Open file in file browser", Category: plugin.CategoryNavigation, Context: "git-diff", Priority: 4},
 	}
 }

@@ -97,6 +97,10 @@ type Plugin struct {
 	diffPaneParsedDiff   *ParsedDiff   // Parsed diff for inline view
 	diffPaneViewMode     DiffViewMode  // Unified, side-by-side, or full-file for inline diff
 	diffPaneFullFileDiff *FullFileDiff // Full-file diff for inline view (loaded on demand)
+	// diffPaneTruncated marks a patch the source had to cut. A short patch
+	// rendered as if it were whole is a lie about the change, so the pane
+	// labels it.
+	diffPaneTruncated bool
 
 	// Commit preview state (for three-pane view when on commit)
 	previewCommit       *Commit // Commit being previewed in right pane
@@ -120,6 +124,7 @@ type Plugin struct {
 	parsedDiff          *ParsedDiff   // Parsed diff for enhanced rendering
 	diffReturnMode      ViewMode      // View mode to return to on esc
 	diffLoaded          bool          // True once diff load completes (distinguishes loading vs empty)
+	diffTruncated       bool          // The source cut this patch; the breadcrumb says so
 	diffWrapEnabled     bool          // Wrap long lines instead of truncating
 	diffBackWidth       int           // Width of back button for hit region (set during render)
 	fullFileDiff        *FullFileDiff // Full-file diff for full-screen view (loaded on demand)
@@ -537,34 +542,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, p.applyStatusSnapshot(msg)
 
 	case DiffLoadedMsg:
-		if plugin.IsStale(p.ctx, msg) || msg.RequestID != p.fullScreenPreviewRequestID {
-			return p, nil // Ignore stale message from previous project
-		}
-		p.diffContent = msg.Content
-		p.diffRaw = msg.Raw
-		p.diffLoaded = true
-		if msg.Err != nil {
-			p.diffContent = ""
-			p.diffRaw = ""
-			p.parsedDiff = nil
-			return p, func() tea.Msg {
-				return app.ToastMsg{Message: "Diff load failed: " + msg.Err.Error(), Duration: 4 * time.Second, IsError: true}
-			}
-		}
-		// Always parse diff for built-in rendering (even if delta is available)
-		// This allows toggling between delta and built-in rendering at runtime
-		p.parsedDiff, _ = ParseUnifiedDiff(msg.Raw)
-		// Auto-load full-file content when in full-file view mode
-		if p.diffViewMode == DiffViewFullFile && p.diffFile != "" {
-			p.fullFileDiff = nil // Invalidate stale data
-			if entry := p.currentWorkingTreeDiffEntry(); entry != nil {
-				return p, p.loadFullFileDiff(entry.Path, entry.Staged, entry.Status, p.diffCommit, false)
-			}
-			if p.diffCommit != "" {
-				return p, p.loadFullFileDiff(p.diffFile, false, "", p.diffCommit, false)
-			}
-		}
-		return p, nil
+		return p, p.applyDiffLoaded(msg)
 
 	case CommitSuccessMsg:
 		if plugin.IsStale(p.ctx, msg) {
@@ -602,30 +580,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, nil
 
 	case InlineDiffLoadedMsg:
-		if plugin.IsStale(p.ctx, msg) || msg.RequestID != p.inlinePreviewRequestID {
-			return p, nil // Ignore stale message from previous project
-		}
-		// Only update if this is still the selected file
-		if msg.File == p.selectedDiffFile && msg.Staged == p.selectedDiffStaged {
-			p.diffPaneParsedDiff = msg.Parsed
-			// Clamp scroll to new content length (diff may have shrunk after stage/unstage).
-			// In full-file view mode, clamp against the full-file line count (which includes
-			// all context lines), not the parsed hunk-only count. Otherwise the watcher
-			// refresh cycle snaps scroll back to a much smaller value.
-			p.clampDiffPaneScroll()
-			// Auto-load full-file content when in full-file view mode.
-			// Always reload (not just when nil) so content refreshes after stage/unstage/discard.
-			// The old diffPaneFullFileDiff is kept until the new one arrives to avoid flicker.
-			if p.diffPaneViewMode == DiffViewFullFile {
-				entries := p.tree.AllEntries()
-				for _, entry := range entries {
-					if entry.Path == msg.File && entry.Staged == msg.Staged {
-						return p, p.loadFullFileDiff(entry.Path, entry.Staged, entry.Status, "", true)
-					}
-				}
-			}
-		}
-		return p, nil
+		return p, p.applyInlineDiffLoaded(msg)
 
 	case FullFileDiffLoadedMsg:
 		if plugin.IsStale(p.ctx, msg) {
@@ -1254,6 +1209,15 @@ func (p *Plugin) Commands() []plugin.Command {
 // FocusContext returns the current focus context.
 func (p *Plugin) FocusContext() string {
 	if p.remoteBound() {
+		// Only the reads this build performs are reachable while bound, so the
+		// context names one of those rather than falling through to the modes
+		// that own a write.
+		switch {
+		case p.viewMode == ViewModeDiff:
+			return "git-diff"
+		case p.activePane == PaneDiff && p.selectedDiffFile != "":
+			return "git-status-diff"
+		}
 		return "git-status"
 	}
 	if p.inNoRepoMode() {
@@ -1390,6 +1354,69 @@ func (p *Plugin) refresh() tea.Cmd {
 	}
 }
 
+// applyDiffLoaded lands one full-screen patch. Both message loops end here, so
+// a bound pane cannot drift into its own rules about what a loaded patch means.
+func (p *Plugin) applyDiffLoaded(msg DiffLoadedMsg) tea.Cmd {
+	if plugin.IsStale(p.ctx, msg) || msg.RequestID != p.fullScreenPreviewRequestID {
+		return nil // Ignore stale message from previous project
+	}
+	p.diffContent = msg.Content
+	p.diffRaw = msg.Raw
+	p.diffLoaded = true
+	p.diffTruncated = msg.Truncated
+	if msg.Err != nil {
+		p.diffContent = ""
+		p.diffRaw = ""
+		p.parsedDiff = nil
+		return func() tea.Msg {
+			return app.ToastMsg{Message: "Diff load failed: " + msg.Err.Error(), Duration: 4 * time.Second, IsError: true}
+		}
+	}
+	// Always parse diff for built-in rendering (even if delta is available)
+	// This allows toggling between delta and built-in rendering at runtime
+	p.parsedDiff, _ = ParseUnifiedDiff(msg.Raw)
+	// Auto-load full-file content when in full-file view mode
+	if p.diffViewMode == DiffViewFullFile && p.diffFile != "" {
+		p.fullFileDiff = nil // Invalidate stale data
+		if entry := p.currentWorkingTreeDiffEntry(); entry != nil {
+			return p.loadFullFileDiff(entry.Path, entry.Staged, entry.Status, p.diffCommit, false)
+		}
+		if p.diffCommit != "" {
+			return p.loadFullFileDiff(p.diffFile, false, "", p.diffCommit, false)
+		}
+	}
+	return nil
+}
+
+// applyInlineDiffLoaded lands one inline patch, for whichever machine answered.
+func (p *Plugin) applyInlineDiffLoaded(msg InlineDiffLoadedMsg) tea.Cmd {
+	if plugin.IsStale(p.ctx, msg) || msg.RequestID != p.inlinePreviewRequestID {
+		return nil // Ignore stale message from previous project
+	}
+	// Only update if this is still the selected file
+	if msg.File != p.selectedDiffFile || msg.Staged != p.selectedDiffStaged {
+		return nil
+	}
+	p.diffPaneParsedDiff = msg.Parsed
+	p.diffPaneTruncated = msg.Truncated
+	// Clamp scroll to new content length (diff may have shrunk after stage/unstage).
+	// In full-file view mode, clamp against the full-file line count (which includes
+	// all context lines), not the parsed hunk-only count. Otherwise the watcher
+	// refresh cycle snaps scroll back to a much smaller value.
+	p.clampDiffPaneScroll()
+	// Auto-load full-file content when in full-file view mode.
+	// Always reload (not just when nil) so content refreshes after stage/unstage/discard.
+	// The old diffPaneFullFileDiff is kept until the new one arrives to avoid flicker.
+	if p.diffPaneViewMode == DiffViewFullFile {
+		for _, entry := range p.treeEntries() {
+			if entry.Path == msg.File && entry.Staged == msg.Staged {
+				return p.loadFullFileDiff(entry.Path, entry.Staged, entry.Status, "", true)
+			}
+		}
+	}
+	return nil
+}
+
 // applyStatusSnapshot lands one status answer. Both the local and the bound
 // message loops end here, so a bound pane cannot drift into its own rules about
 // what a refresh means.
@@ -1434,8 +1461,13 @@ func (p *Plugin) applyStatusSnapshot(msg StatusSnapshotLoadedMsg) tea.Cmd {
 		p.cursor = maxCursor
 	}
 	if p.remoteBound() {
-		// Patches are slice 4h; there is nothing to preview yet, and the local
-		// preview loaders take a directory on this disk.
+		// The patch for the row the cursor is on comes through the same seam
+		// the status did. Commit previews are a later slice, and the write
+		// selection this restores below belongs to operations a bound pane
+		// does not perform.
+		if p.viewMode == ViewModeStatus {
+			return tea.Batch(p.autoLoadDiff(), followUp)
+		}
 		return followUp
 	}
 	p.restoreOperationSelection()
@@ -1603,6 +1635,7 @@ type DiffLoadedMsg struct {
 	RequestID uint64
 	Content   string // Rendered content (may be from delta)
 	Raw       string // Raw diff for built-in rendering
+	Truncated bool   // The source cut this patch; the view must say so
 	Err       error
 }
 
@@ -1657,6 +1690,7 @@ type InlineDiffLoadedMsg struct {
 	Staged    bool
 	Raw       string
 	Parsed    *ParsedDiff
+	Truncated bool // The source cut this patch; the view must say so
 }
 
 // GetEpoch implements plugin.EpochMessage.

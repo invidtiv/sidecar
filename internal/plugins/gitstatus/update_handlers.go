@@ -808,6 +808,7 @@ func (p *Plugin) closeDiffView() {
 	p.parsedDiff = nil
 	p.fullFileDiff = nil
 	p.diffLoaded = false
+	p.diffTruncated = false
 	p.diffHorizOff = 0
 	p.diffCommit = ""
 	p.diffCommitSubject = ""

@@ -727,16 +727,15 @@ func (p *Plugin) renderDiffPane(visibleHeight int) string {
 
 	header = fmt.Sprintf("%s [%s]%s", header, viewModeStr, scrollIndicator)
 	sb.WriteString(styles.Title.Render(header))
+	sb.WriteString(truncationLabel(p.diffPaneTruncated))
 	sb.WriteString("\n\n")
 
 	if p.selectedDiffFile == "" {
-		if p.remoteBound() {
-			// Selecting a row would not produce a patch yet, so inviting it
-			// would be an instruction that does not work.
-			sb.WriteString(styles.Muted.Render("Patches are not read from [" + p.ctx.HostID + "] yet"))
-			return sb.String()
-		}
 		sb.WriteString(styles.Muted.Render("Select a file to view diff"))
+		return sb.String()
+	}
+	if notice := p.boundDiffPaneNotice(); notice != "" {
+		sb.WriteString(styles.Muted.Render(notice))
 		return sb.String()
 	}
 
@@ -751,7 +750,14 @@ func (p *Plugin) renderDiffPane(visibleHeight int) string {
 	var diffContent string
 	switch p.diffPaneViewMode {
 	case DiffViewFullFile:
-		if p.diffPaneFullFileDiff != nil {
+		if p.remoteBound() {
+			// A full file needs its contents on both sides of the change, and
+			// no host verb answers those. The patch is what the host can give,
+			// so the pane says why and renders that rather than sitting on a
+			// load that will never arrive.
+			diffContent = styles.Muted.Render(boundFullFileNotice(p.ctx.HostID)) + "\n\n" +
+				RenderLineDiff(p.diffPaneParsedDiff, diffWidth, p.diffPaneScroll, noticeContentHeight(contentHeight), p.diffPaneHorizScroll, highlighter, p.diffWrapEnabled)
+		} else if p.diffPaneFullFileDiff != nil {
 			diffW := diffWidth - MinimapWidth
 			mmStr := ""
 			if !p.diffWrapEnabled {

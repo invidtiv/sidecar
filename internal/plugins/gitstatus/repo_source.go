@@ -24,6 +24,50 @@ type RepoSource interface {
 	// Status is one repository read: the changed files, and the branch row
 	// above them, as of one instant.
 	Status(ctx context.Context) (RepoStatus, error)
+
+	// Diff is one patch: the change to one path, in the one sense the request
+	// names.
+	Diff(ctx context.Context, req DiffRequest) (RepoDiff, error)
+}
+
+// DiffRequest names exactly one patch.
+//
+// Mode is one of reposervice's mode strings and is never inferred: a staged and
+// an unstaged change to the same path are two different patches, and answering
+// with the wrong one is a quiet, plausible lie about the working tree. Commit
+// and Parent apply only to ModeCommit; Parent is the first parent of a merge,
+// which a local read needs because it diffs the commit itself, while a host
+// resolves parents on its own side.
+type DiffRequest struct {
+	Path   string
+	Mode   string
+	Commit string
+	Parent string
+}
+
+// RepoDiff is one patch as raw unified diff text, plus whether the source had
+// to cut it. Nothing here parses: the viewer runs the same parser on a local
+// and a host patch, so a host upgrade is never a rendering change.
+type RepoDiff struct {
+	Patch     string
+	Truncated bool
+}
+
+// diffModeForRow is the one place a sidebar row's staging sense becomes a diff
+// mode.
+//
+// The row decides, and only the row: a path that is staged and then edited
+// again is two rows, each meaning its own patch, and a mode guessed from the
+// path would answer half of them with the other one's change.
+func diffModeForRow(status FileStatus, staged bool) string {
+	switch {
+	case status == StatusUntracked:
+		return reposervice.ModeUntracked
+	case staged:
+		return reposervice.ModeStaged
+	default:
+		return reposervice.ModeUnstaged
+	}
 }
 
 // RepoStatus is that read.
@@ -61,7 +105,31 @@ func (s localRepoSource) Status(context.Context) (RepoStatus, error) {
 	return RepoStatus{Tree: tree}, nil
 }
 
-// remoteRepoTimeout bounds one status call. A read that outlives the keypress
+// Diff runs the patch read the plugin has always run, routed through the seam
+// rather than rewritten: the same three functions, chosen by the same rule the
+// call sites used, so a local pane renders the bytes it always did.
+func (s localRepoSource) Diff(_ context.Context, req DiffRequest) (RepoDiff, error) {
+	var (
+		patch string
+		err   error
+	)
+	switch req.Mode {
+	case reposervice.ModeCommit:
+		patch, err = GetCommitDiff(s.root, req.Commit, req.Path, req.Parent)
+	case reposervice.ModeUntracked:
+		patch, err = GetNewFileDiff(s.root, req.Path)
+	case reposervice.ModeStaged, reposervice.ModeUnstaged:
+		patch, err = GetDiff(s.root, req.Path, req.Mode == reposervice.ModeStaged)
+	default:
+		return RepoDiff{}, fmt.Errorf("unknown diff mode %q", req.Mode)
+	}
+	if err != nil {
+		return RepoDiff{}, err
+	}
+	return RepoDiff{Patch: patch}, nil
+}
+
+// remoteRepoTimeout bounds one host read. A read that outlives the keypress
 // that asked for it is how a quit comes to take a minute (td-052329), so this
 // is short and the refusal is honest rather than a hang.
 const remoteRepoTimeout = 20 * time.Second
@@ -77,11 +145,7 @@ type remoteRepoSource struct {
 }
 
 func (s *remoteRepoSource) Status(ctx context.Context) (RepoStatus, error) {
-	timeout := s.timeout
-	if timeout <= 0 {
-		timeout = remoteRepoTimeout
-	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	ctx, cancel := context.WithTimeout(ctx, s.callTimeout())
 	defer cancel()
 
 	var result reposervice.StatusResult
@@ -96,6 +160,54 @@ func (s *remoteRepoSource) Status(ctx context.Context) (RepoStatus, error) {
 		return RepoStatus{}, &noRepositoryError{hostID: s.hostID}
 	}
 	return remoteRepoStatus(result), nil
+}
+
+// Diff asks the host for one patch, in the sense the row the cursor is on
+// means.
+//
+// --mode is required by the verb and carried from the row rather than derived
+// here, and the answer's mode is checked against the request: a host that
+// replied with the other side of an MM path would be wrong in exactly the way
+// no test would notice, because both answers are plausible patches for the
+// path.
+func (s *remoteRepoSource) Diff(ctx context.Context, req DiffRequest) (RepoDiff, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.callTimeout())
+	defer cancel()
+
+	args := []string{"repo", "diff", "--workspace", s.workspaceID, "--path", req.Path, "--mode", req.Mode}
+	if req.Mode == reposervice.ModeCommit {
+		args = append(args, "--commit", req.Commit)
+	}
+	args = append(args, "--json")
+
+	var result reposervice.DiffResult
+	if err := s.run(ctx, s.hostID, args, &result); err != nil {
+		// A rejected patch is about this path or this commit, not about the
+		// repository: the status read is what answers whether the workspace is
+		// one, and a refused row must not be reported as if it were not.
+		var runErr *hosts.RunError
+		if errors.As(err, &runErr) && runErr.Failure == hosts.FailRejected {
+			return RepoDiff{}, fmt.Errorf("[%s] will not serve the %s patch for %s: %s", s.hostID, req.Mode, req.Path, runErr.Detail)
+		}
+		return RepoDiff{}, err
+	}
+	if !result.ValidRemoteResult() {
+		return RepoDiff{}, fmt.Errorf("%s did not answer repo diff", s.hostID)
+	}
+	if result.NoRepository {
+		return RepoDiff{}, &noRepositoryError{hostID: s.hostID}
+	}
+	if result.Mode != req.Mode {
+		return RepoDiff{}, fmt.Errorf("%s answered the %s patch for a %s row", s.hostID, result.Mode, req.Mode)
+	}
+	return RepoDiff{Patch: result.Patch, Truncated: result.Truncated}, nil
+}
+
+func (s *remoteRepoSource) callTimeout() time.Duration {
+	if s.timeout > 0 {
+		return s.timeout
+	}
+	return remoteRepoTimeout
 }
 
 // classify separates the host refusing to serve this workspace from the host

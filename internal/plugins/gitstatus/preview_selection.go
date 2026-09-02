@@ -77,6 +77,9 @@ func (p *Plugin) autoLoadDiff() tea.Cmd {
 	if !isNewFile && !p.forceNextDiffReload {
 		return nil // Already loaded
 	}
+	// The label belongs to the patch that is on screen, not to the row that
+	// asked for the next one.
+	p.diffPaneTruncated = false
 
 	p.selectedDiffFile = entry.Path
 	p.selectedDiffStaged = entry.Staged
@@ -100,6 +103,12 @@ func (p *Plugin) autoLoadDiff() tea.Cmd {
 
 	// Handle folder entries
 	if entry.IsFolder {
+		if p.remoteBound() {
+			// Nothing will arrive for this row, so the previous file's patch
+			// must not stay on screen under the folder's name.
+			p.diffPaneParsedDiff = nil
+			return nil
+		}
 		return p.loadFolderDiff(entry)
 	}
 

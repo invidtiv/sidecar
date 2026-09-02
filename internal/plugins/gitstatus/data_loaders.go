@@ -1,7 +1,11 @@
 package gitstatus
 
 import (
+	"context"
+	"errors"
+
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/reposervice"
 )
 
 func (p *Plugin) nextPreviewID() uint64 {
@@ -9,27 +13,39 @@ func (p *Plugin) nextPreviewID() uint64 {
 	return p.nextPreviewRequestID
 }
 
+// errNoRepoSource is a patch asked for when there is no repository to read.
+// It reaches the pane as a load failure rather than as an empty patch, which
+// would render as "nothing changed here".
+var errNoRepoSource = errors.New("no repository is available to read")
+
+// fetchPatch is the one place a patch is read.
+//
+// Every diff surface goes through it, so which machine answers is decided once,
+// at the seam, and neither the inline pane nor the full-screen view can drift
+// into reading the world directly.
+func (p *Plugin) fetchPatch(req DiffRequest) func() (RepoDiff, error) {
+	source := p.repoSource()
+	return func() (RepoDiff, error) {
+		if source == nil {
+			return RepoDiff{}, errNoRepoSource
+		}
+		return source.Diff(context.Background(), req)
+	}
+}
+
 // loadDiff loads the diff for a file.
 func (p *Plugin) loadDiff(path string, staged bool, status FileStatus) tea.Cmd {
 	requestID := p.nextPreviewID()
 	p.fullScreenPreviewRequestID = requestID
 	epoch := p.ctx.Epoch
-	workDir := p.repoRoot
+	fetch := p.fetchPatch(DiffRequest{Path: path, Mode: diffModeForRow(status, staged)})
 	return func() tea.Msg {
-		var rawDiff string
-		var err error
-
-		// Untracked files need special handling - create new file diff
-		if status == StatusUntracked {
-			rawDiff, err = GetNewFileDiff(workDir, path)
-		} else {
-			rawDiff, err = GetDiff(workDir, path, staged)
-		}
+		diff, err := fetch()
 		if err != nil {
 			return DiffLoadedMsg{Epoch: epoch, RequestID: requestID, Err: err}
 		}
 
-		return DiffLoadedMsg{Epoch: epoch, RequestID: requestID, Content: rawDiff, Raw: rawDiff}
+		return DiffLoadedMsg{Epoch: epoch, RequestID: requestID, Content: diff.Patch, Raw: diff.Patch, Truncated: diff.Truncated}
 	}
 }
 
@@ -38,22 +54,14 @@ func (p *Plugin) loadInlineDiff(path string, staged bool, status FileStatus) tea
 	requestID := p.nextPreviewID()
 	p.inlinePreviewRequestID = requestID
 	epoch := p.ctx.Epoch
-	workDir := p.repoRoot
+	fetch := p.fetchPatch(DiffRequest{Path: path, Mode: diffModeForRow(status, staged)})
 	return func() tea.Msg {
-		var rawDiff string
-		var err error
-
-		// Untracked files need special handling - create new file diff
-		if status == StatusUntracked {
-			rawDiff, err = GetNewFileDiff(workDir, path)
-		} else {
-			rawDiff, err = GetDiff(workDir, path, staged)
-		}
+		diff, err := fetch()
 		if err != nil {
 			return InlineDiffLoadedMsg{Epoch: epoch, RequestID: requestID, File: path, Staged: staged, Raw: "", Parsed: nil}
 		}
-		parsed, _ := ParseUnifiedDiff(rawDiff)
-		return InlineDiffLoadedMsg{Epoch: epoch, RequestID: requestID, File: path, Staged: staged, Raw: rawDiff, Parsed: parsed}
+		parsed, _ := ParseUnifiedDiff(diff.Patch)
+		return InlineDiffLoadedMsg{Epoch: epoch, RequestID: requestID, File: path, Staged: staged, Raw: diff.Patch, Parsed: parsed, Truncated: diff.Truncated}
 	}
 }
 
@@ -153,7 +161,15 @@ func (p *Plugin) loadFilteredCommits() tea.Cmd {
 }
 
 // loadFolderDiff loads a concatenated diff for all files in a folder.
+//
+// A folder row is an aggregate of this machine's files, not one repository
+// read, so it stays local. A bound pane says so instead of turning one cursor
+// move into one round trip per file in the folder; the files inside still read
+// their own patches through the seam.
 func (p *Plugin) loadFolderDiff(entry *FileEntry) tea.Cmd {
+	if p.remoteBound() {
+		return nil
+	}
 	requestID := p.nextPreviewID()
 	p.inlinePreviewRequestID = requestID
 	epoch := p.ctx.Epoch
@@ -170,8 +186,12 @@ func (p *Plugin) loadFolderDiff(entry *FileEntry) tea.Cmd {
 	}
 }
 
-// loadFullFolderDiff loads a concatenated diff for full-screen view.
+// loadFullFolderDiff loads a concatenated diff for full-screen view. It is the
+// same local aggregate loadFolderDiff is, and a bound pane does not open it.
 func (p *Plugin) loadFullFolderDiff(entry *FileEntry) tea.Cmd {
+	if p.remoteBound() {
+		return nil
+	}
 	requestID := p.nextPreviewID()
 	p.fullScreenPreviewRequestID = requestID
 	epoch := p.ctx.Epoch
@@ -193,20 +213,28 @@ func (p *Plugin) loadCommitFileDiff(hash, path, parentHash string) tea.Cmd {
 	requestID := p.nextPreviewID()
 	p.fullScreenPreviewRequestID = requestID
 	epoch := p.ctx.Epoch
-	workDir := p.repoRoot
+	fetch := p.fetchPatch(DiffRequest{Path: path, Mode: reposervice.ModeCommit, Commit: hash, Parent: parentHash})
 	return func() tea.Msg {
-		rawDiff, err := GetCommitDiff(workDir, hash, path, parentHash)
+		diff, err := fetch()
 		if err != nil {
 			return DiffLoadedMsg{Epoch: epoch, RequestID: requestID, Err: err}
 		}
 
-		return DiffLoadedMsg{Epoch: epoch, RequestID: requestID, Content: rawDiff, Raw: rawDiff}
+		return DiffLoadedMsg{Epoch: epoch, RequestID: requestID, Content: diff.Patch, Raw: diff.Patch, Truncated: diff.Truncated}
 	}
 }
 
 // loadFullFileDiff loads the full file content (old + new) for full-file diff view.
 // forInline indicates whether this is for the inline diff pane or the full-screen diff view.
+//
+// A full file is not a patch: it needs the file's contents on both sides of the
+// change, and no `sidecar repo` verb answers those. A bound pane therefore does
+// not load one, and the diff pane says why rather than waiting on a read that
+// will never arrive.
 func (p *Plugin) loadFullFileDiff(path string, staged bool, status FileStatus, commitHash string, forInline bool) tea.Cmd {
+	if p.remoteBound() {
+		return nil
+	}
 	requestID := p.nextPreviewID()
 	if forInline {
 		p.inlineFullFileRequestID = requestID
