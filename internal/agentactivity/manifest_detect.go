@@ -36,7 +36,12 @@ func ManifestAgentID(agent string) string {
 // HerdrAgentLabel maps a Sidecar provider family to Herdr's *label* for it —
 // the string `agent_label` returns (src/detect/mod.rs:121 at e2b85c7), which is
 // what `herdr agent explain --agent` takes, what keys its alias table, and what
-// names its local override file.
+// names Herdr's own local override file.
+//
+// It does not name Sidecar's: a local override under
+// ~/.config/sidecar/agent-detection is named after the vendored manifest file it
+// replaces (manifests.OverridePath), so `agy` is Herdr's override name and
+// `antigravity.toml` is Sidecar's. This label is for talking to Herdr.
 //
 // It is a second, different mapping from ManifestAgentID, and the difference is
 // not tidy: Herdr's Antigravity manifest lives in antigravity.toml but its label
@@ -156,6 +161,11 @@ func manifestInput(ob Observation) (*manifest.Compiled, manifest.Input, Result, 
 		return nil, manifest.Input{}, Result{State: StateUnknown, Evidence: agent + ".manifest-unavailable"}, false
 	}
 	return compiled, manifest.Input{
+		// The agent asked about, not the id of the manifest that answered.
+		// Those differ under a local override, which may legitimately declare
+		// one agent's id and carry another's alias, and Herdr reports the
+		// requested one (agent_label, manifest.rs:501).
+		Agent:  agent,
 		Screen: ob.Screen,
 		Title:  ob.PaneTitle,
 		// Progress is always empty under tmux: tmux consumes OSC 9;4 and
@@ -249,6 +259,7 @@ func ExplainVendoredManifest(agentID string, ob Observation) (*manifest.Explain,
 		return nil, false
 	}
 	_, explain := compiled.Explain(manifest.Input{
+		Agent:  agentID,
 		Screen: ob.Screen,
 		Title:  ob.PaneTitle,
 		Rows:   ob.PaneHeight,

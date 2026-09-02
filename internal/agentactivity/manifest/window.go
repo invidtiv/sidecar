@@ -21,6 +21,16 @@ const DefaultDetectionRows = 24
 // region evidence — rather than being silently dropped, which is the honest
 // rendering of a permanent terminal gap.
 type Input struct {
+	// Agent is the agent the caller asked about, and it is what an Explain
+	// reports as `agent`. It is Herdr's own `agent` parameter
+	// (explain_with_input, manifest.rs:384, rendered by agent_label at :501),
+	// and it is deliberately not the loaded manifest's id: those two coincide
+	// for every vendored file and can differ under a local override, which may
+	// declare one agent's id while carrying another's alias. Reporting the id
+	// there would answer a question nobody asked, about a file rather than
+	// about the pane. Empty on a path with no requested agent; nothing about
+	// evaluation depends on it.
+	Agent string
 	// Screen is the raw capture. It may carry SGR escapes and scrollback; the
 	// engine strips and bounds it itself, so callers pass what tmux gave them.
 	Screen string

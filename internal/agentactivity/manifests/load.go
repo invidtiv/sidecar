@@ -56,9 +56,12 @@ type Source struct {
 	Path string
 	// Diagnostic is a human-readable note about something that went wrong but
 	// did not stop the load: an overlay that failed to parse, merge, or
-	// validate, or a local override that was found and refused. The next source
-	// down is used in that case, because a broken user-owned file must never
-	// take a working vendored file with it. Empty when nothing went wrong.
+	// validate, or a local override that was found and refused, in which case
+	// the next source down is used, because a broken user-owned file must never
+	// take a working vendored file with it. It also carries the one problem an
+	// override can have while still being used: a rule Go's regexp cannot
+	// compile, which is dead in a file that has no overlay under it to rewrite
+	// it. Empty when nothing went wrong.
 	Diagnostic string
 }
 
@@ -156,15 +159,20 @@ func load(agent string) loaded {
 	// goes between these two, and loses to the override just as it does in Herdr.
 	override, overridePath, diagnostic := readOverride(agent, upstream)
 	if override != nil {
+		// An override can load *and* have something wrong with it -- a rule RE2
+		// cannot compile is the case that exists -- so the diagnostic travels
+		// onto the source of the file that won, not only onto the fallback.
 		source := Source{
-			Agent:   agent,
-			Kind:    KindLocalOverride,
-			Version: override.Version,
-			Path:    overridePath,
+			Agent:      agent,
+			Kind:       KindLocalOverride,
+			Version:    override.Version,
+			Path:       overridePath,
+			Diagnostic: diagnostic,
 		}
 		compiled, compileErr := manifest.Compile(override)
 		if compileErr == nil {
 			compiled.Source = source.Label()
+			compiled.Warning = source.Diagnostic
 			return loaded{compiled: compiled, source: source}
 		}
 		// Compile refuses only a region spec the validator would already have

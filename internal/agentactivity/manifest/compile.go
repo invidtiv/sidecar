@@ -72,12 +72,13 @@ type Compiled struct {
 	Source string
 	// OverlayApplied records that a Sidecar overlay was merged in.
 	OverlayApplied bool
-	// Warning carries what the loader had to ignore to produce this manifest:
-	// a local override or an overlay that was found and refused. It is Herdr's
-	// `warning` explain field (manifest.rs:881), and it is the whole reason a
-	// refused file is not silent -- explain says the file was found, why it was
-	// rejected, and that the manifest under it is what is running. Empty when
-	// nothing was refused.
+	// Warning carries what the loader had to ignore to produce this manifest,
+	// or what it had to accept: a local override or an overlay that was found
+	// and refused, or an override that is in use and carries a rule this engine
+	// cannot evaluate. It is Herdr's `warning` explain field (manifest.rs:881),
+	// and it is the whole reason a refused file is not silent -- explain says
+	// the file was found, what is wrong with it, and which manifest is running.
+	// Empty when nothing was refused and nothing is wrong.
 	Warning string
 
 	rules []compiledRule

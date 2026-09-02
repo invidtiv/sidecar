@@ -42,6 +42,9 @@ type MatchedRule struct {
 // the per-rule regex_incompatible note — are additions Herdr has no equivalent
 // for; nothing Herdr emits is renamed or dropped from the shared fields.
 type Explain struct {
+	// Agent is the agent the caller asked about, from Input.Agent, which is
+	// what Herdr reports here too. It is not the loaded manifest's id: see the
+	// note on Input.Agent.
 	Agent           string       `json:"agent,omitempty"`
 	State           State        `json:"state"`
 	ManifestSource  string       `json:"manifest_source"`
@@ -173,7 +176,7 @@ func (c *Compiled) evaluate(in Input, explain bool) (Verdict, *Explain) {
 
 	if winner == nil {
 		verdict := Verdict{State: StateIdle, FallbackReason: DefaultKnownAgentIdleFallback}
-		return verdict, c.explainRecord(verdict, evaluated, explain)
+		return verdict, c.explainRecord(in.Agent, verdict, evaluated, explain)
 	}
 
 	rule := winner.rule
@@ -197,10 +200,10 @@ func (c *Compiled) evaluate(in Input, explain bool) (Verdict, *Explain) {
 	if rule.SkipStateUpdate {
 		verdict.SkippedUpdateReason = "matched_rule:" + rule.ID
 	}
-	return verdict, c.explainRecord(verdict, evaluated, explain)
+	return verdict, c.explainRecord(in.Agent, verdict, evaluated, explain)
 }
 
-func (c *Compiled) explainRecord(v Verdict, evaluated []EvaluatedRule, want bool) *Explain {
+func (c *Compiled) explainRecord(agent string, v Verdict, evaluated []EvaluatedRule, want bool) *Explain {
 	if !want {
 		return nil
 	}
@@ -208,7 +211,7 @@ func (c *Compiled) explainRecord(v Verdict, evaluated []EvaluatedRule, want bool
 		evaluated = []EvaluatedRule{}
 	}
 	return &Explain{
-		Agent:               c.Manifest.ID,
+		Agent:               agent,
 		State:               v.State,
 		ManifestSource:      c.Source,
 		ManifestVersion:     c.Manifest.Version,

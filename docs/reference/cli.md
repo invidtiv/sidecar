@@ -65,7 +65,9 @@ Explain which evidence authored a pane's lifecycle state
 
 Reports the effective state, which evidence authored it, the source's exercisable tier, the last valid report, and — when lifecycle evidence did not win — exactly why not.
 
-With --file it runs the screen lane alone over a saved capture: no tmux, no lifecycle store, no running agent. That is how a wrong badge is reproduced from a fixture, and how a new fixture is minted.
+With --file it runs the screen lane alone over a saved capture: no tmux, no lifecycle store, no running agent. It does read the local override directory, so two people reproducing one fixture can reach different verdicts if one of them has an override for that agent; the `manifest` line of the output says which file answered. That is how a wrong badge is reproduced from a fixture, and how a new fixture is minted.
+
+Detection manifests can be tuned locally: a file at ~/.config/sidecar/agent-detection/<file>.toml replaces the vendored Herdr manifest for that agent, where <file> is the vendored file's own base name (github-copilot.toml for Copilot, antigravity.toml for Antigravity). It replaces the Sidecar overlay too rather than layering over it, so a rule Sidecar rewrote upstream is not rewritten under an override. An override that cannot be parsed, that declares a different agent, or that needs a newer engine is ignored and the vendored manifest is used; either way explain prints a warning line saying what was found and why.
 
 Every diagnostic fact the Configuration surface shows is available here, so a pane that is not being driven by its integration always has an actionable reason rather than silence.
 
@@ -79,7 +81,7 @@ Usage: sidecar agent explain [--current | --shell TARGET | --file PATH --agent K
 
 - `--current`: Explain the pane this command is running in (the default)
 - `--shell TARGET`: Explain a managed shell by name
-- `--file PATH`: Explain a saved capture offline, with no tmux and no lifecycle store
+- `--file PATH`: Explain a saved capture offline, with no tmux and no lifecycle store (a local override for the agent is still read)
 - `--agent KIND`: Which agent's manifest to evaluate --file against (required with --file)
 - `--title TEXT`: Pane title for --file when the capture carries no header
 - `--rows N`: Pane height for --file; the detection read window. Must be positive; defaults to the fixture header, else 24

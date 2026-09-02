@@ -15,6 +15,16 @@ import (
 // `sidecar agent explain --file PATH --agent KIND` runs the screen lane alone
 // over a saved capture: no tmux, no lifecycle store, no running agent.
 //
+// One input is not the file: the manifest still comes from manifests.Load, so a
+// local override under ~/.config/sidecar/agent-detection replaces the vendored
+// manifest here exactly as it does on a live pane. Two people running this over
+// the same fixture can therefore reach different verdicts. That is the point of
+// the override -- tuning a rule against a saved screen is the loop it exists for
+// -- and the record says which file answered on its `manifest` line, with a
+// `warning` line whenever an override was found and refused. A run that must not
+// see one, such as scripts/herdr-diff.sh, passes `-config` to move the config
+// axis, which moves the override directory with it.
+//
 // It exists for two jobs the live command cannot do. First, a wrong badge is
 // reproduced from the fixture that produced it, which is what turns "it said
 // idle once" into a test. Second, it is how a new fixture is minted: capture a

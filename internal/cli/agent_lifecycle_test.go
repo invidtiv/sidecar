@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/marcus/sidecar/internal/agentactivity/manifest"
+	"github.com/marcus/sidecar/internal/agentlifecycle"
 	"github.com/marcus/sidecar/internal/shellstate"
 )
 
@@ -229,5 +231,27 @@ func TestASequenceIsOptionalSoAPerEventHookCanReport(t *testing.T) {
 				t.Fatalf("exit %d (stderr: %s)", code, errOut)
 			}
 		})
+	}
+}
+
+// TestLiveExplainTextPrintsTheManifestWarning is the half of "a refused or
+// degraded override must be visible" that runs on a live pane. The --file path
+// already prints the warning and is covered by
+// TestExplainFileReportsARefusedOverride; this is the path a user actually
+// reaches from a pane that is badged wrong, and until it prints the warning the
+// news arrives only in --json.
+func TestLiveExplainTextPrintsTheManifestWarning(t *testing.T) {
+	var out bytes.Buffer
+	writeExplanationText(Env{Stdout: &out}, agentlifecycle.Explanation{
+		State: "idle",
+		ScreenExplain: &manifest.Explain{
+			Agent:          "cursor",
+			ManifestSource: "bundled cursor 2026.08.29.1 + sidecar overlay",
+			Warning:        "ignored override /tmp/cursor.toml because it is invalid: bad",
+		},
+	})
+	text := out.String()
+	if !strings.Contains(text, "warning") || !strings.Contains(text, "/tmp/cursor.toml") {
+		t.Fatalf("live explain text does not carry the warning:\n%s", text)
 	}
 }

@@ -214,6 +214,187 @@ func TestOverrideRequiringANewerEngineIsRefused(t *testing.T) {
 	}
 }
 
+// TestOverrideCarryingAnIncompatibleRegexLoadsAndSaysWhichRulesAreDead is the
+// silent false "done" this whole engine exists to prevent, arriving through the
+// front door.
+//
+// Four vendored manifests carry `\p{Alphabetic}`, which RE2 cannot compile, and
+// each has an overlay rule rewriting it. Copy one of those files into the
+// override directory to tune an unrelated rule and two things happen at once:
+// the incompatible pattern comes with it, and the overlay that rewrote it is
+// replaced along with the vendored file. The rule is now dead. The file still
+// loads, deliberately -- refusing it over a rule the user never touched is
+// worse -- so the warning is the only thing standing between the user and a
+// working pane reading as a finished turn.
+func TestOverrideCarryingAnIncompatibleRegexLoadsAndSaysWhichRulesAreDead(t *testing.T) {
+	body := strings.Replace(overrideBody,
+		`contains = ["sidecar override marker"]`,
+		`line_regex = ["^\\p{Alphabetic}+ working"]`, 1)
+	path := writeOverride(t, overrideDir(t), "cursor", body)
+
+	compiled, source, err := Load("cursor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source.Kind != KindLocalOverride {
+		t.Fatalf("source kind = %q (diagnostic %q), want the override to still be in use",
+			source.Kind, source.Diagnostic)
+	}
+	for _, want := range []string{path, "local_only_blocker", "never match", "overlay"} {
+		if !strings.Contains(source.Diagnostic, want) {
+			t.Fatalf("diagnostic does not mention %q: %q", want, source.Diagnostic)
+		}
+	}
+	// The warning has to ride the compiled manifest, not only the Source: that
+	// is what carries it into both explain paths.
+	if compiled.Warning != source.Diagnostic {
+		t.Fatalf("compiled warning = %q, source diagnostic = %q", compiled.Warning, source.Diagnostic)
+	}
+	_, explain := compiled.Explain(manifest.Input{Screen: "spinning working\n"})
+	if explain.Warning != source.Diagnostic {
+		t.Fatalf("explain warning = %q, want the diagnostic", explain.Warning)
+	}
+	if explain.MatchedRule != nil {
+		t.Fatalf("the dead rule matched: %+v", explain.MatchedRule)
+	}
+}
+
+func TestOverrideDeclaringNoManifestIdIsRefused(t *testing.T) {
+	body := strings.Replace(overrideBody, "id = \"cursor\"\n", "", 1)
+	path := writeOverride(t, overrideDir(t), "cursor", body)
+
+	_, source, err := Load("cursor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source.Kind != KindBundled {
+		t.Fatalf("source kind = %q, want %q", source.Kind, KindBundled)
+	}
+	if !strings.Contains(source.Diagnostic, path) || !strings.Contains(source.Diagnostic, "no manifest id") {
+		t.Fatalf("diagnostic does not name the file and the reason: %q", source.Diagnostic)
+	}
+}
+
+func TestEmptyOverrideFileIsRefusedAsInvalid(t *testing.T) {
+	path := writeOverride(t, overrideDir(t), "cursor", "")
+
+	_, source, err := Load("cursor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source.Kind != KindBundled {
+		t.Fatalf("source kind = %q, want %q", source.Kind, KindBundled)
+	}
+	if !strings.Contains(source.Diagnostic, path) || !strings.Contains(source.Diagnostic, "invalid") {
+		t.Fatalf("diagnostic does not name the file and the reason: %q", source.Diagnostic)
+	}
+}
+
+// TestOverrideWithAByteOrderMarkIsRefusedWithAReason covers the file a user
+// produces by editing a manifest in an editor that writes a BOM. TOML has no
+// BOM, so the parser refuses it, and the point of the test is that the refusal
+// arrives as a diagnostic naming the file rather than as a silent fallback to
+// the vendored manifest.
+func TestOverrideWithAByteOrderMarkIsRefusedWithAReason(t *testing.T) {
+	path := writeOverride(t, overrideDir(t), "cursor", "\xef\xbb\xbf"+overrideBody)
+
+	_, source, err := Load("cursor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source.Kind != KindBundled {
+		t.Fatalf("source kind = %q, want %q", source.Kind, KindBundled)
+	}
+	if !strings.Contains(source.Diagnostic, path) || !strings.Contains(source.Diagnostic, "invalid") {
+		t.Fatalf("diagnostic does not name the file and the reason: %q", source.Diagnostic)
+	}
+}
+
+func TestUnreadableOverrideIsRefusedWithAReason(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can read a file with no read bits")
+	}
+	path := writeOverride(t, overrideDir(t), "cursor", overrideBody)
+	if err := os.Chmod(path, 0o200); err != nil {
+		t.Fatal(err)
+	}
+
+	_, source, err := Load("cursor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source.Kind != KindBundled {
+		t.Fatalf("source kind = %q, want %q", source.Kind, KindBundled)
+	}
+	if !strings.Contains(source.Diagnostic, path) || !strings.Contains(source.Diagnostic, "could not be loaded") {
+		t.Fatalf("diagnostic does not name the file and the reason: %q", source.Diagnostic)
+	}
+}
+
+// TestOverridePathThatIsADirectoryIsRefusedWithAReason covers `mkdir
+// cursor.toml`, which is what an interrupted copy or a misaimed `git clone`
+// leaves behind.
+func TestOverridePathThatIsADirectoryIsRefusedWithAReason(t *testing.T) {
+	dir := overrideDir(t)
+	path := filepath.Join(dir, "cursor.toml")
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, source, err := Load("cursor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source.Kind != KindBundled {
+		t.Fatalf("source kind = %q, want %q", source.Kind, KindBundled)
+	}
+	if !strings.Contains(source.Diagnostic, path) || !strings.Contains(source.Diagnostic, "could not be loaded") {
+		t.Fatalf("diagnostic does not name the file and the reason: %q", source.Diagnostic)
+	}
+}
+
+// TestDanglingOverrideSymlinkIsReportedRatherThanReadAsAbsent is a deliberate
+// divergence from Herdr, which cannot tell a broken link from no file at all.
+// A symlink is not something a user creates by accident: the plausible way to
+// have one is a link into a dotfiles repository that is not checked out here, and
+// "your override is not being used" is the news in that case.
+func TestDanglingOverrideSymlinkIsReportedRatherThanReadAsAbsent(t *testing.T) {
+	dir := overrideDir(t)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "cursor.toml")
+	if err := os.Symlink(filepath.Join(dir, "nowhere", "cursor.toml"), path); err != nil {
+		t.Fatal(err)
+	}
+
+	_, source, err := Load("cursor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source.Kind != KindBundled {
+		t.Fatalf("source kind = %q, want %q", source.Kind, KindBundled)
+	}
+	if !strings.Contains(source.Diagnostic, path) || !strings.Contains(source.Diagnostic, "symlink") {
+		t.Fatalf("diagnostic does not name the file and the reason: %q", source.Diagnostic)
+	}
+}
+
+// TestNoOverrideAtAllReportsNothing is the negative control for the symlink
+// case above: an empty override directory must stay silent, or every explain
+// record on every machine grows a warning line.
+func TestNoOverrideAtAllReportsNothing(t *testing.T) {
+	overrideDir(t)
+
+	_, source, err := Load("cursor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source.Kind != KindBundled || source.Diagnostic != "" {
+		t.Fatalf("no override produced kind %q diagnostic %q", source.Kind, source.Diagnostic)
+	}
+}
+
 // TestOverrideIsReadOnceAtFirstLoadAndNotBefore is the startup-latency rule made
 // checkable. Reading a user file is a filesystem hit, and it must happen at
 // first use of an agent's manifest: never at package init, and never on anything
@@ -279,5 +460,35 @@ func TestTestsNeverReadTheRealOverrideDirectory(t *testing.T) {
 	}
 	if overrideReads.Load() != before {
 		t.Fatal("readOverride opened a path inside the real config directory")
+	}
+}
+
+// TestExplainNamesTheRequestedAgentNotTheOverridesId is the record defect an
+// override is the first thing to expose. Herdr reports the agent that was asked
+// about (agent_label, manifest.rs:501), not the id of the file that answered;
+// those coincide for every vendored manifest, so nothing before overrides could
+// tell them apart. An override may legitimately declare one agent's id and carry
+// another's alias -- manifest_matches_agent accepts it and so does this loader --
+// and the record must still name the pane's agent rather than the file's.
+func TestExplainNamesTheRequestedAgentNotTheOverridesId(t *testing.T) {
+	body := strings.Replace(overrideBody, `id = "cursor"`,
+		"id = \"claude\"\naliases = [\"cursor\"]", 1)
+	writeOverride(t, overrideDir(t), "cursor", body)
+
+	compiled, source, err := Load("cursor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source.Kind != KindLocalOverride {
+		t.Fatalf("source kind = %q (diagnostic %q), want the alias to be accepted",
+			source.Kind, source.Diagnostic)
+	}
+	_, explain := compiled.Explain(manifest.Input{
+		Agent:  "cursor",
+		Screen: "waiting: sidecar override marker\n",
+	})
+	if explain.Agent != "cursor" {
+		t.Fatalf("explain agent = %q, want the requested agent; the manifest id is %q",
+			explain.Agent, compiled.Manifest.ID)
 	}
 }
