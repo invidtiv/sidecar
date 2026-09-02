@@ -40,6 +40,16 @@ func parseWorkspaceID(id string) (kind, projectKey, key string, ok bool) {
 	return "", "", "", false
 }
 
+// LookupWorkspace re-resolves a durable workspace id to its authoritative root.
+//
+// Exported because `sidecar repo` is scoped by the same identity. Which root a
+// viewer is reading is the one fact both verb families must agree on, so there
+// is one resolver rather than one per family: a second implementation is how a
+// bound surface starts reading a different directory than its neighbour.
+func (s *Service) LookupWorkspace(ctx context.Context, workspaceID string) (Workspace, error) {
+	return s.lookupWorkspace(ctx, workspaceID)
+}
+
 func (s *Service) lookupWorkspace(ctx context.Context, workspaceID string) (Workspace, error) {
 	if err := ctx.Err(); err != nil {
 		return Workspace{}, err

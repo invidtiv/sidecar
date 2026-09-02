@@ -191,6 +191,18 @@ type VerbCapabilities struct {
 	// string.
 	ContentTreeV1 bool `json:"contentTreeV1,omitempty"`
 
+	// RepoReadV1 is the `sidecar repo status|diff|history|commit|refs --json`
+	// family, the read-only repository contract a viewer's Git pane is built
+	// from. One bit rather than one per sub-verb: they ship together, and a
+	// host that has one has all of them.
+	//
+	// A host that predates them is read as false and the viewer refuses,
+	// naming the host, rather than falling back to a repository on its own
+	// disk — a same-named checkout is a different project, and staging a file
+	// in it under a remote label is the failure the remote-project work exists
+	// to prevent. Never inferred from a version string.
+	RepoReadV1 bool `json:"repoReadV1,omitempty"`
+
 	// UIRequestRelayV1 is serve observing host `uirequest` files and announcing
 	// them as KindUIRequest. A host that predates it is read as false; the
 	// viewer must not expect announcements. Serve still does not apply the

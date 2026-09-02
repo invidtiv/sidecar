@@ -119,10 +119,22 @@ func (s *Service) Tree(ctx context.Context, workspaceID string, paths []string) 
 // Only relative paths are accepted: unlike a file target, there is no case for
 // browsing a directory outside the workspace a viewer asked about.
 func resolveTreeDir(root, raw string) (rel, abs string, err error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" || raw == "." {
+	if trimmed := strings.TrimSpace(raw); trimmed == "" || trimmed == "." {
 		return "", root, nil
 	}
+	return ContainedRelative(root, raw)
+}
+
+// ContainedRelative maps a caller-supplied relative path onto a path inside
+// root, rejecting anything that escapes it, is absolute, or names a home
+// directory.
+//
+// Exported because `sidecar repo` resolves file paths under a workspace root by
+// the same rule. Containment is the one place a viewer could be walked off a
+// host's disk, so it has exactly one implementation rather than one per verb
+// family.
+func ContainedRelative(root, raw string) (rel, abs string, err error) {
+	raw = strings.TrimSpace(raw)
 	if err := validateLocator(raw, "path"); err != nil {
 		return "", "", err
 	}

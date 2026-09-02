@@ -1,6 +1,6 @@
 # Git on a remote-bound project
 
-Status: **active; not started.** This is slice 4's Git half of [Remote destinations in `@` and `W`](remote-project-switcher.md), split out for the same reason Files was: it needs a new host verb family and a plugin-wide source seam, not a landing rule. **Created:** 2026-09-01 **Verified against the tree on 2026-09-01.**
+Status: **active; slice 4f implemented** on `remote-viewer-screen` (td-7a1393: td-3a4da2). Remaining: 4g–4k, the viewer half. This is slice 4's Git half of [Remote destinations in `@` and `W`](remote-project-switcher.md), split out for the same reason Files was: it needs a new host verb family and a plugin-wide source seam, not a landing rule. **Created:** 2026-09-01 **Verified against the tree on 2026-09-01.**
 
 Related: [Files on a remote-bound project](remote-files-plugin.md) is the pattern this plan follows — a host verb, a source seam at the one place the plugin reads the world, and refusals that name the host. [Sidecar as its own remote host runtime](sidecar-remote-hosts.md) is the ssh transport and the `hostproto` hello. [Remote host content-pane parity](../implemented/remote-host-content-pane-parity.md) is the `contentpanes.Source` read path, which answers branch-vs-base diffs and is **not** what this plugin needs.
 
@@ -99,11 +99,18 @@ The north star is full parity: what you can do to a project on this machine you 
 
 None of that is in scope here, and no half-built write path ships as part of this slice.
 
+## Settled while implementing
+
+- **`NoRepository` is reachable only for a shell-kind workspace.** `contentservice` resolves a `:worktree:` id through `git worktree list`, so a project root without a `.git` is rejected before `reposervice` sees it, with "workspace ... no longer owns this worktree". The Git plugin composes a worktree id, so the "not a git repository" row of the user contract is answered by that **rejection**, not by the `NoRepository` flag. Slice 4g owes the honest sentence: a bound project the host cannot resolve as a worktree must not read as a host failure, and must never fall through to this machine's no-repo view.
+- **`sidecar repo` borrows contentservice's resolvers rather than copying them.** `LookupWorkspace` and `ContainedRelative` are exported from `internal/contentservice` for this. Which root a viewer is reading, and whether a path escapes it, are each one rule with one implementation: a second copy is how two verb families start disagreeing about which directory a bound surface is showing.
+- **A commit patch keeps git's header.** `git show HASH -- PATH` prints the commit header whether or not the path matched, so a header-only result collapses to empty (the local plugin's `normalizeCommitDiff` rule, ported rather than reinvented) and a real patch keeps its header, which `ParseUnifiedDiff` already skips.
+- **An enumerated flag value is a usage error, not a rejected value.** `--mode sideways` exits 2; a workspace, path, or commit the host will not serve exits 5. A viewer branches on the difference.
+
 ## Slices
 
 Each sub-slice is independently testable and leaves the tree in a shippable state. Every commit references its td task. Slice letters continue the ones Files used, so the ordering across slice 4 stays unambiguous.
 
-### 4f — the `sidecar repo` verb family
+### 4f — the `sidecar repo` verb family — implemented (td-3a4da2)
 
 `internal/reposervice` (new, sibling to `internal/contentservice`, and using its containment, encoding, and error conventions rather than new ones):
 
@@ -171,4 +178,5 @@ Packages: `internal/reposervice` (new), `internal/cli`, `internal/hostserve`, `i
 
 ## Changelog
 
+- **2026-09-01** — Slice 4f implemented: `internal/reposervice`, `sidecar repo status|diff|history|commit|refs`, and `RepoReadV1`. `contentservice` exports `LookupWorkspace` and `ContainedRelative` so there is one workspace resolver and one containment rule across both verb families.
 - **2026-09-01** — Created. Split out of remote-project-switcher.md slice 4 once it was clear Git needs a verb family of its own: `contentservice`'s diff kind is branch-versus-base and carries no staging axis, no branch or upstream row, and no author or date, so it cannot answer the Git tab.
