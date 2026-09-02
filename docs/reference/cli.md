@@ -413,30 +413,36 @@ Prints the table `explain` reports for one agent, for every agent Sidecar vendor
 
 Precedence is a local override in ~/.config/sidecar/agent-detection, then the newer of the runtime fetch cache and the vendored manifest, with the Sidecar overlay merged onto whichever upstream file won.
 
-The runtime fetch is off unless `detection.remoteManifests` in ~/.config/sidecar/config.json is set to "herdr.dev" or to a catalog index URL. When it is on, Sidecar checks at most once a day, after the first frame, and a check that fails is reported here rather than shown to the user. With it off, this command reads no network and the cache columns are empty.
+The runtime fetch is off unless `detection.remoteManifests` in ~/.config/sidecar/config.json is set to "herdr.dev" or to a catalog index URL. When it is on, Sidecar checks at most once a day, after the first frame, and a check that fails is reported here rather than shown to the user.
 
-This command is read-only. It never fetches, and it never writes the cache or its status file.
+Off means off: with the setting off, nothing fetches and no cached manifest is loaded, so every agent runs the vendored file again. A cache left over from when it was on is still listed in the REMOTE column, marked as not in use, because "you have a fetched file and it is not the one running" is what this table exists to say. `--clear-cache` deletes it.
+
+Without a flag this command is read-only: it never fetches, and it never writes the cache or its status file. `--refresh` and `--clear-cache` are the two forms that change something, and each of them prints the table afterwards.
 
 ```
-Usage: sidecar agent manifests [--json]
+Usage: sidecar agent manifests [--refresh | --clear-cache] [--json]
 ```
 
 **Options:**
 
+- `--refresh`: Check the catalog now, ignoring the once-a-day gate (requires detection.remoteManifests to be on)
+- `--clear-cache`: Delete every cached manifest and the fetch status file, then print the table
 - `--json`: Write stable structured JSON
 - `-h, --help`: Show this help
 
 **Exit codes:**
 
 - `0`: success
-- `1`: the vendored manifest tree could not be read
-- `2`: usage error
+- `1`: the vendored manifest tree could not be read, or --refresh or --clear-cache failed
+- `2`: usage error, including --refresh with detection.remoteManifests off
 
 **Examples:**
 
 ```bash
 sidecar agent manifests
 sidecar agent manifests --json
+sidecar agent manifests --refresh
+sidecar agent manifests --clear-cache
 ```
 
 ### `sidecar agent prompt`

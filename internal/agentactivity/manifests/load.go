@@ -4,6 +4,8 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
+	"log/slog"
+	"strings"
 	"sync"
 
 	"github.com/marcus/sidecar/internal/agentactivity/manifest"
@@ -120,10 +122,25 @@ type loaded struct {
 	err      error
 }
 
+// entry is one agent's memoised load: the sync.Once that runs it and the result
+// it produced, in one object.
+//
+// Holding the result *in the entry* rather than in a second map keyed by agent
+// is what makes Invalidate safe against a concurrent Load. With two maps, a Load
+// that was already inside load() when Invalidate ran would come back and write
+// its now-stale result under the agent's key, on top of whatever a later Load
+// had since put there, and the process would serve the pre-fetch manifest until
+// it restarted. Here that goroutine writes into the entry it started with, which
+// Invalidate has already unlinked, so its answer is returned to its own caller
+// and reaches nobody else.
+type entry struct {
+	once   sync.Once
+	result loaded
+}
+
 var (
 	loadedMu sync.Mutex
-	loadedBy = map[string]*sync.Once{}
-	loadedAt = map[string]loaded{}
+	loadedBy = map[string]*entry{}
 )
 
 // Load returns the compiled manifest for a Herdr agent id: a valid local
@@ -138,24 +155,15 @@ var (
 // immutable and shared; callers must not mutate it.
 func Load(agent string) (*manifest.Compiled, Source, error) {
 	loadedMu.Lock()
-	once, ok := loadedBy[agent]
+	e, ok := loadedBy[agent]
 	if !ok {
-		once = &sync.Once{}
-		loadedBy[agent] = once
+		e = &entry{}
+		loadedBy[agent] = e
 	}
 	loadedMu.Unlock()
 
-	once.Do(func() {
-		result := load(agent)
-		loadedMu.Lock()
-		loadedAt[agent] = result
-		loadedMu.Unlock()
-	})
-
-	loadedMu.Lock()
-	result := loadedAt[agent]
-	loadedMu.Unlock()
-	return result.compiled, result.source, result.err
+	e.once.Do(func() { e.result = load(agent) })
+	return e.result.compiled, e.result.source, e.result.err
 }
 
 func load(agent string) loaded {
@@ -248,7 +256,6 @@ func load(agent string) loaded {
 		Path:                basePath,
 		Diagnostic:          diagnostic,
 	}
-	merged := base
 
 	// The overlay merges onto whichever upstream file won, not only onto the
 	// vendored one. That is the whole point of an overlay being data in the
@@ -257,19 +264,62 @@ func load(agent string) loaded {
 	// and a newer copy of that file is still that file. Dropping them on the
 	// day a fetch succeeds would make turning the setting on a detection
 	// regression, which is the opposite of what it is for.
+	merged, overlayApplied, overlayErr := mergeOverlay(agent, base)
+
+	// An overlay that no longer fits a *fetched* file -- upstream renamed a rule
+	// the overlay replaces or disables -- takes the whole overlay with it, and
+	// that is not a cost worth paying for a newer file. codex's overlay alone
+	// carries six rules including the `osc_title_idle` disable; cursor's four;
+	// claude's five, and dropping them re-exposes the un-rewritten
+	// `\p{Alphabetic}` rule the overlay exists to fix. So the fetched file is
+	// abandoned rather than the amendments: known-good detection beats a newer
+	// file with Sidecar's half stripped out. The vendored tree is always
+	// underneath, which is the whole argument for fetching being safe at all.
 	//
-	// An overlay that no longer fits -- it disables a rule id upstream renamed,
-	// say -- fails Merge, and the note below is what tells a maintainer to
-	// re-cut it. The remote file is still used; only the overlay is dropped.
-	if overlayBytes, overlayErr := sidecarFiles.ReadFile("sidecar/" + agent + ".toml"); overlayErr == nil {
-		overlay, parseErr := manifest.ParseOverlay(overlayBytes)
-		if parseErr != nil {
-			source.note("ignored sidecar/%s.toml: %v", agent, parseErr)
-		} else if candidate, mergeErr := manifest.Merge(base, overlay); mergeErr != nil {
-			source.note("ignored sidecar/%s.toml: %v", agent, mergeErr)
-		} else {
-			merged = candidate
-			source.OverlayApplied = true
+	// The fetch itself refuses to cache such a file for the same reason
+	// (commitFetchedManifest), so reaching here means a cache written by an
+	// older binary, or an overlay that changed after it was written. Both are
+	// the maintainer's signal to re-cut the overlay, and both are loud: a
+	// warning in the log, the diagnostic on every explain record for the agent,
+	// and a line under the `sidecar agent manifests` table.
+	if overlayErr != nil && kind == KindRemote {
+		slog.Warn("detection manifests: the Sidecar overlay no longer fits the fetched manifest, using the vendored one",
+			"agent", agent, "cached", remotePath, "cachedVersion", base.Version,
+			"vendoredVersion", upstream.Version, "error", overlayErr)
+		source.note("the Sidecar overlay no longer fits cached manifest %s (%v), so the vendored manifest %s is running "+
+			"instead of cached %s: an overlay carries Sidecar's own rules and its RE2 rewrites, and running the newer "+
+			"file without them would lose detection rather than gain it",
+			remotePath, overlayErr, upstream.Version, base.Version)
+		base = upstream
+		kind = KindBundled
+		source.Kind = KindBundled
+		source.Version = upstream.Version
+		source.Path = ""
+		merged, overlayApplied, overlayErr = mergeOverlay(agent, base)
+	}
+	if overlayErr != nil {
+		// The vendored file's own overlay does not fit it, which CI catches, so
+		// this is a build problem rather than a fetch one. Upstream alone runs.
+		source.note("ignored sidecar/%s.toml: %v", agent, overlayErr)
+	}
+	source.OverlayApplied = overlayApplied
+
+	// What the winning file still cannot compile, said out loud. A rule with an
+	// RE2-incompatible pattern is skipped whole, so it asserts nothing, and on
+	// the vendored path that is impossible by test. On the fetched path it is
+	// exactly what upstream publishing a new `\p{Alphabetic}` rule looks like:
+	// the file validates, caches, becomes active, and one rule is quietly dead
+	// with no overlay rewrite under it yet. A rule that silently never fires is
+	// the false "done" this engine exists to prevent, so it is a diagnostic
+	// here, on the same terms an override's dead rules are one.
+	if kind == KindRemote {
+		if dead := deadRules(merged); len(dead) > 0 {
+			slog.Warn("detection manifests: the fetched manifest has rules Go's regexp cannot compile",
+				"agent", agent, "cached", remotePath, "rules", dead)
+			source.note("cached manifest %s is in use, but Go's regexp cannot compile the patterns in these rules, "+
+				"so they never match: %s. A rewrite belongs in sidecar/%s.toml, which is where the existing "+
+				"RE2 rewrites of upstream rules live",
+				remotePath, strings.Join(dead, ", "), agent)
 		}
 	}
 
@@ -295,6 +345,30 @@ func load(agent string) loaded {
 	}
 	applySource(compiled, source)
 	return loaded{compiled: compiled, source: source}
+}
+
+// mergeOverlay applies sidecar/<agent>.toml to a manifest, returning the merged
+// result, whether an overlay was applied, and why not when one was not.
+//
+// An agent with no overlay is not an error: the base comes back unchanged with
+// applied false and a nil error. Only a file that exists and cannot be used --
+// it does not parse, or it names a rule id the base does not have -- is an
+// error, and it is the caller that decides what to do about it, because the
+// answer differs by which file the overlay was being merged onto.
+func mergeOverlay(agent string, base *manifest.Manifest) (*manifest.Manifest, bool, error) {
+	overlayBytes, err := sidecarFiles.ReadFile("sidecar/" + agent + ".toml")
+	if err != nil {
+		return base, false, nil
+	}
+	overlay, err := manifest.ParseOverlay(overlayBytes)
+	if err != nil {
+		return base, false, err
+	}
+	merged, err := manifest.Merge(base, overlay)
+	if err != nil {
+		return base, false, err
+	}
+	return merged, true, nil
 }
 
 // applySource copies the loader's answer onto the compiled manifest, which is

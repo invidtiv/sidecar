@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -198,23 +199,28 @@ func lifecycleCommands() (report, end, release, explain, manifests *Command) {
 	manifests = &Command{
 		Name:    "manifests",
 		Summary: "List every detection manifest, its version, and which source is active",
-		Usage:   "sidecar agent manifests [--json]",
+		Usage:   "sidecar agent manifests [--refresh | --clear-cache] [--json]",
 		Long: "Prints the table `explain` reports for one agent, for every agent Sidecar vendors a manifest for: which of the three sources is active, the version that source carries, the version vendored into this binary, the version in the runtime fetch cache, whether the Sidecar overlay was merged in, and any file that was found and refused.\n\n" +
 			"Precedence is a local override in ~/.config/sidecar/agent-detection, then the newer of the runtime fetch cache and the vendored manifest, with the Sidecar overlay merged onto whichever upstream file won.\n\n" +
-			"The runtime fetch is off unless `detection.remoteManifests` in ~/.config/sidecar/config.json is set to \"herdr.dev\" or to a catalog index URL. When it is on, Sidecar checks at most once a day, after the first frame, and a check that fails is reported here rather than shown to the user. With it off, this command reads no network and the cache columns are empty.\n\n" +
-			"This command is read-only. It never fetches, and it never writes the cache or its status file.",
+			"The runtime fetch is off unless `detection.remoteManifests` in ~/.config/sidecar/config.json is set to \"herdr.dev\" or to a catalog index URL. When it is on, Sidecar checks at most once a day, after the first frame, and a check that fails is reported here rather than shown to the user.\n\n" +
+			"Off means off: with the setting off, nothing fetches and no cached manifest is loaded, so every agent runs the vendored file again. A cache left over from when it was on is still listed in the REMOTE column, marked as not in use, because \"you have a fetched file and it is not the one running\" is what this table exists to say. `--clear-cache` deletes it.\n\n" +
+			"Without a flag this command is read-only: it never fetches, and it never writes the cache or its status file. `--refresh` and `--clear-cache` are the two forms that change something, and each of them prints the table afterwards.",
 		Flags: []Flag{
+			{Name: "--refresh", Summary: "Check the catalog now, ignoring the once-a-day gate (requires detection.remoteManifests to be on)", Bool: true},
+			{Name: "--clear-cache", Summary: "Delete every cached manifest and the fetch status file, then print the table", Bool: true},
 			{Name: "--json", Summary: "Write stable structured JSON", Bool: true},
 			{Name: "--help", Short: "-h", Summary: "Show this help", Bool: true},
 		},
 		ExitCodes: []ExitCode{
 			{Code: 0, Summary: "success"},
-			{Code: 1, Summary: "the vendored manifest tree could not be read"},
-			{Code: 2, Summary: "usage error"},
+			{Code: 1, Summary: "the vendored manifest tree could not be read, or --refresh or --clear-cache failed"},
+			{Code: 2, Summary: "usage error, including --refresh with detection.remoteManifests off"},
 		},
 		Examples: []Example{
 			{Command: "sidecar agent manifests"},
 			{Command: "sidecar agent manifests --json"},
+			{Command: "sidecar agent manifests --refresh"},
+			{Command: "sidecar agent manifests --clear-cache"},
 		},
 		Agent: AgentDoc{Invocation: "sidecar agent manifests --json", Summary: "See every detection manifest's active source and version, and whether a runtime fetch is ahead of the vendored tree"},
 		Run:   runAgentManifests,
@@ -937,6 +943,19 @@ type manifestsResult struct {
 	RemoteManifests string `json:"remoteManifests"`
 	CatalogURL      string `json:"catalogUrl,omitempty"`
 	SettingError    string `json:"settingError,omitempty"`
+	// CacheIgnored is set when the fetch cache holds files and the setting is
+	// off, so nothing in it is loaded. The versions still appear per agent,
+	// marked here rather than silently dropped: a cache that is present and
+	// unused is the one state a user cannot deduce from the rest of the table.
+	CacheIgnored string `json:"cacheIgnored,omitempty"`
+	// FetchStatusError says the status file itself could not be read or parsed.
+	// Without it an unreadable status file reports as "never checked", which is
+	// the one answer that makes a broken fetch look like one nobody configured.
+	FetchStatusError string `json:"fetchStatusError,omitempty"`
+	// Refreshed and Cleared record what --refresh and --clear-cache did, and are
+	// absent for the ordinary read-only run.
+	Refreshed *manifestsRefresh `json:"refreshed,omitempty"`
+	Cleared   []string          `json:"cleared,omitempty"`
 	// CacheDir is where a fetched manifest is cached, and OverrideDir is where
 	// a local override is read from. Both are reported whether or not anything
 	// is in them, because "where do I put the file" is the other question this
@@ -945,6 +964,15 @@ type manifestsResult struct {
 	OverrideDir string                 `json:"overrideDir,omitempty"`
 	Fetch       manifests.FetchStatus  `json:"fetch"`
 	Agents      []manifestAgentSummary `json:"agents"`
+}
+
+// manifestsRefresh is what `--refresh` did: the agents whose cache moved, or
+// the reason the check did nothing.
+type manifestsRefresh struct {
+	Skipped bool     `json:"skipped"`
+	Reason  string   `json:"reason,omitempty"`
+	Updated []string `json:"updated,omitempty"`
+	Error   string   `json:"error,omitempty"`
 }
 
 // manifestAgentSummary is one row of the table.
@@ -981,6 +1009,8 @@ func runAgentManifests(env Env, args []string) int {
 	cmd := RootCommand().FindSubcommand("agent").FindSubcommand("manifests")
 	help := RenderHelp(cmd)
 	jsonOutput := false
+	refresh := false
+	clearCache := false
 	for _, arg := range args {
 		switch {
 		case isHelp(arg):
@@ -988,10 +1018,18 @@ func runAgentManifests(env Env, args []string) int {
 			return 0
 		case arg == "--json":
 			jsonOutput = true
+		case arg == "--refresh":
+			refresh = true
+		case arg == "--clear-cache":
+			clearCache = true
 		default:
 			cliErrf(env.Stderr, "unknown flag %q\n\n%s", arg, help)
 			return 2
 		}
+	}
+	if refresh && clearCache {
+		cliErrf(env.Stderr, "--refresh and --clear-cache ask for opposite things; run them one at a time\n\n%s", help)
+		return 2
 	}
 
 	agents, err := manifests.Agents()
@@ -1007,24 +1045,65 @@ func runAgentManifests(env Env, args []string) int {
 		RemoteManifests: config.RemoteManifestsOff,
 		CacheDir:        manifests.RemoteDir(),
 		OverrideDir:     manifests.OverrideDir(),
-		Fetch:           manifests.LoadFetchStatus(),
 		Agents:          make([]manifestAgentSummary, 0, len(agents)),
 	}
 	// A config that cannot be read is not a reason to refuse the table: every
 	// other column is answerable without it, and "detection.remoteManifests is
 	// off" is the safe thing to report about a config nobody could load.
+	detection := config.DetectionConfig{RemoteManifests: config.RemoteManifestsOff}
 	if cfg, cfgErr := config.Load(); cfgErr == nil && cfg != nil {
+		detection = cfg.Detection
 		res.RemoteManifests = cfg.Detection.RemoteManifests
 		if res.RemoteManifests == "" {
 			res.RemoteManifests = config.RemoteManifestsOff
 		}
 		if url, urlErr := cfg.Detection.RemoteCatalogURL(); urlErr != nil {
+			// Reachable because the loader keeps the value the user wrote rather
+			// than replacing it with the default. This line, and not a log entry
+			// nobody reads, is how someone finds out their setting did nothing.
 			res.SettingError = urlErr.Error()
 		} else {
 			res.CatalogURL = url
 		}
 	}
 
+	// The two forms that change something, before the table is built, so the
+	// table describes the state they left behind.
+	if clearCache {
+		removed, clearErr := manifests.ClearCache()
+		if clearErr != nil {
+			cliErrln(env.Stderr, clearErr.Error())
+			return 1
+		}
+		res.Cleared = removed
+		manifests.Invalidate(agents...)
+	}
+	if refresh {
+		if !detection.RemoteManifestsEnabled() {
+			cliErrf(env.Stderr,
+				"--refresh needs detection.remoteManifests set to %q or a catalog index URL in %s; it is %q\n\n%s",
+				config.RemoteManifestsHerdrDev, config.ConfigPath(), res.RemoteManifests, help)
+			return 2
+		}
+		result, fetchErr := manifests.FetchFromConfig(context.Background(), detection,
+			manifests.FetchOptions{Force: true})
+		res.Refreshed = &manifestsRefresh{
+			Skipped: result.Skipped,
+			Reason:  result.Reason,
+			Updated: result.Updated,
+		}
+		if fetchErr != nil {
+			// A failed check is reported and the table is still printed: what a
+			// check learned about each agent is in the status file, and refusing
+			// to print it is refusing to answer the question that was asked.
+			res.Refreshed.Error = fetchErr.Error()
+		}
+	}
+
+	res.Fetch = manifests.LoadFetchStatus()
+	res.FetchStatusError = res.Fetch.ReadError
+
+	cacheHolds := false
 	for _, agent := range agents {
 		row := manifestAgentSummary{Agent: agent}
 		compiled, source, loadErr := manifests.Load(agent)
@@ -1043,10 +1122,25 @@ func runAgentManifests(env Env, args []string) int {
 		} else if compiled != nil && compiled.Manifest != nil {
 			row.ManifestID = compiled.Manifest.ID
 		}
+		// With the setting off the loader ignores the cache entirely, so the
+		// version has to come from the file itself. The row still says the
+		// active source is the vendored one; this is the column that tells the
+		// user there is something on disk that --clear-cache would remove.
+		if !detection.RemoteManifestsEnabled() {
+			if cached := manifests.CachedRemote(agent); cached.Path != "" {
+				cacheHolds = true
+				row.CachedRemoteVersion = cached.Version
+			}
+		}
 		if status, ok := res.Fetch.Agents[agent]; ok {
 			row.Fetch = &status
 		}
 		res.Agents = append(res.Agents, row)
+	}
+	if cacheHolds {
+		res.CacheIgnored = fmt.Sprintf(
+			"detection.remoteManifests is %q, so no cached manifest is loaded; the versions below are files on disk that are not in use",
+			res.RemoteManifests)
 	}
 
 	if jsonOutput {
@@ -1070,14 +1164,38 @@ func writeManifestsText(env Env, res manifestsResult) {
 	if res.OverrideDir != "" {
 		_, _ = fmt.Fprintf(env.Stdout, "overrides         %s\n", res.OverrideDir)
 	}
+	if res.CacheIgnored != "" {
+		_, _ = fmt.Fprintf(env.Stdout, "cache ignored     %s\n", res.CacheIgnored)
+	}
+	if res.FetchStatusError != "" {
+		_, _ = fmt.Fprintf(env.Stdout, "status unreadable %s\n", res.FetchStatusError)
+	}
 	if res.Fetch.LastCheckUnix > 0 {
 		_, _ = fmt.Fprintf(env.Stdout, "last check        %s (%s)\n",
 			time.Unix(res.Fetch.LastCheckUnix, 0).Format(time.RFC3339), res.Fetch.LastResult)
 		if res.Fetch.LastError != "" {
 			_, _ = fmt.Fprintf(env.Stdout, "last error        %s\n", res.Fetch.LastError)
 		}
-	} else if res.CatalogURL != "" {
+	} else if res.CatalogURL != "" && res.FetchStatusError == "" {
 		_, _ = fmt.Fprintln(env.Stdout, "last check        never")
+	}
+	for _, row := range res.Fetch.SkippedRows {
+		_, _ = fmt.Fprintf(env.Stdout, "skipped row       %s\n", row)
+	}
+	if res.Cleared != nil {
+		_, _ = fmt.Fprintf(env.Stdout, "cleared           %d file(s) from the fetch cache\n", len(res.Cleared))
+	}
+	if r := res.Refreshed; r != nil {
+		switch {
+		case r.Error != "":
+			_, _ = fmt.Fprintf(env.Stdout, "refresh           failed: %s\n", r.Error)
+		case r.Skipped:
+			_, _ = fmt.Fprintf(env.Stdout, "refresh           skipped: %s\n", r.Reason)
+		case len(r.Updated) > 0:
+			_, _ = fmt.Fprintf(env.Stdout, "refresh           updated %s\n", strings.Join(r.Updated, ", "))
+		default:
+			_, _ = fmt.Fprintln(env.Stdout, "refresh           everything was already current")
+		}
 	}
 	_, _ = fmt.Fprintln(env.Stdout)
 

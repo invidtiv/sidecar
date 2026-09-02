@@ -327,8 +327,13 @@ func TestAgentManifestsListsEveryVendoredAgentInBothForms(t *testing.T) {
 }
 
 // TestAgentManifestsReportsARefusedSetting: the config loader warns to the log
-// and keeps the default, and the log is not somewhere anyone looks. This is
-// where a user finds out their setting did nothing.
+// and fetches nothing, and the log is not somewhere anyone looks. This is where
+// a user finds out their setting did nothing.
+//
+// It asserts the refusal itself, which it could not do before: the loader used
+// to replace an unrecognised value with the default, so this verb could only
+// ever see "off" and its `settingError` field was unreachable code. The loader
+// now keeps the value the user wrote, and refuses it here instead.
 func TestAgentManifestsReportsARefusedSetting(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
@@ -348,11 +353,152 @@ func TestAgentManifestsReportsARefusedSetting(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &res); err != nil {
 		t.Fatal(err)
 	}
-	// The loader replaced the value, so the effective setting is off and there
-	// is no catalog. That is the safe direction and the table says so.
-	if res.RemoteManifests != config.RemoteManifestsOff || res.CatalogURL != "" {
-		t.Fatalf("a refused value did not resolve to off: %+v", res)
+	if res.SettingError == "" {
+		t.Fatalf("a refused value was not reported: %+v", res)
 	}
+	if !strings.Contains(res.SettingError, "yes please") {
+		t.Fatalf("settingError does not quote the value the user wrote: %q", res.SettingError)
+	}
+	// Fetching is still off, which is the safe direction, and there is no
+	// catalog to fetch from.
+	if res.CatalogURL != "" {
+		t.Fatalf("a refused value resolved to a catalog: %q", res.CatalogURL)
+	}
+	if res.RemoteManifests != "yes please" {
+		t.Fatalf("remoteManifests = %q, want the value verbatim", res.RemoteManifests)
+	}
+
+	code, text, errOut := runLifecycleCLI(t, "agent", "manifests")
+	if code != 0 {
+		t.Fatalf("exit %d (stderr: %s)", code, errOut)
+	}
+	if !strings.Contains(text, "setting refused") {
+		t.Fatalf("the text form does not report the refusal:\n%s", text)
+	}
+
+	// And --refresh refuses rather than acting on a setting nobody turned on.
+	code, _, errOut = runLifecycleCLI(t, "agent", "manifests", "--refresh")
+	if code != 2 {
+		t.Fatalf("--refresh with a refused setting exited %d, want 2", code)
+	}
+	if !strings.Contains(errOut, "detection.remoteManifests") {
+		t.Fatalf("stderr does not name the setting: %s", errOut)
+	}
+}
+
+// TestAgentManifestsShowsACacheItIsNotUsing is finding 3's user-visible half:
+// with the setting off nothing cached is loaded, and the table has to say that
+// the files are there rather than pretend they are not. Otherwise the only way
+// to find out why `--clear-cache` has anything to do is to go looking in a state
+// directory.
+func TestAgentManifestsShowsACacheItIsNotUsing(t *testing.T) {
+	stateDir := t.TempDir()
+	config.SetTestConfigPath(filepath.Join(t.TempDir(), "config.json"))
+	t.Cleanup(config.ResetTestConfigPath)
+	config.SetTestStateDir(stateDir)
+	t.Cleanup(config.ResetTestStateDir)
+	writeStaleCursorCache(t)
+
+	code, out, errOut := runLifecycleCLI(t, "agent", "manifests", "--json")
+	if code != 0 {
+		t.Fatalf("exit %d (stderr: %s)", code, errOut)
+	}
+	var res manifestsResult
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatal(err)
+	}
+	if res.CacheIgnored == "" {
+		t.Fatalf("a cache present with the setting off was not reported: %+v", res)
+	}
+	for _, row := range res.Agents {
+		if row.Agent != "cursor" {
+			continue
+		}
+		if row.ActiveSource != string(manifests.KindBundled) {
+			t.Fatalf("cursor active source = %q with the setting off", row.ActiveSource)
+		}
+		if row.CachedRemoteVersion != "9999.01.01.1" {
+			t.Fatalf("cursor cached remote version = %q, want the file on disk", row.CachedRemoteVersion)
+		}
+	}
+
+	code, text, errOut := runLifecycleCLI(t, "agent", "manifests")
+	if code != 0 {
+		t.Fatalf("exit %d (stderr: %s)", code, errOut)
+	}
+	if !strings.Contains(text, "cache ignored") {
+		t.Fatalf("the text form does not say the cache is ignored:\n%s", text)
+	}
+}
+
+// TestAgentManifestsClearCacheRemovesTheCache is the recovery path: turning the
+// setting off stops the cache being used, and this is what makes it stop
+// existing, without anyone having to find a state directory.
+func TestAgentManifestsClearCacheRemovesTheCache(t *testing.T) {
+	config.SetTestConfigPath(filepath.Join(t.TempDir(), "config.json"))
+	t.Cleanup(config.ResetTestConfigPath)
+	config.SetTestStateDir(t.TempDir())
+	t.Cleanup(config.ResetTestStateDir)
+	cachePath := writeStaleCursorCache(t)
+
+	code, out, errOut := runLifecycleCLI(t, "agent", "manifests", "--clear-cache", "--json")
+	if code != 0 {
+		t.Fatalf("exit %d (stderr: %s)", code, errOut)
+	}
+	var res manifestsResult
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Cleared) == 0 {
+		t.Fatalf("nothing was reported as cleared: %+v", res)
+	}
+	if _, err := os.Stat(cachePath); err == nil {
+		t.Fatal("the cached manifest survived --clear-cache")
+	}
+	if res.CacheIgnored != "" {
+		t.Fatalf("the table still reports an ignored cache after clearing it: %q", res.CacheIgnored)
+	}
+}
+
+// TestAgentManifestsRefusesRefreshAndClearCacheTogether: they ask for opposite
+// things, and guessing an order for them would be worse than saying so.
+func TestAgentManifestsRefusesRefreshAndClearCacheTogether(t *testing.T) {
+	code, _, errOut := runLifecycleCLI(t, "agent", "manifests", "--refresh", "--clear-cache")
+	if code != 2 {
+		t.Fatalf("exit %d, want 2", code)
+	}
+	if !strings.Contains(errOut, "one at a time") {
+		t.Fatalf("stderr does not say why: %s", errOut)
+	}
+}
+
+// writeStaleCursorCache puts a fetched cursor manifest in the state directory
+// the test axis points at, the way a week with the setting on would have.
+func writeStaleCursorCache(t *testing.T) string {
+	t.Helper()
+	path := manifests.RemoteCachePath("cursor")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := `
+id = "cursor"
+version = "9999.01.01.1"
+min_engine_version = 1
+
+[[rules]]
+id = "spinner_working"
+state = "working"
+priority = 90
+region = "bottom_non_empty_lines(8)"
+visible_working = true
+line_regex = ['^\s*[⠀-⣿]+\s+\w+ing\b']
+`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifests.Invalidate("cursor")
+	t.Cleanup(func() { manifests.Invalidate("cursor") })
+	return path
 }
 
 func TestAgentManifestsRejectsUnknownFlags(t *testing.T) {

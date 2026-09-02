@@ -90,6 +90,11 @@ func (cs *catalogServer) indexURL() string { return cs.URL + "/index.toml" }
 // remoteState points the state axis at a temp directory and clears the
 // per-agent load cache, then restores both. Every fetch test goes through it,
 // so no test can read or write the developer's real fetch cache.
+//
+// It also writes a config with detection.remoteManifests on, because the loader
+// reads the cache only when the setting is on -- "off" means off, cache
+// included. Every test that wants the other half of that rule says so by calling
+// setRemoteManifests with "off".
 func remoteState(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -100,12 +105,43 @@ func remoteState(t *testing.T) string {
 	// not decide what these tests see.
 	config.SetTestConfigPath(filepath.Join(t.TempDir(), "config.json"))
 	t.Cleanup(config.ResetTestConfigPath)
-	resetLoadCache(t)
+	setRemoteManifests(t, config.RemoteManifestsHerdrDev)
 	want := filepath.Join(dir, RemoteDirName)
 	if got := RemoteDir(); got != want {
 		t.Fatalf("RemoteDir() = %q, want %q", got, want)
 	}
 	return want
+}
+
+// setRemoteManifests writes detection.remoteManifests into the config the test
+// axis points at, and clears both memoised caches so the next Load sees it.
+//
+// The value is only ever the gate here: every test drives Fetch with an explicit
+// catalog URL, so "herdr.dev" turns the loader on without anything reaching it.
+func setRemoteManifests(t *testing.T, value string) {
+	t.Helper()
+	path := config.ConfigPath()
+	body := fmt.Sprintf(`{"detection":{"remoteManifests":%q}}`, value)
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resetLoadCache(t)
+}
+
+// writeCache puts bytes in the fetch cache directly, for the cases the fetch
+// itself would now refuse to create: a file cached by an older binary, or one
+// edited by hand.
+func writeCache(t *testing.T, agent, body string) string {
+	t.Helper()
+	path := RemoteCachePath(agent)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	resetLoadCache(t)
+	return path
 }
 
 func fetchNow(t *testing.T, url string) FetchResult {
@@ -285,14 +321,10 @@ func TestTheSidecarOverlayMergesOntoAFetchedManifest(t *testing.T) {
 	}
 }
 
-// TestAnOverlayThatNoLongerFitsAFetchedManifestIsDroppedNotFatal covers the
-// case a maintainer has to be told about: upstream renamed a rule the overlay
-// replaces, so the merge refuses. The fetched file still runs.
-func TestAnOverlayThatNoLongerFitsAFetchedManifestIsDroppedNotFatal(t *testing.T) {
-	remoteState(t)
-	// codex's overlay disables upstream's `osc_title_idle`; a served file with
-	// no such rule is exactly the rename case.
-	served := `
+// codexWithRenamedRule is a served codex manifest that the Sidecar overlay
+// cannot merge onto: codex's overlay disables upstream's `osc_title_idle`, and a
+// served file with no such rule is exactly what a rename upstream looks like.
+const codexWithRenamedRule = `
 id = "codex"
 version = "9999.01.01.1"
 min_engine_version = 1
@@ -304,27 +336,127 @@ priority = 100
 region = "whole_recent"
 contains = ["fetched codex marker"]
 `
+
+// TestAFetchedManifestTheOverlayCannotMergeOntoIsNotCached is the case a
+// maintainer has to be told about: upstream renamed a rule the overlay replaces,
+// so the merge refuses.
+//
+// This test used to pin the opposite answer -- cache the file, drop the overlay,
+// run the fetched file alone -- and that was wrong. codex's overlay carries six
+// rules, cursor's four, claude's five, including the `osc_title_idle` disable,
+// the `weak_blocker` replacement and the `\p{Alphabetic}` RE2 rewrites. Running
+// a newer upstream file with all of that stripped out is a detection regression
+// bought with a version bump, and it would have arrived silently on the day
+// upstream renamed one rule id. Known-good detection wins: the file is not
+// cached, the status file names the agent and the merge error, and re-cutting
+// the overlay is what makes the next check take it.
+func TestAFetchedManifestTheOverlayCannotMergeOntoIsNotCached(t *testing.T) {
+	remoteState(t)
 	server := newCatalogServer(t, map[string]string{
 		"index.toml": catalogFor([2]string{"codex", "codex.toml"}),
-		"codex.toml": served,
+		"codex.toml": codexWithRenamedRule,
 	})
-	fetchNow(t, server.indexURL())
+	res := fetchNow(t, server.indexURL())
+
+	if len(res.Updated) != 0 {
+		t.Fatalf("updated = %v, want nothing", res.Updated)
+	}
+	status := res.Status.Agents["codex"]
+	if status.LastResult != FetchResultIgnored {
+		t.Fatalf("codex result = %q, want %q", status.LastResult, FetchResultIgnored)
+	}
+	if !strings.Contains(status.LastError, "overlay no longer fits") {
+		t.Fatalf("codex error does not say the overlay stopped fitting: %q", status.LastError)
+	}
+	if _, err := os.Stat(RemoteCachePath("codex")); err == nil {
+		t.Fatal("a manifest the overlay cannot merge onto was written to the cache")
+	}
 
 	compiled, source, err := Load("codex")
 	if err != nil {
 		t.Fatal(err)
 	}
+	if source.Kind != KindBundled || !source.OverlayApplied {
+		t.Fatalf("codex is not running vendored-plus-overlay: kind=%q overlay=%v", source.Kind, source.OverlayApplied)
+	}
+	if compiled.Evaluate(manifest.Input{Screen: "fetched codex marker\n"}).MatchedRule != nil {
+		t.Fatal("the uncached manifest classified a screen")
+	}
+}
+
+// TestACachedManifestTheOverlayCannotMergeOntoFallsBackToVendored is the same
+// rule one layer down, for the cache the fetch will no longer create: a file
+// written by an older binary, or one whose overlay changed after it was cached.
+// The whole overlay would otherwise be dropped while the fetched file kept
+// winning, which is the loudest possible way to lose Sidecar's own rules
+// quietly.
+func TestACachedManifestTheOverlayCannotMergeOntoFallsBackToVendored(t *testing.T) {
+	remoteState(t)
+	writeCache(t, "codex", codexWithRenamedRule)
+
+	compiled, source, err := Load("codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source.Kind != KindBundled {
+		t.Fatalf("source kind = %q, want %q: a stale overlay must not cost the vendored file too",
+			source.Kind, KindBundled)
+	}
+	if !source.OverlayApplied {
+		t.Fatalf("the overlay was dropped along with the cached file: %q", source.Diagnostic)
+	}
+	if source.CachedRemoteVersion != "9999.01.01.1" {
+		t.Fatalf("cached remote version = %q, want it reported even though it lost", source.CachedRemoteVersion)
+	}
+	if !strings.Contains(source.Diagnostic, "overlay no longer fits") ||
+		!strings.Contains(source.Diagnostic, RemoteCachePath("codex")) {
+		t.Fatalf("diagnostic does not name the cached file and the reason: %q", source.Diagnostic)
+	}
+	if compiled.Evaluate(manifest.Input{Screen: "fetched codex marker\n"}).MatchedRule != nil {
+		t.Fatal("the abandoned cached manifest still classified a screen")
+	}
+}
+
+// TestAFetchedManifestWithARuleRE2CannotCompileSaysSo is the fetched-file half
+// of the rule the override path already holds to: a rule whose pattern cannot
+// compile is skipped whole, so it asserts nothing, and a rule that silently
+// never fires is the false "done" this engine exists to prevent.
+//
+// The vendored path cannot reach this state -- every incompatible pattern has an
+// overlay rewrite and a test proving it -- but a published file can, the day
+// upstream adds a `\p{Alphabetic}` rule the overlay has not caught up with. The
+// sync report names those before a human merges them; a runtime fetch has no
+// human in it, so the loader has to.
+func TestAFetchedManifestWithARuleRE2CannotCompileSaysSo(t *testing.T) {
+	remoteState(t)
+	// A rule id the overlay does not carry, so the rewrite that keeps upstream's
+	// existing `\p{Alphabetic}` rule alive does not cover this one. That is what
+	// a newly published upstream rule looks like on the day it lands.
+	served := remoteCursor("9999.01.01.1") + `
+[[rules]]
+id = "new_thinking_working"
+state = "working"
+priority = 91
+region = "whole_recent"
+visible_working = true
+line_regex = ['^\p{Alphabetic}+ is thinking']
+`
+	server := newCatalogServer(t, map[string]string{
+		"index.toml":  catalogFor([2]string{"cursor", "cursor.toml"}),
+		"cursor.toml": served,
+	})
+	fetchNow(t, server.indexURL())
+
+	_, source, err := Load("cursor")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if source.Kind != KindRemote {
-		t.Fatalf("source kind = %q, want %q", source.Kind, KindRemote)
+		t.Fatalf("source kind = %q (diagnostic %q), want %q", source.Kind, source.Diagnostic, KindRemote)
 	}
-	if source.OverlayApplied {
-		t.Fatal("an overlay that cannot merge must be dropped, not applied")
-	}
-	if !strings.Contains(source.Diagnostic, "sidecar/codex.toml") {
-		t.Fatalf("diagnostic does not name the overlay it dropped: %q", source.Diagnostic)
-	}
-	if compiled.Evaluate(manifest.Input{Screen: "fetched codex marker\n"}).MatchedRule == nil {
-		t.Fatal("the fetched manifest stopped classifying when its overlay was dropped")
+	if !strings.Contains(source.Diagnostic, "never match") ||
+		!strings.Contains(source.Diagnostic, "new_thinking_working") {
+		t.Fatalf("diagnostic does not name the dead rule: %q", source.Diagnostic)
 	}
 }
 
@@ -591,19 +723,65 @@ func TestFetchSkipsACatalogAgentSidecarVendorsNoManifestFor(t *testing.T) {
 	if res.Status.Agents["cursor"].LastResult != FetchResultUpdated {
 		t.Fatalf("the known agent was not fetched: %+v", res.Status.Agents["cursor"])
 	}
+	if len(res.Status.SkippedRows) != 1 || !strings.Contains(res.Status.SkippedRows[0], "newagent") {
+		t.Fatalf("the skipped row was not recorded: %v", res.Status.SkippedRows)
+	}
 }
 
-func TestTheCatalogIsRefusedWholeWhenItIsMalformed(t *testing.T) {
+// TestARowThisClientCannotUseIsSkippedNotFatal is the failure mode that would
+// have been permanent and silent: Herdr adds one row this binary cannot resolve
+// and every other agent stops updating for good.
+//
+// Herdr skips an id its own enum has no variant for *before* it validates the
+// path (parse_catalog, manifest_update.rs:362). Sidecar keys on the path rather
+// than the id, so the same rule has to cover a path it will not resolve too --
+// nothing is fetched from such a row either way, and refusing the index over a
+// row that was never going to be fetched is the same outage with extra steps.
+func TestARowThisClientCannotUseIsSkippedNotFatal(t *testing.T) {
+	for _, tc := range []struct {
+		name, path, want string
+	}{
+		{"traversing path", "../cursor.toml", "unsafe path"},
+		{"absolute path", "/cursor.toml", "unsafe path"},
+		{"other host", "https://elsewhere/x.toml", "unsafe path"},
+		{"nested path", "a/newthing.toml", "not a plain file name"},
+		{"not toml", "newthing.txt", "not a .toml file"},
+		{"no vendored manifest", "newthing.toml", "no vendored manifest"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			remoteState(t)
+			server := newCatalogServer(t, map[string]string{
+				"index.toml": catalogFor(
+					[2]string{"newthing", tc.path},
+					[2]string{"cursor", "cursor.toml"},
+				),
+				"cursor.toml": remoteCursor("9999.01.01.1"),
+			})
+			res := fetchNow(t, server.indexURL())
+
+			if res.Status.LastResult != FetchResultChecked {
+				t.Fatalf("status = %q, want %q: one bad row refused the whole catalog",
+					res.Status.LastResult, FetchResultChecked)
+			}
+			if res.Status.Agents["cursor"].LastResult != FetchResultUpdated {
+				t.Fatalf("the usable row was not fetched: %+v", res.Status.Agents["cursor"])
+			}
+			if len(res.Status.SkippedRows) != 1 || !strings.Contains(res.Status.SkippedRows[0], tc.want) {
+				t.Fatalf("skipped rows = %v, want one mentioning %q", res.Status.SkippedRows, tc.want)
+			}
+		})
+	}
+}
+
+// TestTheCatalogIsRefusedWholeWhenTheDocumentIsMalformed keeps the refusals that
+// are about the catalog as a *document* rather than about one row: there is no
+// defensible way to read any of these, so reading none of it is the answer.
+func TestTheCatalogIsRefusedWholeWhenTheDocumentIsMalformed(t *testing.T) {
 	for _, tc := range []struct {
 		name, index, want string
 	}{
 		{"wrong schema version", "schema_version = 2\n", "schema_version"},
 		{"unknown key", "schema_version = 1\nwat = true\n", "parse catalog"},
-		{"traversing path", catalogFor([2]string{"cursor", "../cursor.toml"}), "unsafe path"},
-		{"absolute path", catalogFor([2]string{"cursor", "/cursor.toml"}), "unsafe path"},
-		{"other host", catalogFor([2]string{"cursor", "https://elsewhere/x.toml"}), "unsafe path"},
-		{"nested path", catalogFor([2]string{"cursor", "a/cursor.toml"}), "not a plain file name"},
-		{"not toml", catalogFor([2]string{"cursor", "cursor.txt"}), "not a .toml file"},
 		{"duplicate agent", catalogFor(
 			[2]string{"cursor", "cursor.toml"}, [2]string{"cursor", "cursor.toml"}), "duplicate"},
 	} {
@@ -757,5 +935,394 @@ func TestTheCacheIsReadOnFirstLoadAndNotBefore(t *testing.T) {
 	}
 	if remoteReads.Load() != afterFirst {
 		t.Fatal("a second Load read the cache again; the sync.Once is not holding")
+	}
+}
+
+// TestOffMeansOffForACacheAlreadyOnDisk is the setting's other half, and the
+// one it did not have.
+//
+// The setting used to gate fetching alone, so a cache written while it was on
+// kept answering after it was turned off: `sidecar agent manifests` reported
+// `remote`, `explain` reported `active_source: remote`, and the only way back to
+// the vendored tree was deleting a state directory by hand. Herdr's loader reads
+// its cache unconditionally and this diverges deliberately: a user turning a
+// network feature off is asking the software to stop using what the network gave
+// it. The bytes stay on disk for `--refresh` to pick up if it is turned on again.
+func TestOffMeansOffForACacheAlreadyOnDisk(t *testing.T) {
+	remoteState(t)
+	server := newCatalogServer(t, map[string]string{
+		"index.toml":  catalogFor([2]string{"cursor", "cursor.toml"}),
+		"cursor.toml": remoteCursor("9999.01.01.1"),
+	})
+	fetchNow(t, server.indexURL())
+	if _, source, err := Load("cursor"); err != nil || source.Kind != KindRemote {
+		t.Fatalf("the fetched manifest did not become active: kind=%q err=%v", source.Kind, err)
+	}
+
+	setRemoteManifests(t, config.RemoteManifestsOff)
+
+	compiled, source, err := Load("cursor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source.Kind != KindBundled {
+		t.Fatalf("source kind = %q with the setting off, want %q", source.Kind, KindBundled)
+	}
+	if source.CachedRemoteVersion != "" {
+		t.Fatalf("cached remote version = %q with the setting off", source.CachedRemoteVersion)
+	}
+	if compiled.Evaluate(manifest.Input{Screen: "fetched cursor marker\n"}).MatchedRule != nil {
+		t.Fatal("a cached rule fired with detection.remoteManifests off")
+	}
+	// The file is still there. Turning the setting off is not a delete, and
+	// ClearCache is the verb for that.
+	if _, statErr := os.Stat(RemoteCachePath("cursor")); statErr != nil {
+		t.Fatalf("turning the setting off deleted the cache: %v", statErr)
+	}
+	// And CachedRemote still reports it, which is what lets the table say "you
+	// have a fetched file and it is not the one running".
+	if cached := CachedRemote("cursor"); cached.Version != "9999.01.01.1" {
+		t.Fatalf("CachedRemote version = %q with the setting off, want the file's own", cached.Version)
+	}
+}
+
+// TestClearCacheRemovesEveryCachedFileAndTheStatus is the recovery path an agent
+// can take without a shell full of rm: the setting alone stops the cache being
+// used, and this is what makes it stop existing.
+func TestClearCacheRemovesEveryCachedFileAndTheStatus(t *testing.T) {
+	remoteState(t)
+	server := newCatalogServer(t, map[string]string{
+		"index.toml":  catalogFor([2]string{"cursor", "cursor.toml"}),
+		"cursor.toml": remoteCursor("9999.01.01.1"),
+	})
+	fetchNow(t, server.indexURL())
+
+	removed, err := ClearCache()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(removed) != 2 {
+		t.Fatalf("removed %v, want the cached manifest and the status file", removed)
+	}
+	if _, statErr := os.Stat(RemoteCachePath("cursor")); statErr == nil {
+		t.Fatal("the cached manifest survived ClearCache")
+	}
+	if LoadFetchStatus().LastCheckUnix != 0 {
+		t.Fatal("the status file survived ClearCache")
+	}
+	Invalidate("cursor")
+	if _, source, loadErr := Load("cursor"); loadErr != nil || source.Kind != KindBundled {
+		t.Fatalf("Load did not fall back to the vendored manifest: kind=%q err=%v", source.Kind, loadErr)
+	}
+	// An empty cache is what the caller asked for, so clearing one twice is
+	// success, not an error.
+	if removed, err = ClearCache(); err != nil || len(removed) != 0 {
+		t.Fatalf("clearing an empty cache = %v, %v", removed, err)
+	}
+}
+
+// TestAFailedCheckRetriesSoonerThanADay is the train case: a laptop opened with
+// no connectivity claimed the day at 08:40 and never tried again when the
+// connection came back. Claiming the day and never retrying a failure inside it
+// are separable, and only the first of them is the crash-loop protection.
+func TestAFailedCheckRetriesSoonerThanADay(t *testing.T) {
+	remoteState(t)
+	server := newCatalogServer(t, map[string]string{})
+	start := time.Now()
+
+	first, err := Fetch(context.Background(), FetchOptions{CatalogURL: server.indexURL(), Now: start})
+	if err == nil {
+		t.Fatal("the check against a catalog with no index did not fail")
+	}
+	if first.Status.LastResult != FetchResultFailed {
+		t.Fatalf("status = %q, want %q", first.Status.LastResult, FetchResultFailed)
+	}
+	afterFirst := server.requests
+
+	// Inside the retry interval, the claim still holds: a crash loop must not
+	// become a request loop.
+	soon, err := Fetch(context.Background(), FetchOptions{
+		CatalogURL: server.indexURL(), Now: start.Add(FetchRetryInterval / 2),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !soon.Skipped {
+		t.Fatal("a retry inside the retry interval did not skip")
+	}
+	if server.requests != afterFirst {
+		t.Fatalf("a skipped retry still made %d requests", server.requests-afterFirst)
+	}
+
+	// Past it, and well inside the day the successful path would have claimed.
+	server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "index.toml") {
+			_, _ = w.Write([]byte(catalogFor([2]string{"cursor", "cursor.toml"})))
+			return
+		}
+		_, _ = w.Write([]byte(remoteCursor("9999.01.01.1")))
+	})
+	retry, err := Fetch(context.Background(), FetchOptions{
+		CatalogURL: server.indexURL(), Now: start.Add(FetchRetryInterval + time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry.Skipped {
+		t.Fatalf("a retry past the retry interval skipped: %s", retry.Reason)
+	}
+	if retry.Status.LastResult != FetchResultChecked {
+		t.Fatalf("the retry did not succeed: %+v", retry.Status)
+	}
+	// And a successful check goes back to claiming the whole day.
+	next, err := Fetch(context.Background(), FetchOptions{
+		CatalogURL: server.indexURL(), Now: start.Add(FetchRetryInterval + 2*time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !next.Skipped {
+		t.Fatal("a check hours after a successful one did not skip")
+	}
+}
+
+// TestChangingTheCatalogURLDoesNotWaitOutTheOldCatalogsDay: the day belongs to
+// the catalog that claimed it. A user who repoints detection.remoteManifests at
+// another index has said the cache came from somewhere they no longer want it
+// from, and making them wait would be the software arguing with an instruction
+// it was just given.
+func TestChangingTheCatalogURLDoesNotWaitOutTheOldCatalogsDay(t *testing.T) {
+	remoteState(t)
+	first := newCatalogServer(t, map[string]string{
+		"index.toml":  catalogFor([2]string{"cursor", "cursor.toml"}),
+		"cursor.toml": remoteCursor("9999.01.01.1"),
+	})
+	start := time.Now()
+	if _, err := Fetch(context.Background(), FetchOptions{CatalogURL: first.indexURL(), Now: start}); err != nil {
+		t.Fatal(err)
+	}
+
+	second := newCatalogServer(t, map[string]string{
+		"index.toml":  catalogFor([2]string{"cursor", "cursor.toml"}),
+		"cursor.toml": remoteCursor("9999.01.01.2"),
+	})
+	res, err := Fetch(context.Background(), FetchOptions{
+		CatalogURL: second.indexURL(), Now: start.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Skipped {
+		t.Fatalf("a check against a new catalog waited out the old one's day: %s", res.Reason)
+	}
+	if res.Status.CatalogURL != second.indexURL() {
+		t.Fatalf("status catalog = %q, want the new one", res.Status.CatalogURL)
+	}
+}
+
+// TestAnUnreadableStatusFileIsReportedNotReadAsNeverChecked: this file is where
+// the whole feature's observability lives, and reading a corrupt one as an empty
+// status made a broken fetch look like one nobody had configured.
+func TestAnUnreadableStatusFileIsReportedNotReadAsNeverChecked(t *testing.T) {
+	remoteState(t)
+	if err := os.MkdirAll(RemoteDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(FetchStatusPath(), []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	status := LoadFetchStatus()
+	if status.ReadError == "" {
+		t.Fatal("a status file that could not be parsed reported as never checked")
+	}
+	if !strings.Contains(status.ReadError, FetchStatusPath()) {
+		t.Fatalf("the read error does not name the file: %q", status.ReadError)
+	}
+	if status.LastCheckUnix != 0 {
+		t.Fatal("a corrupt status file produced a check timestamp")
+	}
+	// And a fetch still runs and rewrites it: a claim nobody can read is not a
+	// reason to stop checking forever.
+	server := newCatalogServer(t, map[string]string{"index.toml": catalogFor()})
+	res, err := Fetch(context.Background(), FetchOptions{CatalogURL: server.indexURL()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Skipped {
+		t.Fatalf("a corrupt status file stopped the next check: %s", res.Reason)
+	}
+	if LoadFetchStatus().ReadError != "" {
+		t.Fatal("the rewritten status file is still unreadable")
+	}
+}
+
+// TestARedirectToAnotherHostIsRefused closes the door joinURL guards: a catalog
+// cannot name another host in a path, and a 302 must not let it name one anyway.
+func TestARedirectToAnotherHostIsRefused(t *testing.T) {
+	remoteState(t)
+	elsewhere := newCatalogServer(t, map[string]string{
+		"cursor.toml": remoteCursor("9999.01.01.1"),
+	})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "index.toml") {
+			_, _ = w.Write([]byte(catalogFor([2]string{"cursor", "cursor.toml"})))
+			return
+		}
+		http.Redirect(w, r, elsewhere.URL+"/cursor.toml", http.StatusFound)
+	}))
+	t.Cleanup(server.Close)
+
+	// The default client is the one under test here, so this is deliberately
+	// not the shared fetchNow helper.
+	res, err := Fetch(context.Background(), FetchOptions{
+		CatalogURL: server.URL + "/index.toml", Force: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := res.Status.Agents["cursor"]
+	if status.LastResult != FetchResultFailed {
+		t.Fatalf("cursor result = %q, want %q", status.LastResult, FetchResultFailed)
+	}
+	if !strings.Contains(status.LastError, "another host") {
+		t.Fatalf("cursor error does not name the redirect refusal: %q", status.LastError)
+	}
+	if _, statErr := os.Stat(RemoteCachePath("cursor")); statErr == nil {
+		t.Fatal("a manifest fetched across a redirect to another host was cached")
+	}
+	if elsewhere.requests != 0 {
+		t.Fatalf("the other host received %d requests", elsewhere.requests)
+	}
+}
+
+// TestARedirectWithinTheCatalogHostIsFollowed: the policy is a host pin, not a
+// ban. A catalog reorganising its own paths keeps working.
+func TestARedirectWithinTheCatalogHostIsFollowed(t *testing.T) {
+	remoteState(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "index.toml"):
+			_, _ = w.Write([]byte(catalogFor([2]string{"cursor", "cursor.toml"})))
+		case r.URL.Path == "/v2/cursor.toml":
+			_, _ = w.Write([]byte(remoteCursor("9999.01.01.1")))
+		default:
+			http.Redirect(w, r, "/v2/cursor.toml", http.StatusFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	res, err := Fetch(context.Background(), FetchOptions{
+		CatalogURL: server.URL + "/index.toml", Force: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status := res.Status.Agents["cursor"]; status.LastResult != FetchResultUpdated {
+		t.Fatalf("cursor result = %+v, want %q", status, FetchResultUpdated)
+	}
+}
+
+// TestACachedManifestNamingAnotherAgentByAliasIsRefused is the stricter half of
+// the id check on the fetched path: an override may name its agent through an
+// alias, because the user wrote it, but a file that arrived from a catalog may
+// not. `id = "evil", aliases = ["cursor"]` served at cursor.toml is the one
+// thing the id check exists to stop.
+func TestACachedManifestNamingAnotherAgentByAliasIsRefused(t *testing.T) {
+	remoteState(t)
+	writeCache(t, "cursor", `
+id = "evil"
+aliases = ["cursor"]
+version = "9999.01.01.1"
+min_engine_version = 1
+
+[[rules]]
+id = "evil_idle"
+state = "idle"
+priority = 500
+region = "whole_recent"
+visible_idle = true
+contains = ["anything at all"]
+`)
+
+	compiled, source, err := Load("cursor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source.Kind != KindBundled {
+		t.Fatalf("source kind = %q, want %q", source.Kind, KindBundled)
+	}
+	if !strings.Contains(source.Diagnostic, "does not match") {
+		t.Fatalf("diagnostic does not say why the cache was refused: %q", source.Diagnostic)
+	}
+	if compiled.Evaluate(manifest.Input{Screen: "anything at all\n"}).MatchedRule != nil {
+		t.Fatal("a cached manifest naming cursor only through an alias classified a cursor screen")
+	}
+}
+
+// TestAnInvalidLocalOverrideFallsBackToTheCachedManifest is Herdr's
+// invalid_local_override_falls_back_to_cached_remote_manifest, which had no
+// Sidecar equivalent before the fetch cache existed. The precedence is a stack,
+// not a switch: a refused override drops to the next source down, which is the
+// cache, not the vendored file.
+func TestAnInvalidLocalOverrideFallsBackToTheCachedManifest(t *testing.T) {
+	remoteState(t)
+	server := newCatalogServer(t, map[string]string{
+		"index.toml":  catalogFor([2]string{"cursor", "cursor.toml"}),
+		"cursor.toml": remoteCursor("9999.01.01.1"),
+	})
+	fetchNow(t, server.indexURL())
+	path := writeOverride(t, OverrideDir(), "cursor", "id = \"cursor\"\nthis is not toml\n")
+	resetLoadCache(t)
+
+	compiled, source, err := Load("cursor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source.Kind != KindRemote {
+		t.Fatalf("source kind = %q, want %q", source.Kind, KindRemote)
+	}
+	if !strings.Contains(source.Diagnostic, path) {
+		t.Fatalf("diagnostic does not name the refused override: %q", source.Diagnostic)
+	}
+	if compiled.Evaluate(manifest.Input{Screen: "fetched cursor marker\n"}).MatchedRule == nil {
+		t.Fatal("the cached manifest did not answer under a refused override")
+	}
+}
+
+// TestInvalidateDuringAConcurrentLoadDoesNotMemoiseTheStaleAnswer is the race a
+// fetch creates on its own: Invalidate runs while another goroutine is inside
+// load(), and with the result kept in a map keyed by agent that goroutine came
+// back and wrote its pre-fetch answer over the fresh one, for the life of the
+// process. Each Load now writes into the entry it started with, which
+// Invalidate has already unlinked.
+func TestInvalidateDuringAConcurrentLoadDoesNotMemoiseTheStaleAnswer(t *testing.T) {
+	remoteState(t)
+	server := newCatalogServer(t, map[string]string{
+		"index.toml":  catalogFor([2]string{"cursor", "cursor.toml"}),
+		"cursor.toml": remoteCursor("9999.01.01.1"),
+	})
+
+	// The stale reader: an entry taken before the fetch, whose load has not
+	// finished writing its result yet. Taking the entry is what a Load does
+	// first, so holding it here is exactly that goroutine's state.
+	loadedMu.Lock()
+	stale := &entry{}
+	loadedBy["cursor"] = stale
+	loadedMu.Unlock()
+
+	fetchNow(t, server.indexURL())
+
+	// It finishes now, after Invalidate has run, and writes the pre-fetch
+	// answer into its own entry.
+	stale.once.Do(func() { stale.result = loaded{source: Source{Agent: "cursor", Kind: KindBundled}} })
+
+	_, source, err := Load("cursor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source.Kind != KindRemote {
+		t.Fatalf("source kind = %q, want %q: a load that finished after Invalidate was memoised",
+			source.Kind, KindRemote)
 	}
 }

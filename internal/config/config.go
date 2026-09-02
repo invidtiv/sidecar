@@ -74,9 +74,10 @@ type DetectionConfig struct {
 	// user wanted it off and mistyped it", and only one of those two readings
 	// can be wrong quietly: silently reading a typo as "on" would put a network
 	// fetch behind a setting nobody successfully turned on. So a value this
-	// package cannot resolve is reported and the default stands. The loader
-	// warns and keeps "off"; RemoteCatalogURL returns an error so a caller that
-	// built the value by hand cannot fetch on it either.
+	// package cannot resolve turns nothing on and is reported. The loader warns
+	// and keeps the value verbatim so `sidecar agent manifests` can show it back
+	// with the reason it was refused; RemoteCatalogURL is the gate, and it
+	// returns an error for such a value, so no caller can fetch on it.
 	RemoteManifests string `json:"remoteManifests,omitempty"`
 }
 

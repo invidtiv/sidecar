@@ -592,18 +592,21 @@ func mergeConfig(cfg *Config, raw *rawConfig) {
 
 	// Detection
 	//
-	// An unrecognised value keeps the default and says so in the log rather
-	// than being read as "on". A typo must not be able to turn a network fetch
-	// on, and the log line is what tells the user their setting did nothing;
-	// `sidecar agent manifests` reports the effective value beside it.
+	// An unrecognised value is never read as "on": RemoteCatalogURL refuses it,
+	// so RemoteManifestsEnabled is false and nothing fetches. The value is kept
+	// verbatim rather than replaced with the default, which is what lets
+	// `sidecar agent manifests` show the user the typo they wrote and the
+	// reason it was refused. Replacing it here made that impossible -- the verb
+	// could only ever see "off", so its "setting refused" line was unreachable
+	// and the only trace of the typo was this log line, which is not somewhere
+	// anyone looks.
 	if raw.Detection != nil {
 		if value := strings.TrimSpace(raw.Detection.RemoteManifests); value != "" {
 			if _, err := (DetectionConfig{RemoteManifests: value}).RemoteCatalogURL(); err != nil {
 				slog.Warn("config: detection.remoteManifests not understood, runtime manifest fetch stays off",
 					"value", value, "error", err)
-			} else {
-				cfg.Detection.RemoteManifests = value
 			}
+			cfg.Detection.RemoteManifests = value
 		}
 	}
 

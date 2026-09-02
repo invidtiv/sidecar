@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"sort"
@@ -43,6 +44,20 @@ const MaxFetchBytes = 256 * 1024
 // "never more than once per day"; this is that day.
 const FetchInterval = 24 * time.Hour
 
+// FetchRetryInterval is the shortest gap after a check that *failed*.
+//
+// "Claim the day" and "never retry a failure inside the day" are separable, and
+// running them together was wrong in the ordinary case: a laptop opened on a
+// train with no connectivity claimed the day at 08:40, failed, and then never
+// tried again once the connection came back, so a user whose Sidecar is only
+// ever open away from a network would never fetch at all. An hour is short
+// enough that a transient outage -- a train, a VPN reconnect, a catalog
+// deploying -- is retried inside the session it happened in, and long enough
+// that the worst case is 24 requests a day for a static file rather than one.
+// The crash-loop protection is untouched: a process killed mid-check leaves
+// "checking" behind, not "failed", and that still burns the day.
+const FetchRetryInterval = time.Hour
+
 // fetchTimeout bounds the whole check, index and every manifest, so a catalog
 // that accepts a connection and then stops talking cannot leave a goroutine
 // parked for the life of the process. Herdr bounds each curl invocation
@@ -79,8 +94,10 @@ type FetchOptions struct {
 	Client *http.Client
 	// Now is the clock. Zero means time.Now().
 	Now time.Time
-	// Force skips the once-a-day gate. Nothing in the app sets it; it exists
-	// for a test and for a future explicit "check now" verb.
+	// Force skips the once-a-day gate. The app never sets it: this is what
+	// `sidecar agent manifests --refresh` asks for, and what a test uses. An
+	// explicit "check now" is the recovery path for a user who changed the
+	// catalog, or whose day was claimed by a check that has since been fixed.
 	Force bool
 }
 
@@ -148,12 +165,22 @@ func Fetch(ctx context.Context, opts FetchOptions) (FetchResult, error) {
 	if status.Agents == nil {
 		status.Agents = map[string]AgentFetchStatus{}
 	}
-	if !opts.Force && status.LastCheckUnix > 0 {
+	// The gate does not apply to a catalog the last check did not use. Changing
+	// detection.remoteManifests to another URL is a statement that the cache
+	// came from somewhere the user no longer wants it from, and making them wait
+	// out a day claimed by the old catalog would be the software arguing with an
+	// instruction it was just given.
+	sameCatalog := status.CatalogURL == "" || status.CatalogURL == opts.CatalogURL
+	if !opts.Force && sameCatalog && status.LastCheckUnix > 0 {
+		interval := FetchInterval
+		if status.LastResult == FetchResultFailed {
+			interval = FetchRetryInterval
+		}
 		last := time.Unix(status.LastCheckUnix, 0)
-		if elapsed := now.Sub(last); elapsed >= 0 && elapsed < FetchInterval {
+		if elapsed := now.Sub(last); elapsed >= 0 && elapsed < interval {
 			return FetchResult{
 				Skipped: true,
-				Reason:  fmt.Sprintf("checked %s ago, less than the %s interval", elapsed.Round(time.Minute), FetchInterval),
+				Reason:  fmt.Sprintf("checked %s ago, less than the %s interval", elapsed.Round(time.Minute), interval),
 				Status:  status,
 			}, nil
 		}
@@ -174,6 +201,7 @@ func Fetch(ctx context.Context, opts FetchOptions) (FetchResult, error) {
 	status.LastCheckUnix = now.Unix()
 	status.LastResult = FetchResultChecking
 	status.LastError = ""
+	status.SkippedRows = nil
 	if err := saveFetchStatus(status); err != nil {
 		return FetchResult{Skipped: true, Reason: err.Error()}, err
 	}
@@ -207,9 +235,36 @@ func Fetch(ctx context.Context, opts FetchOptions) (FetchResult, error) {
 // newHTTPClient builds the client Fetch uses. It is the single place a client
 // is constructed, which is what makes HTTPClientsBuilt a real assertion rather
 // than a decorative one.
+//
+// The redirect policy is pinned to the catalog's own host, because joinURL
+// refuses a catalog path that names another host and a 302 would otherwise
+// defeat that check completely: `path = "x.toml"` is safe, and a catalog
+// answering it with `Location: https://elsewhere/x.toml` is the thing joinURL
+// exists to prevent, arriving by another door. A scheme downgrade is refused for
+// the same reason -- an https catalog that redirects to http has stopped being
+// the thing the operator configured. Herdr inherits curl's default here; this is
+// a deliberate divergence, and it costs a catalog nothing it was entitled to do.
 func newHTTPClient() *http.Client {
 	httpClientsBuilt.Add(1)
-	return &http.Client{Timeout: fetchTimeout}
+	return &http.Client{
+		Timeout: fetchTimeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) == 0 {
+				return nil
+			}
+			origin := via[0].URL
+			if req.URL.Host != origin.Host {
+				return fmt.Errorf("refused a redirect from %s to another host %s", origin.Host, req.URL.Host)
+			}
+			if origin.Scheme == "https" && req.URL.Scheme != "https" {
+				return fmt.Errorf("refused a redirect from https to %s", req.URL.Scheme)
+			}
+			if len(via) >= 10 {
+				return fmt.Errorf("stopped after %d redirects", len(via))
+			}
+			return nil
+		},
+	}
 }
 
 func runCheck(ctx context.Context, client *http.Client, catalogURL string, now time.Time, status *FetchStatus) (FetchResult, error) {
@@ -217,9 +272,13 @@ func runCheck(ctx context.Context, client *http.Client, catalogURL string, now t
 	if err != nil {
 		return FetchResult{}, fmt.Errorf("fetch catalog: %w", err)
 	}
-	entries, err := parseCatalog(index)
+	entries, skipped, err := parseCatalog(index)
 	if err != nil {
 		return FetchResult{}, err
+	}
+	status.SkippedRows = skipped
+	for _, note := range skipped {
+		slog.Warn("detection manifests: skipping a catalog row", "reason", note)
 	}
 	base, err := baseURL(catalogURL)
 	if err != nil {
@@ -316,6 +375,19 @@ func commitFetchedManifest(entry catalogEntry, data []byte) (bool, string, error
 			err: fmt.Errorf("manifest id %q does not match catalog id %q", served.ID, entry.id),
 		}
 	}
+	// The Sidecar overlay is not optional. If it no longer merges onto the
+	// served file -- upstream renamed or removed a rule id the overlay replaces
+	// or disables -- then caching the file would mean running it with Sidecar's
+	// own rules and its RE2 rewrites stripped out, which is a detection
+	// regression dressed as an upgrade. The cache is left where it is, the
+	// status file names the agent and the merge error, and the maintainer's job
+	// is to re-cut the overlay. Ignored rather than failed: the file was read
+	// and understood, and it is upstream that moved.
+	if _, _, err := mergeOverlay(entry.agent, served); err != nil {
+		return false, served.Version, &ignoredFetchError{
+			err: fmt.Errorf("the Sidecar overlay no longer fits this manifest: %w", err),
+		}
+	}
 
 	path := RemoteCachePath(entry.agent)
 	if path == "" {
@@ -362,46 +434,67 @@ type rawCatalogRow struct {
 }
 
 // parseCatalog ports Herdr's parse_catalog (manifest_update.rs:350): strict
-// decoding, one supported schema version, unsafe paths refused, duplicates
-// refused, and an agent this client does not know skipped rather than fatal.
+// decoding, one supported schema version, duplicates refused, and a row this
+// client cannot use skipped rather than fatal. It returns the usable entries and
+// a note per skipped row.
 //
-// "Does not know" is the one place Sidecar's answer differs from Herdr's, and
-// the difference is only in what the set is: Herdr skips an id its Agent enum
-// has no variant for, Sidecar skips a file it has no vendored manifest for.
-// Both mean the same thing -- a catalog that has moved ahead of this binary
-// does not break it -- and the vendored tree is what a Sidecar release ships,
-// so it is the right set to compare against.
-func parseCatalog(data []byte) ([]catalogEntry, error) {
+// **A row this client cannot use never refuses the index.** That is Herdr's
+// shape (`let Some(agent) = parse_agent_label(&entry.id) else { warn; continue }`
+// before anything else is checked) and getting it wrong here would have been
+// permanent: Herdr adds `id = "newthing", path = "v2/newthing.toml"`, this
+// client refuses the whole index over the one row it cannot resolve, and claude,
+// codex, cursor and every other agent silently stop updating for good, with
+// `last_result: failed` in a status file as the only trace.
+//
+// Which rows those are is the one place Sidecar's answer differs from Herdr's,
+// and only in what the set is: Herdr skips an id its Agent enum has no variant
+// for, Sidecar skips a row whose path does not resolve to a vendored manifest.
+// Both mean the same thing -- a catalog that has moved ahead of this binary does
+// not break it -- and the vendored tree is what a Sidecar release ships, so it
+// is the right set to compare against. An unsafe path lands in the same bucket:
+// nothing is fetched from it either way, and refusing the index over a row this
+// client was never going to fetch is the failure mode above with extra steps.
+//
+// What still refuses the whole index is a catalog that is malformed as a
+// *document*: it does not parse, it declares a schema version this client does
+// not implement, or it names one agent twice, which leaves no defensible answer
+// as to which row wins.
+func parseCatalog(data []byte) ([]catalogEntry, []string, error) {
 	var raw rawCatalog
 	decoder := toml.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&raw); err != nil {
-		return nil, fmt.Errorf("failed to parse catalog TOML: %w", err)
+		return nil, nil, fmt.Errorf("failed to parse catalog TOML: %w", err)
 	}
 	if raw.SchemaVersion != CatalogSchemaVersion {
-		return nil, fmt.Errorf("unsupported catalog schema_version %d", raw.SchemaVersion)
+		return nil, nil, fmt.Errorf("unsupported catalog schema_version %d", raw.SchemaVersion)
 	}
 
 	seen := map[string]bool{}
 	var out []catalogEntry
+	var skipped []string
 	for _, row := range raw.Agents {
+		id := strings.TrimSpace(row.ID)
 		agent, err := agentForCatalogPath(row.Path)
 		if err != nil {
-			return nil, err
+			skipped = append(skipped, fmt.Sprintf("catalog row %q: %v", id, err))
+			continue
 		}
-		if strings.TrimSpace(row.ID) == "" {
-			return nil, fmt.Errorf("catalog entry for %q has an empty id", row.Path)
+		if id == "" {
+			skipped = append(skipped, fmt.Sprintf("catalog row for %q has an empty id", row.Path))
+			continue
 		}
 		if seen[agent] {
-			return nil, fmt.Errorf("catalog contains duplicate agent %s", row.ID)
+			return nil, nil, fmt.Errorf("catalog contains duplicate agent %s", row.ID)
 		}
 		seen[agent] = true
 		if _, err := UpstreamBytes(agent + ".toml"); err != nil {
+			skipped = append(skipped, fmt.Sprintf("catalog row %q: no vendored manifest for %s", id, agent))
 			continue
 		}
-		out = append(out, catalogEntry{id: strings.TrimSpace(row.ID), agent: agent, path: row.Path})
+		out = append(out, catalogEntry{id: id, agent: agent, path: row.Path})
 	}
-	return out, nil
+	return out, skipped, nil
 }
 
 // baseURL is Herdr's base_url: everything up to the last "/" of the index URL.

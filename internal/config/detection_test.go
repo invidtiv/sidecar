@@ -70,16 +70,22 @@ func TestRemoteManifestsIsOffByDefault(t *testing.T) {
 	}
 }
 
-func TestLoadKeepsARefusedRemoteManifestsValueOff(t *testing.T) {
+// TestLoadKeepsARefusedRemoteManifestsValueVerbatimAndOff pins both halves of
+// what a typo does: fetching stays off, and the value the user actually wrote
+// survives the load so a verb can show it back to them. Dropping it here left
+// `sidecar agent manifests` unable to distinguish a typo from "off", which is
+// the one thing it exists to tell them.
+func TestLoadKeepsARefusedRemoteManifestsValueVerbatimAndOff(t *testing.T) {
 	for _, tc := range []struct {
 		name, body, want string
+		enabled          bool
 	}{
-		{"absent section", `{}`, RemoteManifestsOff},
-		{"explicitly off", `{"detection":{"remoteManifests":"off"}}`, RemoteManifestsOff},
-		{"herdr.dev", `{"detection":{"remoteManifests":"herdr.dev"}}`, RemoteManifestsHerdrDev},
-		{"a URL", `{"detection":{"remoteManifests":"https://example.test/i.toml"}}`, "https://example.test/i.toml"},
-		{"a typo", `{"detection":{"remoteManifests":"on"}}`, RemoteManifestsOff},
-		{"an empty string", `{"detection":{"remoteManifests":""}}`, RemoteManifestsOff},
+		{name: "absent section", body: `{}`, want: RemoteManifestsOff},
+		{name: "explicitly off", body: `{"detection":{"remoteManifests":"off"}}`, want: RemoteManifestsOff},
+		{name: "herdr.dev", body: `{"detection":{"remoteManifests":"herdr.dev"}}`, want: RemoteManifestsHerdrDev, enabled: true},
+		{name: "a URL", body: `{"detection":{"remoteManifests":"https://example.test/i.toml"}}`, want: "https://example.test/i.toml", enabled: true},
+		{name: "a typo", body: `{"detection":{"remoteManifests":"on"}}`, want: "on"},
+		{name: "an empty string", body: `{"detection":{"remoteManifests":""}}`, want: RemoteManifestsOff},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "config.json")
@@ -95,6 +101,9 @@ func TestLoadKeepsARefusedRemoteManifestsValueOff(t *testing.T) {
 			}
 			if cfg.Detection.RemoteManifests != tc.want {
 				t.Fatalf("remoteManifests = %q, want %q", cfg.Detection.RemoteManifests, tc.want)
+			}
+			if got := cfg.Detection.RemoteManifestsEnabled(); got != tc.enabled {
+				t.Fatalf("RemoteManifestsEnabled() = %v, want %v", got, tc.enabled)
 			}
 		})
 	}

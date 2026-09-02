@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/marcus/sidecar/internal/agentactivity/manifest"
@@ -53,14 +52,17 @@ func overrideDir(t *testing.T) string {
 
 // resetLoadCache empties the per-agent sync.Once cache now and again at the end
 // of the test, because Load memoises for the life of the process and an override
-// written after the first Load would otherwise be invisible.
+// written after the first Load would otherwise be invisible. The memoised
+// detection setting goes with it, for the same reason: a test that writes a
+// config after another test has already read one would otherwise see the other
+// test's answer.
 func resetLoadCache(t *testing.T) {
 	t.Helper()
 	clear := func() {
 		loadedMu.Lock()
 		defer loadedMu.Unlock()
-		loadedBy = map[string]*sync.Once{}
-		loadedAt = map[string]loaded{}
+		loadedBy = map[string]*entry{}
+		resetRemoteCacheEnabled()
 	}
 	clear()
 	t.Cleanup(clear)
