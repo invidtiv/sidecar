@@ -51,7 +51,7 @@ Adding a new agent CLI touches up to seven distinct subsystems. "Up to" is load-
 `internal/agentcatalog` is the single shared source of truth for agent families Sidecar can launch, configure, and resume.
 
 > [!NOTE]
-> A **detection-only** family skips this step's launch registry and gets a three-field entry in `detectionFamilies` instead. See [Step 2.0](#20-decide-which-shape-you-are-adding).
+> A **detection-only** family skips this step's launch registry and gets a four-field entry in `detectionFamilies` instead. See [Step 2.0](#20-decide-which-shape-you-are-adding).
 
 ### 1.1 Register Family in `internal/agentcatalog/agentcatalog.go`
 
@@ -133,7 +133,7 @@ case oneOf(name, "qwen", "qwen code", "qwen-code"):
 
 Then add the id to `Supports` in the same file: the `detectionOnly` switch for a detection-only family, or the launchable list for a full one. `Supports` is what `Detect` gates on, so an agent missing from it answers `unsupported-agent` for every pane and shows no badge. `TestSupportedProviderSetIsFrozen` in `compat_test.go` is deliberately a frozen set: widening it is a decision, and the reason belongs in that test's comment.
 
-A **detection-only** family needs no process gate of its own. `processGate` in `manifest_detect.go` falls through to `identifyProcessName(command) == agent`, which is the same refusal every provider makes, evaluate `qwen.toml` only against a pane running Qwen, without a file per agent to say so. It is strict: an agent running under `node` refuses rather than being evaluated, which costs a missing badge and buys the guarantee that one agent's manifest never reads another's screen.
+A **detection-only** family needs no process gate of its own. `processGate` in `manifest_detect.go` falls through to `identifyProcessName(command) == agent || ob.ProcessIdentity == agent`, which is the same refusal every provider makes, evaluate `qwen.toml` only against a pane running Qwen, without a file per agent to say so. It reads both identity inputs because `Identify` resolves `ProcessIdentity` first: a pane reporting `node` whose foreground argv[0] basename is `qwen` is claimed as Qwen, and a gate reading only the command name would then refuse every observation on it, leaving the row with a provider chip stuck at unknown. It is still strict: where neither input names the agent, such as a `#!/usr/bin/env node` shim whose argv[0] is the interpreter, the pane is refused rather than evaluated. That costs a missing badge and buys the guarantee that one agent's manifest never reads another's screen.
 
 A **full** family writes `<provider>Process(command string) bool` in `internal/agentactivity/<provider>.go` and registers it in `processGate`. Do that when the agent runs under a shared runtime and the gate has to admit the wrapper.
 
@@ -143,7 +143,7 @@ A **full** family writes `<provider>Process(command string) bool` in `internal/a
 tmux -L probe -f /dev/null new-session -d -s cap -c "$PWD" -x 120 -y 40
 tmux -L probe send-keys -t cap 'qwen' Enter && sleep 12
 tmux -L probe capture-pane -p -e -N -t cap > /tmp/qwen.txt
-tmux -L probe kill-session -t cap
+tmux -L probe kill-server
 sidecar agent explain --file /tmp/qwen.txt --agent qwen
 sidecar agent explain --file /tmp/qwen.txt --agent qwen --print-window   # what detection saw
 sidecar agent explain --file /tmp/qwen.txt --agent qwen --json           # the record the harness diffs
@@ -151,7 +151,7 @@ sidecar agent explain --file /tmp/qwen.txt --agent qwen --json           # the r
 
 `sidecar agent explain --file PATH --agent KIND [--title T] [--rows N] [--print-window] [--json]` runs the screen lane alone over a saved capture: no tmux, no lifecycle store, no running agent. `--agent` takes any id Sidecar vendors a manifest for, not only the ones it registers as families, so a manifest can be exercised before anything is registered at all. `--title` and `--rows` stand in for a header the capture does not carry; `--rows` is the detection read window and defaults to the fixture header, else 24.
 
-Use a private tmux socket (`-L probe`) and never `tmux kill-server`; the default server holds live sessions.
+Use a private tmux socket (`-L probe`) throughout. `tmux -L probe kill-server` is the teardown: killing the session alone leaves the probe server running, and every command above names the socket, so it never reaches the default server. Never run `tmux kill-server` without `-L probe`; the default server holds live sessions.
 
 Save the capture under `internal/agentactivity/testdata/<agent>/` in the header format the other fixtures use (`pane_title:`, `pane_current_command:`, `pane_height:`, an optional `state:` the census checks, then a line reading exactly `screen:`). `internal/agentactivity/testdata/README.md` is the contract: a fixture is a real capture reduced to evidence rows with no conversation text, or it is synthetic and its `source:` header says so. `TestFixtureCensus` classifies every fixture and fails when one declares a state it does not reach.
 
@@ -365,7 +365,7 @@ SIDECAR_BIN=$HOME/go/bin/sidecar ./scripts/tmux-drive.sh start 200 50
 
 ### Detection-only family
 
-- [ ] **Step 2.0**: Add a three-field entry to `detectionFamilies` in `internal/agentcatalog/agentcatalog.go`: id (Herdr's agent label), display name, short label, plus Herdr's aliases, and nothing else.
+- [ ] **Step 2.0**: Add a four-field entry to `detectionFamilies` in `internal/agentcatalog/agentcatalog.go`: id (Herdr's agent label), display name, short label, Herdr's aliases, and nothing else. The display name and the short label are read: `agentcatalog.Label` is what a prose surface shows, and `styles.AgentLabel` lowercases the short label into the agent chip, which is why Qoder's chip reads `qoder` while its id stays `qodercli`.
 - [ ] **Step 2.1**: Confirm the manifest is vendored under `internal/agentactivity/manifests/upstream/`, or run `scripts/sync-herdr.sh`.
 - [ ] **Step 2.2**: Add the alias case to `identifyProcessName()` and the id to the `detectionOnly` switch in `internal/agentactivity/activity.go`.
 - [ ] **Step 2.3**: Optionally mint a fixture with `sidecar agent explain --file`.

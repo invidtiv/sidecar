@@ -128,3 +128,51 @@ func TestDetectionFamiliesReturnsACopy(t *testing.T) {
 		t.Fatal("DetectionFamilies aliased catalog storage")
 	}
 }
+
+// Label and ShortLabel are the only two id-to-name mappings in the codebase, and
+// they answer for both lists. They deliberately do not follow the rule the test
+// above pins: naming a family is not offering it as a choice, and a caller
+// holding an id read off a *pane* has the same question a picker has.
+//
+// This is the gap the first pass left. Ten families were registered with a Name
+// and a Short that nothing read, because Label knew only the launchable list and
+// fell through to the raw id, so a Qoder pane was labelled `qodercli` -- the name
+// of a manifest file. Anything that renames a family here without teaching these
+// two now fails.
+func TestLabelAndShortLabelNameBothHalvesOfTheCatalog(t *testing.T) {
+	for _, family := range append(Families(), DetectionFamilies()...) {
+		if got := Label(family.ID); got != family.Name {
+			t.Errorf("Label(%q) = %q, want %q", family.ID, got, family.Name)
+		}
+		if got := ShortLabel(family.ID); got != family.Short {
+			t.Errorf("ShortLabel(%q) = %q, want %q", family.ID, got, family.Short)
+		}
+	}
+	// The two answers that are not a family, and the pass-through that lets a
+	// provider this catalog has never heard of still render as itself.
+	for id, want := range map[string]string{"": "None (attach only)", "shell": "Project Shell", "warp": "warp"} {
+		if got := Label(id); got != want {
+			t.Errorf("Label(%q) = %q, want %q", id, got, want)
+		}
+	}
+	if got := ShortLabel("warp"); got != "warp" {
+		t.Errorf("ShortLabel(warp) = %q, want the id back", got)
+	}
+}
+
+// The agent chip lowercases whatever it is given, so ShortLabel lowercased is
+// the token every workspace row and Sessions card renders. For the launchable
+// ten that token has always been the id, and styles.AgentLabel now gets there
+// through this function instead of through the id itself. That only stays true
+// while Short lowercased *is* the id, which is a property of the data rather
+// than a rule anything enforces -- so it is enforced here, in the package that
+// owns the data, rather than discovered when a chip silently renames itself.
+func TestLaunchableShortNamesLowercaseToTheirIDs(t *testing.T) {
+	for _, family := range Families() {
+		if got := strings.ToLower(family.Short); got != family.ID {
+			t.Errorf("family %q has Short %q, which lowercases to %q; the agent chip renders that token, "+
+				"so this renames the chip on every row showing this provider. Either keep Short a lowercase "+
+				"spelling of the id or decide deliberately that the chip changes.", family.ID, family.Short, got)
+		}
+	}
+}

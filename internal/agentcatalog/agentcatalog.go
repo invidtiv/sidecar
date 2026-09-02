@@ -445,10 +445,16 @@ func ResolvePicker(allowlist []string, shellMode bool) []string {
 	return out
 }
 
-// Label is the picker display name for an agent id.
+// Label is the display name for an agent id.
 //
-// "" is "None (attach only)". Catalog IDs use Family.Name. "shell" is
-// "Project Shell". Unknown IDs pass through.
+// "" is "None (attach only)". "shell" is "Project Shell". Every family in
+// either list uses Family.Name. Unknown IDs pass through.
+//
+// It answers for detection-only families too, even though no picker offers one,
+// because this is the single id-to-name mapping in the codebase and a caller
+// that has an id from a *pane* rather than from a picker has the same question.
+// Without them `qodercli` was its own display name, and the Name and Short on
+// all ten entries were data nothing read.
 func Label(id string) string {
 	switch id {
 	case "":
@@ -458,6 +464,28 @@ func Label(id string) string {
 	}
 	if family, ok := Find(id); ok {
 		return family.Name
+	}
+	if family, ok := FindDetection(id); ok {
+		return family.Name
+	}
+	return id
+}
+
+// ShortLabel is the compact display name for an agent id: Family.Short from
+// either list, and the id itself for anything this catalog does not name.
+//
+// It is what a width-constrained surface wants where Label is what a settings
+// row wants. The agent chip is the case that forced it to exist: chips render a
+// lowercased token, so "Claude Code" is too long and too proper for one, while
+// the raw id is wrong for the one family whose id is not a name — Qoder's id is
+// `qodercli` because that is Herdr's label, and a chip reading `qodercli` names
+// a manifest file rather than a program.
+func ShortLabel(id string) string {
+	if family, ok := Find(id); ok && family.Short != "" {
+		return family.Short
+	}
+	if family, ok := FindDetection(id); ok && family.Short != "" {
+		return family.Short
 	}
 	return id
 }

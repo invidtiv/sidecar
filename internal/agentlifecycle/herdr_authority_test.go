@@ -28,13 +28,31 @@ import (
 // were extracted from, the list below is describing an upstream that is no
 // longer the one Sidecar vendors, and a stale list is worse than none.
 
-// herdrAuthorityRank and sidecarTierRank are the two halves of one comparison,
-// and they are the same comparison internal/tools/herdrsync/report.go makes in
-// renderAuthority (authorityRank / tierRank there). The tool cannot be imported
-// -- it reads capabilities.json out of a working tree rather than the embedded
-// registry, because it has to run against a checkout -- so the agreement is kept
-// by TestTheGapRuleAgreesWithTheSyncReport below, which enumerates every pair
-// the two rules can be asked about.
+// belowTarget is the gap rule, and it is the same rule
+// internal/tools/herdrsync/report.go applies in renderAuthority (belowTarget
+// there). The tool cannot be imported -- it reads capabilities.json out of a
+// working tree rather than the embedded registry, because it has to run against
+// a checkout -- so the agreement is kept by TestTheGapRuleAgreesWithTheSyncReport
+// below, which enumerates every pair the rule can be asked about.
+//
+// It has two halves and both are shared. The membership half is hooks authority
+// only: where Herdr's own authority is session_identity it reads state off the
+// screen exactly as Sidecar does, so there is nothing upstream has done that
+// Sidecar has not, and calling it a gap would list nine agents as work to do.
+// The rank half is what closes a row once a Sidecar source reaches full.
+//
+// Only one of the two halves used to be shared, and the lists diverged: this
+// test printed five agents and report.md printed fourteen, which is exactly the
+// "two lists" the comment on TestTheGapRuleAgreesWithTheSyncReport says must not
+// happen. The report moved, because the plan's Journey 5 and Phase 4 bullet both
+// state the rule as lifecycle-through-hooks.
+func belowTarget(authority string, tier Tier) bool {
+	if authority != manifests.AuthorityHooks {
+		return false
+	}
+	return herdrAuthorityRank(authority) > sidecarTierRank(tier)
+}
+
 func herdrAuthorityRank(authority string) int {
 	switch authority {
 	case manifests.AuthorityHooks:
@@ -105,14 +123,11 @@ func TestHerdrAuthorityGaps(t *testing.T) {
 	var gaps []string
 	for _, id := range ids {
 		agent := authority.Agents[id]
-		if agent.LifecycleAuthority != manifests.AuthorityHooks {
-			continue
-		}
 		tier, known := tiers[id]
 		if !known {
 			tier = "(none)"
 		}
-		if sidecarTierRank(tier) >= herdrAuthorityRank(agent.LifecycleAuthority) {
+		if !belowTarget(agent.LifecycleAuthority, tier) {
 			continue
 		}
 		gaps = append(gaps, fmt.Sprintf("  %-12s herdr=%s (integration v%d, assets %s)  sidecar=%s",
@@ -141,10 +156,16 @@ func assetDir(dir string) string {
 // different lists. Neither side can import the other, so the agreement is
 // asserted over every pair the rule can be asked about: three Herdr authority
 // values against the four Sidecar tiers, plus the absent tier.
+//
+// Both halves of the rule are covered. The membership half is the one that was
+// missing, and its absence is what let the two lists reach five entries and
+// fourteen; every session_identity row below is false for that reason, and a
+// report that starts marking one again fails here.
 func TestTheGapRuleAgreesWithTheSyncReport(t *testing.T) {
 	// The expectation is written out rather than computed, so that changing
-	// either rank function fails here instead of moving both sides at once.
-	// Keep in step with authorityRank/tierRank in internal/tools/herdrsync/report.go.
+	// belowTarget or either rank function fails here instead of moving both
+	// sides at once. Keep in step with belowTarget/authorityRank/tierRank in
+	// internal/tools/herdrsync/report.go.
 	want := map[string]bool{
 		"hooks/full":                        false,
 		"hooks/advisory":                    true,
@@ -152,10 +173,10 @@ func TestTheGapRuleAgreesWithTheSyncReport(t *testing.T) {
 		"hooks/screen-fallback":             true,
 		"hooks/(none)":                      true,
 		"session_identity/full":             false,
-		"session_identity/advisory":         true,
+		"session_identity/advisory":         false,
 		"session_identity/session-identity": false,
-		"session_identity/screen-fallback":  true,
-		"session_identity/(none)":           true,
+		"session_identity/screen-fallback":  false,
+		"session_identity/(none)":           false,
 		"none/full":                         false,
 		"none/advisory":                     false,
 		"none/session-identity":             false,
@@ -171,7 +192,7 @@ func TestTheGapRuleAgreesWithTheSyncReport(t *testing.T) {
 			if !ok {
 				t.Fatalf("no expectation recorded for %s", key)
 			}
-			if got := herdrAuthorityRank(authority) > sidecarTierRank(tier); got != expected {
+			if got := belowTarget(authority, tier); got != expected {
 				t.Errorf("gap(%s) = %v, want %v", key, got, expected)
 			}
 		}

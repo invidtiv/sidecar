@@ -126,6 +126,51 @@ func TestDetectionOnlyFamiliesRefuseAPaneRunningSomethingElse(t *testing.T) {
 	}
 }
 
+// The gate reads two identity inputs and they have to be checked against each
+// other, because Identify prefers the one processGate used not to read. On a
+// pane whose pane_current_command is a shared runtime and whose foreground
+// argv[0] basename names the agent, Identify answers from ob.ProcessIdentity, so
+// Observation.Agent is the family while CurrentCommand is still `node`. A gate
+// reading only the command refused that pane, and the refusal is worse than not
+// claiming it at all: Supports is true, so the row carries a provider chip whose
+// state can only ever be unknown, with no idle fallback behind it. Nothing
+// exercised the two inputs together, which is why that shipped.
+func TestDetectionOnlyGateAcceptsEitherIdentityInput(t *testing.T) {
+	for _, family := range agentcatalog.DetectionFamilies() {
+		for _, command := range []string{"node", "bun", "agent"} {
+			t.Run(family.ID+"/"+command, func(t *testing.T) {
+				ob := Observation{CurrentCommand: command, ProcessIdentity: family.ID, Screen: "\n"}
+				if got := Identify(ob); got != family.ID {
+					t.Fatalf("Identify(argv0 %q under %q) = %q, want %q", family.ID, command, got, family.ID)
+				}
+				ob.Agent = family.ID
+				got := Detect(ob)
+				if got.Evidence == family.ID+".process-mismatch" {
+					t.Fatalf("Identify claimed this pane for %s and Detect refused it as a process mismatch; "+
+						"the row shows a %s chip that can never leave unknown", family.ID, family.ID)
+				}
+				if got.State != StateIdle || got.Evidence != family.ID+".known-live-fallback" || !got.FallbackIdle {
+					t.Fatalf("Detect(%s under %q) = %+v, want the low-evidence idle fallback", family.ID, command, got)
+				}
+			})
+		}
+	}
+}
+
+// The other direction of the same widening: an argv[0] naming a *different*
+// agent is still a refusal. The gate accepts either input naming this family,
+// never merely some family.
+func TestDetectionOnlyGateRefusesAnotherFamilysProcessIdentity(t *testing.T) {
+	families := agentcatalog.DetectionFamilies()
+	for i, family := range families {
+		other := families[(i+1)%len(families)].ID
+		got := Detect(Observation{Agent: family.ID, CurrentCommand: "node", ProcessIdentity: other, Screen: "⠋ Working\n"})
+		if got.State != StateUnknown || got.Evidence != family.ID+".process-mismatch" {
+			t.Errorf("Detect(%s with argv0 %s) = %+v, want %s.process-mismatch", family.ID, other, got, family.ID)
+		}
+	}
+}
+
 // Two mappings and one vocabulary: a detection-only family's id is Herdr's own
 // label, so neither mapping may need a case for it. A family that did would be
 // carrying a Sidecar-only spelling for no gain, and the loader keys on the file

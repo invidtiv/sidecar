@@ -95,13 +95,36 @@ func processGate(agent, command string, ob Observation) bool {
 		// actually running Qwen — and identifyProcessName already answers that
 		// from Herdr's own alias table, so the gate is that answer.
 		//
-		// It is stricter than the launchable providers' gates in one direction
-		// and that is deliberate: several of these agents run under node, and a
-		// node-wrapped pane refuses rather than being evaluated. Refusing costs a
-		// missing badge; a runtime allowance for ten agents nobody here has
-		// captured would cost one agent's manifest reading another's screen.
+		// It reads *both* identity inputs, for the same reason Cursor's gate
+		// above does. Identify resolves ob.ProcessIdentity before
+		// ob.CurrentCommand, and ProcessIdentity carries a family id resolved
+		// from a foreground argv[0], so a pane whose pane_current_command is
+		// `node` and whose argv[0] basename is `qwen` is identified as Qwen and
+		// then arrives here with a command name the alias table cannot name.
+		// Gating on the command alone refused it, which is worse than not
+		// claiming the pane at all: the row got a provider chip whose state
+		// could only ever be unknown, with no idle fallback, because Supports is
+		// true and Detect refuses. See
+		// TestDetectionOnlyGateAcceptsEitherIdentityInput.
+		//
+		// It is still stricter than the launchable providers' gates in one
+		// direction, and that is deliberate: a pane running one of these under a
+		// runtime that leaves *neither* input naming the agent is refused rather
+		// than evaluated. Refusing costs a missing badge; a bare runtime
+		// allowance for ten agents nobody here has captured would cost one
+		// agent's manifest reading another's screen.
+		//
+		// The known residual is the Node-installed CLI whose bin is a
+		// `#!/usr/bin/env node` shim: tmux reports `node` and argv[0] is the node
+		// interpreter path, so neither input names the agent and the pane is
+		// never claimed. Identify's node/bun/agent branch only rescues claude,
+		// codex, grok and cursor, each from screen chrome nobody has captured for
+		// these ten. Herdr reaches them because it scores the whole foreground
+		// process tree past its generic-runtime list; ResolveForegroundAgent
+		// matches argv[0] basenames only. Closing that is a widening of Identify
+		// with its own risk, and is not this gate's job.
 		if detectionOnly(agent) {
-			return identifyProcessName(command) == agent
+			return identifyProcessName(command) == agent || ob.ProcessIdentity == agent
 		}
 		return false
 	}
@@ -240,14 +263,18 @@ func ExplainManifest(ob Observation) *manifest.Explain {
 // Herdr agent id, with no provider gate and no Result.
 //
 // It exists for the agents Sidecar vendors a manifest for and does not claim as
-// providers — `kiro` and `qodercli`, which carry two of the four
-// `\p{Alphabetic}` overlay rewrites between them. Nothing on Sidecar's live path
-// ever reaches them, so before this the rewrites had no fixture, no census row
-// and no differential-harness row: a dead rule in either file would have gone on
-// being dead until someone read the TOML. `sidecar agent explain --file` is the
-// tool that closes that, and it is a debugging surface for a manifest rather
-// than a verdict for a pane, so refusing an id the binary carries the bytes for
-// was an arbitrary limit.
+// providers. Since Phase 4 registered the ten detection-only families that is
+// `gemini` alone (Decision 4 of the plan), but the reason it was written has not
+// gone away, and it is why the entry point stays: when it was added, `kiro` and
+// `qodercli` were outside Supports and carried two of the four `\p{Alphabetic}`
+// overlay rewrites between them, so those rewrites had no fixture, no census row
+// and no differential-harness row, and a dead rule in either file would have
+// gone on being dead until someone read the TOML. Both are providers now and
+// reach the live path, but the next agent synced in and not yet registered will
+// be in exactly the position they were, and `sidecar agent explain --file` is
+// what covers it. It is a debugging surface for a manifest rather than a verdict
+// for a pane, so refusing an id the binary carries the bytes for was an
+// arbitrary limit.
 //
 // It is deliberately not a second Detect: there is no Sidecar provider here, so
 // there is no process gate to apply, no evidence string to mint and no fallback

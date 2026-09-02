@@ -7,6 +7,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/marcus/sidecar/internal/agentactivity/manifests"
+	"github.com/marcus/sidecar/internal/agentcatalog"
 )
 
 // These are characterization tests. They pin what the agent-state pipeline does
@@ -106,24 +109,94 @@ func TestSnapshotJSONContract(t *testing.T) {
 // Two upstream agents stay out and both are decisions, not omissions. `gemini`
 // is Decision 4: Antigravity replaced it and `agy` is already a full family.
 // `omp` has no screen manifest upstream at all, so there is nothing to execute.
+//
+// The list being frozen only means something if the freeze can be broken, and
+// until the review that produced this version it could not: the test iterated
+// its own lists and a twenty-first name would have passed it unchanged. Two
+// closures fix that. The set is asserted equal to the catalog's two lists, which
+// is how a family added there arrives here; and Supports is asserted false for
+// every vendored manifest id outside the twenty, which is how an agent synced in
+// and wired straight into the switch arrives here. Neither can catch a case
+// added to Supports for a name that is in neither the catalog nor the vendored
+// tree, and that is accepted: such a name has no manifest to execute, so
+// Supports saying yes to it would make Detect answer manifest-unavailable rather
+// than change a verdict.
 func TestSupportedProviderSetIsFrozen(t *testing.T) {
 	launchable := []string{"codex", "claude", "grok", "antigravity", "pi", "copilot", "cursor", "opencode", "amp", "muse"}
 	detectionOnly := []string{"cline", "devin", "droid", "hermes", "kilo", "kimi", "kiro", "maki", "qodercli", "qwen"}
+	frozen := map[string]bool{}
 	for _, agent := range append(append([]string(nil), launchable...), detectionOnly...) {
 		if !Supports(agent) {
 			t.Fatalf("Supports(%q) = false", agent)
 		}
+		frozen[agent] = true
 	}
+
+	// Closure one: the frozen twenty are exactly the catalog's two lists. A
+	// family added to either one is supported the moment it lands -- Supports
+	// reads the launchable ten by name and the detection-only ten through
+	// detectionOnly, which TestDetectionOnlySetMatchesTheCatalog ties to the
+	// catalog -- so this is where a twenty-first name has to be argued for.
+	catalog := map[string]bool{}
+	for _, family := range append(agentcatalog.Families(), agentcatalog.DetectionFamilies()...) {
+		catalog[family.ID] = true
+		if !frozen[family.ID] {
+			t.Errorf("agentcatalog registers %q, which Supports answers %v for, and the frozen list above does not name it.\n"+
+				"Supports gates ProviderSupported through the whole pipeline, so growing it moves whole workspaces\n"+
+				"between the semantic and the legacy projection. Add it here deliberately, with the reason.",
+				family.ID, Supports(family.ID))
+		}
+	}
+	for agent := range frozen {
+		if !catalog[agent] {
+			t.Errorf("the frozen list names %q, which agentcatalog no longer registers", agent)
+		}
+	}
+
+	// Closure two: no vendored manifest outside the twenty is supported. A sync
+	// brings the manifest first and the identity second, so this is the other
+	// door an agent comes through.
+	vendored, err := manifests.Agents()
+	if err != nil {
+		t.Fatalf("list vendored manifests: %v", err)
+	}
+	for _, id := range vendored {
+		if frozen[id] || frozen[sidecarFamilyForManifestID(id)] {
+			continue
+		}
+		if Supports(id) {
+			t.Errorf("Supports(%q) = true for a vendored manifest the frozen list does not name; register the family in "+
+				"agentcatalog and add it above, or say here why it is supported without one", id)
+		}
+	}
+
 	// Everything else, including the shell identity Identify can return and the
-	// shared runtimes that need a process probe, is unsupported. "gemini" and
-	// "omp" are in this list on purpose: they are the two Herdr agents Sidecar
-	// declines to register, and a sync that quietly registered one would show up
-	// here.
+	// shared runtimes that need a process probe, is unsupported. The four Herdr
+	// spellings are here on purpose. "gemini" and "omp" are the two Herdr agents
+	// Sidecar declines to register, and a sync that quietly registered one would
+	// show up here. "mastracode" is in Herdr's alias and authority tables but
+	// ships no screen manifest either, so like omp there is nothing to execute
+	// and nothing to support. "qoder" is a process *spelling* of the Qoder
+	// family, not its id: Supports is asked about family ids, so the alias
+	// answering true would mean Observation.Agent could carry either spelling and
+	// two ids would name one manifest.
 	for _, agent := range []string{"", "shell", "node", "bun", "agent", "Claude", "CODEX", "gemini", "omp", "mastracode", "qoder", "aider", "unknown"} {
 		if Supports(agent) {
 			t.Fatalf("Supports(%q) = true", agent)
 		}
 	}
+}
+
+// sidecarFamilyForManifestID inverts ManifestAgentID over the catalog, so a
+// vendored file named for Herdr's spelling is checked against the Sidecar family
+// that reads it (github-copilot.toml is the `copilot` family's manifest).
+func sidecarFamilyForManifestID(manifestID string) string {
+	for _, family := range append(agentcatalog.Families(), agentcatalog.DetectionFamilies()...) {
+		if ManifestAgentID(family.ID) == manifestID {
+			return family.ID
+		}
+	}
+	return manifestID
 }
 
 // TestDetectFallsBackForUnsupportedAgentsAndProcessMismatches pins the two

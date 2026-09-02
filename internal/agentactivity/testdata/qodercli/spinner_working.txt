@@ -1,7 +1,8 @@
-source: synthetic. Qoder CLI is not a Sidecar provider and no capture of one
-        exists here. This screen is built to the shape upstream's
-        `spinner_working` rule describes — a single braille frame, a space, and
-        a line carrying at least one letter — and deliberately omits the
+source: synthetic. No capture of Qoder CLI exists here; it became a Sidecar
+        provider in Phase 4, as one of the ten detection-only families, and was
+        not one when this was written. This screen is built to the shape
+        upstream's `spinner_working` rule describes — a single braille frame, a
+        space, and a line carrying at least one letter — and deliberately omits the
         "(esc to cancel," hint, because `cancel_hint_working` at priority 100
         would otherwise carry the verdict and the spinner rule would never be
         the one that reports.

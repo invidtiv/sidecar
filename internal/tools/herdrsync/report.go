@@ -355,6 +355,8 @@ func (r *syncReport) renderAuthority(b *strings.Builder) {
 		return
 	}
 	b.WriteString("Herdr's published authority is a *target*. Sidecar tiers are earned by traces and are never copied.\n\n")
+	b.WriteString("**Below target** marks an agent Herdr gives lifecycle authority to *through hooks* and Sidecar has not proved `full` for. " +
+		"That is the same rule `TestHerdrAuthorityGaps` prints, so this table and `go test ./internal/agentlifecycle/` name the same set.\n\n")
 	b.WriteString("| Agent | Herdr authority | Sidecar tier | Below target |\n| --- | --- | --- | --- |\n")
 	ids := make([]string, 0, len(r.Authority.Agents))
 	for id := range r.Authority.Agents {
@@ -368,12 +370,37 @@ func (r *syncReport) renderAuthority(b *strings.Builder) {
 			tier = "—"
 		}
 		gap := ""
-		if authorityRank(herdr) > tierRank(tier) {
+		if belowTarget(herdr, tier) {
 			gap = "yes"
 		}
 		fmt.Fprintf(b, "| `%s` | %s | %s | %s |\n", id, herdr, tier, gap)
 	}
 	b.WriteString("\n")
+}
+
+// belowTarget is the gap rule, and it has two halves: a membership half and a
+// rank half.
+//
+// The rank half was always shared with TestHerdrAuthorityGaps in
+// internal/agentlifecycle. The membership half was not, and the two lists
+// disagreed: the test filtered to hooks authority while this table marked any
+// rank gap, so report.md said fourteen agents were below target and the test
+// printed five. The test's rule is the plan's (Journey 5 and the Phase 4 bullet
+// both say "lifecycle-through-hooks"), so this side moved.
+//
+// The reason the plan's rule is the right one: where Herdr's own authority is
+// session_identity, Herdr reads state off the screen exactly as Sidecar does,
+// and the screen lane is what this plan brought to parity. Calling that a gap
+// would put nine agents on a list of work to do where there is no work Herdr has
+// done and Sidecar has not. Hooks authority is the only place upstream knows
+// something Sidecar's screen lane cannot reach, which is why Phase 6 is scoped to
+// exactly those agents. The rank comparison stays in both halves so a Sidecar
+// tier that reaches full closes the row.
+func belowTarget(herdrAuthority, tier string) bool {
+	if herdrAuthority != manifests.AuthorityHooks {
+		return false
+	}
+	return authorityRank(herdrAuthority) > tierRank(tier)
 }
 
 func authorityRank(authority string) int {

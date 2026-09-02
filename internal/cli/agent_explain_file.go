@@ -78,11 +78,12 @@ func explainFile(env Env, f lifecycleFlags, help string) int {
 		return 2
 	}
 	// A kind Sidecar claims as a provider is evaluated the way a live pane is,
-	// process gate and all. A kind it merely vendors a manifest for — `kiro`,
-	// `qodercli` — is evaluated as a manifest, with no gate and no verdict, so
-	// that the overlay rules in those two files have a fixture, a census row and
-	// a differential-harness row like every other rule. See
-	// agentactivity.ExplainVendoredManifest.
+	// process gate and all. A kind it merely vendors a manifest for is evaluated
+	// as a manifest, with no gate and no verdict, so that the rules in that file
+	// have a fixture, a census row and a differential-harness row like every
+	// other rule. Since Phase 4 registered the ten detection-only families the
+	// second branch is `gemini` alone, plus whatever a future sync brings in
+	// before someone registers it. See agentactivity.ExplainVendoredManifest.
 	provider := agentactivity.Supports(f.agent)
 	if !provider && !agentactivity.HasVendoredManifest(f.agent) {
 		// A rejected value, not a malformed command line: --agent was spelled
