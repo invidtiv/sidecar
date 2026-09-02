@@ -40,10 +40,61 @@ id = "muse"
 # (`blocked_approval` 850, `pick_request_blocked` 950, `workspace_trust_blocked`
 # 970) and below `menu_overlay` (940), so an overlay the user opened mid-turn
 # still retains rather than reporting work.
+#
+# --- Column 0, and why the anchor is exact ---
+#
+# The pattern is `^◈\s+Thinking\b`, not `^\s*◈\s*Thinking\b`. The glyph is a
+# status column, so on the one screen that carries it — thinking.txt, the
+# reconstruction of the 1.0.1 harvest — it is the first character of the row,
+# and the other Muse capture in the corpus (trust_workspace.txt, a real one)
+# shows the same provider putting its own chrome in column 0. Allowing leading
+# whitespace is what let `  ◈ Thinking while the turn runs` inside a quoted
+# block reach the rule, which is the indented-prose case the anchor now refuses.
+# There is no capture of the glyph indented; if one ever appears, widen this to
+# `^\s{0,1}◈` and say so here rather than going back to `^\s*`.
+#
+# --- The settled-thought gate ---
+#
+# `◈ Thinking` can be left on a settled pane: the composer is drawn under it and
+# the footer under that, so upstream's `idle_prompt` (700) has everything it
+# needs and this rule at 750 was overriding it on a screen where the turn had
+# already finished. The gate is the *completed* status row Muse paints in the
+# same column when the thinking ends, `◈ Thought for 12s`, and it fires only
+# when no `◈ Thinking` row appears after it.
+#
+# The nesting is load-bearing rather than clever, and this is the case it
+# exists for. A multi-step turn paints
+#
+#   ◈ Thinking
+#   ◈ Thought for 5s
+#   ◈ Thinking          <- live
+#
+# and a flat `not` on the completed row would suppress the rule there, dropping
+# a live turn onto upstream's `idle_prompt` — a visible idle mid-turn, which is
+# the exact false "done" this rule was restored to prevent. The inner `not`
+# says "and there is no Thinking row below the completed one", so the flat gate
+# only applies to the settled shape:
+#
+#   ◈ Thinking / ◈ Thought for 12s / Done: … / ⟩ / footer   -> idle_prompt
+#   ◈ Thinking / ◈ Thought for 5s / ◈ Thinking / ⟩          -> working
+#
+# The composer marker itself (`⟩`) cannot be the gate, which is the shape this
+# started as. Muse keeps the composer drawn *during* a turn — that is the whole
+# premise of the rule and thinking.txt shows two `⟩` rows on a working screen —
+# so a `not` on it would delete the rule rather than narrow it.
+#
+# Both patterns describe rows nobody has captured: the harvest recorded the
+# glyph and the verb, and `Thought for Ns` is the completed form of the same
+# row. A capture of either is what would settle them. Until then the failure
+# direction is chosen rather than accidental: where the gate is wrong the pane
+# stays on the working lane, which announces nothing.
 [[rules]]
 id = "sidecar.thinking_working"
 state = "working"
 priority = 750
 region = "bottom_non_empty_lines(8)"
 visible_working = true
-line_regex = ['^\s*◈\s*Thinking\b']
+line_regex = ['^◈\s+Thinking\b']
+not = [
+  { line_regex = ['^◈\s+Thought\b'], not = [{ regex = ['(?ms)^◈\s+Thought\b.*^◈\s+Thinking\b'] }] },
+]

@@ -1173,6 +1173,63 @@ func TestCodexRunningTurnBeatsTheComposerIdleRule(t *testing.T) {
 	}
 }
 
+// The two negatives the spot-check of `sidecar.working_chrome` asked for. The
+// rule reads four times as far up the pane as upstream's `screen_working_fallback`,
+// so both of the things upstream's narrow window protects it from — an
+// interrupted turn's stale status line, and a copy of the status line quoted in
+// prose — are inside this rule's region and have to be refused by the gate
+// instead.
+func TestCodexWorkingChromeRefusesInterruptedAndQuotedStatusLines(t *testing.T) {
+	// Upstream's own `not` gate, carried onto this rule. The status line is
+	// still on screen with the banner beneath it and the composer beneath that.
+	interrupted := DetectCodex(Observation{
+		Agent: "codex", CurrentCommand: "codex", PaneTitle: "tasks", PaneHeight: 24,
+		Screen: "• Working (45s • esc to interrupt) · editing files\n" +
+			"  └ apply_patch internal/agentactivity/activity.go\n\n" +
+			"■ Conversation interrupted - tell the model what to do differently.\n\n" +
+			"› ⏎ send   ⌃J newline\n" +
+			"  gpt-5.6-sol low · ~/code/tasks\n",
+	})
+	if interrupted.Evidence == "sidecar.working_chrome" || interrupted.State == StateWorking {
+		t.Fatalf("an interrupted turn read as working: %+v", interrupted)
+	}
+	// It lands on the low-evidence fallback rather than on the composer idle,
+	// because the stale status line still carries the interrupt hint that is
+	// `sidecar.composer_idle`'s own `not` gate. That is the recorded choice —
+	// see manifests/sidecar/codex.toml — and what makes it acceptable is that a
+	// fallback idle establishes the lane without announcing anything.
+	if interrupted.State != StateIdle || interrupted.Evidence != "codex.known-live-fallback" || !interrupted.FallbackIdle {
+		t.Fatalf("interrupted turn got %+v, want idle/codex.known-live-fallback", interrupted)
+	}
+	if interrupted.VisibleIdle {
+		t.Fatalf("interrupted turn announced a visible idle: %+v", interrupted)
+	}
+	tracker := Tracker{State: StateWorking, Evidence: "sidecar.working_chrome"}
+	if tracker.Apply(interrupted, time.Unix(300, 0)) && tracker.DisplayState() == "done" {
+		t.Fatalf("a fallback idle announced done: %+v", tracker)
+	}
+
+	// The anchor. Codex paints the status glyph in column 0; an indented copy of
+	// the line inside prose is a transcript, not chrome.
+	quoted := DetectCodex(Observation{
+		Agent: "codex", CurrentCommand: "codex", PaneTitle: "tasks", PaneHeight: 24,
+		Screen: "› What does the status line mean?\n\n" +
+			"It is the row Codex paints while a turn runs, for example:\n\n" +
+			"    Working (45s • esc to interrupt) · editing files\n\n" +
+			"› \n" +
+			"  gpt-5.6-sol low · ~/code/tasks\n",
+	})
+	if quoted.Evidence == "sidecar.working_chrome" || quoted.State == StateWorking {
+		t.Fatalf("an indented quotation read as working: %+v", quoted)
+	}
+
+	// The positive is unchanged, and it is the reason the anchor allows a glyph
+	// and a run of spaces rather than nothing at all.
+	if got := DetectCodex(readObservationFixture(t, "codex", "tool_running_composer.txt")); got.Evidence != "sidecar.working_chrome" {
+		t.Fatalf("live tool call got %+v, want sidecar.working_chrome", got)
+	}
+}
+
 // Antigravity is the one provider whose no-match fallback is not low-evidence,
 // so a permission prompt upstream cannot see is not merely unclassified — it is
 // a full-evidence visible idle, and the tracker announces a completed turn on a
@@ -1191,6 +1248,46 @@ func TestAntigravityPermissionPromptIsBlockedNotIdle(t *testing.T) {
 	})
 	if quoted.State == StateBlocked {
 		t.Fatalf("a quoted phrase read as a blocker: %+v", quoted)
+	}
+
+	// The option line has to *be* an option. A sentence that merely opens with
+	// one of the three words is prose, and above a quoted "requesting
+	// permission for:" the un-anchored form read it as an unanswered prompt.
+	prose := Detect(Observation{
+		Agent: "antigravity", CurrentCommand: "agy",
+		Screen: "requesting permission for: the deletion I proposed earlier\n" +
+			"Deny the change if the diff looks wrong, and tell me why.\n>\n" +
+			"? for shortcuts · Gemini 3.6 Flash · high\n",
+	})
+	if prose.State == StateBlocked {
+		t.Fatalf("a prose line opening with an option word read as a blocker: %+v", prose)
+	}
+}
+
+// The permission prompt stays on screen after it is answered, exactly as the
+// trust prompt does, and it is read over twelve non-empty lines — so an
+// answered prompt sits in the region while the turn it authorised runs. The
+// `not` gates are `sidecar.status_footer_working`'s own two literals, which
+// makes the two rules complements: the live footer belongs to the working rule,
+// and the blocker stands down for it.
+func TestAntigravityPermissionPromptDoesNotFireAboveALiveTurn(t *testing.T) {
+	answered := "requesting permission for: rm -rf ./build\n" +
+		"> Allow once\n  Allow always\n  Deny\n↑/↓ Navigate · enter Confirm\n"
+	// Short on purpose: nine non-empty lines keeps the answered prompt *inside*
+	// bottom_non_empty_lines(12), so what is being proved is the gate and not
+	// the window bound.
+	live := Detect(Observation{
+		Agent: "antigravity", CurrentCommand: "agy", PaneHeight: 40,
+		Screen: answered + "• removed the stale build output\n" +
+			"Generating...\n>\nesc to cancel · Gemini 3.6 Flash · high\n",
+	})
+	if live.State != StateWorking || live.Evidence != "sidecar.status_footer_working" {
+		t.Fatalf("live turn under an answered permission prompt got %+v, want working", live)
+	}
+
+	// The prompt still blocks while it is the screen, which is the fixture.
+	if got := Detect(readObservationFixture(t, "antigravity", "permission_prompt.txt")); got.Evidence != "sidecar.permission_prompt_blocked" {
+		t.Fatalf("unanswered permission prompt got %+v", got)
 	}
 }
 
@@ -1245,6 +1342,40 @@ func TestMuseThinkingGlyphBeatsTheVisibleIdlePrompt(t *testing.T) {
 	})
 	if narrated.State == StateWorking {
 		t.Fatalf("narrated glyph read as working: %+v", narrated)
+	}
+
+	// The anchor is column 0, not "any indent". The glyph is a status column, so
+	// an indented copy of the row inside a quoted block is transcript text.
+	indented := Detect(Observation{
+		Agent: "muse", CurrentCommand: "muse",
+		Screen: "Here is the row the rule matches:\n" +
+			"  ◈ Thinking while the turn runs\n⟩\ngpt-5.6-sol · high · ~/code/sidecar\n",
+	})
+	if indented.State == StateWorking {
+		t.Fatalf("an indented glyph row read as working: %+v", indented)
+	}
+
+	// A thought that has finished is not a turn that is running. `◈ Thinking`
+	// can be left on a settled pane above the completed row, and at 750 this
+	// rule was overriding upstream's `idle_prompt` on it.
+	settled := Detect(Observation{
+		Agent: "muse", CurrentCommand: "muse",
+		Screen: "◈ Thinking\n◈ Thought for 12s\nDone: the tracker no longer manufactures a completion.\n\n⟩\ngpt-5.6-sol · high · ~/code/sidecar\n",
+	})
+	if settled.State != StateIdle || settled.Evidence != "idle_prompt" || !settled.VisibleIdle {
+		t.Fatalf("settled thought got %+v, want idle/idle_prompt", settled)
+	}
+
+	// The gate is nested rather than flat for this screen: a multi-step turn
+	// prints the completed row and then starts thinking again, and a flat `not`
+	// would drop a live turn onto the visible idle above — the exact false
+	// "done" the rule was restored to prevent.
+	multistep := Detect(Observation{
+		Agent: "muse", CurrentCommand: "muse",
+		Screen: "◈ Thinking\n◈ Thought for 5s\n◈ Thinking\n\n⟩\ngpt-5.6-sol · high · ~/code/sidecar\n",
+	})
+	if multistep.State != StateWorking || multistep.Evidence != "sidecar.thinking_working" {
+		t.Fatalf("multi-step turn got %+v, want working/sidecar.thinking_working", multistep)
 	}
 }
 

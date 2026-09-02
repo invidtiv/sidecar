@@ -109,13 +109,55 @@ not = [{ regex = ['(?i)esc to interrupt'] }]
 # when tool output has pushed it up the pane.
 #
 # This is the deleted `codex.screen.working` (`Working \(.*esc to interrupt\)`
-# over the last twelve lines) restored, anchored to the head of a line and with
-# Codex's own bullet glyphs allowed in front of it. Upstream carries the same
-# signal as `screen_working_fallback`, and carries it better — its pattern
-# spells out the trailing " · <detail>" clause and it excludes an interrupted
-# turn — but it reads only the bottom three non-empty lines, which is the
-# bottom of an *idle* pane. One tool call's worth of output moves the line out
-# of that window, and this rule is what still sees it there.
+# over the last twelve lines) restored, with upstream's own anchoring and
+# upstream's own interrupted gate. Upstream carries the same signal as
+# `screen_working_fallback` and carries it better — its pattern spells out the
+# trailing " · <detail>" clause and it excludes an interrupted turn — but it
+# reads only the bottom three non-empty lines, which is the bottom of an *idle*
+# pane. One tool call's worth of output moves the line out of that window, and
+# this rule is what still sees it there. Everything else about the rule is
+# upstream's, and deliberately so: it exists to extend upstream's reach, not to
+# disagree with it.
+#
+# Two narrowings the spot-check of the first cut asked for, both of them
+# upstream's own text:
+#
+#   1. `^[•◦]\s+Working \(` rather than `^\s*[•◦]?\s*Working \(`. The deleted Go
+#      rule matched the phrase unanchored, but the chrome Codex actually paints
+#      is a status glyph in column 0 — `background_terminal.txt` and
+#      `tool_running_composer.txt` both show it there — so an indented line
+#      quoting the phrase inside prose is not this rule's screen. Without the
+#      anchor a turn that pastes its own status line into the transcript reads
+#      as live work for as long as the paste stays in the bottom twelve lines.
+#   2. `not = [{ contains = ["■ Conversation interrupted"] }]`, copied verbatim
+#      from `screen_working_fallback`. An interrupted turn leaves the status
+#      line on screen with the banner beneath it; upstream refuses to call that
+#      working and so must this rule, which reads four times as far up the pane
+#      and therefore sees the pair more often, not less.
+#
+# What the interrupted screen then resolves to is worth stating, because it is
+# not the composer idle and that was a deliberate choice. On
+#
+#   • Working (45s • esc to interrupt) · editing files
+#     └ apply_patch …
+#
+#   ■ Conversation interrupted
+#
+#   › ⏎ send   ⌃J newline
+#     gpt-5.6-sol low · ~/code/tasks
+#
+# this rule is gated off by the banner and `sidecar.composer_idle` is gated off
+# by the interrupt hint the stale status line still carries, so nothing matches
+# and the pane reads `codex.known-live-fallback` — a low-evidence idle that
+# establishes the lane without announcing a completion. The alternative
+# considered was to teach `sidecar.composer_idle` to ignore its own interrupt
+# gate when the banner is present, which would make this screen an *explicit*
+# visible idle. That is rejected: the same edit would also fire on an
+# interrupted banner still sitting in the scrollback above a turn the user has
+# since restarted, and an explicit visible idle mid-turn is exactly the false
+# "done" this whole overlay exists to prevent. A quiet idle on an interrupted
+# pane costs one unannounced completion; the other direction costs a completion
+# announced while a tool call is running.
 #
 # Priority 490 is deliberately one step *below* upstream's 500 rather than above
 # it. Both rules report the same state with the same visible flag, so on a
@@ -132,7 +174,8 @@ state = "working"
 priority = 490
 region = "bottom_non_empty_lines(12)"
 visible_working = true
-line_regex = ['^\s*[•◦]?\s*Working \(.*esc to interrupt\)']
+line_regex = ['^[•◦]\s+Working \(.*esc to interrupt\)']
+not = [{ contains = ["■ Conversation interrupted"] }]
 
 # The approval prompt Codex paints with its own composer glyph on the option
 # line, which is the one blocker shape upstream cannot see.

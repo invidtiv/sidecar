@@ -111,6 +111,43 @@ any = [
 # `sidecar.trust_prompt_blocked` (310): a screen carrying both a trust prompt
 # and a permission prompt reports through the trust prompt, which is the one
 # that has to be answered first.
+#
+# Two narrowings the spot-check of the first cut asked for, and they are the
+# same two the review had already applied to `sidecar.trust_prompt_blocked`,
+# arrived at the same way.
+#
+#   1. The option line has to look like an option. The first cut ended its
+#      alternative at `\b`, so any line *beginning* with one of the three words
+#      satisfied it — "Deny the change if the diff looks wrong, and say why."
+#      is a sentence a turn writes, and above a quoted "requesting permission
+#      for:" it read as an unanswered prompt. The line now has to be the option
+#      and nothing else: at most two columns of indent, at most one selection
+#      glyph, then the option, then end of line. `enter confirm` stays as the
+#      alternative, because that is the half of the control line
+#      `blocked.txt` actually captures.
+#   2. `not` gates on the two literals `sidecar.status_footer_working` fires on.
+#      An *answered* permission prompt stays on screen the way an answered trust
+#      prompt does, and read over twelve non-empty lines it went on reporting a
+#      blocker above the turn that followed it. The gates are exactly that
+#      working rule's own `any` list, so the two rules are complements: whenever
+#      Antigravity is painting live chrome the blocker stands down and the pane
+#      reports working, and whenever it is not the blocker is free to fire.
+#      `TestAntigravityPermissionPromptDoesNotFireAboveALiveTurn` is the case,
+#      mirroring the trust prompt's.
+#
+# Both literals are transient chrome rather than scrollback, which is what makes
+# the gates safe on an *unanswered* prompt: `esc to cancel` is the footer row,
+# repainted rather than scrolled, and `Generating...` is a status line the
+# response replaces — `working.txt` and `idle_fallback.txt` are the same turn
+# before and after, and the word is gone from the second. A stale copy of either
+# sitting above a live prompt would suppress this rule, and neither provider
+# capture shows one.
+#
+# What is left un-narrowed, deliberately: an answered prompt above a *finished*
+# turn still reports blocked, because nothing live is on screen for the gates to
+# see. That is the same conservative direction `sidecar.approval_blocker` takes
+# for Codex — an attention badge on a pane that no longer needs one, rather than
+# a missed prompt on one that does.
 [[rules]]
 id = "sidecar.permission_prompt_blocked"
 state = "blocked"
@@ -118,7 +155,14 @@ priority = 305
 region = "bottom_non_empty_lines(12)"
 visible_blocker = true
 contains = ["requesting permission for:"]
-line_regex = ['(?i)^\s*[>›❯]?\s*(?:allow once|allow always|deny)\b|enter confirm']
+any = [
+  { line_regex = ['(?i)^\s{0,2}[>›❯]?\s*(?:allow once|allow always|deny)\s*$'] },
+  { contains = ["enter confirm"] },
+]
+not = [
+  { contains = ["esc to cancel"] },
+  { contains = ["generating..."] },
+]
 
 # The working footer. Antigravity's status line is the last row of the pane and
 # it is one of two shapes:
