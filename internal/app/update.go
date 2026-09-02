@@ -973,6 +973,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case uirequest.RequestMsg:
+		if m.uiRequestWatcher != nil {
+			cmds = append(cmds, listenForUIRequests(m.uiRequestWatcher.Messages()))
+		}
 		if msg.Request.Action == uirequest.ActionNotify {
 			if cmd := (&m).handleNotifyRequest(msg.Request); cmd != nil {
 				cmds = append(cmds, cmd)
@@ -983,8 +986,11 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, cmd)
 			}
 		}
-		if m.uiRequestWatcher != nil {
-			cmds = append(cmds, listenForUIRequests(m.uiRequestWatcher.Messages()))
+		if msg.Request.Action == uirequest.ActionSwitchProject {
+			if cmd := (&m).handleSwitchProjectRequest(msg.Request); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			return m, tea.Batch(cmds...)
 		}
 		if cmd, handled := (&m).handleAppContentUIRequest(msg.Request); handled {
 			cmds = append(cmds, cmd)
