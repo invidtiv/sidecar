@@ -136,6 +136,11 @@ func (p *Plugin) renderSidebar(visibleHeight int) string {
 			header += " " + styles.Muted.Render("(detached)")
 		}
 	}
+	// An in-progress operation changes what every other row means, so it sits
+	// beside the branch rather than somewhere further down.
+	if label := repoStateLabel(p.repoState); label != "" {
+		header += " " + styles.StatusModified.Render("("+label+")")
+	}
 	sb.WriteString(header)
 	sb.WriteString("\n\n")
 
@@ -474,9 +479,15 @@ func (p *Plugin) renderRecentCommits(currentY *int, maxVisible int) string {
 
 	if len(commits) == 0 {
 		p.sidebarScroll.commits = sidebarBarSnapshot{}
-		if p.historyFilterActive {
+		switch {
+		case p.remoteBound():
+			// "No commits" would be a claim about the host's repository that
+			// this build has not made and cannot make: history reads land in
+			// their own slice.
+			sb.WriteString(styles.Muted.Render("Commits are not read from [" + p.ctx.HostID + "] yet"))
+		case p.historyFilterActive:
 			sb.WriteString(styles.Muted.Render("No matching commits"))
-		} else {
+		default:
 			sb.WriteString(styles.Muted.Render("No commits"))
 		}
 		return sb.String()
@@ -719,6 +730,12 @@ func (p *Plugin) renderDiffPane(visibleHeight int) string {
 	sb.WriteString("\n\n")
 
 	if p.selectedDiffFile == "" {
+		if p.remoteBound() {
+			// Selecting a row would not produce a patch yet, so inviting it
+			// would be an instruction that does not work.
+			sb.WriteString(styles.Muted.Render("Patches are not read from [" + p.ctx.HostID + "] yet"))
+			return sb.String()
+		}
 		sb.WriteString(styles.Muted.Render("Select a file to view diff"))
 		return sb.String()
 	}

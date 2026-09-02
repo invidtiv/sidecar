@@ -1,6 +1,7 @@
 package gitstatus
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -155,6 +156,17 @@ type Plugin struct {
 	statusError  string
 	historyError string
 
+	// repoState names an in-progress operation on the repository being shown
+	// (merge, rebase, cherry-pick, revert, bisect). Only a source that reports
+	// it fills it; an ordinary working tree leaves it empty.
+	repoState string
+	// remoteRefusal is the host's own reason this bound pane has nothing to
+	// show, learned from an answer rather than from the connection.
+	remoteRefusal string
+	// repoSourceOverride lets a test drive the pane from a fixed answer, the
+	// way filebrowser's treeSourceOverride does.
+	repoSourceOverride RepoSource
+
 	statusLoader           func(string) (*FileTree, error)
 	nextStatusRequestID    uint64
 	activeStatusRequestID  uint64
@@ -293,10 +305,6 @@ func resolveGitRoot(dir string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-func (p *Plugin) remoteBound() bool {
-	return p.ctx != nil && p.ctx.HostID != ""
-}
-
 func (p *Plugin) inNoRepoMode() bool {
 	return p.ctx != nil && p.ctx.HostID == "" && !p.hasRepo
 }
@@ -315,28 +323,28 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	// Preserve resources that are expensive to recreate or have no project-specific state
 	mouseHandler := p.mouseHandler
 	truncateCache := p.truncateCache
+	repoSourceOverride := p.repoSourceOverride
 	width, height := p.width, p.height
 
 	// Reset ALL state by zeroing the struct, then restore preserved fields
 	// Note: Epoch is now handled by plugin.Context, incremented in Registry.Reinit()
 	*p = Plugin{
-		mouseHandler:   mouseHandler,
-		truncateCache:  truncateCache,
-		width:          width,
-		height:         height,
-		sidebarVisible: true,
-		activePane:     PaneSidebar,
-		sidebarRestore: PaneSidebar,
+		mouseHandler:       mouseHandler,
+		truncateCache:      truncateCache,
+		repoSourceOverride: repoSourceOverride,
+		width:              width,
+		height:             height,
+		sidebarVisible:     true,
+		activePane:         PaneSidebar,
+		sidebarRestore:     PaneSidebar,
 	}
 
 	// Set up context and repo
 	p.ctx = ctx
-	if ctx != nil && ctx.HostID != "" {
-		return nil
-	}
-	p.tree = NewFileTree(ctx.WorkDir)
 
-	// Load user preferences from state
+	// Load user preferences from state. These are this viewer's presentation
+	// rules and apply to whichever machine owns the project, so they are read
+	// before the bound branch returns.
 	switch state.GetGitDiffMode() {
 	case "side-by-side":
 		p.diffViewMode = DiffViewSideBySide
@@ -351,13 +359,23 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.showCommitGraph = state.GetGitGraphEnabled()
 	p.diffWrapEnabled = state.GetLineWrapEnabled()
 
+	if p.remoteBound() {
+		// repoRoot and hasRepo stay zero: the host's repository has no path on
+		// this disk, and leaving them empty means no later call has a directory
+		// to run git in. The tree arrives from the first status answer.
+		return nil
+	}
+	p.tree = NewFileTree(ctx.WorkDir)
+
 	return nil
 }
 
 // Start begins plugin operation.
 func (p *Plugin) Start() tea.Cmd {
 	if p.remoteBound() {
-		return nil
+		// A bound pane has no repository to discover: the host owns it, and the
+		// only question is whether this Sidecar can read it.
+		return p.refresh()
 	}
 	// Repository discovery invokes Git, so it must remain inside the command.
 	// Existing repositories are never mutated merely by opening Sidecar.
@@ -374,7 +392,7 @@ func (p *Plugin) Stop() {
 // Update handles messages.
 func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	if p.remoteBound() {
-		return p, nil
+		return p.updateRemote(msg)
 	}
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
@@ -516,36 +534,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		if p.inNoRepoMode() || plugin.IsStale(p.ctx, msg) || msg.RequestID != p.activeStatusRequestID {
 			return p, nil
 		}
-		p.activeStatusRequestID = 0
-		if msg.Err == nil && msg.Tree != nil {
-			p.tree = msg.Tree
-			p.statusError = ""
-		}
-		var followUp tea.Cmd
-		if p.statusRefreshDirty {
-			p.statusRefreshDirty = false
-			followUp = p.refresh()
-		}
-		if msg.Err != nil {
-			p.statusError = msg.Err.Error()
-			return p, tea.Batch(followUp, func() tea.Msg {
-				return app.ToastMsg{Message: "Git status refresh failed: " + msg.Err.Error(), Duration: 4 * time.Second, IsError: true}
-			})
-		}
-		// Clamp cursor to valid range if files changed
-		maxCursor := p.totalSelectableItems() - 1
-		if maxCursor < 0 {
-			maxCursor = 0
-		}
-		if p.cursor > maxCursor {
-			p.cursor = maxCursor
-		}
-		p.restoreOperationSelection()
-		// Auto-load preview for current cursor position after refresh
-		if p.viewMode == ViewModeStatus {
-			return p, tea.Batch(p.autoLoadPreview(true), followUp)
-		}
-		return p, followUp
+		return p, p.applyStatusSnapshot(msg)
 
 	case DiffLoadedMsg:
 		if plugin.IsStale(p.ctx, msg) || msg.RequestID != p.fullScreenPreviewRequestID {
@@ -1093,7 +1082,7 @@ func (p *Plugin) View(width, height int) string {
 
 	var content string
 	if p.remoteBound() {
-		content = styles.Title.Render(pluginName) + "\n\n" + styles.Muted.Render(plugin.FormatRemoteUnavailable(pluginName, p.ctx.HostID))
+		content = p.renderBoundView()
 	} else if p.inNoRepoMode() {
 		content = p.renderNoRepoView()
 	} else {
@@ -1151,7 +1140,7 @@ func (p *Plugin) SetFocused(f bool) { p.focused = f }
 // Commands returns the available commands.
 func (p *Plugin) Commands() []plugin.Command {
 	if p.remoteBound() {
-		return nil
+		return p.remoteCommands()
 	}
 	commands := []plugin.Command{
 		// git-no-repo context
@@ -1325,12 +1314,22 @@ func (p *Plugin) BlocksGlobalKeys() bool {
 // Diagnostics returns plugin health info.
 func (p *Plugin) Diagnostics() []plugin.Diagnostic {
 	if p.remoteBound() {
-		host := ""
-		if p.ctx != nil {
-			host = p.ctx.HostID
+		if reason := p.unavailableReason(); reason != "" {
+			return []plugin.Diagnostic{
+				{ID: "git-status", Status: "warn", Detail: pluginName + " is unavailable: " + reason},
+			}
+		}
+		if p.tree == nil {
+			return []plugin.Diagnostic{
+				{ID: "git-status", Status: "warn", Detail: "Loading [" + p.ctx.HostID + "]…"},
+			}
+		}
+		status := "ok"
+		if p.tree.TotalCount() == 0 {
+			status = "clean"
 		}
 		return []plugin.Diagnostic{
-			{ID: "git-status", Status: "warn", Detail: plugin.FormatRemoteUnavailable(pluginName, host)},
+			{ID: "git-status", Status: status, Detail: "[" + p.ctx.HostID + "] " + p.tree.Summary()},
 		}
 	}
 	if p.inNoRepoMode() {
@@ -1363,9 +1362,11 @@ func (p *Plugin) Diagnostics() []plugin.Diagnostic {
 	return diagnostics
 }
 
-// refresh reloads the git status.
+// refresh reloads repository status through the seam, from whichever machine
+// owns this project.
 func (p *Plugin) refresh() tea.Cmd {
-	if !p.hasRepo || p.tree == nil {
+	source := p.repoSource()
+	if source == nil {
 		return nil
 	}
 	if p.activeStatusRequestID != 0 {
@@ -1376,15 +1377,73 @@ func (p *Plugin) refresh() tea.Cmd {
 	requestID := p.nextStatusRequestID
 	p.activeStatusRequestID = requestID
 	epoch := p.ctx.Epoch
-	workDir := p.repoRoot
-	loader := p.statusLoader
-	if loader == nil {
-		loader = LoadFileTree
-	}
 	return func() tea.Msg {
-		tree, err := loader(workDir)
-		return StatusSnapshotLoadedMsg{Epoch: epoch, RequestID: requestID, Tree: tree, Err: err}
+		status, err := source.Status(context.Background())
+		return StatusSnapshotLoadedMsg{
+			Epoch:     epoch,
+			RequestID: requestID,
+			Tree:      status.Tree,
+			Push:      status.Push,
+			State:     status.State,
+			Err:       err,
+		}
 	}
+}
+
+// applyStatusSnapshot lands one status answer. Both the local and the bound
+// message loops end here, so a bound pane cannot drift into its own rules about
+// what a refresh means.
+func (p *Plugin) applyStatusSnapshot(msg StatusSnapshotLoadedMsg) tea.Cmd {
+	p.activeStatusRequestID = 0
+	if msg.Err == nil && msg.Tree != nil {
+		p.tree = msg.Tree
+		p.statusError = ""
+		p.remoteRefusal = ""
+		p.repoState = msg.State
+		// A source that answers the branch row in the read it was already
+		// making fills it here; locally it still arrives with the history load.
+		if msg.Push != nil {
+			p.pushStatus = msg.Push
+		}
+	}
+	var followUp tea.Cmd
+	if p.statusRefreshDirty {
+		p.statusRefreshDirty = false
+		followUp = p.refresh()
+	}
+	if msg.Err != nil {
+		if p.remoteBound() {
+			// A bound failure is a state of the pane, not an event: the reason
+			// replaces the sidebar and stays until a read succeeds. Toasting it
+			// on every refresh would be one alert per snapshot generation.
+			p.remoteRefusal = msg.Err.Error()
+			p.statusError = msg.Err.Error()
+			return followUp
+		}
+		p.statusError = msg.Err.Error()
+		return tea.Batch(followUp, func() tea.Msg {
+			return app.ToastMsg{Message: "Git status refresh failed: " + msg.Err.Error(), Duration: 4 * time.Second, IsError: true}
+		})
+	}
+	// Clamp cursor to valid range if files changed
+	maxCursor := p.totalSelectableItems() - 1
+	if maxCursor < 0 {
+		maxCursor = 0
+	}
+	if p.cursor > maxCursor {
+		p.cursor = maxCursor
+	}
+	if p.remoteBound() {
+		// Patches are slice 4h; there is nothing to preview yet, and the local
+		// preview loaders take a directory on this disk.
+		return followUp
+	}
+	p.restoreOperationSelection()
+	// Auto-load preview for current cursor position after refresh
+	if p.viewMode == ViewModeStatus {
+		return tea.Batch(p.autoLoadPreview(true), followUp)
+	}
+	return followUp
 }
 
 // startWatcher starts the file system watcher.
@@ -1497,7 +1556,11 @@ type StatusSnapshotLoadedMsg struct {
 	Epoch     uint64
 	RequestID uint64
 	Tree      *FileTree
-	Err       error
+	// Push and State are set only by a source that answers them in the same
+	// read; see RepoStatus.
+	Push  *PushStatus
+	State string
+	Err   error
 }
 
 func (m StatusSnapshotLoadedMsg) GetEpoch() uint64 { return m.Epoch }

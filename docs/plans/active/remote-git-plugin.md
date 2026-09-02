@@ -1,6 +1,6 @@
 # Git on a remote-bound project
 
-Status: **active; slice 4f implemented** on `remote-viewer-screen` (td-7a1393: td-3a4da2). Remaining: 4g–4k, the viewer half. This is slice 4's Git half of [Remote destinations in `@` and `W`](remote-project-switcher.md), split out for the same reason Files was: it needs a new host verb family and a plugin-wide source seam, not a landing rule. **Created:** 2026-09-01 **Verified against the tree on 2026-09-01.**
+Status: **active; slices 4f–4g implemented** on `remote-viewer-screen` (td-7a1393: td-3a4da2, td-ca9621). Remaining: 4h–4k, the rest of the viewer half. This is slice 4's Git half of [Remote destinations in `@` and `W`](remote-project-switcher.md), split out for the same reason Files was: it needs a new host verb family and a plugin-wide source seam, not a landing rule. **Created:** 2026-09-01 **Verified against the tree on 2026-09-01.**
 
 Related: [Files on a remote-bound project](remote-files-plugin.md) is the pattern this plan follows — a host verb, a source seam at the one place the plugin reads the world, and refusals that name the host. [Sidecar as its own remote host runtime](sidecar-remote-hosts.md) is the ssh transport and the `hostproto` hello. [Remote host content-pane parity](../implemented/remote-host-content-pane-parity.md) is the `contentpanes.Source` read path, which answers branch-vs-base diffs and is **not** what this plugin needs.
 
@@ -105,6 +105,9 @@ None of that is in scope here, and no half-built write path ships as part of thi
 - **`sidecar repo` borrows contentservice's resolvers rather than copying them.** `LookupWorkspace` and `ContainedRelative` are exported from `internal/contentservice` for this. Which root a viewer is reading, and whether a path escapes it, are each one rule with one implementation: a second copy is how two verb families start disagreeing about which directory a bound surface is showing.
 - **A commit patch keeps git's header.** `git show HASH -- PATH` prints the commit header whether or not the path matched, so a header-only result collapses to empty (the local plugin's `normalizeCommitDiff` rule, ported rather than reinvented) and a real patch keeps its header, which `ParseUnifiedDiff` already skips.
 - **An enumerated flag value is a usage error, not a rejected value.** `--mode sideways` exits 2; a workspace, path, or commit the host will not serve exits 5. A viewer branches on the difference.
+- **`RepoSource` answers status only, and the branch row rides with it.** The seam is one method because status is the only read slice 4g performs; 4h and 4i add their own. `RepoStatus` carries the branch row and the in-progress state alongside the tree because the host answers all three in one `repo status`, while a local project still gets its branch row from the history load — moving that read into the local source would be two more subprocesses on every refresh, which is not "moved, not rewritten".
+- **A bound pane keeps `repoRoot` empty and `hasRepo` false.** That is what makes "no local git for a bound project" structural rather than a matter of remembering: no code path has a directory to run git in even if one were reached. `beginWrite` refuses an empty root for the same reason — otherwise a stray write would run in whatever directory Sidecar was started from.
+- **The bound message loop is its own entry point** (`updateRemote`), not a set of guards inside the local one. The local handlers reach stage, discard, push, and the patch loaders, all of which take a path on this disk; a whitelist at the door is checkable, and a dozen guards spread through them is not.
 
 ## Slices
 
@@ -126,7 +129,7 @@ Each sub-slice is independently testable and leaves the tree in a shippable stat
 
 Proof: unit tests over a temporary repository fixture for each verb — a staged and an unstaged change to the same path returning different patches, an untracked file, a detached HEAD, an in-progress rebase, a repository with no upstream, a workspace that is not a repository, an unknown workspace, and a patch large enough to truncate. CLI tests for the JSON contract and each exit code.
 
-### 4g — the `RepoSource` seam and a bound status pane
+### 4g — the `RepoSource` seam and a bound status pane — implemented (td-ca9621)
 
 `internal/plugins/gitstatus`: a `RepoSource` interface consumed wherever the plugin reads repository state, a local implementation that is today's `gitReadOnly` code moved rather than rewritten, and a remote implementation over `ctx.RemoteRunner` gated on `ctx.HostVerbs().RepoReadV1`.
 
@@ -178,5 +181,6 @@ Packages: `internal/reposervice` (new), `internal/cli`, `internal/hostserve`, `i
 
 ## Changelog
 
+- **2026-09-01** — Slice 4g implemented: `RepoSource` with a local and a remote implementation, and a bound status pane showing the host's changed files, branch, upstream, ahead/behind, and in-progress state. The four unavailable reasons are distinct sentences, and "not a git repository" is answered on both of its paths — the `NoRepository` flag and the exit-5 rejection of a worktree id the host will not resolve. A local twin repository is planted in every bound test and a `git` PATH shim records any local invocation.
 - **2026-09-01** — Slice 4f implemented: `internal/reposervice`, `sidecar repo status|diff|history|commit|refs`, and `RepoReadV1`. `contentservice` exports `LookupWorkspace` and `ContainedRelative` so there is one workspace resolver and one containment rule across both verb families.
 - **2026-09-01** — Created. Split out of remote-project-switcher.md slice 4 once it was clear Git needs a verb family of its own: `contentservice`'s diff kind is branch-versus-base and carries no staging axis, no branch or upstream row, and no author or date, so it cannot answer the Git tab.

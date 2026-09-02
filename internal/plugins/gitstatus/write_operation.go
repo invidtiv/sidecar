@@ -86,6 +86,12 @@ func executeGitWrite(workDir string, args []string) error {
 }
 
 func (p *Plugin) beginWrite(kind operationKind, args []string, selection selectionIdentity) tea.Cmd {
+	// Every index write needs a repository on this disk to run in. A bound
+	// project has none, and running git in the process's own directory instead
+	// would write to whatever repository Sidecar happens to be started from.
+	if p.repoRoot == "" {
+		return nil
+	}
 	p.nextOperationID++
 	var epoch uint64
 	if p.ctx != nil {
