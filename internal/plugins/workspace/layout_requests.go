@@ -2,13 +2,10 @@ package workspace
 
 import (
 	"encoding/json"
-	"fmt"
-	"strconv"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/config"
-	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/contentpanes"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/layoutapply"
@@ -16,7 +13,6 @@ import (
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/uirequest"
-	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
 // The `sidecar layout` host side. Get answers with a report built from THIS
@@ -174,100 +170,18 @@ func (p *Plugin) resolveLayoutTargets(kind panelayout.Kind, spec uirequest.Layou
 	return layoutapply.ResolveTargets(kind, spec, root, p.resourceMatchers)
 }
 
+// resolveRemoteLayoutTargets classifies a relayed descriptor against the bound
+// host's content Source. The rule lives in layoutapply so this surface and the
+// Sessions preview cannot drift apart.
 func (p *Plugin) resolveRemoteLayoutTargets(kind panelayout.Kind, spec uirequest.LayoutPane) ([]uirequest.Target, string) {
 	if kind == panelayout.Resource {
 		return layoutapply.ResolveTargets(kind, spec, "", p.resourceMatchers)
 	}
-	if len(spec.Targets) == 0 {
-		if kind == panelayout.Diff {
-			spec.Targets = []string{workspacediff.IdentityWorkingTree}
-		} else {
-			return nil, "a " + kind.Name() + " pane needs at least one target"
-		}
-	}
-	want, ok := layoutapply.WireKind(kind)
-	if !ok {
-		return nil, "unsupported pane kind " + kind.Name()
-	}
-	pendingKind, ok := remoteLayoutPendingKind(kind)
-	if !ok {
-		return nil, "unsupported pane kind " + kind.Name()
-	}
-	src := p.documentSource()
 	var sourceCtx contentpanes.SourceContext
 	if root, surface, ok := p.selectedTerminalSurface(); ok {
 		sourceCtx = p.workspaceSourceContext(root, surface)
 	}
-	targets := make([]uirequest.Target, 0, len(spec.Targets))
-	for _, raw := range spec.Targets {
-		raw = strings.TrimSpace(raw)
-		line := 0
-		if kind == panelayout.Document {
-			raw, line = splitLayoutFileLine(raw)
-		}
-		if kind == panelayout.Diff && raw == "" {
-			raw = workspacediff.IdentityWorkingTree
-		}
-		ref, err := contentpanes.ResolveDocument(src, sourceCtx, contentlink.Pending{Kind: pendingKind, Raw: raw})
-		if err != nil {
-			return nil, fmt.Sprintf("target %q: %v", raw, err)
-		}
-		if ref.Value == "" {
-			host := sourceCtx.HostID
-			if host == "" {
-				host = "that host"
-			}
-			return nil, fmt.Sprintf("target %q: not found on %s", raw, host)
-		}
-		tgt := remoteLayoutTarget(ref, line)
-		if tgt.Kind != want {
-			return nil, fmt.Sprintf("target %q resolves to a %s pane, want %s", raw, string(tgt.Kind), kind.Name())
-		}
-		targets = append(targets, tgt)
-	}
-	return targets, ""
-}
-
-func remoteLayoutPendingKind(kind panelayout.Kind) (contentlink.Kind, bool) {
-	switch kind {
-	case panelayout.Document:
-		return contentlink.KindFile, true
-	case panelayout.Issue:
-		return contentlink.KindIssue, true
-	case panelayout.Note:
-		return contentlink.KindInternal, true
-	case panelayout.Diff:
-		return contentlink.KindDiff, true
-	default:
-		return "", false
-	}
-}
-
-func remoteLayoutTarget(ref contentlink.Ref, line int) uirequest.Target {
-	switch ref.Kind {
-	case contentlink.KindFile:
-		return uirequest.Target{Kind: uirequest.TargetKindFile, Value: ref.Value, Line: line}
-	case contentlink.KindIssue:
-		return uirequest.Target{Kind: uirequest.TargetKindIssue, Value: ref.Value}
-	case contentlink.KindInternal:
-		if ref.Namespace == "note" {
-			return uirequest.Target{Kind: uirequest.TargetKindNote, Value: ref.Value}
-		}
-	case contentlink.KindDiff:
-		return uirequest.Target{Kind: uirequest.TargetKindDiff, Value: ref.Value}
-	case contentlink.KindResource:
-		return uirequest.Target{Kind: uirequest.TargetKindResource, Value: ref.Value, Provider: ref.Provider, Matcher: ref.Matcher}
-	}
-	return uirequest.Target{}
-}
-
-func splitLayoutFileLine(raw string) (string, int) {
-	if colonIdx := strings.LastIndex(raw, ":"); colonIdx > 0 && colonIdx < len(raw)-1 {
-		if n, err := strconv.Atoi(raw[colonIdx+1:]); err == nil && n > 0 {
-			return raw[:colonIdx], n
-		}
-	}
-	return raw, 0
+	return layoutapply.ResolveRemoteTargets(kind, spec, p.documentSource(), sourceCtx, p.resourceMatchers)
 }
 
 func (p *Plugin) planPassiveItem(screen, deckTrial *PaneNode, item layoutItemPlan, boxes map[int]Box) (panelayout.OpenPlan, string) {

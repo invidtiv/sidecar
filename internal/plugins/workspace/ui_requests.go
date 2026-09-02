@@ -14,6 +14,7 @@ import (
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/features"
+	"github.com/marcus/sidecar/internal/hosts"
 	"github.com/marcus/sidecar/internal/layoutapply"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/panelayout"
@@ -154,20 +155,10 @@ func (p *Plugin) ownsRelayedOrigin(req uirequest.Request) bool {
 	if !tty.ThisInstanceOwnsSession(req.Origin.TmuxSession) {
 		return false
 	}
-	if req.Origin.ProjectKey != "" && !p.matchesRemoteProject(req.Origin.ProjectKey) {
+	if req.Origin.ProjectKey != "" && !hosts.OriginNamesProject(req.Origin.ProjectKey, p.ctx.ProjectKey) {
 		return false
 	}
 	return p.shellByTmux(req.Origin.TmuxSession) != nil || p.worktreeIndexForSession(req.Origin.TmuxSession) >= 0
-}
-
-func (p *Plugin) matchesRemoteProject(originKey string) bool {
-	if p.ctx == nil || p.ctx.ProjectKey == "" || originKey == "" {
-		return false
-	}
-	if originKey == p.ctx.ProjectKey {
-		return true
-	}
-	return filepath.Base(originKey) == filepath.Base(p.ctx.ProjectKey)
 }
 
 func (p *Plugin) shellByTmux(session string) *ShellSession {

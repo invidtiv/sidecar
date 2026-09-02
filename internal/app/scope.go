@@ -1,10 +1,10 @@
 package app
 
 import (
-	"path/filepath"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/hosts"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/plugins/tasks"
 	"github.com/marcus/sidecar/internal/state"
@@ -461,7 +461,7 @@ func (m Model) boundWorkspaceIsRelayedScreen(req uirequest.Request) bool {
 	if req.Origin.HostID != m.boundDestination.HostID {
 		return false
 	}
-	if req.Origin.ProjectKey != "" && !originMatchesBoundProject(req.Origin.ProjectKey, m.boundDestination.ProjectKey) {
+	if req.Origin.ProjectKey != "" && !hosts.OriginNamesProject(req.Origin.ProjectKey, m.boundDestination.ProjectKey) {
 		return false
 	}
 	if req.Origin.TmuxSession == "" || !m.boundInventoryHasSession(req.Origin.TmuxSession) {
@@ -472,16 +472,6 @@ func (m Model) boundWorkspaceIsRelayedScreen(req uirequest.Request) bool {
 	}
 	active := m.ActivePlugin()
 	return active != nil && active.ID() == workspacePluginID
-}
-
-func originMatchesBoundProject(originKey, boundKey string) bool {
-	if originKey == "" || boundKey == "" {
-		return originKey == boundKey
-	}
-	if originKey == boundKey {
-		return true
-	}
-	return filepath.Base(originKey) == filepath.Base(boundKey)
 }
 
 func (m Model) boundInventoryHasSession(session string) bool {
