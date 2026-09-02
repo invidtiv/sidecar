@@ -182,6 +182,15 @@ type VerbCapabilities struct {
 	// than guess, and must not infer ordering from version strings.
 	ContentReadV1 bool `json:"contentReadV1,omitempty"`
 
+	// ContentTreeV1 is `sidecar content tree --json`, the read-only directory
+	// listing a viewer's file tree is built from. A host that predates the verb
+	// is read as false and the viewer refuses, naming the host, rather than
+	// falling back to a tree of its own disk — a same-named checkout is a
+	// different project, and showing it under a remote label is the failure the
+	// remote-project work exists to prevent. Never inferred from a version
+	// string.
+	ContentTreeV1 bool `json:"contentTreeV1,omitempty"`
+
 	// UIRequestRelayV1 is serve observing host `uirequest` files and announcing
 	// them as KindUIRequest. A host that predates it is read as false; the
 	// viewer must not expect announcements. Serve still does not apply the

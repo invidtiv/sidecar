@@ -10,9 +10,9 @@ import (
 	"github.com/marcus/sidecar/internal/contentservice"
 )
 
-// contentCommand is the read-only content contract a viewing Sidecar invokes
-// on a host. It is an internal transport endpoint, not a general file browser
-// and not a public `sidecar open --host`.
+// contentCommand is the read-only content and tree contract a viewing Sidecar
+// invokes on a host. It is an internal transport endpoint, not a public
+// `sidecar open --host`.
 func contentCommand() *Command {
 	jsonFlag := Flag{Name: "--json", Summary: "Write the structured result object to stdout (required for the machine contract)", Bool: true}
 	helpFlag := Flag{Name: "--help", Short: "-h", Summary: "Show this help", Bool: true}
@@ -107,6 +107,38 @@ func contentCommand() *Command {
 		Run: runContentCatalog,
 	}
 
+	treeCmd := &Command{
+		Name:    "tree",
+		Summary: "List directories under a workspace root for a viewing Sidecar's file tree",
+		Usage:   "sidecar content tree --workspace ID [--path REL]... [--json]",
+		Long: "List one or more directories inside a durable workspace identity on this machine.\n\n" +
+			"This is the read-only tree contract a viewing Sidecar invokes on a host, not a public browse-my-disk surface.\n" +
+			"--path is repeatable and relative to the workspace root; omitting it lists the root alone, and \".\" names the root explicitly alongside other paths.\n" +
+			"A viewer opens its tree with one call for the root plus every directory it had expanded, so a deep tree costs one round trip rather than one per level.\n" +
+			"Each listing reports name, directory and symlink flags, whether git ignores the entry, size, and modification time. Symlinks are not followed.\n" +
+			"A directory that has gone missing or unreadable is reported on that directory alone; the other listings still return.\n" +
+			"The encoded JSON is capped under 768KiB; oversized listings are truncated and say so rather than failing the call.\n\n" +
+			"--json writes the machine contract.",
+		Flags: []Flag{
+			{Name: "--workspace", Arg: "ID", Summary: "Unscoped durable workspace id (projectKey:shell:name or projectKey:worktree:path)"},
+			{Name: "--path", Arg: "REL", Summary: "Directory relative to the workspace root, or \".\" for the root; repeatable; omit for the root alone"},
+			jsonFlag,
+			helpFlag,
+		},
+		Args: ArgSpec{Min: 0, Max: 0},
+		ExitCodes: []ExitCode{
+			{Code: 0, Summary: "listed"},
+			{Code: 1, Summary: "internal or load failure"},
+			{Code: 2, Summary: "usage error"},
+			{Code: 5, Summary: "value rejected: unknown workspace, containment, or too many paths"},
+		},
+		Examples: []Example{
+			{Command: "sidecar content tree --workspace /home/me/api:worktree:/home/me/api --json"},
+			{Command: "sidecar content tree --workspace /home/me/api:worktree:/home/me/api --path internal --path internal/cli --json"},
+		},
+		Run: runContentTree,
+	}
+
 	readCmd := &Command{
 		Name:    "read",
 		Summary: "Read bounded file, issue, note, diff, or resource content",
@@ -151,12 +183,12 @@ func contentCommand() *Command {
 
 	return &Command{
 		Name:    "content",
-		Summary: "Read-only content contract a viewing Sidecar invokes on a host",
+		Summary: "Read-only content and tree contract a viewing Sidecar invokes on a host",
 		Usage:   "sidecar content <command>",
-		Long: "Resolve and read files, issues, notes, diffs, and resources for a viewing Sidecar over the existing host request seam.\n\n" +
-			"This is an internal transport endpoint, not a general file browser and not a public open-on-host surface.\n" +
+		Long: "Resolve, list, and read files, issues, notes, diffs, and resources for a viewing Sidecar over the existing host request seam.\n\n" +
+			"This is an internal transport endpoint, not a public open-on-host surface.\n" +
 			"Every verb is non-interactive, read-only, and strictly enumerated.",
-		Sub: []*Command{catalogCmd, describeCmd, readCmd, resolveCmd},
+		Sub: []*Command{catalogCmd, describeCmd, readCmd, resolveCmd, treeCmd},
 		Run: runContentRoot,
 	}
 }
@@ -534,4 +566,83 @@ func runContentRead(env Env, args []string) int {
 	}
 	_, _ = fmt.Fprintf(env.Stdout, "%s %s\n", result.Kind, result.Display)
 	return 0
+}
+
+type treeFlags struct {
+	workspace string
+	paths     []string
+	json      bool
+}
+
+func runContentTree(env Env, args []string) int {
+	cmd := RootCommand().FindSubcommand("content").FindSubcommand("tree")
+	help := RenderHelp(cmd)
+	flags, code, ok := parseTreeFlags(env, help, args)
+	if !ok {
+		return code
+	}
+	result, err := contentservice.Default().Tree(contentCtx(env), flags.workspace, flags.paths)
+	if err != nil {
+		return contentExit(env, err)
+	}
+	if flags.json {
+		raw, err := contentservice.EncodeTreeResult(result)
+		if err != nil {
+			return contentExit(env, err)
+		}
+		return writeContentJSON(env, raw)
+	}
+	for _, dir := range result.Dirs {
+		name := dir.Path
+		if name == "" {
+			name = "."
+		}
+		if dir.Err != "" {
+			_, _ = fmt.Fprintf(env.Stdout, "%s error=%s\n", name, dir.Err)
+			continue
+		}
+		_, _ = fmt.Fprintf(env.Stdout, "%s entries=%d truncated=%t\n", name, len(dir.Entries), dir.Truncated)
+	}
+	return 0
+}
+
+func parseTreeFlags(env Env, help string, args []string) (treeFlags, int, bool) {
+	var flags treeFlags
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "-h" || arg == "--help":
+			_, _ = fmt.Fprint(env.Stdout, help)
+			return flags, 0, false
+		case arg == "--json":
+			flags.json = true
+		case arg == "--workspace" || strings.HasPrefix(arg, "--workspace="):
+			val, next, ok := takeFlagArg(arg, args, i, "--workspace")
+			if !ok || val == "" {
+				cliErrf(env.Stderr, "--workspace requires an id\n\n%s", help)
+				return flags, 2, false
+			}
+			flags.workspace = val
+			i = next
+		case arg == "--path" || strings.HasPrefix(arg, "--path="):
+			val, next, ok := takeFlagArg(arg, args, i, "--path")
+			if !ok || val == "" {
+				cliErrf(env.Stderr, "--path requires a directory relative to the workspace root\n\n%s", help)
+				return flags, 2, false
+			}
+			flags.paths = append(flags.paths, val)
+			i = next
+		case strings.HasPrefix(arg, "-"):
+			cliErrf(env.Stderr, "unknown option %q\n\n%s", arg, help)
+			return flags, 2, false
+		default:
+			cliErrf(env.Stderr, "content tree takes no positional arguments\n\n%s", help)
+			return flags, 2, false
+		}
+	}
+	if flags.workspace == "" {
+		cliErrf(env.Stderr, "--workspace is required\n\n%s", help)
+		return flags, 2, false
+	}
+	return flags, 0, true
 }

@@ -758,11 +758,11 @@ sidecar --agents
 
 ## `sidecar content`
 
-Read-only content contract a viewing Sidecar invokes on a host
+Read-only content and tree contract a viewing Sidecar invokes on a host
 
-Resolve and read files, issues, notes, diffs, and resources for a viewing Sidecar over the existing host request seam.
+Resolve, list, and read files, issues, notes, diffs, and resources for a viewing Sidecar over the existing host request seam.
 
-This is an internal transport endpoint, not a general file browser and not a public open-on-host surface.
+This is an internal transport endpoint, not a public open-on-host surface.
 Every verb is non-interactive, read-only, and strictly enumerated.
 
 ```
@@ -931,6 +931,46 @@ Usage: sidecar content resolve --workspace ID --kind file|issue|note|diff|resour
 
 ```bash
 sidecar content resolve --workspace /home/me/api:shell:sidecar-sh-1 --kind file --target README.md --json
+```
+
+### `sidecar content tree`
+
+List directories under a workspace root for a viewing Sidecar's file tree
+
+List one or more directories inside a durable workspace identity on this machine.
+
+This is the read-only tree contract a viewing Sidecar invokes on a host, not a public browse-my-disk surface.
+--path is repeatable and relative to the workspace root; omitting it lists the root alone, and "." names the root explicitly alongside other paths.
+A viewer opens its tree with one call for the root plus every directory it had expanded, so a deep tree costs one round trip rather than one per level.
+Each listing reports name, directory and symlink flags, whether git ignores the entry, size, and modification time. Symlinks are not followed.
+A directory that has gone missing or unreadable is reported on that directory alone; the other listings still return.
+The encoded JSON is capped under 768KiB; oversized listings are truncated and say so rather than failing the call.
+
+--json writes the machine contract.
+
+```
+Usage: sidecar content tree --workspace ID [--path REL]... [--json]
+```
+
+**Options:**
+
+- `--workspace ID`: Unscoped durable workspace id (projectKey:shell:name or projectKey:worktree:path)
+- `--path REL`: Directory relative to the workspace root, or "." for the root; repeatable; omit for the root alone
+- `--json`: Write the structured result object to stdout (required for the machine contract)
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: listed
+- `1`: internal or load failure
+- `2`: usage error
+- `5`: value rejected: unknown workspace, containment, or too many paths
+
+**Examples:**
+
+```bash
+sidecar content tree --workspace /home/me/api:worktree:/home/me/api --json
+sidecar content tree --workspace /home/me/api:worktree:/home/me/api --path internal --path internal/cli --json
 ```
 
 ## `sidecar create`
