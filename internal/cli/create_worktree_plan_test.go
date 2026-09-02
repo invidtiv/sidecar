@@ -165,7 +165,7 @@ func TestCreateWorktreePlanRefusesLaunchFlags(t *testing.T) {
 		if !handled || code != 2 {
 			t.Fatalf("Run(%v) = handled %v code %d", args, handled, code)
 		}
-		if !strings.Contains(errOut.String(), "--plan cannot be combined with --run or --no-launch") {
+		if !strings.Contains(errOut.String(), "--plan cannot be combined with --run, --no-launch, or provider arguments") {
 			t.Fatalf("stderr = %q", errOut.String())
 		}
 	}

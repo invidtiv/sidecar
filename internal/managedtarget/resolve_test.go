@@ -1,6 +1,9 @@
 package managedtarget
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestResolvePrefersSessionAndRefusesAmbiguousDisplayName(t *testing.T) {
 	candidates := []Target{{Host: "local", Project: "a", Session: "s1", Name: "reviewer"}, {Host: "local", Project: "b", Session: "reviewer", Name: "other"}, {Host: "local", Project: "b", Session: "s2", Name: "reviewer"}}
@@ -79,5 +82,37 @@ func TestResolvePriorityNeverHidesCrossTargetAmbiguity(t *testing.T) {
 				t.Fatalf("Resolve() err = %T %v, want ambiguity", err, err)
 			}
 		})
+	}
+}
+
+func TestAmbiguityNamesTheProjectsAndTheSelector(t *testing.T) {
+	candidates := []Target{
+		{Host: "local", Project: "sidecar", Session: "sidecar-ws-topic"},
+		{Host: "local", Project: "sidecar-2", Session: "sidecar-ws-topic"},
+		{Host: "local", Project: ".claude", Session: "sidecar-ws-topic"},
+	}
+	_, err := Resolve(candidates, Query{Host: "local", Value: "sidecar-ws-topic"})
+	e, ok := err.(*Error)
+	if !ok || e.Kind != Ambiguous {
+		t.Fatalf("err = %T %v", err, err)
+	}
+	for _, want := range []string{"sidecar, sidecar-2, .claude", "--project", "--shell"} {
+		if !strings.Contains(e.Message, want) {
+			t.Fatalf("message %q does not name %q", e.Message, want)
+		}
+	}
+	// Two records in ONE project cannot be narrowed by --project, and saying
+	// so would send the caller after a flag that changes nothing.
+	_, err = Resolve(candidates[:1], Query{Host: "local", Value: "sidecar-ws-topic", Project: "missing"})
+	if e, ok := err.(*Error); !ok || e.Kind != NotFound {
+		t.Fatalf("scoped miss = %T %v", err, err)
+	}
+	same := []Target{
+		{Host: "local", Project: "p", Kind: "worktree", Session: "sidecar-ws-feature", WorktreeRoot: "/a/feature", Priority: 1},
+		{Host: "local", Project: "p", Kind: "worktree", Session: "sidecar-ws-feature", WorktreeRoot: "/b/feature", Priority: 1},
+	}
+	_, err = Resolve(same, Query{Host: "local", Value: "sidecar-ws-feature"})
+	if e, ok := err.(*Error); !ok || strings.Contains(e.Message, "--project") || !strings.Contains(e.Message, `project "p"`) {
+		t.Fatalf("same-project message = %v", err)
 	}
 }

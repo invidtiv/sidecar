@@ -100,6 +100,77 @@ func findShellTarget(env Env, target, shellFlag, projectFlag string, globalExpli
 // is gone.
 type shellTargetLookup struct {
 	scans map[string]*shellTargetScan
+	// caller memoizes the project the calling shell belongs to; the empty
+	// string after resolution means "none", and resolved says the lookup ran.
+	caller         string
+	callerResolved bool
+}
+
+// callerProject is the registered project the calling Sidecar session belongs
+// to, or "" outside one. It is memoized because a prompt asks twice.
+//
+// SIDECAR_SHELL is asked first: it needs no tmux subprocess and survives a
+// harness that dropped the TMUX variables. A worktree session (sidecar-ws-…)
+// exports no SIDECAR_SHELL, though, and it is exactly the context
+// `create worktree --agent` puts an agent in — so when the variable is
+// absent the session tmux reports is resolved the way the current-shell verbs
+// resolve it: a shell record by name, or a registered worktree to the project
+// whose checkout Git says is its main worktree.
+func (l *shellTargetLookup) callerProject(env Env) string {
+	if l.callerResolved {
+		return l.caller
+	}
+	l.callerResolved = true
+	if origin, ok := callerShellOrigin(env.StateDir); ok {
+		l.caller = origin.ProjectKey
+		return l.caller
+	}
+	ctx := env.Ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	identity, err := currentShellIdentity(ctx)
+	if err != nil {
+		return ""
+	}
+	if strings.HasPrefix(identity.session, "sidecar-sh-") {
+		if origin, err := shellstate.LookupOrigin(env.StateDir, shellstate.Identity{TmuxName: identity.session, Namespace: identity.socket}); err == nil {
+			l.caller = origin.ProjectKey
+		}
+		return l.caller
+	}
+	projectRoot, _, err := currentManagedWorktree(ctx, env.StateDir, identity)
+	if err != nil {
+		return ""
+	}
+	projects, err := loadRegisteredProjects(env.StateDir)
+	if err != nil {
+		return ""
+	}
+	want := canonicalOpenPath(projectRoot)
+	for _, p := range projects {
+		if p.Path != "" && canonicalOpenPath(p.Path) == want {
+			l.caller = p.Key
+			break
+		}
+	}
+	return l.caller
+}
+
+// callerShellOrigin resolves the managed shell this process was started in,
+// by the name Sidecar exported into it, on the tmux server this process talks
+// to. It is the state-file half of currentShellIdentity: no tmux subprocess,
+// and no dependence on TMUX_PANE surviving whatever spawned us.
+func callerShellOrigin(stateDir string) (shellstate.OriginInfo, bool) {
+	name := strings.TrimSpace(os.Getenv(shellstate.SessionEnv))
+	if name == "" {
+		return shellstate.OriginInfo{}, false
+	}
+	origin, err := shellstate.LookupOrigin(stateDir, shellstate.Identity{TmuxName: name, Namespace: tmuxenv.Namespace()})
+	if err != nil {
+		return shellstate.OriginInfo{}, false
+	}
+	return origin, true
 }
 
 type shellTargetScan struct {
@@ -126,10 +197,27 @@ func (l *shellTargetLookup) resolve(env Env, target, shellFlag, projectFlag stri
 	}
 	resolved, err := managedtarget.Resolve(scan.candidates, managedtarget.Query{Host: "local", Namespace: namespace, Value: target})
 	if err != nil {
-		if typed, ok := err.(*managedtarget.Error); ok && typed.Kind == managedtarget.NotFound {
+		typed, ok := err.(*managedtarget.Error)
+		if ok && typed.Kind == managedtarget.NotFound {
 			return shellTarget{}, shellTargetUnregistered, err
 		}
-		return shellTarget{}, 1, err
+		if ok && typed.Kind == managedtarget.Ambiguous && shellFlag == "" && projectFlag == "" {
+			// The caller's own project breaks a tie a global search cannot.
+			// An agent driving a sibling worktree from its managed shell has
+			// already said which Sidecar it means — SIDECAR_SHELL names it —
+			// and being told to pass --shell with that same value is the
+			// friction td-c906c1 records. Only ambiguity is narrowed: a value
+			// that resolved uniquely elsewhere still resolves there, so a
+			// shell can keep addressing another project by name.
+			if project := l.callerProject(env); project != "" {
+				if narrowed, narrowErr := managedtarget.Resolve(scan.candidates, managedtarget.Query{Host: "local", Project: project, Namespace: namespace, Value: target}); narrowErr == nil {
+					resolved, err = narrowed, nil
+				}
+			}
+		}
+		if err != nil {
+			return shellTarget{}, 1, err
+		}
 	}
 	proj := byProject[resolved.Project]
 	return shellTarget{Kind: resolved.Kind, Session: resolved.Session, DisplayName: resolved.Name, Namespace: resolved.Namespace, WorkDir: resolved.WorkDir, WorktreeRoot: resolved.WorktreeRoot, Project: proj, ManifestPath: resolved.ManifestPath}, 0, nil
@@ -156,30 +244,75 @@ func (l *shellTargetLookup) scan(env Env, shellFlag, projectFlag string, globalE
 }
 
 func buildShellTargetScan(env Env, shellFlag, projectFlag string, globalExplicit bool) *shellTargetScan {
-	ctx := env.Ctx
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	var projects []registeredProject
-	if dest, err := resolveCreateDestination(ctx, env.StateDir, shellFlag, projectFlag, resolveProjectOnly); !globalExplicit && err == nil {
-		if proj, projectErr := registeredProjectForCreate(env.StateDir, dest); projectErr == nil {
-			projects = []registeredProject{proj}
-		}
-	} else if shellFlag != "" || projectFlag != "" {
-		return &shellTargetScan{code: createDestExitCode(err), err: err}
-	}
-	if len(projects) == 0 {
-		var err error
-		projects, err = loadRegisteredProjects(env.StateDir)
-		if err != nil {
-			return &shellTargetScan{code: 1, err: err}
-		}
+	projects, code, err := scanProjects(env, shellFlag, projectFlag, globalExplicit)
+	if err != nil {
+		return &shellTargetScan{code: code, err: err}
 	}
 	candidates, err := managedTargetCandidates(env, projects)
 	if err != nil {
 		return &shellTargetScan{code: 1, err: err}
 	}
 	return &shellTargetScan{projects: projects, candidates: candidates}
+}
+
+// scanProjects is the set of projects a read-only lookup searches.
+//
+// An explicit --project or --shell is matched against the registry directly
+// rather than through resolveExplicitDestination, because that function
+// answers a different question. It resolves where a UI request should LAND,
+// and so refuses a project that several running instances are showing — the
+// request would have to pick one. A lookup only needs the project's manifest,
+// which is the same file however many instances have it open; refusing
+// `agent get X --project sidecar` because two Sidecars show sidecar sent a
+// caller after --shell for a verb that never touches an instance.
+//
+// With no flags and globalExplicit unset, the caller's own context (its
+// managed shell, the unique instance, or the registered project holding the
+// working directory) scopes the search; failing that, or with globalExplicit,
+// every registered project is searched.
+func scanProjects(env Env, shellFlag, projectFlag string, globalExplicit bool) ([]registeredProject, int, error) {
+	if shellFlag != "" || projectFlag != "" {
+		projects, err := loadRegisteredProjects(env.StateDir)
+		if err != nil {
+			return nil, 1, err
+		}
+		if shellFlag != "" {
+			search := projects
+			if projectFlag != "" {
+				proj, err := matchProject(env.StateDir, projects, projectFlag, resolveProjectOnly)
+				if err != nil {
+					return nil, createDestExitCode(err), err
+				}
+				search = []registeredProject{proj}
+			}
+			proj, _, err := matchShell(search, shellFlag, projectFlag == "")
+			if err != nil {
+				return nil, createDestExitCode(err), err
+			}
+			return []registeredProject{proj}, 0, nil
+		}
+		proj, err := matchProject(env.StateDir, projects, projectFlag, resolveProjectOnly)
+		if err != nil {
+			return nil, createDestExitCode(err), err
+		}
+		return []registeredProject{proj}, 0, nil
+	}
+	ctx := env.Ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if !globalExplicit {
+		if dest, err := resolveCreateDestination(ctx, env.StateDir, "", "", resolveProjectOnly); err == nil {
+			if proj, projectErr := registeredProjectForCreate(env.StateDir, dest); projectErr == nil {
+				return []registeredProject{proj}, 0, nil
+			}
+		}
+	}
+	projects, err := loadRegisteredProjects(env.StateDir)
+	if err != nil {
+		return nil, 1, err
+	}
+	return projects, 0, nil
 }
 
 // projectManifestPath is where one registered project keeps its shell manifest.
@@ -192,8 +325,59 @@ func projectManifestPath(proj registeredProject) string {
 	return filepath.Join(proj.Dir, "shells.json")
 }
 
+// managedTargetCandidates is every shell and worktree session the given
+// projects own, each worktree root listed exactly once.
+//
+// Shell records are simple: a shells.json row belongs to the project whose
+// manifest holds it. Worktree roots are not, because several registered
+// projects can see the same directory. A worktree Sidecar created under
+// project A is also, in Git's inventory, a sibling of every other checkout of
+// that repository — so a project registered from another worktree of the same
+// repo (a `sidecar-2`, a `sidecar-pane-parity` someone opened Sidecar in) or
+// from a subdirectory of it (`.claude`) rediscovers it. Emitting the root once
+// per project that can see it is how `agent list` came to report one pane six
+// times and how an explicit target became "ambiguous across 3 Sidecar
+// sessions" (td-ebd72c, td-c906c1).
+//
+// Each root therefore has one owner, chosen by how strongly a project claims
+// it: the project that registered it as a created worktree, then the project
+// whose own checkout it is, then the first project that merely discovered it
+// through Git. A project with no checkout path owns no worktree at all — its
+// empty path used to canonicalize to the working directory, which claimed
+// whatever repository the caller happened to be standing in. The same order
+// decides which project a working directory belongs to (uniqueProjectContaining),
+// so a rename resolved from inside a worktree writes the display name the
+// global listing reads back.
 func managedTargetCandidates(env Env, projects []registeredProject) ([]managedtarget.Target, error) {
 	var candidates []managedtarget.Target
+	type rootClaim struct {
+		proj     registeredProject
+		manifest string
+		tier     int
+	}
+	const (
+		tierCreated = iota
+		tierCheckout
+		tierDiscovered
+	)
+	claims := map[string]rootClaim{}
+	var roots []string
+	claim := func(root string, proj registeredProject, manifest string, tier int) {
+		root = strings.TrimSpace(root)
+		if root == "" {
+			return
+		}
+		root = canonicalOpenPath(root)
+		current, ok := claims[root]
+		if !ok {
+			claims[root] = rootClaim{proj: proj, manifest: manifest, tier: tier}
+			roots = append(roots, root)
+			return
+		}
+		if tier < current.tier {
+			claims[root] = rootClaim{proj: proj, manifest: manifest, tier: tier}
+		}
+	}
 	for _, proj := range projects {
 		manifest := projectManifestPath(proj)
 		defs, err := shellstate.ListAtPath(manifest)
@@ -207,44 +391,46 @@ func managedTargetCandidates(env Env, projects []registeredProject) ([]managedta
 			}
 			candidates = append(candidates, managedtarget.Target{Host: "local", Project: proj.Key, ProjectRoot: proj.Path, Kind: shellTargetKindShell, Session: def.TmuxName, Name: def.DisplayName, Namespace: def.Namespace, WorkDir: workDir, ManifestPath: manifest, Priority: 0})
 		}
-		registered, discovered := worktreeRootsForTarget(env, proj)
-		seen := map[string]bool{}
-		addRoots := func(roots []string, priority int) {
-			for _, root := range roots {
-				root = canonicalOpenPath(root)
-				if root == "" || seen[root] {
-					continue
-				}
-				seen[root] = true
-				name, _ := workspaceops.LookupWorktreeDisplayName(env.StateDir, proj.Path, root)
-				candidates = append(candidates, managedtarget.Target{Host: "local", Project: proj.Key, ProjectRoot: proj.Path, Kind: shellTargetKindWorktree, Session: workspaceops.WorktreeSessionName(root, ""), Name: name, Namespace: tmuxenv.Namespace(), WorkDir: root, WorktreeRoot: root, ManifestPath: manifest, Priority: priority})
-			}
+		if strings.TrimSpace(proj.Path) == "" {
+			continue
 		}
-		addRoots(registered, 1)
-		addRoots(discovered, 2)
+		for _, root := range proj.Worktrees {
+			claim(root, proj, manifest, tierCreated)
+		}
+		claim(proj.Path, proj, manifest, tierCheckout)
+		for _, root := range discoveredWorktreeRoots(env, proj) {
+			claim(root, proj, manifest, tierDiscovered)
+		}
+	}
+	for _, root := range roots {
+		c := claims[root]
+		priority := 1
+		if c.tier == tierDiscovered {
+			priority = 2
+		}
+		name, _ := workspaceops.LookupWorktreeDisplayName(env.StateDir, c.proj.Path, root)
+		candidates = append(candidates, managedtarget.Target{Host: "local", Project: c.proj.Key, ProjectRoot: c.proj.Path, Kind: shellTargetKindWorktree, Session: workspaceops.WorktreeSessionName(root, ""), Name: name, Namespace: tmuxenv.Namespace(), WorkDir: root, WorktreeRoot: root, ManifestPath: c.manifest, Priority: priority})
 	}
 	return candidates, nil
 }
 
-// worktreeRootsForTarget is every worktree of this project a row can be shown
-// for, split into the ones Sidecar registered and the ones only Git knows.
+// discoveredWorktreeRoots is every worktree Git lists for this project's
+// checkout, whether or not Sidecar registered it.
 //
-// proj.Worktrees is the set Sidecar CREATED (<projectDir>/worktrees/*). The
-// rows come from Git's own `worktree list`, a superset that also holds a
-// worktree the user made by hand — and locally RenameWorktreeDisplayName
-// creates the state directory on demand, so renaming one of those works. Scoped
-// to the created set, a remote rename of a hand-made worktree exited 3 while
-// the identical local rename succeeded, for a row the user could see either way.
+// proj.Worktrees is the set Sidecar CREATED (<projectDir>/worktrees/*). Git's
+// own `worktree list` is a superset that also holds a worktree the user made
+// by hand — and locally RenameWorktreeDisplayName creates the state directory
+// on demand, so renaming one of those works. Scoped to the created set, a
+// remote rename of a hand-made worktree exited 3 while the identical local
+// rename succeeded, for a row the user could see either way.
 //
-// The two come back separately because a session name is derived from a
-// basename and therefore collides across directories; the caller resolves the
-// registered tier first. Git is asked only when the name matched no shell
-// record, so the ordinary `--target sidecar-sh-…` path still spawns nothing,
-// and a repository Git cannot read simply has no discovered tier.
-func worktreeRootsForTarget(env Env, proj registeredProject) (registered, discovered []string) {
-	registered = append([]string{proj.Path}, proj.Worktrees...)
+// The caller ranks these below the registered tiers, because a session name
+// is derived from a basename and collides across directories, and because a
+// repository's inventory is visible from every one of its checkouts. A
+// repository Git cannot read simply has no discovered tier.
+func discoveredWorktreeRoots(env Env, proj registeredProject) []string {
 	if proj.Path == "" {
-		return registered, nil
+		return nil
 	}
 	ctx := env.Ctx
 	if ctx == nil {
@@ -252,15 +438,16 @@ func worktreeRootsForTarget(env Env, proj registeredProject) (registered, discov
 	}
 	states, err := workspaceops.ListWorktreeStates(ctx, proj.Path)
 	if err != nil {
-		return registered, nil
+		return nil
 	}
+	var discovered []string
 	for _, state := range states {
 		if state.Bare || state.Path == "" {
 			continue
 		}
 		discovered = append(discovered, state.Path)
 	}
-	return registered, discovered
+	return discovered
 }
 
 // sameTmuxServer reports whether a recorded namespace names the tmux server

@@ -17,6 +17,7 @@ func runCreateShell(env Env, args []string) int {
 	cmd := RootCommand().FindSubcommand("create").FindSubcommand("shell")
 	help := RenderHelp(cmd)
 
+	usage := newUsageReporter(env, wantsJSON(args), help)
 	flags := createCommonFlags{wait: createWaitDefault}
 	nameFlag := ""
 	runCmd := ""
@@ -24,6 +25,11 @@ func runCreateShell(env Env, args []string) int {
 	agentKind := ""
 	skipPerms := false
 	var positional []string
+	// extra are provider arguments written after `--`, the same vocabulary
+	// `agent start TARGET --kind KIND -- ARGS` has: they follow the family's
+	// launch command. This verb takes no positionals, so everything after the
+	// terminator is theirs.
+	var extra []string
 
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -31,7 +37,11 @@ func runCreateShell(env Env, args []string) int {
 			_, _ = fmt.Fprint(env.Stdout, help)
 			return 0
 		}
-		next, handled, code := applyCreateCommonFlag(arg, args, i, help, env.Stderr, &flags)
+		if arg == "--" {
+			extra = append(extra, args[i+1:]...)
+			break
+		}
+		next, handled, code := applyCreateCommonFlag(arg, args, i, usage, &flags)
 		if handled {
 			if code != 0 {
 				return code
@@ -43,32 +53,28 @@ func runCreateShell(env Env, args []string) int {
 		case arg == "--name" || strings.HasPrefix(arg, "--name="):
 			val, next, ok := takeFlagArg(arg, args, i, "--name")
 			if !ok || val == "" {
-				cliErrf(env.Stderr, "--name requires a display name\n\n%s", help)
-				return 2
+				return usage("--name requires a display name")
 			}
 			nameFlag = val
 			i = next
 		case arg == "--run" || strings.HasPrefix(arg, "--run="):
 			val, next, ok := takeFlagArg(arg, args, i, "--run")
 			if !ok || val == "" {
-				cliErrf(env.Stderr, "--run requires a command\n\n%s", help)
-				return 2
+				return usage("--run requires a command")
 			}
 			runCmd = val
 			i = next
 		case arg == "--type" || strings.HasPrefix(arg, "--type="):
 			val, next, ok := takeFlagArg(arg, args, i, "--type")
 			if !ok || val == "" {
-				cliErrf(env.Stderr, "--type requires a command\n\n%s", help)
-				return 2
+				return usage("--type requires a command")
 			}
 			typeCmd = val
 			i = next
 		case arg == "--agent" || strings.HasPrefix(arg, "--agent="):
 			val, next, ok := takeFlagArg(arg, args, i, "--agent")
 			if !ok || val == "" {
-				cliErrf(env.Stderr, "--agent requires an agent type\n\n%s", help)
-				return 2
+				return usage("--agent requires an agent type")
 			}
 			agentKind = val
 			i = next
@@ -76,20 +82,17 @@ func runCreateShell(env Env, args []string) int {
 			skipPerms = true
 		default:
 			if strings.HasPrefix(arg, "-") {
-				cliErrf(env.Stderr, "unknown option %q\n\n%s", arg, help)
-				return 2
+				return usage("unknown option %q", arg)
 			}
 			positional = append(positional, arg)
 		}
 	}
 
 	if len(positional) != 0 {
-		cliErrf(env.Stderr, "create shell takes no positional arguments\n\n%s", help)
-		return 2
+		return usage("create shell takes no positional arguments")
 	}
 	if runCmd != "" && typeCmd != "" {
-		cliErrf(env.Stderr, "--run and --type are mutually exclusive\n\n%s", help)
-		return 2
+		return usage("--run and --type are mutually exclusive")
 	}
 	// Trimmed before it is judged, not after: `--agent "  "` names no family, and
 	// a guard that ran against the untrimmed value would let it through and then
@@ -97,8 +100,16 @@ func runCreateShell(env Env, args []string) int {
 	// replayed on every later start of that shell.
 	agentKind = strings.TrimSpace(agentKind)
 	if skipPerms && agentKind == "" {
-		cliErrf(env.Stderr, "--skip-permissions requires --agent\n\n%s", help)
-		return 2
+		return usage("--skip-permissions requires --agent")
+	}
+	// Provider arguments extend the family's launch command, so they need a
+	// family, and they need this run to be the one launching it: --run and
+	// --type are opaque command lines nothing here can append to.
+	if len(extra) > 0 && agentKind == "" {
+		return usage("provider arguments after -- require --agent")
+	}
+	if len(extra) > 0 && (runCmd != "" || typeCmd != "") {
+		return usage("provider arguments after -- extend --agent's launch; put them in the --run or --type command instead")
 	}
 
 	// One flag, two layers. The floor is the durable record: --agent always
@@ -139,6 +150,12 @@ func runCreateShell(env Env, args []string) int {
 			}
 			startAgent = enabled
 		}
+		// Arguments for a launch this run will not perform would be dropped on
+		// the floor, and a caller that wrote `-- --model X` and got a shell
+		// with no provider in it has been told nothing. Refused instead.
+		if len(extra) > 0 && !startAgent {
+			return emitAgentError(env, flags.jsonOutput, &agentcontrol.Error{Code: agentcontrol.ErrFeatureDisabled, Message: "provider arguments after -- start the provider, which needs the agent_control feature; enable it, or launch with --run"})
+		}
 		// Only the start needs a launchable catalog family. A configured name
 		// this Sidecar can record but agent control cannot launch is refused
 		// here rather than after the shell exists, which is where
@@ -161,8 +178,7 @@ func runCreateShell(env Env, args []string) int {
 		return createDestExitCode(err)
 	}
 	if flags.splitSet && flags.tab {
-		cliErrf(env.Stderr, "--split and --tab name different placements\n\n%s", help)
-		return 2
+		return usage("--split and --tab name different placements")
 	}
 	// --agent writes a field of a workspace shell's durable record, and a
 	// beside-the-session split adds no such record ("do not add a workspace
@@ -170,8 +186,7 @@ func runCreateShell(env Env, args []string) int {
 	// asked for the durable agent type and silently did not get one is exactly
 	// the defect this flag exists to fix.
 	if agentKind != "" && flags.splitSet {
-		cliErrf(env.Stderr, "--agent records a workspace shell's agent type, and a beside-the-session split adds no workspace row\n\n%s", help)
-		return 2
+		return usage("--agent records a workspace shell's agent type, and a beside-the-session split adds no workspace row")
 	}
 	// A shell asked for from inside a Sidecar shell opens beside that session
 	// by default; switching the whole workspace to the new shell is what --tab
@@ -191,8 +206,7 @@ func runCreateShell(env Env, args []string) int {
 	// asked for something only one placement can carry.
 	if flags.splitSet || (!flags.tab && agentKind == "" && dest.Origin.TmuxSession != "") {
 		if dest.Origin.TmuxSession == "" {
-			cliErrf(env.Stderr, "%s\n\n%s", createSplitNeedsShell, help)
-			return 2
+			return usage("%s", createSplitNeedsShell)
 		}
 		if !flags.splitSet {
 			flags.splitMode = "auto"
@@ -216,10 +230,10 @@ func runCreateShell(env Env, args []string) int {
 		cliErrf(env.Stderr, "no beside-the-session placement available; created a workspace shell instead\n")
 	}
 
-	return runCreateShellWorkspace(env, dest, flags, nameFlag, runCmd, typeCmd, agentKind, skipPerms, startAgent)
+	return runCreateShellWorkspace(env, dest, flags, nameFlag, runCmd, typeCmd, agentKind, skipPerms, startAgent, extra)
 }
 
-func runCreateShellWorkspace(env Env, dest openDestination, flags createCommonFlags, nameFlag, runCmd, typeCmd, agentKind string, skipPerms, startAgent bool) int {
+func runCreateShellWorkspace(env Env, dest openDestination, flags createCommonFlags, nameFlag, runCmd, typeCmd, agentKind string, skipPerms, startAgent bool, extra []string) int {
 	ctx := env.Ctx
 	if ctx == nil {
 		ctx = context.Background()
@@ -272,7 +286,7 @@ func runCreateShellWorkspace(env Env, dest openDestination, flags createCommonFl
 	} else if typeCmd != "" {
 		seedErr = workspaceops.TypeInShell(ctx, session, typeCmd)
 	} else if startAgent {
-		_, seedErr = startCreatedAgent(ctx, proj, session, display, proj.Path, agentKind, skipPerms)
+		_, seedErr = startCreatedAgent(ctx, proj, session, display, proj.Path, agentKind, skipPerms, extra)
 	}
 
 	focus := true
@@ -305,6 +319,7 @@ func runCreateShellWorkspace(env Env, dest openDestination, flags createCommonFl
 			Session:     session,
 			WorkDir:     proj.Path,
 		},
+		Project:   proj.Key,
 		Acked:     len(acks) > 0,
 		Surface:   createAckSurface(acks),
 		Placement: createPlacementWorkspace,
@@ -372,6 +387,7 @@ func runCreateShellSplit(env Env, dest openDestination, flags createCommonFlags,
 			DisplayName: display,
 			WorkDir:     workDir,
 		},
+		Project:   dest.Origin.ProjectKey,
 		Placement: flags.splitMode,
 	}
 
@@ -429,8 +445,12 @@ type createShellInfo struct {
 }
 
 type createShellResult struct {
-	Shell     createShellInfo `json:"shell"`
-	Acked     bool            `json:"acked"`
-	Surface   string          `json:"surface,omitempty"`
-	Placement string          `json:"placement"`
+	Shell createShellInfo `json:"shell"`
+	// Project is the registered project slug the shell belongs to: the value
+	// `--project` on every other verb accepts, so a caller holding this result
+	// can address what it created without guessing the selector.
+	Project   string `json:"project,omitempty"`
+	Acked     bool   `json:"acked"`
+	Surface   string `json:"surface,omitempty"`
+	Placement string `json:"placement"`
 }
