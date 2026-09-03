@@ -312,11 +312,11 @@ func TestQueryDebounceRunsOnlyTheNewestKeystroke(t *testing.T) {
 		t.Fatalf("query = %q, want dex", s.query)
 	}
 	// The two superseded ticks do nothing at all.
-	run(t, m, m.Update(queryDebouncedMsg{Instance: "fixture", Collection: "results", Sequence: s.debounce - 1}))
+	run(t, m, m.Update(QueryDebouncedMsg{Instance: "fixture", Collection: "results", Sequence: s.debounce - 1}))
 	if len(host.lists) != 0 {
 		t.Fatalf("a superseded debounce listed %d times", len(host.lists))
 	}
-	run(t, m, m.Update(queryDebouncedMsg{Instance: "fixture", Collection: "results", Sequence: s.debounce}))
+	run(t, m, m.Update(QueryDebouncedMsg{Instance: "fixture", Collection: "results", Sequence: s.debounce}))
 	if len(host.lists) != 1 {
 		t.Fatalf("the newest debounce listed %d times, want 1", len(host.lists))
 	}

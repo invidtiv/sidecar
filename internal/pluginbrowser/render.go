@@ -48,6 +48,10 @@ func (m *Model) View() string {
 	if m.width <= 0 || m.height <= 0 {
 		return ""
 	}
+	// A pane leaf shows one tab shape at a time; see pane.go for why.
+	if m.paneMode() {
+		return m.paneView()
+	}
 	listOuter, detailOuter := m.split()
 
 	listActive := m.focused && m.focus == FocusList && m.innerFocusActive()
@@ -72,6 +76,13 @@ func (m *Model) ViewIsSelfConstrained() bool { return true }
 // split decides the two outer widths. A box too narrow for both gives the whole
 // of itself to the list.
 func (m *Model) split() (list, detail int) {
+	if m.paneMode() {
+		// One shape per tab: whichever this pane is, it gets the whole box.
+		if m.paneShape == PaneDocument {
+			return 0, m.width
+		}
+		return m.width, 0
+	}
 	if m.width < detailFloor*2 {
 		return m.width, 0
 	}

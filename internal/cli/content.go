@@ -61,6 +61,11 @@ func contentCommand() *Command {
 			{Name: "--target", Arg: "VALUE", Summary: "File path, issue/note id, git spec, or resource locator as the viewer saw it"},
 			{Name: "--provider", Arg: "ID", Summary: "Resource provider instance id"},
 			{Name: "--matcher", Arg: "ID", Summary: "Resource matcher id"},
+			{Name: "--collection", Arg: "ID", Summary: "Plugin collection id for the collection and item operations"},
+			{Name: "--query", Arg: "Q", Summary: "Collection search query"},
+			{Name: "--view", Arg: "ID", Summary: "Collection view id"},
+			{Name: "--sort", Arg: "ID", Summary: "Collection sort key id"},
+			{Name: "--cursor", Arg: "C", Summary: "Opaque page cursor from a previous collection read"},
 			jsonFlag,
 			helpFlag,
 		},
@@ -142,22 +147,28 @@ func contentCommand() *Command {
 	readCmd := &Command{
 		Name:    "read",
 		Summary: "Read bounded file, issue, note, diff, or resource content",
-		Usage:   "sidecar content read --workspace ID --kind file|issue|note|diff|resource --operation OP --target VALUE [--provider ID --matcher ID] [--path PATH] [--parent HASH] [--offset N] [--limit N] [--if-revision REV] [--refresh] [--json]",
+		Usage:   "sidecar content read --workspace ID --kind file|issue|note|diff|resource --operation OP [--target VALUE] [--provider ID --matcher ID] [--collection ID --query Q --view ID --sort ID --cursor C] [--path PATH] [--parent HASH] [--offset N] [--limit N] [--if-revision REV] [--refresh] [--json]",
 		Long: "Read a file document, issue card, note, git diff operation, or resource document from a durable workspace identity on this machine.\n\n" +
 			"This is the read-only content contract a viewing Sidecar invokes on a host, not a general file browser.\n" +
 			"--if-revision returns a small notModified object when the content is unchanged, so a refresh is one round trip.\n" +
 			"The encoded JSON is capped under 768KiB; a payload that would blow that cap is truncated or returned as a structured oversize object rather than invalid JSON.\n" +
 			"Issue fallback candidates come from this host's configured projects.\n" +
 			"Diff operations are enumerated: working-tree, working-tree-file, commit, range, commit-file, full-file.\n" +
-			"Resource reads return the provider wire document; the viewer sanitizes again. --refresh bypasses the host manager cache.\n\n" +
+			"Resource reads return the provider wire document; the viewer sanitizes again. --refresh bypasses the host manager cache.\n" +
+			"The collection and item operations are the plugin protocol's: collection lists one collection of --provider, item expands one row of it. A Resource pane bound to this host asks through them, so it lists this machine's plugins rather than the viewer's.\n\n" +
 			"--json writes the machine contract.",
 		Flags: []Flag{
 			{Name: "--workspace", Arg: "ID", Summary: "Unscoped durable workspace id (projectKey:shell:name or projectKey:worktree:path)"},
 			{Name: "--kind", Arg: "KIND", Summary: "Content kind (file, issue, note, diff, or resource)"},
-			{Name: "--operation", Arg: "OP", Summary: "Read operation (document, card, note, resource, working-tree, working-tree-file, commit, range, commit-file, or full-file)"},
+			{Name: "--operation", Arg: "OP", Summary: "Read operation (document, card, note, resource, collection, item, working-tree, working-tree-file, commit, range, commit-file, or full-file)"},
 			{Name: "--target", Arg: "VALUE", Summary: "File path, issue/note id, git spec, or resource locator as resolved or as the viewer saw it"},
 			{Name: "--provider", Arg: "ID", Summary: "Resource provider instance id"},
 			{Name: "--matcher", Arg: "ID", Summary: "Resource matcher id"},
+			{Name: "--collection", Arg: "ID", Summary: "Plugin collection id for the collection and item operations"},
+			{Name: "--query", Arg: "Q", Summary: "Collection search query"},
+			{Name: "--view", Arg: "ID", Summary: "Collection view id"},
+			{Name: "--sort", Arg: "ID", Summary: "Collection sort key id"},
+			{Name: "--cursor", Arg: "C", Summary: "Opaque page cursor from a previous collection read"},
 			{Name: "--path", Arg: "PATH", Summary: "Diff file path for working-tree-file, commit-file, and full-file"},
 			{Name: "--parent", Arg: "HASH", Summary: "Merge parent hash for commit-file and full-file"},
 			{Name: "--offset", Arg: "N", Summary: "Full-file page offset in lines"},
@@ -177,6 +188,7 @@ func contentCommand() *Command {
 		Examples: []Example{
 			{Command: "sidecar content read --workspace /home/me/api:shell:sidecar-sh-1 --kind file --operation document --target README.md --json"},
 			{Command: "sidecar content read --workspace /home/me/api:shell:sidecar-sh-1 --kind file --operation document --target README.md --if-revision v1:abc --json"},
+			{Command: "sidecar content read --workspace /home/me/api:shell:sidecar-sh-1 --kind resource --operation collection --provider recall --collection results --query dex --json"},
 		},
 		Run: runContentRead,
 	}
@@ -217,6 +229,11 @@ type contentFlags struct {
 	parent     string
 	provider   string
 	matcher    string
+	collection string
+	query      string
+	view       string
+	sort       string
+	cursor     string
 	offset     int
 	limit      int
 	json       bool
@@ -291,6 +308,46 @@ func parseContentFlags(env Env, help string, args []string, allowRead bool) (con
 			i = next
 		case allowRead && arg == "--refresh":
 			flags.refresh = true
+		case allowRead && (arg == "--collection" || strings.HasPrefix(arg, "--collection=")):
+			val, next, ok := takeFlagArg(arg, args, i, "--collection")
+			if !ok || val == "" {
+				cliErrf(env.Stderr, "--collection requires an id\n\n%s", help)
+				return flags, 2, false
+			}
+			flags.collection = val
+			i = next
+		case allowRead && (arg == "--query" || strings.HasPrefix(arg, "--query=")):
+			val, next, ok := takeFlagArg(arg, args, i, "--query")
+			if !ok {
+				cliErrf(env.Stderr, "--query requires a value\n\n%s", help)
+				return flags, 2, false
+			}
+			flags.query = val
+			i = next
+		case allowRead && (arg == "--view" || strings.HasPrefix(arg, "--view=")):
+			val, next, ok := takeFlagArg(arg, args, i, "--view")
+			if !ok || val == "" {
+				cliErrf(env.Stderr, "--view requires an id\n\n%s", help)
+				return flags, 2, false
+			}
+			flags.view = val
+			i = next
+		case allowRead && (arg == "--sort" || strings.HasPrefix(arg, "--sort=")):
+			val, next, ok := takeFlagArg(arg, args, i, "--sort")
+			if !ok || val == "" {
+				cliErrf(env.Stderr, "--sort requires an id\n\n%s", help)
+				return flags, 2, false
+			}
+			flags.sort = val
+			i = next
+		case allowRead && (arg == "--cursor" || strings.HasPrefix(arg, "--cursor=")):
+			val, next, ok := takeFlagArg(arg, args, i, "--cursor")
+			if !ok || val == "" {
+				cliErrf(env.Stderr, "--cursor requires a value\n\n%s", help)
+				return flags, 2, false
+			}
+			flags.cursor = val
+			i = next
 		case allowRead && (arg == "--path" || strings.HasPrefix(arg, "--path=")):
 			val, next, ok := takeFlagArg(arg, args, i, "--path")
 			if !ok || val == "" {
@@ -548,7 +605,9 @@ func runContentRead(env Env, args []string) int {
 		WorkspaceID: flags.workspace, Kind: flags.kind, Operation: flags.operation,
 		Target: flags.target, IfRevision: flags.ifRevision, Path: flags.path, Parent: flags.parent,
 		Offset: flags.offset, Limit: flags.limit, Provider: flags.provider, Matcher: flags.matcher,
-		Refresh: flags.refresh,
+		Refresh:    flags.refresh,
+		Collection: flags.collection, Query: flags.query, View: flags.view,
+		Sort: flags.sort, Cursor: flags.cursor,
 	})
 	if err != nil {
 		return contentExit(env, err)

@@ -169,6 +169,12 @@ func (m *Model) moveTo(index int) tea.Cmd {
 // the row it already shows is the one under the cursor. That is the second
 // Enter in the user contract, and it costs no process.
 func (m *Model) openCursorRow() tea.Cmd {
+	// In a pane there is no room for the document beside the list, so Enter
+	// opens it as a second tab in the same leaf and a second Enter on the same
+	// row focuses that tab. Both halves live on the host, which owns the strip.
+	if m.paneMode() {
+		return m.paneOpenRow()
+	}
 	c, ok := m.ActiveCollection()
 	if !ok {
 		return nil
@@ -242,7 +248,7 @@ func (m *Model) scheduleQuery(s *collectionState) tea.Cmd {
 	seq := s.debounce
 	instance, collection := m.instance, s.id
 	return tea.Tick(QueryDebounce, func(time.Time) tea.Msg {
-		return queryDebouncedMsg{Instance: instance, Collection: collection, Sequence: seq}
+		return QueryDebouncedMsg{Instance: instance, Collection: collection, Sequence: seq}
 	})
 }
 
@@ -300,6 +306,14 @@ func (m *Model) openSource() tea.Cmd {
 // The detail box is a stop only when there is something in it; a ring entry
 // that lands on a blank card is a stop the user cannot use.
 func (m *Model) PaneFocusStops() []string {
+	// A pane leaf holds one shape, so it is one stop. The other shape is a
+	// sibling TAB in the same leaf, and the strip is what moves between them.
+	if m.paneMode() {
+		if m.paneShape == PaneDocument {
+			return []string{string(FocusDetail)}
+		}
+		return []string{string(FocusList)}
+	}
 	stops := []string{string(FocusList)}
 	if m.detail.loaded || m.detail.loading {
 		stops = append(stops, string(FocusDetail))

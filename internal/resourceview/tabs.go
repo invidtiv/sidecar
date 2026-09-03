@@ -13,11 +13,23 @@ import (
 // dropped rather than refusing the user's click.
 const MaxTabs = 16
 
-// TabKey is the stable identity of one tab before a resolve: the provider
-// instance, the matcher, and the exact matched locator. The same locator from
-// two providers is two resources, so the instance is part of the key.
+// TabKey is the stable identity of one tab before anything is fetched. The same
+// locator from two plugins is two resources, so the instance is always part of
+// the key, and the shape is part of it too so a collection and a row of that
+// collection can never collide.
+//
+// A collection tab's identity is deliberately {instance, collection} and
+// nothing more: the query, view, sort and cursor are view position, so retyping
+// a query re-lists the tab that is already open rather than forking a second.
 func TabKey(ref resource.Reference) string {
-	return ref.Instance + "\x00" + ref.Matcher + "\x00" + ref.Locator
+	switch ref.Shape() {
+	case resource.ShapeCollection:
+		return ref.Instance + "\x00c\x00" + ref.Collection
+	case resource.ShapeItem:
+		return ref.Instance + "\x00i\x00" + ref.Collection + "\x00" + ref.Locator
+	default:
+		return ref.Instance + "\x00" + ref.Matcher + "\x00" + ref.Locator
+	}
 }
 
 // Tabs is the tabbed set of resource references in one Resource leaf.
@@ -32,6 +44,11 @@ type Tabs struct {
 
 	renderer *markdown.Renderer
 	resolve  Resolver
+	// callsFor and openRow are the plugin-shaped tabs' half of the seam. They
+	// arrive after construction for the same reason resolve does: the host's
+	// describe pass finishes long after a restored tab is armed.
+	callsFor CallsFor
+	openRow  OpenRow
 
 	// nextModelID hands each model a distinct identity so a late answer can be
 	// matched to the tab that asked even after tabs close and indices shift.
@@ -60,6 +77,59 @@ func (t *Tabs) SetResolver(resolve Resolver) {
 	for _, item := range t.Items {
 		item.Value.SetResolver(resolve)
 	}
+}
+
+// SetCallsFor injects how a plugin-shaped tab reaches its plugin, for this set
+// and every tab already in it.
+func (t *Tabs) SetCallsFor(calls CallsFor) {
+	if t == nil {
+		return
+	}
+	t.callsFor = calls
+	for _, item := range t.Items {
+		item.Value.SetCallsFor(calls)
+	}
+}
+
+// SetOpenRow injects what Enter on a collection row does. The default is this
+// set's own: open the row as a second tab in the same leaf, which is the
+// behaviour both surfaces owe and neither should re-derive.
+func (t *Tabs) SetOpenRow(open OpenRow) {
+	if t == nil {
+		return
+	}
+	t.openRow = open
+	for _, item := range t.Items {
+		item.Value.SetOpenRow(open)
+	}
+}
+
+// UpdatePlugins routes one of the shared browser's messages to every
+// plugin-shaped tab, reporting whether any of them owned it. Each browser
+// discards a message for another instance or a superseded generation itself.
+func (t *Tabs) UpdatePlugins(msg tea.Msg) (tea.Cmd, bool) {
+	if t == nil {
+		return nil, false
+	}
+	var cmds []tea.Cmd
+	handled := false
+	for i := range t.Items {
+		cmd, ok := t.Items[i].Value.ApplyPluginMsg(msg)
+		handled = handled || ok
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		if ok {
+			// A row's document may come back under a canonical identity, so the
+			// strip is re-keyed and any tab that now names the same row merges
+			// into it — the same rule a resolve already holds for the card.
+			t.rekeyAndMerge(i, t.Items[i].Value.Reference().Locator)
+		}
+	}
+	if len(cmds) == 0 {
+		return nil, handled
+	}
+	return tea.Batch(cmds...), handled
 }
 
 // Len reports how many tabs are open.
@@ -149,6 +219,8 @@ func (t *Tabs) Arm(ref resource.Reference, scroll int) *Model {
 
 func (t *Tabs) newModel() *Model {
 	m := New(t.renderer, t.resolve)
+	m.SetCallsFor(t.callsFor)
+	m.SetOpenRow(t.openRow)
 	m.SetSize(t.width, t.height)
 	t.nextModelID++
 	return m
@@ -287,10 +359,15 @@ func (t *Tabs) References() []PersistedTab {
 	for _, item := range t.Items {
 		ref := item.Value.Reference()
 		out = append(out, PersistedTab{
-			Provider: ref.Instance,
-			Matcher:  ref.Matcher,
-			Locator:  ref.Locator,
-			Scroll:   item.Value.Scroll(),
+			Provider:   ref.Instance,
+			Matcher:    ref.Matcher,
+			Locator:    ref.Locator,
+			Collection: ref.Collection,
+			Query:      ref.Query,
+			View:       ref.View,
+			Sort:       ref.Sort,
+			CursorID:   ref.CursorID,
+			Scroll:     item.Value.Scroll(),
 		})
 	}
 	return out
@@ -298,12 +375,18 @@ func (t *Tabs) References() []PersistedTab {
 
 // PersistedTab is one reference plus its scroll. It mirrors the state
 // package's JSON shape without this package depending on state, so the view
-// layer stays free of persistence concerns.
+// layer stays free of persistence concerns. Collection and the view position
+// beside it are set only on a plugin-shaped tab.
 type PersistedTab struct {
-	Provider string
-	Matcher  string
-	Locator  string
-	Scroll   int
+	Provider   string
+	Matcher    string
+	Locator    string
+	Collection string
+	Query      string
+	View       string
+	Sort       string
+	CursorID   string
+	Scroll     int
 }
 
 // View renders the active tab.

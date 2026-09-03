@@ -11,6 +11,7 @@ import (
 	"github.com/marcus/sidecar/internal/contentservice"
 	"github.com/marcus/sidecar/internal/hostproto"
 	"github.com/marcus/sidecar/internal/hosts"
+	"github.com/marcus/sidecar/internal/pluginhost"
 	"github.com/marcus/sidecar/internal/resource"
 )
 
@@ -119,6 +120,86 @@ func (s RemoteSource) ResolveResource(ctx context.Context, src SourceContext, re
 		return resource.Document{}, contentservice.ResourceErrorFromWire(result.ResourceError)
 	}
 	return contentservice.SanitizeWireDocument(result.Resource)
+}
+
+// ListCollection asks the host that owns the pane, over the connection Sidecar
+// already holds open. It is the same journey ResolveResource takes, with the
+// same refusal shape: the host runs its own plugin, and the answer that comes
+// back is the page IT kept, already sanitized and already bounded.
+func (s RemoteSource) ListCollection(ctx context.Context, src SourceContext, instance string, params contentservice.CollectionParams) (pluginhost.Page, error) {
+	if err := s.ready(); err != nil {
+		return pluginhost.Page{}, err
+	}
+	ref := resource.Reference{Instance: instance, Collection: params.Collection,
+		Query: params.Query, View: params.View, Sort: params.Sort}
+	if !ref.Valid() {
+		return pluginhost.Page{}, fmt.Errorf("collection reference is empty or exceeds its bounds")
+	}
+	args := []string{
+		"content", "read",
+		"--workspace", src.WorkspaceID,
+		"--kind", contentservice.KindResource,
+		"--operation", contentservice.OpCollection,
+		"--provider", instance,
+		"--collection", params.Collection,
+		"--json",
+	}
+	args = appendOptional(args, "--query", params.Query)
+	args = appendOptional(args, "--view", params.View)
+	args = appendOptional(args, "--sort", params.Sort)
+	args = appendOptional(args, "--cursor", params.Cursor)
+	if params.Limit > 0 {
+		args = append(args, "--limit", strconv.Itoa(params.Limit))
+	}
+	var result contentservice.ReadResult
+	if err := s.Run(ctx, s.HostID, args, &result); err != nil {
+		return pluginhost.Page{}, mapRemoteContentErr(s.HostID, contentservice.KindResource, err)
+	}
+	if result.ResourceError != nil {
+		return pluginhost.Page{}, contentservice.ResourceErrorFromWire(result.ResourceError)
+	}
+	return contentservice.PageFromWire(result.Collection), nil
+}
+
+// GetCollectionItem expands one row on the host that owns the pane.
+func (s RemoteSource) GetCollectionItem(ctx context.Context, src SourceContext, instance, collection, id string, refresh bool) (resource.Document, error) {
+	if err := s.ready(); err != nil {
+		return resource.Document{}, err
+	}
+	ref := resource.Reference{Instance: instance, Collection: collection, Locator: id}
+	if !ref.Valid() {
+		return resource.Document{}, fmt.Errorf("collection item reference is empty or exceeds its bounds")
+	}
+	args := []string{
+		"content", "read",
+		"--workspace", src.WorkspaceID,
+		"--kind", contentservice.KindResource,
+		"--operation", contentservice.OpItem,
+		"--provider", instance,
+		"--collection", collection,
+		"--target", id,
+		"--json",
+	}
+	if refresh {
+		args = append(args, "--refresh")
+	}
+	var result contentservice.ReadResult
+	if err := s.Run(ctx, s.HostID, args, &result); err != nil {
+		return resource.Document{}, mapRemoteContentErr(s.HostID, contentservice.KindResource, err)
+	}
+	if result.ResourceError != nil {
+		return resource.Document{}, contentservice.ResourceErrorFromWire(result.ResourceError)
+	}
+	return contentservice.SanitizeWireDocument(result.Resource)
+}
+
+// appendOptional adds a flag only when it carries a value, so an empty query
+// is an absent flag rather than an empty string the host has to interpret.
+func appendOptional(args []string, flag, value string) []string {
+	if value == "" {
+		return args
+	}
+	return append(args, flag, value)
 }
 
 func (s RemoteSource) LoadDocument(ctx context.Context, src SourceContext, req DocumentReadRequest) (DocumentReadResult, error) {

@@ -9,10 +9,12 @@ import (
 	"strings"
 	"testing"
 
+	"errors"
 	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/contentservice"
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/filepreview"
+	"github.com/marcus/sidecar/internal/pluginhost"
 	"github.com/marcus/sidecar/internal/resource"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
@@ -276,4 +278,15 @@ func TestEncodeOmitsHostIncarnation(t *testing.T) {
 	if decoded.Source["hostId"] != "mini" {
 		t.Fatalf("missing hostId: %s", raw)
 	}
+}
+
+// The plugin-collection twins of ResolveResource. This fake is about the file,
+// issue, note or diff journeys; a collection read is not part of what it is
+// pinning, so both refuse rather than pretend.
+func (*fakeDocumentSource) ListCollection(context.Context, SourceContext, string, contentservice.CollectionParams) (pluginhost.Page, error) {
+	return pluginhost.Page{}, errors.New("collection listing is not part of this fixture")
+}
+
+func (*fakeDocumentSource) GetCollectionItem(context.Context, SourceContext, string, string, string, bool) (resource.Document, error) {
+	return resource.Document{}, errors.New("collection items are not part of this fixture")
 }

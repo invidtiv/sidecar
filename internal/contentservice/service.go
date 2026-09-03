@@ -163,6 +163,16 @@ func (s *Service) ReadParams(ctx context.Context, params ReadParams) (ReadResult
 		}
 		return diffReadResultFrom(ws.ID, doc, params.Operation), nil
 	case KindResource:
+		switch params.Operation {
+		case OpCollection:
+			return s.ListCollection(ctx, params.WorkspaceID, params.Provider, CollectionParams{
+				Collection: params.Collection, Query: params.Query, View: params.View,
+				Sort: params.Sort, Cursor: params.Cursor, Limit: params.Limit,
+			})
+		case OpItem:
+			return s.GetCollectionItem(ctx, params.WorkspaceID, params.Provider,
+				params.Collection, params.Target, params.Refresh)
+		}
 		return s.ReadResource(ctx, params.WorkspaceID, resource.Reference{
 			Instance: params.Provider, Matcher: params.Matcher, Locator: params.Target,
 		}, params.Refresh)
@@ -208,7 +218,9 @@ func requireOperation(kind, operation string) error {
 			return Usage("unknown content operation %q", operation)
 		}
 	case KindResource:
-		if operation != OpResource {
+		switch operation {
+		case OpResource, OpCollection, OpItem:
+		default:
 			return Usage("unknown content operation %q", operation)
 		}
 	}

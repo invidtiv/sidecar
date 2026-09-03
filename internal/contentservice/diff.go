@@ -132,6 +132,13 @@ type ReadParams struct {
 	Provider    string
 	Matcher     string
 	Refresh     bool
+	// Collection and the four beside it are the plugin collection operations'
+	// parameters. They are meaningless for every other kind.
+	Collection string
+	Query      string
+	View       string
+	Sort       string
+	Cursor     string
 }
 
 func validDiffOperation(op string) bool {

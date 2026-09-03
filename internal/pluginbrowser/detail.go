@@ -296,6 +296,21 @@ func (m *Model) renderBody(body *resource.Body, width int) []string {
 	return resource.StripRenderedOSC(plain)
 }
 
+// maxDetailScroll is the furthest the detail viewport can travel, and zero when
+// there is no detail box on screen at all.
+func (m *Model) maxDetailScroll() int {
+	_, detailOuter := m.split()
+	if detailOuter <= 0 {
+		return 0
+	}
+	lines := len(m.detailBlock(detailOuter - chromeOverhead))
+	maxScroll := lines - (m.height - 2)
+	if maxScroll < 0 {
+		return 0
+	}
+	return maxScroll
+}
+
 // clampDetailScroll keeps the detail viewport inside the card.
 func (m *Model) clampDetailScroll() {
 	_, detailOuter := m.split()
@@ -303,11 +318,7 @@ func (m *Model) clampDetailScroll() {
 		m.detail.scroll = 0
 		return
 	}
-	lines := len(m.detailBlock(detailOuter - chromeOverhead))
-	maxScroll := lines - (m.height - 2)
-	if maxScroll < 0 {
-		maxScroll = 0
-	}
+	maxScroll := m.maxDetailScroll()
 	if m.detail.scroll > maxScroll {
 		m.detail.scroll = maxScroll
 	}

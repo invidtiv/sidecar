@@ -124,20 +124,104 @@ type Document struct {
 	Sections []Section
 }
 
-// Reference is {provider instance, matcher, locator}: what a match produces
-// and what a resolve consumes. It is the only provider-shaped value that
-// reaches persisted state, and it carries no secret.
+// Shape names which of a Reference's alternatives is set.
+type Shape int
+
+const (
+	// ShapeInvalid is a reference that is no shape, or more than one.
+	ShapeInvalid Shape = iota
+	// ShapeMatched is {instance, matcher, locator}: what a scanned span
+	// produces and what `resolve` consumes. It is the frozen resource
+	// protocol's only shape and is unchanged by the plugin protocol.
+	ShapeMatched
+	// ShapeCollection is {instance, collection} plus the user-owned view
+	// position: what a plugin's collection tab points at. `list` consumes it.
+	ShapeCollection
+	// ShapeItem is {instance, collection, locator}: one row of a collection,
+	// which `get` consumes. It is a distinct shape rather than a matched
+	// document because a plugin row is addressed by its collection and ID, and
+	// there is no matcher anywhere in that journey to invent.
+	ShapeItem
+)
+
+// Reference is what a plugin-shaped tab points at, and the only plugin-shaped
+// value that reaches persisted state. It carries no secret: a locator such as
+// CASH-1245 and a user-typed query are the minimum needed to restore the pane
+// the user had open.
 type Reference struct {
 	Instance string
 	Matcher  string
-	Locator  string
+	// Locator is the matched locator in ShapeMatched and the row ID in
+	// ShapeItem. It is empty in ShapeCollection.
+	Locator string
+
+	// Collection is the plugin-declared collection ID. Non-empty is what makes
+	// a reference one of the two plugin shapes.
+	Collection string
+	// Query, View, Sort and CursorID are a collection tab's view position,
+	// restored verbatim so relaunch reopens the list the user was reading
+	// rather than the collection's default page.
+	Query    string
+	View     string
+	Sort     string
+	CursorID string
 }
 
-// Valid reports whether a reference is well-formed enough to send to a
-// provider. It is a bounds check, not an existence check.
+// Shape reports which alternative this reference is, or ShapeInvalid when it is
+// none or several. Deciding it in one place is what stops each caller from
+// growing its own idea of what "a collection tab" means.
+func (r Reference) Shape() Shape {
+	switch {
+	case r.Collection == "" && r.Matcher != "" && r.Locator != "":
+		return ShapeMatched
+	case r.Collection != "" && r.Matcher == "" && r.Locator == "":
+		return ShapeCollection
+	case r.Collection != "" && r.Matcher == "" && r.Locator != "":
+		return ShapeItem
+	default:
+		return ShapeInvalid
+	}
+}
+
+// IsCollection reports the collection-tab shape.
+func (r Reference) IsCollection() bool { return r.Shape() == ShapeCollection }
+
+// IsPlugin reports either of the two shapes that talk to a protocol plugin's
+// list/get methods, which is what decides whether a tab renders as the shared
+// browser or as the resource card.
+func (r Reference) IsPlugin() bool {
+	shape := r.Shape()
+	return shape == ShapeCollection || shape == ShapeItem
+}
+
+// Valid reports whether a reference is well-formed enough to send to a plugin.
+// It is a bounds check, not an existence check.
+//
+// Exactly one shape. A reference naming both a matcher and a collection, or
+// neither, is refused rather than sent under a guess: which one the sender
+// meant is not something the host can infer, and inferring it is how a restored
+// tab silently becomes a different tab.
 func (r Reference) Valid() bool {
-	return r.Instance != "" && r.Matcher != "" && r.Locator != "" &&
-		runeLen(r.Instance) <= MaxInstanceIDChars &&
-		runeLen(r.Matcher) <= MaxMatcherIDChars &&
-		runeLen(r.Locator) <= MaxLocatorChars
+	if r.Instance == "" || runeLen(r.Instance) > MaxInstanceIDChars {
+		return false
+	}
+	switch r.Shape() {
+	case ShapeMatched:
+		return runeLen(r.Matcher) <= MaxMatcherIDChars &&
+			runeLen(r.Locator) <= MaxLocatorChars
+	case ShapeCollection:
+		return r.viewPositionInBounds()
+	case ShapeItem:
+		return runeLen(r.Locator) <= MaxLocatorChars && r.viewPositionInBounds()
+	default:
+		return false
+	}
+}
+
+func (r Reference) viewPositionInBounds() bool {
+	return runeLen(r.Collection) <= MaxCollectionIDChars &&
+		runeLen(r.Query) <= MaxQueryChars &&
+		runeLen(r.View) <= MaxViewIDChars &&
+		runeLen(r.Sort) <= MaxSortIDChars &&
+		runeLen(r.CursorID) <= MaxIdentityChars
 }

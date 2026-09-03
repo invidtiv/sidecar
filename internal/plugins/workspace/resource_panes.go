@@ -382,3 +382,73 @@ func (p *Plugin) registerResourceTabRegions(res *resourcePane, leafID int, box B
 			resourceTabHit{LeafID: leafID, Index: index, Close: close})
 	})
 }
+
+// The app injects the protocol-plugin seam through this interface. Asserting it
+// here makes a signature drift a build error rather than a collection pane that
+// silently never lists anything.
+var _ resourceview.PluginSurface = (*Plugin)(nil)
+
+// SetPluginCalls injects how a collection or row tab reaches its plugin, and
+// asks the visible pane's active tab again.
+//
+// The second half is the point, exactly as it is for SetResourceResolver.
+// Restore arms tabs, and until the host has described a plugin there is nothing
+// to list, so this is the first moment a remembered collection tab can load.
+// Without it the pane sits on its loading card after every relaunch — of a
+// plugin that is ready — until the user refreshes it by hand.
+func (p *Plugin) SetPluginCalls(calls resourceview.CallsFor) tea.Cmd {
+	p.pluginCalls = calls
+	if p.contentDeck != nil {
+		p.contentDeck.SetPluginCalls(calls)
+		return tea.Batch(unwrapDeckCmds(p.contentDeck.LoadVisibleKind(panelayout.Resource)...)...)
+	}
+	var cmds []tea.Cmd
+	for _, res := range p.resources {
+		if res == nil || res.tabs == nil {
+			continue
+		}
+		res.tabs.SetCallsFor(calls)
+		if cmd := res.tabs.ResolveActive(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+	return tea.Batch(cmds...)
+}
+
+// applyPluginBrowserMsg routes one of the shared browser's answers to the
+// collection and row tabs that are open. It is the collection shape's version
+// of applyResourceResolved, and it goes through the deck for the same reason:
+// the deck owns the models the projection points at.
+func (p *Plugin) applyPluginBrowserMsg(msg tea.Msg) tea.Cmd {
+	if p.contentDeck != nil {
+		return p.applyWorkspaceDeckBroadcast(msg)
+	}
+	var cmds []tea.Cmd
+	for _, res := range p.resources {
+		if res == nil || res.tabs == nil {
+			continue
+		}
+		if cmd, ok := res.tabs.UpdatePlugins(msg); ok && cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+	return tea.Batch(cmds...)
+}
+
+// visibleResourceTabs is the active tab of every Resource leaf on screen. Live
+// refresh and the poll ticker both read it, and both must see only what is
+// actually being looked at: a background tab's plugin is a process spent on a
+// frame nobody sees.
+func (p *Plugin) visibleResourceTabs() []*resourceview.Model {
+	visible := p.visibleContentLeaves()
+	var out []*resourceview.Model
+	for id, res := range p.resources {
+		if res == nil || !visible[id] {
+			continue
+		}
+		if view := res.view(); view != nil {
+			out = append(out, view)
+		}
+	}
+	return out
+}

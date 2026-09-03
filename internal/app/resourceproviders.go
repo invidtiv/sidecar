@@ -218,6 +218,17 @@ func (m *Model) publishResourceProviders() tea.Cmd {
 		if cmd := surface.SetResourceResolver(resolve); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
+		// The collection shape's half of the same injection. It is behind the
+		// flag rather than the manager: a Resource leaf must keep resolving
+		// matched documents when the draft protocol is off, and a collection tab
+		// that could not exist has nothing to bind.
+		plugins, ok := surface.(resourceview.PluginSurface)
+		if !ok || !features.IsEnabled(features.PluginProtocol.Name) {
+			continue
+		}
+		if cmd := plugins.SetPluginCalls(pluginBrowserCalls); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	}
 	// Every protocol browser is waiting on exactly this: a describe pass has
 	// settled, so its own snapshot is worth re-reading. It is delivered here

@@ -6,10 +6,12 @@ import (
 	"strings"
 	"testing"
 
+	"errors"
 	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/contentpanes"
 	"github.com/marcus/sidecar/internal/contentservice"
 	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/pluginhost"
 	"github.com/marcus/sidecar/internal/resource"
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspacediff"
@@ -135,4 +137,15 @@ func TestResolveRemoteTargetsEmptyDocumentTargetsRefuse(t *testing.T) {
 	if len(src.seen) != 0 {
 		t.Fatalf("source was consulted for an empty descriptor: %v", src.seen)
 	}
+}
+
+// The plugin-collection twins of ResolveResource. This fake is about the file,
+// issue, note or diff journeys; a collection read is not part of what it is
+// pinning, so both refuse rather than pretend.
+func (*recordingSource) ListCollection(context.Context, contentpanes.SourceContext, string, contentservice.CollectionParams) (pluginhost.Page, error) {
+	return pluginhost.Page{}, errors.New("collection listing is not part of this fixture")
+}
+
+func (*recordingSource) GetCollectionItem(context.Context, contentpanes.SourceContext, string, string, string, bool) (resource.Document, error) {
+	return resource.Document{}, errors.New("collection items are not part of this fixture")
 }

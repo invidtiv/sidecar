@@ -76,8 +76,21 @@ type Pane struct {
 }
 
 // NewPane binds a tab set to a surface.
+//
+// It also installs the leaf's own answer to Enter on a collection row: open the
+// row as a second tab in this same set, and focus it if it is already there.
+// That is the second Enter in the user contract, it costs no process, and it is
+// the same on both surfaces because it is written once here.
 func NewPane(tabs *Tabs, host Host) *Pane {
-	return &Pane{Tabs: tabs, host: host}
+	p := &Pane{Tabs: tabs, host: host}
+	if tabs != nil {
+		tabs.SetOpenRow(func(ref Ref) tea.Cmd {
+			cmd := tabs.Open(ref)
+			p.persist()
+			return cmd
+		})
+	}
+	return p
 }
 
 // ActivateFromTerminal is the click journey: the terminal ritual first, then
@@ -240,6 +253,16 @@ func (p *Pane) Scroll(delta int) bool {
 func (p *Pane) HandleKey(key string) (handled bool, cmd tea.Cmd) {
 	if p == nil || p.Tabs == nil || p.Tabs.Empty() {
 		return false, nil
+	}
+	// A plugin-shaped tab answers first, with the browser's own keys. They are
+	// the same keys the global tab binds, which is the whole point of one
+	// browser: j/k, Enter, /, v, r, a and o mean what they mean everywhere.
+	// { and } stay the leaf's, because the strip is the leaf's.
+	if m := p.Tabs.Active(); m != nil && m.IsPlugin() && key != "{" && key != "}" {
+		if cmd, ok := p.Tabs.HandlePluginKey(key); ok {
+			p.persist()
+			return true, cmd
+		}
 	}
 	switch key {
 	case "r":

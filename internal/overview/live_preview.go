@@ -1,7 +1,9 @@
 package overview
 
 import (
+	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -11,6 +13,7 @@ import (
 	"github.com/marcus/sidecar/internal/livepanes"
 	"github.com/marcus/sidecar/internal/livewatch"
 	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
@@ -38,6 +41,10 @@ const (
 	livePreviewNotes  = "notes"
 	livePreviewDocs   = "docs"
 	livePreviewDiffs  = "diffs"
+	// livePreviewResources is the Resource preview: the collection and row tabs
+	// of every configured protocol plugin. Its signal is the plugin's own
+	// declared watch paths and poll interval, never a path Sidecar chose.
+	livePreviewResources = "resources"
 
 	// remoteDocumentRefreshInterval is the visible-tab conditional read cadence
 	// for remote Documents. Hidden tabs are not checked.
@@ -66,7 +73,7 @@ type previewTDStoreResolvedMsg struct {
 // the visible surface, exactly like the shell probes above them.
 func isLiveWatchMessage(msg tea.Msg) bool {
 	switch msg.(type) {
-	case previewTDStoreResolvedMsg, workspacediff.AdminTargetsMsg, remoteDocumentRefreshTickMsg, remoteResourceDescribeTickMsg, remoteDescribeMsg:
+	case previewTDStoreResolvedMsg, workspacediff.AdminTargetsMsg, remoteDocumentRefreshTickMsg, remoteResourceDescribeTickMsg, remoteDescribeMsg, previewPluginPollTickMsg:
 		return true
 	}
 	return livepanes.Owns(livePreviewOwner, msg)
@@ -100,6 +107,16 @@ func (m *Model) newLiveSet() *livepanes.Set {
 			Owed:    m.previewDocRefreshOwed,
 		},
 		livepanes.Binding{
+			Kind: livePreviewResources,
+			// A plugin's store is somebody else's tool writing, and those move in
+			// bursts the way the td store does. Settle the same way, so a burst is
+			// one re-list rather than one process per write.
+			Config:  livewatch.Config{Quiet: 400 * time.Millisecond, MaxLatency: 2 * time.Second},
+			Prepare: m.preparePreviewPluginWatchTargets,
+			Targets: m.previewResourceTargets,
+			Refresh: m.refreshPreviewResources,
+		},
+		livepanes.Binding{
 			Kind:    livePreviewDiffs,
 			Config:  livewatch.Config{Quiet: 500 * time.Millisecond, MaxLatency: 3 * time.Second},
 			Prepare: m.resolvePreviewDiffAdmin,
@@ -120,6 +137,8 @@ func (m *Model) handleLiveWatchMsg(msg tea.Msg) (tea.Cmd, bool) {
 		return m.applyRemoteDescribe(msg), true
 	case remoteResourceDescribeTickMsg:
 		return m.applyRemoteResourceDescribeTick(msg), true
+	case previewPluginPollTickMsg:
+		return m.applyPreviewPluginPollTick(msg), true
 	case previewTDStoreResolvedMsg:
 		if m.preview.tdStoreTargets == nil {
 			m.preview.tdStoreTargets = make(map[string][]livewatch.Target)
@@ -678,4 +697,129 @@ func (m *Model) previewDiffRefreshOwed() bool {
 		}
 	}
 	return false
+}
+
+// ---------------------------------------------------------------------------
+// Resource preview (td-44fe20)
+// ---------------------------------------------------------------------------
+//
+// The parity half of the project surface's resources binding. Same kind name,
+// same signal, same visibility rule; what differs is only the plumbing, because
+// this surface has one preview slot rather than a pane tree.
+
+// preparePreviewPluginWatchTargets validates the declared watch paths of the
+// visible collection tab's plugin, once per describe generation.
+//
+// Validation is a stat per path, so it happens here rather than in Targets:
+// Targets runs on the update goroutine on every reconcile, and a stat per path
+// per message is exactly the hidden per-frame filesystem cost the startup rules
+// exist to prevent.
+func (m *Model) preparePreviewPluginWatchTargets() tea.Cmd {
+	for _, view := range m.visiblePreviewResourceTabs() {
+		key := previewPluginWatchKey(view)
+		if key == "" {
+			continue
+		}
+		if _, done := m.pluginWatchTargets[key]; done {
+			continue
+		}
+		if m.pluginWatchTargets == nil {
+			m.pluginWatchTargets = make(map[string][]livewatch.Target)
+		}
+		m.pluginWatchTargets[key] = previewPluginWatchTargets(view.Browser().PaneWatchPaths())
+	}
+	return m.schedulePreviewPluginPoll()
+}
+
+func previewPluginWatchKey(view *resourceview.Model) string {
+	browser := view.Browser()
+	if browser == nil {
+		return ""
+	}
+	return browser.Instance() + "\x00" + strconv.FormatUint(browser.DescribeGeneration(), 10)
+}
+
+func previewPluginWatchTargets(paths []string) []livewatch.Target {
+	out := make([]livewatch.Target, 0, len(paths))
+	for _, path := range paths {
+		info, err := os.Stat(path)
+		if err != nil {
+			// A declared path a plugin's tool has not created yet contributes no
+			// registration, and Prepare re-stats on the next describe generation.
+			continue
+		}
+		out = append(out, livewatch.Target{Path: path, Dir: info.IsDir()})
+	}
+	return out
+}
+
+// previewResourceTargets is the declared watch paths behind the visible
+// collection or row tab, read from the cached expansion and nothing else.
+func (m *Model) previewResourceTargets() []livewatch.Target {
+	seen := make(map[string]bool)
+	var targets []livewatch.Target
+	for _, view := range m.visiblePreviewResourceTabs() {
+		for _, t := range m.pluginWatchTargets[previewPluginWatchKey(view)] {
+			if seen[t.Path] {
+				continue
+			}
+			seen[t.Path] = true
+			targets = append(targets, t)
+		}
+	}
+	return targets
+}
+
+// refreshPreviewResources re-lists the visible collection tab and re-fetches
+// the visible row tab. It is the same call `r` makes.
+func (m *Model) refreshPreviewResources() []tea.Cmd {
+	var cmds []tea.Cmd
+	for _, view := range m.visiblePreviewResourceTabs() {
+		if browser := view.Browser(); browser != nil {
+			if cmd := browser.PaneRefresh(); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
+	}
+	return cmds
+}
+
+// previewPluginPollTickMsg is one declared poll interval elapsing.
+type previewPluginPollTickMsg struct{ Sequence uint64 }
+
+// schedulePreviewPluginPoll arms the next poll tick when the visible tab's
+// plugin declared an interval, and arms nothing when it did not. The ticker
+// lives inside the binding so it obeys the same visibility rule as the watcher.
+func (m *Model) schedulePreviewPluginPoll() tea.Cmd {
+	interval := 0
+	for _, view := range m.visiblePreviewResourceTabs() {
+		browser := view.Browser()
+		if browser == nil {
+			continue
+		}
+		if seconds := browser.PanePollSeconds(); seconds > 0 && (interval == 0 || seconds < interval) {
+			interval = seconds
+		}
+	}
+	if interval == 0 || m.pluginPollArmed {
+		return nil
+	}
+	m.pluginPollArmed = true
+	m.pluginPollTick++
+	seq := m.pluginPollTick
+	return tea.Tick(time.Duration(interval)*time.Second, func(time.Time) tea.Msg {
+		return previewPluginPollTickMsg{Sequence: seq}
+	})
+}
+
+func (m *Model) applyPreviewPluginPollTick(msg previewPluginPollTickMsg) tea.Cmd {
+	if msg.Sequence != m.pluginPollTick {
+		return nil
+	}
+	m.pluginPollArmed = false
+	cmds := m.refreshPreviewResources()
+	if cmd := m.schedulePreviewPluginPoll(); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	return tea.Batch(cmds...)
 }

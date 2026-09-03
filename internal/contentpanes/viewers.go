@@ -24,6 +24,10 @@ import (
 type Config struct {
 	Renderer         *markdown.Renderer
 	ResourceResolver resourceview.Resolver
+	// PluginCalls is how a collection or row tab reaches its protocol plugin.
+	// It is injected for the same reason ResourceResolver is: the host's
+	// describe pass finishes long after a restored tab is armed.
+	PluginCalls resourceview.CallsFor
 	// Source loads Document identity and bytes. Nil uses today's local
 	// filepreview path so tests constructing Config{} keep working.
 	Source Source
@@ -55,7 +59,9 @@ func newViewer(cfg Config, kind panelayout.Kind) viewer {
 	case panelayout.Diff:
 		v = &diffViewer{view: &workspacediff.View{}, source: cfg.documentSource()}
 	case panelayout.Resource:
-		v = &resourceViewer{view: resourceview.New(cfg.Renderer, cfg.ResourceResolver)}
+		view := resourceview.New(cfg.Renderer, cfg.ResourceResolver)
+		view.SetCallsFor(cfg.PluginCalls)
+		v = &resourceViewer{view: view}
 	default:
 		panic("contentpanes: viewer requested for non-content kind")
 	}
@@ -118,7 +124,7 @@ func normalizeRef(ctx SurfaceContext, ref contentlink.Ref) (contentlink.Ref, pan
 		ref.Value = target.Identity()
 		return ref, panelayout.Diff, ref.Value, true
 	case contentlink.KindResource:
-		rf := resource.Reference{Instance: ref.Provider, Matcher: ref.Matcher, Locator: ref.Value}
+		rf := resourceRef(ref)
 		if !rf.Valid() {
 			return contentlink.Ref{}, panelayout.Resource, "", false
 		}
@@ -456,6 +462,11 @@ func (v *diffViewer) snapshot(ref contentlink.Ref) TabState {
 	return TabState{Ref: ref, Scope: v.view.Scope.Persist(), Mode: v.view.ViewMode.Persist(), Scroll: v.view.DiffScroll, Path: path}
 }
 
+// resourceViewer is the ONE Resource viewer, for all three of the leaf's tab
+// shapes. It dispatches nothing itself: resourceview.Model answers a matched
+// document with the resource card and a collection or row with the shared
+// plugin browser, so both workspace projections inherit the shapes by holding
+// the model they already hold and neither content.go learns a new kind.
 type resourceViewer struct{ view *resourceview.Model }
 
 func (v *resourceViewer) model() any { return v.view }
@@ -466,27 +477,69 @@ func (v *resourceViewer) reload(ctx SurfaceContext, ref contentlink.Ref, id int)
 	return v.load(ctx, ref, id)
 }
 func (v *resourceViewer) arm(ctx SurfaceContext, ref contentlink.Ref, id int, state TabState) {
-	v.view.Arm(id, resourceRef(ref), ctx.Epoch)
+	rf := resourceRef(ref)
+	// A collection tab's view position is restored before anything is listed,
+	// so the first page is the one the user was reading rather than the
+	// collection's default followed by a correction.
+	rf.View, rf.Sort, rf.CursorID = state.View, state.Sort, state.CursorID
+	v.view.Arm(id, rf, ctx.Epoch)
 	v.view.SetPendingScroll(state.Scroll)
 }
 func (v *resourceViewer) focus(_ SurfaceContext, _ contentlink.Ref, _ int) tea.Cmd {
 	return v.view.Resolve()
 }
 func (v *resourceViewer) apply(_ SurfaceContext, msg any) (tea.Cmd, bool) {
-	m, ok := msg.(resourceview.ResolvedMsg)
-	return nil, ok && v.view.Apply(m)
+	if m, ok := msg.(resourceview.ResolvedMsg); ok {
+		return nil, v.view.Apply(m)
+	}
+	// The plugin browser's own answers reach a collection or row tab the same
+	// way a resolve reaches a card: as a broadcast the viewer either owns or
+	// does not.
+	if cmd, ok := v.view.ApplyPluginMsg(msg); ok {
+		return cmd, true
+	}
+	return nil, false
 }
 func (v *resourceViewer) reference(ref contentlink.Ref) (contentlink.Ref, string) {
 	rf := v.view.Reference()
-	ref.Provider, ref.Matcher, ref.Value = rf.Instance, rf.Matcher, rf.Locator
-	return ref, resourceview.TabKey(rf)
+	return refFromResource(ref, rf), resourceview.TabKey(rf)
 }
 func (v *resourceViewer) snapshot(ref contentlink.Ref) TabState {
 	rf := v.view.Reference()
-	ref.Provider, ref.Matcher, ref.Value = rf.Instance, rf.Matcher, rf.Locator
-	return TabState{Ref: ref, Scroll: v.view.Scroll()}
+	return TabState{
+		Ref: refFromResource(ref, rf), Scroll: v.view.Scroll(),
+		View: rf.View, Sort: rf.Sort, CursorID: rf.CursorID,
+	}
 }
 
+// resourceRef and refFromResource are the one projection between the content
+// link vocabulary and the plugin reference, in both directions. Two spellings
+// of this mapping is how a shape gets carried one way and dropped the other.
 func resourceRef(ref contentlink.Ref) resource.Reference {
-	return resource.Reference{Instance: ref.Provider, Matcher: ref.Matcher, Locator: ref.Value}
+	return resource.Reference{
+		Instance: ref.Provider, Matcher: ref.Matcher, Locator: ref.Value,
+		Collection: ref.Collection, Query: ref.Query,
+	}
+}
+
+func refFromResource(ref contentlink.Ref, rf resource.Reference) contentlink.Ref {
+	ref.Provider, ref.Matcher, ref.Value = rf.Instance, rf.Matcher, rf.Locator
+	ref.Collection, ref.Query = rf.Collection, rf.Query
+	return ref
+}
+
+// SetPluginCalls rebinds how every Resource tab reaches its protocol plugin,
+// for existing tabs and for the ones a later open creates. It is the collection
+// shape's counterpart to SetResourceResolver, and it starts nothing for the
+// same reason: a load whose command is dropped leaves the tab loading forever.
+func (d *Deck) SetPluginCalls(calls resourceview.CallsFor) {
+	if d == nil {
+		return
+	}
+	d.cfg.PluginCalls = calls
+	d.ConfigureViewers(func(_ panelayout.Kind, model any) {
+		if view, ok := model.(*resourceview.Model); ok {
+			view.SetCallsFor(calls)
+		}
+	})
 }

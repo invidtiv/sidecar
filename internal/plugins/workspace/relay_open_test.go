@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"errors"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/contentlink"
@@ -19,6 +20,7 @@ import (
 	"github.com/marcus/sidecar/internal/layoutapply"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/pluginhost"
 	"github.com/marcus/sidecar/internal/resource"
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
@@ -415,4 +417,15 @@ func TestRelayedLayoutApplyOffScreenDeclinesWithoutQueue(t *testing.T) {
 	if !strings.Contains(joined, "--status declined") || !strings.Contains(joined, layoutapply.NotOnScreenReason) {
 		t.Fatalf("decline ack = %s", joined)
 	}
+}
+
+// The plugin-collection twins of ResolveResource. This fake is about the file,
+// issue, note or diff journeys; a collection read is not part of what it is
+// pinning, so both refuse rather than pretend.
+func (*fakeRemoteFileSource) ListCollection(context.Context, contentpanes.SourceContext, string, contentservice.CollectionParams) (pluginhost.Page, error) {
+	return pluginhost.Page{}, errors.New("collection listing is not part of this fixture")
+}
+
+func (*fakeRemoteFileSource) GetCollectionItem(context.Context, contentpanes.SourceContext, string, string, string, bool) (resource.Document, error) {
+	return resource.Document{}, errors.New("collection items are not part of this fixture")
 }

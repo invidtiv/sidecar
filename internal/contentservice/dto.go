@@ -79,6 +79,8 @@ type ReadResult struct {
 	Diff          *DiffDTO               `json:"diff,omitempty"`
 	Resource      *resource.WireDocument `json:"resource,omitempty"`
 	ResourceError *resource.WireError    `json:"resourceError,omitempty"`
+	// Collection is one page of a plugin collection, for OpCollection only.
+	Collection *WirePage `json:"collection,omitempty"`
 }
 
 // ValidRemoteResult reports whether a decoded object is this verb's answer.
@@ -116,6 +118,12 @@ func (r ReadResult) ValidRemoteResult() bool {
 	case KindDiff:
 		return validDiffOperation(r.Operation) && r.Diff != nil && strings.TrimSpace(r.Diff.Target) != ""
 	case KindResource:
+		if r.Operation == OpCollection {
+			return r.Collection != nil || r.ResourceError != nil
+		}
+		if r.Operation == OpItem {
+			return r.Resource != nil || r.ResourceError != nil
+		}
 		if r.Operation != OpResource {
 			return false
 		}

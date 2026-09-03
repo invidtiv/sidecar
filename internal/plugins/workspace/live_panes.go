@@ -1,7 +1,9 @@
 package workspace
 
 import (
+	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -10,6 +12,7 @@ import (
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/livepanes"
 	"github.com/marcus/sidecar/internal/livewatch"
+	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
@@ -39,6 +42,10 @@ const (
 	liveNotes  = "notes"
 	liveDocs   = "docs"
 	liveDiffs  = "diffs"
+	// liveResources is the Resource leaf: the collection and row tabs of every
+	// configured protocol plugin. Its signal is the plugin's own declared watch
+	// paths and poll interval, never a path Sidecar chose.
+	liveResources = "resources"
 )
 
 // liveOwner distinguishes this surface's live-refresh messages from the global
@@ -77,6 +84,17 @@ func (p *Plugin) newLiveSet() *livepanes.Set {
 			Targets: p.docWatchTargets,
 			Refresh: p.refreshDocPanes,
 			Owed:    p.docRefreshOwed,
+		},
+		livepanes.Binding{
+			Kind: liveResources,
+			// A plugin's store is somebody else's tool writing: a `dex log`, a
+			// `recall index`, an `ongoing set`. Those move in bursts the way the
+			// td store does, so settle the same way and turn a burst into one
+			// re-list rather than one process per write.
+			Config:  livewatch.Config{Quiet: 400 * time.Millisecond, MaxLatency: 2 * time.Second},
+			Prepare: p.preparePluginWatchTargets,
+			Targets: p.resourceWatchTargets,
+			Refresh: p.refreshResourcePanes,
 		},
 		livepanes.Binding{
 			Kind: liveDiffs,
@@ -133,6 +151,8 @@ func (p *Plugin) handleLiveWatchMsg(msg tea.Msg) (tea.Cmd, bool) {
 		return p.handleTDStoreResolved(msg), true
 	case workspacediff.AdminTargetsMsg:
 		return p.handleDiffAdminTargets(msg), true
+	case pluginPollTickMsg:
+		return p.handlePluginPollTick(msg), true
 	}
 	return p.live.Handle(msg)
 }
@@ -666,4 +686,163 @@ func (p *Plugin) diffRefreshOwed() bool {
 // owed signal lands harmlessly after that with nothing new to show.
 func (p *Plugin) diffRefreshSuppressed() bool {
 	return p.viewMode != ViewModeList || p.activeLifecycleOperationID != ""
+}
+
+// ---------------------------------------------------------------------------
+// Resource panes (td-44fe20)
+// ---------------------------------------------------------------------------
+//
+// The Resource leaf is the pane kind livepanes' own doc comment names as the
+// motivating defect: it had none of this and so quietly stopped being true
+// while an agent worked. It has it now, and the entry below is the whole of
+// this surface's half — the other half is one identical entry in
+// internal/overview/live_preview.go, and a parity test asserts both.
+//
+// What a plugin gets watched for is what IT declared: `refresh.watch` paths,
+// already validated at describe time to be absolute and under the user's home,
+// and `refresh.everySeconds`, already clamped. Sidecar never invents a path to
+// watch on a plugin's behalf.
+
+// pluginWatchTargetsFor expands one plugin's declared watch paths into watch
+// targets, deciding directory-ness with one stat per path.
+//
+// It runs in Prepare, once per describe generation, never in Targets: Targets
+// runs on the update goroutine on every reconcile, and a stat per path per
+// message is exactly the hidden per-frame filesystem cost the startup rules
+// exist to prevent.
+func pluginWatchTargetsFor(paths []string) []livewatch.Target {
+	out := make([]livewatch.Target, 0, len(paths))
+	for _, path := range paths {
+		info, err := os.Stat(path)
+		if err != nil {
+			// A declared path that does not exist yet is not an error: a plugin
+			// may watch a store its tool has not created. It contributes no
+			// registration until it appears, and Prepare re-stats on the next
+			// describe generation.
+			continue
+		}
+		out = append(out, livewatch.Target{Path: path, Dir: info.IsDir()})
+	}
+	return out
+}
+
+// pluginWatchKey identifies one cached expansion: the plugin's own describe
+// generation, so a re-describe that changed the declared paths invalidates it
+// and nothing else does.
+func pluginWatchKey(view *resourceview.Model) string {
+	browser := view.Browser()
+	if browser == nil {
+		return ""
+	}
+	return browser.Instance() + "\x00" + strconv.FormatUint(browser.DescribeGeneration(), 10)
+}
+
+// preparePluginWatchTargets validates the declared watch paths of every visible
+// collection tab's plugin, once per describe generation.
+func (p *Plugin) preparePluginWatchTargets() tea.Cmd {
+	for _, view := range p.visibleResourceTabs() {
+		key := pluginWatchKey(view)
+		if key == "" {
+			continue
+		}
+		if _, done := p.pluginWatchTargets[key]; done {
+			continue
+		}
+		if p.pluginWatchTargets == nil {
+			p.pluginWatchTargets = make(map[string][]livewatch.Target)
+		}
+		p.pluginWatchTargets[key] = pluginWatchTargetsFor(view.Browser().PaneWatchPaths())
+	}
+	return p.schedulePluginPoll()
+}
+
+// resourceWatchTargets is the declared watch paths behind every visible
+// collection or row tab, read from the cached expansion and nothing else.
+func (p *Plugin) resourceWatchTargets() []livewatch.Target {
+	seen := make(map[string]bool)
+	var targets []livewatch.Target
+	for _, view := range p.visibleResourceTabs() {
+		for _, t := range p.pluginWatchTargets[pluginWatchKey(view)] {
+			if seen[t.Path] {
+				continue
+			}
+			seen[t.Path] = true
+			targets = append(targets, t)
+		}
+	}
+	return targets
+}
+
+// refreshResourcePanes re-lists every visible collection tab and re-fetches
+// every visible row tab. It is the same call `r` makes, so a watched file
+// changing and the user pressing a key do exactly the same thing.
+func (p *Plugin) refreshResourcePanes() []tea.Cmd {
+	if p.resourceRefreshSuppressed() {
+		return nil
+	}
+	var cmds []tea.Cmd
+	for _, view := range p.visibleResourceTabs() {
+		if browser := view.Browser(); browser != nil {
+			if cmd := browser.PaneRefresh(); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
+	}
+	return cmds
+}
+
+// resourceRefreshSuppressed vetoes a re-list while a modal owns the screen. The
+// pane underneath is not visible, so refreshing it buys nothing and costs one
+// process per visible tab.
+func (p *Plugin) resourceRefreshSuppressed() bool { return p.viewMode != ViewModeList }
+
+// pluginPollTickMsg is one declared poll interval elapsing.
+type pluginPollTickMsg struct {
+	Epoch    uint64
+	Sequence uint64
+}
+
+// GetEpoch implements the plugin epoch check.
+func (m pluginPollTickMsg) GetEpoch() uint64 { return m.Epoch }
+
+// schedulePluginPoll arms the next poll tick when a visible tab's plugin
+// declared an interval, and arms nothing when none did.
+//
+// The ticker lives inside the live-refresh binding rather than beside it so it
+// obeys the same visibility rule: a plugin polls only while a tab of its is on
+// screen, and a pane the user has scrolled away from costs nothing.
+func (p *Plugin) schedulePluginPoll() tea.Cmd {
+	interval := 0
+	for _, view := range p.visibleResourceTabs() {
+		browser := view.Browser()
+		if browser == nil {
+			continue
+		}
+		if seconds := browser.PanePollSeconds(); seconds > 0 && (interval == 0 || seconds < interval) {
+			interval = seconds
+		}
+	}
+	if interval == 0 || p.pluginPollArmed {
+		return nil
+	}
+	p.pluginPollArmed = true
+	p.pluginPollTick++
+	seq, epoch := p.pluginPollTick, p.liveEpoch()
+	return tea.Tick(time.Duration(interval)*time.Second, func(time.Time) tea.Msg {
+		return pluginPollTickMsg{Epoch: epoch, Sequence: seq}
+	})
+}
+
+// handlePluginPollTick re-lists on a declared interval and re-arms only while
+// something is still on screen to poll for.
+func (p *Plugin) handlePluginPollTick(msg pluginPollTickMsg) tea.Cmd {
+	if msg.Sequence != p.pluginPollTick {
+		return nil
+	}
+	p.pluginPollArmed = false
+	cmds := p.refreshResourcePanes()
+	if cmd := p.schedulePluginPoll(); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	return tea.Batch(cmds...)
 }

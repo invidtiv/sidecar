@@ -131,6 +131,19 @@ type Model struct {
 
 	// seq stamps act calls, which are neither cached nor deduplicated.
 	seq uint64
+
+	// Pane mode. paneShape is PaneNone in a tab placement; the rest is the one
+	// collection or document a Resource leaf's tab is pinned to. See pane.go.
+	paneShape       PaneShape
+	paneCollection  string
+	onOpenRow       func(collection, id string) tea.Cmd
+	restore         paneRestore
+	pendingCursorID string
+
+	// describeGeneration counts adopted describe results, so the live-refresh
+	// binding validates its watch set once per generation rather than on every
+	// reconcile.
+	describeGeneration uint64
 }
 
 // New builds a browser for one configured instance.
@@ -234,7 +247,7 @@ func (m *Model) Collections() []pluginhost.Collection {
 		}
 		out = append(out, c)
 	}
-	return out
+	return m.paneVisibleCollections(out)
 }
 
 func collectionNeedsProject(c pluginhost.Collection) bool {
@@ -312,8 +325,12 @@ func (m *Model) readDescription() bool {
 	if status.State == pluginhost.StateReady {
 		m.desc = desc
 		m.described = true
+		m.describeGeneration++
 		m.grantKeys()
 		m.pruneStates()
+		if s := m.paneState(); s != nil {
+			m.applyRestore(s)
+		}
 	}
 	return before != m.described || beforeState != status.State
 }
@@ -442,7 +459,7 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case DescribedMsg:
 		return m.Refresh()
-	case queryDebouncedMsg:
+	case QueryDebouncedMsg:
 		return m.applyDebounce(msg)
 	case ListedMsg:
 		return m.applyListed(msg)
@@ -455,16 +472,20 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 	return nil
 }
 
-// queryDebouncedMsg fires QueryDebounce after a keystroke. Only the newest
+// QueryDebouncedMsg fires QueryDebounce after a keystroke. Only the newest
 // sequence for a collection is acted on; every earlier one is a keystroke the
 // user typed past.
-type queryDebouncedMsg struct {
+//
+// It is exported because a pane-mode browser's ticks travel the host's message
+// bus like every other background answer, and a host cannot route a type it
+// cannot name.
+type QueryDebouncedMsg struct {
 	Instance   string
 	Collection string
 	Sequence   uint64
 }
 
-func (m *Model) applyDebounce(msg queryDebouncedMsg) tea.Cmd {
+func (m *Model) applyDebounce(msg QueryDebouncedMsg) tea.Cmd {
 	if msg.Instance != m.instance {
 		return nil
 	}
@@ -515,6 +536,9 @@ func (m *Model) applyListed(msg ListedMsg) tea.Cmd {
 	s.nextCursor = msg.Page.NextCursor
 	s.truncated = msg.Page.Truncated
 	m.clampCursor(s)
+	if !msg.Append {
+		m.restoreCursor(s)
+	}
 	return nil
 }
 

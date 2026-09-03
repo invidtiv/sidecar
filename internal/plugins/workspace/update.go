@@ -20,6 +20,7 @@ import (
 	"github.com/marcus/sidecar/internal/noteview"
 	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/pluginbrowser"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/state"
@@ -137,6 +138,12 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		p.applyResourceResolved(msg)
 		return p, nil
+	case pluginbrowser.ListedMsg, pluginbrowser.GotMsg, pluginbrowser.ActedMsg, pluginbrowser.DescribedMsg, pluginbrowser.QueryDebouncedMsg:
+		// A collection or row tab's own answers. They reach the tab that asked
+		// the same way a resolve reaches a card: as a broadcast each viewer
+		// either owns or does not, so a page for a tab that has closed lands
+		// nowhere rather than in the wrong pane.
+		return p, p.applyPluginBrowserMsg(msg)
 
 	case tea.WindowSizeMsg:
 		p.width = msg.Width
