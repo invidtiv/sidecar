@@ -1,6 +1,6 @@
 # Plugin ecosystem: protocol plugins, embedded plugins, one host
 
-**Status:** proposed; decisions settled with the maintainer on 2026-09-02, nothing implemented. **Tracking:** td-f9f007. **Verified against the tree on 2026-09-02.**
+**Status:** M1 (descriptor and generalized global host, td-01b62b) is implemented on branch `plugin-ecosystem`. M0's mockups are in [mockups/](mockups/) and the protocol revisions they surfaced are still pending the maintainer's confirmation. M2 onward are proposed. Decisions settled with the maintainer on 2026-09-02. **Tracking:** td-f9f007.
 
 **Related:** [Terminal resource providers](../../implemented/terminal-resource-providers.md) built the executable protocol, the `Resource` leaf, and the trust posture this plan extends; its protocol stays frozen and keeps working. [Hosting Herdr plugins in Sidecar](../../deprecated/herdr-plugin-support.md) is superseded by this plan. [Pane switcher everywhere](../pane-switcher-everywhere.md) and [Cross-project td issue links](../cross-project-issue-links.md) are the two nearest live plans and neither conflicts.
 
@@ -23,7 +23,7 @@ A protocol plugin will never render as richly as Tasks, and this plan does not p
 
 ## Settled decisions
 
-1. **Two classes, one descriptor.** `plugin.Descriptor{ID, Class, Scope, Placements, Enabled, New | Instance, Integration}` is the only thing the assembly, settings page, global host list, pane switcher, palette, and `sidecar plugin list` read. Class decides who renders; scope decides lifecycle; placements decide where content shows.
+1. **Two classes, one descriptor.** `plugin.Descriptor` is the only thing the assembly, settings page, global host list, palette, and `sidecar plugin list` read. Class decides who renders; scope decides lifecycle; placements decide where content shows. Its fields are listed in [host.md](host.md#the-descriptor).
 2. **The protocol is `sidecar.terminal-resource/v1` grown, not replaced.** Same invocation model, environment allowlist, process-group rules, sanitization, limits, error codes, and matcher rules. Three new methods and a `sections` field. Old providers keep answering the old identifier and keep working unchanged.
 3. **Domain-shaped vocabulary, not a generic widget tree.** Collections with columns, views, and sort keys; resources with fields, body, and sections; search as a `list` parameter; typed actions with up to eight inputs. A2UI's posture and action loop are borrowed; its component catalog is not, for the reasons in [protocol.md](protocol.md#why-not-a-generic-ui-catalog).
 4. **One-shot invocation in v1.** Live search is debounce plus cancel; mutations are `act`; background updates are plugin-declared `watch` paths and poll intervals through `livepanes`, plus `sidecar plugin changed` on the file bus for a plugin that wants to poke Sidecar itself. Resident mode carries the same objects later and only with measured evidence that process startup, not tool latency, is the cost.
@@ -55,7 +55,7 @@ A protocol plugin will never render as richly as Tasks, and this plan does not p
 | A file under a declared `watch` path changes while a collection from that plugin is visible | The list refreshes within the livepanes latency window without the user pressing anything. Nothing refreshes when no tab from that plugin is on screen. |
 | `sidecar plugin changed dex --collection people` from a shell hook | Same refresh, through the file bus. |
 | Bound to a remote host, open a collection with `context: ["project"]` | The plugin receives `project.hostId` and either answers or refuses naming the host. Sidecar never substitutes a local path. |
-| Disable Tasks in settings | `plugins.tasks.enabled` is written; the `tasks_plugin` flag is left alone; after restart the global tab is gone and `0` names the next global plugin or nothing. |
+| Disable Tasks in settings | `plugins.tasks.enabled` is written; the `tasks_plugin` flag is left alone; after restart the global tab is gone and `0` names the next global plugin or nothing. Implemented in M1. |
 | A plugin answers `sidecar.terminal-resource/v1` only | It keeps working exactly as today: matchers, resolve, the Resource card, `--provider`. |
 
 ## Delivery
@@ -69,12 +69,12 @@ Each milestone ends net-better than the tree before it, lands on main, and is ga
 - Do the same on paper for DEX (`context`, `timeline`, `log` as an `act` with `multiline`) and ongoing (`list --view --sort`, `show`, `favorite`/`set` as actions with `choice` inputs) to confirm the vocabulary generalizes. Record what each needed in the protocol's changelog.
 - **Evidence:** three mockup files reviewed on the canvas; a protocol revision commit that cites what recall, DEX, and ongoing each forced.
 
-### M1. Descriptor and generalized global host (embedded class)
+### M1. Descriptor and generalized global host (embedded class) — implemented, td-01b62b
 
-- Add `plugin.Descriptor`; give every plugin in `internal/plugins` one; make `assembly.Plan` iterate descriptors. Tab order and IDs are unchanged and the existing ordering tests prove it.
-- Replace `GlobalTab` and `globalTasksHost` with the descriptor-driven slice and `globalPluginHost`. Sessions and Activity keep `8` and `9`; Tasks keeps `0`. The start/stop counters and every scope test pass unchanged.
-- Unified enablement with alias reads; settings page as one loop over descriptors; `sidecar plugin list` (no `--describe` yet).
-- **Evidence:** `go test ./...`; an isolated `tmux-drive.sh` run showing the header with Tasks on `0` before and after; a second embedded global descriptor in a test proving it gets no number key and is reachable through `[`/`]`.
+- `plugin.Descriptor` in `internal/plugin`; one per plugin in `internal/plugins`; `assembly.Descriptors()` is the ordered catalog and `assembly.Plan` filters it. Tab order and IDs are unchanged and the existing ordering tests prove it.
+- The `GlobalTab` enum and `globalTasksHost` are gone: the global tab row is a descriptor-driven ordered slice and each hosted plugin has a `globalPluginHost`. Sessions and Activity keep `8` and `9`; the first plugin-provided global tab keeps `0`; a second takes no number key and is reached by `[`/`]`, the palette command `focus-<id>`, or a click. The start/stop counters and every scope test pass unchanged.
+- Unified enablement: `plugins.notes.enabled` and `plugins.tasks.enabled` with the two flags as read-only aliases; the settings page is one loop over descriptors; `sidecar plugin list [--json]`.
+- **Evidence:** `go test ./...` green; an isolated `tmux-drive.sh` run at 160x45 whose stripped header capture is byte-identical before and after, with `0`/`8`/`9` opening Tasks, Sessions, and Activity in both builds, and with `plugins.tasks.enabled: false` removing the Tasks tab while `tasks_plugin` is still true; `TestSecondGlobalPluginGetsNoNumberKeyAndIsReachableByCycling` proving the fourth global entry takes no number key.
 
 ### M2. Protocol host and the browser in a tab
 
@@ -149,3 +149,4 @@ Not blocking M0 or M1; each has a default the plan proceeds under.
 
 - 2026-09-02: opened. Decisions 1–11 settled in conversation with the maintainer; Herdr plugin-hosting plan superseded.
 - 2026-09-02: decision 12 (theme awareness) and the pending-revisions table added from the M0 recall mockup.
+- 2026-09-02: M1 implemented on branch `plugin-ecosystem` (td-01b62b). One deviation from the design: `tabRef.global` is the surface ID rather than an index into the global slice, because the persisted value is an ID already and carrying one identity instead of two removes a whole class of staleness.

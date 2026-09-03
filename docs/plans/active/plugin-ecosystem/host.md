@@ -1,22 +1,22 @@
 # Host architecture: one descriptor, two classes, both surfaces
 
-**Status:** design, opened 2026-09-02. **Controlling document:** [README.md](README.md). **Contract:** [protocol.md](protocol.md).
+**Status:** M1 implemented on branch `plugin-ecosystem` (td-01b62b); M2 onward are design. **Controlling document:** [README.md](README.md). **Contract:** [protocol.md](protocol.md).
 
-This document is the Sidecar-side half: how a plugin is described, enabled, placed, rendered, refreshed, persisted, and reached from the CLI, and which existing seams each of those reuses. File and line references were read from the tree on 2026-09-02.
+This document is the Sidecar-side half: how a plugin is described, enabled, placed, rendered, refreshed, persisted, and reached from the CLI, and which existing seams each of those reuses.
 
 ## Baseline
 
-What exists, and what this plan turns each into.
+What M1 built, and what the remaining milestones turn each of the rest into.
 
-| Today | Where | Becomes |
+| Seam | Where | State |
 | --- | --- | --- |
-| Tab list is data: `assembly.Plan(cfg)` returns ordered `{ID, New}` entries gated by config and flags | `internal/plugins/assembly/assembly.go:74` | The same function over a slice of descriptors, embedded and protocol alike |
-| Tasks is an app-owned `globalTasksHost` with a hardcoded `GlobalTab` enum and named keys `8`/`9`/`0` | `internal/app/scope.go:74,571` | A generalized global host list built from descriptors with `Scope: Global`; keys assigned in order |
-| Enablement is inconsistent: `plugins.<id>.enabled` for some, feature flags for Tasks/Notes, both for Conversations; the settings page hides the seam | `internal/configui/page_panels.go:13-21` | `plugins.<id>.enabled` for every plugin; flags stay only for experimental host features |
-| `configui.Integration{ID, Name, Flag, Why, Descriptor}` is the closest thing to a plugin descriptor and was written to be extended | `internal/configui/integrations.go:22` | Folded into the descriptor |
-| External executables: `terminalResources.providers[]`, `resourceprovider.Manager`, describe/resolve, the `Resource` leaf | `internal/config/terminalresources.go`, `internal/resourceprovider`, `internal/panelayout/panelayout.go:28` | The protocol class. Config section aliased, manager extended with `list`/`get`/`act`, leaf gains collection tabs |
-| `Resource` leaf has no `livepanes` binding | `internal/livepanes/livepanes.go:11-13` names this as the motivating defect | Gets one, driven by plugin-declared `refresh` |
-| `sidecar open --provider ID LOCATOR`, layout spec `{"kind":"resource","provider":…}`, `terminal-links list/check` | `internal/cli/open.go`, `internal/uirequest/types.go:85`, `internal/cli/registry.go` | `sidecar plugin …` family; `--provider` and `terminal-links` kept as aliases |
+| Tab list is data: `assembly.Descriptors()` is the ordered catalog and `assembly.Plan(cfg)` filters it to the enabled project tabs | `internal/plugins/assembly/assembly.go` | Built. Protocol descriptors join the same catalog in M2 |
+| The global tab row is a descriptor-driven ordered slice of surfaces, each hosted by a generic `globalPluginHost` | `internal/app/scope.go` | Built |
+| Enablement is `plugins.<id>.enabled` for every plugin; `tasks_plugin` and `notes_plugin` are read-only aliases | `internal/config/config.go`, each plugin's `descriptor.go` | Built |
+| `configui.Integration{ID, Name, Why, Descriptor}` is a projection of the descriptor, carrying only the install route | `internal/configui/integrations.go` | Built |
+| External executables: `terminalResources.providers[]`, `resourceprovider.Manager`, describe/resolve, the `Resource` leaf | `internal/config/terminalresources.go`, `internal/resourceprovider`, `internal/panelayout/panelayout.go:28` | M2. The protocol class. Config section aliased, manager extended with `list`/`get`/`act`, leaf gains collection tabs |
+| `Resource` leaf has no `livepanes` binding | `internal/livepanes/livepanes.go:11-13` names this as the motivating defect | M3. Gets one, driven by plugin-declared `refresh` |
+| `sidecar open --provider ID LOCATOR`, layout spec `{"kind":"resource","provider":…}`, `terminal-links list/check` | `internal/cli/open.go`, `internal/uirequest/types.go:85`, `internal/cli/registry.go` | M3. `sidecar plugin …` family; `--provider` and `terminal-links` kept as aliases |
 
 ## The descriptor
 
@@ -25,25 +25,38 @@ One Go type describes every plugin Sidecar can host. It is data, lives in `inter
 ```go
 // Descriptor is what Sidecar knows about a plugin before it runs.
 type Descriptor struct {
-    ID    string // stable; the config key and the CLI name
-    Name  string
+    ID    string // stable; the config key, the CLI name, and the persisted tab ID
+    Name  string // header label
     Icon  string
     Class Class  // Embedded | Protocol
     Scope Scope  // Project | Global
     // Placements the plugin can occupy. Tab is a navbar surface; Panes means its
     // content can open as leaves in the workspace and Sessions decks.
     Placements []Placement
+    // Settings-page copy: the one-line detail under the name, the sentence the
+    // install route leads with, and whether the surface carries a beta badge.
+    Detail string
+    Why    string
+    Beta   bool
     // Enabled reads plugins.<id>.enabled and any legacy switch this plugin
     // migrated from, so a config written before this plan keeps working.
+    // Nil means the plugin has no switch: Workspaces is exactly that.
     Enabled func(*config.Config) bool
+    // Preference is what the user chose, ignoring dependencies on other
+    // surfaces. Nil means the preference and the effective answer are the same
+    // question. Notes is why it exists: it needs the td panel, and a Notes row
+    // reading OFF because td is off would claim a choice nobody made.
+    Preference func(*config.Config) bool
+    // SetEnabled writes plugins.<id>.enabled. It never writes a legacy flag.
+    SetEnabled func(*config.PluginsConfig, bool)
     // Embedded only: constructs the in-process plugin.
     New func() Plugin
-    // Protocol only: the configured instance this descriptor projects.
-    Instance *config.PluginInstanceConfig
     // Install and version UX (Homebrew tap, PATH probe). Zero means ships in-repo.
     Integration version.Descriptor
 }
 ```
+
+M2 adds `Instance *config.PluginInstanceConfig` for the protocol class: the configured entry a protocol descriptor is projected from.
 
 **Class** decides who renders. `Embedded` plugins implement `plugin.Plugin` and own their frame (Tasks, td monitor, and every plugin in `internal/plugins`). `Protocol` plugins are executables; their descriptor is projected from a config entry after `describe`, and the host renders them through one shared browser.
 
@@ -73,24 +86,32 @@ A protocol plugin that Sidecar's release knows nothing about is the point of the
 
 ## Generalizing the global host
 
-`GlobalTab` is an enum with three values and named keys today (`scope.go:74`, `globalTabKey:272`). It becomes an ordered slice of global surfaces built at startup:
+The global tab row is an ordered slice of `globalSurface` values built from descriptors at startup:
 
-1. Sessions and Activity stay app-owned surfaces, first in the order, and keep `8` and `9`.
-2. Every enabled descriptor with `Scope: Global` and a `Tab` placement follows, in descriptor order. The first gets `0`; the rest are reachable through `[`/`]`, the palette, and the pane switcher.
-3. `tabRef.global` becomes an index into that slice rather than an enum value. `globalTabsVisible`, `ensureVisibleGlobalTab`, `headerEntries`, `globalMouse`, `persistID`, `context`, and `surfacePlugins` (`scope.go:166-775`) read the slice.
-4. `globalTasksHost` becomes `globalPluginHost`, one per global descriptor, with the same start-once / forward-every-message / stop-once contract and the same start and stop counters the tests already assert.
+1. Sessions and Activity are app-owned surfaces, first in the order, and keep `8` and `9`.
+2. Every enabled descriptor with `Scope: Global` and a `Tab` placement follows, in descriptor order. The first gets `0`; the rest are reachable through `[`/`]`, the palette command `focus-<id>`, and a click. There is no fourth number key: renumbering the three that exist would move Sessions under the user, which is the same reason the positional project keys stop at 7.
+3. `tabRef.global` is the surface ID. `globalTabsVisible`, `ensureVisibleGlobalTab`, `headerEntries`, `globalMouse`, `activeGlobalSurface`, and `surfacePlugins` all read the slice by ID, so nothing can be shifted onto a different action by a tab disappearing.
+4. `globalPluginHost` is one per global descriptor, with the start-once / forward-every-message / stop-once contract and the start and stop counters the tests assert.
 
-The persisted last-scope and last-tab IDs are descriptor IDs, so a global tab that disappears (plugin disabled) falls back to Sessions rather than to an index that now names something else. That is the reason the enum was not an index in the first place, and the slice keeps the property.
+Number keys belong to entries rather than to positions: `8`, `9`, and `0` never change meaning, and a key whose entry is not on the row does nothing at all rather than falling through to a project tab.
+
+The persisted last-scope and last-tab values are descriptor IDs. A global tab that disappears — its plugin disabled — falls back to Sessions rather than to an index that now names something else. The two surface names state.json wrote before the header settled on the fleet vocabulary (`workspaces`, `agents`) still read back.
+
+`internal/app` keeps its own list of global descriptors (`app.GlobalDescriptors()`) because the plugin packages import it, so it cannot import the assembly. Both lists call the same per-plugin `Descriptor()`, and an assembly test fails if they ever name different plugins.
 
 ## Unifying enablement
 
-Every plugin gets `plugins.<id>.enabled`. Migration is one-directional and silent:
+Every plugin has `plugins.<id>.enabled`. Migration is one-directional and silent:
 
-- `tasks_plugin` and `notes_plugin` flags become deprecated aliases: if the flag is set in config and `plugins.tasks.enabled` is absent, the flag value wins; a save writes the config key and leaves the flag untouched. The flags are removed from `allFeatures` one minor release after the settings page stops writing them.
-- `conversations_plugin` follows the same path if the Conversations plugin survives its own removal plan; if not, nothing to do.
-- `terminalResources.providers[]` entries load into the same list as `plugins.external[]` with `scope: global`, `placements: ["panes"]`. Saving writes `plugins.external`. The old key is read for one minor release after that and then dropped.
+- `tasks_plugin` and `notes_plugin` are deprecated aliases. Both config keys are pointers, so "absent" stays a third answer: while the key is absent the flag decides, and a save writes the key and leaves the flag untouched. The flags are removed from `allFeatures` one minor release after the settings page stopped writing them.
+- `conversations_plugin` is deliberately not an alias. It is the preview opt-in, and the panel needs both it and `plugins.conversations.enabled`; turning the panel off clears only the plugin key so the opt-in is not silently revoked.
+- `terminalResources.providers[]` entries load into the same list as `plugins.external[]` with `scope: global`, `placements: ["panes"]` (M4). Saving writes `plugins.external`. The old key is read for one minor release after that and then dropped.
 
-The settings page (`page_panels.go`) becomes one loop over descriptors: enable switch, class, status line, and the install route from `configui.Integration` where the descriptor has one. `panelRestartNote` stays until enablement is live; making it live is deliberately out of scope.
+The settings page (`page_panels.go`) is one loop over descriptors: the enable switch, the detail line, the beta badge, the missing-command note, and the install route from `configui.Integration` where the descriptor has one. Per-plugin settings that are not a switch — a refresh interval, a database path, an editor choice — are the one place the loop is not uniform. A descriptor with no `SetEnabled` has no row, because a control that cannot change anything is worse than no control.
+
+The catalog reaches the page through `app.WithPluginDescriptors`, from the process that owns both: `internal/configui` cannot import the assembly, because the plugin packages import `internal/app`, which owns this surface. An assembly test renders the real page with the real catalog so configui's own fixture cannot drift.
+
+`panelRestartNote` stays until enablement is live; making it live is deliberately out of scope.
 
 ## Protocol plugin configuration
 
@@ -169,7 +190,7 @@ Floors, dividers, chrome, drag, and the compositor are untouched: `paneframe` do
 
 | Verb | Does | Talks to |
 | --- | --- | --- |
-| `sidecar plugin list [--describe] [--json]` | Every descriptor: class, scope, placements, enabled, status; `--describe` opts in to running `describe` on protocol plugins | config, optionally subprocess |
+| `sidecar plugin list [--json]` | Every descriptor: class, scope, placements, enabled. Built; `--describe`, which opts in to running `describe` on protocol plugins, arrives with M2 | config, optionally subprocess |
 | `sidecar plugin check ID [--list COLLECTION [--query Q]] [--get COLLECTION ID] [--json]` | `describe` plus an explicit call, for authors | subprocess |
 | `sidecar plugin call ID METHOD [--params JSON] [--json]` | One raw method call with the host's envelope and validation, printing what the host would have kept | subprocess |
 | `sidecar plugin add ID --command ARGV... [--pass-env V]... [--scope] [--placement]...` | Appends a config entry after printing exactly what will run; `--yes` skips the confirm | config |
@@ -185,7 +206,7 @@ The `Agent` doc on each verb and `sidecar --agents` cover them; `docs/reference/
 
 ## Startup
 
-Nothing changes in the startup posture: no subprocess, no `LookPath`, no config read of the plugin section before the first ready frame, enforced by the same explicit latch the resource providers use (`internal/app/resourceproviders.go:19-46`). A global protocol tab renders a loading state until its describe snapshot lands. `assembly.Plan` reads only config and constructs nothing.
+The startup posture is unchanged: no subprocess, no `LookPath`, no config read of the plugin section before the first ready frame, enforced by the same explicit latch the resource providers use (`internal/app/resourceproviders.go:19-46`). Building a `globalPluginHost` constructs the plugin value and does no I/O; its model is built by the command `start` returns, after the first frame. `assembly.Plan` and `assembly.Descriptors` read only config and construct nothing. A global protocol tab will render a loading state until its describe snapshot lands.
 
 ## What does not change
 
