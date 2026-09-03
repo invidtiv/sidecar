@@ -1,0 +1,665 @@
+package pluginbrowser
+
+import (
+	"strings"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
+
+	"github.com/marcus/sidecar/internal/markdown"
+	"github.com/marcus/sidecar/internal/pluginhost"
+	"github.com/marcus/sidecar/internal/resource"
+)
+
+// QueryDebounce is how long the browser waits after a keystroke before it
+// spends a process on the new query. It is the protocol's stated figure, and it
+// is a package constant rather than a literal because the conformance story
+// ("search as you type costs one process per pause, not one per keystroke")
+// depends on exactly this value.
+const QueryDebounce = 250 * time.Millisecond
+
+// listLimit is the page size the browser asks for. The host clamps it; asking
+// for the clamp explicitly means the request the plugin sees does not change
+// when the host's own limit does.
+const listLimit = pluginhost.MaxPageItems
+
+// Focus names the two windows inside the browser. They are the browser's own
+// focus ring, projected to the host through PaneFocusProvider rather than
+// duplicated by it.
+type Focus string
+
+const (
+	// FocusList is the collection table.
+	FocusList Focus = "list"
+	// FocusDetail is the document box beside it.
+	FocusDetail Focus = "detail"
+)
+
+// collectionState is everything one collection remembers while the browser is
+// alive: what was asked, what came back, and where the cursor is.
+type collectionState struct {
+	id string
+
+	query   string
+	editing bool
+	// debounce is the newest scheduled query tick. A tick whose sequence is not
+	// this one is a keystroke the user has already typed past.
+	debounce uint64
+
+	view    string
+	sortKey string
+	sortDir pluginhost.SortDir
+
+	items      []pluginhost.Item
+	outcome    pluginhost.PageOutcome
+	notices    []pluginhost.Notice
+	total      int
+	nextCursor string
+	truncated  bool
+
+	cursor int
+	scroll int
+
+	loading bool
+	paging  bool
+	loaded  bool
+	err     *resource.Error
+
+	// generation stamps every call, so an answer to a superseded query, view or
+	// sort is discarded rather than painted over the newer one.
+	generation uint64
+}
+
+// detailState is the document the browser is showing beside the list.
+type detailState struct {
+	collection string
+	id         string
+	loading    bool
+	loaded     bool
+	doc        resource.Document
+	err        *resource.Error
+	scroll     int
+	generation uint64
+
+	// body is the rendered body cached per width and generation, so a resize
+	// during a drag does not re-run the markdown renderer every frame.
+	body       []string
+	bodyForW   int
+	bodyForGen uint64
+}
+
+// Model is one protocol plugin in one content box.
+type Model struct {
+	instance string
+	name     string
+	calls    Calls
+	renderer *markdown.Renderer
+
+	width, height int
+
+	focused bool
+	focus   Focus
+	// paneFocusManaged records that an outer deck composes this browser's pane
+	// focus. Until one does, the browser's own focused window draws its own
+	// chrome, which is what a surface that is not inside a deck wants.
+	paneFocusManaged bool
+	paneFocusActive  bool
+
+	described bool
+	desc      pluginhost.Description
+	status    pluginhost.Status
+
+	states map[string]*collectionState
+	active int
+
+	detail detailState
+
+	// grantedKeys maps a plugin-suggested letter onto the action it was granted
+	// for. It is rebuilt on every describe and never persisted, because a key
+	// the host granted once must not outlive the declaration that asked for it.
+	grantedKeys map[string]string
+	// reservedKeys are the surface's own bindings, supplied by the host. A
+	// plugin-suggested key that collides with one is refused.
+	reservedKeys map[string]bool
+
+	overlay overlay
+
+	// flash is the one line an act outcome leaves behind, shown in the host
+	// footer rather than in a toast the browser would have to own.
+	flash    string
+	flashErr bool
+
+	// seq stamps act calls, which are neither cached nor deduplicated.
+	seq uint64
+}
+
+// New builds a browser for one configured instance.
+//
+// Construction does no I/O and starts nothing: the model renders a loading card
+// until the host's describe pass has settled, which is what keeps a protocol
+// plugin off the first-frame path.
+func New(instance, name string, calls Calls, renderer *markdown.Renderer) *Model {
+	if renderer == nil {
+		renderer, _ = markdown.NewRenderer()
+	}
+	if name == "" {
+		name = instance
+	}
+	return &Model{
+		instance:     instance,
+		focused:      true,
+		name:         name,
+		calls:        calls,
+		renderer:     renderer,
+		focus:        FocusList,
+		states:       make(map[string]*collectionState),
+		grantedKeys:  make(map[string]string),
+		reservedKeys: make(map[string]bool),
+		detail:       detailState{bodyForW: -1},
+	}
+}
+
+// Instance is the configured instance ID this browser renders.
+func (m *Model) Instance() string { return m.instance }
+
+// Name is the display name: the plugin's own once describe has landed, and the
+// configured ID until then. It never changes to something the settings page and
+// the CLI would disagree with, because both read the same describe result.
+func (m *Model) Name() string {
+	if m.described && m.desc.Info.Name != "" {
+		return m.desc.Info.Name
+	}
+	return m.name
+}
+
+// SetCalls replaces the host seam. A browser built before the host had a
+// manager observes one appearing this way.
+func (m *Model) SetCalls(calls Calls) { m.calls = calls }
+
+// SetReservedKeys records the keys the surface already binds, so a
+// plugin-suggested action letter that collides with one is refused rather than
+// silently stealing it.
+func (m *Model) SetReservedKeys(keys map[string]bool) {
+	m.reservedKeys = make(map[string]bool, len(keys))
+	for k, v := range keys {
+		if v {
+			m.reservedKeys[k] = true
+		}
+	}
+	m.grantKeys()
+}
+
+// SetSize records the content box.
+func (m *Model) SetSize(width, height int) {
+	if width == m.width && height == m.height {
+		return
+	}
+	m.width, m.height = width, height
+	m.detail.invalidateBody()
+}
+
+// SetFocused records whether the browser owns the keyboard.
+func (m *Model) SetFocused(focused bool) { m.focused = focused }
+
+// Focused reports whether the browser owns the keyboard.
+func (m *Model) Focused() bool { return m.focused }
+
+// Described reports whether a describe result has landed.
+func (m *Model) Described() bool { return m.described }
+
+// Description returns the newest describe result.
+func (m *Model) Description() pluginhost.Description { return m.desc }
+
+// Status returns the newest describe status.
+func (m *Model) Status() pluginhost.Status { return m.status }
+
+// Collections are the collections the browser can show, which is every declared
+// one. A collection that narrows itself to project context and has none is
+// hidden: showing a tab that can only ever be empty claims a capability the
+// surface does not have.
+func (m *Model) Collections() []pluginhost.Collection {
+	if !m.described {
+		return nil
+	}
+	hasProject := false
+	if m.calls.Context != nil {
+		if ctx := m.calls.Context(); ctx != nil && ctx.Project != nil {
+			hasProject = true
+		}
+	}
+	out := make([]pluginhost.Collection, 0, len(m.desc.Collections))
+	for _, c := range m.desc.Collections {
+		if !hasProject && collectionNeedsProject(c) {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+func collectionNeedsProject(c pluginhost.Collection) bool {
+	for _, kind := range c.Context {
+		if kind == pluginhost.ContextProject {
+			return true
+		}
+	}
+	return false
+}
+
+// ActiveCollection is the collection on screen, and whether there is one.
+func (m *Model) ActiveCollection() (pluginhost.Collection, bool) {
+	cols := m.Collections()
+	if len(cols) == 0 {
+		return pluginhost.Collection{}, false
+	}
+	if m.active < 0 || m.active >= len(cols) {
+		m.active = 0
+	}
+	return cols[m.active], true
+}
+
+// state returns the remembered state for a collection, creating it with the
+// collection's declared default sort the first time.
+func (m *Model) state(c pluginhost.Collection) *collectionState {
+	if s, ok := m.states[c.ID]; ok {
+		return s
+	}
+	s := &collectionState{id: c.ID}
+	for _, key := range c.Sort {
+		if key.Default != "" {
+			s.sortKey, s.sortDir = key.ID, key.Default
+			break
+		}
+	}
+	m.states[c.ID] = s
+	return s
+}
+
+// activeState is the state of the collection on screen, or nil.
+func (m *Model) activeState() *collectionState {
+	c, ok := m.ActiveCollection()
+	if !ok {
+		return nil
+	}
+	return m.state(c)
+}
+
+// Refresh re-reads the host's describe result and re-lists the active
+// collection if anything it depends on moved. It is what a DescribedMsg and the
+// first focus both run.
+func (m *Model) Refresh() tea.Cmd {
+	changed := m.readDescription()
+	cmd := m.ensureListed()
+	if changed && cmd == nil {
+		return nil
+	}
+	return cmd
+}
+
+// readDescription pulls the host's cached describe outcome into the model and
+// reports whether it changed anything.
+func (m *Model) readDescription() bool {
+	if m.calls.Describe == nil {
+		return false
+	}
+	desc, status, ok := m.calls.Describe(m.instance)
+	if !ok {
+		return false
+	}
+	before := m.described
+	beforeState := m.status.State
+	m.status = status
+	if status.State == pluginhost.StateReady {
+		m.desc = desc
+		m.described = true
+		m.grantKeys()
+		m.pruneStates()
+	}
+	return before != m.described || beforeState != status.State
+}
+
+// pruneStates drops remembered state for collections the newest describe no
+// longer declares. Keeping it would mean a re-describe could resurrect a query
+// against a collection that has gone away.
+func (m *Model) pruneStates() {
+	live := make(map[string]bool, len(m.desc.Collections))
+	for _, c := range m.desc.Collections {
+		live[c.ID] = true
+	}
+	for id := range m.states {
+		if !live[id] {
+			delete(m.states, id)
+		}
+	}
+	if m.detail.collection != "" && !live[m.detail.collection] {
+		m.detail = detailState{bodyForW: -1}
+	}
+}
+
+// grantKeys resolves each plugin-suggested action letter. A suggestion is a
+// request, never a grant: the host refuses anything it owns, anything the
+// surface binds, and anything a second action already took.
+func (m *Model) grantKeys() {
+	m.grantedKeys = make(map[string]string, len(m.desc.Actions))
+	for _, action := range m.desc.Actions {
+		key := strings.TrimSpace(action.Key)
+		if key == "" {
+			continue
+		}
+		if browserOwnedKeys[key] || m.reservedKeys[key] {
+			continue
+		}
+		if _, taken := m.grantedKeys[key]; taken {
+			continue
+		}
+		m.grantedKeys[key] = action.ID
+	}
+}
+
+// GrantedKey reports the action a plugin-suggested letter was granted for.
+func (m *Model) GrantedKey(key string) (string, bool) {
+	id, ok := m.grantedKeys[key]
+	return id, ok
+}
+
+// ensureListed starts the first list for the active collection if it has never
+// been listed. It is a no-op for a collection that is loaded, loading, or
+// waiting on a required query.
+func (m *Model) ensureListed() tea.Cmd {
+	c, ok := m.ActiveCollection()
+	if !ok {
+		return nil
+	}
+	s := m.state(c)
+	if s.loaded || s.loading {
+		return nil
+	}
+	return m.list(c, s, false)
+}
+
+// list asks for a page. append extends the current items with the next cursor;
+// otherwise the page replaces them.
+//
+// A required-search collection with an empty query is answered here, without a
+// process: that is the protocol's rule, and it is what keeps a search box free
+// until there is something to search for.
+func (m *Model) list(c pluginhost.Collection, s *collectionState, appendPage bool) tea.Cmd {
+	if c.Search == pluginhost.SearchRequired && strings.TrimSpace(s.query) == "" {
+		s.items = nil
+		s.outcome = pluginhost.OutcomeAbstained
+		s.notices = nil
+		s.total = 0
+		s.nextCursor = ""
+		s.cursor, s.scroll = 0, 0
+		s.loading, s.paging = false, false
+		s.loaded = true
+		s.err = nil
+		s.generation++
+		return nil
+	}
+	if m.calls.List == nil {
+		return nil
+	}
+	s.generation++
+	cursor := ""
+	if appendPage {
+		cursor = s.nextCursor
+		if cursor == "" {
+			return nil
+		}
+		s.paging = true
+	} else {
+		s.loading = true
+	}
+	call := ListCall{
+		Instance: m.instance,
+		PaneKey:  paneKey(m.instance, c.ID),
+		Params: pluginhost.ListParams{
+			Collection: c.ID,
+			Query:      s.query,
+			View:       s.view,
+			Sort:       pluginhost.SortOrder{Key: s.sortKey, Dir: string(s.sortDir)},
+			Cursor:     cursor,
+			Limit:      listLimit,
+		},
+		Context:    m.context(),
+		Generation: s.generation,
+		Append:     appendPage,
+	}
+	return m.calls.List(call)
+}
+
+func (m *Model) context() *pluginhost.Context {
+	if m.calls.Context == nil {
+		return nil
+	}
+	return m.calls.Context()
+}
+
+// Update routes one message. It returns only commands; nothing here starts a
+// process itself.
+func (m *Model) Update(msg tea.Msg) tea.Cmd {
+	switch msg := msg.(type) {
+	case DescribedMsg:
+		return m.Refresh()
+	case queryDebouncedMsg:
+		return m.applyDebounce(msg)
+	case ListedMsg:
+		return m.applyListed(msg)
+	case GotMsg:
+		m.applyGot(msg)
+		return nil
+	case ActedMsg:
+		return m.applyActed(msg)
+	}
+	return nil
+}
+
+// queryDebouncedMsg fires QueryDebounce after a keystroke. Only the newest
+// sequence for a collection is acted on; every earlier one is a keystroke the
+// user typed past.
+type queryDebouncedMsg struct {
+	Instance   string
+	Collection string
+	Sequence   uint64
+}
+
+func (m *Model) applyDebounce(msg queryDebouncedMsg) tea.Cmd {
+	if msg.Instance != m.instance {
+		return nil
+	}
+	c, ok := m.ActiveCollection()
+	if !ok || c.ID != msg.Collection {
+		return nil
+	}
+	s := m.state(c)
+	if s.debounce != msg.Sequence {
+		return nil
+	}
+	return m.list(c, s, false)
+}
+
+func (m *Model) applyListed(msg ListedMsg) tea.Cmd {
+	if msg.Instance != m.instance {
+		return nil
+	}
+	s, ok := m.states[msg.Collection]
+	if !ok || msg.Generation != s.generation {
+		// A page for a query, view, sort or collection the user has moved past.
+		return nil
+	}
+	s.loading, s.paging = false, false
+	s.loaded = true
+	if msg.Err != nil {
+		s.err = pluginhost.AsResourceError(msg.Err)
+		if !msg.Append {
+			s.items = nil
+			s.total = 0
+			s.nextCursor = ""
+			s.outcome = pluginhost.OutcomeDegraded
+			s.notices = nil
+			s.cursor, s.scroll = 0, 0
+		}
+		return nil
+	}
+	s.err = nil
+	if msg.Append {
+		s.items = append(s.items, msg.Page.Items...)
+	} else {
+		s.items = msg.Page.Items
+		s.cursor, s.scroll = 0, 0
+	}
+	s.outcome = msg.Page.Outcome
+	s.notices = msg.Page.Notices
+	s.total = msg.Page.Total
+	s.nextCursor = msg.Page.NextCursor
+	s.truncated = msg.Page.Truncated
+	m.clampCursor(s)
+	return nil
+}
+
+func (m *Model) applyGot(msg GotMsg) {
+	if msg.Instance != m.instance || msg.Generation != m.detail.generation {
+		return
+	}
+	m.detail.loading = false
+	if msg.Err != nil {
+		m.detail.err = pluginhost.AsResourceError(msg.Err)
+		// A failed refresh keeps the document it was refreshing, exactly as the
+		// resource card does: replacing what the user is reading with an error
+		// would lose the thing the refresh was meant to update.
+		if !m.detail.loaded {
+			m.detail.doc = resource.Document{}
+		}
+		return
+	}
+	m.detail.err = nil
+	m.detail.doc = msg.Document
+	m.detail.loaded = true
+	m.detail.invalidateBody()
+}
+
+func (m *Model) applyActed(msg ActedMsg) tea.Cmd {
+	if msg.Instance != m.instance || msg.Generation != m.seq {
+		return nil
+	}
+	if msg.Err != nil {
+		err := pluginhost.AsResourceError(msg.Err)
+		m.flash, m.flashErr = actionFailure(err), true
+		return nil
+	}
+	m.flashErr = msg.Outcome.Status != pluginhost.ActDone
+	m.flash = msg.Outcome.Message
+	if m.flash == "" {
+		if m.flashErr {
+			m.flash = "The action failed."
+		} else {
+			m.flash = "Done."
+		}
+	}
+	if m.flashErr {
+		return nil
+	}
+
+	var cmds []tea.Cmd
+	for _, id := range msg.Outcome.Refresh {
+		for _, c := range m.Collections() {
+			if c.ID != id {
+				continue
+			}
+			s := m.state(c)
+			if !s.loaded && !s.loading {
+				continue
+			}
+			if cmd := m.list(c, s, false); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
+	}
+	// A document whose row an action just touched is re-fetched, so the box
+	// beside the list is never one action out of date.
+	if m.detail.loaded || m.detail.loading {
+		for _, id := range msg.Outcome.Refresh {
+			if id == m.detail.collection {
+				if cmd := m.openDocument(m.detail.collection, m.detail.id, true); cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+				break
+			}
+		}
+	}
+	if target := msg.Outcome.Open; target != nil && target.ID != "" {
+		if cmd := m.openDocument(target.Collection, target.ID, false); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+	return tea.Batch(cmds...)
+}
+
+func actionFailure(err *resource.Error) string {
+	if err == nil {
+		return "The action failed."
+	}
+	if err.Message != "" {
+		return err.Message
+	}
+	return string(err.Code)
+}
+
+// openDocument asks for one row's document. A collection the newest describe
+// does not declare is refused here rather than sent, which is the same rule the
+// manager holds one layer down.
+func (m *Model) openDocument(collection, id string, refresh bool) tea.Cmd {
+	if m.calls.Get == nil || id == "" {
+		return nil
+	}
+	c, ok := m.desc.Collection(collection)
+	if !ok || !c.Detail {
+		return nil
+	}
+	m.detail.generation++
+	m.detail.collection = collection
+	m.detail.id = id
+	m.detail.loading = true
+	if !refresh {
+		m.detail.loaded = false
+		m.detail.doc = resource.Document{}
+		m.detail.scroll = 0
+	}
+	m.detail.err = nil
+	m.detail.invalidateBody()
+	return m.calls.Get(GetCall{
+		Instance:   m.instance,
+		Params:     pluginhost.GetParams{Collection: collection, ID: id},
+		Context:    m.context(),
+		Refresh:    refresh,
+		Generation: m.detail.generation,
+	})
+}
+
+// currentItem is the row under the cursor.
+func (m *Model) currentItem() (pluginhost.Item, bool) {
+	s := m.activeState()
+	if s == nil || len(s.items) == 0 || s.cursor < 0 || s.cursor >= len(s.items) {
+		return pluginhost.Item{}, false
+	}
+	return s.items[s.cursor], true
+}
+
+func (m *Model) clampCursor(s *collectionState) {
+	if s.cursor >= len(s.items) {
+		s.cursor = len(s.items) - 1
+	}
+	if s.cursor < 0 {
+		s.cursor = 0
+	}
+}
+
+func (d *detailState) invalidateBody() {
+	d.body = nil
+	d.bodyForW = -1
+}
+
+// Flash is the standing line an act outcome left, and whether it is an error.
+// The host puts it in the footer; the browser never renders a footer of its own.
+func (m *Model) Flash() (string, bool) { return m.flash, m.flashErr }
