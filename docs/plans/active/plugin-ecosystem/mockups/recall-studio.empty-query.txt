@@ -1,9 +1,10 @@
  ◱ Sidecar │   Sessions     Activity     Recall                                                       Files     Git     Workspaces     Notes    sidecar ▾  ·  ⚙
 ╭────────────────────────────────────────────────────────────────────────────────────────────────╮ ╭───────────────────────────────────────────────────────────╮
-│ Recall · Results                                                                               │┃│ Recall · Sources                                          │
+│ Recall · Results                                                          ⇅ rank · 3 filters   │┃│ Recall · Sources                                          │
+│                                                                                                │┃│                                                           │
 │ /   search notes, mail, shell and td                                                  no query │┃│ SOURCE          HEALTH        FRESH               RECORDS │
-│ scope  project=sidecar  source, type, since unset                                    sort rank │┃│ ──────────────  ────────────  ────────────  ───────────── │
-│ ────────────────────────────────────────────────────────────────────────────────────────────── │┃│ notes            ok           4m ago                1,284 │
+│                                                                                                │┃│ ──────────────  ────────────  ────────────  ───────────── │
+│                                                                                                │┃│ notes            ok           4m ago                1,284 │
 │                                                                                                │┃│ mail             warn         3d ago                9,610 │
 │                                                                                                │┃│ shell            ok           1m ago               22,470 │
 │                                                                                                │┃│ td               ok           12m ago                 613 │
@@ -20,7 +21,6 @@
 │                                                                                                │┃│ context      project                                      │
 │                                                                                                │┃│ matchers     rc:<source>:<local>                          │
 │                                                                                                │┃│ actions      scope, refresh-source, refresh-all           │
-│                                                                                                │┃│                                                           │
 │                                 This collection needs a query.                                 │┃│                                                           │
 │                                                                                                │┃│                                                           │
 │                      recall does not list; it answers. Press  /  to ask.                       │┃│                                                           │
@@ -42,4 +42,4 @@
 │                                                                                                │┃│                                                           │
 │                                                                                                │┃│                                                           │
 ╰────────────────────────────────────────────────────────────────────────────────────────────────╯ ╰───────────────────────────────────────────────────────────╯
- j/k  Move   Enter  Open   /  Query   v  Scope   s  Sort   r  Refresh   a  Actions   o  Source   n  Pane   Tab  Focus                            recall · ready
+ j/k  Move   Enter  Open   /  Query   v  View   r  Refresh   a  Actions   o  Source   n  Pane   Tab  Focus                                       recall · ready

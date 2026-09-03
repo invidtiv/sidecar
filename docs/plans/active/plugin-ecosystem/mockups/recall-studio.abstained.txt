@@ -1,9 +1,10 @@
  ◱ Sidecar │   Sessions     Activity     Recall                                                       Files     Git     Workspaces     Notes    sidecar ▾  ·  ⚙
 ╭────────────────────────────────────────────────────────────────────────────────────────────────╮ ╭───────────────────────────────────────────────────────────╮
-│ Recall · Results                                                                               │┃│ Recall · Sources                                          │
+│ Recall · Results                                                          ⇅ rank · 3 filters   │┃│ Recall · Sources                                          │
+│                                                                                                │┃│                                                           │
 │ / quarterly forecast                                                    0 results   abstained  │┃│ SOURCE          HEALTH        ANSWERED            RECORDS │
-│ scope  project=sidecar  source, type, since unset                                    sort rank │┃│ ──────────────  ────────────  ────────────  ───────────── │
-│ ────────────────────────────────────────────────────────────────────────────────────────────── │┃│ notes            ok           yes · 41ms            1,284 │
+│                                                                                                │┃│ ──────────────  ────────────  ────────────  ───────────── │
+│                                                                                                │┃│ notes            ok           yes · 41ms            1,284 │
 │                                                                                                │┃│ mail             warn         yes · 780ms           9,610 │
 │                                                                                                │┃│ shell            ok           yes · 12ms           22,470 │
 │                                                                                                │┃│ td               ok           yes · 9ms               613 │
@@ -15,7 +16,6 @@
 │                                                                                                │┃│ ── Suppressed ─────────────────────────────────────────── │
 │                                                                                                │┃│ 0 below the relevance floor                               │
 │                                                                                                │┃│ 0 dropped by the result budget                            │
-│                                                                                                │┃│                                                           │
 │                                                                                                │┃│                                                           │
 │                                                                                                │┃│                                                           │
 │                                No matches. 4 sources answered.                                 │┃│                                                           │
@@ -42,4 +42,4 @@
 │                                                                                                │┃│                                                           │
 │                                                                                                │┃│                                                           │
 ╰────────────────────────────────────────────────────────────────────────────────────────────────╯ ╰───────────────────────────────────────────────────────────╯
- j/k  Move   Enter  Open   /  Query   v  Scope   s  Sort   r  Refresh   a  Actions   o  Source   n  Pane   Tab  Focus              recall · results · abstained
+ j/k  Move   Enter  Open   /  Query   v  View   r  Refresh   a  Actions   o  Source   n  Pane   Tab  Focus                         recall · results · abstained

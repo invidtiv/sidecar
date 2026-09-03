@@ -1,8 +1,9 @@
  ◱ Sidecar │   Sessions     Activity     Recall                                                       Files     Git     Workspaces     Notes    sidecar ▾  ·  ⚙
 ╭────────────────────────────────────────────────────────────────────────╮ ╭───────────────────────────────────────────────────────────────────────────────────╮
 │ Recall · Results                                                       │┃│ DEX schema notes                                                           exact  │
-│ / query: dex                           7 results · degraded            │┃│ notes · 2026-08-14                                                                │
-│ ────────────────────────────────────────────────────────────────────── │┃│ Source   notes          Locator  rc:notes:2026-08-14-dex-design                   │
+│                                                                        │┃│                                                                                   │
+│ / query: dex                                      7 results · degraded │┃│ notes · 2026-08-14                                                                │
+│                                                                        │┃│ Source   notes          Locator  rc:notes:2026-08-14-dex-design                   │
 │ #    TITLE                       SOURCE     EXCERPT                    │┃│ Updated  2 weeks ago    Corroborated  2 records                                   │
 │ ───  ──────────────────────────  ─────────  ────────────────────────── │┃│ ── Evidence ───────────────────────────────────────────────────────────────────── │
 │ 1    DEX schema notes            notes      …people are tiered, and th │┃│ People are tiered. The tier drives what brief shows at session                    │
@@ -16,7 +17,6 @@
 │ ⚠ 1 of 4 sources did not answer (mail: checkpoint stale)               │┃│ 2w ago   Note added                                                               │
 │                                                                        │┃│ 13d ago  Linked from td-3fa2c1                                                    │
 │                                                                        │┃│ 9d ago   Corroborated by rc:shell:dex-context                                     │
-│                                                                        │┃│                                                                                   │
 │                                                                        │┃│                                                                                   │
 │                                                                        │┃│                                                                                   │
 │                                                                        │┃│                                                                                   │

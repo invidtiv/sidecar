@@ -1,34 +1,35 @@
  ◱ Sidecar │   Sessions     Activity     Recall                                                       Files     Git     Workspaces     Notes    sidecar ▾  ·  ⚙
 ╭────────────────────────────────────────────────────────────────────────────────────────────────╮ ╭───────────────────────────────────────────────────────────╮
-│ Recall · Results                                                                               │┃│ dex context --json                        corroborated 3  │
+│ Recall · Results                                                          ⇅ rank · 3 filters   │┃│ dex context --json                        corroborated 3  │
+│                                                                                                │┃│                                                           │
 │ / dex                                                                     18 of 18   degraded  │┃│ shell · 2026-08-27                                        │
-│ scope  project=sidecar  source, type, since unset                                    sort rank │┃│                                                           │
-│ ────────────────────────────────────────────────────────────────────────────────────────────── │┃│ Source        shell                                       │
-│   #  TITLE                        SOURCE    EXCERPT                                            │┃│ Locator       rc:shell:2026-08-27-dex-context             │
-│ ───  ───────────────────────────  ────────  ────────────────────────────────  ──────────────── │┃│ Updated       6 days ago                                  │
-│   1  DEX schema notes             notes     › people are tiered, and the…      exact           │┃│ Corroborated  3 records · notes, td                       │
-│   2  dex context --json           shell     › dumps every field the brief…     corroborated 3  │┃│ ── Evidence ───────────────────────────────────────────── │
-│   3  People database, first cut   notes     › handles, aliases, links, and…                    │┃│ $ dex context --json --tier inner                         │
-│   4  td-3fa2c1 Import people.md   td        › import from people.md keeps…     corroborated 2  │┃│ {                                                         │
-│   5  Weekly review 2026-08-18     notes     › promote three contacts to…                       │┃│   "generated_at": "2026-08-27T09:14:02Z",                 │
-│   6  dex brief for session boot   shell     › inner circle first, then the…                    │┃│   "tier": "inner",                                        │
-│   7  Handles and phone numbers    notes     › one phone per handle kind…                       │┃│   "people": 27,                                           │
-│   8  td-9c04ab dex stale rules    td        › stale should read tier, not…                     │┃│   "stale": 4,                                             │
-│   9  dex merge --dry-run          shell     › keeps the first person and…                      │┃│   "brief_budget_tokens": 1200                             │
-│  10  Tier promotion policy        notes     › demotion is explicit, never…                     │┃│ }                                                         │
-│  11  td-51b7e0 dex brief budget   td        › the brief has a token budget…                    │┃│                                                           │
-│  12  dex stale --tier inner       shell     › lists overdue people only in…                    │┃│ The star command. Everything the session-boot brief       │
-│  13  Retrieval eval pack notes    notes     ~ The eval pack covers recall…                     │┃│ renders comes from this one call, so the brief never      │
-│  14  dex import --format md       shell     › the importer is idempotent…                      │┃│ reaches into the store a second time.                     │
-│  15  dex tier --set inner         shell     › promotion is one command, and…                   │┃│ ── Record ─────────────────────────────────────────────── │
-│  16  td-2ef880 dex tier audit     td        › audit which tiers changed in…                    │┃│ Record type   command                                     │
-│  17  Contacts import checklist    notes     › export, dedupe, then import…                     │┃│ Ran           2026-08-27 09:14 · exit 0                   │
-│  18  dex stale --json             shell     › the same rows the brief hid…                     │┃│ Checkpoint    shell @ 1m ago                              │
-│ ────────────────────────────────────────────────────────────────────────────────────────────── │┃│ Excerpt       matched span                                │
-│ ⚠  1 of 4 sources did not answer (mail: checkpoint stale since 2026-08-30)                     │┃│ ── Timeline ───────────────────────────────────────────── │
-│ •  2 records suppressed below the relevance floor (profile default)                            │┃│ 6d ago    Command recorded                                │
-│                                                                                                │┃│ 6d ago    Corroborated by rc:notes:…-dex-design           │
-│ coverage is incomplete, so 18 is what these 3 sources hold — not what exists          r  retry │┃│ 5d ago    Corroborated by rc:td:td-51b7e0                 │
+│                                                                                                │┃│                                                           │
+│   #  TITLE                        SOURCE    EXCERPT                                            │┃│ Source        shell                                       │
+│ ───  ───────────────────────────  ────────  ────────────────────────────────  ──────────────── │┃│ Locator       rc:shell:2026-08-27-dex-context             │
+│   1  DEX schema notes             notes     › people are tiered, and the…      exact           │┃│ Updated       6 days ago                                  │
+│   2  dex context --json           shell     › dumps every field the brief…     corroborated 3  │┃│ Corroborated  3 records · notes, td                       │
+│   3  People database, first cut   notes     › handles, aliases, links, and…                    │┃│ ── Evidence ───────────────────────────────────────────── │
+│   4  td-3fa2c1 Import people.md   td        › import from people.md keeps…     corroborated 2  │┃│ $ dex context --json --tier inner                         │
+│   5  Weekly review 2026-08-18     notes     › promote three contacts to…                       │┃│ {                                                         │
+│   6  dex brief for session boot   shell     › inner circle first, then the…                    │┃│   "generated_at": "2026-08-27T09:14:02Z",                 │
+│   7  Handles and phone numbers    notes     › one phone per handle kind…                       │┃│   "tier": "inner",                                        │
+│   8  td-9c04ab dex stale rules    td        › stale should read tier, not…                     │┃│   "people": 27,                                           │
+│   9  dex merge --dry-run          shell     › keeps the first person and…                      │┃│   "stale": 4,                                             │
+│  10  Tier promotion policy        notes     › demotion is explicit, never…                     │┃│   "brief_budget_tokens": 1200                             │
+│  11  td-51b7e0 dex brief budget   td        › the brief has a token budget…                    │┃│ }                                                         │
+│  12  dex stale --tier inner       shell     › lists overdue people only in…                    │┃│                                                           │
+│  13  Retrieval eval pack notes    notes     ~ The eval pack covers recall…                     │┃│ The star command. Everything the session-boot brief       │
+│  14  dex import --format md       shell     › the importer is idempotent…                      │┃│ renders comes from this one call, so the brief never      │
+│  15  dex tier --set inner         shell     › promotion is one command, and…                   │┃│ reaches into the store a second time.                     │
+│  16  td-2ef880 dex tier audit     td        › audit which tiers changed in…                    │┃│ ── Record ─────────────────────────────────────────────── │
+│  17  Contacts import checklist    notes     › export, dedupe, then import…                     │┃│ Record type   command                                     │
+│  18  dex stale --json             shell     › the same rows the brief hid…                     │┃│ Ran           2026-08-27 09:14 · exit 0                   │
+│ ────────────────────────────────────────────────────────────────────────────────────────────── │┃│ Checkpoint    shell @ 1m ago                              │
+│ ⚠  1 of 4 sources did not answer (mail: checkpoint stale since 2026-08-30)                     │┃│ Excerpt       matched span                                │
+│ •  2 records suppressed below the relevance floor (profile default)                            │┃│ ── Timeline ───────────────────────────────────────────── │
+│                                                                                                │┃│ 6d ago    Command recorded                                │
+│ coverage is incomplete, so 18 is what these 3 sources hold — not what exists          r  retry │┃│ 6d ago    Corroborated by rc:notes:…-dex-design           │
+│                                                                                                │┃│ 5d ago    Corroborated by rc:td:td-51b7e0                 │
 │                                                                                                │┃│ 2d ago    Re-run · exit 0                                 │
 │                                                                                                │┃│                                                           │
 │                                                                                                │┃│                                                           │
@@ -40,6 +41,5 @@
 │                                                                                                │┃│                                                           │
 │                                                                                                │┃│                                                           │
 │                                                                                                │┃│                                                           │
-│                                                                                                │┃│                                                           │
 ╰────────────────────────────────────────────────────────────────────────────────────────────────╯ ╰───────────────────────────────────────────────────────────╯
- j/k  Move   Enter  Open   /  Query   v  Scope   s  Sort   r  Refresh   a  Actions   o  Source   n  Pane   Tab  Focus               recall · results · degraded
+ j/k  Move   Enter  Open   /  Query   v  View   r  Refresh   a  Actions   o  Source   n  Pane   Tab  Focus                          recall · results · degraded

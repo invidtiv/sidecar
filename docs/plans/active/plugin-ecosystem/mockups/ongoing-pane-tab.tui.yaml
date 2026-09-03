@@ -40,6 +40,8 @@ states:
               border: rounded
               border_gradient: normal
               content:
+                # One blank row under the title row.
+                - text: ""
                 - list:
                     selected_index: 1
                     cursor: "❯ "
@@ -56,6 +58,8 @@ states:
               border: rounded
               border_gradient: active
               content:
+                # One blank row under the title row.
+                - text: ""
                 - text: "[fg:green]›[/fg] sidecar open --plugin ongoing --collection projects --split right"
                 - text: "[dim]opened  resource  ongoing/projects  at 2.2[/dim]"
                 - text: ""
@@ -77,7 +81,22 @@ states:
                     close: true
                     items: ["Projects", "recall"]
                     active: 0
-                - text: "[bg:accent fg:on-accent bold] Attention [/bg] [dim]Rising  Momentum  Dormant[/dim] [dim]↓ commits[/dim]"
+                # One blank row between the header row — here the tab strip —
+                # and the first content row.
+                - text: ""
+                # A Resource leaf has no header row free for the View control,
+                # so the sort pill sits at the right end of the row under it.
+                # styles.Button, two columns of padding; pressing it — or v —
+                # opens the View modal, where sort and the filters both live.
+                #
+                # At 52 columns the view rows and the full "⇅ commits" label
+                # cannot both be drawn, so the pill sheds its word and keeps its
+                # glyph — sidebar.go headerAttempts, second rung. The control is
+                # still there to press and the sort still has a name inside the
+                # modal; only the header caption goes.
+                - bar:
+                    left: "[bg:accent fg:on-accent bold] Attention [/bg] [dim]Rising  Momentum  Dormant[/dim]"
+                    right: "[bg:surface0 fg:subtext]  ⇅  [/bg]"
                 - divider: ""
                 - text: "[bg:surface0 fg:accent bold]❯[/bg][bg:surface0 fg:selection-fg] recall                      [/bg][bg:surface0 fg:warning]warn[/bg][bg:surface0 fg:selection-fg]  41 · 3d [/bg]"
                 - text: " [dim]retrieval over user-controlled sources[/dim]"
@@ -96,7 +115,6 @@ states:
             - { key: "j/k", label: "Move" }
             - { key: "Enter", label: "Open" }
             - { key: "v", label: "View" }
-            - { key: "s", label: "Sort" }
             - { key: "r", label: "Refresh" }
             - { key: "a", label: "Actions" }
             - { key: "n", label: "Pane" }

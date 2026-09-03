@@ -1,7 +1,8 @@
  ◱ Sidecar │   Sessions     Activity     Recall                                                       Files     Git     Workspaces     Notes    sidecar ▾  ·  ⚙
 ╭──────────────────────────╮ ╭────────────────────────────────────────────────────────────────────────────╮ ╭──────────────────────────────────────────────────╮
 │ Workspaces               │┃│ plugin-ecosystem · claude                                                  │┃│   Projects ×     recall ×                        │
-│   main  ●                │┃│ › sidecar open --plugin ongoing --collection projects --split right        │┃│  Attention  Rising  Momentum  Dormant ↓ commits  │
+│                          │┃│                                                                            │┃│                                                  │
+│   main  ●                │┃│ › sidecar open --plugin ongoing --collection projects --split right        │┃│  Attention  Rising  Momentum  Dormant        ⇅   │
 │ ❯ plugin-eco…  agent     │┃│ opened  resource  ongoing/projects  at 2.2                                 │┃│ ──────────────────────────────────────────────── │
 │   remote-git  idle       │┃│                                                                            │┃│ ❯ recall                      warn  41 · 3d      │
 │                          │┃│ › sidecar open --plugin ongoing --collection projects recall               │┃│  retrieval over user-controlled sources          │
@@ -40,6 +41,5 @@
 │                          │┃│                                                                            │┃│                                                  │
 │                          │┃│                                                                            │┃│                                                  │
 │                          │┃│                                                                            │┃│                                                  │
-│                          │┃│                                                                            │┃│                                                  │
 ╰──────────────────────────╯ ╰────────────────────────────────────────────────────────────────────────────╯ ╰──────────────────────────────────────────────────╯
- j/k  Move   Enter  Open   v  View   s  Sort   r  Refresh   a  Actions   n  Pane   x  Close                                                      2.2 · resource
+ j/k  Move   Enter  Open   v  View   r  Refresh   a  Actions   n  Pane   x  Close                                                                2.2 · resource

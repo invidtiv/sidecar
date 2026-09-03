@@ -32,6 +32,15 @@ The title itself is a chip: one column of padding either side, bold, in `TextPri
 
 A framed leaf spends one column of border and one column of padding on each side, and one row of border top and bottom with no vertical padding. Content therefore starts two columns in from the pane's left edge and one row down from its top edge, and the title row is the first of those content rows.
 
+### The blank row under the title row, and under a query bar
+
+Two rows are spent on separation rather than on content, and both are cheap in a way that reads immediately:
+
+- One blank row sits between the title row and the first content row. A leaf whose header row is a tab strip rather than a title counts that strip as the title row and takes the same blank under it.
+- A surface that takes a query draws the query bar on a row of its own, and one blank row of padding separates it from whatever comes next — a table, a list, a filter line. The blank row is the separator; a horizontal rule in that position is saying the same thing louder.
+
+These two are the one part of this section that is specified rather than transcribed: they were decided against the plugin-ecosystem mockups, not read out of a function, so no Go names them yet and the usual rule — the code wins — has nothing to point at. `docs/plans/active/plugin-ecosystem/mockups/recall-studio.tui.yaml` is the reference for what they look like, and any surface built to them should keep matching it.
+
 ### Gradient borders
 
 The border is not a single colour. `styles.RenderGradientBorder` walks the perimeter and asks the gradient for the colour at each border cell's own coordinates, so the corner glyphs and every dash and pipe between them carry their own hex. `styles.Gradient.PositionAt` normalises the cell into the box, projects it onto the angle's direction vector, and divides by the largest projection the box can produce, which puts the top-left corner exactly at position 0 and the bottom-right corner exactly at 1. `ColorAt` then interpolates linearly between the stops, which `NewGradient` spreads evenly from 0 to 1.

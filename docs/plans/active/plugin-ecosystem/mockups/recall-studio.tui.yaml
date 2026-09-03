@@ -14,8 +14,8 @@
 #
 # Sidecar owns every affordance on screen: the navbar and its number keys, the
 # query line, the cursor, the selection highlight, the status pills, the field
-# grid, the section rules, the reflow at narrow widths, the action form, the
-# pane frame, and the whole footer.
+# grid, the section rules, the reflow at narrow widths, the View control and the
+# modal behind it, the pane frame, and the whole footer.
 # ==============================================================================
 
 title: "Recall studio · one protocol plugin, six host renderings"
@@ -54,18 +54,27 @@ states:
             - type: pane
               width: 98
               title: "Recall · Results"
+              # The View control, exactly where the real one sits: the sort pill
+              # on the list pane's header row, right-aligned, drawn with
+              # styles.Button (workspacelist.SortPillLabel through
+              # sidebar.go renderControl). Pressing it — or v — opens the View
+              # modal, which is where sort and the scope filters both live.
+              # Applied filters are folded into the label rather than spent on a
+              # chip line the list-row grammar has no room for.
+              title_right: "[bg:surface0 fg:subtext]  ⇅ rank · 3 filters  [/bg]"
               title_position: inside
               padding: [0, 1]
               border: rounded
               border_gradient: active
               content:
+                # One blank row between the title row and the first content row.
+                - text: ""
                 - bar:
                     left: "[fg:accent]/[/fg] [reverse] [/reverse][dim] search notes, mail, shell and td[/dim]"
                     right: "[dim]no query[/dim]"
-                - bar:
-                    left: "[dim]scope[/dim]  [fg:accent]project=sidecar[/fg]  [dim]source, type, since unset[/dim]"
-                    right: "[dim]sort[/dim] rank"
-                - divider: ""
+                # The query bar owns its row, and one blank row of padding
+                # separates it from whatever comes next.
+                - text: ""
                 - text: ""
                 - text: ""
                 - text: ""
@@ -101,6 +110,8 @@ states:
               border: rounded
               border_gradient: normal
               content:
+                # One blank row under the title row.
+                - text: ""
                 - table:
                     indent: 0
                     headers: ["SOURCE", "HEALTH", "FRESH", "RECORDS"]
@@ -132,8 +143,7 @@ states:
             - { key: "j/k", label: "Move" }
             - { key: "Enter", label: "Open" }
             - { key: "/", label: "Query" }
-            - { key: "v", label: "Scope" }
-            - { key: "s", label: "Sort" }
+            - { key: "v", label: "View" }
             - { key: "r", label: "Refresh" }
             - { key: "a", label: "Actions" }
             - { key: "o", label: "Source" }
@@ -171,18 +181,27 @@ states:
             - type: pane
               width: 98
               title: "Recall · Results"
+              # The View control, exactly where the real one sits: the sort pill
+              # on the list pane's header row, right-aligned, drawn with
+              # styles.Button (workspacelist.SortPillLabel through
+              # sidebar.go renderControl). Pressing it — or v — opens the View
+              # modal, which is where sort and the scope filters both live.
+              # Applied filters are folded into the label rather than spent on a
+              # chip line the list-row grammar has no room for.
+              title_right: "[bg:surface0 fg:subtext]  ⇅ rank · 3 filters  [/bg]"
               title_position: inside
               padding: [0, 1]
               border: rounded
               border_gradient: active
               content:
+                # One blank row between the title row and the first content row.
+                - text: ""
                 - bar:
                     left: "[fg:accent]/[/fg] [bold]dex[/bold][reverse] [/reverse]"
                     right: "[dim]26 of 31[/dim]  [badge:green:black:answered]"
-                - bar:
-                    left: "[dim]scope[/dim]  [fg:accent]project=sidecar[/fg]  [dim]source, type, since unset[/dim]"
-                    right: "[dim]sort[/dim] rank"
-                - divider: ""
+                # The query bar owns its row, and one blank row of padding
+                # separates it from whatever comes next.
+                - text: ""
                 - table:
                     indent: 0
                     headers: ["#", "TITLE", "SOURCE", "EXCERPT", ""]
@@ -230,6 +249,8 @@ states:
               border: rounded
               border_gradient: normal
               content:
+                # One blank row under the title row.
+                - text: ""
                 - text: "[dim]notes · 2026-08-14[/dim]"
                 - text: ""
                 - text: "[dim]Source[/dim]        notes"
@@ -269,8 +290,7 @@ states:
             - { key: "j/k", label: "Move" }
             - { key: "Enter", label: "Open" }
             - { key: "/", label: "Query" }
-            - { key: "v", label: "Scope" }
-            - { key: "s", label: "Sort" }
+            - { key: "v", label: "View" }
             - { key: "r", label: "Refresh" }
             - { key: "a", label: "Actions" }
             - { key: "o", label: "Source" }
@@ -306,18 +326,27 @@ states:
             - type: pane
               width: 98
               title: "Recall · Results"
+              # The View control, exactly where the real one sits: the sort pill
+              # on the list pane's header row, right-aligned, drawn with
+              # styles.Button (workspacelist.SortPillLabel through
+              # sidebar.go renderControl). Pressing it — or v — opens the View
+              # modal, which is where sort and the scope filters both live.
+              # Applied filters are folded into the label rather than spent on a
+              # chip line the list-row grammar has no room for.
+              title_right: "[bg:surface0 fg:subtext]  ⇅ rank · 3 filters  [/bg]"
               title_position: inside
               padding: [0, 1]
               border: rounded
               border_gradient: active
               content:
+                # One blank row between the title row and the first content row.
+                - text: ""
                 - bar:
                     left: "[fg:accent]/[/fg] [bold]dex[/bold][reverse] [/reverse]"
                     right: "[dim]18 of 18[/dim]  [badge:yellow:black:degraded]"
-                - bar:
-                    left: "[dim]scope[/dim]  [fg:accent]project=sidecar[/fg]  [dim]source, type, since unset[/dim]"
-                    right: "[dim]sort[/dim] rank"
-                - divider: ""
+                # The query bar owns its row, and one blank row of padding
+                # separates it from whatever comes next.
+                - text: ""
                 - table:
                     indent: 0
                     headers: ["#", "TITLE", "SOURCE", "EXCERPT", ""]
@@ -360,6 +389,8 @@ states:
               border: rounded
               border_gradient: normal
               content:
+                # One blank row under the title row.
+                - text: ""
                 - text: "[dim]shell · 2026-08-27[/dim]"
                 - text: ""
                 - text: "[dim]Source[/dim]        shell"
@@ -396,8 +427,7 @@ states:
             - { key: "j/k", label: "Move" }
             - { key: "Enter", label: "Open" }
             - { key: "/", label: "Query" }
-            - { key: "v", label: "Scope" }
-            - { key: "s", label: "Sort" }
+            - { key: "v", label: "View" }
             - { key: "r", label: "Refresh" }
             - { key: "a", label: "Actions" }
             - { key: "o", label: "Source" }
@@ -433,18 +463,27 @@ states:
             - type: pane
               width: 98
               title: "Recall · Results"
+              # The View control, exactly where the real one sits: the sort pill
+              # on the list pane's header row, right-aligned, drawn with
+              # styles.Button (workspacelist.SortPillLabel through
+              # sidebar.go renderControl). Pressing it — or v — opens the View
+              # modal, which is where sort and the scope filters both live.
+              # Applied filters are folded into the label rather than spent on a
+              # chip line the list-row grammar has no room for.
+              title_right: "[bg:surface0 fg:subtext]  ⇅ rank · 3 filters  [/bg]"
               title_position: inside
               padding: [0, 1]
               border: rounded
               border_gradient: active
               content:
+                # One blank row between the title row and the first content row.
+                - text: ""
                 - bar:
                     left: "[fg:accent]/[/fg] [bold]quarterly forecast[/bold][reverse] [/reverse]"
                     right: "[dim]0 results[/dim]  [badge:surface2:fg:abstained]"
-                - bar:
-                    left: "[dim]scope[/dim]  [fg:accent]project=sidecar[/fg]  [dim]source, type, since unset[/dim]"
-                    right: "[dim]sort[/dim] rank"
-                - divider: ""
+                # The query bar owns its row, and one blank row of padding
+                # separates it from whatever comes next.
+                - text: ""
                 - text: ""
                 - text: ""
                 - text: ""
@@ -483,6 +522,8 @@ states:
               border: rounded
               border_gradient: normal
               content:
+                # One blank row under the title row.
+                - text: ""
                 - table:
                     indent: 0
                     headers: ["SOURCE", "HEALTH", "ANSWERED", "RECORDS"]
@@ -509,8 +550,7 @@ states:
             - { key: "j/k", label: "Move" }
             - { key: "Enter", label: "Open" }
             - { key: "/", label: "Query" }
-            - { key: "v", label: "Scope" }
-            - { key: "s", label: "Sort" }
+            - { key: "v", label: "View" }
             - { key: "r", label: "Refresh" }
             - { key: "a", label: "Actions" }
             - { key: "o", label: "Source" }
@@ -519,14 +559,17 @@ states:
           status: "recall · results · abstained "
 
   # ==========================================================================
-  # 5. The scope picker is not a host feature. recall declared an action with
-  #    four typed inputs and asked for the key `v`; the host granted it because
-  #    `results` declares no views, and built this form from the declaration.
+  # 5. Sort and scope are one surface, and it is the host's: the View modal the
+  #    global Workspaces (Sessions) list opens on `v`
+  #    (internal/overview/view_flyout.go). recall declared sort keys and four
+  #    typed scope inputs; the host put both inside the one modal its own lists
+  #    already use, so a plugin cannot invent a second way to reorder a list.
   # ==========================================================================
   - name: "Scope picker"
     notes:
-      - "Host-built form: one control per declared input, kind decides the control."
-      - "The plugin asked for key `v` and got it only because no view row claims it."
+      - "Same construction as internal/overview/view_flyout.go: a Current sort line, a spacer, the sort list, a spacer, the filter checkboxes, a spacer, Done."
+      - "The affordance is the sort pill on the list pane's header row, the place workspacelist.SortPillLabel puts it."
+      - "Applied filters are folded into the pill's label; the list-row grammar has no chip line to spend on them."
     layout:
       type: vertical
       children:
@@ -547,18 +590,27 @@ states:
             - type: pane
               width: 98
               title: "Recall · Results"
+              # The View control, exactly where the real one sits: the sort pill
+              # on the list pane's header row, right-aligned, drawn with
+              # styles.Button (workspacelist.SortPillLabel through
+              # sidebar.go renderControl). Pressing it — or v — opens the View
+              # modal, which is where sort and the scope filters both live.
+              # Applied filters are folded into the label rather than spent on a
+              # chip line the list-row grammar has no room for.
+              title_right: "[bg:surface0 fg:subtext]  ⇅ rank · 3 filters  [/bg]"
               title_position: inside
               padding: [0, 1]
               border: rounded
               border_gradient: active
               content:
+                # One blank row between the title row and the first content row.
+                - text: ""
                 - bar:
                     left: "[fg:accent]/[/fg] [bold]dex[/bold]"
                     right: "[dim]26 of 31[/dim]  [badge:green:black:answered]"
-                - bar:
-                    left: "[dim]scope[/dim]  [fg:accent]project=sidecar[/fg]  [dim]source, type, since unset[/dim]"
-                    right: "[dim]sort[/dim] rank"
-                - divider: ""
+                # The query bar owns its row, and one blank row of padding
+                # separates it from whatever comes next.
+                - text: ""
                 - table:
                     indent: 0
                     headers: ["#", "TITLE", "SOURCE", "EXCERPT", ""]
@@ -606,6 +658,8 @@ states:
               border: rounded
               border_gradient: normal
               content:
+                # One blank row under the title row.
+                - text: ""
                 - text: "[dim]notes · 2026-08-14[/dim]"
                 - text: ""
                 - text: "[dim]Source[/dim]        notes"
@@ -618,42 +672,53 @@ states:
                 - text: "session boot, and what [bold]stale[/bold] treats as overdue."
         - type: sidecar_footer
           keys:
-            - { key: "j/k", label: "Field" }
-            - { key: "h/l", label: "Change" }
-            - { key: "Enter", label: "Apply" }
-            - { key: "Esc", label: "Cancel" }
-          status: "act · recall/scope "
+            - { key: "j/k", label: "Move" }
+            - { key: "Enter", label: "Select" }
+            - { key: "Space", label: "Toggle" }
+            - { key: "Esc", label: "Done" }
+          status: "recall · view "
     modals:
       # Sidecar's modal chrome, from internal/styles/styles.go: ModalBox is a
       # rounded border in Primary over the BgSecondary surface with Padding(1, 2)
       # and no drop shadow, and ModalTitle is bold primary text inside the box
       # with one blank row under it. The border line stays unbroken here too.
-      - width: 80
-        height: 21
+      #
+      # The sections are the View flyout's, in its order
+      # (internal/overview/view_flyout.go ensureViewFlyout): a Current sort line,
+      # a spacer, the sort list, a spacer, the checkboxes, a spacer, Done. The
+      # sort list draws modal.List — styles.ListCursor's filled cursor on the
+      # selected row and styles.ListItemFocused's fill behind its label — and
+      # each checkbox is styles.Button, two columns of padding, ragged to its
+      # own label. modal.WithHints(false) means the modal carries no hint line;
+      # the footer already says what the keys do.
+      - width: 44
+        height: 19
         border: rounded
         border_style: "fg:accent"
         background: "surface"
         shadow: false
         content:
           - text: ""
-          - text: "  [bold]Scope · Results[/bold]"
+          - text: "  [bold]View · Results[/bold]"
           - text: ""
-          - text: " [dim]Sidecar built this form from the four inputs recall declared[/dim]"
-          - text: " [dim]on its[/dim] scope [dim]action. One control per input; the kind picks it.[/dim]"
+          - text: " Current sort: rank"
           - text: ""
-          - text: " [fg:accent]❯[/fg] [bold]source[/bold]    [dim]choice[/dim]  [fg:accent](•)[/fg] any  ( ) notes  ( ) mail  ( ) shell  ( ) td"
-          - text: "   [dim]type[/dim]      [dim]choice[/dim]  ( ) any  [fg:accent](•)[/fg] note  ( ) message  ( ) command  ( ) task"
-          - text: "   [dim]project[/dim]   [dim]choice[/dim]  ( ) any  [fg:accent](•)[/fg] sidecar  ( ) recall  ( ) dex"
-          - text: "   [dim]entity[/dim]    [dim]text[/dim]    [bg:surface1] [dim]unset[/dim]                            [/bg]"
-          - text: "   [dim]since[/dim]     [dim]text[/dim]    [bg:surface1] 2026-08-01                       [/bg]"
+          - text: " [fg:accent bold]▸ [/fg][bg:accent fg:on-accent]rank[/bg]"
+          - text: "   source"
+          - text: "   updated"
+          - text: "   corroborated"
           - text: ""
-          - text: " [dim]Nothing here is required. An unset key is not sent, and recall never[/dim]"
-          - text: " [dim]reads an absent scope key as a narrower one.[/dim]"
+          # modal.Checkbox draws [ ] and [x]; the studio's markup parser eats a
+          # bracketed token, so the boxes are ( ) and (x) here. Everything else
+          # about them is the real control: styles.Button, two columns of
+          # padding, ragged to its own label, unchecked meaning the key is not
+          # sent at all.
+          - text: " [bg:surface0 fg:subtext]  ( ) source · any  [/bg]"
+          - text: " [bg:surface0 fg:subtext]  (x) type · note  [/bg]"
+          - text: " [bg:surface0 fg:subtext]  (x) project · sidecar  [/bg]"
+          - text: " [bg:surface0 fg:subtext]  (x) since · 2026-08-01  [/bg]"
           - text: ""
-          - text: " [dim]sends[/dim]  act scope  [fg:accent]type=note[/fg]  [fg:accent]project=sidecar[/fg]  [fg:accent]since=2026-08-01[/fg]"
-          - divider: ""
-          - bar:
-              center: "[key:Enter] Apply   [key:h/l] Change   [key:j/k] Field   [key:Esc] Cancel"
+          - text: " [bg:surface0 fg:subtext]   Done   [/bg]"
 
   # ==========================================================================
   # 6. The Panes placement. The same collection in a 52-column Resource leaf:
@@ -684,6 +749,8 @@ states:
               border: rounded
               border_gradient: normal
               content:
+                # One blank row under the title row.
+                - text: ""
                 - list:
                     selected_index: 1
                     cursor: "❯ "
@@ -712,6 +779,8 @@ states:
               border: rounded
               border_gradient: normal
               content:
+                # One blank row under the title row.
+                - text: ""
                 - text: "[fg:green]›[/fg] sidecar open --plugin recall --collection results \\"
                 - text: "      --query dex --split right"
                 - text: "[dim]opened  resource  recall/results  at 1.3[/dim]"
@@ -741,10 +810,17 @@ states:
                     close: true
                     items: ["Results", "DEX schema notes"]
                     active: 0
+                # One blank row between the header row — here the tab strip —
+                # and the first content row.
+                - text: ""
+                # No header row is free for the View control in a Resource leaf,
+                # so the pill sits at the right end of the query row instead,
+                # after the count. Same control, same modal.
                 - bar:
                     left: "[fg:accent]/[/fg] [bold]dex[/bold]"
-                    right: "[dim]26 of 31[/dim]"
-                - divider: ""
+                    right: "[dim]26 of 31[/dim]  [bg:surface0 fg:subtext]  ⇅ rank · 3 filters  [/bg]"
+                # One blank row of padding under the query row.
+                - text: ""
                 - text: "[bg:surface0 fg:accent bold]❯[/bg][bg:surface0 fg:selection-fg]  1  DEX schema notes                        [/bg]"
                 - text: "[bg:surface0 fg:selection-fg]      notes · exact · › people are tiered, and…  [/bg]"
                 - text: "  2  dex context --json"
@@ -786,6 +862,7 @@ states:
             - { key: "j/k", label: "Move" }
             - { key: "Enter", label: "Open" }
             - { key: "/", label: "Query" }
+            - { key: "v", label: "View" }
             - { key: "[ ]", label: "Tabs" }
             - { key: "r", label: "Refresh" }
             - { key: "a", label: "Actions" }

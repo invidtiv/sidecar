@@ -40,8 +40,15 @@ states:
               border: rounded
               border_gradient: active
               content:
-                - text: "[fg:accent]/[/fg] query: [bold]dex[/bold][reverse] [/reverse]                          [dim]7 results · [/dim][fg:yellow]degraded[/fg]"
-                - divider: ""
+                # One blank row between the title row and the first content row.
+                - text: ""
+                # The query bar owns its row; the count and the outcome pill sit
+                # at its right end, and one blank row of padding separates it
+                # from the table.
+                - bar:
+                    left: "[fg:accent]/[/fg] query: [bold]dex[/bold][reverse] [/reverse]"
+                    right: "[dim]7 results ·[/dim] [fg:yellow]degraded[/fg]"
+                - text: ""
                 - table:
                     headers: ["#", "TITLE", "SOURCE", "EXCERPT"]
                     widths: [3, 26, 9, 26]
@@ -66,6 +73,8 @@ states:
               border: rounded
               border_gradient: normal
               content:
+                # One blank row under the title row.
+                - text: ""
                 - text: "[dim]notes · 2026-08-14[/dim]"
                 - text: "[dim]Source[/dim]   notes          [dim]Locator[/dim]  rc:notes:2026-08-14-dex-design"
                 - text: "[dim]Updated[/dim]  2 weeks ago    [dim]Corroborated[/dim]  2 records"
@@ -114,12 +123,19 @@ states:
             - type: pane
               width: 74
               title: "DEX · People"
+              # The View control, where workspacelist puts it: the sort pill on
+              # the list pane's header row, right-aligned, drawn with
+              # styles.Button. It opens the View modal, the one place sort and
+              # the filters live.
+              title_right: "[bg:surface0 fg:subtext]  ⇅ recent  [/bg]"
               title_position: inside
               padding: [0, 1]
               border: rounded
               border_gradient: active
               content:
-                - text: "[bg:accent fg:on-accent bold] Inner [/bg] [dim] Circle   Contacts   Stale [/dim]                 [dim]sort:[/dim] recent ↓"
+                # One blank row between the title row and the first content row.
+                - text: ""
+                - text: "[bg:accent fg:on-accent bold] Inner [/bg] [dim] Circle   Contacts   Stale [/dim]"
                 - divider: ""
                 - table:
                     headers: ["NAME", "TIER", "LAST", "NEXT"]
@@ -140,6 +156,8 @@ states:
               border: rounded
               border_gradient: normal
               content:
+                # One blank row under the title row.
+                - text: ""
                 - text: "[dim]Handles[/dim]  @grace · grace@example.test      [dim]Phone[/dim]  +1 555 0100"
                 - divider: "Timeline"
                 - text: "[dim]9d ago[/dim]   Call · retrieval eval pack review"

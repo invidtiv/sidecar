@@ -1,8 +1,9 @@
  ◱ Sidecar │   Sessions     Activity     Recall                                                       Files     Git     Workspaces     Notes    sidecar ▾  ·  ⚙
 ╭──────────────────────────╮ ╭────────────────────────────────────────────────────────────────────────────╮ ╭──────────────────────────────────────────────────╮
 │ Workspaces               │┃│ plugin-ecosystem · claude                                                  │┃│   Results ×     DEX schema notes ×               │
-│   main  ●                │┃│ › sidecar open --plugin recall --collection results \                      │┃│ / dex                                   26 of 31 │
-│ ❯ plugin-eco…  agent     │┃│       --query dex --split right                                            │┃│ ──────────────────────────────────────────────── │
+│                          │┃│                                                                            │┃│                                                  │
+│   main  ●                │┃│ › sidecar open --plugin recall --collection results \                      │┃│ / dex           26 of 31    ⇅ rank · 3 filters   │
+│ ❯ plugin-eco…  agent     │┃│       --query dex --split right                                            │┃│                                                  │
 │   remote-git  idle       │┃│ opened  resource  recall/results  at 1.3                                   │┃│ ❯  1  DEX schema notes                           │
 │   recall-eval  idle      │┃│                                                                            │┃│       notes · exact · › people are tiered, and…  │
 │ ── Shells ────────────── │┃│ › sidecar open --plugin recall rc:notes:2026-08-14-dex-design              │┃│   2  dex context --json                          │
@@ -40,6 +41,5 @@
 │                          │┃│                                                                            │┃│ ──────────────────────────────────────────────── │
 │                          │┃│                                                                            │┃│ Enter opens a tab here, not a side box           │
 │                          │┃│                                                                            │┃│                                                  │
-│                          │┃│                                                                            │┃│                                                  │
 ╰──────────────────────────╯ ╰────────────────────────────────────────────────────────────────────────────╯ ╰──────────────────────────────────────────────────╯
- j/k  Move   Enter  Open   /  Query   [ ]  Tabs   r  Refresh   a  Actions   n  Pane   x  Close   Tab  Focus                     1.3 · resource · recall/results
+ j/k  Move   Enter  Open   /  Query   v  View   [ ]  Tabs   r  Refresh   a  Actions   n  Pane   x  Close   Tab  Focus           1.3 · resource · recall/results

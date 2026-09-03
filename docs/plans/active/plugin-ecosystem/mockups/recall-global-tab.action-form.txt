@@ -1,7 +1,8 @@
  ◱ Sidecar │   Sessions     Activity     DEX                                                          Files     Git     Workspaces     Notes    sidecar ▾  ·  ⚙
 ╭────────────────────────────────────────────────────────────────────────╮ ╭───────────────────────────────────────────────────────────────────────────────────╮
-│ DEX · People                                                           │┃│ Grace Hopper                                                               inner  │
-│  Inner   Circle   Contacts   Stale                  sort: recent ↓     │┃│ Handles  @grace · grace@example.test      Phone  +1 555 0100                      │
+│ DEX · People                                                ⇅ recent   │┃│ Grace Hopper                                                               inner  │
+│                                                                        │┃│                                                                                   │
+│  Inner   Circle   Contacts   Stale                                     │┃│ Handles  @grace · grace@example.test      Phone  +1 555 0100                      │
 │ ────────────────────────────────────────────────────────────────────── │┃│ ── Timeline ───────────────────────────────────────────────────────────────────── │
 │ NAME                    TIER      LAST        NEXT                     │┃│ 9d ago   Call · retrieval eval pack review                                        │
 │ ──────────────────────  ────────  ──────────  ──────────────────────── │┃│ 3w ago   Event · conference dinner                                                │
@@ -9,7 +10,6 @@
 │ Grace Hopper            inner     9d ago      coffee, retrieval demo   │┃│                                                                                   │
 │ Linus Pauling           inner     3w ago      stale · follow up        │┃│                                                                                   │
 │ Mary Somerville         circle    1d ago                               │┃│                                                                                   │
-│                                                                        │┃│                                                                                   │
 │                                                                        │┃│                                                                                   │
 │                                                                        │┃│                                                                                   │
 │                                                                        │┃│                                                                                   │
