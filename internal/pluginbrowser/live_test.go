@@ -224,13 +224,21 @@ func TestLiveHostilePageStaysInsideTheBox(t *testing.T) {
 	s.query = "dex"
 	run(t, m, m.list(c, s, false))
 
-	view := m.View()
-	lines := strings.Split(view, "\n")
-	if len(lines) != 45 {
-		t.Fatalf("hostile page rendered %d lines", len(lines))
+	// Every size the tab can be, not just the one it was built at: a cell that
+	// fits at 160 columns is the one that breaks the frame at 52.
+	for _, size := range [][2]int{{160, 45}, {120, 30}, {80, 20}, {52, 18}} {
+		assertBox(t, m, "hostile page", size[0], size[1])
 	}
-	if strings.Contains(strip(view), "\x1b") || strings.Contains(strip(view), "\x07") {
-		t.Fatal("control bytes reached the frame")
+
+	m.SetSize(160, 45)
+	view := m.View()
+	// The frame's own styling is escape sequences, so the check is on what a
+	// plugin's bytes could have added: BEL, OSC, a carriage return, or a tab,
+	// each of which moves the cursor somewhere the box does not own.
+	for _, forbidden := range []string{"\x07", "\x1b]", "\r", "\t"} {
+		if strings.Contains(view, forbidden) {
+			t.Fatalf("a control byte %q reached the frame", forbidden)
+		}
 	}
 }
 

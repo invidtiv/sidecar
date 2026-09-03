@@ -16,10 +16,12 @@
 //
 // Keys are host-owned and identical for every plugin, which is the whole point
 // of one browser rather than one per plugin: j/k move, Enter opens, / edits the
-// query, v opens the View modal, r refreshes, a opens the action menu, o opens
-// a validated sourceUrl through the host's confirmed path, n opens the pane
-// switcher, and Tab moves between the list and the detail. A plugin may suggest
-// one letter for an action; it is granted only when nothing above, nothing in
+// query, v opens the View modal, r refreshes, a opens the action menu, and o
+// opens a validated sourceUrl through the host's confirmed path. `n` and Tab
+// are deliberately not the browser's: the pane switcher and the app's focus
+// ring already answer both, and the browser joins the ring through
+// PaneFocusProvider rather than by binding a key. A plugin may suggest one
+// letter for an action; it is granted only when nothing above, nothing in
 // keymap.HostReservedKeys, and nothing in the surface's own bindings already
 // uses it.
 package pluginbrowser

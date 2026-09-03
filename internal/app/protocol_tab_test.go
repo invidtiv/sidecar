@@ -214,3 +214,36 @@ func TestPluginBrowserCallsAnswerBeforeTheHostExists(t *testing.T) {
 		t.Fatalf("list before the host exists = %#v", msg)
 	}
 }
+
+// The header carries the plugin's own display name once describe has landed,
+// and the configured instance ID until then. Only the protocol class asks: an
+// embedded plugin's label is a Go literal beside the plugin, and the descriptor
+// and the plugin cannot disagree about it.
+func TestProtocolTabLabelComesFromTheDescribedPlugin(t *testing.T) {
+	protocol := &globalPluginHost{
+		descriptor: plugin.Descriptor{ID: "recall", Name: "recall", Class: plugin.ClassProtocol},
+		plugin:     &hostedTestPlugin{id: "Recall Studio"},
+	}
+	if got := protocol.label(); got != "Recall Studio" {
+		t.Fatalf("protocol label = %q, want the plugin's own name", got)
+	}
+
+	// A plugin with nothing to say yet keeps the descriptor's name, which is the
+	// configured instance ID.
+	silent := &globalPluginHost{
+		descriptor: plugin.Descriptor{ID: "recall", Name: "recall", Class: plugin.ClassProtocol},
+		plugin:     &hostedTestPlugin{id: ""},
+	}
+	if got := silent.label(); got != "recall" {
+		t.Fatalf("undescribed label = %q, want the configured id", got)
+	}
+
+	// The embedded class never asks the plugin, whatever it would have said.
+	embedded := &globalPluginHost{
+		descriptor: plugin.Descriptor{ID: "tasks", Name: "Tasks", Class: plugin.ClassEmbedded},
+		plugin:     &hostedTestPlugin{id: "something else"},
+	}
+	if got := embedded.label(); got != "Tasks" {
+		t.Fatalf("embedded label = %q, want the descriptor's", got)
+	}
+}
