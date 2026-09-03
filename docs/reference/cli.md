@@ -2114,6 +2114,57 @@ sidecar open --project sidecar README.md
 sidecar open --sessions README.md
 ```
 
+## `sidecar plugin`
+
+Inspect the plugins Sidecar hosts
+
+Inspect the plugins Sidecar hosts. A plugin is either embedded (compiled into
+Sidecar, with its own UI) or, once the protocol host lands, an external
+executable Sidecar renders.
+
+```
+Usage: sidecar plugin <command> [options]
+```
+
+### `sidecar plugin list`
+
+List the plugins Sidecar can host
+
+List every plugin Sidecar knows about, in the order the header paints them:
+the project tabs first, then the global-space tabs.
+
+Each row reports the plugin's class (who renders it), scope (project plugins are
+rebuilt on a project switch, global ones are built once), the placements its
+content can occupy, and whether it is enabled.
+
+Enablement is plugins.<id>.enabled. Two deprecated feature flags, tasks_plugin
+and notes_plugin, still answer for their plugin while that key is absent.
+
+This reads configuration directly and runs no plugin: it does not require a
+running Sidecar and starts no subprocess.
+
+```
+Usage: sidecar plugin list [--json]
+```
+
+**Options:**
+
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: success
+- `1`: configuration read failure
+- `2`: usage error
+
+**Examples:**
+
+```bash
+sidecar plugin list
+sidecar plugin list --json
+```
+
 ## `sidecar project`
 
 Inspect, add, edit, and switch Sidecar projects
