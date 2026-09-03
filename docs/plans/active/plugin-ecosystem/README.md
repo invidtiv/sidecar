@@ -1,6 +1,6 @@
 # Plugin ecosystem: protocol plugins, embedded plugins, one host
 
-**Status:** implemented on branch `plugin-ecosystem`: M1 (descriptor and generalized global host, td-01b62b) and M2a (the protocol host half — `internal/pluginhost`, `plugins.external`, the fixture and conformance suite, and the `sidecar plugin` CLI — td-a6d276). M0's mockups are in [mockups/](mockups/) and the protocol revisions they surfaced are still pending the maintainer's confirmation, so none of them is implemented. The rest of M2 (`internal/pluginbrowser` and the global tab), M3, and M4 are proposed. Decisions settled with the maintainer on 2026-09-02. **Tracking:** td-f9f007.
+**Status:** implemented on branch `plugin-ecosystem`: M1 (descriptor and generalized global host, td-01b62b), M2a (the protocol host half — `internal/pluginhost`, `plugins.external`, the fixture and conformance suite, and the `sidecar plugin` CLI — td-a6d276) and M2b (the shared browser `internal/pluginbrowser` and the protocol global tab, td-0d3539). M0's mockups are in [mockups/](mockups/) and the protocol revisions they surfaced are still pending the maintainer's confirmation, so none of them is implemented. M3 and M4 are proposed. Decisions settled with the maintainer on 2026-09-02. **Tracking:** td-f9f007.
 
 **Related:** [Terminal resource providers](../../implemented/terminal-resource-providers.md) built the executable protocol, the `Resource` leaf, and the trust posture this plan extends; its protocol stays frozen and keeps working. [Hosting Herdr plugins in Sidecar](../../deprecated/herdr-plugin-support.md) is superseded by this plan. [Pane switcher everywhere](../pane-switcher-everywhere.md) and [Cross-project td issue links](../cross-project-issue-links.md) are the two nearest live plans and neither conflicts.
 
@@ -86,11 +86,11 @@ Each milestone ends net-better than the tree before it, lands on main, and is ga
 - Everything behind the `plugin_protocol` feature flag, default off.
 - **Evidence:** `go test ./...` green; the fixture driven from an isolated config through `plugin list`, `check --list/--get`, `call describe|list|get|act`, and `add/disable/remove`; every hostile fixture case bounded, including an `act` that never returns ending in a killed process group at its configured timeout.
 
-### M2b. The browser in a tab
+### M2b. The browser in a tab — implemented, td-0d3539
 
-- `internal/pluginbrowser`: the shared list-and-detail browser with host-owned keys, view pills, sort picker, query line, notices, action menu and input form, and the capability interfaces implemented once.
-- A global tab for each enabled protocol plugin with a `tab` placement, hosted through M1's `globalPluginHost`.
-- **Evidence:** the fixture plugin driven end to end in an isolated run: query, open, action with inputs, degraded notice, setup card; every hostile fixture case produces a bounded card and never a frozen frame.
+- `internal/pluginbrowser`: the shared list-and-detail browser with host-owned keys, a query line with a 250 ms debounce and cancellation, the View modal (sort keys and views, built as `internal/overview/view_flyout.go` builds its own), notices, paging on demand, a detail box rendering fields, body and sections with relative timelines, the action menu with typed input forms and a confirm step, and the capability interfaces implemented once. Host-independent in the same way `resourceview` is.
+- A global tab for each enabled protocol plugin with a `tab` placement, hosted through M1's `globalPluginHost` with no new host type; the project context, including a remote surface's `hostId`, is republished from the same place the matchers are.
+- **Evidence:** `go test ./...` green; the browser driven against the real fixture process through a real `pluginhost.Manager` in `internal/pluginbrowser/live_test.go`, including every hostile describe mode ending in a bounded card; an isolated `tmux-drive.sh` run at 160x45 covering the empty query, a live query, a document with sections, the View modal, the action menu, the input form, the outcome flash, the degraded notice, the abstained state, the setup card, and the narrow reflow.
 
 ### M3. Panes, persistence, refresh, and `open`
 
@@ -157,4 +157,5 @@ Not blocking M0 or M1; each has a default the plan proceeds under.
 - 2026-09-02: opened. Decisions 1–11 settled in conversation with the maintainer; Herdr plugin-hosting plan superseded.
 - 2026-09-02: decision 12 (theme awareness) and the pending-revisions table added from the M0 recall mockup.
 - 2026-09-02: M1 implemented on branch `plugin-ecosystem` (td-01b62b). One deviation from the design: `tabRef.global` is the surface ID rather than an index into the global slice, because the persisted value is an ID already and carrying one identity instead of two removes a whole class of staleness.
+- 2026-09-02: M2b implemented on branch `plugin-ecosystem` (td-0d3539). The view pill row became one View control on the pane title row opening a modal, following the M0 mockups; deviations are recorded in [host.md](host.md#deviations-from-the-design-recorded-in-m2b).
 - 2026-09-02: M2 split into M2a (protocol host and CLI) and M2b (the browser and the tab); M2a implemented on branch `plugin-ecosystem` (td-a6d276). `internal/resourceprovider` was renamed to `internal/pluginhost` rather than wrapped, so there is literally one manager, one cache, and one process policy. Deviations from the design are recorded in [host.md](host.md#deviations-from-the-design-recorded-in-m2a). None of the pending protocol revisions above was implemented: the draft is implemented as written.

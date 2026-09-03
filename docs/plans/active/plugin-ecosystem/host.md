@@ -1,6 +1,6 @@
 # Host architecture: one descriptor, two classes, both surfaces
 
-**Status:** M1 (td-01b62b) and M2a (td-a6d276) implemented on branch `plugin-ecosystem`; M2b onward are design. **Controlling document:** [README.md](README.md). **Contract:** [protocol.md](protocol.md).
+**Status:** M1 (td-01b62b), M2a (td-a6d276) and M2b (td-0d3539) implemented on branch `plugin-ecosystem`; M3 onward are design. **Controlling document:** [README.md](README.md). **Contract:** [protocol.md](protocol.md).
 
 This document is the Sidecar-side half: how a plugin is described, enabled, placed, rendered, refreshed, persisted, and reached from the CLI, and which existing seams each of those reuses.
 
@@ -15,6 +15,7 @@ What M1 built, and what the remaining milestones turn each of the rest into.
 | Enablement is `plugins.<id>.enabled` for every plugin; `tasks_plugin` and `notes_plugin` are read-only aliases | `internal/config/config.go`, each plugin's `descriptor.go` | Built |
 | `configui.Integration{ID, Name, Why, Descriptor}` is a projection of the descriptor, carrying only the install route | `internal/configui/integrations.go` | Built |
 | External executables: `plugins.external[]` and `terminalResources.providers[]`, `pluginhost.Manager`, describe/resolve/list/get/act | `internal/config/pluginexternal.go`, `internal/config/terminalresources.go`, `internal/pluginhost` | Built in M2a. The leaf still needs collection tabs (M3) |
+| The shared browser and the protocol global tab | `internal/pluginbrowser`, `internal/app/pluginbrowser.go` | Built in M2b. The same model binds the pane in M3 |
 | The `Resource` leaf, one kind for every external plugin's content | `internal/panelayout/panelayout.go:28` | M3. Gains collection tabs |
 | `Resource` leaf has no `livepanes` binding | `internal/livepanes/livepanes.go:11-13` names this as the motivating defect | M3. Gets one, driven by plugin-declared `refresh` |
 | `sidecar open --provider ID LOCATOR`, layout spec `{"kind":"resource","provider":…}`, `terminal-links list/check` | `internal/cli/open.go`, `internal/uirequest/types.go:85`, `internal/cli/registry.go` | M3. `sidecar plugin …` family; `--provider` and `terminal-links` kept as aliases |
@@ -158,30 +159,55 @@ Everything the protocol host does is behind the `plugin_protocol` feature flag, 
 
 ## The shared browser
 
-One package, `internal/pluginbrowser`, renders a protocol plugin. It is host-independent in the same way `resourceview` is (`internal/resourceview/doc.go`): it knows `pluginhost` types and nothing about panes, tmux, or which surface is showing it.
+One package, `internal/pluginbrowser`, renders a protocol plugin. It is host-independent in the same way `resourceview` is (`internal/resourceview/doc.go`): it knows `pluginhost` types and nothing about panes, tmux, or which surface is showing it. Every call to a plugin is a command the host supplies through `pluginbrowser.Calls`, so no process is ever started inside `Update` or `View`.
 
 ```text
-┌ Recall ─────────────────────────────────────────────────────────────────┐
-│ ▸ query: dex_                                    Results · 7 · degraded │
-│ ─────────────────────────────────────────────────────────────────────── │
-│  # Title                      Source    Excerpt                          │
-│ ❯1 DEX schema notes           notes     …people are tiered, and the…    │
-│  2 dex context --json         shell     …the star command…              │
-│ ...                                                                      │
-│ ⚠ 1 of 4 sources did not answer (mail: checkpoint stale)                │
-├──────────────────────────────────────────────────────────────────────────┤
-│  DEX schema notes                                     exact · notes      │
-│  Source notes  Locator rc:notes/2026-08-14-dex-design  Updated 2w ago    │
-│  ── Evidence ─────────────────────────────────────────────────────────── │
-│  rendered markdown …                                                     │
-└──────────────────────────────────────────────────────────────────────────┘
+╭───────────────────────────────────────────────╮ ╭──────────────────────────────╮
+│ Fixture · Results                ⇅ Relevance  │ │ Fixture row rc:notes:1 exact │
+│                                               │ │                              │
+│ / dex                  3 results   answered   │ │ results · 2026-08-14         │
+│                                               │ │                              │
+│   #  TITLE            SOURCE   EXCERPT        │ │ Collection  results          │
+│ ───  ───────────────  ───────  ────────  ──── │ │ Locator     rc:notes:1       │
+│ ❯ 1  dex schema notes notes    …tiered…  exact│ │ ── Evidence ──────────────── │
+│   2  dex context      shell    …the star…exact│ │ rendered markdown …          │
+│                                               │ │ ── Timeline ──────────────── │
+│ ───────────────────────────────────────────── │ │ 2w ago    Note added         │
+│ ⚠  1 of 4 sources did not answer              │ │                              │
+│ 3 shown · the rest load on scroll             │ │ o  open https://…            │
+╰───────────────────────────────────────────────╯ ╰──────────────────────────────╯
 ```
 
-The real mockups are the M0 deliverable and live in [mockups/](mockups/); the sketch above only fixes the parts: a query or filter line (shown when the collection's `search` is not `none`), a view pill row (when `views` is non-empty), a table with a cursor that reflows to primary/secondary rows when narrow, a notice line, and a detail deck below or beside it depending on the box. In a `Tab` placement the browser owns the whole content box and shows list and detail together. In a pane the same package renders either a collection tab or a document tab, because a pane is usually too small for both.
+The parts, in the order the rows fall:
 
-Keys are host-owned and identical for every plugin: `j`/`k` move, `Enter` opens (a document tab in the same leaf, or the detail box in a tab placement), `/` edits the query, `v` cycles views, `s` opens the sort picker, `r` refreshes, `a` opens the action menu, `o` opens `sourceUrl` through the confirmed path, `n` opens the pane switcher as it does in every deck-eligible plugin. A plugin-suggested action `key` is granted only if none of these, none of `keymap.HostReservedKeys`, and none of the surface's bindings use it.
+- The pane title is the first row inside the box, never in the border, with the **View control right-aligned on it** — the sort pill Sidecar's own lists already use (`workspacelist.SortGlyph` in `styles.Button`), carrying the live sort key and, folded into the same label, the applied view. It sheds its word before it sheds its glyph, which is the app's own degradation ladder.
+- One blank row under the title.
+- The **query row**, shown only when the collection's `search` is not `none`. It owns its line, with the item count and the page's outcome right-aligned on it, and one blank row of padding beneath. A blank row and a rule say the same thing; the blank one is quieter.
+- The **table**: column headings, a rule, then rows with a two-column cursor gutter. Row `status` gets a reserved, unlabelled right-hand column rather than a plugin-declared one. Below `narrowTable` the rows reflow: the primary cell on line one, the remaining short columns and the secondary cell folded into a dimmed line two.
+- A rule, the page's **notices**, and a summary line saying what is shown, what is left, and whether the host held anything back. An act's outcome message is right-aligned on that line and repeated in the host footer.
+- An empty state that says what is true and offers the next action: "this collection needs a query" for `search: required`, "no matches" under `abstained`, and "no matches, and coverage was incomplete" under `degraded`. The three are never interchanged, because each is a different claim.
 
-`PaneFocusProvider`, `ContentLinkProvider`, `WheelBoundaryConsumer`, `FooterStatusProvider`, and `DiagnosticProvider` are implemented once by the browser, so every protocol plugin gets the app focus ring, content links in rendered bodies, correct wheel behaviour, a footer status when `describe` fails, and diagnostics without doing anything.
+In a `Tab` placement the browser owns the whole content box and shows list and detail side by side, giving the list 61% and the detail the rest; below the detail floor the list takes the whole box. In a pane (M3) the same package renders either a collection tab or a document tab, because a pane is usually too small for both.
+
+`v` opens the **View modal**, built exactly as `internal/overview/view_flyout.go` builds its own: a `Current sort:` line, a spacer, the declared sort keys with the live one selected, the declared views with the live one selected, a spacer, and a `Done` button. It replaces the view pill row the earlier draft called for — pills spend a row on every collection whether or not anyone is choosing, and folding the choice into one control on the title row is what the list-row grammar in the design language has space for.
+
+An action opens one of three steps, decided by its own declaration: a **form** when it declares inputs (one control per input, typed: text, multiline, choice, confirm), a **confirm** when it mutates and declares none, and nothing at all otherwise. The form is the confirm step for an action that has one — a user who filled it in has already said yes — and a required input left empty stops in the modal rather than sending the plugin a value it said it needs and did not get.
+
+Keys are host-owned and identical for every plugin: `j`/`k` move, `Enter` opens (a document tab in the same leaf, or the detail box in a tab placement) and a second `Enter` on the same row focuses it, `/` edits the query, `v` opens the View modal, `r` refreshes, `a` opens the action menu, `o` opens `sourceUrl` through the host's confirmed path, `Esc` closes an overlay. `n` and `Tab` are deliberately not the browser's: the pane switcher and the focus ring belong to the app, and a surface that swallowed either would be answering a question the ladder already answered. A plugin-suggested action `key` is granted only if none of the browser's own keys, none of `keymap.HostReservedKeys`, none of `keymap.GlobalKeys`, and no other action already uses it; a grant is rebuilt on every describe and never persisted.
+
+Search as you type is a 250 ms debounce (`pluginbrowser.QueryDebounce`) plus cancellation: every keystroke schedules a tick, only the newest one spends a process, and the manager supersedes the in-flight `list` for that pane key, which kills its process group. A page whose generation is not the live one is discarded rather than painted over the newer one.
+
+`PaneFocusProvider`, `ContentLinkProvider`, `WheelBoundaryConsumer`, `FooterStatusProvider`, `DiagnosticProvider`, `TextInputConsumer` and `KeyRouter` are implemented once, by `pluginbrowser.TabPlugin`, so every protocol plugin gets the app focus ring, content links over its detail box, correct wheel behaviour, a footer status when `describe` fails, diagnostics, and the key ladder without doing anything. The browser never renders a footer of its own: it publishes `Commands()` in its own per-instance context, and an open overlay reports a second context so the bar describes what actually has the keyboard.
+
+## The protocol tab
+
+A configured instance that declares a `tab` placement becomes a global tab through M1's `globalPluginHost`, with no new host type:
+
+1. `pluginbrowser.TabDescriptors(cfg, calls)` projects `plugin.ProtocolDescriptors(cfg)` down to the tab placements and attaches `New`. It is a pure function of configuration — no process, no `LookPath`, no disk — so it is safe on the first-frame path.
+2. `app.globalProtocolDescriptors(cfg)` filters that to enabled, global-scope entries behind the `plugin_protocol` flag, and `newGlobalPluginHosts` receives it appended to `GlobalDescriptors()`. Sessions and Activity keep `8` and `9`; the first plugin-provided global tab keeps `0`, whether it is Tasks or a protocol plugin.
+3. The header label comes from the plugin's own `describe` for the protocol class and from the descriptor for the embedded one, because a protocol descriptor names its plugin by the configured instance ID until there is something better to say.
+4. `app.pluginBrowserCalls` is the seam: `Describe` reads the manager's cached status, and `List`, `Get` and `Act` each run inside a `tea.Cmd` over the same `pluginhost.Manager` the resource protocol uses — one cache, one dedupe table, one concurrency budget, one process policy.
+5. A describe pass ends in `publishResourceProviders`, which hands every browser a `pluginbrowser.DescribedMsg` in the same breath as it republishes matchers and the resolver. That is also where the project context every protocol plugin is asked about is republished, because a global plugin outlives every project switch and the context it was constructed with is the wrong answer the moment the user moves. On a remote-bound surface it carries that host's ID and that host's paths; Sidecar never substitutes a local path.
 
 ## Panes: reuse the Resource leaf, add a tab shape
 
@@ -253,6 +279,15 @@ The startup posture is unchanged: no subprocess, no `LookPath`, no config read o
 8. **M2 was split** into M2a (this) and M2b (the browser and the tab), because the host half is independently useful and independently provable.
 
 None of the [pending protocol revisions](README.md#protocol-revisions-pending-from-the-m0-recall-mockup) was implemented. The draft is implemented as written.
+
+## Deviations from the design, recorded in M2b
+
+1. **The view pill row is a View modal.** The draft called for a pill row when `views` is non-empty and a separate sort picker on `s`. The mockups settled on one control instead: a sort pill on the title row that opens a modal carrying both, so a collection with four views does not spend a row saying so on every frame. `s` binds nothing; `v` opens the modal.
+2. **`n` and `Tab` are not the browser's keys.** The design listed `n` among the browser's own. It is the app's, self-gated by `paneSwitcherCommands`, and claiming it would have put a second answer behind a key that already has one. `Tab` is the app-owned focus ring, which the browser joins through `PaneFocusProvider` rather than by binding the key.
+3. **An empty detail box shows what the next gesture does, not the plugin's next collection.** The host rule in the pending-revisions table asks for the second collection there. It is not implemented, for the same reason nothing else in that table is: none of those revisions is confirmed, and M2a implemented the draft as written.
+4. **`internal/pluginbrowser` has its own detail renderer** rather than reusing `resourceview.Model`. The card the mockups specify is a different layout from the resource card — title with a right-aligned status, subtitle, field grid, then sections under titled rules — and `resourceview` renders no sections at all today. M3 is where the two meet, because that is when the same document has to render in a pane.
+5. **The browser owns one truncation function.** `ui.TruncateString` measures runes rather than display cells behind escape sequences, so a styled table row handed to it came back cut mid-data while the frame stayed exactly the right width. Everything the browser paints goes through `fitStyled`, which is `ansi`-aware and pads as well as truncates, so "every line is exactly the box's width" is a property of one function instead of a promise each renderer keeps.
+6. **The header label for a protocol tab comes from the plugin.** `globalPluginHost.label()` asks the hosted plugin first for the protocol class only. An embedded plugin keeps the descriptor's label, because that is a Go literal beside the plugin and the two cannot disagree.
 
 ## What does not change
 

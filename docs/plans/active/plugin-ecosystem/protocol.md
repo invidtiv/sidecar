@@ -1,6 +1,6 @@
 # Sidecar plugin protocol v1 (draft)
 
-**Status:** draft contract, opened 2026-09-02, implemented by the host in M2a (td-a6d276). Nothing here is frozen. It freezes the way `sidecar.terminal-resource/v1` did: the host has implemented it, one real external plugin (recall) implements it against a live tool next, and both revise what they found. Until then the identifier is `sidecar.plugin/v1-draft` and a host may refuse it at any point. **Controlling document:** [README.md](README.md). **Host architecture:** [host.md](host.md).
+**Status:** draft contract, opened 2026-09-02, implemented by the host in M2a (td-a6d276) and rendered by it in M2b (td-0d3539). Nothing here is frozen. It freezes the way `sidecar.terminal-resource/v1` did: the host has implemented it, one real external plugin (recall) implements it against a live tool next, and both revise what they found. Until then the identifier is `sidecar.plugin/v1-draft` and a host may refuse it at any point. **Controlling document:** [README.md](README.md). **Host architecture:** [host.md](host.md).
 
 **Related:** [Terminal resource provider protocol](../../../reference/terminal-resource-provider-protocol.md) is the frozen v1 this grows from. Everything in that document that this one does not restate still holds: invocation model, process groups, the execution environment, stderr handling, transport failure rules, sanitization, and the safety posture.
 
@@ -133,8 +133,8 @@ A collection is a named, listable set of rows the host can show as a table with 
 | `id`, `title` | Stable ID (persisted in pane state) and display title. |
 | `search` | `none`, `optional`, or `required`. `required` means the collection is empty until there is a query (recall). `optional` filters. |
 | `columns[]` | Ordered. `{id, label, width?, align?, kind?, primary?, secondary?}`. Exactly one `primary` column names the row; an optional `secondary` column is rendered under it when the pane is too narrow for a table. `kind` is `text` (default), `status`, `timestamp`, `user`, `number`, `badge`. Width is a hint in cells; the host reflows. |
-| `views[]` | Named preset filters: `{id, title}`. The host shows them as a pill row; the selected view ID goes back in `list`. ongoing's attention/rising/dormant, DEX's tiers. |
-| `sort[]` | Sortable keys: `{id, label, default?: "asc"|"desc"}`. The host offers them in a sort picker; the chosen key and direction go back in `list`. |
+| `views[]` | Named preset filters: `{id, title}`. The host offers them in its View modal, opened from the sort control on the pane's title row; the selected view ID goes back in `list`. ongoing's attention/rising/dormant, DEX's tiers. |
+| `sort[]` | Sortable keys: `{id, label, default?: "asc"|"desc"}`. The host offers them in the same View modal; the chosen key and direction go back in `list`. |
 | `detail` | Whether `get` is meaningful for rows. `false` means Enter does nothing but a `sourceUrl` on the row can still open. |
 | `refresh` | `{everySeconds?, watch?[]}`. See [Freshness](#freshness-how-live-behaviour-works-without-a-resident-process). |
 | `context` | Optional narrowing: `["project"]` means this collection is meaningful only when project context exists, so a global surface hides it. |
