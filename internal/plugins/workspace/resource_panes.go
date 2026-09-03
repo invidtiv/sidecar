@@ -227,6 +227,33 @@ func (p *Plugin) focusedResourcePane() (*resourcePane, *PaneNode) {
 	return res, leaf
 }
 
+// focusedResourceTabs is the tab set of the focused Resource leaf, or nil when
+// the keyboard is somewhere else. It is what this surface reports keyboard
+// ownership from: the leaf's own tabs answer whether a query line or an overlay
+// has the keys, so the host's ladder holds its globals back for the same
+// reasons on this surface as on the global Sessions one.
+func (p *Plugin) focusedResourceTabs() *resourceview.Tabs {
+	res, _ := p.focusedResourcePane()
+	if res == nil {
+		return nil
+	}
+	return res.tabs
+}
+
+// resourcePaneConsumesTextInput reports that a focused collection pane's query
+// line is taking typed text.
+func (p *Plugin) resourcePaneConsumesTextInput() bool {
+	tabs := p.focusedResourceTabs()
+	return tabs != nil && tabs.ConsumesTextInput()
+}
+
+// resourcePaneBlocksGlobalKeys reports that a focused collection pane has an
+// overlay — the View control, an action form — owning the keyboard.
+func (p *Plugin) resourcePaneBlocksGlobalKeys() bool {
+	tabs := p.focusedResourceTabs()
+	return tabs != nil && tabs.BlocksGlobalKeys()
+}
+
 // handleResourceKey is the focused Resource leaf's input context. The
 // documented pane keys are asked first and answered by the shared pane, so
 // both surfaces spell them identically; only the close/hide rule, the sidebar

@@ -536,6 +536,14 @@ func (p *Plugin) ConsumesTextInput() bool {
 	if p.docSearchActive() || p.docFindActive() {
 		return true
 	}
+	// A collection pane's query line is a text input like any other. Without
+	// this the host's global switch takes `1`, `` ` ``, `[` and the rest out of
+	// the middle of a query — the tab digits would switch project tabs while
+	// the user is typing into a pane. The predicate is the pane's own, so the
+	// global Sessions surface answers the identical question.
+	if p.resourcePaneConsumesTextInput() {
+		return true
+	}
 	if p.filterFocused() && p.activePane == PaneSidebar && !p.docFocused() {
 		return true
 	}
@@ -564,7 +572,40 @@ func (p *Plugin) BlocksGlobalKeys() bool {
 	if p.docSearchActive() {
 		return true
 	}
+	// The View control and an action form are overlays drawn inside a
+	// collection pane. They own the keyboard exactly as a boxed modal does.
+	if p.resourcePaneBlocksGlobalKeys() {
+		return true
+	}
 	return p.viewMode != ViewModeList && p.viewMode != ViewModeKanban && p.viewMode != ViewModeInteractive
+}
+
+// ClaimsKey implements plugin.KeyRouter (precedence level 3): a live
+// contextual binding of the focused surface beats sidecar's global bindings.
+//
+// The only claim this plugin makes is the focused Resource leaf's plugin-shaped
+// tab, and the claim is the browser's own, so `j`, `enter`, `/`, `v`, `r`, `a`,
+// `o` and a plugin's granted action letters mean in a pane what they mean in
+// the global browser tab, whatever the host later binds globally. Every other
+// workspace key is answered at level 5 as it always has been; claiming them
+// here would move a large, well-settled keymap up two rungs for no reason.
+func (p *Plugin) ClaimsKey(key string) bool {
+	tabs := p.focusedResourceTabs()
+	return tabs != nil && tabs.ClaimsKey(key)
+}
+
+// QuitKeyExits implements plugin.KeyRouter. It is the same answer the host's
+// own root-context list gives for this plugin's contexts — the list and the
+// preview are where `q` quits sidecar, and every other context (a focused
+// content leaf, a filter, a form) answers `q` itself. Implementing KeyRouter
+// moves that decision here, so it is stated here rather than inferred.
+func (p *Plugin) QuitKeyExits() bool {
+	switch p.FocusContext() {
+	case "workspace-list", "workspace-preview":
+		return true
+	default:
+		return false
+	}
 }
 
 // resourcePaneCommands is the footer vocabulary of a focused Resource leaf.

@@ -25,6 +25,9 @@ func (c *globalCollectionCalls) callsFor() resourceview.CallsFor {
 			ID: "results", Title: "Results", Detail: true,
 			Search:  pluginhost.SearchOptional,
 			Columns: []pluginhost.Column{{ID: "title", Label: "Title"}},
+			// A declared view gives the pane its View control, which is the
+			// overlay the keyboard-ownership test opens.
+			Views:   []pluginhost.View{{ID: "recent", Title: "Recent"}},
 			Refresh: pluginhost.Refresh{EverySeconds: 30},
 		}},
 	}

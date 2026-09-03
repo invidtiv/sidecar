@@ -17,6 +17,7 @@ import (
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/panereposition"
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/tabs"
@@ -807,6 +808,47 @@ func (m *Model) previewCloseWheelAtBoundary(kind panelayout.Kind, delta int) boo
 // off the query.
 func (m *Model) WorkspacesFilterFocused() bool {
 	return m.workspaces.Filter().Focused()
+}
+
+// WorkspacesConsumesTextInput is this surface's half of the keyboard-ownership
+// question every plugin answers with plugin.TextInputConsumer: the list filter
+// or a focused collection pane's query line is taking typed text, so the host
+// must not run its printable shortcuts or advertise them in the footer.
+//
+// The project workspace answers the same question from the same pane predicate
+// (workspace.Plugin.ConsumesTextInput). Two surfaces, one answer.
+func (m *Model) WorkspacesConsumesTextInput() bool {
+	if m == nil {
+		return false
+	}
+	if m.WorkspacesFilterFocused() {
+		return true
+	}
+	tabs := m.focusedResourceTabs()
+	return tabs != nil && tabs.ConsumesTextInput()
+}
+
+// WorkspacesBlocksGlobalKeys is the other half: an overlay drawn inside a
+// focused collection pane — the View control, an action form — owns the
+// keyboard the way a boxed modal does.
+func (m *Model) WorkspacesBlocksGlobalKeys() bool {
+	if m == nil {
+		return false
+	}
+	tabs := m.focusedResourceTabs()
+	return tabs != nil && tabs.BlocksGlobalKeys()
+}
+
+// focusedResourceTabs is the tab set of the focused Resource pane, or nil when
+// the keyboard is somewhere else.
+func (m *Model) focusedResourceTabs() *resourceview.Tabs {
+	if !m.resourcePaneFocused() {
+		return nil
+	}
+	if m.preview.resource == nil {
+		return nil
+	}
+	return m.preview.resource.tabs
 }
 
 // WorkspacesFilterActive reports that a query is still narrowing the list, even

@@ -296,6 +296,15 @@ func (t *Tabs) ConsumesTextInput() bool {
 	return m != nil && m.ConsumesTextInput()
 }
 
+// BlocksGlobalKeys reports that the active tab has an overlay owning the
+// keyboard — the View control or an action form. A host asks it at precedence
+// level 2, beside its own modal question, so those keys reach the overlay
+// rather than the host's global switch.
+func (t *Tabs) BlocksGlobalKeys() bool {
+	m := t.Active()
+	return m != nil && m.BlocksGlobalKeys()
+}
+
 // PluginSurface is what the app injects the protocol-plugin seam into. It is
 // declared here rather than in the app, and asserted by each surface, for the
 // reason Surface gives: an assertion that quietly fails is a collection pane

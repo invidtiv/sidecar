@@ -2389,6 +2389,13 @@ func (m *Model) pluginBlocksGlobalKeys() bool {
 	if m.appContentPassiveFocused() {
 		return false
 	}
+	// The global Sessions surface is not a plugin, so it cannot implement
+	// plugin.GlobalKeyBlocker — but it hosts the same panes the project
+	// workspace does, and an overlay inside one of them owns the keyboard on
+	// both. Asking here is what keeps the two projections one answer.
+	if m.globalWorkspacesVisible() && m.overview.WorkspacesBlocksGlobalKeys() {
+		return true
+	}
 	p := m.focusedSurface()
 	blocker, ok := p.(plugin.GlobalKeyBlocker)
 	return ok && blocker.BlocksGlobalKeys()
@@ -2458,6 +2465,13 @@ func (m Model) textInputFocused() bool {
 	// focused again.
 	if m.appContentPassiveFocused() {
 		return isTextInputContext(m.activeContext)
+	}
+	// The global Sessions surface answers for itself: its list filter and a
+	// focused collection pane's query line take typed text exactly as the
+	// project workspace's do, and it is not a plugin, so it cannot say so
+	// through plugin.TextInputConsumer.
+	if m.globalWorkspacesVisible() && m.overview.WorkspacesConsumesTextInput() {
+		return true
 	}
 	// A global view overlays the plugin pane and takes keyboard focus, so a
 	// plugin sitting in a text-input mode underneath it does not consume keys.
