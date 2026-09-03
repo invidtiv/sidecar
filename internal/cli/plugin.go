@@ -608,11 +608,12 @@ func runPluginList(env Env, args []string) int {
 }
 
 func writePluginListText(env Env, items []pluginJSONItem) {
-	idWidth, classWidth, scopeWidth := 0, 0, 0
+	idWidth, classWidth, scopeWidth, placeWidth := 0, 0, 0, 0
 	for _, item := range items {
 		idWidth = max(idWidth, len(item.ID))
 		classWidth = max(classWidth, len(item.Class))
 		scopeWidth = max(scopeWidth, len(item.Scope))
+		placeWidth = max(placeWidth, len(strings.Join(item.Placements, ",")))
 	}
 	for _, item := range items {
 		state := "off"
@@ -622,11 +623,11 @@ func writePluginListText(env Env, items []pluginJSONItem) {
 		if item.Enabled && !item.Active {
 			state = "on (inactive: " + item.InactiveReason + ")"
 		}
-		line := fmt.Sprintf("%-*s  %-*s  %-*s  %-8s  %s",
+		line := fmt.Sprintf("%-*s  %-*s  %-*s  %-*s  %s",
 			idWidth, item.ID,
 			classWidth, item.Class,
 			scopeWidth, item.Scope,
-			strings.Join(item.Placements, ","),
+			placeWidth, strings.Join(item.Placements, ","),
 			state)
 		if item.Source != "" {
 			line += "  " + item.Source
