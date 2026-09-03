@@ -73,6 +73,10 @@ type Host interface {
 type Pane struct {
 	Tabs *Tabs
 	host Host
+	// saved is the persisted projection as it was at the last save, so a key
+	// that changed nothing a reader would see does not cost a write. See
+	// persist.
+	saved paneSnapshot
 }
 
 // NewPane binds a tab set to a surface.
@@ -241,6 +245,16 @@ func (p *Pane) HandleKey(key string) (handled bool, cmd tea.Cmd) {
 	if p == nil || p.Tabs == nil || p.Tabs.Empty() {
 		return false, nil
 	}
+	// A plugin-shaped tab answers first, with the browser's own keys. They are
+	// the same keys the global tab binds, which is the whole point of one
+	// browser: j/k, Enter, /, v, r, a and o mean what they mean everywhere.
+	// { and } stay the leaf's, because the strip is the leaf's.
+	if m := p.Tabs.Active(); m != nil && m.IsPlugin() && key != "{" && key != "}" {
+		if cmd, ok := p.Tabs.HandlePluginKey(key); ok {
+			p.persist()
+			return true, cmd
+		}
+	}
 	switch key {
 	case "r":
 		return true, p.Refresh()
@@ -273,10 +287,49 @@ func (p *Pane) pageStep() int {
 	return 1
 }
 
+// persist saves the leaf's tabs — but only when what would be written has
+// actually changed. Every consumed key asks, and on the project surface the
+// host's answer is a state.json write, so an unconditional persist would spend
+// one synchronous save per character typed into a query line. The comparison is
+// over the reference-only projection that IS the saved record, so anything that
+// moves the saved position (a committed query, a view, a sort, the cursor, the
+// scroll, a tab opening or closing) still writes exactly once.
 func (p *Pane) persist() {
-	if p.host != nil {
-		p.host.Persist()
+	if p == nil || p.host == nil {
+		return
 	}
+	if p.Tabs != nil {
+		next := paneSnapshot{set: true, active: p.Tabs.ActiveIndex(), tabs: p.Tabs.References()}
+		if next.equal(p.saved) {
+			return
+		}
+		p.saved = next
+	}
+	p.host.Persist()
+}
+
+// paneSnapshot is the persisted projection of a leaf at one moment.
+type paneSnapshot struct {
+	set    bool
+	active int
+	tabs   []PersistedTab
+}
+
+func (s paneSnapshot) equal(other paneSnapshot) bool {
+	// An unset snapshot equals nothing: the first save after a pane is built
+	// always happens, whatever it happens to hold.
+	if !s.set || !other.set {
+		return false
+	}
+	if s.active != other.active || len(s.tabs) != len(other.tabs) {
+		return false
+	}
+	for i := range s.tabs {
+		if s.tabs[i] != other.tabs[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // Stable command IDs for a Resource leaf. They are declared here, not derived

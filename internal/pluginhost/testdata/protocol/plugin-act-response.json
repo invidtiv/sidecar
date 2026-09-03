@@ -1,0 +1,9 @@
+{
+  "protocol": "sidecar.plugin/v1-draft",
+  "outcome": {
+    "status": "done",
+    "message": "Logged a note for Ada",
+    "refresh": ["people"],
+    "open": {"collection": "people", "id": "p:ada"}
+  }
+}

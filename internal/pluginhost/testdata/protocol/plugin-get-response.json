@@ -1,0 +1,27 @@
+{
+  "protocol": "sidecar.plugin/v1-draft",
+  "resource": {
+    "identity": "rc:notes:2026-08-14-dex-design",
+    "title": "DEX schema notes",
+    "subtitle": "notes · 2026-08-14",
+    "status": {"label": "exact", "tone": "success"},
+    "fields": [
+      {"label": "Source", "value": "notes"},
+      {"label": "Locator", "value": "rc:notes:2026-08-14-dex-design"}
+    ],
+    "body": {"format": "markdown", "text": "Opening paragraph of the note."},
+    "sections": [
+      {"title": "Evidence", "body": {"format": "markdown", "text": "Why this matched."}},
+      {
+        "title": "Timeline",
+        "items": [
+          {"when": "2026-08-14T10:02:00Z", "title": "Note added", "text": "first revision"},
+          {"when": "2026-08-20T16:40:00Z", "title": "Linked from td-3fa2c1", "text": ""}
+        ]
+      }
+    ],
+    "sourceUrl": "",
+    "updatedAt": "2026-08-20T16:40:00Z",
+    "freshForSeconds": 60
+  }
+}

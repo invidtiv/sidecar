@@ -10,16 +10,17 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/features"
+	"github.com/marcus/sidecar/internal/pluginbrowser"
+	"github.com/marcus/sidecar/internal/pluginhost"
 	"github.com/marcus/sidecar/internal/resource"
-	"github.com/marcus/sidecar/internal/resourceprovider"
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/startuptrace"
 )
 
-// Terminal resource providers must never enter the first-frame path. Not
-// plugin.Init, not config loading, not app construction, not a render path: no
-// LookPath, no subprocess, no provider config read, no network before the first
-// frame is on screen.
+// External plugins — terminal resource providers and protocol plugins alike —
+// must never enter the first-frame path. Not plugin.Init, not config loading,
+// not app construction, not a render path: no LookPath, no subprocess, no
+// plugin config read, no network before the first frame is on screen.
 //
 // Bubble Tea's command timing is not a strong enough guarantee for that. A
 // command returned from Init can start running before the first render, so
@@ -53,7 +54,7 @@ var firstReadyFrameLatch = newReadyLatch()
 // about it exists during construction or rendering.
 var resourceProviderHost struct {
 	mu      sync.Mutex
-	manager *resourceprovider.Manager
+	manager *pluginhost.Manager
 	cancel  context.CancelFunc
 	// ctx is the lifetime resolves hang off, so shutdown cancels them.
 	ctx context.Context
@@ -62,7 +63,7 @@ var resourceProviderHost struct {
 // ResourceProvidersDescribedMsg reports the outcome of a describe pass. In M0
 // it is diagnostics only: nothing in the TUI changes shape because of it.
 type ResourceProvidersDescribedMsg struct {
-	Statuses []resourceprovider.Status
+	Statuses []pluginhost.Status
 	// SnapshotError is the error from a refused snapshot replacement, if any.
 	// The previous snapshot stays live when this is set.
 	SnapshotError error
@@ -71,7 +72,7 @@ type ResourceProvidersDescribedMsg struct {
 // ResourceProviderManager returns the live manager, or nil before the first
 // describe pass has started. M1 injects its read-only snapshot and Resolve into
 // both workspace surfaces through this.
-func ResourceProviderManager() *resourceprovider.Manager {
+func ResourceProviderManager() *pluginhost.Manager {
 	resourceProviderHost.mu.Lock()
 	defer resourceProviderHost.mu.Unlock()
 	return resourceProviderHost.manager
@@ -100,14 +101,15 @@ func describeResourceProvidersCmd(cfg *config.Config) tea.Cmd {
 	if cfg == nil {
 		return nil
 	}
-	if !features.IsEnabled(features.TerminalResourceProviders.Name) {
+	resources := features.IsEnabled(features.TerminalResourceProviders.Name)
+	protocol := features.IsEnabled(features.PluginProtocol.Name)
+	if !resources && !protocol {
 		return nil
 	}
 	// Reading the already-parsed config struct is not I/O, but it still happens
 	// inside the command rather than here, so that the decision and the work
 	// sit on the same side of the latch.
-	section := cfg.TerminalResources
-	if len(section.Providers) == 0 {
+	if len(cfg.TerminalResources.Providers) == 0 && len(cfg.Plugins.External) == 0 {
 		return nil
 	}
 
@@ -130,16 +132,25 @@ func describeResourceProvidersCmd(cfg *config.Config) tea.Cmd {
 
 		defer startuptrace.Begin("terminal resource providers: describe")()
 
-		providers, disabled, err := resourceprovider.FromConfig(section, resourceprovider.Options{
+		// Each flag gates its own section. terminal_resource_providers keeps
+		// answering for the frozen protocol whatever the plugin flag says, so
+		// turning the draft protocol off cannot take a working Jira provider
+		// down with it.
+		instances := enabledPluginInstances(cfg, resources, protocol)
+		if len(instances) == 0 {
+			return nil
+		}
+
+		providers, disabled, err := pluginhost.FromInstances(instances, pluginhost.Options{
 			Dir: providerWorkingDir(),
 			Log: slog.Default(),
 		})
 		if err != nil {
-			slog.Warn("terminal resource providers: configuration refused", "error", err)
+			slog.Warn("external plugins: configuration refused", "error", err)
 			return ResourceProvidersDescribedMsg{}
 		}
 
-		manager := resourceprovider.NewManager(resourceprovider.ManagerOptions{Log: slog.Default()})
+		manager := pluginhost.NewManager(pluginhost.ManagerOptions{Log: slog.Default()})
 		manager.SetProviders(providers, disabled)
 
 		resourceProviderHost.mu.Lock()
@@ -152,6 +163,25 @@ func describeResourceProvidersCmd(cfg *config.Config) tea.Cmd {
 		}
 		return ResourceProvidersDescribedMsg{Statuses: statuses, SnapshotError: manager.SnapshotError()}
 	}
+}
+
+// enabledPluginInstances filters the merged instance list to the sections whose
+// feature flag is on. It reads only the already-parsed config struct.
+func enabledPluginInstances(cfg *config.Config, resources, protocol bool) []config.PluginInstance {
+	all := cfg.PluginInstances()
+	out := make([]config.PluginInstance, 0, len(all))
+	for _, instance := range all {
+		if instance.IsLegacyResourceProvider() {
+			if resources {
+				out = append(out, instance)
+			}
+			continue
+		}
+		if protocol {
+			out = append(out, instance)
+		}
+	}
+	return out
 }
 
 // publishResourceProviders hands every surface the live matcher snapshot and a
@@ -167,6 +197,14 @@ func describeResourceProvidersCmd(cfg *config.Config) tea.Cmd {
 // resolver to ask, so the surfaces hand back the first load for whatever
 // Resource pane is on screen.
 func (m *Model) publishResourceProviders() tea.Cmd {
+	// The project every protocol plugin is asked about is republished here for
+	// the same reason the matchers are: a global plugin outlives every project
+	// switch, so the context it was constructed with is the wrong answer the
+	// moment the user moves. It is published even when there is no manager,
+	// because the browser reads it on its first list rather than at
+	// construction.
+	m.publishPluginBrowserProject()
+
 	manager := ResourceProviderManager()
 	if manager == nil {
 		return nil
@@ -180,6 +218,25 @@ func (m *Model) publishResourceProviders() tea.Cmd {
 		if cmd := surface.SetResourceResolver(resolve); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
+		// The collection shape's half of the same injection. It is behind the
+		// flag rather than the manager: a Resource leaf must keep resolving
+		// matched documents when the draft protocol is off, and a collection tab
+		// that could not exist has nothing to bind.
+		plugins, ok := surface.(resourceview.PluginSurface)
+		if !ok || !features.IsEnabled(features.PluginProtocol.Name) {
+			continue
+		}
+		if cmd := plugins.SetPluginCalls(pluginBrowserCalls); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+	// Every protocol browser is waiting on exactly this: a describe pass has
+	// settled, so its own snapshot is worth re-reading. It is delivered here
+	// rather than returned as a message, so the batch grows only when a browser
+	// actually has work to do — a surface with no protocol plugin configured
+	// still hands back exactly the one command its waiting tab produced.
+	if cmd := m.updateGlobalHosts(pluginbrowser.DescribedMsg{}); cmd != nil {
+		cmds = append(cmds, cmd)
 	}
 	return tea.Batch(cmds...)
 }
@@ -210,7 +267,7 @@ func (m *Model) resourceSurfaces() []resourceview.Surface {
 //
 // The work happens inside the returned command, never in Update or View: that
 // is what keeps an external process off the render path.
-func resourceResolver(manager *resourceprovider.Manager) resourceview.Resolver {
+func resourceResolver(manager *pluginhost.Manager) resourceview.Resolver {
 	return func(modelID int, generation, epoch uint64, ref resource.Reference, refresh bool) tea.Cmd {
 		return func() tea.Msg {
 			msg := resourceview.ResolvedMsg{

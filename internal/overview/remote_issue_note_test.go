@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"errors"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/contentpanes"
@@ -15,6 +16,7 @@ import (
 	"github.com/marcus/sidecar/internal/hostproto"
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/noteview"
+	"github.com/marcus/sidecar/internal/pluginhost"
 	"github.com/marcus/sidecar/internal/resource"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/targetactivation"
@@ -522,4 +524,15 @@ func TestRemoteIssueDoesNotLivewatchLocalPath(t *testing.T) {
 	if cmd := m.resolvePreviewTDStore(); cmd != nil {
 		t.Fatal("remote issue queued a local td store resolve")
 	}
+}
+
+// The plugin-collection twins of ResolveResource. This fake is about the file,
+// issue, note or diff journeys; a collection read is not part of what it is
+// pinning, so both refuse rather than pretend.
+func (*fakeRemoteContentSource) ListCollection(context.Context, contentpanes.SourceContext, string, contentservice.CollectionParams) (pluginhost.Page, error) {
+	return pluginhost.Page{}, errors.New("collection listing is not part of this fixture")
+}
+
+func (*fakeRemoteContentSource) GetCollectionItem(context.Context, contentpanes.SourceContext, string, string, string, bool) (resource.Document, error) {
+	return resource.Document{}, errors.New("collection items are not part of this fixture")
 }

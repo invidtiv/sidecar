@@ -27,6 +27,10 @@ func runOpen(env Env, args []string) int {
 	shellFlag := ""
 	projectFlag := ""
 	providerFlag := ""
+	pluginFlag := ""
+	collectionFlag := ""
+	queryFlag := ""
+	querySet := false
 	sessions := false
 	sessionsRow := ""
 	var positional []string
@@ -58,6 +62,30 @@ func runOpen(env Env, args []string) int {
 				cliErrf(env.Stderr, "--provider requires a provider instance id\n\n%s", openHelp)
 				return 2
 			}
+		case arg == "--plugin" || strings.HasPrefix(arg, "--plugin="):
+			val, next, ok := takeFlagArg(arg, args, i, "--plugin")
+			if !ok || val == "" {
+				cliErrf(env.Stderr, "--plugin requires a plugin instance id\n\n%s", openHelp)
+				return 2
+			}
+			pluginFlag = val
+			i = next
+		case arg == "--collection" || strings.HasPrefix(arg, "--collection="):
+			val, next, ok := takeFlagArg(arg, args, i, "--collection")
+			if !ok || val == "" {
+				cliErrf(env.Stderr, "--collection requires a collection id\n\n%s", openHelp)
+				return 2
+			}
+			collectionFlag = val
+			i = next
+		case arg == "--query" || strings.HasPrefix(arg, "--query="):
+			val, next, ok := takeFlagArg(arg, args, i, "--query")
+			if !ok {
+				cliErrf(env.Stderr, "--query requires a value\n\n%s", openHelp)
+				return 2
+			}
+			queryFlag, querySet = val, true
+			i = next
 		case arg == "--shell":
 			if i+1 >= len(args) {
 				cliErrf(env.Stderr, "--shell requires a shell name\n\n%s", openHelp)
@@ -183,6 +211,33 @@ func runOpen(env Env, args []string) int {
 		cliErrf(env.Stderr, "--sessions cannot be combined with --shell or --project\n\n%s", openHelp)
 		return 2
 	}
+	// --provider is the older spelling of --plugin's locator form. One instance
+	// wins: naming both is a mistake worth saying out loud rather than a
+	// precedence rule to remember.
+	if pluginFlag != "" && providerFlag != "" && pluginFlag != providerFlag {
+		cliErrf(env.Stderr, "--plugin and --provider name different instances; pass one\n\n%s", openHelp)
+		return 2
+	}
+	if pluginFlag == "" {
+		pluginFlag = providerFlag
+	}
+	providerFlag = pluginFlag
+	if collectionFlag != "" && pluginFlag == "" {
+		cliErrf(env.Stderr, "--collection needs the --plugin whose collection it names\n\n%s", openHelp)
+		return 2
+	}
+	if querySet && collectionFlag == "" {
+		cliErrf(env.Stderr, "--query needs a --collection to search\n\n%s", openHelp)
+		return 2
+	}
+	if collectionFlag != "" && wantDiff {
+		cliErrf(env.Stderr, "--collection and --diff name different kinds of target\n\n%s", openHelp)
+		return 2
+	}
+	if collectionFlag != "" && lineNo > 0 {
+		cliErrf(env.Stderr, "--line does not apply to a plugin collection\n\n%s", openHelp)
+		return 2
+	}
 	if providerFlag != "" && wantDiff {
 		cliErrf(env.Stderr, "--provider and --diff name different kinds of target\n\n%s", openHelp)
 		return 2
@@ -208,7 +263,9 @@ func runOpen(env Env, args []string) int {
 		}
 	}
 
-	if wantDiff {
+	if wantDiff || collectionFlag != "" {
+		// A collection names what to open by itself; a positional is the
+		// optional row inside it.
 		if len(positional) > 1 {
 			cliErrf(env.Stderr, "open accepts at most one target\n\n%s", openHelp)
 			return 2
@@ -252,10 +309,23 @@ func runOpen(env Env, args []string) int {
 			dest.Origin.WorkDir = workDir
 		}
 	}
-	target, err := uirequest.ResolveTarget(dest.Origin.WorkDir, raw, lineNo, uirequest.ResolveOptions{Diff: wantDiff, Provider: providerFlag})
+	var target uirequest.Target
+	if collectionFlag != "" {
+		target, err = uirequest.ResolveCollectionTarget(pluginFlag, collectionFlag, queryFlag, raw)
+	} else {
+		target, err = uirequest.ResolveTarget(dest.Origin.WorkDir, raw, lineNo, uirequest.ResolveOptions{Diff: wantDiff, Provider: providerFlag})
+	}
 	if err != nil {
 		cliErrf(env.Stderr, "validation error: %v\n\n%s", err, openHelp)
 		return 2
+	}
+
+	// What to call the thing in the human line. A collection tab has no
+	// locator, so naming it by its empty Value would print a bare sentence with
+	// a hole in it.
+	label := target.Value
+	if label == "" && target.Collection != "" {
+		label = target.Provider + "/" + target.Collection
 	}
 
 	options := uirequest.Options{}
@@ -287,7 +357,7 @@ func runOpen(env Env, args []string) int {
 		if jsonOutput {
 			_ = json.NewEncoder(env.Stdout).Encode(openResult(req, dest, nil))
 		} else {
-			_, _ = fmt.Fprintf(env.Stdout, "Sent open request for %s.\n", target.Value)
+			_, _ = fmt.Fprintf(env.Stdout, "Sent open request for %s.\n", label)
 		}
 		return 0
 	}
@@ -355,18 +425,18 @@ func runOpen(env Env, args []string) int {
 		return 0
 	}
 
-	label := dest.DisplayName
-	if label == "" {
-		label = dest.Origin.ProjectKey
+	shellLabel := dest.DisplayName
+	if shellLabel == "" {
+		shellLabel = dest.Origin.ProjectKey
 	}
 	if hasOpened {
 		if allRetargeted {
-			_, _ = fmt.Fprintf(env.Stdout, "Opened %s in the split already beside %q.\n", target.Value, label)
+			_, _ = fmt.Fprintf(env.Stdout, "Opened %s in the split already beside %q.\n", label, shellLabel)
 		} else {
-			_, _ = fmt.Fprintf(env.Stdout, "Opened %s in a split beside %q.\n", target.Value, label)
+			_, _ = fmt.Fprintf(env.Stdout, "Opened %s in a split beside %q.\n", label, shellLabel)
 		}
 	} else {
-		_, _ = fmt.Fprintf(env.Stdout, "Queued %s for %q; it opens when the user selects that shell.\n", target.Value, label)
+		_, _ = fmt.Fprintf(env.Stdout, "Queued %s for %q; it opens when the user selects that shell.\n", label, shellLabel)
 	}
 	return 0
 }

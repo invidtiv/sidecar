@@ -312,21 +312,21 @@ func TestScopeOwnsTheHeaderTabRow(t *testing.T) {
 	}
 	// The global space owns its own tabs, and only its own. Tasks is absent
 	// because its feature is off in this fixture.
-	want := []GlobalTab{GlobalSessions, GlobalActivity}
+	want := []struct{ id, name string }{{GlobalSessions, "Sessions"}, {GlobalActivity, "Activity"}}
 	if len(tabs) != len(want) {
 		t.Fatalf("global tabs = %d, want %d", len(tabs), len(want))
 	}
 	for i, tab := range tabs {
-		if tab.ref.scope != ScopeGlobal || tab.ref.global != want[i] {
-			t.Fatalf("global tab %d = %#v, want %v", i, tab.ref, want[i])
+		if tab.ref.scope != ScopeGlobal || tab.ref.global != want[i].id {
+			t.Fatalf("global tab %d = %#v, want %v", i, tab.ref, want[i].id)
 		}
-		if !strings.Contains(ansi.Strip(tab.text), want[i].Name()) {
-			t.Fatalf("global tab %d text = %q, want %q", i, ansi.Strip(tab.text), want[i].Name())
+		if !strings.Contains(ansi.Strip(tab.text), want[i].name) {
+			t.Fatalf("global tab %d text = %q, want %q", i, ansi.Strip(tab.text), want[i].name)
 		}
 	}
 	// The visible global tab is the active one; nothing renders a project tab
 	// behind it.
-	activeGlobal := styles.RenderTab(GlobalSessions.Name(), 0, len(want), true, false)
+	activeGlobal := styles.RenderTab("Sessions", 0, len(want), true, false)
 	if tabs[0].text != activeGlobal {
 		t.Fatal("the visible global tab is not drawn active")
 	}
@@ -461,13 +461,13 @@ func TestHeaderKeysAddressTheWholeHeaderRow(t *testing.T) {
 	t.Run("tasks joins and leaves the ring with its feature", func(t *testing.T) {
 		m, _ := scopeBaselineModel(t, "git")
 		for _, ref := range m.headerEntries() {
-			if ref.scope == ScopeGlobal && ref.global == GlobalTasks {
+			if ref.scope == ScopeGlobal && ref.global == globalTabTasks {
 				t.Fatal("a disabled Tasks tab is in the ring")
 			}
 		}
-		m.globalTasks = &globalTasksHost{plugin: &hostedTestPlugin{}}
+		installGlobalHost(&m, globalTabTasks, "Tasks", &hostedTestPlugin{id: "tasks"})
 		ring := m.headerEntries()
-		if len(ring) != 7 || !ring[2].same(globalTabRef(GlobalTasks)) {
+		if len(ring) != 7 || !ring[2].same(globalTabRef(globalTabTasks)) {
 			t.Fatalf("ring with Tasks on = %#v, want Tasks third", ring)
 		}
 		// And cycling reaches it: ] from Activity lands on Tasks, not on the
@@ -477,7 +477,7 @@ func TestHeaderKeysAddressTheWholeHeaderRow(t *testing.T) {
 		m.updateContext()
 		updated, _ := m.Update(tea.KeyPressMsg{Code: ']', Text: "]"})
 		pressed := asAppModel(t, updated)
-		if !pressed.inGlobalScope() || pressed.globalTab != GlobalTasks {
+		if !pressed.inGlobalScope() || pressed.globalTab != globalTabTasks {
 			t.Fatalf("] from Activity: global=%v tab=%v, want Tasks", pressed.inGlobalScope(), pressed.globalTab)
 		}
 	})
@@ -659,7 +659,7 @@ func TestPositionalTabShortcutsStopAtSeven(t *testing.T) {
 		}
 	})
 
-	for key, want := range map[string]GlobalTab{"8": GlobalSessions, "9": GlobalActivity} {
+	for key, want := range map[string]string{"8": GlobalSessions, "9": GlobalActivity} {
 		t.Run(key+" is a global entry, not the nth plugin", func(t *testing.T) {
 			m := wideScopeBaselineModel(t)
 			updated, _ := m.Update(tea.KeyPressMsg{Code: rune(key[0]), Text: key})

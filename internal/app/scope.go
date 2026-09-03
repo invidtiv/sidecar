@@ -4,9 +4,9 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/hosts"
 	"github.com/marcus/sidecar/internal/plugin"
-	"github.com/marcus/sidecar/internal/plugins/tasks"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/uirequest"
@@ -62,15 +62,11 @@ func (m *Model) persistScope() {
 	_ = state.SetLastScope(m.scope.persistID())
 }
 
-// GlobalTab is a tab owned by the global space. These are not plugin indices
-// and must never be encoded as such: a disabled tab would otherwise shift an
-// index onto the wrong action.
-type GlobalTab uint8
-
+// The two app-owned global surfaces. Everything else in the global space is a
+// plugin, named by its descriptor ID.
 const (
-	GlobalSessions GlobalTab = iota
-	GlobalActivity
-	GlobalTasks
+	GlobalSessions = "sessions"
+	GlobalActivity = "activity"
 
 	// Deprecated compatibility names. Session state and older callers used the
 	// surface names before the header established the fleet vocabulary.
@@ -78,54 +74,53 @@ const (
 	GlobalAgents     = GlobalActivity
 )
 
-// Name is the header label for a global tab.
-func (t GlobalTab) Name() string {
-	switch t {
-	case GlobalSessions:
-		return "Sessions"
-	case GlobalActivity:
-		return "Activity"
-	case GlobalTasks:
-		return "Tasks"
-	}
-	return ""
+// globalSurface is one entry in the global space's tab row.
+//
+// The row used to be an enum with three values and named keys, which meant a
+// second global plugin was a new enum value and a new case in a dozen switches.
+// It is a descriptor-driven ordered slice instead: Sessions and Activity are
+// app-owned and always first, then one entry per enabled global-scope plugin
+// descriptor, in descriptor order.
+//
+// The identity is the ID, never the position: a disabled tab would otherwise
+// shift an index onto the wrong action, and a persisted index would name
+// something else after the plugin behind it was turned off.
+type globalSurface struct {
+	// id is the descriptor ID, and the value persisted in state.json.
+	id string
+	// name is the header label.
+	name string
+	// key is the number-row key that addresses this entry directly, or empty
+	// when the entry has none. It is a property of the entry, not of its
+	// position, so a disabled tab does not slide another one onto its key.
+	key string
+	// context is the keymap context an app-owned surface owns while visible. A
+	// hosted plugin reports its own, so this is empty for one.
+	context string
+	// host is the hosted plugin behind the entry, nil for an app-owned surface.
+	host *globalPluginHost
 }
 
-// persistID is the stable state.json value for a global tab.
-func (t GlobalTab) persistID() string {
-	switch t {
-	case GlobalSessions:
-		return "sessions"
-	case GlobalActivity:
-		return "activity"
-	case GlobalTasks:
-		return "tasks"
-	}
-	return ""
-}
+// globalTabKeys are the number-row keys the global entries take, in order:
+// Sessions, Activity, then the first plugin-provided tab. There is no fourth —
+// a further global plugin is reachable through `[`/`]`, the palette, and the
+// project switcher, which is the same answer an eighth project tab gets.
+var globalTabKeys = []string{"8", "9", "0"}
 
-func parseGlobalTabID(id string) (GlobalTab, bool) {
+// parseGlobalTabID reads a persisted global tab back, normalising the surface
+// names state.json used before the header established the fleet vocabulary.
+// Any other non-empty value is taken as a plugin descriptor ID and checked
+// against the tabs that actually exist by ensureVisibleGlobalTab.
+func parseGlobalTabID(id string) (string, bool) {
 	switch id {
-	case "sessions", "workspaces":
+	case "":
+		return "", false
+	case "workspaces":
 		return GlobalSessions, true
-	case "activity", "agents":
+	case "agents":
 		return GlobalActivity, true
-	case "tasks":
-		return GlobalTasks, true
 	}
-	return 0, false
-}
-
-// context is the keymap context the tab owns while it is visible. The Tasks tab
-// is absent: its context is reported by the Tasks model itself.
-func (t GlobalTab) context() string {
-	switch t {
-	case GlobalActivity:
-		return "overview"
-	case GlobalSessions:
-		return "global-workspaces"
-	}
-	return "overview"
+	return id, true
 }
 
 // tabRef identifies one header tab together with the scope that owns it.
@@ -133,16 +128,16 @@ func (t GlobalTab) context() string {
 // tabRefs so a click or a key can never activate a tab from the other scope.
 type tabRef struct {
 	scope  AppScope
-	plugin int       // meaningful when scope == ScopeProject
-	global GlobalTab // meaningful when scope == ScopeGlobal
+	plugin int    // meaningful when scope == ScopeProject
+	global string // surface ID, meaningful when scope == ScopeGlobal
 }
 
 func projectTabRef(index int) tabRef {
 	return tabRef{scope: ScopeProject, plugin: index}
 }
 
-func globalTabRef(tab GlobalTab) tabRef {
-	return tabRef{scope: ScopeGlobal, global: tab}
+func globalTabRef(id string) tabRef {
+	return tabRef{scope: ScopeGlobal, global: id}
 }
 
 func (r tabRef) same(other tabRef) bool {
@@ -159,19 +154,55 @@ func (r tabRef) same(other tabRef) bool {
 func (m Model) inGlobalScope() bool { return m.scope == ScopeGlobal }
 
 // globalTabsVisible lists the global tabs in header order. Each tab appears
-// only while the thing behind it exists: Agents and Workspaces are projections
-// of the cross-project catalog the Overview model owns, and Tasks is the hosted
-// surface. Either feature can be disabled independently, and a tab with nothing
-// behind it must not be rendered, numbered, or cycled onto.
-func (m Model) globalTabsVisible() []GlobalTab {
-	var tabs []GlobalTab
+// only while the thing behind it exists: Activity and Sessions are projections
+// of the cross-project catalog the Overview model owns, and each further entry
+// is a hosted global plugin. Either can be disabled independently, and a tab
+// with nothing behind it must not be rendered, numbered, or cycled onto.
+//
+// Number keys are assigned here, in order, from globalTabKeys: Sessions keeps
+// 8 and Activity keeps 9 whether or not any plugin is hosted, and the first
+// plugin-provided tab gets 0 whether or not the catalog is on — the key belongs
+// to the entry, not to its position in the row.
+func (m Model) globalTabsVisible() []globalSurface {
+	var tabs []globalSurface
 	if m.overview != nil {
-		tabs = append(tabs, GlobalSessions, GlobalActivity)
+		tabs = append(tabs,
+			globalSurface{id: GlobalSessions, name: "Sessions", key: globalTabKeys[0], context: "global-workspaces"},
+			globalSurface{id: GlobalActivity, name: "Activity", key: globalTabKeys[1], context: "overview"},
+		)
 	}
-	if m.globalTasks != nil {
-		tabs = append(tabs, GlobalTasks)
+	hosted := 0
+	for _, host := range m.globalHosts {
+		if host == nil || host.plugin == nil {
+			continue
+		}
+		surface := globalSurface{id: host.id(), name: host.label(), host: host}
+		if hosted == 0 {
+			surface.key = globalTabKeys[2]
+		}
+		hosted++
+		tabs = append(tabs, surface)
 	}
 	return tabs
+}
+
+// globalSurfaceByID finds a visible global tab by ID.
+func (m Model) globalSurfaceByID(id string) (globalSurface, bool) {
+	for _, tab := range m.globalTabsVisible() {
+		if tab.id == id {
+			return tab, true
+		}
+	}
+	return globalSurface{}, false
+}
+
+// activeGlobalSurface is the visible global tab, if the global space owns the
+// screen and the remembered tab still exists.
+func (m Model) activeGlobalSurface() (globalSurface, bool) {
+	if !m.inGlobalScope() {
+		return globalSurface{}, false
+	}
+	return m.globalSurfaceByID(m.globalTab)
 }
 
 // globalScopeAvailable reports that the global space has at least one tab to
@@ -196,11 +227,11 @@ func (m *Model) ensureVisibleGlobalTab() {
 		return
 	}
 	for _, tab := range tabs {
-		if tab == m.globalTab {
+		if tab.id == m.globalTab {
 			return
 		}
 	}
-	m.globalTab = tabs[0]
+	m.globalTab = tabs[0].id
 }
 
 // visibleTabs returns the tabs owned by the active scope, in header order.
@@ -209,7 +240,7 @@ func (m Model) visibleTabs() []tabRef {
 		global := m.globalTabsVisible()
 		refs := make([]tabRef, 0, len(global))
 		for _, tab := range global {
-			refs = append(refs, globalTabRef(tab))
+			refs = append(refs, globalTabRef(tab.id))
 		}
 		return refs
 	}
@@ -247,7 +278,7 @@ func (m Model) headerEntries() []tabRef {
 	global := m.globalTabsVisible()
 	entries := make([]tabRef, 0, len(global)+8)
 	for _, tab := range global {
-		entries = append(entries, globalTabRef(tab))
+		entries = append(entries, globalTabRef(tab.id))
 	}
 	if m.registry != nil {
 		for i := range m.registry.Plugins() {
@@ -266,38 +297,27 @@ func (m Model) numberedProjectTabs() int {
 	return min(len(m.registry.Plugins()), maxNumberedProjectTabs)
 }
 
-// globalTabKey is the number-row key that jumps straight to a global entry.
-// It is a property of the entry, not of its position, so a disabled Tasks tab
-// does not slide Activity onto `0`.
-func globalTabKey(tab GlobalTab) string {
-	switch tab {
-	case GlobalSessions:
-		return "8"
-	case GlobalActivity:
-		return "9"
-	case GlobalTasks:
-		return "0"
+// globalTabForKey maps 8/9/0 back to the entry they address, or reports that
+// nothing visible answers that key.
+func (m Model) globalTabForKey(key string) (string, bool) {
+	if key == "" {
+		return "", false
 	}
-	return ""
-}
-
-// globalTabForKey maps 8/9/0 back to the entry they address.
-func globalTabForKey(key string) (GlobalTab, bool) {
-	switch key {
-	case "8":
-		return GlobalSessions, true
-	case "9":
-		return GlobalActivity, true
-	case "0":
-		return GlobalTasks, true
+	for _, tab := range m.globalTabsVisible() {
+		if tab.key == key {
+			return tab.id, true
+		}
 	}
-	return 0, false
+	return "", false
 }
 
 // tabLabel is the text painted in the header for a tab.
 func (m Model) tabLabel(ref tabRef) string {
 	if ref.scope == ScopeGlobal {
-		return ref.global.Name()
+		if tab, ok := m.globalSurfaceByID(ref.global); ok {
+			return tab.name
+		}
+		return ""
 	}
 	plugins := m.registry.Plugins()
 	if ref.plugin < 0 || ref.plugin >= len(plugins) {
@@ -312,6 +332,7 @@ func (m Model) activeTab() tabRef {
 	if m.inGlobalScope() {
 		return globalTabRef(m.globalTab)
 	}
+
 	return projectTabRef(m.activePlugin)
 }
 
@@ -343,21 +364,14 @@ func (m *Model) activateTab(ref tabRef) tea.Cmd {
 // setGlobalTab switches the visible global tab. Switching tabs is cheap: it
 // never reloads a project, and it starts collection only for the tab that
 // becomes visible.
-func (m *Model) setGlobalTab(tab GlobalTab) tea.Cmd {
+func (m *Model) setGlobalTab(id string) tea.Cmd {
 	if !m.inGlobalScope() {
 		return nil
 	}
-	if m.globalTab == tab {
+	if m.globalTab == id {
 		return nil
 	}
-	visible := false
-	for _, candidate := range m.globalTabsVisible() {
-		if candidate == tab {
-			visible = true
-			break
-		}
-	}
-	if !visible {
+	if _, ok := m.globalSurfaceByID(id); !ok {
 		return nil
 	}
 	previous := m.globalTab
@@ -371,9 +385,9 @@ func (m *Model) setGlobalTab(tab GlobalTab) tea.Cmd {
 			deckCmd = h.live.Reconcile()
 		}
 	}
-	m.globalTab = tab
-	_ = state.SetLastGlobalTab(tab.persistID())
-	if catalogTab(previous) && !catalogTab(tab) && m.overview != nil {
+	m.globalTab = id
+	_ = state.SetLastGlobalTab(id)
+	if catalogTab(previous) && !catalogTab(id) && m.overview != nil {
 		// Leaving the catalog entirely (for Tasks): stop collecting rather than
 		// polling projects behind a tab nobody is looking at. Moving between
 		// Agents and Workspaces does not stop anything — they are two
@@ -387,8 +401,8 @@ func (m *Model) setGlobalTab(tab GlobalTab) tea.Cmd {
 
 // catalogTab reports that a global tab is a projection of the cross-project
 // catalog. Agents and Workspaces both are; Tasks owns its own store.
-func catalogTab(tab GlobalTab) bool {
-	return tab == GlobalActivity || tab == GlobalSessions
+func catalogTab(id string) bool {
+	return id == GlobalActivity || id == GlobalSessions
 }
 
 // startVisibleGlobalTab starts whatever collection the visible global tab
@@ -557,27 +571,29 @@ func (m *Model) selectProjectTabByNumber(index int) tea.Cmd {
 // response to that is no response — the same one 1-7 give for a plugin index
 // that does not exist. A toast would be noise on a key the user can see has
 // nothing behind it.
-func (m *Model) selectGlobalTab(tab GlobalTab) tea.Cmd {
-	for _, candidate := range m.globalTabsVisible() {
-		if candidate == tab {
-			return m.activateTab(globalTabRef(tab))
-		}
+func (m *Model) selectGlobalTab(id string) tea.Cmd {
+	if _, ok := m.globalSurfaceByID(id); ok {
+		return m.activateTab(globalTabRef(id))
 	}
 	return nil
 }
 
-// globalTasksHost owns the embedded Tasks surface.
+// globalPluginHost owns one global-scope embedded plugin.
 //
-// Tasks is an app-global hosted surface, not a project plugin and not an
+// A global plugin is an app-hosted surface, not a project plugin and not an
 // Overview data projection. Keeping it out of the plugin registry is the whole
 // point: registry.Reinit stops and rebuilds every plugin it owns on each
 // project switch, which for Tasks meant closing the store, tearing down the
 // agent queue, and rewriting its session — once per project switch. Here it is
 // built once, stays alive across project switches and scope toggles, and closes
 // exactly once at shutdown.
-type globalTasksHost struct {
-	plugin plugin.Plugin
-	ctx    *plugin.Context
+//
+// There is one of these per global descriptor. Nothing in it knows what the
+// plugin is: Tasks used to be the type, and is now one value of it.
+type globalPluginHost struct {
+	descriptor plugin.Descriptor
+	plugin     plugin.Plugin
+	ctx        *plugin.Context
 
 	// starts/stops count lifecycle transitions so a test can prove a project
 	// switch does neither.
@@ -585,21 +601,66 @@ type globalTasksHost struct {
 	stops  int
 }
 
-// newGlobalTasksHost builds the host when the tasks_plugin feature is enabled.
-// Construction performs no I/O: the Tasks model is built by the command Start
-// returns, after the first frame.
-func newGlobalTasksHost(base *plugin.Context, km plugin.BindingRegistrar) *globalTasksHost {
+// newGlobalPluginHost builds a host for one enabled global descriptor.
+// Construction performs no I/O: the plugin's model is built by the command
+// start returns, after the first frame.
+func newGlobalPluginHost(d plugin.Descriptor, base *plugin.Context, km plugin.BindingRegistrar) *globalPluginHost {
+	if d.New == nil {
+		return nil
+	}
 	ctx := &plugin.Context{Keymap: km}
 	if base != nil {
 		copied := *base
 		copied.Keymap = km
 		ctx = &copied
 	}
-	return &globalTasksHost{plugin: tasks.New(), ctx: ctx}
+	return &globalPluginHost{descriptor: d, plugin: d.New(), ctx: ctx}
+}
+
+// id is the descriptor ID, which is also the persisted tab ID. It falls back to
+// the plugin's own ID so a test that installs a host without a descriptor still
+// names its tab.
+func (h *globalPluginHost) id() string {
+	if h == nil {
+		return ""
+	}
+	if h.descriptor.ID != "" {
+		return h.descriptor.ID
+	}
+	if h.plugin != nil {
+		return h.plugin.ID()
+	}
+	return ""
+}
+
+// label is the header text for this plugin's tab.
+//
+// A protocol plugin's descriptor names it by its configured instance ID,
+// because the descriptor exists before anything has run. Its own display name
+// arrives with describe, and the surface is what carries it, so the plugin is
+// asked first for that class and the descriptor is the fallback. An embedded
+// plugin keeps the descriptor's label: it is a Go literal beside the plugin,
+// and the two cannot disagree.
+func (h *globalPluginHost) label() string {
+	if h == nil {
+		return ""
+	}
+	if h.descriptor.Class == plugin.ClassProtocol && h.plugin != nil {
+		if name := h.plugin.Name(); name != "" {
+			return name
+		}
+	}
+	if h.descriptor.Name != "" {
+		return h.descriptor.Name
+	}
+	if h.plugin != nil {
+		return h.plugin.Name()
+	}
+	return ""
 }
 
 // start initializes and starts the host exactly once.
-func (h *globalTasksHost) start() tea.Cmd {
+func (h *globalPluginHost) start() tea.Cmd {
 	if h == nil || h.plugin == nil || h.starts > 0 {
 		return nil
 	}
@@ -612,7 +673,7 @@ func (h *globalTasksHost) start() tea.Cmd {
 
 // stop closes the model once. Sidecar's quit paths all route through
 // Model.shutdown, so a second call is a no-op rather than a double Close.
-func (h *globalTasksHost) stop() {
+func (h *globalPluginHost) stop() {
 	if h == nil || h.plugin == nil || h.stops > 0 {
 		return
 	}
@@ -621,9 +682,9 @@ func (h *globalTasksHost) stop() {
 }
 
 // update forwards a message to the hosted surface. It is called for every
-// message sidecar forwards to plugins, so the Tasks file watch, agent queue,
+// message sidecar forwards to plugins, so a global plugin's file watch, queue,
 // and ticks keep running while another tab is visible.
-func (h *globalTasksHost) update(msg tea.Msg) tea.Cmd {
+func (h *globalPluginHost) update(msg tea.Msg) tea.Cmd {
 	if h == nil || h.plugin == nil {
 		return nil
 	}
@@ -632,6 +693,67 @@ func (h *globalTasksHost) update(msg tea.Msg) tea.Cmd {
 		h.plugin = updated
 	}
 	return cmd
+}
+
+// newGlobalPluginHosts builds one host per enabled global descriptor, in
+// descriptor order. It runs before the first frame and must stay free of I/O.
+func newGlobalPluginHosts(descriptors []plugin.Descriptor, cfg *config.Config, base *plugin.Context, km plugin.BindingRegistrar) []*globalPluginHost {
+	var hosts []*globalPluginHost
+	for _, d := range descriptors {
+		if d.Scope != plugin.ScopeGlobal || !d.HasPlacement(plugin.PlacementTab) {
+			continue
+		}
+		if !d.IsEnabled(cfg) {
+			continue
+		}
+		if host := newGlobalPluginHost(d, base, km); host != nil {
+			hosts = append(hosts, host)
+		}
+	}
+	return hosts
+}
+
+// startGlobalHosts starts every hosted global plugin. They outlive the project
+// registry: none of them is in it, so a later project switch cannot stop or
+// rebuild one. Each model is built by the returned command, after the first
+// frame.
+func (m *Model) startGlobalHosts() []tea.Cmd {
+	var cmds []tea.Cmd
+	for _, host := range m.globalHosts {
+		if cmd := host.start(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+	return cmds
+}
+
+// stopGlobalHosts closes every hosted global plugin exactly once.
+func (m *Model) stopGlobalHosts() {
+	for _, host := range m.globalHosts {
+		host.stop()
+	}
+}
+
+// updateGlobalHosts forwards one message to every hosted global plugin,
+// whichever tab is visible.
+func (m *Model) updateGlobalHosts(msg tea.Msg) tea.Cmd {
+	var cmds []tea.Cmd
+	for _, host := range m.globalHosts {
+		if cmd := host.update(msg); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+	return tea.Batch(cmds...)
+}
+
+// globalHostByID finds a hosted global plugin by descriptor ID.
+func (m Model) globalHostByID(id string) *globalPluginHost {
+	for _, host := range m.globalHosts {
+		if host != nil && host.id() == id {
+			return host
+		}
+	}
+	return nil
 }
 
 // agentsBoardVisible reports that the cross-project Agents board owns the
@@ -657,7 +779,7 @@ func (m Model) globalCatalogNavigable() bool {
 // visible global tab.
 func (m *Model) globalMouse(msg tea.Msg) tea.Cmd {
 	switch {
-	case m.globalTasksFocused():
+	case m.globalPluginFocused():
 		if mouseMsg, ok := msg.(tea.MouseMsg); ok {
 			if handled, cmd := m.handleAppContentEditMouse(mouseMsg); handled {
 				return cmd
@@ -666,7 +788,7 @@ func (m *Model) globalMouse(msg tea.Msg) tea.Cmd {
 				return cmd
 			}
 		}
-		return m.globalTasks.update(msg)
+		return m.focusedGlobalHost().update(msg)
 	case m.globalTab == GlobalActivity && m.overview != nil:
 		return m.overview.Update(msg)
 	case m.globalWorkspacesVisible():
@@ -675,26 +797,34 @@ func (m *Model) globalMouse(msg tea.Msg) tea.Cmd {
 	return nil
 }
 
-// globalTasksPlugin returns the hosted Tasks surface, or nil when the feature
-// is disabled.
-func (m Model) globalTasksPlugin() plugin.Plugin {
-	if m.globalTasks == nil {
+// focusedGlobalHost is the hosted global plugin whose tab is visible, or nil
+// when the visible global tab is one of the app-owned surfaces.
+func (m Model) focusedGlobalHost() *globalPluginHost {
+	tab, ok := m.activeGlobalSurface()
+	if !ok || tab.host == nil || tab.host.plugin == nil {
 		return nil
 	}
-	return m.globalTasks.plugin
+	return tab.host
 }
 
-// globalTasksFocused reports that the hosted Tasks surface is the visible
-// global tab and therefore owns keyboard and mouse input.
-func (m Model) globalTasksFocused() bool {
-	return m.inGlobalScope() && m.globalTab == GlobalTasks && m.globalTasksPlugin() != nil
+// globalPluginPlugin returns the hosted plugin behind the visible global tab,
+// or nil when an app-owned surface is showing.
+func (m Model) globalPluginPlugin() plugin.Plugin {
+	if host := m.focusedGlobalHost(); host != nil {
+		return host.plugin
+	}
+	return nil
 }
+
+// globalPluginFocused reports that a hosted global plugin is the visible global
+// tab and therefore owns keyboard and mouse input.
+func (m Model) globalPluginFocused() bool { return m.focusedGlobalHost() != nil }
 
 // globalSurfaceWantsEsc reports that the focused global surface will handle esc
 // itself, so sidecar's scope-exit must not take it first.
 //
 // Those surfaces are the Workspaces browser — whose filter and preview both
-// give esc their own meaning — and the hosted Tasks tab, whose
+// give esc their own meaning — and a hosted global plugin's tab, whose
 // overlays, pickers, and prompts are dismissed by esc through precedence level
 // 2 (a blocking overlay or text-input context) or level 3 (a live contextual
 // binding). All of them run after the modal/esc switch at the top of
@@ -729,17 +859,17 @@ func (m *Model) globalSurfaceWantsEsc() bool {
 	if m.globalWorkspacesPreviewFocused() {
 		return true
 	}
-	if !m.globalTasksFocused() {
+	if !m.globalPluginFocused() {
 		return false
 	}
 	return m.consumesTextInput() || m.pluginBlocksGlobalKeys() || m.pluginClaimsKey("esc")
 }
 
-// focusedSurface is the plugin that owns input right now: the hosted Tasks
-// surface while its global tab is visible, otherwise the active project plugin.
+// focusedSurface is the plugin that owns input right now: the hosted global
+// plugin while its tab is visible, otherwise the active project plugin.
 func (m Model) focusedSurface() plugin.Plugin {
-	if m.globalTasksFocused() {
-		return m.globalTasksPlugin()
+	if host := m.focusedGlobalHost(); host != nil {
+		return host.plugin
 	}
 	if m.inGlobalScope() {
 		return nil
@@ -752,21 +882,23 @@ func (m Model) focusedSurface() plugin.Plugin {
 // does, keys must not reach the hidden project plugin. The hosted Tasks tab is
 // deliberately excluded: it is a real surface that wants its own keys.
 func (m Model) globalOverlayOwnsKeys() bool {
-	return m.inGlobalScope() && !m.globalTasksFocused()
+	return m.inGlobalScope() && !m.globalPluginFocused()
 }
 
 // surfacePlugins lists every plugin the palette, help, and command lookup can
-// reach: the project registry plus the global Tasks host.
+// reach: the project registry plus every hosted global plugin.
 func (m Model) surfacePlugins() []plugin.Plugin {
 	plugins := m.registry.Plugins()
-	if host := m.globalTasksPlugin(); host != nil {
-		plugins = append(plugins, host)
+	for _, host := range m.globalHosts {
+		if host != nil && host.plugin != nil {
+			plugins = append(plugins, host.plugin)
+		}
 	}
 	return plugins
 }
 
 // shutdown saves the active project plugin and closes everything sidecar owns:
-// the project registry, the global Tasks host, and the global browser's
+// the project registry, every hosted global plugin, and the global browser's
 // embedded terminal, whose control subprocess outlives the process otherwise.
 // Every quit path calls it, so each is closed exactly once however the user
 // leaves.
@@ -781,7 +913,7 @@ func (m *Model) shutdown() {
 		}
 	}
 	m.registry.Stop()
-	m.globalTasks.stop()
+	m.stopGlobalHosts()
 	if m.overview != nil {
 		m.overview.Stop()
 		// Stop() runs whenever the global tab is left, so host connections

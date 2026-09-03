@@ -1511,13 +1511,13 @@ func TestGlobalTasksUsesOneDeckAcrossProjectSwitches(t *testing.T) {
 	project := &deckHostTestPlugin{id: "file-browser", focus: "preview", frame: "project"}
 	tasks := &deckHostTestPlugin{id: "tasks", focus: "tree", frame: "tasks"}
 	m := appDeckTestModel(t, rootA, project)
-	m.globalTasks = &globalTasksHost{plugin: tasks}
+	installGlobalHost(m, globalTabTasks, "Tasks", tasks)
 	m.scope = ScopeGlobal
-	m.globalTab = GlobalTasks
+	m.globalTab = globalTabTasks
 
 	m.renderGlobalContent(180, 36)
 	h := m.currentContentDeck()
-	if h == nil || !h.global || h.stateRoot != globalTasksDeckRoot || h.plugin != tasks {
+	if h == nil || !h.global || h.stateRoot != globalDeckRoot(globalTabTasks) || h.plugin != tasks {
 		t.Fatalf("global Tasks deck = %+v", h)
 	}
 	if tasks.width != h.primaryInner.W || tasks.height != h.primaryInner.H {
@@ -1542,7 +1542,7 @@ func TestGlobalTasksUsesOneDeckAcrossProjectSwitches(t *testing.T) {
 		t.Fatal("global Tasks document returned no load command")
 	}
 	m.renderGlobalContent(180, 36)
-	if raw := state.GetContentDeck(globalTasksDeckRoot, tasks.ID()); len(raw) == 0 {
+	if raw := state.GetContentDeck(globalDeckRoot(globalTabTasks), tasks.ID()); len(raw) == 0 {
 		t.Fatal("global Tasks deck was not persisted under its stable root")
 	}
 	h.deck.FocusLeaf(h.deck.Leaf(panelayout.Primary))
@@ -1575,7 +1575,7 @@ func TestGlobalTasksUsesOneDeckAcrossProjectSwitches(t *testing.T) {
 	if got := m.registry.Plugins()[0]; got != project {
 		t.Fatalf("global Tasks mouse replaced project plugin with %T", got)
 	}
-	if m.globalTasks.plugin != tasks {
+	if m.globalHostByID(globalTabTasks).plugin != tasks {
 		t.Fatal("global Tasks mouse did not retain the hosted surface")
 	}
 	if click, ok := tasks.seen[len(tasks.seen)-1].(tea.MouseClickMsg); !ok || click.X != 0 || click.Y != 0 {
@@ -1611,7 +1611,7 @@ func TestEnteringGlobalScopeDeactivatesAppDeckLiveSurface(t *testing.T) {
 	}
 	p := &deckHostTestPlugin{id: "file-browser", focus: "preview", frame: "plain"}
 	m := appDeckTestModel(t, root, p)
-	m.globalTasks = &globalTasksHost{plugin: &deckHostTestPlugin{id: "tasks", focus: "tree"}}
+	installGlobalHost(m, globalTabTasks, "Tasks", &deckHostTestPlugin{id: "tasks", focus: "tree"})
 	m.renderContent(200, 40)
 	m.openAppContent(root, p.id, contentlink.Ref{Kind: contentlink.KindFile, Value: "live.md"})
 	m.renderContent(200, 40)
@@ -1632,7 +1632,7 @@ func TestWatcherStartedAfterGlobalEntryIsStoppedAndDoesNotWedgeDeck(t *testing.T
 	}
 	p := &deckHostTestPlugin{id: "file-browser", focus: "preview", frame: "plain"}
 	m := appDeckTestModel(t, root, p)
-	m.globalTasks = &globalTasksHost{plugin: &deckHostTestPlugin{id: "tasks", focus: "tree"}}
+	installGlobalHost(m, globalTabTasks, "Tasks", &deckHostTestPlugin{id: "tasks", focus: "tree"})
 	m.renderContent(200, 40)
 	m.openAppContent(root, p.id, contentlink.Ref{Kind: contentlink.KindFile, Value: "live.md"})
 	m.renderContent(200, 40)

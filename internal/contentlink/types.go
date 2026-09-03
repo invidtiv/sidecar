@@ -29,6 +29,13 @@ const (
 // Ref is the presentation-neutral identity produced by every recognition
 // path. Line is 1-based and zero when absent. Provider and Matcher identify an
 // external resource matcher. Namespace is set only for internal intents.
+//
+// KindResource carries the two shapes a plugin tab has. A DOCUMENT reference is
+// {Provider, Matcher, Value}, which is what the scanner produces: a matcher
+// claimed a span, and Value is the locator it matched. A COLLECTION reference
+// is {Provider, Collection} with an optional opening Query, which nothing in
+// text produces — it only ever arrives from a request that named it, an `open
+// --plugin`, a layout spec, or a tab restored from disk.
 type Ref struct {
 	Kind      Kind
 	Value     string
@@ -36,6 +43,13 @@ type Ref struct {
 	Provider  string
 	Matcher   string
 	Namespace string
+	// Collection names a plugin collection. Non-empty makes a KindResource ref
+	// a collection reference; it is empty on every other kind.
+	Collection string
+	// Query is the collection's opening query. It is view position rather than
+	// identity: retyping a query re-lists the tab that is already open instead
+	// of forking a second one.
+	Query string
 }
 
 // KindSet bounds the reference kinds a rendered surface allows the host to

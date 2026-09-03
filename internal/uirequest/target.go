@@ -306,3 +306,46 @@ func TargetFromSpan(span terminallink.Span) (Target, bool) {
 		return Target{}, false
 	}
 }
+
+// ResolveCollectionTarget validates a `--plugin` request without contacting
+// anything, for the same reason ResolveResourceTarget does: a short-lived CLI
+// process must never start a plugin to answer `sidecar open`.
+//
+// The two shapes are distinguished by whether a row was named. A collection
+// with no row opens the collection tab and carries its opening query; a
+// collection with a row opens that row's document tab, and a query there would
+// be describing a search nobody is running.
+func ResolveCollectionTarget(plugin, collection, query, row string) (Target, error) {
+	plugin = strings.TrimSpace(plugin)
+	collection = strings.TrimSpace(collection)
+	row = strings.TrimSpace(row)
+	if plugin == "" {
+		return Target{}, fmt.Errorf("a plugin instance is required")
+	}
+	if collection == "" {
+		return Target{}, fmt.Errorf("a collection is required")
+	}
+	if utf8.RuneCountInString(plugin) > resource.MaxInstanceIDChars {
+		return Target{}, fmt.Errorf("plugin instance is longer than %d characters", resource.MaxInstanceIDChars)
+	}
+	if utf8.RuneCountInString(collection) > resource.MaxCollectionIDChars {
+		return Target{}, fmt.Errorf("collection is longer than %d characters", resource.MaxCollectionIDChars)
+	}
+	if utf8.RuneCountInString(query) > resource.MaxQueryChars {
+		return Target{}, fmt.Errorf("query is longer than %d characters", resource.MaxQueryChars)
+	}
+	if utf8.RuneCountInString(row) > resource.MaxLocatorChars {
+		return Target{}, fmt.Errorf("row id is longer than %d characters", resource.MaxLocatorChars)
+	}
+	if strings.ContainsFunc(plugin, isControl) || strings.ContainsFunc(collection, isControl) ||
+		strings.ContainsFunc(query, isControl) || strings.ContainsFunc(row, isControl) {
+		return Target{}, fmt.Errorf("plugin instance, collection, query and row id cannot contain control characters")
+	}
+	if row != "" && query != "" {
+		return Target{}, fmt.Errorf("a row id and a query name different things to open; pass one")
+	}
+	return Target{
+		Kind: TargetKindResource, Value: row,
+		Provider: plugin, Collection: collection, Query: query,
+	}, nil
+}

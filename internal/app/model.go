@@ -398,8 +398,15 @@ type Model struct {
 	overview      *overview.Model
 	terminalLinks termpreview.LinkCoordinator
 	scope         AppScope
-	globalTab     GlobalTab
-	globalTasks   *globalTasksHost
+	// globalTab is the visible global surface's ID, never an index: a tab that
+	// disappears must not slide an index onto a different action.
+	globalTab string
+	// globalHosts is one host per enabled global-scope plugin descriptor, in
+	// descriptor order. The header row is built from it.
+	globalHosts []*globalPluginHost
+	// pluginDescriptors is the full catalog, injected by the host process. It
+	// is what the settings page loops over.
+	pluginDescriptors []plugin.Descriptor
 
 	// Configuration surface. Like the Tasks host it is app-owned rather than a
 	// registry plugin, so it survives project switches; unlike the global
@@ -538,6 +545,21 @@ func WithStartupConfigPage(page configui.PageID) Option {
 	return func(m *Model) { m.startupConfigPage = page }
 }
 
+// WithPluginDescriptors hands the shell the full plugin catalog, which it
+// passes to the settings page. It is an option rather than a parameter because
+// internal/app cannot import internal/plugins/assembly — the plugin packages
+// import this one — so the catalog arrives from the process that owns both.
+// Without it the shell still hosts the global plugins it knows about; only the
+// settings page's loop is empty.
+func WithPluginDescriptors(descriptors []plugin.Descriptor) Option {
+	return func(m *Model) {
+		m.pluginDescriptors = descriptors
+		if m.config != nil {
+			m.config.SetPluginDescriptors(descriptors)
+		}
+	}
+}
+
 // WithNotificationDelivery injects a coordinator for focused app tests and
 // alternate hosts. Production uses the lazy platform coordinator.
 func WithNotificationDelivery(delivery notifydelivery.Coordinator) Option {
@@ -603,6 +625,8 @@ func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentV
 	m.toastMouse = mouse.NewHandler()
 	if tab, ok := parseGlobalTabID(state.GetLastGlobalTab()); ok {
 		m.globalTab = tab
+	} else {
+		m.globalTab = GlobalSessions
 	}
 	if features.IsEnabled(features.CrossProjectOverview.Name) {
 		m.overview = overview.New(workspaceinventory.Collector{})
@@ -620,11 +644,11 @@ func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentV
 		km.RegisterPluginBinding(terminal.PasteKey, "paste", "global-workspaces-terminal")
 	}
 	m.installPluginHostSeams()
-	if features.IsEnabled(features.TasksPlugin.Name) {
-		// Tasks is a global tab, so its host is built here rather than
-		// registered as a project plugin. Constructing it does no I/O.
-		m.globalTasks = newGlobalTasksHost(reg.Context(), km)
-	}
+	// Global-scope plugins are tabs of the global space, so their hosts are
+	// built here rather than registered as project plugins. Constructing one
+	// does no I/O; the model behind it is built by the command start returns.
+	m.globalHosts = newGlobalPluginHosts(
+		append(GlobalDescriptors(), globalProtocolDescriptors(cfg)...), cfg, reg.Context(), km)
 	// Restore the top-level space the user left on. It runs here, after the two
 	// fields that decide which global tabs exist are built, and it reads only
 	// the state the process already loaded — no extra file is opened on the
@@ -749,12 +773,10 @@ func (m Model) Init() tea.Cmd {
 		}
 	}
 
-	// The global Tasks host starts alongside them and outlives them: it is not
-	// in the registry, so a later project switch cannot stop or rebuild it. Its
+	// The global plugin hosts start alongside them and outlive them: none is in
+	// the registry, so a later project switch cannot stop or rebuild one. Each
 	// model is built by the returned command, i.e. after the first frame.
-	if cmd := m.globalTasks.start(); cmd != nil {
-		cmds = append(cmds, cmd)
-	}
+	cmds = append(cmds, m.startGlobalHosts()...)
 
 	// Remote hosts connect after the first frame, in a command, like every
 	// other startup fetch. Nothing about a host may run before the first
@@ -2191,8 +2213,14 @@ func (m *Model) runHostCommand(id string) (tea.Cmd, bool) {
 		return m.selectGlobalTab(GlobalSessions), true
 	case "focus-activity":
 		return m.selectGlobalTab(GlobalActivity), true
-	case "focus-tasks":
-		return m.selectGlobalTab(GlobalTasks), true
+	}
+	// A hosted global plugin's palette command is focus-<descriptor id>, so a
+	// second global plugin needs no new case here — focus-tasks is one value of
+	// this rule rather than a special case.
+	if surfaceID, ok := strings.CutPrefix(id, "focus-"); ok {
+		if _, exists := m.globalSurfaceByID(surfaceID); exists {
+			return m.selectGlobalTab(surfaceID), true
+		}
 	}
 	return nil, false
 }
@@ -2407,7 +2435,7 @@ func (m *Model) notifyThemeChanged() tea.Cmd {
 			}
 		}
 	}
-	if cmd := m.globalTasks.update(themeMsg); cmd != nil {
+	if cmd := m.updateGlobalHosts(themeMsg); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
 	if m.overview != nil {

@@ -12,6 +12,8 @@ import (
 
 	"github.com/marcus/sidecar/internal/livepanes"
 	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/pluginbrowser"
+	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
@@ -109,7 +111,7 @@ func TestGlobalSurfaceRegistersEveryLiveKind(t *testing.T) {
 	for _, kind := range m.preview.live.Kinds() {
 		got[kind] = true
 	}
-	for _, want := range []string{livePreviewIssues, livePreviewNotes, livePreviewDocs, livePreviewDiffs} {
+	for _, want := range []string{livePreviewIssues, livePreviewNotes, livePreviewDocs, livePreviewDiffs, livePreviewResources} {
 		if !got[want] {
 			t.Errorf("the %q kind is not registered on the global surface", want)
 		}
@@ -170,4 +172,32 @@ func runLiveDepth(t *testing.T, m *Model, cmd tea.Cmd, depth int) {
 		return
 	}
 	runLiveDepth(t, m, m.Update(msg), depth+1)
+}
+
+// A protocol plugin's answers are BOTH background work for this surface and the
+// project surface's: the project workspace hosts the same browser. Classifying
+// them as this surface's alone made the app claim them and return, which left a
+// project collection pane on "refreshing…" forever with the page already
+// fetched. They must be async AND shared.
+func TestPluginAnswersAreSharedBackgroundWork(t *testing.T) {
+	for _, msg := range []tea.Msg{
+		pluginbrowser.ListedMsg{Instance: "recall"},
+		pluginbrowser.GotMsg{Instance: "recall"},
+		pluginbrowser.ActedMsg{Instance: "recall"},
+		pluginbrowser.DescribedMsg{},
+		pluginbrowser.QueryDebouncedMsg{Instance: "recall"},
+		pluginbrowser.ChangedMsg{Instance: "recall"},
+		resourceview.OpenRowMsg{},
+	} {
+		if !IsAsyncMessage(msg) {
+			t.Errorf("%T is not background work; a modal owning focus would strand the pane", msg)
+		}
+		if !IsSharedPluginMessage(msg) {
+			t.Errorf("%T is claimed by this surface alone; the project workspace hosts the same browser", msg)
+		}
+	}
+	// A message that is not a plugin's is not shared by this rule.
+	if IsSharedPluginMessage(previewIssueLoadedMsg{}) {
+		t.Error("an issue result was classified as a plugin message")
+	}
 }

@@ -18,6 +18,20 @@ import (
 // targets through ResolveTarget — the exact classification the CLI's `open`
 // argument goes through, here on the host where the workspace root is known.
 func ResolveTargets(kind panelayout.Kind, spec uirequest.LayoutPane, root string, matchers []terminallink.ResourceMatcher) ([]uirequest.Target, string) {
+	// A resource pane naming a collection is a plugin tab: the collection is
+	// what it opens, an optional single target is the row inside it, and no
+	// matcher is consulted because a plugin row is addressed by name.
+	if kind == panelayout.Resource && strings.TrimSpace(spec.Collection) != "" {
+		row := ""
+		if len(spec.Targets) == 1 {
+			row = spec.Targets[0]
+		}
+		tgt, err := uirequest.ResolveCollectionTarget(spec.Provider, spec.Collection, spec.Query, row)
+		if err != nil {
+			return nil, err.Error()
+		}
+		return []uirequest.Target{tgt}, ""
+	}
 	if len(spec.Targets) == 0 {
 		if kind == panelayout.Diff {
 			return []uirequest.Target{{Kind: uirequest.TargetKindDiff, Value: workspacediff.IdentityWorkingTree}}, ""

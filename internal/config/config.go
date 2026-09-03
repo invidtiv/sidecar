@@ -210,6 +210,11 @@ type PluginsConfig struct {
 	Workspace     WorkspacePluginConfig     `json:"workspace"`
 	Notes         NotesPluginConfig         `json:"notes"`
 	Tasks         TasksPluginConfig         `json:"tasks"`
+	// External is the ordered list of external plugin instances Sidecar hosts
+	// over the plugin protocol. It lives under plugins because the settings
+	// page already groups every plugin here and because enablement is
+	// plugins.<id>.enabled for every class.
+	External []PluginInstanceConfig `json:"external,omitempty"`
 }
 
 // Tab positions for the Tasks plugin.
@@ -224,13 +229,13 @@ const (
 
 // TasksPluginConfig configures the embedded Tasks plugin.
 //
-// Whether the plugin loads at all is governed by the "tasks_plugin" feature
-// flag (default off), not by a field here — that keeps enablement on the same
-// lever as the other opt-in surfaces (see internal/features).
-//
 // There is deliberately no store/JSONL path: the embedded Tasks package uses
 // Tasks' own configuration resolution.
 type TasksPluginConfig struct {
+	// Enabled is the unified plugins.<id>.enabled switch. See
+	// NotesPluginConfig.Enabled for why it is a pointer; the deprecated alias
+	// here is the tasks_plugin feature flag.
+	Enabled *bool `json:"enabled,omitempty"`
 	// Position was the anchor the Tasks tab was inserted after while Tasks was
 	// a project plugin. Tasks is now a tab of the global space (Agents,
 	// Workspaces, Tasks), whose order is fixed, so the value is accepted,
@@ -400,6 +405,12 @@ type SidebarDisplayConfig struct {
 
 // NotesPluginConfig configures the notes plugin.
 type NotesPluginConfig struct {
+	// Enabled is the unified plugins.<id>.enabled switch. It is a pointer
+	// because "absent" is a third answer: with no key written, the deprecated
+	// notes_plugin feature flag still decides, so a config written before this
+	// key existed keeps working. Notes additionally requires the td panel,
+	// which owns its persistence.
+	Enabled *bool `json:"enabled,omitempty"`
 	// DefaultEditor sets the default editor mode when pressing Enter on a note.
 	// Values: "builtin" (default) or "pane" ($EDITOR in the Notes pane).
 	DefaultEditor string `json:"defaultEditor,omitempty"`
@@ -547,5 +558,10 @@ func (c *Config) Validate() error {
 	default:
 		c.Plugins.Notes.DefaultEditor = NotesEditorBuiltin
 	}
+	external, err := validatePluginInstances(c.Plugins.External)
+	if err != nil {
+		return err
+	}
+	c.Plugins.External = external
 	return validateTerminalResources(&c.TerminalResources)
 }

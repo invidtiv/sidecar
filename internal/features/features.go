@@ -133,6 +133,24 @@ var (
 		Description: "Recognize and open resources from configured external terminal resource providers",
 	}
 
+	// PluginProtocol gates the plugin protocol host: the plugins.external
+	// configuration section, the sidecar.plugin/v1-draft envelope, and every
+	// `sidecar plugin` verb that talks to an external plugin process.
+	//
+	// Off by default while the contract is a draft. Deliberately a flag rather
+	// than "is anything configured": a user must be able to write the
+	// configuration and turn it on separately, and turning it off must stop
+	// every plugin process rather than only hide the surfaces.
+	//
+	// It does not gate terminal_resource_providers. A provider configured under
+	// terminalResources keeps being described and resolved on the frozen
+	// sidecar.terminal-resource/v1 identifier whatever this flag says.
+	PluginProtocol = Feature{
+		Name:        "plugin_protocol",
+		Default:     false,
+		Description: "Host external plugins that speak the Sidecar plugin protocol",
+	}
+
 	// CrossProjectOverview gates the cross-project agent overview.
 	CrossProjectOverview = Feature{
 		Name:        "cross_project_overview",
@@ -178,6 +196,7 @@ var allFeatures = []Feature{
 	WorkspaceTerminalPanel,
 	CrossProjectOverview,
 	TerminalResourceProviders,
+	PluginProtocol,
 	SidecarRemoteHosts,
 	AgentControl,
 }

@@ -225,9 +225,11 @@ func (p *Plugin) activateResolvedTerminalLink(link terminalLink, context termina
 		return p.activateNoteLink(plan.Note)
 	case targetactivation.PlanOpenResource:
 		return p.activateResourceLink(resourceview.Ref{
-			Instance: plan.Provider,
-			Matcher:  plan.Matcher,
-			Locator:  plan.Locator,
+			Instance:   plan.Provider,
+			Matcher:    plan.Matcher,
+			Locator:    plan.Locator,
+			Collection: plan.Collection,
+			Query:      plan.Query,
 		})
 	case targetactivation.PlanOpenDiff:
 		return p.revalidateTerminalLink(link, context, termPanel)

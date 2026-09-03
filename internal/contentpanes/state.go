@@ -60,6 +60,13 @@ type TabState struct {
 	// the first load so the card does not re-run the search.
 	OwnerName string `json:"ownerName,omitempty"`
 	OwnerRoot string `json:"ownerRoot,omitempty"`
+	// View, Sort and CursorID are a plugin collection tab's view position, the
+	// rest of which (its query) is identity-adjacent enough to live on the Ref.
+	// They are here for the reason Scope and Mode are: they are what the user
+	// chose, not what the tab points at.
+	View     string `json:"view,omitempty"`
+	Sort     string `json:"sort,omitempty"`
+	CursorID string `json:"cursorId,omitempty"`
 }
 
 func persistSource(src SourceContext) *SourceState {

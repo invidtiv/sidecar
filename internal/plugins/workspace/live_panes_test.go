@@ -210,7 +210,7 @@ func TestProjectSurfaceRegistersEveryLiveKind(t *testing.T) {
 	for _, kind := range p.live.Kinds() {
 		got[kind] = true
 	}
-	for _, want := range []string{liveIssues, liveNotes, liveDocs, liveDiffs} {
+	for _, want := range []string{liveIssues, liveNotes, liveDocs, liveDiffs, liveResources} {
 		if !got[want] {
 			t.Errorf("the %q kind is not registered on the project surface", want)
 		}
@@ -327,5 +327,32 @@ func TestRepeatedReconcilesDoNotRefreshAnythingWhenNothingChanged(t *testing.T) 
 		if cmd != nil {
 			t.Fatal("an idle reconcile produced work; a per-update refresh loop is exactly the cost this design exists to avoid")
 		}
+	}
+}
+
+// A watched change that arrives while a modal covers the pane tree is owed, not
+// dropped. Every other content kind's binding answers this; the collection
+// pane's veto (viewMode != ViewModeList) made it the one kind that could lose a
+// signal and sit stale until some later write happened to arrive.
+func TestAVetoedCollectionRefreshStaysOwed(t *testing.T) {
+	p, _ := focusedCollectionPane(t)
+	if p.resourceRefreshOwed() {
+		t.Fatal("a refresh is owed before any signal arrived")
+	}
+
+	// The veto: a modal is up, so the panes underneath are not on screen.
+	p.viewMode = ViewModeCreate
+	if cmds := p.refreshResourcePanes(); len(cmds) != 0 {
+		t.Fatalf("a covered pane refreshed anyway (%d commands)", len(cmds))
+	}
+	if !p.resourceRefreshOwed() {
+		t.Fatal("the vetoed refresh was dropped rather than owed; the pane would stay stale")
+	}
+
+	// The veto lifts and the reconcile retries: the debt is paid and cleared.
+	p.viewMode = ViewModeList
+	p.refreshResourcePanes()
+	if p.resourceRefreshOwed() {
+		t.Fatal("the debt survived the refresh that paid it; the reconcile would retry forever")
 	}
 }

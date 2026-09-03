@@ -1,0 +1,10 @@
+{
+  "protocol": "sidecar.plugin/v1-draft",
+  "method": "describe",
+  "instance": "recall",
+  "deadlineMs": 5000,
+  "host": {
+    "name": "sidecar",
+    "version": "0.0.0"
+  }
+}

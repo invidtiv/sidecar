@@ -224,5 +224,3 @@ func TestAdjustSurfaceFlipsDirectionAcrossTheCrossover(t *testing.T) {
 		t.Errorf("surface %s left only %.2f for %s", surface, ratio, pole)
 	}
 }
-
-

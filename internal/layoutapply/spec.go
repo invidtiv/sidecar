@@ -232,9 +232,16 @@ func specLeafJSON(item *ItemPlan) *state.PaneLayoutJSON {
 			case panelayout.Diff:
 				saved.DiffTabs = append(saved.DiffTabs, state.PaneDiffTabJSON{Spec: t.Value})
 			case panelayout.Resource:
-				saved.ResourceTabs = append(saved.ResourceTabs, state.PaneResourceTabJSON{
-					Provider: t.Provider, Matcher: t.Matcher, Locator: t.Value,
-				})
+				// Exactly one shape per record, chosen by what the target
+				// carries. A plugin collection has no matcher to write, and a
+				// matched locator has no collection.
+				tab := state.PaneResourceTabJSON{Provider: t.Provider}
+				if t.Collection != "" {
+					tab.Collection, tab.Query, tab.Locator = t.Collection, t.Query, t.Value
+				} else {
+					tab.Matcher, tab.Locator = t.Matcher, t.Value
+				}
+				saved.ResourceTabs = append(saved.ResourceTabs, tab)
 			}
 		}
 		return saved

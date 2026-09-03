@@ -62,4 +62,3 @@ func buildTheme() monitor.Theme {
 		MarkdownTheme: c.MarkdownTheme,
 	}
 }
-

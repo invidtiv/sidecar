@@ -1,0 +1,475 @@
+package pluginbrowser
+
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
+
+	"github.com/marcus/sidecar/internal/pluginhost"
+	"github.com/marcus/sidecar/internal/resource"
+	"github.com/marcus/sidecar/internal/styles"
+)
+
+// detailLines is the whole detail box, already fitted to its width and height.
+func (m *Model) detailLines(width, height int) []string {
+	if width < 1 || height < 1 {
+		return nil
+	}
+	lines := m.detailBlock(width)
+	start := m.detail.scroll
+	if start > max0(len(lines)-1) {
+		start = max0(len(lines) - 1)
+	}
+	if start < 0 {
+		start = 0
+	}
+	end := start + height
+	if end > len(lines) {
+		end = len(lines)
+	}
+	return fitLines(append([]string(nil), lines[start:end]...), width, height)
+}
+
+// detailBlock is the unscrolled card, which is what both the viewport and the
+// scroll bound are measured against, so what can be scrolled to and what is
+// drawn cannot disagree.
+func (m *Model) detailBlock(width int) []string {
+	switch {
+	case !m.described:
+		return []string{styles.Muted.Render(ansi.Truncate("Waiting for "+m.instance+"…", width, "…"))}
+	case m.detail.loading && !m.detail.loaded:
+		return []string{
+			styles.Title.Render(ansi.Truncate(m.detail.id, width, "…")),
+			"",
+			styles.Muted.Render(ansi.Truncate("Loading from "+m.instance+"…", width, "…")),
+		}
+	case !m.detail.loaded && m.detail.err != nil:
+		return append([]string{styles.Title.Render(ansi.Truncate(m.detail.id, width, "…")), ""},
+			m.errorLines(m.detail.err, width)...)
+	case !m.detail.loaded:
+		return m.detailEmptyLines(width)
+	}
+	return m.documentLines(width)
+}
+
+// detailEmptyLines is the box with nothing open. It says what the next gesture
+// does rather than showing a blank card, which is the difference between an
+// empty surface and a broken one.
+func (m *Model) detailEmptyLines(width int) []string {
+	c, ok := m.ActiveCollection()
+	if !ok {
+		return []string{styles.Muted.Render(ansi.Truncate("Nothing to open.", width, "…"))}
+	}
+	lines := []string{styles.Title.Render(ansi.Truncate(m.Name()+" · "+c.Title, width, "…")), ""}
+	if !c.Detail {
+		lines = append(lines, styles.Muted.Render(ansi.Truncate(
+			"This collection's rows have no document behind them.", width, "…")))
+		return lines
+	}
+	lines = append(lines,
+		styles.Muted.Render(ansi.Truncate("Press Enter on a row to open it here.", width, "…")),
+		"",
+		styles.Subtle.Render(ansi.Truncate("A second Enter moves the keyboard into this box.", width, "…")),
+	)
+	if len(m.desc.Actions) > 0 {
+		lines = append(lines, "", styles.Subtle.Render(ansi.Truncate(
+			fmt.Sprintf("a  offers %d plugin action(s), each confirmed by the host.", len(m.desc.Actions)), width, "…")))
+	}
+	return lines
+}
+
+// documentLines renders one resource: identity, fields, body, then sections in
+// the order the plugin declared them, each under a titled rule.
+func (m *Model) documentLines(width int) []string {
+	doc := m.detail.doc
+	title := doc.Title
+	if title == "" {
+		title = doc.Identity
+	}
+	head := styles.Title.Render(ansi.Truncate(title, width, "…"))
+	if doc.Status != nil && doc.Status.Label != "" {
+		pill := toneStyle(doc.Status.Tone).Render(doc.Status.Label)
+		if ansi.StringWidth(head)+2+ansi.StringWidth(pill) <= width {
+			head = padBetween(head, pill, width)
+		}
+	}
+	lines := []string{head, ""}
+
+	if doc.Subtitle != "" {
+		lines = append(lines, styles.Subtle.Render(ansi.Truncate(doc.Subtitle, width, "…")), "")
+	}
+	if m.detail.err != nil {
+		// A refresh that failed keeps the document and says so, rather than
+		// replacing what the user is reading with an error card.
+		lines = append(lines, toneStyle(errorTone(m.detail.err.Code)).Render(
+			ansi.Truncate("Refresh failed: "+errorHeadline(m.detail.err.Code), width, "…")), "")
+	} else if m.detail.loading {
+		lines = append(lines, styles.Muted.Render(ansi.Truncate("Refreshing…", width, "…")), "")
+	}
+
+	if len(doc.Fields) > 0 {
+		lines = append(lines, fieldGrid(doc.Fields, width)...)
+	}
+	if body := m.renderedBody(width); len(body) > 0 {
+		if len(doc.Fields) > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, body...)
+		if doc.Body != nil && doc.Body.Truncated {
+			lines = append(lines, "", styles.Muted.Render(ansi.Truncate(
+				"… body truncated by Sidecar's size limit", width, "…")))
+		}
+	}
+
+	for _, section := range doc.Sections {
+		lines = append(lines, sectionRule(section.Title, width))
+		lines = append(lines, m.sectionLines(section, width)...)
+	}
+
+	lines = append(lines, "")
+	if doc.SourceURL != "" {
+		lines = append(lines, styles.Muted.Render(ansi.Truncate("o  open "+doc.SourceURL, width, "…")))
+	} else {
+		lines = append(lines, styles.Subtle.Render(ansi.Truncate(
+			"no sourceUrl — o is unavailable on this record", width, "…")))
+	}
+	return lines
+}
+
+// sectionRule is the section header the design language names: a bold label,
+// then a rule fill.
+func sectionRule(title string, width int) string {
+	label := "── " + title + " "
+	fill := width - ansi.StringWidth(label)
+	if fill < 0 {
+		return styles.Muted.Render(ansi.Truncate(label, width, "…"))
+	}
+	return styles.Muted.Render(label + strings.Repeat("─", fill))
+}
+
+// sectionLines renders exactly one of a section's three shapes. Sanitization
+// already picked which one, so nothing here has to choose.
+func (m *Model) sectionLines(section resource.Section, width int) []string {
+	switch {
+	case section.Body != nil && section.Body.Text != "":
+		return m.renderBody(section.Body, width)
+	case len(section.Fields) > 0:
+		return fieldGrid(section.Fields, width)
+	case len(section.Items) > 0:
+		return m.timelineLines(section.Items, width)
+	default:
+		return []string{styles.Subtle.Render(ansi.Truncate("(empty)", width, "…"))}
+	}
+}
+
+// timelineLines renders a timeline with its times relative, which is what the
+// protocol says `when` means and what keeps a column of absolute stamps from
+// being the widest thing in a narrow box.
+func (m *Model) timelineLines(items []resource.TimelineItem, width int) []string {
+	now := m.now()
+	stamp := 0
+	rendered := make([]string, len(items))
+	for i, item := range items {
+		rendered[i] = relativeAge(item.When, now)
+		if w := ansi.StringWidth(rendered[i]); w > stamp {
+			stamp = w
+		}
+	}
+	if stamp > 10 {
+		stamp = 10
+	}
+	out := make([]string, 0, len(items))
+	for i, item := range items {
+		when := ansi.Truncate(rendered[i], stamp, "…")
+		pad := stamp - ansi.StringWidth(when)
+		text := item.Title
+		if item.Text != "" {
+			if text != "" {
+				text += " · "
+			}
+			text += item.Text
+		}
+		rest := max0(width - stamp - 3)
+		out = append(out, styles.Muted.Render(when+strings.Repeat(" ", max0(pad)))+"   "+
+			styles.Body.Render(ansi.Truncate(text, rest, "…")))
+	}
+	return out
+}
+
+func (m *Model) now() time.Time {
+	if m.calls.Now != nil {
+		return m.calls.Now()
+	}
+	return time.Now()
+}
+
+// relativeAge is the host's relative form. It stops at weeks because a plugin
+// that wants a calendar date can send one in a field, and a number of months
+// inferred from a timestamp is precision the data rarely backs.
+func relativeAge(when, now time.Time) string {
+	if when.IsZero() {
+		return ""
+	}
+	d := now.Sub(when)
+	if d < 0 {
+		d = 0
+	}
+	switch {
+	case d < time.Minute:
+		return "now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	case d < 14*24*time.Hour:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	default:
+		return fmt.Sprintf("%dw ago", int(d.Hours()/(24*7)))
+	}
+}
+
+// fieldGrid lays bounded label/value pairs out in an aligned column. A value
+// that overruns its column takes a whole line of its own rather than wrapping
+// into the label gutter.
+func fieldGrid(fields []resource.Field, width int) []string {
+	labelW := 0
+	for _, f := range fields {
+		if w := ansi.StringWidth(f.Label); w > labelW {
+			labelW = w
+		}
+	}
+	if maxLabel := width / 3; labelW > maxLabel {
+		labelW = maxLabel
+	}
+	if labelW < 1 {
+		labelW = 1
+	}
+	valueW := width - labelW - 2
+	lines := make([]string, 0, len(fields))
+	for _, f := range fields {
+		label := ansi.Truncate(f.Label, labelW, "…")
+		pad := labelW - ansi.StringWidth(label)
+		if valueW < 8 || ansi.StringWidth(f.Value) > valueW {
+			lines = append(lines, styles.Muted.Render(label))
+			lines = append(lines, styles.Body.Render(ansi.Truncate(f.Value, width, "…")))
+			continue
+		}
+		lines = append(lines, styles.Muted.Render(label+strings.Repeat(" ", max0(pad)))+"  "+
+			styles.Body.Render(f.Value))
+	}
+	return lines
+}
+
+// renderedBody renders the document's own body once per width and generation.
+func (m *Model) renderedBody(width int) []string {
+	doc := m.detail.doc
+	if doc.Body == nil || doc.Body.Text == "" {
+		return nil
+	}
+	if m.detail.body != nil && m.detail.bodyForW == width && m.detail.bodyForGen == m.detail.generation {
+		return m.detail.body
+	}
+	out := m.renderBody(doc.Body, width)
+	m.detail.body = out
+	m.detail.bodyForW = width
+	m.detail.bodyForGen = m.detail.generation
+	return out
+}
+
+// renderBody is the sanitized markdown path: raw HTML dropped, images inert alt
+// text, links plain text with no destination, and all OSC stripped after
+// rendering.
+func (m *Model) renderBody(body *resource.Body, width int) []string {
+	if body == nil || body.Text == "" {
+		return nil
+	}
+	if body.Format == resource.FormatMarkdown {
+		return resource.RenderSafeMarkdown(m.renderer, body.Text, width)
+	}
+	var plain []string
+	for _, line := range strings.Split(body.Text, "\n") {
+		plain = append(plain, wrapToWidth(line, width)...)
+	}
+	return resource.StripRenderedOSC(plain)
+}
+
+// maxDetailScroll is the furthest the detail viewport can travel, and zero when
+// there is no detail box on screen at all.
+func (m *Model) maxDetailScroll() int {
+	_, detailOuter := m.split()
+	if detailOuter <= 0 {
+		return 0
+	}
+	lines := len(m.detailBlock(detailOuter - chromeOverhead))
+	maxScroll := lines - (m.height - 2)
+	if maxScroll < 0 {
+		return 0
+	}
+	return maxScroll
+}
+
+// clampDetailScroll keeps the detail viewport inside the card.
+func (m *Model) clampDetailScroll() {
+	_, detailOuter := m.split()
+	if detailOuter <= 0 {
+		m.detail.scroll = 0
+		return
+	}
+	maxScroll := m.maxDetailScroll()
+	if m.detail.scroll > maxScroll {
+		m.detail.scroll = maxScroll
+	}
+	if m.detail.scroll < 0 {
+		m.detail.scroll = 0
+	}
+}
+
+// ScrollBy moves whichever window has focus and reports whether anything moved.
+func (m *Model) ScrollBy(delta int) bool {
+	if m.focus == FocusDetail {
+		before := m.detail.scroll
+		m.detail.scroll += delta
+		m.clampDetailScroll()
+		return m.detail.scroll != before
+	}
+	s := m.activeState()
+	if s == nil {
+		return false
+	}
+	before := s.cursor
+	m.moveTo(s.cursor + delta)
+	return s.cursor != before
+}
+
+// ScrollAtBoundary reports whether a scroll of delta would move nothing, so a
+// host can hand the wheel event to whatever is underneath instead of swallowing
+// it.
+func (m *Model) ScrollAtBoundary(delta int) bool {
+	if m.focus == FocusDetail {
+		if delta < 0 {
+			return m.detail.scroll <= 0
+		}
+		before := m.detail.scroll
+		m.detail.scroll += delta
+		m.clampDetailScroll()
+		at := m.detail.scroll == before
+		m.detail.scroll = before
+		return at
+	}
+	s := m.activeState()
+	if s == nil {
+		return true
+	}
+	if delta < 0 {
+		return s.cursor <= 0
+	}
+	return s.cursor >= len(s.items)-1
+}
+
+// errorHeadline is the host's sentence for a stable code. The plugin's own
+// message is displayed beneath it; this line is Sidecar's, so a plugin cannot
+// restyle or reframe the failure.
+func errorHeadline(code resource.Code) string {
+	switch code {
+	case resource.CodeNotFound:
+		return "Not found"
+	case resource.CodeUnauthorized:
+		return "Not authorized"
+	case resource.CodeForbidden:
+		return "Access denied"
+	case resource.CodeRateLimited:
+		return "Rate limited"
+	case resource.CodeInvalidConfig:
+		return "This plugin is not configured"
+	case resource.CodeInvalidRequest:
+		return "Sidecar sent a request this plugin rejected"
+	case resource.CodeUnavailable:
+		return "This plugin is unavailable"
+	default:
+		return "This plugin failed"
+	}
+}
+
+func errorTone(code resource.Code) resource.Tone {
+	switch code {
+	case resource.CodeNotFound:
+		return resource.ToneNeutral
+	case resource.CodeRateLimited, resource.CodeUnavailable:
+		return resource.ToneWarning
+	default:
+		return resource.ToneDanger
+	}
+}
+
+func toneStyle(tone resource.Tone) lipgloss.Style {
+	switch tone {
+	case resource.ToneInfo:
+		return styles.Body.Foreground(styles.Info)
+	case resource.ToneSuccess:
+		return styles.Body.Foreground(styles.Success)
+	case resource.ToneWarning:
+		return styles.Body.Foreground(styles.Warning)
+	case resource.ToneDanger:
+		return styles.Body.Foreground(styles.Error)
+	default:
+		return styles.Muted
+	}
+}
+
+// wrapToWidth is a plain greedy word wrap in display cells. It always returns
+// at least one line so an empty string still costs a row where one is meant.
+func wrapToWidth(text string, width int) []string {
+	if width <= 0 {
+		return []string{""}
+	}
+	if ansi.StringWidth(text) <= width {
+		return []string{text}
+	}
+	var lines []string
+	var current string
+	for _, word := range strings.Fields(text) {
+		switch {
+		case current == "":
+			current = word
+		case ansi.StringWidth(current)+1+ansi.StringWidth(word) <= width:
+			current += " " + word
+		default:
+			lines = append(lines, current)
+			current = word
+		}
+		for ansi.StringWidth(current) > width {
+			lines = append(lines, ansi.Truncate(current, width, "…"))
+			current = trimCells(current, width)
+		}
+	}
+	if current != "" {
+		lines = append(lines, current)
+	}
+	if len(lines) == 0 {
+		return []string{""}
+	}
+	return lines
+}
+
+func trimCells(s string, width int) string {
+	taken := 0
+	for i, r := range s {
+		if taken >= width {
+			return s[i:]
+		}
+		taken += ansi.StringWidth(string(r))
+	}
+	return ""
+}
+
+// DetailDocument returns the open document and whether there is one, for a host
+// that needs its source URL or its identity.
+func (m *Model) DetailDocument() (resource.Document, bool) {
+	return m.detail.doc, m.detail.loaded
+}
+
+// Collection returns the collection on screen for a host that needs its ID.
+func (m *Model) Collection() (pluginhost.Collection, bool) { return m.ActiveCollection() }

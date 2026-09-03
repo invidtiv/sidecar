@@ -270,7 +270,9 @@ func main() {
 	// Create and run application
 	currentVersion := effectiveVersion(Version)
 	initialPluginID := initialPluginForWorkDir(workDir, projectRootPath)
-	var options []app.Option
+	// The settings page renders the plugin catalog; assembly owns it, and the
+	// app shell cannot import assembly, so it is handed over here.
+	options := []app.Option{app.WithPluginDescriptors(assembly.Descriptors())}
 	if page, ok := cli.StartupConfigPage(); ok {
 		// The only caller today is `sidecar setup`. Configuration opens on its
 		// default page unless a caller deliberately named another one.

@@ -42,7 +42,7 @@ type metaCacheEntry struct {
 // Adapter implements the adapter.Adapter interface for GitHub Copilot CLI sessions.
 type Adapter struct {
 	stateDir     string
-	sessionIndex map[string]string // sessionID -> directory path
+	sessionIndex map[string]string         // sessionID -> directory path
 	metaCache    map[string]metaCacheEntry // workspace.yaml path -> cached metadata
 	msgCache     *cache.Cache[messageCacheEntry]
 	mu           sync.RWMutex // guards sessionIndex

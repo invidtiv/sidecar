@@ -320,6 +320,26 @@ type Plugin struct {
 	// timeout and cancellation are all the host's; this plugin only decides
 	// when to ask.
 	resolveResource resourceview.Resolver
+	// pluginCalls is how a collection or row tab reaches its protocol plugin.
+	// It is the collection shape's counterpart to resolveResource and arrives
+	// from the same describe pass.
+	pluginCalls resourceview.CallsFor
+	// pluginWatchTargets caches the expanded, validated watch targets of the
+	// plugins behind the visible collection tabs, keyed by the describe
+	// generation they came from. Validation is a stat per path, which is why it
+	// happens once per generation in Prepare rather than on every reconcile.
+	pluginWatchTargets map[string][]livewatch.Target
+	// pluginPollTick is the newest poll ticker sequence, so a tick from a pane
+	// that has closed or a plugin whose interval changed is discarded rather
+	// than left driving a list nobody is looking at.
+	pluginPollTick uint64
+	// pluginPollArmed is whether a poll tick is already in flight, so a
+	// reconcile per message does not arm one ticker per message.
+	pluginPollArmed bool
+	// resourceRefreshDebt records a watched change that arrived while a modal
+	// covered the collection panes, so the reconcile drives it once the veto
+	// lifts rather than dropping it. See livepanes.Binding.Owed.
+	resourceRefreshDebt bool
 
 	// Live refresh: one filesystem watcher per content-pane kind, created the
 	// first time a pane of that kind is on screen and released in Stop. The

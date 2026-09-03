@@ -13,6 +13,7 @@ import (
 	"github.com/marcus/sidecar/internal/filepreview"
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/noteview"
+	"github.com/marcus/sidecar/internal/pluginhost"
 	"github.com/marcus/sidecar/internal/resource"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/workspacediff"
@@ -130,6 +131,12 @@ type Source interface {
 	LoadDiff(context.Context, SourceContext, DiffReadRequest) (DiffReadResult, error)
 	Describe(ctx context.Context, ifRevision string) (contentservice.DescribeResult, error)
 	ResolveResource(ctx context.Context, src SourceContext, ref resource.Reference, refresh bool) (resource.Document, error)
+	// ListCollection and GetCollectionItem are the plugin-protocol twins of
+	// ResolveResource. A Resource leaf bound to a remote workspace must ask
+	// THAT host's plugins, exactly as a resolve already does, or a collection
+	// pane would quietly list this machine while its header named another.
+	ListCollection(ctx context.Context, src SourceContext, instance string, params contentservice.CollectionParams) (pluginhost.Page, error)
+	GetCollectionItem(ctx context.Context, src SourceContext, instance, collection, id string, refresh bool) (resource.Document, error)
 }
 
 // LocalSource is the in-process Document adapter. It uses the same
@@ -289,6 +296,39 @@ func (LocalSource) LoadDiff(ctx context.Context, src SourceContext, req DiffRead
 func (LocalSource) Describe(context.Context, string) (contentservice.DescribeResult, error) {
 	fp := contentservice.FingerprintDescriptors(nil)
 	return contentservice.DescribeResult{Fingerprint: fp, Descriptors: []contentservice.ProviderDescriptor{}}, nil
+}
+
+// ListCollection lists through this process's own plugin manager. A local pane
+// takes the app-injected calls instead of this path, for the reason
+// ResolveResource gives below; this exists so the Source contract is complete
+// and a caller that has only a Source never has to ask whether it is remote.
+func (LocalSource) ListCollection(ctx context.Context, src SourceContext, instance string, params contentservice.CollectionParams) (pluginhost.Page, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	result, err := contentservice.Default().ListCollection(ctx, src.WorkspaceID, instance, params)
+	if err != nil {
+		return pluginhost.Page{}, err
+	}
+	if result.ResourceError != nil {
+		return pluginhost.Page{}, contentservice.ResourceErrorFromWire(result.ResourceError)
+	}
+	return contentservice.PageFromWire(result.Collection), nil
+}
+
+// GetCollectionItem expands one row through this process's own plugin manager.
+func (LocalSource) GetCollectionItem(ctx context.Context, src SourceContext, instance, collection, id string, refresh bool) (resource.Document, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	result, err := contentservice.Default().GetCollectionItem(ctx, src.WorkspaceID, instance, collection, id, refresh)
+	if err != nil {
+		return resource.Document{}, err
+	}
+	if result.ResourceError != nil {
+		return resource.Document{}, contentservice.ResourceErrorFromWire(result.ResourceError)
+	}
+	return contentservice.SanitizeWireDocument(result.Resource)
 }
 
 // ResolveResource uses the host-side manager bound to this process's config.

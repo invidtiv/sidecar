@@ -29,3 +29,28 @@ func ReferenceForLocator(matchers []terminallink.ResourceMatcher, provider, loca
 	}
 	return Ref{}, fmt.Sprintf("provider %s has no live matcher that recognizes %s", provider, locator)
 }
+
+// ReferenceForRequest builds the reference a request names, choosing the shape
+// from the fields it carries rather than from which surface is asking.
+//
+// It exists so both workspace projections resolve `sidecar open` and a layout
+// spec identically. A collection is a plugin tab and consults no matcher: there
+// is no span a matcher could have claimed, and a row is addressed by its
+// collection and ID. Everything else is today's matched locator, and a locator
+// no live matcher recognizes is refused out loud rather than opened blind.
+func ReferenceForRequest(matchers []terminallink.ResourceMatcher, provider, matcher, collection, query, value string) (Ref, string) {
+	if collection != "" {
+		ref := Ref{Instance: provider, Collection: collection, Query: query, Locator: value}
+		if !ref.Valid() {
+			return Ref{}, fmt.Sprintf("plugin %s cannot open collection %q as asked", provider, collection)
+		}
+		return ref, ""
+	}
+	if matcher != "" {
+		ref := Ref{Instance: provider, Matcher: matcher, Locator: value}
+		if ref.Valid() {
+			return ref, ""
+		}
+	}
+	return ReferenceForLocator(matchers, provider, value)
+}

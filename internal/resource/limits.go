@@ -64,6 +64,24 @@ const (
 	MaxInstanceIDChars = 64
 )
 
+// Bounds on the collection shape of a Reference. They are stated here, beside
+// the document shape's, because both shapes reach persisted state through one
+// value and a bound that lived only in the plugin host would not be checked on
+// the way back off disk.
+const (
+	// MaxCollectionIDChars bounds a plugin-declared collection ID. It matches
+	// pluginhost.MaxCollectionIDChars; this package cannot import that one, so
+	// a test over there pins the two together.
+	MaxCollectionIDChars = 64
+	// MaxQueryChars bounds a collection tab's persisted query — user-typed text
+	// that survives a relaunch, so it is bounded on the way out as well as in.
+	MaxQueryChars = 512
+	// MaxViewIDChars and MaxSortIDChars bound the declared view and sort key a
+	// collection tab remembers.
+	MaxViewIDChars = 64
+	MaxSortIDChars = 64
+)
+
 // Timeouts. describe is local and must be fast; resolve may cross a network.
 const (
 	DescribeTimeout       = 5 * time.Second

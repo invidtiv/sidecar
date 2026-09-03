@@ -13,7 +13,6 @@ func CreateTDPanelRenderer() monitor.PanelRenderer {
 	}
 }
 
-
 // CreateTDModalRenderer creates a ModalRenderer that uses sidecar's gradient borders
 // and fills the entire modal surface (including padding and trailing lines) with the theme surface color.
 // Maps td monitor ModalType and depth values to appropriate gradients from the current theme.
@@ -24,7 +23,6 @@ func CreateTDModalRenderer() monitor.ModalRenderer {
 		return RenderGradientBorderWithBg(content, width, height, gradient, 1, theme.Colors.BgSecondary)
 	}
 }
-
 
 // deriveSemanticGradientStops creates a 2-stop gradient from a base semantic color,
 // blending with the contrast pole of the theme's background so the gradient works
@@ -140,4 +138,3 @@ func getTDModalGradient(modalType monitor.ModalType, depth int) Gradient {
 		return NewGradient(deriveSemanticGradientStops(base, theme.Colors.BgPrimary), angle)
 	}
 }
-

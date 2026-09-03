@@ -8,8 +8,8 @@ import (
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/noteview"
+	"github.com/marcus/sidecar/internal/pluginhost"
 	"github.com/marcus/sidecar/internal/resource"
-	"github.com/marcus/sidecar/internal/resourceprovider"
 	"github.com/marcus/sidecar/internal/shellstate"
 )
 
@@ -24,7 +24,7 @@ type Service struct {
 	Git                func(ctx context.Context, dir string, args ...string) ([]byte, error)
 	LookupIssue        func(ctx context.Context, workDir, issueID string, fallbacks []issueview.ProjectRef) (*issueview.Data, *issueview.Owner, error)
 	LookupNote         func(ctx context.Context, workDir, noteID string) (*noteview.Data, error)
-	NewResourceManager func() (*resourceprovider.Manager, error)
+	NewResourceManager func() (*pluginhost.Manager, error)
 	ListIssues         func(ctx context.Context, root string, limit int) ([]CatalogIssue, error)
 	ListNotes          func(ctx context.Context, root string, limit int) ([]CatalogNote, error)
 }
@@ -163,6 +163,16 @@ func (s *Service) ReadParams(ctx context.Context, params ReadParams) (ReadResult
 		}
 		return diffReadResultFrom(ws.ID, doc, params.Operation), nil
 	case KindResource:
+		switch params.Operation {
+		case OpCollection:
+			return s.ListCollection(ctx, params.WorkspaceID, params.Provider, CollectionParams{
+				Collection: params.Collection, Query: params.Query, View: params.View,
+				Sort: params.Sort, Cursor: params.Cursor, Limit: params.Limit,
+			})
+		case OpItem:
+			return s.GetCollectionItem(ctx, params.WorkspaceID, params.Provider,
+				params.Collection, params.Target, params.Refresh)
+		}
 		return s.ReadResource(ctx, params.WorkspaceID, resource.Reference{
 			Instance: params.Provider, Matcher: params.Matcher, Locator: params.Target,
 		}, params.Refresh)
@@ -208,7 +218,9 @@ func requireOperation(kind, operation string) error {
 			return Usage("unknown content operation %q", operation)
 		}
 	case KindResource:
-		if operation != OpResource {
+		switch operation {
+		case OpResource, OpCollection, OpItem:
+		default:
 			return Usage("unknown content operation %q", operation)
 		}
 	}

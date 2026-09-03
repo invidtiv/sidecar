@@ -13,7 +13,7 @@ import (
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/plugin"
-	"github.com/marcus/sidecar/internal/resourceprovider"
+	"github.com/marcus/sidecar/internal/pluginhost"
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/terminallink"
 )
@@ -236,7 +236,7 @@ func TestPublishingProvidersReturnsTheWorkItStarted(t *testing.T) {
 	}
 	m := New(registry, keymap.NewRegistry(), config.Default(), "", "/tmp/one", "/tmp/one", "workspaces")
 
-	manager := resourceprovider.NewManager(resourceprovider.ManagerOptions{Log: slog.Default()})
+	manager := pluginhost.NewManager(pluginhost.ManagerOptions{Log: slog.Default()})
 	resourceProviderHost.mu.Lock()
 	previous := resourceProviderHost.manager
 	resourceProviderHost.manager = manager
@@ -257,5 +257,111 @@ func TestPublishingProvidersReturnsTheWorkItStarted(t *testing.T) {
 	cmd()
 	if !surface.resolved {
 		t.Fatal("the returned command did not carry the surface's load")
+	}
+}
+
+// externalPluginConfig configures one plugins.external entry.
+func externalPluginConfig(argv0 string) *config.Config {
+	cfg := config.Default()
+	cfg.Plugins.External = []config.PluginInstanceConfig{
+		{ID: "fixture", Command: []string{argv0}, Enabled: true, Scope: config.PluginScopeGlobal},
+	}
+	return cfg
+}
+
+// Each section has its own flag. Turning the draft protocol off must not take a
+// working terminal resource provider down with it, and turning it on must not
+// resurrect providers whose own flag is off.
+func TestEachPluginSectionIsGatedByItsOwnFlag(t *testing.T) {
+	features.Init(config.Default())
+	t.Cleanup(func() {
+		features.SetOverride(features.TerminalResourceProviders.Name, false)
+		features.SetOverride(features.PluginProtocol.Name, false)
+	})
+
+	features.SetOverride(features.TerminalResourceProviders.Name, false)
+	features.SetOverride(features.PluginProtocol.Name, false)
+	if cmd := describeResourceProvidersCmd(externalPluginConfig("/bin/echo")); cmd != nil {
+		t.Fatal("an external plugin produced a describe command with plugin_protocol off")
+	}
+
+	features.SetOverride(features.PluginProtocol.Name, true)
+	if cmd := describeResourceProvidersCmd(externalPluginConfig("/bin/echo")); cmd == nil {
+		t.Fatal("an external plugin produced no describe command with plugin_protocol on")
+	}
+
+	// Two distinct IDs: an ID configured in both sections is one plugin, and
+	// that collapse is a different rule than this one.
+	cfg := providerConfig(t, "/bin/echo")
+	cfg.Plugins.External = []config.PluginInstanceConfig{
+		{ID: "recall", Command: []string{"/bin/echo"}, Enabled: true, Scope: config.PluginScopeGlobal},
+	}
+	features.SetOverride(features.TerminalResourceProviders.Name, false)
+	got := enabledPluginInstances(cfg, false, true)
+	if len(got) != 1 || got[0].Source != config.PluginSourceExternal {
+		t.Fatalf("instances = %+v, want only the plugins.external entry", got)
+	}
+	features.SetOverride(features.TerminalResourceProviders.Name, true)
+	got = enabledPluginInstances(cfg, true, false)
+	if len(got) != 1 || got[0].Source != config.PluginSourceTerminalResources {
+		t.Fatalf("instances = %+v, want only the terminalResources entry", got)
+	}
+	if got = enabledPluginInstances(cfg, true, true); len(got) != 2 {
+		t.Fatalf("instances = %+v, want both sections", got)
+	}
+}
+
+// An external plugin waits on exactly the same latch a resource provider does:
+// nothing about plugins.external may spawn, LookPath, or read the section
+// before the first ready frame.
+func TestExternalPluginWaitsForTheFirstReadyFrame(t *testing.T) {
+	features.Init(config.Default())
+	features.SetOverride(features.PluginProtocol.Name, true)
+	t.Cleanup(func() { features.SetOverride(features.PluginProtocol.Name, false) })
+
+	marker := filepath.Join(t.TempDir(), "plugin-ran")
+	script := filepath.Join(t.TempDir(), "plugin.sh")
+	body := "#!/bin/sh\ntouch " + marker + "\nexit 1\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+
+	latch := newReadyLatch()
+	restore := firstReadyFrameLatch
+	firstReadyFrameLatch = latch
+	t.Cleanup(func() {
+		firstReadyFrameLatch = restore
+		ShutdownResourceProviders()
+		resourceProviderHost.mu.Lock()
+		resourceProviderHost.manager = nil
+		resourceProviderHost.mu.Unlock()
+	})
+
+	cmd := describeResourceProvidersCmd(externalPluginConfig(script))
+	if cmd == nil {
+		t.Fatal("no describe command was produced")
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		cmd()
+	}()
+
+	time.Sleep(200 * time.Millisecond)
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("a plugin process ran before the first ready frame")
+	}
+	if ResourceProviderManager() != nil {
+		t.Fatal("the manager was built before the first ready frame")
+	}
+
+	latch.close()
+	select {
+	case <-done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("the describe command never finished after the latch opened")
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatal("the plugin never ran after the first ready frame")
 	}
 }

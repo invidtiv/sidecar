@@ -206,7 +206,10 @@ func (m *Model) openPreviewResourceRefResult(ref resourceview.Ref, fromTerminal 
 	if fromTerminal {
 		m.clearPreviewSelection()
 	}
-	return m.openPreviewContent(contentlink.Ref{Kind: contentlink.KindResource, Provider: ref.Instance, Matcher: ref.Matcher, Value: ref.Locator}, "Resource"), nil
+	return m.openPreviewContent(contentlink.Ref{
+		Kind: contentlink.KindResource, Provider: ref.Instance, Matcher: ref.Matcher, Value: ref.Locator,
+		Collection: ref.Collection, Query: ref.Query,
+	}, "Resource"), nil
 }
 
 // previewResourceResolver wraps the host-supplied resolver so every answer
@@ -430,4 +433,81 @@ func (m *Model) previewResourceKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	// Unclaimed keys fall through to WorkspacesKey, which lets host globals
 	// through and swallows the rest so they cannot drive the list.
 	return false, nil
+}
+
+// The app injects the protocol-plugin seam through this interface. Asserting it
+// here makes a signature drift a build error rather than a collection pane that
+// silently never lists anything.
+var _ resourceview.PluginSurface = (*Model)(nil)
+
+// SetPluginCalls supplies how a collection or row tab reaches its plugin, and
+// returns the load it starts for the pane on screen.
+//
+// It is SetResourceResolver's counterpart, shaped exactly the same way and for
+// the same reason: a tab opened before the app had a plugin host is armed and
+// waiting for readiness, readiness arrives here, so this is where the wait ends.
+// Cached rows are rebound but not asked — they are not on screen, and showing
+// one lists it.
+func (m *Model) SetPluginCalls(calls resourceview.CallsFor) tea.Cmd {
+	m.pluginCalls = calls
+	var cmds []tea.Cmd
+	if m.preview.deck != nil {
+		ctx := m.preview.deck.Context()
+		m.preview.deck.SetPluginCalls(calls)
+		for _, cmd := range m.preview.deck.LoadVisibleKind(panelayout.Resource) {
+			cmds = append(cmds, wrapPreviewDeckCmd(cmd, ctx.Surface))
+		}
+	}
+	if res := m.preview.resource; res != nil && res.tabs != nil {
+		res.tabs.SetCallsFor(calls)
+		if m.preview.deck == nil {
+			if cmd := res.tabs.ResolveActive(); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
+	}
+	for _, cached := range m.preview.paneCache {
+		if cached.deck != nil {
+			cached.deck.SetPluginCalls(calls)
+		}
+		if cached.resource == nil || cached.resource == m.preview.resource || cached.resource.tabs == nil {
+			continue
+		}
+		cached.resource.tabs.SetCallsFor(calls)
+	}
+	return tea.Batch(cmds...)
+}
+
+// applyPluginBrowserMsg routes one of the shared browser's answers to the
+// collection and row tabs on this surface. It goes through the deck when there
+// is one, for the reason every other broadcast does: the deck owns the models
+// the projection points at.
+func (m *Model) applyPluginBrowserMsg(msg tea.Msg) tea.Cmd {
+	var cmds []tea.Cmd
+	if m.preview.deck != nil {
+		if cmd := m.preview.deck.ApplyBroadcast(msg); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+	if res := m.preview.resource; res != nil && res.tabs != nil && m.preview.deck == nil {
+		if cmd, ok := res.tabs.UpdatePlugins(msg); ok && cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+	return tea.Batch(cmds...)
+}
+
+// visiblePreviewResourceTabs is the active tab of the Resource pane on screen,
+// which on this surface is at most one: preview panes are memory-only and torn
+// down when the cursor leaves the row.
+func (m *Model) visiblePreviewResourceTabs() []*resourceview.Model {
+	res := m.preview.resource
+	if res == nil {
+		return nil
+	}
+	view := res.view()
+	if view == nil {
+		return nil
+	}
+	return []*resourceview.Model{view}
 }

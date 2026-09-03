@@ -480,17 +480,21 @@ func RootCommand() *Command {
 
 	openCmd := &Command{
 		Name:    "open",
-		Summary: "Show a file, a td issue, a note, a git diff, or a provider resource in a split pane",
+		Summary: "Show a file, a td issue, a note, a git diff, a plugin resource, or a plugin collection in a split pane",
 		Usage:   "sidecar open [options] [<target>]",
-		Long: "Show a file, a td issue, a td note, a git diff, or an external provider resource to the user as a\n" +
+		Long: "Show a file, a td issue, a td note, a git diff, an external resource, or a plugin collection to the user as a\n" +
 			"split pane in a Sidecar workspace. From a Sidecar shell this targets that shell.\n" +
 			"Otherwise it targets the unique running instance, or a specific --shell / --project.\n" +
 			"--sessions addresses the global Sessions surface of a running instance.\n" +
 			"Pass --sessions=ROW for a durable inventory ID or display name; a following\n" +
 			"bare word is the open target, not the row. Mutually exclusive with --shell\n" +
 			"and --project.\n" +
-			"--diff with no spec is the working tree. --provider names a configured terminal resource\n" +
-			"provider instance and is required for a resource: a bare locator is never guessed at.\n" +
+			"--diff with no spec is the working tree. --plugin names a configured plugin instance:\n" +
+			"with --collection it opens that collection's tab (add --query to open it searched, or a\n" +
+			"positional row id to open that row's document instead), and without --collection it\n" +
+			"opens a matched locator through the plugin's matchers. --provider is the older spelling\n" +
+			"of the locator form and still works. Either way the instance is required for a resource:\n" +
+			"a bare locator is never guessed at.\n" +
 			"--split only overrides the split axis; it never halves a live terminal after content is open.\n" +
 			"--at places the pane at an explicit grid cell and is a requirement: a kind whose open\n" +
 			"would retarget an existing pane, or any cell that cannot be honored exactly, declines\n" +
@@ -506,12 +510,16 @@ func RootCommand() *Command {
 			{Target: "sidecar://note/nt-xxxx", Summary: "A td note, opened as a read-only pane"},
 			{Target: "--diff", Summary: "Working-tree diff (wt); add a spec for a commit or range"},
 			{Target: "spec", Summary: "A git commit or range (abc1234, A..B); --diff accepts HEAD and branch names"},
-			{Target: "locator", Summary: "With --provider, a resource key such as CASH-1245"},
+			{Target: "locator", Summary: "With --plugin (or --provider), a resource key such as CASH-1245"},
+			{Target: "row id", Summary: "With --plugin and --collection, one row of that collection"},
 		},
 		Flags: []Flag{
 			{Name: "--line", Arg: "N", Summary: "Line to reveal (alternative to \"path:line\")"},
 			{Name: "--diff", Summary: "Open a Diff leaf (working tree if no spec)", Bool: true},
-			{Name: "--provider", Arg: "ID", Summary: "Open a locator through a configured terminal resource provider"},
+			{Name: "--plugin", Arg: "ID", Summary: "Open through a configured plugin instance (collection tab with --collection, otherwise a matched locator)"},
+			{Name: "--provider", Arg: "ID", Summary: "Alias for --plugin's locator form, kept for the frozen resource protocol"},
+			{Name: "--collection", Arg: "C", Summary: "With --plugin, the collection to open as a tab"},
+			{Name: "--query", Arg: "Q", Summary: "With --collection, the query the tab opens searched on"},
 			{Name: "--shell", Arg: "NAME", Summary: "Target a registered shell by display name or tmux name"},
 			{Name: "--project", Arg: "NAME", Summary: "Target a project's Workspaces surface (slug, basename, or path)"},
 			{Name: "--sessions", Arg: "[=ROW]", Summary: "Target the global Sessions surface (optional row as --sessions=ID)"},
@@ -539,14 +547,16 @@ func RootCommand() *Command {
 			{Command: "sidecar open --diff HEAD", Description: "that commit, not the working tree"},
 			{Command: "sidecar open abc1234", Description: "commit, unless a file of that name exists"},
 			{Command: "sidecar open --provider jira-work CASH-1245", Description: "resource pane for that provider's locator"},
+			{Command: "sidecar open --plugin recall --collection results --query dex --split right", Description: "a collection tab beside the terminal, opened searched"},
+			{Command: "sidecar open --plugin ongoing --collection projects recall", Description: "one row's document tab"},
 			{Command: "sidecar open --json --split below README.md", Description: "structured result for the agent"},
 			{Command: "sidecar open README.md --at 2.1", Description: "explicit cell: second column, top row"},
 			{Command: "sidecar open --project sidecar README.md", Description: "from any terminal, that project's Workspaces surface"},
 			{Command: "sidecar open --sessions README.md", Description: "the selected row on the global Sessions surface"},
 		},
 		Agent: AgentDoc{
-			Invocation: "sidecar open <path>[:line] | td-xxxxxx | sidecar://note/nt-xxxx | --diff [spec] | --provider ID <locator> [--split right|below] [--at COL[.ROW]]",
-			Summary:    "Put a file, issue, note, diff, or resource in front of the user on the lease holder's screen",
+			Invocation: "sidecar open <path>[:line] | td-xxxxxx | sidecar://note/nt-xxxx | --diff [spec] | --plugin ID [--collection C [--query Q]] [<locator-or-row>] [--split right|below] [--at COL[.ROW]]",
+			Summary:    "Put a file, issue, note, diff, resource, or plugin collection in front of the user on the lease holder's screen",
 		},
 		Mutates: true,
 		Run:     runOpen,
@@ -604,7 +614,7 @@ func RootCommand() *Command {
 		Launch: runSetupLaunch,
 	}
 
-	root.Sub = []*Command{agentCommand(), agentsCmd, contentCommand(), createCmd, helpCmd, hostCommand(), layoutCommand(), notifyCommand(), openCmd, projectCommand(), repoCommand(), requestCommand(), sessionCommand(), setupCmd, shellCmd, terminalLinksCommand()}
+	root.Sub = []*Command{agentCommand(), agentsCmd, contentCommand(), createCmd, helpCmd, hostCommand(), layoutCommand(), notifyCommand(), openCmd, pluginCommand(), projectCommand(), repoCommand(), requestCommand(), sessionCommand(), setupCmd, shellCmd, terminalLinksCommand()}
 	return root
 }
 

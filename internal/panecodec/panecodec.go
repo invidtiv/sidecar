@@ -266,15 +266,14 @@ func encodeTabs(out *state.PaneLayoutJSON, pane *contentpanes.PaneState) {
 		tabs := make([]state.PaneResourceTabJSON, 0, len(pane.Tabs))
 		active := 0
 		for i, tab := range pane.Tabs {
-			if tab.Ref.Provider == "" || tab.Ref.Matcher == "" || tab.Ref.Value == "" {
+			saved, ok := resourceTabJSON(tab)
+			if !ok {
 				continue
 			}
 			if i == pane.Active {
 				active = len(tabs)
 			}
-			tabs = append(tabs, state.PaneResourceTabJSON{
-				Provider: tab.Ref.Provider, Matcher: tab.Ref.Matcher, Locator: tab.Ref.Value, Scroll: tab.Scroll,
-			})
+			tabs = append(tabs, saved)
 		}
 		out.ResourceTabs, out.Active = tabs, active
 	}
@@ -347,13 +346,11 @@ func decodePane(j *state.PaneLayoutJSON, opts Options) *contentpanes.PaneState {
 		}
 	case KindResource:
 		for i, tab := range j.ResourceTabs {
-			if tab.Provider == "" || tab.Matcher == "" || tab.Locator == "" {
+			state, ok := resourceTabState(tab)
+			if !ok {
 				continue
 			}
-			admit(i, contentpanes.TabState{
-				Ref:    contentlink.Ref{Kind: contentlink.KindResource, Provider: tab.Provider, Matcher: tab.Matcher, Value: tab.Locator},
-				Scroll: tab.Scroll,
-			})
+			admit(i, state)
 		}
 	default:
 		return nil
@@ -433,4 +430,52 @@ func stateKind(jsonKind string) string {
 	default:
 		return jsonKind
 	}
+}
+
+// resourceTabJSON projects one Resource tab onto its persisted record, choosing
+// the shape from the reference rather than from anything the writer remembered
+// to set. A tab that is no shape is dropped rather than written half-formed.
+func resourceTabJSON(tab contentpanes.TabState) (state.PaneResourceTabJSON, bool) {
+	ref := tab.Ref
+	if ref.Provider == "" {
+		return state.PaneResourceTabJSON{}, false
+	}
+	out := state.PaneResourceTabJSON{Provider: ref.Provider, Scroll: tab.Scroll}
+	switch {
+	case ref.Collection != "" && ref.Matcher == "" && ref.Value == "":
+		out.Collection = ref.Collection
+		out.Query, out.View, out.Sort, out.CursorID = ref.Query, tab.View, tab.Sort, tab.CursorID
+	case ref.Collection != "" && ref.Matcher == "" && ref.Value != "":
+		out.Collection, out.Locator = ref.Collection, ref.Value
+	case ref.Collection == "" && ref.Matcher != "" && ref.Value != "":
+		out.Matcher, out.Locator = ref.Matcher, ref.Value
+	default:
+		return state.PaneResourceTabJSON{}, false
+	}
+	return out, true
+}
+
+// resourceTabState is the inverse, and it is where an ambiguous record is
+// refused. A record naming both a matcher and a collection, or naming neither,
+// is dropped: which one it meant is not knowable here, and guessing would
+// restore a tab pointing at something the user never opened.
+func resourceTabState(tab state.PaneResourceTabJSON) (contentpanes.TabState, bool) {
+	if tab.Provider == "" {
+		return contentpanes.TabState{}, false
+	}
+	ref := contentlink.Ref{Kind: contentlink.KindResource, Provider: tab.Provider}
+	out := contentpanes.TabState{Scroll: tab.Scroll}
+	switch {
+	case tab.Collection != "" && tab.Matcher == "" && tab.Locator == "":
+		ref.Collection, ref.Query = tab.Collection, tab.Query
+		out.View, out.Sort, out.CursorID = tab.View, tab.Sort, tab.CursorID
+	case tab.Collection != "" && tab.Matcher == "" && tab.Locator != "":
+		ref.Collection, ref.Value = tab.Collection, tab.Locator
+	case tab.Collection == "" && tab.Matcher != "" && tab.Locator != "":
+		ref.Matcher, ref.Value = tab.Matcher, tab.Locator
+	default:
+		return contentpanes.TabState{}, false
+	}
+	out.Ref = ref
+	return out, true
 }

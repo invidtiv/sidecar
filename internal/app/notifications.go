@@ -123,10 +123,10 @@ func (m *Model) emitContentSize() []tea.Cmd {
 			cmds = append(cmds, cmd)
 		}
 	}
-	// The global Tasks host is not in the registry, and the Workspaces browser
-	// sizes a live pane; both lay out against the same box.
-	if !m.globalTasksFocused() || m.currentContentDeck() == nil {
-		if cmd := m.globalTasks.update(size); cmd != nil {
+	// The global plugin hosts are not in the registry, and the Workspaces
+	// browser sizes a live pane; both lay out against the same box.
+	if !m.globalPluginFocused() || m.currentContentDeck() == nil {
+		if cmd := m.updateGlobalHosts(size); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
 	}

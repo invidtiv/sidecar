@@ -19,6 +19,10 @@ func (m *Model) SetSize(width, height int) {
 		return
 	}
 	m.width, m.height = width, height
+	if m.browser != nil {
+		m.browser.SetSize(width, height)
+		return
+	}
 	if width != m.bodyForW {
 		m.invalidateBody()
 	}
@@ -35,6 +39,9 @@ func (m *Model) Scroll() int { return m.scroll }
 // ScrollBy moves the viewport and reports whether anything moved, so a host
 // can decide whether the wheel event was consumed.
 func (m *Model) ScrollBy(delta int) bool {
+	if m.browser != nil {
+		return m.browser.PaneScroll(delta)
+	}
 	before := m.scroll
 	m.scroll += delta
 	m.clampScroll()
@@ -46,6 +53,9 @@ func (m *Model) ScrollBy(delta int) bool {
 // instead of swallowing it. The doc, issue and diff viewers all answer this;
 // without it a host has to probe by scrolling and undoing.
 func (m *Model) ScrollAtBoundary(delta int) bool {
+	if m.browser != nil {
+		return m.browser.PaneScrollAtBoundary(delta)
+	}
 	if delta < 0 {
 		return m.scroll <= 0
 	}
@@ -93,6 +103,9 @@ func (m *Model) invalidateBody() {
 func (m *Model) View() string {
 	if m.width <= 0 || m.height <= 0 {
 		return ""
+	}
+	if m.browser != nil {
+		return m.browser.View()
 	}
 	lines := m.lines()
 	start := m.scroll
@@ -419,6 +432,9 @@ func toneStyle(tone resource.Tone) interface{ Render(...string) string } {
 // moment of the click, rather than a title that appears a moment later and
 // makes the strip jump.
 func (m *Model) TabLabel() string {
+	if m.browser != nil {
+		return m.browser.PaneTabLabel()
+	}
 	if m.ref.Locator != "" {
 		return m.ref.Locator
 	}
@@ -427,6 +443,9 @@ func (m *Model) TabLabel() string {
 
 // Title is the pane's headline for host chrome.
 func (m *Model) Title() string {
+	if m.browser != nil {
+		return m.browser.PaneTitle()
+	}
 	if m.hasDoc && m.doc.Title != "" {
 		return fmt.Sprintf("%s: %s", m.ref.Locator, m.doc.Title)
 	}
@@ -436,6 +455,9 @@ func (m *Model) Title() string {
 // SourceURL is the one action a document can offer, already validated as
 // http(s) by the document sanitizer.
 func (m *Model) SourceURL() string {
+	if m.browser != nil {
+		return m.browser.PaneSourceURL()
+	}
 	if !m.hasDoc {
 		return ""
 	}

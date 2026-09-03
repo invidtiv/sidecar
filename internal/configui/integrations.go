@@ -5,6 +5,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/features"
+	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/version"
 )
 
@@ -13,17 +14,15 @@ import (
 // command and cached here — the same rule the readiness checks follow. Nothing
 // on a render path touches PATH.
 
-// Integration describes a panel backed by an external command. It exists so the
-// enable route is written once: a future integration supplies a descriptor and
-// gets the PATH check, the Homebrew check, the confirmed install, and the
-// honest failure states without a second implementation.
+// Integration is the install half of a plugin descriptor: what the enable route
+// needs to check a command, offer a confirmed install, and explain a failure.
+// It is a projection of plugin.Descriptor rather than a second catalog —
+// enablement itself belongs to the descriptor, which knows the config key.
 type Integration struct {
-	// ID is the panel's own identifier, used for region IDs and probe lookups.
+	// ID is the plugin's descriptor ID, used for region IDs and probe lookups.
 	ID string
 	// Name is what the user calls it.
 	Name string
-	// Flag is the feature flag enabling the panel.
-	Flag string
 	// Why is one line saying what enabling it gets the user.
 	Why string
 	// Descriptor names the command and the formula. A zero Descriptor means the
@@ -36,29 +35,24 @@ type Integration struct {
 // outside Sidecar.
 func (i Integration) NeedsCommand() bool { return i.Descriptor.Executable != "" }
 
+// integrationFor projects one plugin descriptor onto the enable route.
+func integrationFor(d plugin.Descriptor) Integration {
+	return Integration{ID: d.ID, Name: d.Name, Why: d.Why, Descriptor: d.Integration}
+}
+
 // TasksIntegration is the Tasks command suite: a real external product with a
 // Homebrew formula, so enabling it can genuinely fail for a reason Sidecar can
 // explain and offer to fix.
+//
+// It exists apart from the injected catalog because probeCommands runs before
+// anything has handed this surface a descriptor list, and what to look for on
+// PATH cannot wait for that.
 func TasksIntegration() Integration {
 	return Integration{
 		ID:         "tasks",
 		Name:       "Tasks",
-		Flag:       features.TasksPlugin.Name,
 		Why:        "Tasks adds an embedded task board to Sidecar's global space. It is a beta integration.",
 		Descriptor: version.TasksDescriptor(),
-	}
-}
-
-// NotesIntegration is in-repo. It has no executable, no formula, and no install
-// route: enabling it is only the feature flag. The mockup shows the enable
-// route with Notes as its example, which does not match how Notes is actually
-// built; the route is parameterized for integrations that do have a command.
-func NotesIntegration() Integration {
-	return Integration{
-		ID:   "notes",
-		Name: "Notes",
-		Flag: features.NotesPlugin.Name,
-		Why:  "Notes adds project notes to Sidecar.",
 	}
 }
 

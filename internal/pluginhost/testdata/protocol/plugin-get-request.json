@@ -1,0 +1,10 @@
+{
+  "protocol": "sidecar.plugin/v1-draft",
+  "method": "get",
+  "instance": "recall",
+  "deadlineMs": 10000,
+  "params": {
+    "collection": "results",
+    "id": "rc:notes:2026-08-14-dex-design"
+  }
+}

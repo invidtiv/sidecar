@@ -903,21 +903,27 @@ The encoded JSON is capped under 768KiB; a payload that would blow that cap is t
 Issue fallback candidates come from this host's configured projects.
 Diff operations are enumerated: working-tree, working-tree-file, commit, range, commit-file, full-file.
 Resource reads return the provider wire document; the viewer sanitizes again. --refresh bypasses the host manager cache.
+The collection and item operations are the plugin protocol's: collection lists one collection of --provider, item expands one row of it. A Resource pane bound to this host asks through them, so it lists this machine's plugins rather than the viewer's.
 
 --json writes the machine contract.
 
 ```
-Usage: sidecar content read --workspace ID --kind file|issue|note|diff|resource --operation OP --target VALUE [--provider ID --matcher ID] [--path PATH] [--parent HASH] [--offset N] [--limit N] [--if-revision REV] [--refresh] [--json]
+Usage: sidecar content read --workspace ID --kind file|issue|note|diff|resource --operation OP [--target VALUE] [--provider ID --matcher ID] [--collection ID --query Q --view ID --sort ID --cursor C] [--path PATH] [--parent HASH] [--offset N] [--limit N] [--if-revision REV] [--refresh] [--json]
 ```
 
 **Options:**
 
 - `--workspace ID`: Unscoped durable workspace id (projectKey:shell:name or projectKey:worktree:path)
 - `--kind KIND`: Content kind (file, issue, note, diff, or resource)
-- `--operation OP`: Read operation (document, card, note, resource, working-tree, working-tree-file, commit, range, commit-file, or full-file)
+- `--operation OP`: Read operation (document, card, note, resource, collection, item, working-tree, working-tree-file, commit, range, commit-file, or full-file)
 - `--target VALUE`: File path, issue/note id, git spec, or resource locator as resolved or as the viewer saw it
 - `--provider ID`: Resource provider instance id
 - `--matcher ID`: Resource matcher id
+- `--collection ID`: Plugin collection id for the collection and item operations
+- `--query Q`: Collection search query
+- `--view ID`: Collection view id
+- `--sort ID`: Collection sort key id
+- `--cursor C`: Opaque page cursor from a previous collection read
 - `--path PATH`: Diff file path for working-tree-file, commit-file, and full-file
 - `--parent HASH`: Merge parent hash for commit-file and full-file
 - `--offset N`: Full-file page offset in lines
@@ -939,6 +945,7 @@ Usage: sidecar content read --workspace ID --kind file|issue|note|diff|resource 
 ```bash
 sidecar content read --workspace /home/me/api:shell:sidecar-sh-1 --kind file --operation document --target README.md --json
 sidecar content read --workspace /home/me/api:shell:sidecar-sh-1 --kind file --operation document --target README.md --if-revision v1:abc --json
+sidecar content read --workspace /home/me/api:shell:sidecar-sh-1 --kind resource --operation collection --provider recall --collection results --query dex --json
 ```
 
 ### `sidecar content resolve`
@@ -967,6 +974,11 @@ Usage: sidecar content resolve --workspace ID --kind file|issue|note|diff|resour
 - `--target VALUE`: File path, issue/note id, git spec, or resource locator as the viewer saw it
 - `--provider ID`: Resource provider instance id
 - `--matcher ID`: Resource matcher id
+- `--collection ID`: Plugin collection id for the collection and item operations
+- `--query Q`: Collection search query
+- `--view ID`: Collection view id
+- `--sort ID`: Collection sort key id
+- `--cursor C`: Opaque page cursor from a previous collection read
 - `--json`: Write the structured result object to stdout (required for the machine contract)
 - `-h, --help`: Show this help
 
@@ -2027,17 +2039,21 @@ sidecar notify test --channel native --source td --json
 
 ## `sidecar open`
 
-Show a file, a td issue, a note, a git diff, or a provider resource in a split pane
+Show a file, a td issue, a note, a git diff, a plugin resource, or a plugin collection in a split pane
 
-Show a file, a td issue, a td note, a git diff, or an external provider resource to the user as a
+Show a file, a td issue, a td note, a git diff, an external resource, or a plugin collection to the user as a
 split pane in a Sidecar workspace. From a Sidecar shell this targets that shell.
 Otherwise it targets the unique running instance, or a specific --shell / --project.
 --sessions addresses the global Sessions surface of a running instance.
 Pass --sessions=ROW for a durable inventory ID or display name; a following
 bare word is the open target, not the row. Mutually exclusive with --shell
 and --project.
---diff with no spec is the working tree. --provider names a configured terminal resource
-provider instance and is required for a resource: a bare locator is never guessed at.
+--diff with no spec is the working tree. --plugin names a configured plugin instance:
+with --collection it opens that collection's tab (add --query to open it searched, or a
+positional row id to open that row's document instead), and without --collection it
+opens a matched locator through the plugin's matchers. --provider is the older spelling
+of the locator form and still works. Either way the instance is required for a resource:
+a bare locator is never guessed at.
 --split only overrides the split axis; it never halves a live terminal after content is open.
 --at places the pane at an explicit grid cell and is a requirement: a kind whose open
 would retarget an existing pane, or any cell that cannot be honored exactly, declines
@@ -2060,13 +2076,17 @@ Usage: sidecar open [options] [<target>]
 - `sidecar://note/nt-xxxx`: A td note, opened as a read-only pane
 - `--diff`: Working-tree diff (wt); add a spec for a commit or range
 - `spec`: A git commit or range (abc1234, A..B); --diff accepts HEAD and branch names
-- `locator`: With --provider, a resource key such as CASH-1245
+- `locator`: With --plugin (or --provider), a resource key such as CASH-1245
+- `row id`: With --plugin and --collection, one row of that collection
 
 **Options:**
 
 - `--line N`: Line to reveal (alternative to "path:line")
 - `--diff`: Open a Diff leaf (working tree if no spec)
-- `--provider ID`: Open a locator through a configured terminal resource provider
+- `--plugin ID`: Open through a configured plugin instance (collection tab with --collection, otherwise a matched locator)
+- `--provider ID`: Alias for --plugin's locator form, kept for the frozen resource protocol
+- `--collection C`: With --plugin, the collection to open as a tab
+- `--query Q`: With --collection, the query the tab opens searched on
 - `--shell NAME`: Target a registered shell by display name or tmux name
 - `--project NAME`: Target a project's Workspaces surface (slug, basename, or path)
 - `--sessions [=ROW]`: Target the global Sessions surface (optional row as --sessions=ID)
@@ -2104,6 +2124,10 @@ sidecar open --diff HEAD
 sidecar open abc1234
 # resource pane for that provider's locator
 sidecar open --provider jira-work CASH-1245
+# a collection tab beside the terminal, opened searched
+sidecar open --plugin recall --collection results --query dex --split right
+# one row's document tab
+sidecar open --plugin ongoing --collection projects recall
 # structured result for the agent
 sidecar open --json --split below README.md
 # explicit cell: second column, top row
@@ -2112,6 +2136,358 @@ sidecar open README.md --at 2.1
 sidecar open --project sidecar README.md
 # the selected row on the global Sessions surface
 sidecar open --sessions README.md
+```
+
+## `sidecar plugin`
+
+Inspect and configure the plugins Sidecar hosts
+
+Inspect and configure the plugins Sidecar hosts. A plugin is either embedded
+(compiled into Sidecar, with its own UI) or external: an explicitly configured
+executable that answers JSON on stdout and that Sidecar renders itself.
+
+An external plugin speaks one of two protocols, decided by the config section
+it is written in and never by the executable. plugins.external entries speak
+sidecar.plugin/v1-draft, which has describe, resolve, list, get, and act;
+terminalResources.providers entries speak the frozen
+sidecar.terminal-resource/v1, which has describe and resolve. The
+`sidecar terminal-links` verbs remain the surface for that older section.
+
+The draft protocol is behind the plugin_protocol feature flag. Turn it on
+with `sidecar --enable-feature=plugin_protocol`, or set
+features.flags.plugin_protocol.
+
+```
+Usage: sidecar plugin <command> [options]
+```
+
+### `sidecar plugin list`
+
+List the plugins Sidecar can host
+
+List every plugin Sidecar knows about: the embedded ones in the order the
+header paints them, then every external plugin configured under
+plugins.external and terminalResources.providers.
+
+Each row reports the plugin's class (who renders it), scope (project plugins
+are rebuilt on a project switch, global ones are built once), the placements
+its content can occupy, and whether it is enabled. An external row also
+reports the config section it was read from.
+
+Enablement is plugins.<id>.enabled. Two deprecated feature flags, tasks_plugin
+and notes_plugin, still answer for their plugin while that key is absent. A
+plugin that is enabled but whose feature flag is off is reported inactive,
+naming the flag.
+
+Without --describe this reads configuration and runs nothing: no running
+Sidecar, no PATH lookup, no subprocess. --describe opts in to running each
+active external plugin's describe method, with the same environment, working
+directory, and timeout the app uses.
+
+```
+Usage: sidecar plugin list [--describe] [--json]
+```
+
+**Options:**
+
+- `--describe`: Run describe on each active external plugin
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: success
+- `1`: configuration read failure
+- `2`: usage error
+
+**Examples:**
+
+```bash
+sidecar plugin list
+sidecar plugin list --json
+sidecar plugin list --describe --json
+```
+
+### `sidecar plugin check`
+
+Describe one external plugin, and optionally call it
+
+Answer "is this plugin configured, startable, and speaking the protocol",
+using the exact base environment, working directory, and timeouts the app
+uses. This is the authoring surface; it is not a replacement for the
+plugin's own CLI.
+
+describe always runs. --list and --get are separate, explicit flags because
+they can perform network access and print private data; neither is ever
+implied. --query applies only to --list, and a collection whose search is
+required needs one.
+
+Only what the host kept is printed, never the plugin's raw stdout: every
+string shown has been through the host's own sanitization and bounds, so what
+you see is what a pane would draw.
+
+```
+Usage: sidecar plugin check [--list COLLECTION [--query Q]] [--get COLLECTION ID] [--json] <id>
+```
+
+**Options:**
+
+- `--list COLLECTION`: Also call list on this collection
+- `--query TEXT`: Query to send with --list
+- `--get COLLECTION ID`: Also call get on this collection row (two values)
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: the plugin answered every requested call
+- `1`: a call failed
+- `2`: usage error
+- `3`: no plugin with that id is configured
+- `4`: the governing feature flag is off
+
+**Examples:**
+
+```bash
+sidecar plugin check recall
+sidecar plugin check recall --list results --query dex --json
+sidecar plugin check recall --get results rc:notes:1 --json
+```
+
+### `sidecar plugin call`
+
+Call one protocol method with the host's envelope
+
+Run one method — describe, resolve, list, get, or act — through the host's own
+envelope, validation, and sanitization, and print what the host would have
+kept. It is the authoring loop for a plugin: write a response, call it, see
+exactly what survives.
+
+--params is the method's params object as JSON:
+  resolve  {"matcher":"issue-key","locator":"CASH-1"}
+  list     {"collection":"results","query":"dex","cursor":"","limit":100}
+  get      {"collection":"results","id":"rc:notes:1"}
+  act      {"action":"log-note","collection":"results","id":"rc:notes:1","inputs":{"text":"…"}}
+
+list first runs describe, because the declared columns are what a page is
+sanitized against — a cell keyed by an undeclared column is dropped, and that
+is a finding worth seeing here rather than in a pane.
+
+No host context is sent: this process has no surface, so it has no project
+and no selection to offer.
+
+```
+Usage: sidecar plugin call [--params JSON] [--json] <id> <method>
+```
+
+**Options:**
+
+- `--params JSON`: The method's params object
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: the plugin answered
+- `1`: the call failed
+- `2`: usage error
+- `3`: no plugin with that id is configured
+- `4`: the governing feature flag is off
+
+**Examples:**
+
+```bash
+sidecar plugin call recall describe --json
+sidecar plugin call recall list --params '{"collection":"results","query":"dex"}' --json
+sidecar plugin call dex act --params '{"action":"log-note","collection":"people","id":"p:ada","inputs":{"text":"hi"}}' --json
+```
+
+### `sidecar plugin add`
+
+Configure an external plugin
+
+Append one entry to plugins.external. This is the whole install flow: Sidecar
+never scans a directory, never runs every sidecar-* binary on PATH, never
+auto-enables anything, and never lets a repository declare a plugin.
+
+Everything after --command is the argv, executed directly with no shell. Put
+it last.
+
+Nothing is started: add prints exactly what will run — every argv element on
+its own line, the working directory, and the variables that will be passed by
+name — and asks for confirmation. --yes skips the question, which is what a
+script or an agent uses.
+
+A process boundary is crash isolation, not a sandbox. Configuring a plugin
+trusts that executable with your full OS privileges.
+
+```
+Usage: sidecar plugin add [--pass-env NAME]... [--scope global] [--placement tab|panes]... [--timeout DURATION] [--claim-host HOST]... [--disabled] [--yes] [--json] <id> --command ARGV...
+```
+
+**Options:**
+
+- `--command ARGV...`: The argv to run; everything after it is part of the command
+- `--pass-env NAME`: Pass this variable's current value through (repeatable, names only)
+- `--scope SCOPE`: Lifecycle: global (the only value this version supports)
+- `--placement WHERE`: tab or panes (repeatable; default both)
+- `--timeout DURATION`: Per-call timeout, clamped to [1s, 60s]
+- `--claim-host HOST`: Hostname whose URLs this plugin may claim (repeatable)
+- `--disabled`: Write the entry turned off
+- `-y, --yes`: Skip the confirmation
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: the entry was written, or the confirmation was declined
+- `1`: the configuration could not be written
+- `2`: usage error, or the entry was refused by validation
+- `4`: plugin_protocol is off
+
+**Examples:**
+
+```bash
+sidecar plugin add recall --yes --command recall sidecar-plugin
+sidecar plugin add dex --pass-env DEX_PROFILE --placement panes --yes --command dex sidecar-plugin
+```
+
+### `sidecar plugin remove`
+
+Remove an external plugin's configuration
+
+Delete one entry from plugins.external. Unknown config sections are preserved,
+and removing the last entry removes the key rather than leaving it empty.
+
+An entry in terminalResources.providers is not removed here: that section
+belongs to the frozen resource protocol, and the message says so.
+
+```
+Usage: sidecar plugin remove [--json] <id>
+```
+
+**Options:**
+
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: the configuration was written
+- `1`: the configuration could not be written
+- `2`: usage error
+- `3`: no plugin with that id is configured
+- `4`: plugin_protocol is off, or the entry is in a section this verb does not own
+
+**Examples:**
+
+```bash
+sidecar plugin remove recall
+```
+
+### `sidecar plugin enable`
+
+Turn an external plugin on
+
+Set enabled:true on the plugins.external entry.
+
+Enablement is read at startup, so a running Sidecar needs a restart.
+
+```
+Usage: sidecar plugin enable [--json] <id>
+```
+
+**Options:**
+
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: the configuration was written
+- `1`: the configuration could not be written
+- `2`: usage error
+- `3`: no plugin with that id is configured
+- `4`: plugin_protocol is off, or the entry is in a section this verb does not own
+
+**Examples:**
+
+```bash
+sidecar plugin enable recall
+```
+
+### `sidecar plugin disable`
+
+Turn an external plugin off
+
+Set enabled:false on the plugins.external entry. The entry is kept, so turning
+it back on needs no argv.
+
+Enablement is read at startup, so a running Sidecar needs a restart.
+
+```
+Usage: sidecar plugin disable [--json] <id>
+```
+
+**Options:**
+
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: the configuration was written
+- `1`: the configuration could not be written
+- `2`: usage error
+- `3`: no plugin with that id is configured
+- `4`: plugin_protocol is off, or the entry is in a section this verb does not own
+
+**Examples:**
+
+```bash
+sidecar plugin disable recall
+```
+
+### `sidecar plugin changed`
+
+Tell running Sidecar instances a plugin's data moved
+
+Write one request onto the bus saying that a plugin's data changed. Every
+running instance re-lists the visible tabs of that plugin; a tab nobody is
+looking at costs nothing, so this is safe from a shell hook.
+
+It is the poke for a change no declared watch path would catch. A plugin
+whose store is one file should declare it under refresh.watch instead and
+need no hook at all.
+
+--collection narrows the refresh to one collection. Omit it when the tool
+does not know what it touched.
+
+This starts no plugin and reads no configuration: it neither knows nor cares
+whether the id names a configured plugin, because only a running instance
+has the tabs that would answer.
+
+```
+Usage: sidecar plugin changed [--collection C] [--json] <id>
+```
+
+**Options:**
+
+- `--collection C`: Narrow the refresh to one collection
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: the request was written
+- `1`: the request could not be written
+- `2`: usage error
+
+**Examples:**
+
+```bash
+sidecar plugin changed dex --collection people
+sidecar plugin changed recall --json
 ```
 
 ## `sidecar project`

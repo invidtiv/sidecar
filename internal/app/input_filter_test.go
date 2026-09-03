@@ -73,7 +73,7 @@ func TestGlobalWheelFollowsTheVisibleTab(t *testing.T) {
 	if got := m.wheelAtBoundary(wheelAt(10, 10, true)); got {
 		t.Errorf("unrendered agents board = %v, want false (unknown)", got)
 	}
-	if m.globalTasksFocused() {
-		t.Fatal("globalTasksFocused is true while the Agents tab is visible")
+	if m.globalPluginFocused() {
+		t.Fatal("globalPluginFocused is true while the Agents tab is visible")
 	}
 }

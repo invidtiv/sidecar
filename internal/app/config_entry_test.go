@@ -127,7 +127,7 @@ func TestProjectSwitcherNoProjectsOffersSetup(t *testing.T) {
 	m.cfg = config.Default()
 	m.cfg.Projects.List = nil
 	m.overview = nil
-	m.globalTasks = nil
+	m.globalHosts = nil
 
 	m.showProjectSwitcher = true
 	m.initProjectSwitcher()

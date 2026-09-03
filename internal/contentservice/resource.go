@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/pluginhost"
 	"github.com/marcus/sidecar/internal/resource"
-	"github.com/marcus/sidecar/internal/resourceprovider"
 	"github.com/marcus/sidecar/internal/terminallink"
 )
 
@@ -58,20 +58,20 @@ func FingerprintDescriptors(descriptors []ProviderDescriptor) string {
 // in the same precedence SnapshotStore uses: configured order, then
 // descending priority, then matcher ID.
 func TerminalMatchersFrom(descriptors []ProviderDescriptor) ([]terminallink.ResourceMatcher, error) {
-	sets := make([]resourceprovider.DescribedSet, 0, len(descriptors))
+	sets := make([]pluginhost.DescribedSet, 0, len(descriptors))
 	for _, d := range descriptors {
-		matchers := make([]resourceprovider.Matcher, 0, len(d.Matchers))
+		matchers := make([]pluginhost.Matcher, 0, len(d.Matchers))
 		for _, m := range d.Matchers {
-			matchers = append(matchers, resourceprovider.Matcher{ID: m.ID, Pattern: m.Pattern, Priority: m.Priority})
+			matchers = append(matchers, pluginhost.Matcher{ID: m.ID, Pattern: m.Pattern, Priority: m.Priority})
 		}
-		sets = append(sets, resourceprovider.DescribedSet{
+		sets = append(sets, pluginhost.DescribedSet{
 			Instance:   d.Instance,
 			Order:      d.Order,
 			Matchers:   matchers,
 			ClaimHosts: d.ClaimHosts,
 		})
 	}
-	store := resourceprovider.NewSnapshotStore()
+	store := pluginhost.NewSnapshotStore()
 	if err := store.Replace(sets); err != nil {
 		return nil, err
 	}
@@ -149,7 +149,7 @@ func (s *Service) ReadResource(ctx context.Context, workspaceID string, ref reso
 	}
 	doc, resolveErr := mgr.Resolve(ctx, ref, refresh)
 	if resolveErr != nil {
-		typed := resourceprovider.AsResourceError(resolveErr)
+		typed := pluginhost.AsResourceError(resolveErr)
 		return resourceErrorResult(ws.ID, ref, typed), nil
 	}
 	wire := wireDocumentFrom(doc)
@@ -215,13 +215,13 @@ func wireDocumentFrom(doc resource.Document) *resource.WireDocument {
 	return w
 }
 
-func descriptorsFromManager(mgr *resourceprovider.Manager) []ProviderDescriptor {
+func descriptorsFromManager(mgr *pluginhost.Manager) []ProviderDescriptor {
 	if mgr == nil {
 		return []ProviderDescriptor{}
 	}
 	snap := mgr.Snapshot()
 	statuses := mgr.Statuses()
-	info := make(map[string]resourceprovider.Status, len(statuses))
+	info := make(map[string]pluginhost.Status, len(statuses))
 	for _, st := range statuses {
 		info[st.Instance] = st
 	}
@@ -259,7 +259,7 @@ func descriptorsFromManager(mgr *resourceprovider.Manager) []ProviderDescriptor 
 	return out
 }
 
-func (s *Service) resourceManager() (*resourceprovider.Manager, error) {
+func (s *Service) resourceManager() (*pluginhost.Manager, error) {
 	if s != nil && s.NewResourceManager != nil {
 		return s.NewResourceManager()
 	}
@@ -274,13 +274,13 @@ func (s *Service) resourceManager() (*resourceprovider.Manager, error) {
 	if cfg == nil {
 		cfg = config.Default()
 	}
-	providers, disabled, err := resourceprovider.FromConfig(cfg.TerminalResources, resourceprovider.Options{
+	providers, disabled, err := pluginhost.FromConfig(cfg.TerminalResources, pluginhost.Options{
 		Dir: resourceProviderDir(),
 	})
 	if err != nil {
 		return nil, Internal("resource provider config", err)
 	}
-	mgr := resourceprovider.NewManager(resourceprovider.ManagerOptions{})
+	mgr := pluginhost.NewManager(pluginhost.ManagerOptions{})
 	mgr.SetProviders(providers, disabled)
 	return mgr, nil
 }

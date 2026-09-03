@@ -115,12 +115,15 @@ func TestPanelTogglesPersistTheirRealKeys(t *testing.T) {
 		{regionPanel + panelIDFiles, func(c *config.Config) bool { return c.Plugins.FileBrowser.Enabled }, false},
 		{regionPanel + panelIDTD, func(c *config.Config) bool { return c.Plugins.TDMonitor.Enabled }, false},
 		{regionPanel + panelIDNotes, func(c *config.Config) bool {
-			return c.Features.Flags[features.NotesPlugin.Name]
+			return c.Plugins.Notes.Enabled != nil && *c.Plugins.Notes.Enabled
 		}, false},
+		{regionPanel + panelIDTasks, func(c *config.Config) bool {
+			return c.Plugins.Tasks.Enabled != nil && *c.Plugins.Tasks.Enabled
+		}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.region, func(t *testing.T) {
-			m := panelsFixture(t, map[string]bool{"td": true}, nil)
+			m := panelsFixture(t, map[string]bool{"td": true, "tasks": true}, nil)
 			activate(t, m, tc.region)
 			if got := tc.check(loadSaved(t)); got != tc.want {
 				t.Fatalf("%s stored %v, want %v", tc.region, got, tc.want)
@@ -221,8 +224,14 @@ func TestNotesTogglesWithoutTheEnableRoute(t *testing.T) {
 	if m.Route().IsChild() {
 		t.Fatalf("Notes opened a dependency route: %#v", m.Route())
 	}
-	if loadSaved(t).Features.Flags[features.NotesPlugin.Name] {
-		t.Fatal("Notes opt-out did not persist")
+	saved := loadSaved(t)
+	if saved.Plugins.Notes.Enabled == nil || *saved.Plugins.Notes.Enabled {
+		t.Fatal("Notes opt-out did not persist to plugins.notes.enabled")
+	}
+	// The deprecated flag is a read-only alias: a save writes the key and
+	// leaves whatever the user once set to the flag exactly as it was.
+	if _, wrote := saved.Features.Flags[features.NotesPlugin.Name]; wrote {
+		t.Fatal("the Notes toggle wrote the deprecated notes_plugin flag")
 	}
 	if view := ansi.Strip(m.View(160, 45)); strings.Contains(view, "Notes  BETA") {
 		t.Fatalf("stable Notes regained a BETA badge:\n%s", view)
@@ -236,8 +245,12 @@ func TestTasksEnablesDirectlyWhenTheCommandIsPresent(t *testing.T) {
 	if m.Route().IsChild() {
 		t.Fatalf("an installed Tasks opened the enable route: %#v", m.Route())
 	}
-	if !loadSaved(t).Features.Flags[features.TasksPlugin.Name] {
-		t.Fatal("Tasks did not persist")
+	saved := loadSaved(t)
+	if saved.Plugins.Tasks.Enabled == nil || !*saved.Plugins.Tasks.Enabled {
+		t.Fatal("Tasks did not persist to plugins.tasks.enabled")
+	}
+	if _, wrote := saved.Features.Flags[features.TasksPlugin.Name]; wrote {
+		t.Fatal("the Tasks toggle wrote the deprecated tasks_plugin flag")
 	}
 }
 
@@ -248,7 +261,7 @@ func TestTasksEnableRouteOffersHomebrewInstall(t *testing.T) {
 	if m.Route().Child != ChildEnableIntegration {
 		t.Fatalf("a missing Tasks command did not open the enable route: %#v", m.Route())
 	}
-	if loadSaved(t).Features.Flags[features.TasksPlugin.Name] {
+	if tasksEnabled(loadSaved(t)) {
 		t.Fatal("opening the dependency check already enabled the panel")
 	}
 	view := ansi.Strip(m.View(160, 45))
@@ -323,14 +336,17 @@ func TestTasksEnableRouteFallsBackToManualInstructions(t *testing.T) {
 	}
 }
 
+// tasksEnabled reads the unified switch the page writes.
+func tasksEnabled(cfg *config.Config) bool {
+	return cfg.Plugins.Tasks.Enabled != nil && *cfg.Plugins.Tasks.Enabled
+}
+
 // Tasks already enabled but the standalone command is missing: Panels offers
 // the same install action rather than a scavenger hunt for brew.
 func TestTasksEnabledMissingOffersInstall(t *testing.T) {
+	on := true
 	m := panelsFixture(t, map[string]bool{"brew": true}, func(cfg *config.Config) {
-		if cfg.Features.Flags == nil {
-			cfg.Features.Flags = map[string]bool{}
-		}
-		cfg.Features.Flags[features.TasksPlugin.Name] = true
+		cfg.Plugins.Tasks.Enabled = &on
 	})
 	view := ansi.Strip(m.View(160, 45))
 	if !strings.Contains(view, "Install Tasks") {
@@ -375,8 +391,8 @@ func TestTasksInstallSuccessEnablesThePanel(t *testing.T) {
 		t.Fatal("a successful install did not enable the panel")
 	}
 	reload(t, m, saveCmd())
-	if !loadSaved(t).Features.Flags[features.TasksPlugin.Name] {
-		t.Fatal("a successful install did not persist the flag")
+	if !tasksEnabled(loadSaved(t)) {
+		t.Fatal("a successful install did not persist plugins.tasks.enabled")
 	}
 	if m.Route().IsChild() {
 		t.Fatalf("a successful install stayed in the route: %#v", m.Route())
@@ -399,7 +415,7 @@ func TestTasksInstallFailureLeavesThePanelOff(t *testing.T) {
 	msg := cmd().(installResultMsg)
 	m.Handle(msg)
 
-	if loadSaved(t).Features.Flags[features.TasksPlugin.Name] {
+	if tasksEnabled(loadSaved(t)) {
 		t.Fatal("a failed install enabled the panel anyway")
 	}
 	if m.Route().Child != ChildEnableIntegration {
@@ -437,7 +453,7 @@ func TestEnableRouteCancelReturnsWithThePanelOff(t *testing.T) {
 	if m.Route().IsChild() {
 		t.Fatalf("Escape did not return to Panels: %#v", m.Route())
 	}
-	if loadSaved(t).Features.Flags[features.TasksPlugin.Name] {
+	if tasksEnabled(loadSaved(t)) {
 		t.Fatal("cancelling enabled the panel")
 	}
 	if m.enable != nil {
@@ -577,7 +593,7 @@ func TestInstallLeftRunningStillReportsItsOutcome(t *testing.T) {
 		t.Fatal("the finished install was never reported")
 	}
 	reload(t, m, saveCmd())
-	if !loadSaved(t).Features.Flags[features.TasksPlugin.Name] {
+	if !tasksEnabled(loadSaved(t)) {
 		t.Fatal("a successful install that outlived its route did not enable the panel")
 	}
 	if m.installing != nil {
@@ -603,7 +619,7 @@ func TestInstallLeftRunningReportsFailure(t *testing.T) {
 	if !strings.Contains(notice.Message, "formula not found") {
 		t.Fatalf("the notice does not say what happened: %q", notice.Message)
 	}
-	if loadSaved(t).Features.Flags[features.TasksPlugin.Name] {
+	if tasksEnabled(loadSaved(t)) {
 		t.Fatal("a failed install enabled the panel anyway")
 	}
 }

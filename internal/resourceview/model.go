@@ -4,6 +4,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/marcus/sidecar/internal/markdown"
+	"github.com/marcus/sidecar/internal/pluginbrowser"
 	"github.com/marcus/sidecar/internal/resource"
 )
 
@@ -92,6 +93,13 @@ type Model struct {
 	bodyForW     int
 	bodyForGen   uint64
 	bodyForStyle string
+
+	// browser is non-nil exactly when ref is one of the plugin shapes: the
+	// shared browser in pane mode, which renders a collection tab or a row's
+	// document tab. See collection.go.
+	browser  *pluginbrowser.Model
+	callsFor CallsFor
+	openRow  OpenRow
 }
 
 // New creates a view bound to a resolver. A nil renderer takes the default.
@@ -110,8 +118,9 @@ func (m *Model) SetResolver(resolve Resolver) {
 	}
 }
 
-// Reference is what this tab points at.
-func (m *Model) Reference() resource.Reference { return m.ref }
+// Reference is what this tab points at. For a collection tab it carries the
+// live view position, so what a host persists is what the user can see.
+func (m *Model) Reference() resource.Reference { return m.pluginSnapshot() }
 
 // State reports what the view is showing.
 func (m *Model) State() State { return m.state }
@@ -131,6 +140,11 @@ func (m *Model) Arm(modelID int, ref resource.Reference, epoch uint64) {
 	m.modelID = modelID
 	m.epoch = epoch
 	m.ref = ref
+	if ref.IsPlugin() {
+		m.pluginArm(ref)
+		return
+	}
+	m.browser = nil
 	m.state = StateArmed
 	m.hasDoc = false
 	m.doc = resource.Document{}
@@ -181,6 +195,11 @@ func (m *Model) Load(modelID int, ref resource.Reference, epoch uint64) tea.Cmd 
 	m.epoch = epoch
 	m.ref = ref
 	m.generation++
+	if ref.IsPlugin() {
+		m.bindPlugin(ref)
+		return m.pluginLoad()
+	}
+	m.browser = nil
 	m.state = StateLoading
 	m.hasDoc = false
 	m.doc = resource.Document{}
@@ -194,6 +213,9 @@ func (m *Model) Load(modelID int, ref resource.Reference, epoch uint64) tea.Cmd 
 // Resolve starts a resolve for an armed tab, and is a no-op for one that is
 // already loading or resolved. Selecting a restored tab calls this.
 func (m *Model) Resolve() tea.Cmd {
+	if m.browser != nil {
+		return m.pluginLoad()
+	}
 	if m.state != StateArmed {
 		return nil
 	}
@@ -206,6 +228,9 @@ func (m *Model) Resolve() tea.Cmd {
 // are preserved: a transient failure must not blank a card the user is
 // reading.
 func (m *Model) Refresh() tea.Cmd {
+	if m.browser != nil {
+		return m.browser.PaneRefresh()
+	}
 	if !m.ref.Valid() {
 		return nil
 	}
@@ -290,7 +315,7 @@ func (m *Model) Apply(msg ResolvedMsg) bool {
 // instance is never allowed to change: a response may say what a resource is
 // called, not who owns it.
 func (m *Model) Rekey(identity string) {
-	if identity == "" || identity == m.ref.Locator {
+	if identity == "" || identity == m.ref.Locator || m.ref.IsCollection() {
 		return
 	}
 	m.ref.Locator = identity

@@ -135,6 +135,8 @@ func (p preview) state(m *Model) bool {
 //     cross-project surface is constructed at all → restart.
 //   - terminal_resource_providers gates a describe pass that runs once after
 //     the first ready frame (app.describeResourceProvidersCmd) → restart.
+//   - plugin_protocol gates the same describe pass for plugins.external
+//     entries, which is read once on the same latch → restart.
 //   - workspace_doc_panes is checked live wherever a pane or a diff is opened
 //     (workspace.Plugin, internal/overview) → immediate.
 //   - tmux_full_attach is checked live, but a terminal resolves its chords when
@@ -187,6 +189,12 @@ var previewCopy = map[string]preview{
 		help:    "Turn terminal text into openable links via external providers.",
 		restart: true,
 		note:    "Providers are described once at startup; turning this off stops every provider process.",
+	},
+	features.PluginProtocol.Name: {
+		label:   "Plugin protocol",
+		help:    "Host external plugins configured under plugins.external.",
+		restart: true,
+		note:    "Plugins are described once at startup; turning this off stops every plugin process.",
 	},
 	features.SidecarRemoteHosts.Name: {
 		label: "Remote hosts",

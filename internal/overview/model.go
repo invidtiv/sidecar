@@ -31,6 +31,7 @@ import (
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/panereposition"
 	"github.com/marcus/sidecar/internal/panesearch"
+	"github.com/marcus/sidecar/internal/pluginbrowser"
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/shellliveness"
 	"github.com/marcus/sidecar/internal/state"
@@ -134,6 +135,7 @@ func IsAsyncMessage(msg tea.Msg) bool {
 	case panesMsg, projectMsg, pollMsg, previewAutoScrollTickMsg, workspacePulseTickMsg,
 		sessionsSelectedTickMsg,
 		previewDocLoadedMsg, previewDocSearchMsg, previewIssueLoadedMsg, previewNoteLoadedMsg, previewResourceResolvedMsg, previewHistoryLoadedMsg, previewTerminalSearchLoadedMsg, contentpanes.Result,
+		pluginbrowser.ListedMsg, pluginbrowser.GotMsg, pluginbrowser.ActedMsg, pluginbrowser.DescribedMsg, pluginbrowser.QueryDebouncedMsg, pluginbrowser.ChangedMsg, resourceview.OpenRowMsg,
 		renameShellDoneMsg, globalShellCreatedMsg, previewTerminalSplitCreatedMsg, previewSplitSeedFailedMsg, previewSplitCloseProbeMsg, projectMutationRefreshMsg, globalCreateBranchesMsg, previewLinkRevalidatedMsg,
 		createPickerDataMsg, createHostCatalogMsg, workspacecreate.FilesScannedMsg:
 		// creation is a multi-stage async workflow; every result must stay
@@ -170,6 +172,20 @@ func IsSharedPickerMessage(msg tea.Msg) bool {
 // are shared by construction; raw workspacediff messages predate Deck and are
 // shared for the same reason. Routing either family here alone leaves the
 // project pane that issued the load waiting forever.
+// IsSharedPluginMessage reports a protocol plugin's own answer or tick.
+//
+// It is background work like a diff result, and it is SHARED for the same
+// reason: the project workspace hosts the same browser this surface does, and a
+// page claimed here would leave a project pane refreshing forever. The app
+// offers it to this surface and then lets it reach the plugins like any other
+// broadcast; every host drops what is not addressed to it.
+func IsSharedPluginMessage(msg tea.Msg) bool {
+	if _, ok := msg.(resourceview.OpenRowMsg); ok {
+		return true
+	}
+	return pluginbrowser.IsBrowserMsg(msg)
+}
+
 func IsSharedDiffMessage(msg tea.Msg) bool {
 	if _, ok := msg.(contentpanes.Result); ok {
 		return true
@@ -296,6 +312,15 @@ type Model struct {
 	// instead of spinning. The app supplies both once a provider reports ready.
 	resourceMatchers []terminallink.ResourceMatcher
 	resolveResource  resourceview.Resolver
+	// pluginCalls is how a collection or row tab reaches its protocol plugin,
+	// injected by the app from the same describe pass that supplies the
+	// resolver above.
+	pluginCalls resourceview.CallsFor
+	// pluginWatchTargets caches the expanded, validated watch targets of the
+	// plugins behind the visible collection tabs, keyed by describe generation.
+	pluginWatchTargets map[string][]livewatch.Target
+	pluginPollTick     uint64
+	pluginPollArmed    bool
 	// remoteMatchers is the host-scoped describe cache. Local rows never
 	// read it; remote rows never read resourceMatchers.
 	remoteMatchers remoteMatcherCache
@@ -933,6 +958,18 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 	case previewResourceResolvedMsg:
 		m.applyPreviewResourceResolved(msg)
 		return nil
+	case resourceview.OpenRowMsg:
+		// Enter on a collection row. It travels as a message rather than a
+		// direct call so the row opens through this surface's own open journey,
+		// which is what focuses a tab that is already there instead of fetching
+		// it twice. Its twin is in internal/plugins/workspace.
+		return m.OpenPreviewResource(msg.Ref)
+	case pluginbrowser.ListedMsg, pluginbrowser.GotMsg, pluginbrowser.ActedMsg,
+		pluginbrowser.DescribedMsg, pluginbrowser.QueryDebouncedMsg, pluginbrowser.ChangedMsg:
+		// A collection or row tab's own answers, delivered as a broadcast each
+		// viewer either owns or does not, so a page for a tab that has closed
+		// lands nowhere rather than in the wrong pane.
+		return m.applyPluginBrowserMsg(msg)
 	case previewHistoryLoadedMsg:
 		return m.applyPreviewHistory(msg)
 	case previewTerminalSearchLoadedMsg:

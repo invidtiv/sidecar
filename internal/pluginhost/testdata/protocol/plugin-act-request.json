@@ -1,0 +1,22 @@
+{
+  "protocol": "sidecar.plugin/v1-draft",
+  "method": "act",
+  "instance": "dex",
+  "deadlineMs": 10000,
+  "context": {
+    "project": {
+      "root": "/path/to/checkout",
+      "workDir": "/path/to/checkout",
+      "name": "sidecar",
+      "branch": "main"
+    }
+  },
+  "params": {
+    "action": "log-note",
+    "collection": "people",
+    "id": "p:ada",
+    "inputs": {
+      "text": "Met at the conference; follow up about the retrieval eval pack."
+    }
+  }
+}

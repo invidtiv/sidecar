@@ -19,6 +19,21 @@ reference `sidecar-jira` provider against a live Jira Cloud site — and revised
 from what both implementations found before being frozen. Changes after this
 point require a new protocol identifier.
 
+**This contract is a subset of the Sidecar plugin protocol.** The plugin
+protocol, `sidecar.plugin/v1-draft`, is this one grown rather than replaced: the
+same invocation model, environment allowlist, process-group rules, sanitization,
+limits, error codes, and matcher rules, plus three methods (`list`, `get`,
+`act`), a `sections` field on the resource object, and declarations of the
+collections and actions a plugin offers. One host runs both — an instance
+configured under `terminalResources.providers` is dispatched with the identifier
+above, one configured under `plugins.external` with the newer one, and the
+dialect comes from the config section rather than from anything the executable
+says. A provider that answers only this protocol keeps working exactly as
+described here and needs no change. Its contract is
+[docs/plans/active/plugin-ecosystem/protocol.md](../plans/active/plugin-ecosystem/protocol.md),
+and `sidecar plugin` is its CLI; `sidecar terminal-links` remains the surface for
+this section.
+
 ## Invocation model
 
 Sidecar runs the configured argv directly — no shell, no `PATH` interpolation of
@@ -505,11 +520,11 @@ dispatch before any TUI, tmux, state, or log setup.
 ## Fixtures
 
 Canonical request/response JSON lives at the stable path
-`internal/resourceprovider/testdata/protocol/` and may be vendored by external
+`internal/pluginhost/testdata/protocol/` and may be vendored by external
 provider authors implementing this contract.
 
 The reference fixture executable is
-`internal/resourceprovider/testdata/fixtureprovider`, which describes
+`internal/pluginhost/testdata/fixtureprovider`, which describes
 `CASH|GRES|AVATAXUI` and resolves deterministic synthetic documents with no
 network access and no credentials. It also simulates the hostile cases —
 malformed output, oversize output, hanging, crashing, extra stdout, incompatible

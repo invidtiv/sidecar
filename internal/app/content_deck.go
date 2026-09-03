@@ -132,7 +132,10 @@ func (m *Model) appDeckSurfaceContext(workdir, pluginID string, epoch uint64) co
 	}
 }
 
-const globalTasksDeckRoot = "@global-tasks"
+// globalDeckRoot is the persistence root for a hosted global plugin's content
+// deck. It is keyed by plugin ID so a second global plugin gets its own deck
+// rather than inheriting the first one's saved layout.
+func globalDeckRoot(pluginID string) string { return "@global-" + pluginID }
 
 func (m *Model) contentDeckEligible(p plugin.Plugin) bool {
 	if p == nil || p.ID() == workspacePluginID || !features.IsEnabled(features.PluginContentPanes.Name) {
@@ -210,8 +213,8 @@ func (m Model) appContentPassiveFocused() bool {
 }
 
 func (m Model) contentDeckSurface() (plugin.Plugin, string, bool) {
-	if m.globalTasksFocused() {
-		return m.globalTasksPlugin(), globalTasksDeckRoot, true
+	if host := m.focusedGlobalHost(); host != nil {
+		return host.plugin, globalDeckRoot(host.id()), true
 	}
 	if m.inGlobalScope() {
 		return nil, "", false
@@ -961,8 +964,8 @@ func (m *Model) adoptAppContentPlugin(h *appContentDeck) {
 		return
 	}
 	if h.global {
-		if m.globalTasks != nil {
-			m.globalTasks.plugin = h.plugin
+		if host := m.globalHostByID(h.pluginID); host != nil {
+			host.plugin = h.plugin
 		}
 		return
 	}

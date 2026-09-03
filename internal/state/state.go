@@ -237,18 +237,40 @@ type PaneDiffTabJSON struct {
 	Scroll int    `json:"scroll,omitempty"`
 }
 
-// PaneResourceTabJSON is one persisted external resource reference. It is
-// deliberately provider-neutral and deliberately reference-only: Sidecar
-// re-resolves on restore and never writes a returned title, field, body,
-// error, URL, or any auth state to disk.
+// PaneResourceTabJSON is one persisted external plugin reference. It is
+// deliberately plugin-neutral and deliberately reference-only: Sidecar re-asks
+// on restore and never writes a returned title, field, body, error, URL, or any
+// auth state to disk.
 //
 // A reference necessarily includes the non-secret locator, such as CASH-1245,
 // because that is the minimum needed to restore the pane the user had open.
+//
+// It carries the Resource leaf's three tab shapes, exactly one per record:
+//
+//   - MATCHED: Matcher and Locator, Collection empty. The frozen resource
+//     protocol's shape, written by every release before the plugin protocol
+//     and read back unchanged.
+//   - COLLECTION: Collection set, Matcher and Locator empty, plus the view
+//     position (Query, View, Sort, CursorID) so relaunch reopens the list the
+//     user was reading rather than the collection's default page.
+//   - ITEM: Collection and Locator, Matcher empty. One row of a collection,
+//     which the plugin's get method addresses by collection and ID.
+//
+// Decode refuses a record that is more than one shape or none of them. Which
+// shape a half-written record meant is not something the host can infer, and
+// inferring it is how a restored tab silently becomes a different tab.
 type PaneResourceTabJSON struct {
 	Provider string `json:"provider"`
-	Matcher  string `json:"matcher"`
-	Locator  string `json:"locator"`
-	Scroll   int    `json:"scroll,omitempty"`
+	Matcher  string `json:"matcher,omitempty"`
+	Locator  string `json:"locator,omitempty"`
+	// Collection and the view position beside it are written only for a
+	// plugin-shaped tab. A matched document omits all five.
+	Collection string `json:"collection,omitempty"`
+	Query      string `json:"query,omitempty"`
+	View       string `json:"view,omitempty"`
+	Sort       string `json:"sort,omitempty"`
+	CursorID   string `json:"cursorId,omitempty"`
+	Scroll     int    `json:"scroll,omitempty"`
 }
 
 // MigratePaneLayouts copies a legacy single-slot PaneLayout into PaneLayouts

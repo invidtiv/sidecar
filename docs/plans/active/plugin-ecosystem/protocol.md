@@ -1,6 +1,6 @@
 # Sidecar plugin protocol v1 (draft)
 
-**Status:** draft contract, opened 2026-09-02. Nothing here is frozen. It freezes the way `sidecar.terminal-resource/v1` did: after the host implements it, one real external plugin (recall) implements it against a live tool, and both revise what they found. Until then the identifier is `sidecar.plugin/v1-draft` and a host may refuse it at any point. **Controlling document:** [README.md](README.md).
+**Status:** draft contract, opened 2026-09-02, implemented by the host in M2a (td-a6d276) and rendered by it in M2b (td-0d3539). Nothing here is frozen. It freezes the way `sidecar.terminal-resource/v1` did: the host has implemented it, one real external plugin (recall) implements it against a live tool next, and both revise what they found. Until then the identifier is `sidecar.plugin/v1-draft` and a host may refuse it at any point. **Controlling document:** [README.md](README.md). **Host architecture:** [host.md](host.md).
 
 **Related:** [Terminal resource provider protocol](../../../reference/terminal-resource-provider-protocol.md) is the frozen v1 this grows from. Everything in that document that this one does not restate still holds: invocation model, process groups, the execution environment, stderr handling, transport failure rules, sanitization, and the safety posture.
 
@@ -20,7 +20,8 @@ Unchanged from the resource protocol, restated for one reason: a plugin author r
 - One JSON request object on stdin, then EOF. Exactly one JSON object on stdout. stderr is drained and discarded.
 - Every invocation is its own process group, killed as a group on timeout or cancel.
 - A typed success or typed failure exits `0`. Non-zero exit, malformed or multiple stdout values, oversize stdout, timeout, or a mismatched `protocol` field is a transport failure attributed to the plugin.
-- The environment is the documented allowlist plus `passEnv`. `SIDECAR_PLUGIN=1` is added so a tool's ordinary CLI can tell it is being driven by the host.
+- The environment is the documented allowlist plus `passEnv`, plus `SIDECAR_PLUGIN=1`, which the host sets rather than inherits so a tool whose ordinary CLI and whose plugin subcommand share a binary can tell which one it is running as. It is added only on this protocol; the frozen one publishes its child environment exactly.
+- Which identifier an instance is asked on comes from the config section it is configured in, never from anything the executable says: `plugins.external` entries are asked on `sidecar.plugin/v1-draft`, `terminalResources.providers` entries on the frozen identifier. A plugin must answer on the identifier it was asked on; answering with the other one is a protocol failure, not a silent upgrade.
 
 Plugins are one-shot in v1. There is no resident process, no framing, no multiplexing. Live behaviour (search-as-you-type, background refresh, mutations) is built from one-shot calls plus the host-side mechanisms in [Freshness](#freshness-how-live-behaviour-works-without-a-resident-process). A resident transport is a declared future capability that carries these same objects; see [Deferred](#deferred-to-evidence).
 
@@ -55,6 +56,8 @@ Exactly one of: a describe result, a `resource` (from `resolve` and `get`), a `p
 ## `describe`
 
 Reports identity, what context the plugin reads, what it can recognise in terminal output, what collections it offers, and what actions it exposes. Local, fast, no network, no credential prompt. A plugin that is installed but unconfigured returns a typed `invalid_config` with a single-line `setupHint`.
+
+The identity block is spelled `plugin`. A response that spells it `provider`, the resource protocol's name for the same object, is accepted too — an author who started from a resource provider is describing the same thing under the older name — and `plugin` wins if both are present.
 
 ```json
 {
@@ -113,7 +116,9 @@ The kinds of host context the plugin reads. Declared here so the settings page a
 
 Nothing else in v1. Terminal lines, scrollback, tmux targets, file contents, and environment are not context kinds, and adding one is a protocol revision, not a field.
 
-An undeclared kind is never sent. A declared kind is sent whenever the host has it. On a remote-bound surface `project` carries the host-side path and the host ID, so a plugin that runs locally can tell it is being asked about another machine.
+A kind this host does not recognise is dropped rather than refused: it is the one forward-compatible declaration in `describe`, and since the host only ever sends kinds it knows, an unknown one costs nothing.
+
+An undeclared kind is never sent — enforced in the host at the process boundary, so a plugin that has never described successfully receives no context at all. A declared kind is sent whenever the host has it. On a remote-bound surface `project` carries the host-side path and the host ID, so a plugin that runs locally can tell it is being asked about another machine.
 
 ### `matchers`
 
@@ -128,8 +133,8 @@ A collection is a named, listable set of rows the host can show as a table with 
 | `id`, `title` | Stable ID (persisted in pane state) and display title. |
 | `search` | `none`, `optional`, or `required`. `required` means the collection is empty until there is a query (recall). `optional` filters. |
 | `columns[]` | Ordered. `{id, label, width?, align?, kind?, primary?, secondary?}`. Exactly one `primary` column names the row; an optional `secondary` column is rendered under it when the pane is too narrow for a table. `kind` is `text` (default), `status`, `timestamp`, `user`, `number`, `badge`. Width is a hint in cells; the host reflows. |
-| `views[]` | Named preset filters: `{id, title}`. The host shows them as a pill row; the selected view ID goes back in `list`. ongoing's attention/rising/dormant, DEX's tiers. |
-| `sort[]` | Sortable keys: `{id, label, default?: "asc"|"desc"}`. The host offers them in a sort picker; the chosen key and direction go back in `list`. |
+| `views[]` | Named preset filters: `{id, title}`. The host offers them in its View modal, opened from the sort control on the pane's title row; the selected view ID goes back in `list`. ongoing's attention/rising/dormant, DEX's tiers. |
+| `sort[]` | Sortable keys: `{id, label, default?: "asc"|"desc"}`. The host offers them in the same View modal; the chosen key and direction go back in `list`. |
 | `detail` | Whether `get` is meaningful for rows. `false` means Enter does nothing but a `sourceUrl` on the row can still open. |
 | `refresh` | `{everySeconds?, watch?[]}`. See [Freshness](#freshness-how-live-behaviour-works-without-a-resident-process). |
 | `context` | Optional narrowing: `["project"]` means this collection is meaningful only when project context exists, so a global surface hides it. |
@@ -193,13 +198,13 @@ Actions never carry code, keys the host did not grant, or colours.
 
 | Field | Meaning |
 | --- | --- |
-| `outcome` | `answered`, `abstained` (nothing matched, sources fine), `degraded` (some eligible source could not answer). These are recall's exit states lifted into data; a plugin whose CLI would have exited non-zero for one of these must still exit `0` here and say it in `outcome`. The host renders each honestly: an empty list under `abstained` is "no matches", under `degraded` it is "no matches, and coverage was incomplete". |
-| `items[]` | Bounded rows. `id` is what `get` and item actions receive. `cells` is keyed by column ID; missing cells render blank. `status` is an optional pill. `sourceUrl` is an optional validated http(s) URL. |
+| `outcome` | `answered`, `abstained` (nothing matched, sources fine), `degraded` (some eligible source could not answer). These are recall's exit states lifted into data; a plugin whose CLI would have exited non-zero for one of these must still exit `0` here and say it in `outcome`. The host renders each honestly: an empty list under `abstained` is "no matches", under `degraded` it is "no matches, and coverage was incomplete". An absent outcome reads as `answered`, which is what a plugin that never thinks about coverage means; a value this host does not recognise reads as `degraded`, because of the two ways to be wrong about a claim it cannot understand, that is the one that does not invent a guarantee on the plugin's behalf. |
+| `items[]` | Bounded rows. `id` is what `get` and item actions receive, and a row without one is dropped: it could be neither opened nor acted on. `cells` is keyed by column ID; a missing cell renders blank and a cell keyed by a column the collection never declared is dropped, because the host has nowhere to paint it. `status` is an optional pill. `sourceUrl` is an optional validated http(s) URL. |
 | `nextCursor` | Opaque; empty means no more. The host pages on demand, never eagerly. |
 | `total` | Optional count for the footer. |
 | `notices[]` | Up to 4 single-line `{tone, text}` rows the host shows above or below the list. Where recall's coverage notes and ongoing's scan-health line go. |
 
-A query on a `search: required` collection with an empty string is answered by the host without calling the plugin: an empty list with a prompt.
+A query on a `search: required` collection with an empty string is answered by the host without calling the plugin: an `abstained` page and a prompt. No process is started, which is what keeps a required-search collection free once per keystroke rather than once per keystroke plus a spawn.
 
 ## `get`
 
@@ -233,7 +238,7 @@ Returns a `resource`, the same object `resolve` returns, extended with `sections
 }
 ```
 
-`sections[]` is bounded (8) and each is exactly one of `{body}`, `{fields[]}`, or `{items[]}` (a timeline: `when` is RFC 3339, rendered relatively). A resource with no `sections` renders exactly as a resource v1 card does today, which is how Jira keeps working.
+`sections[]` is bounded (8) and each is exactly one of `{body}`, `{fields[]}`, or `{items[]}` (a timeline: `when` is RFC 3339, rendered relatively). A section that sends more than one keeps the first in that order rather than being refused, so a plugin that sends two still shows the user something. A resource with no `sections` renders exactly as a resource v1 card does today, which is how Jira keeps working.
 
 ## `act`
 
@@ -281,7 +286,7 @@ The user's stated bar is that one-shot invocation is acceptable only if live sea
 
 | Need | Mechanism | Host owner |
 | --- | --- | --- |
-| Search as you type | The host debounces (250 ms), sends `list` with the new `query`, and kills the previous in-flight process group for that pane. Results are applied only if their query matches the current input. | the manager (`internal/resourceprovider`) |
+| Search as you type | The host debounces (250 ms), sends `list` with the new `query`, and kills the previous in-flight process group for that pane. Results are applied only if their query matches the current input. | the manager (`internal/pluginhost`) |
 | Edit or transition a ticket | An `act` with `on: "resource"`; the response's `refresh` re-fetches the document. | `act` plus the existing resolve cache |
 | A plugin's data changed in the background | `refresh.watch[]`: absolute paths (files or directories, `~` expanded, must be under the user's home) the host watches through `internal/livewatch` while a collection or document from that plugin is on screen. A change re-lists visible collections and re-fetches visible documents. | `internal/livepanes` binding for the Resource leaf |
 | The plugin cannot name a path | `refresh.everySeconds` (clamped to [15, 900]), polled only while visible, like td monitor. | `livepanes` |
@@ -314,11 +319,13 @@ Everything in resource v1 plus:
 | Cell length | 512 chars |
 | Notices per page / notice length | 4 / 200 chars |
 | Sections per resource / timeline items per section | 8 / 200 |
-| `refresh.watch` paths per plugin | 8 |
+| `refresh.watch` paths per plugin | 8, each an absolute path under the user's home directory but not the home directory itself |
 | `refresh.everySeconds` | clamped to [15, 900] |
 | `list` / `get` / `act` timeout | 10 s (configurable, clamped to 60 s) |
 
-Over-limit content is truncated and marked, as in resource v1. Only stdout size and structural violations refuse a response.
+Over-limit content in a `list`, `get`, `resolve`, or `act` response is truncated and marked, as in resource v1. Only stdout size and structural violations refuse one.
+
+`describe` is the exception, and the exception is deliberate: it is validated all-or-nothing, exactly as resource v1 already validates matchers. A plugin that declares a 13-column collection, an action naming a collection it never declared, a `choice` input with no choices, or a watch path outside the home directory is refused whole, with a typed reason `sidecar plugin list --describe` and `sidecar plugin check` print. Publishing the rest of such a declaration would hide the bug while changing what the scanner recognises and what the host holds open on disk. Two things inside `describe` are still repaired rather than refused, because neither can be wrong in a way the user needs to act on: a second `primary` or `secondary` column is dropped so exactly one of each survives, and a second default sort key loses its default.
 
 ## Why not a generic UI catalog
 
@@ -337,4 +344,4 @@ If a plugin ever needs a layout the vocabulary cannot express, the answer is one
 
 ## Fixtures
 
-Canonical request and response JSON will live at `internal/pluginhost/testdata/protocol/` and may be vendored by plugin authors. The reference fixture executable simulates every hostile case the resource fixture does, plus: an `act` that never returns, a `list` whose `nextCursor` loops, a collection that declares 13 columns, a `watch` path outside the home directory, and a `describe` that answers `sidecar.terminal-resource/v1` only.
+Canonical request and response JSON lives at `internal/pluginhost/testdata/protocol/` (`plugin-*.json`) and may be vendored by plugin authors. The reference fixture executable, `internal/pluginhost/testdata/fixtureprovider`, speaks both identifiers from one binary — which is itself the property under test — and simulates every hostile case the resource fixture does, plus: an `act` that never returns, a `list` whose `nextCursor` loops, a collection that declares 13 columns, a `watch` path outside the home directory, one that is the home directory, one that is relative, more than eight of them, an action with an unknown target, an action naming an undeclared collection, a `choice` input with no choices, a page whose every string is trying to escape the table, a page over every count limit, a page carrying an undeclared cell, and a `describe` that answers `sidecar.terminal-resource/v1` only. Each is selected with `-mode=NAME` or with a `mode:NAME:` prefix on the request's subject — the locator on `resolve`, the query on `list`, the id on `get`, the action on `act`.
