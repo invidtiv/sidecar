@@ -3,11 +3,13 @@ package pluginbrowser
 import (
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/pluginhost"
+	"github.com/marcus/sidecar/internal/resource"
 )
 
 // browserOwnedKeys are the keys the browser itself acts on. They are the same
@@ -237,6 +239,13 @@ func (m *Model) queryKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	}
 	text := msg.Text
 	if text == "" || strings.ContainsAny(text, "\n\r\t") {
+		return nil, true
+	}
+	// The same bound the CLI and resource.Reference.Valid enforce. A query typed
+	// past it would persist, decode, and then be refused as invalid when the
+	// tabs were rebuilt — the tab would vanish on relaunch. Refusing the
+	// keystroke is the honest answer: what is on screen is what is saved.
+	if utf8.RuneCountInString(s.query)+utf8.RuneCountInString(text) > resource.MaxQueryChars {
 		return nil, true
 	}
 	s.query += text

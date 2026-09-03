@@ -111,6 +111,13 @@ func (m *Model) newLiveSet() *livepanes.Set {
 			// A plugin's store is somebody else's tool writing, and those move in
 			// bursts the way the td store does. Settle the same way, so a burst is
 			// one re-list rather than one process per write.
+			//
+			// No Owed, deliberately: this surface has no refresh veto to owe
+			// against. The project surface's binding does — a modal covering the
+			// pane tree — and its resourceRefreshOwed is what carries a change
+			// across that veto. Here a refresh is either performed or there is no
+			// visible tab to perform it on, and a tab coming back into view is
+			// re-read by livepanes itself.
 			Config:  livewatch.Config{Quiet: 400 * time.Millisecond, MaxLatency: 2 * time.Second},
 			Prepare: m.preparePreviewPluginWatchTargets,
 			Targets: m.previewResourceTargets,
@@ -715,11 +722,13 @@ func (m *Model) previewDiffRefreshOwed() bool {
 // per message is exactly the hidden per-frame filesystem cost the startup rules
 // exist to prevent.
 func (m *Model) preparePreviewPluginWatchTargets() tea.Cmd {
+	live := make(map[string]bool)
 	for _, view := range m.visiblePreviewResourceTabs() {
 		key := previewPluginWatchKey(view)
 		if key == "" {
 			continue
 		}
+		live[key] = true
 		if _, done := m.pluginWatchTargets[key]; done {
 			continue
 		}
@@ -727,6 +736,13 @@ func (m *Model) preparePreviewPluginWatchTargets() tea.Cmd {
 			m.pluginWatchTargets = make(map[string][]livewatch.Target)
 		}
 		m.pluginWatchTargets[key] = previewPluginWatchTargets(view.Browser().PaneWatchPaths())
+	}
+	// Same rule as the project surface: the cache holds the expansion of what is
+	// on screen, not one entry per generation for the life of the process.
+	for key := range m.pluginWatchTargets {
+		if !live[key] {
+			delete(m.pluginWatchTargets, key)
+		}
 	}
 	return m.schedulePreviewPluginPoll()
 }

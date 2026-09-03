@@ -375,21 +375,44 @@ func resourcePaneState(res *resourcePane) *contentpanes.PaneState {
 	}
 	pane := &contentpanes.PaneState{Kind: "resource"}
 	for i, ref := range res.tabs.References() {
-		if ref.Provider == "" || ref.Matcher == "" || ref.Locator == "" {
+		tab, ok := resourceTabStateFrom(ref)
+		if !ok {
 			continue
 		}
 		if i == res.tabs.ActiveIndex() {
 			pane.Active = len(pane.Tabs)
 		}
-		pane.Tabs = append(pane.Tabs, contentpanes.TabState{
-			Ref:    contentlink.Ref{Kind: contentlink.KindResource, Provider: ref.Provider, Matcher: ref.Matcher, Value: ref.Locator},
-			Scroll: ref.Scroll,
-		})
+		pane.Tabs = append(pane.Tabs, tab)
 	}
 	if len(pane.Tabs) == 0 {
 		return nil
 	}
 	return pane
+}
+
+// resourceTabStateFrom projects one remembered tab onto the deck's tab state,
+// choosing the shape from the reference exactly as the codec does. All three
+// shapes are carried: a collection tab dropped here would vanish from the saved
+// layout the moment the deck was built from these maps.
+func resourceTabStateFrom(ref resourceview.PersistedTab) (contentpanes.TabState, bool) {
+	if ref.Provider == "" {
+		return contentpanes.TabState{}, false
+	}
+	link := contentlink.Ref{Kind: contentlink.KindResource, Provider: ref.Provider}
+	out := contentpanes.TabState{Scroll: ref.Scroll}
+	switch {
+	case ref.Collection != "" && ref.Matcher == "" && ref.Locator == "":
+		link.Collection, link.Query = ref.Collection, ref.Query
+		out.View, out.Sort, out.CursorID = ref.View, ref.Sort, ref.CursorID
+	case ref.Collection != "" && ref.Matcher == "" && ref.Locator != "":
+		link.Collection, link.Value = ref.Collection, ref.Locator
+	case ref.Collection == "" && ref.Matcher != "" && ref.Locator != "":
+		link.Matcher, link.Value = ref.Matcher, ref.Locator
+	default:
+		return contentpanes.TabState{}, false
+	}
+	out.Ref = link
+	return out, true
 }
 
 func findPaneState(n *contentpanes.NodeState, kind string) *contentpanes.PaneState {

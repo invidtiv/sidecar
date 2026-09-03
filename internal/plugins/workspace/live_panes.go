@@ -12,6 +12,7 @@ import (
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/livepanes"
 	"github.com/marcus/sidecar/internal/livewatch"
+	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/workspacediff"
 )
@@ -95,6 +96,7 @@ func (p *Plugin) newLiveSet() *livepanes.Set {
 			Prepare: p.preparePluginWatchTargets,
 			Targets: p.resourceWatchTargets,
 			Refresh: p.refreshResourcePanes,
+			Owed:    p.resourceRefreshOwed,
 		},
 		livepanes.Binding{
 			Kind: liveDiffs,
@@ -740,11 +742,13 @@ func pluginWatchKey(view *resourceview.Model) string {
 // preparePluginWatchTargets validates the declared watch paths of every visible
 // collection tab's plugin, once per describe generation.
 func (p *Plugin) preparePluginWatchTargets() tea.Cmd {
+	live := make(map[string]bool)
 	for _, view := range p.visibleResourceTabs() {
 		key := pluginWatchKey(view)
 		if key == "" {
 			continue
 		}
+		live[key] = true
 		if _, done := p.pluginWatchTargets[key]; done {
 			continue
 		}
@@ -752,6 +756,15 @@ func (p *Plugin) preparePluginWatchTargets() tea.Cmd {
 			p.pluginWatchTargets = make(map[string][]livewatch.Target)
 		}
 		p.pluginWatchTargets[key] = pluginWatchTargetsFor(view.Browser().PaneWatchPaths())
+	}
+	// The cache is a per-generation expansion, not a history of them: an entry
+	// whose tab has closed, or whose plugin has re-described, can never be read
+	// again. Dropping it here bounds the map by what is on screen rather than by
+	// how long the process has been running.
+	for key := range p.pluginWatchTargets {
+		if !live[key] {
+			delete(p.pluginWatchTargets, key)
+		}
 	}
 	return p.schedulePluginPoll()
 }
@@ -778,8 +791,14 @@ func (p *Plugin) resourceWatchTargets() []livewatch.Target {
 // changing and the user pressing a key do exactly the same thing.
 func (p *Plugin) refreshResourcePanes() []tea.Cmd {
 	if p.resourceRefreshSuppressed() {
+		// A vetoed refresh is owed, not dropped: the change that arrived while
+		// a modal covered the pane is remembered here and driven again by the
+		// next reconcile once the veto lifts. Without the debt the pane stays
+		// stale until some later write happens to arrive.
+		p.resourceRefreshDebt = true
 		return nil
 	}
+	p.resourceRefreshDebt = false
 	var cmds []tea.Cmd
 	for _, view := range p.visibleResourceTabs() {
 		if browser := view.Browser(); browser != nil {
@@ -790,6 +809,10 @@ func (p *Plugin) refreshResourcePanes() []tea.Cmd {
 	}
 	return cmds
 }
+
+// resourceRefreshOwed reports a watched change a visible collection pane was
+// vetoed from applying. It is the same contract every other kind's Owed answers.
+func (p *Plugin) resourceRefreshOwed() bool { return p.resourceRefreshDebt }
 
 // resourceRefreshSuppressed vetoes a re-list while a modal owns the screen. The
 // pane underneath is not visible, so refreshing it buys nothing and costs one
@@ -835,7 +858,16 @@ func (p *Plugin) schedulePluginPoll() tea.Cmd {
 
 // handlePluginPollTick re-lists on a declared interval and re-arms only while
 // something is still on screen to poll for.
+//
+// Both gates are load-bearing. The sequence discards a tick the newest arming
+// has already superseded; the epoch discards one armed for a project the user
+// has since switched away from, whose panes and plugins are not this plugin's
+// any more — the same staleness check every other asynchronous answer here runs.
 func (p *Plugin) handlePluginPollTick(msg pluginPollTickMsg) tea.Cmd {
+	if plugin.IsStale(p.ctx, msg) {
+		p.pluginPollArmed = false
+		return nil
+	}
 	if msg.Sequence != p.pluginPollTick {
 		return nil
 	}

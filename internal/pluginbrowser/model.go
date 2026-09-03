@@ -1,6 +1,7 @@
 package pluginbrowser
 
 import (
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -334,9 +335,17 @@ func (m *Model) readDescription() bool {
 	beforeState := m.status.State
 	m.status = status
 	if status.State == pluginhost.StateReady {
+		// The generation counts describe snapshots, not reads of one. Refresh()
+		// runs on every tab focus and on every Resolve, so bumping it here
+		// unconditionally would make "once per describe generation" mean "on
+		// every focus" for the live-refresh binding that keys its validated
+		// watch set by it — one stat per declared path per focus, and one cache
+		// entry per focus for the life of the process.
+		if !m.described || !describeEqual(m.desc, desc) {
+			m.describeGeneration++
+		}
 		m.desc = desc
 		m.described = true
-		m.describeGeneration++
 		m.grantKeys()
 		m.pruneStates()
 		if s := m.paneState(); s != nil {
@@ -345,6 +354,12 @@ func (m *Model) readDescription() bool {
 	}
 	return before != m.described || beforeState != status.State
 }
+
+// describeEqual reports whether two describe snapshots say the same thing. It
+// is a deep comparison of a small, flat, plugin-declared structure — a handful
+// of collections, columns, actions and paths — run once per Refresh, not per
+// frame.
+func describeEqual(a, b pluginhost.Description) bool { return reflect.DeepEqual(a, b) }
 
 // pruneStates drops remembered state for collections the newest describe no
 // longer declares. Keeping it would mean a re-describe could resurrect a query

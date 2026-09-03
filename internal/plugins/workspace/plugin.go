@@ -336,6 +336,10 @@ type Plugin struct {
 	// pluginPollArmed is whether a poll tick is already in flight, so a
 	// reconcile per message does not arm one ticker per message.
 	pluginPollArmed bool
+	// resourceRefreshDebt records a watched change that arrived while a modal
+	// covered the collection panes, so the reconcile drives it once the veto
+	// lifts rather than dropping it. See livepanes.Binding.Owed.
+	resourceRefreshDebt bool
 
 	// Live refresh: one filesystem watcher per content-pane kind, created the
 	// first time a pane of that kind is on screen and released in Stop. The
