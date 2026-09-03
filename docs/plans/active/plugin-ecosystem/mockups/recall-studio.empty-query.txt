@@ -1,0 +1,45 @@
+ sidecar  [8] Sessions  [9] Activity  [0]  Recall   [1] Files  [2] Git  [3] Workspaces  [4] Notes                                                sidecar · main
+╭─ Recall · Results ─────────────────────────────────────────────────────────────────────────────╮╭─ Recall · Sources ─────────────────────────────────────────╮
+│ /   search notes, mail, shell and td                                                  no query ││ SOURCE          HEALTH        FRESH                RECORDS │
+│ scope  project=sidecar  source, type, since unset                                    sort rank ││ ──────────────  ────────────  ────────────  ────────────── │
+│────────────────────────────────────────────────────────────────────────────────────────────────││ notes            ok           4m ago                 1,284 │
+│                                                                                                ││ mail             warn         3d ago                 9,610 │
+│                                                                                                ││ shell            ok           1m ago                22,470 │
+│                                                                                                ││ td               ok           12m ago                  613 │
+│                                                                                                ││────────────────────────────────────────────────────────────│
+│                                                                                                ││ warn  mail checkpoint is 3 days old.                       │
+│                                                                                                ││       Records after it are not searchable yet.             │
+│                                                                                                ││                                                            │
+│                                                                                                ││ [a] offers Refresh source on the row and                   │
+│                                                                                                ││     Refresh all on the collection — both are               │
+│                                                                                                ││     plugin actions, confirmed by the host.                 │
+│                                                                                                ││── Declared ────────────────────────────────────────────────│
+│                                                                                                ││ collections  results (search: required)                    │
+│                                                                                                ││              sources (refresh: 120s)                       │
+│                                                                                                ││ context      project                                       │
+│                                                                                                ││ matchers     rc:<source>:<local>                           │
+│                                                                                                ││ actions      scope, refresh-source, refresh-all            │
+│                                                                                                ││                                                            │
+│                                 This collection needs a query.                                 ││                                                            │
+│                                                                                                ││                                                            │
+│                      recall does not list; it answers. Press [/] to ask.                       ││                                                            │
+│                                                                                                ││                                                            │
+│                                                                                                ││                                                            │
+│                       4 sources · profile default · last refresh 1m ago                        ││                                                            │
+│                                                                                                ││                                                            │
+│                                                                                                ││                                                            │
+│                                                                                                ││                                                            │
+│                                                                                                ││                                                            │
+│                                                                                                ││                                                            │
+│                                                                                                ││                                                            │
+│                                                                                                ││                                                            │
+│                                                                                                ││                                                            │
+│                                                                                                ││                                                            │
+│                                                                                                ││                                                            │
+│                                                                                                ││                                                            │
+│                                                                                                ││                                                            │
+│                                                                                                ││                                                            │
+│                                                                                                ││                                                            │
+│                                                                                                ││                                                            │
+╰────────────────────────────────────────────────────────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────╯
+ [j/k] Move  [Enter] Open  [/] Query  [v] Scope  [s] Sort  [r] Refresh  [a] Actions  [o] Source  [n] Pane  [Tab] Focus                           recall · ready

@@ -1,0 +1,45 @@
+ sidecar  [8] Sessions  [9] Activity  [0] Recall  [1] Files  [2] Git  [3]  Workspaces   [4] Notes                                                sidecar · main
+╭─ Workspaces ─────────────╮╭─ plugin-ecosystem · claude ──────────────────────────────────────────────────╮╭─ Recall ─────────────────────────────────────────╮
+│  main  ●                 ││ › sidecar open --plugin recall --collection results \                        ││  Results     DEX schema notes                    │
+│❯ plugin-eco…  agent      ││       --query dex --split right                                              ││ / dex                                   26 of 31 │
+│  remote-git  idle        ││ opened  resource  recall/results  at 1.3                                     ││──────────────────────────────────────────────────│
+│  recall-eval  idle       ││                                                                              ││❯  1  DEX schema notes                            │
+│── Shells ────────────────││ › sidecar open --plugin recall rc:notes:2026-08-14-dex-design                ││      notes · exact · › people are tiered, and…   │
+│ ● claude    1.2          ││ opened  resource  recall/rc:notes:2026-08-14-dex-design  at 1.3 (tab 2)      ││   2  dex context --json                          │
+│ ▣ recall    1.3          ││                                                                              ││      shell · corroborated 3 · › dumps every…     │
+│ ○ build     2.1          ││ › sidecar plugin check recall --list results --query dex                     ││   3  People database, first cut                  │
+│── Layout ────────────────││ describe  ok    recall 0.4.0   context: project   matchers: 1                ││      notes · › handles, aliases, links, and…     │
+│ 1.1  sidebar             ││ list      ok    outcome answered   26 items   total 31                       ││   4  td-3fa2c1 Import people.md                  │
+│ 1.2  shell · claude      ││           notices 0   nextCursor set                                         ││      td · corroborated 2 · › import from…        │
+│ 1.3  resource · recall   ││                                                                              ││   5  Weekly review 2026-08-18                    │
+│                          ││ ›                                                                            ││      notes · › promote three contacts to…        │
+│ sidecar layout get       ││                                                                              ││   6  dex brief for session boot                  │
+│ reads this grid.         ││                                                                              ││      shell · › inner circle first, then…         │
+│                          ││                                                                              ││   7  Re: dex trial accounts                      │
+│                          ││                                                                              ││      mail · › the trial list you asked for…      │
+│                          ││                                                                              ││   8  Handles and phone numbers                   │
+│                          ││                                                                              ││      notes · › one phone per handle kind…        │
+│                          ││                                                                              ││   9  td-9c04ab dex stale rules                   │
+│                          ││                                                                              ││      td · › stale should read tier, not…         │
+│                          ││                                                                              ││  10  dex merge --dry-run                         │
+│                          ││                                                                              ││      shell · › keeps the first person and…       │
+│                          ││                                                                              ││  11  Tier promotion policy                       │
+│                          ││                                                                              ││      notes · › demotion is explicit, never…      │
+│                          ││                                                                              ││  12  Fwd: conference contacts                    │
+│                          ││                                                                              ││      mail · ~ Thanks — attaching the list…       │
+│                          ││                                                                              ││  13  td-51b7e0 dex brief budget                  │
+│                          ││                                                                              ││      td · › the brief has a token budget…        │
+│                          ││                                                                              ││  14  dex stale --tier inner                      │
+│                          ││                                                                              ││      shell · › lists overdue people only in…     │
+│                          ││                                                                              ││  15  Retrieval eval pack notes                   │
+│                          ││                                                                              ││      notes · ~ The eval pack covers recall…      │
+│                          ││                                                                              ││  16  dex import --format md                      │
+│                          ││                                                                              ││      shell · › the importer is idempotent…       │
+│                          ││                                                                              ││  17  Meeting notes 2026-08-22                    │
+│                          ││                                                                              ││      notes · › agreed dex owns identity, td…     │
+│                          ││                                                                              ││──────────────────────────────────────────────────│
+│                          ││                                                                              ││ Enter opens a tab here, not a side box           │
+│                          ││                                                                              ││                                                  │
+│                          ││                                                                              ││                                                  │
+╰──────────────────────────╯╰──────────────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────────╯
+ [j/k] Move  [Enter] Open  [/] Query  [[] []] Tabs  [r] Refresh  [a] Actions  [n] Pane  [x] Close  [Tab] Focus                  1.3 · resource · recall/results

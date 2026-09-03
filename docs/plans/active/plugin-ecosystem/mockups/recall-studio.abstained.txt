@@ -1,0 +1,45 @@
+ sidecar  [8] Sessions  [9] Activity  [0]  Recall   [1] Files  [2] Git  [3] Workspaces  [4] Notes                                                sidecar · main
+╭─ Recall · Results ─────────────────────────────────────────────────────────────────────────────╮╭─ Recall · Sources ─────────────────────────────────────────╮
+│ / quarterly forecast                                                    0 results   abstained  ││ SOURCE          HEALTH        ANSWERED             RECORDS │
+│ scope  project=sidecar  source, type, since unset                                    sort rank ││ ──────────────  ────────────  ────────────  ────────────── │
+│────────────────────────────────────────────────────────────────────────────────────────────────││ notes            ok           yes · 41ms             1,284 │
+│                                                                                                ││ mail             warn         yes · 780ms            9,610 │
+│                                                                                                ││ shell            ok           yes · 12ms            22,470 │
+│                                                                                                ││ td               ok           yes · 9ms                613 │
+│                                                                                                ││────────────────────────────────────────────────────────────│
+│                                                                                                ││ Every eligible source answered, so the empty               │
+│                                                                                                ││ list is an answer and not a gap. A source that             │
+│                                                                                                ││ had failed would be named here instead, and                │
+│                                                                                                ││ the outcome would read degraded.                           │
+│                                                                                                ││── Suppressed ──────────────────────────────────────────────│
+│                                                                                                ││ 0 below the relevance floor                                │
+│                                                                                                ││ 0 dropped by the result budget                             │
+│                                                                                                ││                                                            │
+│                                                                                                ││                                                            │
+│                                                                                                ││                                                            │
+│                                No matches. 4 sources answered.                                 ││                                                            │
+│                                                                                                ││                                                            │
+│                Nothing in notes, mail, shell or td matched quarterly forecast.                 ││                                                            │
+│                   Coverage was complete, so this is a fact about the query.                    ││                                                            │
+│                                                                                                ││                                                            │
+│                                                                                                ││                                                            │
+│               [/] edit the query     [v] widen the scope     [r] refresh sources               ││                                                            │
+│                                                                                                ││                                                            │
+│                                                                                                ││                                                            │
+│                Matching is lexical. A keyword reaches further than a sentence.                 ││                                                            │
+│                                                                                                ││                                                            │
+│                                                                                                ││                                                            │
+│                                                                                                ││                                                            │
+│                                                                                                ││                                                            │
+│                                                                                                ││                                                            │
+│                                                                                                ││                                                            │
+│                                                                                                ││                                                            │
+│                                                                                                ││                                                            │
+│                                                                                                ││                                                            │
+│                                                                                                ││                                                            │
+│                                                                                                ││                                                            │
+│                                                                                                ││                                                            │
+│                                                                                                ││                                                            │
+│                                                                                                ││                                                            │
+╰────────────────────────────────────────────────────────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────╯
+ [j/k] Move  [Enter] Open  [/] Query  [v] Scope  [s] Sort  [r] Refresh  [a] Actions  [o] Source  [n] Pane  [Tab] Focus             recall · results · abstained
