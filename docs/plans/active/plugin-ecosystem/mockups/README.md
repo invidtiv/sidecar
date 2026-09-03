@@ -2,6 +2,8 @@
 
 Screen mockups for the shared browser that renders every protocol plugin. Each `.tui.yaml` is a deterministic mockup for the TUI mockup tool; the `.txt` beside it is the rendered grid with colour stripped, so the layout can be read in a diff. Controlling document: [../README.md](../README.md); contract: [../protocol.md](../protocol.md).
 
+**These mockups follow [docs/reference/design-language.md](../../../../reference/design-language.md).** Read it before editing one or adding another. The chrome here is not an approximation of Sidecar's: the header, the footer, the gradient pane borders, the inside pane titles, the leaf tab strip, the drag rail and the modal are drawn by studio components transcribed from the Go that paints the real app, so a mockup lands on the same columns and the same hex values as a capture of the running binary. Only the plugin's own data layout is invented here.
+
 | File | Placement | Shows |
 | --- | --- | --- |
 | `recall-global-tab.tui.yaml` (`.results.txt`) | Global `Tab` | Recall's `results` collection with a query line, a `degraded` outcome and its notice, and the detail box rendering a resource with `fields`, an `Evidence` body section, and a `Timeline` section. Every key in the footer is host-owned. |
@@ -20,3 +22,5 @@ Regenerate a snapshot after editing a mockup:
 ```bash
 node "$TUI_REPO/bin/tui.js" render recall-global-tab.tui.yaml --state "Results and detail" | sed 's/\x1b\[[0-9;]*m//g; s/[[:space:]]*$//' > recall-global-tab.results.txt
 ```
+
+State names, for `--state`: `Results and detail` and `Action form` in `recall-global-tab`; `Empty query`, `Results · answered`, `Results · degraded`, `Abstained`, `Scope picker` and `Narrow pane` in `recall-studio`. `ongoing-pane-tab` has one unnamed state and needs no flag.

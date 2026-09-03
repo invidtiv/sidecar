@@ -1,0 +1,45 @@
+ ◱ Sidecar │   Sessions     Activity                                                           td     Git     Files     Workspaces     Notes    sidecar ▾  ·  ⚙
+╭─────────────────────────────────────────────╮ ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Files  [name]                               │┃│ Preview                                                                                                      │
+│                                             │┃│                                                                                                              │
+│ + .agents                                 ┃ │┃│ Select a file to preview                                                                                     │
+│ + .benchmarks                             ┃ │┃│                                                                                                              │
+│ + .claude                                 ┃ │┃│                                                                                                              │
+│ + .codex                                  ┃ │┃│                                                                                                              │
+│ + .git                                    ┃ │┃│                                                                                                              │
+│ + .github                                 ┃ │┃│                                                                                                              │
+│ + .grok                                   ┃ │┃│                                                                                                              │
+│ + .kiro                                   ┃ │┃│                                                                                                              │
+│ + .proof                                  ┃ │┃│                                                                                                              │
+│ + .sidecar                                ┃ │┃│                                                                                                              │
+│ + .todos                                  ┃ │┃│                                                                                                              │
+│ + bin                                     ┃ │┃│                                                                                                              │
+│ + captures                                ┃ │┃│     ╭──────────────────────────────────────────────────╮                                                     │
+│ + cmd                                     ┃ │┃│     │                                                  │                                                     │
+│ + compat                                  ┃ │┃│     │  Open Pane                                       │                                                     │
+│ + configs                                 ┃ │┃│     │                                                  │                                                     │
+│ + dist                                    ┃ │┃│     │  [   File    |    Git diff    |    td issue   …  │                                                     │
+│ + docs                                    ┃ │┃│     │                                                  │                                                     │
+│ + internal                                ┃ │┃│     │                                                  │                                                     │
+│ + packaging                               ┃ │┃│     │     Auto        Right        Below               │                                                     │
+│ + screenshots                             ┃ │┃│     │                                                  │                                                     │
+│ + scripts                                 ┃ │┃│     │     Cancel                                       │                                                     │
+│ + website                                 ┃ │┃│     │  ↑↓ type · Enter continues · Esc cancels         │                                                     │
+│   .gitignore                              ┃ │┃│     │                                                  │                                                     │
+│   .golangci.yml                           ┃ │┃│     ╰──────────────────────────────────────────────────╯                                                     │
+│   .goreleaser.yml                         ┃ │┃│                                                                                                              │
+│   .worktree-setup.sh                      ┃ │┃│                                                                                                              │
+│   AGENTS.md                               ┃ │┃│                                                                                                              │
+│   CHANGELOG.md                            ┃ │┃│                                                                                                              │
+│   CLAUDE.md                               ┃ │┃│                                                                                                              │
+│   coverage.out                            ┃ │┃│                                                                                                              │
+│   debug.log                               ┃ │┃│                                                                                                              │
+│   GEMINI.md                               ┃ │┃│                                                                                                              │
+│   go.mod                                  │ │┃│                                                                                                              │
+│   go.sum                                  │ │┃│                                                                                                              │
+│   go.work                                 │ │┃│                                                                                                              │
+│   go.work.sum                             │ │┃│                                                                                                              │
+│   LICENSE                                 │ │┃│                                                                                                              │
+│   Makefile                                │ │┃│                                                                                                              │
+╰─────────────────────────────────────────────╯ ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+ enter  Open   up, down  Move   tab  Field   esc  Back   ctrl+c  quit

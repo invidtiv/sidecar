@@ -1,0 +1,45 @@
+ ◱ Sidecar │   Sessions     Activity                                                           td     Git     Files     Workspaces     Notes    sidecar ▾  ·  ⚙
+╭─────────────────────────────────────────────╮ ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Git main                                    │┃│ Commit  70d5cfac                                                                                             │
+│                                             │┃│                                                                                                              │
+│ Working tree clean                          │┃│ 󰀄 Marcus Vorwaller                                                                                           │
+│                                             │┃│ 󰃰 1 min ago                                                                                                  │
+│ ─────────────────────────────────────────── │┃│                                                                                                              │
+│ Recent Commits (2850) ↑2                    │┃│ docs(plugin-ecosystem): theme-awareness decision and pending protocol revisions from the recall mockup       │
+│ ↑ 70d5cfa docs(plugin-ecosystem): theme…  ┃ │┃│                                                                                                              │
+│ ↑ 9c0972a docs(plugin-ecosystem): recal…  ┃ │┃│ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>                                                     │
+│   af07fb1 docs: plan the plugin ecosyst…  ┃ │┃│ Claude-Session: ]8;;https://claude.ai/code/session_01F2dpUB3sBHZgxzb87Gva1w\https://claude.ai/code/session_01F2dpUB3sBHZgxzb87Gva1w]8;;\                                      │
+│   5ac3fa8 test(cli): stop the loopback …  ┃ │┃│                                                                                                              │
+│   77542ab Merge pull request #326 from …  ┃ │┃│ ──────────────────────────────────────────────────────────────────────────────────────────────────────────── │
+│   4bbff3d cli: implement agent-facing p…  ┃ │┃│ Files (1)  +17 -0                                                                                            │
+│   eb55006 release: prepare v1.13.0        ┃ │┃│ M docs/plans/active/plugin-ecosystem/README.md +17/-0                                                        │
+│   6fa5230 Merge branch 'herdr-detection…  ┃ │┃│                                                                                                              │
+│   9f6bf7c release: prepare v1.12.0        ┃ │┃│                                                                                                              │
+│   0f111ff chore(deps): pin tasks v1.17.0  ┃ │┃│                                                                                                              │
+│   08baa1f docs(changelog): record read-…  ┃ │┃│                                                                                                              │
+│   53d66f0 Merge branch 'remote-viewer-s…  ┃ │┃│                                                                                                              │
+│   f0e98cf Merge branch 'main' into remo…  ┃ │┃│                                                                                                              │
+│   18c229f Merge remote-tracking branch …  ┃ │┃│                                                                                                              │
+│   b352f5e fix(agentactivity): make the …  ┃ │┃│                                                                                                              │
+│   2e61413 fix(agentactivity): keep argv…  ┃ │┃│                                                                                                              │
+│   3085db8 feat(agentactivity): score th…  ┃ │┃│                                                                                                              │
+│   56a914e fix(agentintegration): stop t…  ┃ │┃│                                                                                                              │
+│   f88099e fix(agentintegration): stop t…  ┃ │┃│                                                                                                              │
+│   68f5c92 feat(agentlifecycle): trace a…  ┃ │┃│                                                                                                              │
+│   0ea916e feat(agentintegration): port …  ┃ │┃│                                                                                                              │
+│   39809cf docs(herdr): correct Slice 1'…  ┃ │┃│                                                                                                              │
+│   c1eee1d fix(herdr): retract the Pi ti…  ┃ │┃│                                                                                                              │
+│   61fafac docs(herdr): plan the work th…  ┃ │┃│                                                                                                              │
+│   9b8739f Merge pull request #325 from …  ┃ │┃│                                                                                                              │
+│   8bdced7 chore(herdr): sync detection …  ┃ │┃│                                                                                                              │
+│   1136f58 Merge pull request #324 from …  ┃ │┃│                                                                                                              │
+│   346568f fix(herdrsync): track Herdr's…  │ │┃│                                                                                                              │
+│   24b294f Merge pull request #322 from …  │ │┃│                                                                                                              │
+│   9261b66 docs(herdr): record Phases 3 …  │ │┃│                                                                                                              │
+│   b318ba4 fix(agentactivity): off means…  │ │┃│                                                                                                              │
+│   3cc72fe fix(grok): delete sidecar.all…  │ │┃│                                                                                                              │
+│   f329735 fix(agentactivity): the detec…  │ │┃│                                                                                                              │
+│   3eb7f63 fix: a bound Git pane survive…  │ │┃│                                                                                                              │
+│   1dcc22b feat(agentactivity): opt-in r…  │ │┃│                                                                                                              │
+╰─────────────────────────────────────────────╯ ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+ enter, d  View   P  Push   L  Pull   /  Search   v  Graph   f  Author   p  Path   F  Clear   y  Yank   Y  YankID   o  GitHub   n  Next   N  Prev

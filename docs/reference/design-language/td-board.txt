@@ -1,0 +1,45 @@
+ ◱ Sidecar │   Sessions     Activity                                                           td     Git     Files     Workspaces     Notes    sidecar ▾  ·  ⚙
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│  CURRENT WORK (1-8 of 20)                                                                                                                                    │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│ IN PROGRESS ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 20   │
+│   td-1987bf ✗ P0 Split-created shell is not agent-addressable ses_03fce5                                                                                     │
+│   td-bcfe53 ■ P1 Inventory and plan complete inertial wheel boundary coverage ses_a25f68                                                                     │
+│   td-0b2400 ◆ P1 Final Pre-Launch Polish ses_ddc2e9                                                                                                          │
+│   td-e3d108 ■ P1 A: hostserve freshness — watch shells.json, share the local reap ses_e987e3                                                                 │
+│   td-ec4b64 ■ P1 B: sidecar shell delete + remote delete in Sessions ses_e987e3                                                                              │
+│   ▼ more below                                                                                                                                               │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│  BOARD: All Issues [swimlanes] (1-14 of 173)                                                                                                                 │
+│ ★ REVIEWABLE ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 14   │
+│ ❯ td-2b26ad   ■ P1 4k: loopback proof and docs for remote Git                                                                                                │
+│   td-6fa047   ■ P1 4j: honest refusals for every Git write                                                                                                   │
+│   td-edd823   ■ P1 4i: history, commits, and refs through the seam                                                                                           │
+│   td-d7a47f   ■ P1 4h: patches through the RepoSource seam                                                                                                   │
+│   td-ca9621   ■ P1 4g: RepoSource seam and a bound status pane                                                                                               │
+│   td-3a4da2   ■ P1 4f: sidecar repo verb family and RepoReadV1                                                                                               │
+│   td-94d7f7   ✗ P1 A revisited remote file previews as an empty pane                                                                                         │
+│   td-055768   ✗ P1 The serve stream has no banner tolerance, so a chatty login shell kills every remote row                                                  │
+│   td-cea79d   ■ P1 4e: loopback proof and docs for remote Files                                                                                              │
+│   td-635f93   ● P1 4d: honest refusals for writes, blame, and search                                                                                         │
+│   td-4ff672   ● P1 4c: remote previews and find-by-name                                                                                                      │
+│   td-33dd8a   ● P1 4b: tree source seam and a remote FileTree                                                                                                │
+│   td-ce0701   ● P1 4a: sidecar content tree host verb and ContentTreeV1                                                                                      │
+│   ▼ more below                                                                                                                                               │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│  ACTIVITY LOG (1-8 of 50)                                                                                                                                    │
+│ Time  Sess       Type  Issue       Message                                                                                                                   │
+│ 17:02 ses_54b070 [ACT] lg-f3c55a0f created issue                                                                                                             │
+│ 17:02 ses_54b070 [LOG] td-f9f007   Plan set written at docs/plans/active/plugin-ecosystem (README, protocol.md, host.md, two M0 mockups).... • Plug...       │
+│ 16:55 ses_54b070 [ACT] td-f9f007   created issue • Plugin ecosystem: protocol plugins, embedded plugins, and a shared host                                   │
+│ 16:28            [ACT] nt-8ad3b9   updated note                                                                                                              │
+│ 16:28            [ACT] nt-8ad3b9   updated note                                                                                                              │
+│ 16:28            [ACT] nt-8ad3b9   updated note                                                                                                              │
+│ 16:28            [ACT] nt-8ad3b9   updated note                                                                                                              │
+│ 16:28            [ACT] nt-8ad3b9   created note                                                                                                              │
+│   ↓ 42 more below                                                                                                                                            │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+ enter  Details   /  Search   a  Approve   R  Review   c  Closed   F  Filter   b  Boards   r  Refresh   v  View   C  Close   O  Reopen   x  Delete

@@ -22,7 +22,7 @@ title: "Recall studio · one protocol plugin, six host renderings"
 viewport:
   cols: 160
   rows: 45
-theme: "catppuccin-mocha"
+theme: "sidecar-modern"
 
 states:
   # ==========================================================================
@@ -37,26 +37,34 @@ states:
     layout:
       type: vertical
       children:
-        - type: bar
-          height: 1
-          style: "bg:surface0 fg:subtext"
-          left: " [bold][fg:accent]sidecar[/fg][/bold]  [kbd:8] Sessions  [kbd:9] Activity  [kbd:0] [reverse] Recall [/reverse]  [kbd:1] Files  [kbd:2] Git  [kbd:3] Workspaces  [kbd:4] Notes"
-          right: "sidecar · main "
+        # Sidecar's own top bar, not an approximation of one: the studio's
+        # sidecar_header transcribes internal/app/view.go headerGeometry. Global
+        # destinations sit left of the divider, project tabs right of it, and
+        # the selector pill, unread indicator and gear are pinned to the right
+        # edge in that order. Same destinations and same active one as before —
+        # only the chrome changed.
+        - type: sidecar_header
+          global_tabs: ["Sessions", "Activity", "Recall"]
+          active_global: "Recall"
+          project_tabs: ["Files", "Git", "Workspaces", "Notes"]
+          project: "sidecar"
         - type: horizontal
           flex: 1
           children:
             - type: pane
               width: 98
-              title: " Recall · Results "
+              title: "Recall · Results"
+              title_position: inside
+              padding: [0, 1]
               border: rounded
-              border_style: "fg:accent"
+              border_gradient: active
               content:
                 - bar:
-                    left: " [fg:accent]/[/fg] [reverse] [/reverse][dim] search notes, mail, shell and td[/dim]"
-                    right: "[dim]no query[/dim] "
+                    left: "[fg:accent]/[/fg] [reverse] [/reverse][dim] search notes, mail, shell and td[/dim]"
+                    right: "[dim]no query[/dim]"
                 - bar:
-                    left: " [dim]scope[/dim]  [fg:accent]project=sidecar[/fg]  [dim]source, type, since unset[/dim]"
-                    right: "[dim]sort[/dim] rank "
+                    left: "[dim]scope[/dim]  [fg:accent]project=sidecar[/fg]  [dim]source, type, since unset[/dim]"
+                    right: "[dim]sort[/dim] rank"
                 - divider: ""
                 - text: ""
                 - text: ""
@@ -78,22 +86,25 @@ states:
                 - text: "[bold]This collection needs a query.[/bold]"
                   align: center
                 - text: ""
-                - text: "[dim]recall does not list; it answers. Press [/dim][kbd:/][dim] to ask.[/dim]"
+                - text: "[dim]recall does not list; it answers. Press [/dim][key:/][dim] to ask.[/dim]"
                   align: center
                 - text: ""
                 - text: ""
                 - text: "[dim]4 sources · profile [/dim][fg:accent]default[/fg][dim] · last refresh 1m ago[/dim]"
                   align: center
+            - type: sidecar_rail
             - type: pane
               flex: 1
-              title: " Recall · Sources "
+              title: "Recall · Sources"
+              title_position: inside
+              padding: [0, 1]
               border: rounded
-              border_style: "fg:border"
+              border_gradient: normal
               content:
                 - table:
-                    indent: 1
+                    indent: 0
                     headers: ["SOURCE", "HEALTH", "FRESH", "RECORDS"]
-                    widths: [14, 12, 12, 14]
+                    widths: [14, 12, 12, 13]
                     alignments: ["left", "left", "left", "right"]
                     selected_row: -1
                     rows:
@@ -102,23 +113,33 @@ states:
                       - ["shell", "[badge:green:black:ok]", "1m ago", "22,470"]
                       - ["td", "[badge:green:black:ok]", "12m ago", "613"]
                 - divider: ""
-                - text: " [fg:yellow]warn[/fg]  [dim]mail checkpoint is 3 days old.[/dim]"
-                - text: "       [dim]Records after it are not searchable yet.[/dim]"
+                - text: "[fg:yellow]warn[/fg]  [dim]mail checkpoint is 3 days old.[/dim]"
+                - text: "      [dim]Records after it are not searchable yet.[/dim]"
                 - text: ""
-                - text: " [kbd:a] [dim]offers[/dim] Refresh source [dim]on the row and[/dim]"
-                - text: "     Refresh all [dim]on the collection — both are[/dim]"
-                - text: "     [dim]plugin actions, confirmed by the host.[/dim]"
+                - text: "[key:a] [dim]offers[/dim] Refresh source [dim]on the row and[/dim]"
+                - text: "    Refresh all [dim]on the collection — both are[/dim]"
+                - text: "    [dim]plugin actions, confirmed by the host.[/dim]"
                 - divider: "Declared"
-                - text: " [dim]collections[/dim]  results [dim](search: required)[/dim]"
-                - text: "              sources [dim](refresh: 120s)[/dim]"
-                - text: " [dim]context[/dim]      project"
-                - text: " [dim]matchers[/dim]     rc:<source>:<local>"
-                - text: " [dim]actions[/dim]      scope, refresh-source, refresh-all"
-        - type: bar
-          height: 1
-          style: "bg:surface0 fg:subtext"
-          left: " [kbd:j/k] Move  [kbd:Enter] Open  [kbd:/] Query  [kbd:v] Scope  [kbd:s] Sort  [kbd:r] Refresh  [kbd:a] Actions  [kbd:o] Source  [kbd:n] Pane  [kbd:Tab] Focus"
-          right: "recall · ready "
+                - text: "[dim]collections[/dim]  results [dim](search: required)[/dim]"
+                - text: "             sources [dim](refresh: 120s)[/dim]"
+                - text: "[dim]context[/dim]      project"
+                - text: "[dim]matchers[/dim]     rc:<source>:<local>"
+                - text: "[dim]actions[/dim]      scope, refresh-source, refresh-all"
+        # The footer is styles.KeyHint chips and their labels, two columns
+        # between pairs, drawn whole or dropped — view.go renderHintLineTruncated.
+        - type: sidecar_footer
+          keys:
+            - { key: "j/k", label: "Move" }
+            - { key: "Enter", label: "Open" }
+            - { key: "/", label: "Query" }
+            - { key: "v", label: "Scope" }
+            - { key: "s", label: "Sort" }
+            - { key: "r", label: "Refresh" }
+            - { key: "a", label: "Actions" }
+            - { key: "o", label: "Source" }
+            - { key: "n", label: "Pane" }
+            - { key: "Tab", label: "Focus" }
+          status: "recall · ready "
 
   # ==========================================================================
   # 2. outcome: answered. The pill and the count share the query line's right
@@ -133,29 +154,37 @@ states:
     layout:
       type: vertical
       children:
-        - type: bar
-          height: 1
-          style: "bg:surface0 fg:subtext"
-          left: " [bold][fg:accent]sidecar[/fg][/bold]  [kbd:8] Sessions  [kbd:9] Activity  [kbd:0] [reverse] Recall [/reverse]  [kbd:1] Files  [kbd:2] Git  [kbd:3] Workspaces  [kbd:4] Notes"
-          right: "sidecar · main "
+        # Sidecar's own top bar, not an approximation of one: the studio's
+        # sidecar_header transcribes internal/app/view.go headerGeometry. Global
+        # destinations sit left of the divider, project tabs right of it, and
+        # the selector pill, unread indicator and gear are pinned to the right
+        # edge in that order. Same destinations and same active one as before —
+        # only the chrome changed.
+        - type: sidecar_header
+          global_tabs: ["Sessions", "Activity", "Recall"]
+          active_global: "Recall"
+          project_tabs: ["Files", "Git", "Workspaces", "Notes"]
+          project: "sidecar"
         - type: horizontal
           flex: 1
           children:
             - type: pane
               width: 98
-              title: " Recall · Results "
+              title: "Recall · Results"
+              title_position: inside
+              padding: [0, 1]
               border: rounded
-              border_style: "fg:accent"
+              border_gradient: active
               content:
                 - bar:
-                    left: " [fg:accent]/[/fg] [bold]dex[/bold][reverse] [/reverse]"
-                    right: "[dim]26 of 31[/dim]  [badge:green:black:answered] "
+                    left: "[fg:accent]/[/fg] [bold]dex[/bold][reverse] [/reverse]"
+                    right: "[dim]26 of 31[/dim]  [badge:green:black:answered]"
                 - bar:
-                    left: " [dim]scope[/dim]  [fg:accent]project=sidecar[/fg]  [dim]source, type, since unset[/dim]"
-                    right: "[dim]sort[/dim] rank "
+                    left: "[dim]scope[/dim]  [fg:accent]project=sidecar[/fg]  [dim]source, type, since unset[/dim]"
+                    right: "[dim]sort[/dim] rank"
                 - divider: ""
                 - table:
-                    indent: 1
+                    indent: 0
                     headers: ["#", "TITLE", "SOURCE", "EXCERPT", ""]
                     widths: [3, 27, 8, 32, 16]
                     alignments: ["right", "left", "left", "left", "left"]
@@ -189,54 +218,65 @@ states:
                       - ["26", "Re: people.md format v2", "mail", "~ Second pass at the format we…", ""]
                 - divider: ""
                 - bar:
-                    left: " [dim]26 of 31 shown · the rest load on scroll[/dim]"
-                    right: "[dim]› matched span   ~ record opening[/dim] "
+                    left: "[dim]26 of 31 shown · the rest load on scroll[/dim]"
+                    right: "[dim]› matched span   ~ record opening[/dim]"
+            - type: sidecar_rail
             - type: pane
               flex: 1
-              title: " DEX schema notes "
+              title: "DEX schema notes"
+              title_right: "[badge:green:black:exact]"
+              title_position: inside
+              padding: [0, 1]
               border: rounded
-              border_style: "fg:border"
+              border_gradient: normal
               content:
-                - bar:
-                    left: " [bold]DEX schema notes[/bold]"
-                    right: "[badge:green:black:exact] "
-                - text: " [dim]notes · 2026-08-14[/dim]"
+                - text: "[dim]notes · 2026-08-14[/dim]"
                 - text: ""
-                - text: " [dim]Source[/dim]        notes"
-                - text: " [dim]Locator[/dim]       rc:notes:2026-08-14-dex-design"
-                - text: " [dim]Updated[/dim]       2 weeks ago"
-                - text: " [dim]Corroborated[/dim]  2 records · shell, td"
+                - text: "[dim]Source[/dim]        notes"
+                - text: "[dim]Locator[/dim]       rc:notes:2026-08-14-dex-design"
+                - text: "[dim]Updated[/dim]       2 weeks ago"
+                - text: "[dim]Corroborated[/dim]  2 records · shell, td"
                 - divider: "Evidence"
-                - text: " [bold]Tiers[/bold]"
-                - text: " People are tiered. The tier drives what [bold]brief[/bold] shows at"
-                - text: " session boot, and what [bold]stale[/bold] treats as overdue."
+                - text: "[bold]Tiers[/bold]"
+                - text: "People are tiered. The tier drives what [bold]brief[/bold] shows at"
+                - text: "session boot, and what [bold]stale[/bold] treats as overdue."
                 - text: ""
-                - text: " Promotion and demotion are explicit commands, so an"
-                - text: " agent never infers a tier from interaction counts."
+                - text: "Promotion and demotion are explicit commands, so an"
+                - text: "agent never infers a tier from interaction counts."
                 - text: ""
-                - text: " [bold]Attachments[/bold]"
-                - text: " [fg:accent]•[/fg] handles, aliases, links and phones hang off the"
-                - text: "   person, never off a handle"
-                - text: " [fg:accent]•[/fg] a merge keeps the first person and moves every"
-                - text: "   attachment over from the second"
+                - text: "[bold]Attachments[/bold]"
+                - text: "[fg:accent]•[/fg] handles, aliases, links and phones hang off the"
+                - text: "  person, never off a handle"
+                - text: "[fg:accent]•[/fg] a merge keeps the first person and moves every"
+                - text: "  attachment over from the second"
                 - divider: "Record"
-                - text: " [dim]Record type[/dim]   note"
-                - text: " [dim]Ingested[/dim]      2026-08-14 10:02"
-                - text: " [dim]Checkpoint[/dim]    notes @ 4m ago"
-                - text: " [dim]Excerpt[/dim]       matched span"
+                - text: "[dim]Record type[/dim]   note"
+                - text: "[dim]Ingested[/dim]      2026-08-14 10:02"
+                - text: "[dim]Checkpoint[/dim]    notes @ 4m ago"
+                - text: "[dim]Excerpt[/dim]       matched span"
                 - divider: "Timeline"
-                - text: " [dim]2w ago[/dim]    Note added"
-                - text: " [dim]13d ago[/dim]   Linked from [fg:accent]td-3fa2c1[/fg]"
-                - text: " [dim]9d ago[/dim]    Corroborated by [fg:accent]rc:shell:dex-context[/fg]"
-                - text: " [dim]6d ago[/dim]    Re-read at checkpoint [fg:accent]notes@41f0[/fg]"
-                - text: " [dim]4d ago[/dim]    Cited in [fg:accent]rc:td:td-51b7e0[/fg]"
+                - text: "[dim]2w ago[/dim]    Note added"
+                - text: "[dim]13d ago[/dim]   Linked from [fg:accent]td-3fa2c1[/fg]"
+                - text: "[dim]9d ago[/dim]    Corroborated by [fg:accent]rc:shell:dex-context[/fg]"
+                - text: "[dim]6d ago[/dim]    Re-read at checkpoint [fg:accent]notes@41f0[/fg]"
+                - text: "[dim]4d ago[/dim]    Cited in [fg:accent]rc:td:td-51b7e0[/fg]"
                 - text: ""
-                - text: " [dim]no sourceUrl —[/dim] [kbd:o] [dim]is unavailable on this record[/dim]"
-        - type: bar
-          height: 1
-          style: "bg:surface0 fg:subtext"
-          left: " [kbd:j/k] Move  [kbd:Enter] Open  [kbd:/] Query  [kbd:v] Scope  [kbd:s] Sort  [kbd:r] Refresh  [kbd:a] Actions  [kbd:o] Source  [kbd:n] Pane  [kbd:Tab] Focus"
-          right: "recall · results · answered "
+                - text: "[dim]no sourceUrl —[/dim] [key:o] [dim]is unavailable on this record[/dim]"
+        # The footer is styles.KeyHint chips and their labels, two columns
+        # between pairs, drawn whole or dropped — view.go renderHintLineTruncated.
+        - type: sidecar_footer
+          keys:
+            - { key: "j/k", label: "Move" }
+            - { key: "Enter", label: "Open" }
+            - { key: "/", label: "Query" }
+            - { key: "v", label: "Scope" }
+            - { key: "s", label: "Sort" }
+            - { key: "r", label: "Refresh" }
+            - { key: "a", label: "Actions" }
+            - { key: "o", label: "Source" }
+            - { key: "n", label: "Pane" }
+            - { key: "Tab", label: "Focus" }
+          status: "recall · results · answered "
 
   # ==========================================================================
   # 3. outcome: degraded. mail could not answer, so it contributes no rows and
@@ -249,29 +289,37 @@ states:
     layout:
       type: vertical
       children:
-        - type: bar
-          height: 1
-          style: "bg:surface0 fg:subtext"
-          left: " [bold][fg:accent]sidecar[/fg][/bold]  [kbd:8] Sessions  [kbd:9] Activity  [kbd:0] [reverse] Recall [/reverse]  [kbd:1] Files  [kbd:2] Git  [kbd:3] Workspaces  [kbd:4] Notes"
-          right: "sidecar · main "
+        # Sidecar's own top bar, not an approximation of one: the studio's
+        # sidecar_header transcribes internal/app/view.go headerGeometry. Global
+        # destinations sit left of the divider, project tabs right of it, and
+        # the selector pill, unread indicator and gear are pinned to the right
+        # edge in that order. Same destinations and same active one as before —
+        # only the chrome changed.
+        - type: sidecar_header
+          global_tabs: ["Sessions", "Activity", "Recall"]
+          active_global: "Recall"
+          project_tabs: ["Files", "Git", "Workspaces", "Notes"]
+          project: "sidecar"
         - type: horizontal
           flex: 1
           children:
             - type: pane
               width: 98
-              title: " Recall · Results "
+              title: "Recall · Results"
+              title_position: inside
+              padding: [0, 1]
               border: rounded
-              border_style: "fg:accent"
+              border_gradient: active
               content:
                 - bar:
-                    left: " [fg:accent]/[/fg] [bold]dex[/bold][reverse] [/reverse]"
-                    right: "[dim]18 of 18[/dim]  [badge:yellow:black:degraded] "
+                    left: "[fg:accent]/[/fg] [bold]dex[/bold][reverse] [/reverse]"
+                    right: "[dim]18 of 18[/dim]  [badge:yellow:black:degraded]"
                 - bar:
-                    left: " [dim]scope[/dim]  [fg:accent]project=sidecar[/fg]  [dim]source, type, since unset[/dim]"
-                    right: "[dim]sort[/dim] rank "
+                    left: "[dim]scope[/dim]  [fg:accent]project=sidecar[/fg]  [dim]source, type, since unset[/dim]"
+                    right: "[dim]sort[/dim] rank"
                 - divider: ""
                 - table:
-                    indent: 1
+                    indent: 0
                     headers: ["#", "TITLE", "SOURCE", "EXCERPT", ""]
                     widths: [3, 27, 8, 32, 16]
                     alignments: ["right", "left", "left", "left", "left"]
@@ -296,55 +344,66 @@ states:
                       - ["17", "Contacts import checklist", "notes", "› export, dedupe, then import…", ""]
                       - ["18", "dex stale --json", "shell", "› the same rows the brief hid…", ""]
                 - divider: ""
-                - text: " [fg:yellow]⚠[/fg]  1 of 4 sources did not answer [dim](mail: checkpoint stale since 2026-08-30)[/dim]"
-                - text: " [fg:blue]•[/fg]  2 records suppressed below the relevance floor [dim](profile default)[/dim]"
+                - text: "[fg:yellow]⚠[/fg]  1 of 4 sources did not answer [dim](mail: checkpoint stale since 2026-08-30)[/dim]"
+                - text: "[fg:blue]•[/fg]  2 records suppressed below the relevance floor [dim](profile default)[/dim]"
                 - text: ""
                 - bar:
-                    left: " [dim]coverage is incomplete, so 18 is what these 3 sources hold — not what exists[/dim]"
-                    right: "[kbd:r] [dim]retry[/dim] "
+                    left: "[dim]coverage is incomplete, so 18 is what these 3 sources hold — not what exists[/dim]"
+                    right: "[key:r] [dim]retry[/dim]"
+            - type: sidecar_rail
             - type: pane
               flex: 1
-              title: " dex context --json "
+              title: "dex context --json"
+              title_right: "[badge:blue:black:corroborated 3]"
+              title_position: inside
+              padding: [0, 1]
               border: rounded
-              border_style: "fg:border"
+              border_gradient: normal
               content:
-                - bar:
-                    left: " [bold]dex context --json[/bold]"
-                    right: "[badge:blue:black:corroborated 3] "
-                - text: " [dim]shell · 2026-08-27[/dim]"
+                - text: "[dim]shell · 2026-08-27[/dim]"
                 - text: ""
-                - text: " [dim]Source[/dim]        shell"
-                - text: " [dim]Locator[/dim]       rc:shell:2026-08-27-dex-context"
-                - text: " [dim]Updated[/dim]       6 days ago"
-                - text: " [dim]Corroborated[/dim]  3 records · notes, td"
+                - text: "[dim]Source[/dim]        shell"
+                - text: "[dim]Locator[/dim]       rc:shell:2026-08-27-dex-context"
+                - text: "[dim]Updated[/dim]       6 days ago"
+                - text: "[dim]Corroborated[/dim]  3 records · notes, td"
                 - divider: "Evidence"
-                - text: " [dim]$[/dim] dex context --json --tier inner"
-                - text: " [dim]{[/dim]"
-                - text: "   [fg:accent]\"generated_at\"[/fg]: [fg:green]\"2026-08-27T09:14:02Z\"[/fg],"
-                - text: "   [fg:accent]\"tier\"[/fg]: [fg:green]\"inner\"[/fg],"
-                - text: "   [fg:accent]\"people\"[/fg]: [fg:yellow]27[/fg],"
-                - text: "   [fg:accent]\"stale\"[/fg]: [fg:yellow]4[/fg],"
-                - text: "   [fg:accent]\"brief_budget_tokens\"[/fg]: [fg:yellow]1200[/fg]"
-                - text: " [dim]}[/dim]"
+                - text: "[dim]$[/dim] dex context --json --tier inner"
+                - text: "[dim]{[/dim]"
+                - text: "  [fg:accent]\"generated_at\"[/fg]: [fg:green]\"2026-08-27T09:14:02Z\"[/fg],"
+                - text: "  [fg:accent]\"tier\"[/fg]: [fg:green]\"inner\"[/fg],"
+                - text: "  [fg:accent]\"people\"[/fg]: [fg:yellow]27[/fg],"
+                - text: "  [fg:accent]\"stale\"[/fg]: [fg:yellow]4[/fg],"
+                - text: "  [fg:accent]\"brief_budget_tokens\"[/fg]: [fg:yellow]1200[/fg]"
+                - text: "[dim]}[/dim]"
                 - text: ""
-                - text: " The star command. Everything the session-boot brief"
-                - text: " renders comes from this one call, so the brief never"
-                - text: " reaches into the store a second time."
+                - text: "The star command. Everything the session-boot brief"
+                - text: "renders comes from this one call, so the brief never"
+                - text: "reaches into the store a second time."
                 - divider: "Record"
-                - text: " [dim]Record type[/dim]   command"
-                - text: " [dim]Ran[/dim]           2026-08-27 09:14 · exit 0"
-                - text: " [dim]Checkpoint[/dim]    shell @ 1m ago"
-                - text: " [dim]Excerpt[/dim]       matched span"
+                - text: "[dim]Record type[/dim]   command"
+                - text: "[dim]Ran[/dim]           2026-08-27 09:14 · exit 0"
+                - text: "[dim]Checkpoint[/dim]    shell @ 1m ago"
+                - text: "[dim]Excerpt[/dim]       matched span"
                 - divider: "Timeline"
-                - text: " [dim]6d ago[/dim]    Command recorded"
-                - text: " [dim]6d ago[/dim]    Corroborated by [fg:accent]rc:notes:…-dex-design[/fg]"
-                - text: " [dim]5d ago[/dim]    Corroborated by [fg:accent]rc:td:td-51b7e0[/fg]"
-                - text: " [dim]2d ago[/dim]    Re-run · exit 0"
-        - type: bar
-          height: 1
-          style: "bg:surface0 fg:subtext"
-          left: " [kbd:j/k] Move  [kbd:Enter] Open  [kbd:/] Query  [kbd:v] Scope  [kbd:s] Sort  [kbd:r] Refresh  [kbd:a] Actions  [kbd:o] Source  [kbd:n] Pane  [kbd:Tab] Focus"
-          right: "recall · results · degraded "
+                - text: "[dim]6d ago[/dim]    Command recorded"
+                - text: "[dim]6d ago[/dim]    Corroborated by [fg:accent]rc:notes:…-dex-design[/fg]"
+                - text: "[dim]5d ago[/dim]    Corroborated by [fg:accent]rc:td:td-51b7e0[/fg]"
+                - text: "[dim]2d ago[/dim]    Re-run · exit 0"
+        # The footer is styles.KeyHint chips and their labels, two columns
+        # between pairs, drawn whole or dropped — view.go renderHintLineTruncated.
+        - type: sidecar_footer
+          keys:
+            - { key: "j/k", label: "Move" }
+            - { key: "Enter", label: "Open" }
+            - { key: "/", label: "Query" }
+            - { key: "v", label: "Scope" }
+            - { key: "s", label: "Sort" }
+            - { key: "r", label: "Refresh" }
+            - { key: "a", label: "Actions" }
+            - { key: "o", label: "Source" }
+            - { key: "n", label: "Pane" }
+            - { key: "Tab", label: "Focus" }
+          status: "recall · results · degraded "
 
   # ==========================================================================
   # 4. outcome: abstained. Every source answered and none matched. The host
@@ -357,26 +416,34 @@ states:
     layout:
       type: vertical
       children:
-        - type: bar
-          height: 1
-          style: "bg:surface0 fg:subtext"
-          left: " [bold][fg:accent]sidecar[/fg][/bold]  [kbd:8] Sessions  [kbd:9] Activity  [kbd:0] [reverse] Recall [/reverse]  [kbd:1] Files  [kbd:2] Git  [kbd:3] Workspaces  [kbd:4] Notes"
-          right: "sidecar · main "
+        # Sidecar's own top bar, not an approximation of one: the studio's
+        # sidecar_header transcribes internal/app/view.go headerGeometry. Global
+        # destinations sit left of the divider, project tabs right of it, and
+        # the selector pill, unread indicator and gear are pinned to the right
+        # edge in that order. Same destinations and same active one as before —
+        # only the chrome changed.
+        - type: sidecar_header
+          global_tabs: ["Sessions", "Activity", "Recall"]
+          active_global: "Recall"
+          project_tabs: ["Files", "Git", "Workspaces", "Notes"]
+          project: "sidecar"
         - type: horizontal
           flex: 1
           children:
             - type: pane
               width: 98
-              title: " Recall · Results "
+              title: "Recall · Results"
+              title_position: inside
+              padding: [0, 1]
               border: rounded
-              border_style: "fg:accent"
+              border_gradient: active
               content:
                 - bar:
-                    left: " [fg:accent]/[/fg] [bold]quarterly forecast[/bold][reverse] [/reverse]"
-                    right: "[dim]0 results[/dim]  [badge:surface2:fg:abstained] "
+                    left: "[fg:accent]/[/fg] [bold]quarterly forecast[/bold][reverse] [/reverse]"
+                    right: "[dim]0 results[/dim]  [badge:surface2:fg:abstained]"
                 - bar:
-                    left: " [dim]scope[/dim]  [fg:accent]project=sidecar[/fg]  [dim]source, type, since unset[/dim]"
-                    right: "[dim]sort[/dim] rank "
+                    left: "[dim]scope[/dim]  [fg:accent]project=sidecar[/fg]  [dim]source, type, since unset[/dim]"
+                    right: "[dim]sort[/dim] rank"
                 - divider: ""
                 - text: ""
                 - text: ""
@@ -401,22 +468,25 @@ states:
                   align: center
                 - text: ""
                 - text: ""
-                - text: "[kbd:/] [dim]edit the query[/dim]     [kbd:v] [dim]widen the scope[/dim]     [kbd:r] [dim]refresh sources[/dim]"
+                - text: "[key:/] [dim]edit the query[/dim]     [key:v] [dim]widen the scope[/dim]     [key:r] [dim]refresh sources[/dim]"
                   align: center
                 - text: ""
                 - text: ""
                 - text: "[dim]Matching is lexical. A keyword reaches further than a sentence.[/dim]"
                   align: center
+            - type: sidecar_rail
             - type: pane
               flex: 1
-              title: " Recall · Sources "
+              title: "Recall · Sources"
+              title_position: inside
+              padding: [0, 1]
               border: rounded
-              border_style: "fg:border"
+              border_gradient: normal
               content:
                 - table:
-                    indent: 1
+                    indent: 0
                     headers: ["SOURCE", "HEALTH", "ANSWERED", "RECORDS"]
-                    widths: [14, 12, 12, 14]
+                    widths: [14, 12, 12, 13]
                     alignments: ["left", "left", "left", "right"]
                     selected_row: -1
                     rows:
@@ -425,18 +495,28 @@ states:
                       - ["shell", "[badge:green:black:ok]", "yes · 12ms", "22,470"]
                       - ["td", "[badge:green:black:ok]", "yes · 9ms", "613"]
                 - divider: ""
-                - text: " [dim]Every eligible source answered, so the empty[/dim]"
-                - text: " [dim]list is an answer and not a gap. A source that[/dim]"
-                - text: " [dim]had failed would be named here instead, and[/dim]"
-                - text: " [dim]the outcome would read[/dim] [fg:yellow]degraded[/fg][dim].[/dim]"
+                - text: "[dim]Every eligible source answered, so the empty[/dim]"
+                - text: "[dim]list is an answer and not a gap. A source that[/dim]"
+                - text: "[dim]had failed would be named here instead, and[/dim]"
+                - text: "[dim]the outcome would read[/dim] [fg:yellow]degraded[/fg][dim].[/dim]"
                 - divider: "Suppressed"
-                - text: " [dim]0 below the relevance floor[/dim]"
-                - text: " [dim]0 dropped by the result budget[/dim]"
-        - type: bar
-          height: 1
-          style: "bg:surface0 fg:subtext"
-          left: " [kbd:j/k] Move  [kbd:Enter] Open  [kbd:/] Query  [kbd:v] Scope  [kbd:s] Sort  [kbd:r] Refresh  [kbd:a] Actions  [kbd:o] Source  [kbd:n] Pane  [kbd:Tab] Focus"
-          right: "recall · results · abstained "
+                - text: "[dim]0 below the relevance floor[/dim]"
+                - text: "[dim]0 dropped by the result budget[/dim]"
+        # The footer is styles.KeyHint chips and their labels, two columns
+        # between pairs, drawn whole or dropped — view.go renderHintLineTruncated.
+        - type: sidecar_footer
+          keys:
+            - { key: "j/k", label: "Move" }
+            - { key: "Enter", label: "Open" }
+            - { key: "/", label: "Query" }
+            - { key: "v", label: "Scope" }
+            - { key: "s", label: "Sort" }
+            - { key: "r", label: "Refresh" }
+            - { key: "a", label: "Actions" }
+            - { key: "o", label: "Source" }
+            - { key: "n", label: "Pane" }
+            - { key: "Tab", label: "Focus" }
+          status: "recall · results · abstained "
 
   # ==========================================================================
   # 5. The scope picker is not a host feature. recall declared an action with
@@ -450,29 +530,37 @@ states:
     layout:
       type: vertical
       children:
-        - type: bar
-          height: 1
-          style: "bg:surface0 fg:subtext"
-          left: " [bold][fg:accent]sidecar[/fg][/bold]  [kbd:8] Sessions  [kbd:9] Activity  [kbd:0] [reverse] Recall [/reverse]  [kbd:1] Files  [kbd:2] Git  [kbd:3] Workspaces  [kbd:4] Notes"
-          right: "sidecar · main "
+        # Sidecar's own top bar, not an approximation of one: the studio's
+        # sidecar_header transcribes internal/app/view.go headerGeometry. Global
+        # destinations sit left of the divider, project tabs right of it, and
+        # the selector pill, unread indicator and gear are pinned to the right
+        # edge in that order. Same destinations and same active one as before —
+        # only the chrome changed.
+        - type: sidecar_header
+          global_tabs: ["Sessions", "Activity", "Recall"]
+          active_global: "Recall"
+          project_tabs: ["Files", "Git", "Workspaces", "Notes"]
+          project: "sidecar"
         - type: horizontal
           flex: 1
           children:
             - type: pane
               width: 98
-              title: " Recall · Results "
+              title: "Recall · Results"
+              title_position: inside
+              padding: [0, 1]
               border: rounded
-              border_style: "fg:accent"
+              border_gradient: active
               content:
                 - bar:
-                    left: " [fg:accent]/[/fg] [bold]dex[/bold]"
-                    right: "[dim]26 of 31[/dim]  [badge:green:black:answered] "
+                    left: "[fg:accent]/[/fg] [bold]dex[/bold]"
+                    right: "[dim]26 of 31[/dim]  [badge:green:black:answered]"
                 - bar:
-                    left: " [dim]scope[/dim]  [fg:accent]project=sidecar[/fg]  [dim]source, type, since unset[/dim]"
-                    right: "[dim]sort[/dim] rank "
+                    left: "[dim]scope[/dim]  [fg:accent]project=sidecar[/fg]  [dim]source, type, since unset[/dim]"
+                    right: "[dim]sort[/dim] rank"
                 - divider: ""
                 - table:
-                    indent: 1
+                    indent: 0
                     headers: ["#", "TITLE", "SOURCE", "EXCERPT", ""]
                     widths: [3, 27, 8, 32, 16]
                     alignments: ["right", "left", "left", "left", "left"]
@@ -506,40 +594,50 @@ states:
                       - ["26", "Re: people.md format v2", "mail", "~ Second pass at the format we…", ""]
                 - divider: ""
                 - bar:
-                    left: " [dim]26 of 31 shown · the rest load on scroll[/dim]"
-                    right: "[dim]› matched span   ~ record opening[/dim] "
+                    left: "[dim]26 of 31 shown · the rest load on scroll[/dim]"
+                    right: "[dim]› matched span   ~ record opening[/dim]"
+            - type: sidecar_rail
             - type: pane
               flex: 1
-              title: " DEX schema notes "
+              title: "DEX schema notes"
+              title_right: "[badge:green:black:exact]"
+              title_position: inside
+              padding: [0, 1]
               border: rounded
-              border_style: "fg:border"
+              border_gradient: normal
               content:
-                - bar:
-                    left: " [bold]DEX schema notes[/bold]"
-                    right: "[badge:green:black:exact] "
-                - text: " [dim]notes · 2026-08-14[/dim]"
+                - text: "[dim]notes · 2026-08-14[/dim]"
                 - text: ""
-                - text: " [dim]Source[/dim]        notes"
-                - text: " [dim]Locator[/dim]       rc:notes:2026-08-14-dex-design"
-                - text: " [dim]Updated[/dim]       2 weeks ago"
-                - text: " [dim]Corroborated[/dim]  2 records · shell, td"
+                - text: "[dim]Source[/dim]        notes"
+                - text: "[dim]Locator[/dim]       rc:notes:2026-08-14-dex-design"
+                - text: "[dim]Updated[/dim]       2 weeks ago"
+                - text: "[dim]Corroborated[/dim]  2 records · shell, td"
                 - divider: "Evidence"
-                - text: " [bold]Tiers[/bold]"
-                - text: " People are tiered. The tier drives what [bold]brief[/bold] shows at"
-                - text: " session boot, and what [bold]stale[/bold] treats as overdue."
-        - type: bar
-          height: 1
-          style: "bg:surface0 fg:subtext"
-          left: " [kbd:j/k] Field  [kbd:h/l] Change  [kbd:Enter] Apply  [kbd:Esc] Cancel"
-          right: "act · recall/scope "
+                - text: "[bold]Tiers[/bold]"
+                - text: "People are tiered. The tier drives what [bold]brief[/bold] shows at"
+                - text: "session boot, and what [bold]stale[/bold] treats as overdue."
+        - type: sidecar_footer
+          keys:
+            - { key: "j/k", label: "Field" }
+            - { key: "h/l", label: "Change" }
+            - { key: "Enter", label: "Apply" }
+            - { key: "Esc", label: "Cancel" }
+          status: "act · recall/scope "
     modals:
-      - title: " Scope · Results "
-        width: 80
-        height: 18
+      # Sidecar's modal chrome, from internal/styles/styles.go: ModalBox is a
+      # rounded border in Primary over the BgSecondary surface with Padding(1, 2)
+      # and no drop shadow, and ModalTitle is bold primary text inside the box
+      # with one blank row under it. The border line stays unbroken here too.
+      - width: 80
+        height: 21
         border: rounded
         border_style: "fg:accent"
-        shadow: true
+        background: "surface"
+        shadow: false
         content:
+          - text: ""
+          - text: "  [bold]Scope · Results[/bold]"
+          - text: ""
           - text: " [dim]Sidecar built this form from the four inputs recall declared[/dim]"
           - text: " [dim]on its[/dim] scope [dim]action. One control per input; the kind picks it.[/dim]"
           - text: ""
@@ -555,8 +653,7 @@ states:
           - text: " [dim]sends[/dim]  act scope  [fg:accent]type=note[/fg]  [fg:accent]project=sidecar[/fg]  [fg:accent]since=2026-08-01[/fg]"
           - divider: ""
           - bar:
-              style: "bg:surface1 fg:fg"
-              center: "[kbd:Enter] Apply    [kbd:h/l] Change    [kbd:j/k] Field    [kbd:Esc] Cancel"
+              center: "[key:Enter] Apply   [key:h/l] Change   [key:j/k] Field   [key:Esc] Cancel"
 
   # ==========================================================================
   # 6. The Panes placement. The same collection in a 52-column Resource leaf:
@@ -571,19 +668,21 @@ states:
     layout:
       type: vertical
       children:
-        - type: bar
-          height: 1
-          style: "bg:surface0 fg:subtext"
-          left: " [bold][fg:accent]sidecar[/fg][/bold]  [kbd:8] Sessions  [kbd:9] Activity  [kbd:0] Recall  [kbd:1] Files  [kbd:2] Git  [kbd:3] [reverse] Workspaces [/reverse]  [kbd:4] Notes"
-          right: "sidecar · main "
+        - type: sidecar_header
+          global_tabs: ["Sessions", "Activity", "Recall"]
+          project_tabs: ["Files", "Git", "Workspaces", "Notes"]
+          active_project: "Workspaces"
+          project: "sidecar"
         - type: horizontal
           flex: 1
           children:
             - type: pane
               width: 28
-              title: " Workspaces "
+              title: "Workspaces"
+              title_position: inside
+              padding: [0, 1]
               border: rounded
-              border_style: "fg:border"
+              border_gradient: normal
               content:
                 - list:
                     selected_index: 1
@@ -594,86 +693,103 @@ states:
                       - { text: "remote-git", badge: "idle" }
                       - { text: "recall-eval", badge: "idle" }
                 - divider: "Shells"
-                - text: " [fg:green]●[/fg] claude    [dim]1.2[/dim]"
-                - text: " [fg:accent]▣[/fg] recall    [dim]1.3[/dim]"
-                - text: " [dim]○ build     2.1[/dim]"
+                - text: "[fg:green]●[/fg] claude    [dim]1.2[/dim]"
+                - text: "[fg:accent]▣[/fg] recall    [dim]1.3[/dim]"
+                - text: "[dim]○ build     2.1[/dim]"
                 - divider: "Layout"
-                - text: " [dim]1.1[/dim]  sidebar"
-                - text: " [dim]1.2[/dim]  shell · claude"
-                - text: " [dim]1.3[/dim]  [fg:accent]resource · recall[/fg]"
+                - text: "[dim]1.1[/dim]  sidebar"
+                - text: "[dim]1.2[/dim]  shell · claude"
+                - text: "[dim]1.3[/dim]  [fg:accent]resource · recall[/fg]"
                 - text: ""
-                - text: " [dim]sidecar layout get[/dim]"
-                - text: " [dim]reads this grid.[/dim]"
+                - text: "[dim]sidecar layout get[/dim]"
+                - text: "[dim]reads this grid.[/dim]"
+            - type: sidecar_rail
             - type: pane
               flex: 1
-              title: " plugin-ecosystem · claude "
+              title: "plugin-ecosystem · claude"
+              title_position: inside
+              padding: [0, 1]
               border: rounded
-              border_style: "fg:border"
+              border_gradient: normal
               content:
-                - text: " [fg:green]›[/fg] sidecar open --plugin recall --collection results \\"
-                - text: "       --query dex --split right"
-                - text: " [dim]opened  resource  recall/results  at 1.3[/dim]"
+                - text: "[fg:green]›[/fg] sidecar open --plugin recall --collection results \\"
+                - text: "      --query dex --split right"
+                - text: "[dim]opened  resource  recall/results  at 1.3[/dim]"
                 - text: ""
-                - text: " [fg:green]›[/fg] sidecar open --plugin recall rc:notes:2026-08-14-dex-design"
-                - text: " [dim]opened  resource  recall/rc:notes:2026-08-14-dex-design  at 1.3 (tab 2)[/dim]"
+                - text: "[fg:green]›[/fg] sidecar open --plugin recall rc:notes:2026-08-14-dex-design"
+                - text: "[dim]opened  resource  recall/rc:notes:2026-08-14-dex-design  at 1.3 (tab 2)[/dim]"
                 - text: ""
-                - text: " [fg:green]›[/fg] sidecar plugin check recall --list results --query dex"
-                - text: " [dim]describe  ok    recall 0.4.0   context: project   matchers: 1[/dim]"
-                - text: " [dim]list      ok    outcome answered   26 items   total 31[/dim]"
-                - text: " [dim]          notices 0   nextCursor set[/dim]"
+                - text: "[fg:green]›[/fg] sidecar plugin check recall --list results --query dex"
+                - text: "[dim]describe  ok    recall 0.4.0   context: project   matchers: 1[/dim]"
+                - text: "[dim]list      ok    outcome answered   26 items   total 31[/dim]"
+                - text: "[dim]          notices 0   nextCursor set[/dim]"
                 - text: ""
-                - text: " [fg:green]›[/fg] [reverse] [/reverse]"
+                - text: "[fg:green]›[/fg] [reverse] [/reverse]"
+            - type: sidecar_rail
             - type: pane
               width: 52
-              title: " Recall "
+              # A Resource leaf has no title of its own: its header row IS the
+              # tab strip, packed through styles.RenderTab with the theme's
+              # minimal tab style and a per-tab close control
+              # (internal/tabs/strip.go, internal/ui/header_close.go).
+              padding: [0, 1]
               border: rounded
-              border_style: "fg:accent"
+              border_gradient: active
               content:
                 - tabs:
+                    sidecar: true
+                    close: true
                     items: ["Results", "DEX schema notes"]
                     active: 0
                 - bar:
-                    left: " [fg:accent]/[/fg] [bold]dex[/bold]"
-                    right: "[dim]26 of 31[/dim] "
+                    left: "[fg:accent]/[/fg] [bold]dex[/bold]"
+                    right: "[dim]26 of 31[/dim]"
                 - divider: ""
-                - text: "[reverse]❯  1  DEX schema notes                             [/reverse]"
-                - text: "[reverse]      notes · exact · › people are tiered, and…    [/reverse]"
-                - text: "   2  dex context --json"
-                - text: "      [dim]shell · corroborated 3 · › dumps every…[/dim]"
-                - text: "   3  People database, first cut"
-                - text: "      [dim]notes · › handles, aliases, links, and…[/dim]"
-                - text: "   4  td-3fa2c1 Import people.md"
-                - text: "      [dim]td · corroborated 2 · › import from…[/dim]"
-                - text: "   5  Weekly review 2026-08-18"
-                - text: "      [dim]notes · › promote three contacts to…[/dim]"
-                - text: "   6  dex brief for session boot"
-                - text: "      [dim]shell · › inner circle first, then…[/dim]"
-                - text: "   7  Re: dex trial accounts"
-                - text: "      [dim]mail · › the trial list you asked for…[/dim]"
-                - text: "   8  Handles and phone numbers"
-                - text: "      [dim]notes · › one phone per handle kind…[/dim]"
-                - text: "   9  td-9c04ab dex stale rules"
-                - text: "      [dim]td · › stale should read tier, not…[/dim]"
-                - text: "  10  dex merge --dry-run"
-                - text: "      [dim]shell · › keeps the first person and…[/dim]"
-                - text: "  11  Tier promotion policy"
-                - text: "      [dim]notes · › demotion is explicit, never…[/dim]"
-                - text: "  12  Fwd: conference contacts"
-                - text: "      [dim]mail · ~ Thanks — attaching the list…[/dim]"
-                - text: "  13  td-51b7e0 dex brief budget"
-                - text: "      [dim]td · › the brief has a token budget…[/dim]"
-                - text: "  14  dex stale --tier inner"
-                - text: "      [dim]shell · › lists overdue people only in…[/dim]"
-                - text: "  15  Retrieval eval pack notes"
-                - text: "      [dim]notes · ~ The eval pack covers recall…[/dim]"
-                - text: "  16  dex import --format md"
-                - text: "      [dim]shell · › the importer is idempotent…[/dim]"
-                - text: "  17  Meeting notes 2026-08-22"
-                - text: "      [dim]notes · › agreed dex owns identity, td…[/dim]"
+                - text: "[bg:surface0 fg:accent bold]❯[/bg][bg:surface0 fg:selection-fg]  1  DEX schema notes                        [/bg]"
+                - text: "[bg:surface0 fg:selection-fg]      notes · exact · › people are tiered, and…  [/bg]"
+                - text: "  2  dex context --json"
+                - text: "     [dim]shell · corroborated 3 · › dumps every…[/dim]"
+                - text: "  3  People database, first cut"
+                - text: "     [dim]notes · › handles, aliases, links, and…[/dim]"
+                - text: "  4  td-3fa2c1 Import people.md"
+                - text: "     [dim]td · corroborated 2 · › import from…[/dim]"
+                - text: "  5  Weekly review 2026-08-18"
+                - text: "     [dim]notes · › promote three contacts to…[/dim]"
+                - text: "  6  dex brief for session boot"
+                - text: "     [dim]shell · › inner circle first, then…[/dim]"
+                - text: "  7  Re: dex trial accounts"
+                - text: "     [dim]mail · › the trial list you asked for…[/dim]"
+                - text: "  8  Handles and phone numbers"
+                - text: "     [dim]notes · › one phone per handle kind…[/dim]"
+                - text: "  9  td-9c04ab dex stale rules"
+                - text: "     [dim]td · › stale should read tier, not…[/dim]"
+                - text: " 10  dex merge --dry-run"
+                - text: "     [dim]shell · › keeps the first person and…[/dim]"
+                - text: " 11  Tier promotion policy"
+                - text: "     [dim]notes · › demotion is explicit, never…[/dim]"
+                - text: " 12  Fwd: conference contacts"
+                - text: "     [dim]mail · ~ Thanks — attaching the list…[/dim]"
+                - text: " 13  td-51b7e0 dex brief budget"
+                - text: "     [dim]td · › the brief has a token budget…[/dim]"
+                - text: " 14  dex stale --tier inner"
+                - text: "     [dim]shell · › lists overdue people only in…[/dim]"
+                - text: " 15  Retrieval eval pack notes"
+                - text: "     [dim]notes · ~ The eval pack covers recall…[/dim]"
+                - text: " 16  dex import --format md"
+                - text: "     [dim]shell · › the importer is idempotent…[/dim]"
+                - text: " 17  Meeting notes 2026-08-22"
+                - text: "     [dim]notes · › agreed dex owns identity, td…[/dim]"
                 - divider: ""
-                - text: " [dim]Enter opens a tab here, not a side box[/dim]"
-        - type: bar
-          height: 1
-          style: "bg:surface0 fg:subtext"
-          left: " [kbd:j/k] Move  [kbd:Enter] Open  [kbd:/] Query  [kbd:[] [kbd:]] Tabs  [kbd:r] Refresh  [kbd:a] Actions  [kbd:n] Pane  [kbd:x] Close  [kbd:Tab] Focus"
-          right: "1.3 · resource · recall/results "
+                - text: "[dim]Enter opens a tab here, not a side box[/dim]"
+        - type: sidecar_footer
+          keys:
+            - { key: "j/k", label: "Move" }
+            - { key: "Enter", label: "Open" }
+            - { key: "/", label: "Query" }
+            - { key: "[ ]", label: "Tabs" }
+            - { key: "r", label: "Refresh" }
+            - { key: "a", label: "Actions" }
+            - { key: "n", label: "Pane" }
+            - { key: "x", label: "Close" }
+            - { key: "Tab", label: "Focus" }
+          status: "1.3 · resource · recall/results "

@@ -16,26 +16,29 @@ title: "Ongoing collection tab in a Resource leaf"
 viewport:
   cols: 160
   rows: 45
-theme: "catppuccin-mocha"
+theme: "sidecar-modern"
 
 states:
   - name: "Collection tab beside a terminal"
     layout:
       type: vertical
       children:
-        - type: bar
-          height: 1
-          style: "bg:surface0 fg:subtext"
-          left: " [bold][fg:accent]sidecar[/fg][/bold]  [kbd:8] Sessions  [kbd:9] Activity  [kbd:0] Recall  [kbd:1] Files  [kbd:2] Git  [kbd:3] [reverse] Workspaces [/reverse]  [kbd:4] Notes"
-          right: "sidecar · main "
+        # Sidecar's own top bar (internal/app/view.go headerGeometry).
+        - type: sidecar_header
+          global_tabs: ["Sessions", "Activity", "Recall"]
+          project_tabs: ["Files", "Git", "Workspaces", "Notes"]
+          active_project: "Workspaces"
+          project: "sidecar"
         - type: horizontal
           flex: 1
           children:
             - type: pane
               width: 28
-              title: " Workspaces "
+              title: "Workspaces"
+              title_position: inside
+              padding: [0, 1]
               border: rounded
-              border_style: "fg:border"
+              border_gradient: normal
               content:
                 - list:
                     selected_index: 1
@@ -44,44 +47,58 @@ states:
                       - { text: "main", badge: "●", badge_style: "fg:green" }
                       - { text: "plugin-eco…", badge: "agent" }
                       - { text: "remote-git", badge: "idle" }
+            - type: sidecar_rail
             - type: pane
               flex: 1
-              title: " plugin-ecosystem · claude "
+              title: "plugin-ecosystem · claude"
+              title_position: inside
+              padding: [0, 1]
               border: rounded
-              border_style: "fg:accent"
+              border_gradient: active
               content:
-                - text: " [fg:green]›[/fg] sidecar open --plugin ongoing --collection projects --split right"
-                - text: " [dim]opened  resource  ongoing/projects  at 2.2[/dim]"
+                - text: "[fg:green]›[/fg] sidecar open --plugin ongoing --collection projects --split right"
+                - text: "[dim]opened  resource  ongoing/projects  at 2.2[/dim]"
                 - text: ""
-                - text: " [fg:green]›[/fg] sidecar open --plugin ongoing --collection projects recall"
-                - text: " [dim]opened  resource  ongoing/projects/recall  at 2.2 (tab 2)[/dim]"
+                - text: "[fg:green]›[/fg] sidecar open --plugin ongoing --collection projects recall"
+                - text: "[dim]opened  resource  ongoing/projects/recall  at 2.2 (tab 2)[/dim]"
                 - text: ""
-                - text: " [fg:green]›[/fg] [reverse] [/reverse]"
+                - text: "[fg:green]›[/fg] [reverse] [/reverse]"
+            - type: sidecar_rail
             - type: pane
               width: 52
-              title: " Ongoing "
+              # A Resource leaf has no title of its own: its header row IS the
+              # tab strip (internal/tabs/strip.go, internal/ui/header_close.go).
+              padding: [0, 1]
               border: rounded
-              border_style: "fg:border"
+              border_gradient: normal
               content:
                 - tabs:
+                    sidecar: true
+                    close: true
                     items: ["Projects", "recall"]
                     active: 0
-                - text: " [reverse] Attention [/reverse] [dim]Rising  Momentum  Dormant[/dim]  [dim]↓ commits[/dim]"
+                - text: "[bg:accent fg:on-accent bold] Attention [/bg] [dim]Rising  Momentum  Dormant[/dim] [dim]↓ commits[/dim]"
                 - divider: ""
-                - text: "[reverse]❯ recall                        [fg:yellow]warn[/fg]  41 · 3d [/reverse]"
-                - text: "  [dim]retrieval over user-controlled sources[/dim]"
-                - text: "  sidecar                       [fg:green]ok[/fg]    88 · 2h"
-                - text: "  [dim]terminal workspace for agents[/dim]"
-                - text: "  dex                           [fg:yellow]warn[/fg]  12 · 9d"
-                - text: "  [dim]agent-native people database[/dim]"
-                - text: "  td                            [fg:green]ok[/fg]    27 · 1d"
-                - text: "  [dim]task tracker with review gates[/dim]"
-                - text: "  ongoing                       [fg:red]stale[/fg] 3 · 6w"
-                - text: "  [dim]projects dashboard[/dim]"
+                - text: "[bg:surface0 fg:accent bold]❯[/bg][bg:surface0 fg:selection-fg] recall                      [/bg][bg:surface0 fg:warning]warn[/bg][bg:surface0 fg:selection-fg]  41 · 3d [/bg]"
+                - text: " [dim]retrieval over user-controlled sources[/dim]"
+                - text: " sidecar                       [fg:green]ok[/fg]    88 · 2h"
+                - text: " [dim]terminal workspace for agents[/dim]"
+                - text: " dex                           [fg:yellow]warn[/fg]  12 · 9d"
+                - text: " [dim]agent-native people database[/dim]"
+                - text: " td                            [fg:green]ok[/fg]    27 · 1d"
+                - text: " [dim]task tracker with review gates[/dim]"
+                - text: " ongoing                       [fg:red]stale[/fg] 3 · 6w"
+                - text: " [dim]projects dashboard[/dim]"
                 - divider: ""
-                - text: " [dim]12 projects · scanned 14m ago[/dim]"
-        - type: bar
-          height: 1
-          style: "bg:surface0 fg:subtext"
-          left: " [kbd:j/k] Move  [kbd:Enter] Open  [kbd:v] View  [kbd:s] Sort  [kbd:r] Refresh  [kbd:a] Actions  [kbd:n] Pane  [kbd:x] Close"
-          right: "2.2 · resource "
+                - text: "[dim]12 projects · scanned 14m ago[/dim]"
+        - type: sidecar_footer
+          keys:
+            - { key: "j/k", label: "Move" }
+            - { key: "Enter", label: "Open" }
+            - { key: "v", label: "View" }
+            - { key: "s", label: "Sort" }
+            - { key: "r", label: "Refresh" }
+            - { key: "a", label: "Actions" }
+            - { key: "n", label: "Pane" }
+            - { key: "x", label: "Close" }
+          status: "2.2 · resource "

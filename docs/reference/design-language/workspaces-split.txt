@@ -1,0 +1,45 @@
+ ◱ Sidecar │   Sessions     Activity                                                           td     Git     Files     Workspaces     Notes    sidecar ▾  ·  ⚙
+╭─────────────────────────────────────────────────────────────╮ ╭──────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Workspaces                                 ⇅ Manual     +   │┃│ sidecar-herdr-detection-parity                                                         Diff  │
+│                                                             │┃│                                                                                              │
+│ ○ WORKTREES (4) ──────────────────────────────────────────  │┃│   No agent running                                                                           │
+│  ⏸ ⑂ sidecar-herdr-detection-parity                    7h   │┃│   Press s or click Start Agent to launch one.                                                │
+│      branch herdr-detection-parity  —                       │┃│                                                                                              │
+│                                                             │┃│     [ Start Agent ]                                                                          │
+│  ⏸ ⑂ sidecar-pane-parity                               3h   │┃│                                                                                              │
+│      branch remote-viewer-screen  —                         │┃│                                                                                              │
+│                                                             │┃│                                                                                              │
+│  ⏸ ⑂ sidecar-project-awareness                         2h   │┃│                                                                                              │
+│      branch project-awareness  —                            │┃│                                                                                              │
+│                                                             │┃│                                                                                              │
+│  ⏸ ⑂ sidecar-public-site                              12d   │┃│                                                                                              │
+│      branch public-site  —                                  │┃│                                                                                              │
+│                                                             │┃│                                                                                              │
+│                                                             │┃│                                                                                              │
+│                                                             │┃│                                                                                              │
+│                                                             │┃│                                                                                              │
+│                                                             │┃│                                                                                              │
+│                                                             │┃│                                                                                              │
+│                                                             │┃│                                                                                              │
+│                                                             │┃│                                                                                              │
+│                                                             │┃│                                                                                              │
+│                                                             │┃│                                                                                              │
+│                                                             │┃│                                                                                              │
+│                                                             │┃│                                                                                              │
+│                                                             │┃│                                                                                              │
+│                                                             │┃│                                                                                              │
+│                                                             │┃│                                                                                              │
+│                                                             │┃│                                                                                              │
+│                                                             │┃│                                                                                              │
+│                                                             │┃│                                                                                              │
+│                                                             │┃│                                                                                              │
+│                                                             │┃│                                                                                              │
+│                                                             │┃│                                                                                              │
+│                                                             │┃│                                                                                              │
+│                                                             │┃│                                                                                              │
+│                                                             │┃│                                                                                              │
+│                                                             │┃│                                                                                              │
+│                                                             │┃│                                                                                              │
+│                                                             │┃│                                                                                              │
+╰─────────────────────────────────────────────────────────────╯ ╰──────────────────────────────────────────────────────────────────────────────────────────────╯
+ n  New   ctrl+n  Shell   P  Fetch   v  View   \  Sidebar   D  Delete   r  Refresh   p  Push   /  Filter   m  Merge   d  Diff   s  Start   R  Rename

@@ -1,45 +1,45 @@
- sidecar  [8] Sessions  [9] Activity  [0]  Recall   [1] Files  [2] Git  [3] Workspaces  [4] Notes                                                sidecar · main
-╭─ Recall · Results ─────────────────────────────────────────────────────────────────────────────╮╭─ DEX schema notes ─────────────────────────────────────────╮
-│ / dex                                                                     26 of 31   answered  ││ DEX schema notes                                    exact  │
-│ scope  project=sidecar  source, type, since unset                                    sort rank ││ notes · 2026-08-14                                         │
-│────────────────────────────────────────────────────────────────────────────────────────────────││                                                            │
-│   #  TITLE                        SOURCE    EXCERPT                                            ││ Source        notes                                        │
-│ ───  ───────────────────────────  ────────  ────────────────────────────────  ──────────────── ││ Locator       rc:notes:2026-08-14-dex-design               │
-│   1  DEX schema notes             notes     › people are tiered, and the…      exact           ││ Updated       2 weeks ago                                  │
-│   2  dex context --json           shell     › dumps every field the brief…     corroborated 3  ││ Corroborated  2 records · shell, td                        │
-│   3  People database, first cut   notes     › handles, aliases, links, and…                    ││── Evidence ────────────────────────────────────────────────│
-│   4  td-3fa2c1 Import people.md   td        › import from people.md keeps…     corroborated 2  ││ Tiers                                                      │
-│   5  Weekly review 2026-08-18     notes     › promote three contacts to…                       ││ People are tiered. The tier drives what brief shows at     │
-│   6  dex brief for session boot   shell     › inner circle first, then the…                    ││ session boot, and what stale treats as overdue.            │
-│   7  Re: dex trial accounts       mail╭────────────────────────────── Scope · Results ───────────────────────────────╮                                       │
-│   8  Handles and phone numbers    note│  Sidecar built this form from the four inputs recall declared                │░░                                     │
-│   9  td-9c04ab dex stale rules    td  │  on its scope action. One control per input; the kind picks it.              │░░                                     │
-│  10  dex merge --dry-run          shel│                                                                              │░░                                     │
-│  11  Tier promotion policy        note│  ❯ source    choice  (•) any  ( ) notes  ( ) mail  ( ) shell  ( ) td         │░░                                     │
-│  12  Fwd: conference contacts     mail│    type      choice  ( ) any  (•) note  ( ) message  ( ) command  ( ) task   │░░                                     │
-│  13  td-51b7e0 dex brief budget   td  │    project   choice  ( ) any  (•) sidecar  ( ) recall  ( ) dex               │░░                                     │
-│  14  dex stale --tier inner       shel│    entity    text     unset                                                  │░░                                     │
-│  15  Retrieval eval pack notes    note│    since     text     2026-08-01                                             │░░                                     │
-│  16  dex import --format md       shel│                                                                              │░░                                     │
-│  17  Meeting notes 2026-08-22     note│  Nothing here is required. An unset key is not sent, and recall never        │░░                                     │
-│  18  td-77aa19 dex export         td  │  reads an absent scope key as a narrower one.                                │░░                                     │
-│  19  Re: people.md format         mail│                                                                              │░░                                     │
-│  20  dex link add --kind repo     shel│  sends  act scope  type=note  project=sidecar  since=2026-08-01              │░░                                     │
-│  21  Re: dex and td identity      mail│ ──────────────────────────────────────────────────────────────────────────── │░░                                     │
-│  22  dex tier --set inner         shel│         [Enter] Apply    [h/l] Change    [j/k] Field    [Esc] Cancel         │░░                                     │
-│  23  td-2ef880 dex tier audit     td  │                                                                              │░░                                     │
-│  24  Contacts import checklist    note╰──────────────────────────────────────────────────────────────────────────────╯░░                                     │
-│  25  dex stale --json             shell ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░                                     │
-│  26  Re: people.md format v2      mail      ~ Second pass at the format we…                    ││                                                            │
-│────────────────────────────────────────────────────────────────────────────────────────────────││                                                            │
-│ 26 of 31 shown · the rest load on scroll                     › matched span   ~ record opening ││                                                            │
-│                                                                                                ││                                                            │
-│                                                                                                ││                                                            │
-│                                                                                                ││                                                            │
-│                                                                                                ││                                                            │
-│                                                                                                ││                                                            │
-│                                                                                                ││                                                            │
-│                                                                                                ││                                                            │
-│                                                                                                ││                                                            │
-╰────────────────────────────────────────────────────────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────╯
- [j/k] Field  [h/l] Change  [Enter] Apply  [Esc] Cancel                                                                                      act · recall/scope
+ ◱ Sidecar │   Sessions     Activity     Recall                                                       Files     Git     Workspaces     Notes    sidecar ▾  ·  ⚙
+╭────────────────────────────────────────────────────────────────────────────────────────────────╮ ╭───────────────────────────────────────────────────────────╮
+│ Recall · Results                                                                               │┃│ DEX schema notes                                   exact  │
+│ / dex                                                                     26 of 31   answered  │┃│ notes · 2026-08-14                                        │
+│ scope  project=sidecar  source, type, since unset                                    sort rank │┃│                                                           │
+│ ────────────────────────────────────────────────────────────────────────────────────────────── │┃│ Source        notes                                       │
+│   #  TITLE                        SOURCE    EXCERPT                                            │┃│ Locator       rc:notes:2026-08-14-dex-design              │
+│ ───  ───────────────────────────  ────────  ────────────────────────────────  ──────────────── │┃│ Updated       2 weeks ago                                 │
+│   1  DEX schema notes             notes     › people are tiered, and the…      exact           │┃│ Corroborated  2 records · shell, td                       │
+│   2  dex context --json           shell     › dumps every field the brief…     corroborated 3  │┃│ ── Evidence ───────────────────────────────────────────── │
+│   3  People database, first cut   notes     › handles, aliases, links, and…                    │┃│ Tiers                                                     │
+│   4  td-3fa2c1 Import people.md   td        › import from people.md keeps…     corroborated 2  │┃│ People are tiered. The tier drives what brief shows at    │
+│   5  Weekly review 2026-08-18     note╭──────────────────────────────────────────────────────────────────────────────╮hat stale treats as overdue.           │
+│   6  dex brief for session boot   shel│                                                                              │                                       │
+│   7  Re: dex trial accounts       mail│   Scope · Results                                                            │                                       │
+│   8  Handles and phone numbers    note│                                                                              │                                       │
+│   9  td-9c04ab dex stale rules    td  │  Sidecar built this form from the four inputs recall declared                │                                       │
+│  10  dex merge --dry-run          shel│  on its scope action. One control per input; the kind picks it.              │                                       │
+│  11  Tier promotion policy        note│                                                                              │                                       │
+│  12  Fwd: conference contacts     mail│  ❯ source    choice  (•) any  ( ) notes  ( ) mail  ( ) shell  ( ) td         │                                       │
+│  13  td-51b7e0 dex brief budget   td  │    type      choice  ( ) any  (•) note  ( ) message  ( ) command  ( ) task   │                                       │
+│  14  dex stale --tier inner       shel│    project   choice  ( ) any  (•) sidecar  ( ) recall  ( ) dex               │                                       │
+│  15  Retrieval eval pack notes    note│    entity    text     unset                                                  │                                       │
+│  16  dex import --format md       shel│    since     text     2026-08-01                                             │                                       │
+│  17  Meeting notes 2026-08-22     note│                                                                              │                                       │
+│  18  td-77aa19 dex export         td  │  Nothing here is required. An unset key is not sent, and recall never        │                                       │
+│  19  Re: people.md format         mail│  reads an absent scope key as a narrower one.                                │                                       │
+│  20  dex link add --kind repo     shel│                                                                              │                                       │
+│  21  Re: dex and td identity      mail│  sends  act scope  type=note  project=sidecar  since=2026-08-01              │                                       │
+│  22  dex tier --set inner         shel│ ──────────────────────────────────────────────────────────────────────────── │                                       │
+│  23  td-2ef880 dex tier audit     td  │           Enter  Apply    h/l  Change    j/k  Field    Esc  Cancel           │                                       │
+│  24  Contacts import checklist    note│                                                                              │                                       │
+│  25  dex stale --json             shel╰──────────────────────────────────────────────────────────────────────────────╯                                       │
+│  26  Re: people.md format v2      mail      ~ Second pass at the format we…                    │┃│                                                           │
+│ ────────────────────────────────────────────────────────────────────────────────────────────── │┃│                                                           │
+│ 26 of 31 shown · the rest load on scroll                     › matched span   ~ record opening │┃│                                                           │
+│                                                                                                │┃│                                                           │
+│                                                                                                │┃│                                                           │
+│                                                                                                │┃│                                                           │
+│                                                                                                │┃│                                                           │
+│                                                                                                │┃│                                                           │
+│                                                                                                │┃│                                                           │
+│                                                                                                │┃│                                                           │
+╰────────────────────────────────────────────────────────────────────────────────────────────────╯ ╰───────────────────────────────────────────────────────────╯
+ j/k  Field   h/l  Change   Enter  Apply   Esc  Cancel                                                                                       act · recall/scope

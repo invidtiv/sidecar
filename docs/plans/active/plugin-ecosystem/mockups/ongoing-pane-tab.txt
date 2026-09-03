@@ -1,45 +1,45 @@
- sidecar  [8] Sessions  [9] Activity  [0] Recall  [1] Files  [2] Git  [3]  Workspaces   [4] Notes                                                sidecar · main
-╭─ Workspaces ─────────────╮╭─ plugin-ecosystem · claude ──────────────────────────────────────────────────╮╭─ Ongoing ────────────────────────────────────────╮
-│  main  ●                 ││ › sidecar open --plugin ongoing --collection projects --split right          ││  Projects     recall                             │
-│❯ plugin-eco…  agent      ││ opened  resource  ongoing/projects  at 2.2                                   ││  Attention  Rising  Momentum  Dormant  ↓ commits │
-│  remote-git  idle        ││                                                                              ││──────────────────────────────────────────────────│
-│                          ││ › sidecar open --plugin ongoing --collection projects recall                 ││❯ recall                        warn  41 · 3d     │
-│                          ││ opened  resource  ongoing/projects/recall  at 2.2 (tab 2)                    ││  retrieval over user-controlled sources          │
-│                          ││                                                                              ││  sidecar                       ok    88 · 2h     │
-│                          ││ ›                                                                            ││  terminal workspace for agents                   │
-│                          ││                                                                              ││  dex                           warn  12 · 9d     │
-│                          ││                                                                              ││  agent-native people database                    │
-│                          ││                                                                              ││  td                            ok    27 · 1d     │
-│                          ││                                                                              ││  task tracker with review gates                  │
-│                          ││                                                                              ││  ongoing                       stale 3 · 6w      │
-│                          ││                                                                              ││  projects dashboard                              │
-│                          ││                                                                              ││──────────────────────────────────────────────────│
-│                          ││                                                                              ││ 12 projects · scanned 14m ago                    │
-│                          ││                                                                              ││                                                  │
-│                          ││                                                                              ││                                                  │
-│                          ││                                                                              ││                                                  │
-│                          ││                                                                              ││                                                  │
-│                          ││                                                                              ││                                                  │
-│                          ││                                                                              ││                                                  │
-│                          ││                                                                              ││                                                  │
-│                          ││                                                                              ││                                                  │
-│                          ││                                                                              ││                                                  │
-│                          ││                                                                              ││                                                  │
-│                          ││                                                                              ││                                                  │
-│                          ││                                                                              ││                                                  │
-│                          ││                                                                              ││                                                  │
-│                          ││                                                                              ││                                                  │
-│                          ││                                                                              ││                                                  │
-│                          ││                                                                              ││                                                  │
-│                          ││                                                                              ││                                                  │
-│                          ││                                                                              ││                                                  │
-│                          ││                                                                              ││                                                  │
-│                          ││                                                                              ││                                                  │
-│                          ││                                                                              ││                                                  │
-│                          ││                                                                              ││                                                  │
-│                          ││                                                                              ││                                                  │
-│                          ││                                                                              ││                                                  │
-│                          ││                                                                              ││                                                  │
-│                          ││                                                                              ││                                                  │
-╰──────────────────────────╯╰──────────────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────────╯
- [j/k] Move  [Enter] Open  [v] View  [s] Sort  [r] Refresh  [a] Actions  [n] Pane  [x] Close                                                     2.2 · resource
+ ◱ Sidecar │   Sessions     Activity     Recall                                                       Files     Git     Workspaces     Notes    sidecar ▾  ·  ⚙
+╭──────────────────────────╮ ╭────────────────────────────────────────────────────────────────────────────╮ ╭──────────────────────────────────────────────────╮
+│ Workspaces               │┃│ plugin-ecosystem · claude                                                  │┃│   Projects ×     recall ×                        │
+│   main  ●                │┃│ › sidecar open --plugin ongoing --collection projects --split right        │┃│  Attention  Rising  Momentum  Dormant ↓ commits  │
+│ ❯ plugin-eco…  agent     │┃│ opened  resource  ongoing/projects  at 2.2                                 │┃│ ──────────────────────────────────────────────── │
+│   remote-git  idle       │┃│                                                                            │┃│ ❯ recall                      warn  41 · 3d      │
+│                          │┃│ › sidecar open --plugin ongoing --collection projects recall               │┃│  retrieval over user-controlled sources          │
+│                          │┃│ opened  resource  ongoing/projects/recall  at 2.2 (tab 2)                  │┃│  sidecar                       ok    88 · 2h     │
+│                          │┃│                                                                            │┃│  terminal workspace for agents                   │
+│                          │┃│ ›                                                                          │┃│  dex                           warn  12 · 9d     │
+│                          │┃│                                                                            │┃│  agent-native people database                    │
+│                          │┃│                                                                            │┃│  td                            ok    27 · 1d     │
+│                          │┃│                                                                            │┃│  task tracker with review gates                  │
+│                          │┃│                                                                            │┃│  ongoing                       stale 3 · 6w      │
+│                          │┃│                                                                            │┃│  projects dashboard                              │
+│                          │┃│                                                                            │┃│ ──────────────────────────────────────────────── │
+│                          │┃│                                                                            │┃│ 12 projects · scanned 14m ago                    │
+│                          │┃│                                                                            │┃│                                                  │
+│                          │┃│                                                                            │┃│                                                  │
+│                          │┃│                                                                            │┃│                                                  │
+│                          │┃│                                                                            │┃│                                                  │
+│                          │┃│                                                                            │┃│                                                  │
+│                          │┃│                                                                            │┃│                                                  │
+│                          │┃│                                                                            │┃│                                                  │
+│                          │┃│                                                                            │┃│                                                  │
+│                          │┃│                                                                            │┃│                                                  │
+│                          │┃│                                                                            │┃│                                                  │
+│                          │┃│                                                                            │┃│                                                  │
+│                          │┃│                                                                            │┃│                                                  │
+│                          │┃│                                                                            │┃│                                                  │
+│                          │┃│                                                                            │┃│                                                  │
+│                          │┃│                                                                            │┃│                                                  │
+│                          │┃│                                                                            │┃│                                                  │
+│                          │┃│                                                                            │┃│                                                  │
+│                          │┃│                                                                            │┃│                                                  │
+│                          │┃│                                                                            │┃│                                                  │
+│                          │┃│                                                                            │┃│                                                  │
+│                          │┃│                                                                            │┃│                                                  │
+│                          │┃│                                                                            │┃│                                                  │
+│                          │┃│                                                                            │┃│                                                  │
+│                          │┃│                                                                            │┃│                                                  │
+│                          │┃│                                                                            │┃│                                                  │
+│                          │┃│                                                                            │┃│                                                  │
+╰──────────────────────────╯ ╰────────────────────────────────────────────────────────────────────────────╯ ╰──────────────────────────────────────────────────╯
+ j/k  Move   Enter  Open   v  View   s  Sort   r  Refresh   a  Actions   n  Pane   x  Close                                                      2.2 · resource

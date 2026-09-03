@@ -1,45 +1,45 @@
- sidecar  [8] Sessions  [9] Activity  [0]  Recall   [1] Files  [2] Git  [3] Workspaces  [4] Notes                                                sidecar · main
-╭─ Recall · Results ─────────────────────────────────────────────────────────────────────────────╮╭─ DEX schema notes ─────────────────────────────────────────╮
-│ / dex                                                                     26 of 31   answered  ││ DEX schema notes                                    exact  │
-│ scope  project=sidecar  source, type, since unset                                    sort rank ││ notes · 2026-08-14                                         │
-│────────────────────────────────────────────────────────────────────────────────────────────────││                                                            │
-│   #  TITLE                        SOURCE    EXCERPT                                            ││ Source        notes                                        │
-│ ───  ───────────────────────────  ────────  ────────────────────────────────  ──────────────── ││ Locator       rc:notes:2026-08-14-dex-design               │
-│   1  DEX schema notes             notes     › people are tiered, and the…      exact           ││ Updated       2 weeks ago                                  │
-│   2  dex context --json           shell     › dumps every field the brief…     corroborated 3  ││ Corroborated  2 records · shell, td                        │
-│   3  People database, first cut   notes     › handles, aliases, links, and…                    ││── Evidence ────────────────────────────────────────────────│
-│   4  td-3fa2c1 Import people.md   td        › import from people.md keeps…     corroborated 2  ││ Tiers                                                      │
-│   5  Weekly review 2026-08-18     notes     › promote three contacts to…                       ││ People are tiered. The tier drives what brief shows at     │
-│   6  dex brief for session boot   shell     › inner circle first, then the…                    ││ session boot, and what stale treats as overdue.            │
-│   7  Re: dex trial accounts       mail      › the trial list you asked for…                    ││                                                            │
-│   8  Handles and phone numbers    notes     › one phone per handle kind…                       ││ Promotion and demotion are explicit commands, so an        │
-│   9  td-9c04ab dex stale rules    td        › stale should read tier, not…                     ││ agent never infers a tier from interaction counts.         │
-│  10  dex merge --dry-run          shell     › keeps the first person and…                      ││                                                            │
-│  11  Tier promotion policy        notes     › demotion is explicit, never…                     ││ Attachments                                                │
-│  12  Fwd: conference contacts     mail      ~ Thanks — attaching the list…                     ││ • handles, aliases, links and phones hang off the          │
-│  13  td-51b7e0 dex brief budget   td        › the brief has a token budget…                    ││   person, never off a handle                               │
-│  14  dex stale --tier inner       shell     › lists overdue people only in…                    ││ • a merge keeps the first person and moves every           │
-│  15  Retrieval eval pack notes    notes     ~ The eval pack covers recall…                     ││   attachment over from the second                          │
-│  16  dex import --format md       shell     › the importer is idempotent…                      ││── Record ──────────────────────────────────────────────────│
-│  17  Meeting notes 2026-08-22     notes     › agreed dex owns identity, td…                    ││ Record type   note                                         │
-│  18  td-77aa19 dex export         td        › export must round-trip the…                      ││ Ingested      2026-08-14 10:02                             │
-│  19  Re: people.md format         mail      ~ Attached is the format we…                       ││ Checkpoint    notes @ 4m ago                               │
-│  20  dex link add --kind repo     shell     › links hang off the person…                       ││ Excerpt       matched span                                 │
-│  21  Re: dex and td identity      mail      ~ If dex owns the person then…                     ││── Timeline ────────────────────────────────────────────────│
-│  22  dex tier --set inner         shell     › promotion is one command, and…                   ││ 2w ago    Note added                                       │
-│  23  td-2ef880 dex tier audit     td        › audit which tiers changed in…                    ││ 13d ago   Linked from td-3fa2c1                            │
-│  24  Contacts import checklist    notes     › export, dedupe, then import…                     ││ 9d ago    Corroborated by rc:shell:dex-context             │
-│  25  dex stale --json             shell     › the same rows the brief hid…                     ││ 6d ago    Re-read at checkpoint notes@41f0                 │
-│  26  Re: people.md format v2      mail      ~ Second pass at the format we…                    ││ 4d ago    Cited in rc:td:td-51b7e0                         │
-│────────────────────────────────────────────────────────────────────────────────────────────────││                                                            │
-│ 26 of 31 shown · the rest load on scroll                     › matched span   ~ record opening ││ no sourceUrl — [o] is unavailable on this record           │
-│                                                                                                ││                                                            │
-│                                                                                                ││                                                            │
-│                                                                                                ││                                                            │
-│                                                                                                ││                                                            │
-│                                                                                                ││                                                            │
-│                                                                                                ││                                                            │
-│                                                                                                ││                                                            │
-│                                                                                                ││                                                            │
-╰────────────────────────────────────────────────────────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────╯
- [j/k] Move  [Enter] Open  [/] Query  [v] Scope  [s] Sort  [r] Refresh  [a] Actions  [o] Source  [n] Pane  [Tab] Focus              recall · results · answered
+ ◱ Sidecar │   Sessions     Activity     Recall                                                       Files     Git     Workspaces     Notes    sidecar ▾  ·  ⚙
+╭────────────────────────────────────────────────────────────────────────────────────────────────╮ ╭───────────────────────────────────────────────────────────╮
+│ Recall · Results                                                                               │┃│ DEX schema notes                                   exact  │
+│ / dex                                                                     26 of 31   answered  │┃│ notes · 2026-08-14                                        │
+│ scope  project=sidecar  source, type, since unset                                    sort rank │┃│                                                           │
+│ ────────────────────────────────────────────────────────────────────────────────────────────── │┃│ Source        notes                                       │
+│   #  TITLE                        SOURCE    EXCERPT                                            │┃│ Locator       rc:notes:2026-08-14-dex-design              │
+│ ───  ───────────────────────────  ────────  ────────────────────────────────  ──────────────── │┃│ Updated       2 weeks ago                                 │
+│   1  DEX schema notes             notes     › people are tiered, and the…      exact           │┃│ Corroborated  2 records · shell, td                       │
+│   2  dex context --json           shell     › dumps every field the brief…     corroborated 3  │┃│ ── Evidence ───────────────────────────────────────────── │
+│   3  People database, first cut   notes     › handles, aliases, links, and…                    │┃│ Tiers                                                     │
+│   4  td-3fa2c1 Import people.md   td        › import from people.md keeps…     corroborated 2  │┃│ People are tiered. The tier drives what brief shows at    │
+│   5  Weekly review 2026-08-18     notes     › promote three contacts to…                       │┃│ session boot, and what stale treats as overdue.           │
+│   6  dex brief for session boot   shell     › inner circle first, then the…                    │┃│                                                           │
+│   7  Re: dex trial accounts       mail      › the trial list you asked for…                    │┃│ Promotion and demotion are explicit commands, so an       │
+│   8  Handles and phone numbers    notes     › one phone per handle kind…                       │┃│ agent never infers a tier from interaction counts.        │
+│   9  td-9c04ab dex stale rules    td        › stale should read tier, not…                     │┃│                                                           │
+│  10  dex merge --dry-run          shell     › keeps the first person and…                      │┃│ Attachments                                               │
+│  11  Tier promotion policy        notes     › demotion is explicit, never…                     │┃│ • handles, aliases, links and phones hang off the         │
+│  12  Fwd: conference contacts     mail      ~ Thanks — attaching the list…                     │┃│   person, never off a handle                              │
+│  13  td-51b7e0 dex brief budget   td        › the brief has a token budget…                    │┃│ • a merge keeps the first person and moves every          │
+│  14  dex stale --tier inner       shell     › lists overdue people only in…                    │┃│   attachment over from the second                         │
+│  15  Retrieval eval pack notes    notes     ~ The eval pack covers recall…                     │┃│ ── Record ─────────────────────────────────────────────── │
+│  16  dex import --format md       shell     › the importer is idempotent…                      │┃│ Record type   note                                        │
+│  17  Meeting notes 2026-08-22     notes     › agreed dex owns identity, td…                    │┃│ Ingested      2026-08-14 10:02                            │
+│  18  td-77aa19 dex export         td        › export must round-trip the…                      │┃│ Checkpoint    notes @ 4m ago                              │
+│  19  Re: people.md format         mail      ~ Attached is the format we…                       │┃│ Excerpt       matched span                                │
+│  20  dex link add --kind repo     shell     › links hang off the person…                       │┃│ ── Timeline ───────────────────────────────────────────── │
+│  21  Re: dex and td identity      mail      ~ If dex owns the person then…                     │┃│ 2w ago    Note added                                      │
+│  22  dex tier --set inner         shell     › promotion is one command, and…                   │┃│ 13d ago   Linked from td-3fa2c1                           │
+│  23  td-2ef880 dex tier audit     td        › audit which tiers changed in…                    │┃│ 9d ago    Corroborated by rc:shell:dex-context            │
+│  24  Contacts import checklist    notes     › export, dedupe, then import…                     │┃│ 6d ago    Re-read at checkpoint notes@41f0                │
+│  25  dex stale --json             shell     › the same rows the brief hid…                     │┃│ 4d ago    Cited in rc:td:td-51b7e0                        │
+│  26  Re: people.md format v2      mail      ~ Second pass at the format we…                    │┃│                                                           │
+│ ────────────────────────────────────────────────────────────────────────────────────────────── │┃│ no sourceUrl —  o  is unavailable on this record          │
+│ 26 of 31 shown · the rest load on scroll                     › matched span   ~ record opening │┃│                                                           │
+│                                                                                                │┃│                                                           │
+│                                                                                                │┃│                                                           │
+│                                                                                                │┃│                                                           │
+│                                                                                                │┃│                                                           │
+│                                                                                                │┃│                                                           │
+│                                                                                                │┃│                                                           │
+│                                                                                                │┃│                                                           │
+╰────────────────────────────────────────────────────────────────────────────────────────────────╯ ╰───────────────────────────────────────────────────────────╯
+ j/k  Move   Enter  Open   /  Query   v  Scope   s  Sort   r  Refresh   a  Actions   o  Source   n  Pane   Tab  Focus               recall · results · answered

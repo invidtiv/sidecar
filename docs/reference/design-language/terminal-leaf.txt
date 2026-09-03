@@ -1,0 +1,45 @@
+ ◱ Sidecar │   Sessions     Activity                                                           td     Git     Files     Workspaces     Notes    sidecar ▾  ·  ⚙
+╭─────────────────────────────────────────────────────────────╮ ╭──────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Workspaces                                 ⇅ Manual     +   │┃│ Shell 1                                                        Diff  INTERACTIVE ctrl+\ exit │
+│                                                             │┃│ 🌐 aerie in sidecar main *⇡2❯ AGENTS.md                                                    │ │
+│ ○ SHELLS (2) ────────────────────────────────────────  +    │┃│ zsh: command not found: AGENTS.md                                                          ┃ │
+│  ⚠ ❯ Install                                         204d   │┃│ 🌐 aerie in sidecar main *⇡2❯                                                              ┃ │
+│      ◆ claude  offline                                      │┃│                                                                                            ┃ │
+│                                                             │┃│                                                                                            ┃ │
+│  ◎ ❯ Shell 1                                          now   │┃│                                                                                            ┃ │
+│      shell  live                                            │┃│                                                                                            ┃ │
+│                                                             │┃│                                                                                            ┃ │
+│ ○ WORKTREES (4) ─────────────────────────────────────  +    │┃│                                                                                            ┃ │
+│  ⏸ ⑂ sidecar-herdr-detection-parity                    7h   │┃│                                                                                            ┃ │
+│      branch herdr-detection-parity  —                       │┃│                                                                                            ┃ │
+│                                                             │┃│                                                                                            ┃ │
+│  ⏸ ⑂ sidecar-pane-parity                               3h   │┃│                                                                                            ┃ │
+│      branch remote-viewer-screen  —                         │┃│                                                                                            ┃ │
+│                                                             │┃│                                                                                            ┃ │
+│  ⏸ ⑂ sidecar-project-awareness                         2h   │┃│                                                                                            ┃ │
+│      branch project-awareness  —                            │┃│                                                                                            ┃ │
+│                                                             │┃│                                                                                            ┃ │
+│  ⏸ ⑂ sidecar-public-site                              12d   │┃│                                                                                            ┃ │
+│      branch public-site  —                                  │┃│                                                                                            ┃ │
+│                                                             │┃│                                                                                            ┃ │
+│                                                             │┃│                                                                                            ┃ │
+│                                                             │┃│                                                                                            ┃ │
+│                                                             │┃│                                                                                            ┃ │
+│                                                             │┃│                                                                                            ┃ │
+│                                                             │┃│                                                                                            ┃ │
+│                                                             │┃│                                                                                            ┃ │
+│                                                             │┃│                                                                                            ┃ │
+│                                                             │┃│                                                                                            ┃ │
+│                                                             │┃│                                                                                            ┃ │
+│                                                             │┃│                                                                                            ┃ │
+│                                                             │┃│                                                                                            ┃ │
+│                                                             │┃│                                                                                            ┃ │
+│                                                             │┃│                                                                                            ┃ │
+│                                                             │┃│                                                                                            ┃ │
+│                                                             │┃│                                                                                            ┃ │
+│                                                             │┃│                                                                                            ┃ │
+│                                                             │┃│                                                                                            ┃ │
+│                                                             │┃│                                                                                            ┃ │
+│                                                             │┃│                                                                                            ┃ │
+╰─────────────────────────────────────────────────────────────╯ ╰──────────────────────────────────────────────────────────────────────────────────────────────╯
+ ctrl+\  Exit   alt+c, super+c  Copy   alt+v  Paste   ctrl+shift+f  Search

@@ -1,5 +1,7 @@
 # Launch visual language
 
+For what Sidecar looks like *today*, read [../../reference/design-language.md](../../reference/design-language.md); this file is the launch design study that theme was transcribed from.
+
 Source of truth: Claude Design project `3172ac49-4413-4a60-9235-0afa5c77cf77`,
 file `Agenda TUI Refresh.dc.html`. Read it with the `DesignSync` MCP
 (`get_file`) rather than re-deriving from screenshots.
