@@ -404,6 +404,9 @@ type Model struct {
 	// globalHosts is one host per enabled global-scope plugin descriptor, in
 	// descriptor order. The header row is built from it.
 	globalHosts []*globalPluginHost
+	// pluginDescriptors is the full catalog, injected by the host process. It
+	// is what the settings page loops over.
+	pluginDescriptors []plugin.Descriptor
 
 	// Configuration surface. Like the Tasks host it is app-owned rather than a
 	// registry plugin, so it survives project switches; unlike the global
@@ -540,6 +543,21 @@ type Option func(*Model)
 // to Configuration's own default rather than failing the launch.
 func WithStartupConfigPage(page configui.PageID) Option {
 	return func(m *Model) { m.startupConfigPage = page }
+}
+
+// WithPluginDescriptors hands the shell the full plugin catalog, which it
+// passes to the settings page. It is an option rather than a parameter because
+// internal/app cannot import internal/plugins/assembly — the plugin packages
+// import this one — so the catalog arrives from the process that owns both.
+// Without it the shell still hosts the global plugins it knows about; only the
+// settings page's loop is empty.
+func WithPluginDescriptors(descriptors []plugin.Descriptor) Option {
+	return func(m *Model) {
+		m.pluginDescriptors = descriptors
+		if m.config != nil {
+			m.config.SetPluginDescriptors(descriptors)
+		}
+	}
 }
 
 // WithNotificationDelivery injects a coordinator for focused app tests and

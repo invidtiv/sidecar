@@ -88,6 +88,11 @@ type Model struct {
 	goFound   bool
 	probed    bool
 
+	// pluginDescriptors is the plugin catalog the Panels page renders. It is
+	// injected by the host: the plugin packages import internal/app, which owns
+	// this surface, so reading the catalog here directly would be a cycle.
+	pluginDescriptors []plugin.Descriptor
+
 	// installEnv is the process environment the enable route installs through.
 	// Nil means the real one; a test substitutes it so no test ever runs a
 	// package manager.

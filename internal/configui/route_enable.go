@@ -5,6 +5,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/version"
 )
@@ -70,27 +71,30 @@ func (m *Model) installationEnv() *version.Environment {
 // installs through.
 func (m *Model) SetInstallEnvironment(env *version.Environment) { m.installEnv = env }
 
-// toggleIntegration is what a beta integration's panel row does. Turning it off
-// is just the flag. Turning it on checks that its command exists first, and
-// opens the enable route when it does not — enabling a panel whose command is
-// missing would be a switch that produces an empty surface.
-func (m *Model) toggleIntegration(integration Integration) tea.Cmd {
-	if m.flagEnabled(integration.Flag) {
-		m.noteRestart()
-		return saveFlagCmd(toggleNotice(integration.Name+" panel", false), integration.Flag, false)
+// integrationOn reports whether the plugin behind an integration is switched
+// on, reading the descriptor's own key. An integration with no descriptor in
+// the injected catalog reads as off, which is what an unknown plugin is.
+func (m *Model) integrationOn(integration Integration) bool {
+	d, ok := m.panelDescriptor(integration.ID)
+	return ok && m.panelOn(d)
+}
+
+// enableIntegrationCmd turns the plugin behind an integration on through its
+// descriptor's config key.
+func (m *Model) enableIntegrationCmd(integration Integration, notice string) tea.Cmd {
+	d, ok := m.panelDescriptor(integration.ID)
+	if !ok || !d.HasSwitch() {
+		return nil
 	}
-	if !integration.NeedsCommand() || (m.probed && m.commandFound(integration.Descriptor.Executable)) {
-		m.noteRestart()
-		return saveFlagCmd(toggleNotice(integration.Name+" panel", true), integration.Flag, true)
-	}
-	m.openEnableRoute(integration)
-	return nil
+	return SaveCmd(notice, func() error {
+		return config.SavePlugins(func(p *config.PluginsConfig) { d.SetEnabled(p, true) })
+	})
 }
 
 // openEnableRoute opens the dependency check for an integration.
 func (m *Model) openEnableRoute(integration Integration) {
 	title := "Enable " + integration.Name
-	if m.flagEnabled(integration.Flag) {
+	if m.integrationOn(integration) {
 		title = "Install " + integration.Name
 	}
 	m.PushChild(ChildEnableIntegration, title)
@@ -167,7 +171,7 @@ func (m *Model) buildEnableRoute(b *paneBuilder) {
 		}
 		b.buttons(retry...)
 		b.blank()
-		if m.flagEnabled(integration.Flag) {
+		if m.integrationOn(integration) {
 			b.text(Muted(integration.Name + " is still missing. Nothing was changed."))
 		} else {
 			b.text(Muted(integration.Name + " is still turned off. Nothing was changed."))
@@ -179,7 +183,7 @@ func (m *Model) buildEnableRoute(b *paneBuilder) {
 	switch {
 	case found:
 		action := "Enable " + integration.Name
-		if m.flagEnabled(integration.Flag) {
+		if m.integrationOn(integration) {
 			action = integration.Name + " is ready"
 		}
 		b.buttons(
@@ -357,7 +361,7 @@ func (m *Model) applyDetachedInstallResult(msg installResultMsg) tea.Cmd {
 		m.probes = map[string]commandProbe{}
 	}
 	m.probes[msg.integration.Descriptor.Executable] = commandProbe{Found: true}
-	return saveFlagCmd("Installed "+name+" — "+name+" panel on", msg.integration.Flag, true)
+	return m.enableIntegrationCmd(msg.integration, "Installed "+name+" — "+name+" panel on")
 }
 
 // finishEnable turns the panel on and returns to Panels.
@@ -365,5 +369,5 @@ func (m *Model) finishEnable(integration Integration) tea.Cmd {
 	m.enable = nil
 	m.Back()
 	m.noteRestart()
-	return saveFlagCmd(toggleNotice(integration.Name+" panel", true), integration.Flag, true)
+	return m.enableIntegrationCmd(integration, toggleNotice(integration.Name+" panel", true))
 }

@@ -1,10 +1,15 @@
 package assembly
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/configui"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/plugins/tasks"
@@ -124,5 +129,45 @@ func TestUnifiedEnablementPrefersTheConfigKey(t *testing.T) {
 				t.Fatalf("enabled = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// The settings page is one loop over the catalog, and the catalog lives here.
+// This is the guard against configui's own fixture drifting from what Sidecar
+// actually ships: it renders the real page with the real descriptors.
+func TestPanelsPageListsEverySurfaceInTheRealCatalog(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(path, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config.SetTestConfigPath(path)
+	t.Cleanup(config.ResetTestConfigPath)
+
+	cfg := config.Default()
+	features.Init(cfg)
+	t.Cleanup(func() { features.Init(config.Default()) })
+
+	m := configui.New()
+	m.SetPluginDescriptors(Descriptors())
+	m.SetHostState(configui.HostState{Config: cfg})
+	m.Open(configui.PagePanels)
+
+	view := ansi.Strip(m.View(160, 45))
+	for _, d := range Descriptors() {
+		if !d.HasSwitch() {
+			// Workspaces has no switch, so it has no row: a control that
+			// cannot change anything is worse than no control.
+			if strings.Contains(view, d.Detail) {
+				t.Fatalf("a switchless plugin has a settings row: %q", d.ID)
+			}
+			continue
+		}
+		if !strings.Contains(view, d.Name) {
+			t.Fatalf("Panels is missing %q:\n%s", d.Name, view)
+		}
+		if !strings.Contains(view, d.Detail) {
+			t.Fatalf("Panels is missing %q's detail line %q:\n%s", d.ID, d.Detail, view)
+		}
 	}
 }

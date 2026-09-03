@@ -44,6 +44,8 @@ func configFixture(t *testing.T, cfg *config.Config) (*Model, string) {
 	m := New()
 	// No test ever resolves a real installation or runs a package manager.
 	m.SetInstallEnvironment(stubEnvironment(nil))
+	// The host injects the plugin catalog; a test is the host here.
+	m.SetPluginDescriptors(testPluginDescriptors())
 	m.SetHostState(HostState{Config: loaded})
 	return m, path
 }
