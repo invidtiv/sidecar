@@ -16,10 +16,10 @@ import (
 	"github.com/marcus/sidecar/internal/startuptrace"
 )
 
-// Terminal resource providers must never enter the first-frame path. Not
-// plugin.Init, not config loading, not app construction, not a render path: no
-// LookPath, no subprocess, no provider config read, no network before the first
-// frame is on screen.
+// External plugins — terminal resource providers and protocol plugins alike —
+// must never enter the first-frame path. Not plugin.Init, not config loading,
+// not app construction, not a render path: no LookPath, no subprocess, no
+// plugin config read, no network before the first frame is on screen.
 //
 // Bubble Tea's command timing is not a strong enough guarantee for that. A
 // command returned from Init can start running before the first render, so
@@ -100,14 +100,15 @@ func describeResourceProvidersCmd(cfg *config.Config) tea.Cmd {
 	if cfg == nil {
 		return nil
 	}
-	if !features.IsEnabled(features.TerminalResourceProviders.Name) {
+	resources := features.IsEnabled(features.TerminalResourceProviders.Name)
+	protocol := features.IsEnabled(features.PluginProtocol.Name)
+	if !resources && !protocol {
 		return nil
 	}
 	// Reading the already-parsed config struct is not I/O, but it still happens
 	// inside the command rather than here, so that the decision and the work
 	// sit on the same side of the latch.
-	section := cfg.TerminalResources
-	if len(section.Providers) == 0 {
+	if len(cfg.TerminalResources.Providers) == 0 && len(cfg.Plugins.External) == 0 {
 		return nil
 	}
 
@@ -130,12 +131,21 @@ func describeResourceProvidersCmd(cfg *config.Config) tea.Cmd {
 
 		defer startuptrace.Begin("terminal resource providers: describe")()
 
-		providers, disabled, err := pluginhost.FromConfig(section, pluginhost.Options{
+		// Each flag gates its own section. terminal_resource_providers keeps
+		// answering for the frozen protocol whatever the plugin flag says, so
+		// turning the draft protocol off cannot take a working Jira provider
+		// down with it.
+		instances := enabledPluginInstances(cfg, resources, protocol)
+		if len(instances) == 0 {
+			return nil
+		}
+
+		providers, disabled, err := pluginhost.FromInstances(instances, pluginhost.Options{
 			Dir: providerWorkingDir(),
 			Log: slog.Default(),
 		})
 		if err != nil {
-			slog.Warn("terminal resource providers: configuration refused", "error", err)
+			slog.Warn("external plugins: configuration refused", "error", err)
 			return ResourceProvidersDescribedMsg{}
 		}
 
@@ -152,6 +162,25 @@ func describeResourceProvidersCmd(cfg *config.Config) tea.Cmd {
 		}
 		return ResourceProvidersDescribedMsg{Statuses: statuses, SnapshotError: manager.SnapshotError()}
 	}
+}
+
+// enabledPluginInstances filters the merged instance list to the sections whose
+// feature flag is on. It reads only the already-parsed config struct.
+func enabledPluginInstances(cfg *config.Config, resources, protocol bool) []config.PluginInstance {
+	all := cfg.PluginInstances()
+	out := make([]config.PluginInstance, 0, len(all))
+	for _, instance := range all {
+		if instance.IsLegacyResourceProvider() {
+			if resources {
+				out = append(out, instance)
+			}
+			continue
+		}
+		if protocol {
+			out = append(out, instance)
+		}
+	}
+	return out
 }
 
 // publishResourceProviders hands every surface the live matcher snapshot and a

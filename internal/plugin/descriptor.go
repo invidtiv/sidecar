@@ -66,6 +66,19 @@ type Descriptor struct {
 	// the settings page's install route. The zero value means the plugin ships
 	// inside Sidecar and has nothing to install.
 	Integration version.Descriptor
+	// Instance is the configured entry a protocol descriptor was projected
+	// from, carrying the config section it was read from. Nil for the embedded
+	// class, which has a Go literal instead.
+	Instance *config.PluginInstance
+}
+
+// Source reports the config section this descriptor was read from, or "" for an
+// embedded plugin, whose descriptor is a Go literal.
+func (d Descriptor) Source() string {
+	if d.Instance == nil {
+		return ""
+	}
+	return d.Instance.Source
 }
 
 // Class is who renders a plugin.
@@ -74,8 +87,8 @@ type Class string
 const (
 	// ClassEmbedded is a Go plugin compiled into Sidecar with its own UI.
 	ClassEmbedded Class = "embedded"
-	// ClassProtocol is an external executable the host renders. No descriptor
-	// carries it yet; it arrives with the protocol host.
+	// ClassProtocol is an external executable the host renders. Its descriptor
+	// is projected from a config entry by ProtocolDescriptor.
 	ClassProtocol Class = "protocol"
 )
 
