@@ -54,6 +54,22 @@ type savePluginsConfig struct {
 	Workspace     saveWorkspaceConfig     `json:"workspace,omitempty"`
 	Notes         saveNotesConfig         `json:"notes,omitempty"`
 	Tasks         saveTasksConfig         `json:"tasks,omitempty"`
+	// External is written whenever an instance is configured and omitted when
+	// the list is empty. Unlike terminalResources it needs no companion delete
+	// in Save: the whole plugins object is re-marshalled on every save, so an
+	// emptied list disappears with it rather than being carried forward.
+	External []savePluginInstanceConfig `json:"external,omitempty"`
+}
+
+type savePluginInstanceConfig struct {
+	ID         string   `json:"id"`
+	Command    []string `json:"command"`
+	PassEnv    []string `json:"passEnv,omitempty"`
+	Enabled    bool     `json:"enabled"`
+	Scope      string   `json:"scope,omitempty"`
+	Placements []string `json:"placements,omitempty"`
+	Timeout    string   `json:"timeout,omitempty"`
+	ClaimHosts []string `json:"claimHosts,omitempty"`
 }
 
 type saveNotesConfig struct {
@@ -140,6 +156,7 @@ func toSaveConfig(cfg *Config) saveConfig {
 				Enabled:       cfg.Plugins.Notes.Enabled,
 				DefaultEditor: cfg.Plugins.Notes.DefaultEditor,
 			},
+			External: toSavePluginInstances(cfg.Plugins.External),
 			Workspace: saveWorkspaceConfig{
 				DirPrefix:                 &cfg.Plugins.Workspace.DirPrefix,
 				DefaultAgentType:          cfg.Plugins.Workspace.DefaultAgentType,
@@ -169,6 +186,29 @@ func toSaveConfig(cfg *Config) saveConfig {
 		Notifications:     cfg.Notifications,
 		Hosts:             cfg.Hosts,
 	}
+}
+
+func toSavePluginInstances(entries []PluginInstanceConfig) []savePluginInstanceConfig {
+	if len(entries) == 0 {
+		return nil
+	}
+	out := make([]savePluginInstanceConfig, 0, len(entries))
+	for _, p := range entries {
+		sp := savePluginInstanceConfig{
+			ID:         p.ID,
+			Command:    append([]string(nil), p.Command...),
+			PassEnv:    append([]string(nil), p.PassEnv...),
+			Enabled:    p.Enabled,
+			Scope:      p.Scope,
+			Placements: append([]string(nil), p.Placements...),
+			ClaimHosts: append([]string(nil), p.ClaimHosts...),
+		}
+		if p.Timeout > 0 {
+			sp.Timeout = p.Timeout.String()
+		}
+		out = append(out, sp)
+	}
+	return out
 }
 
 func toSaveTerminalResources(cfg TerminalResourcesConfig) saveTerminalResourcesConfig {

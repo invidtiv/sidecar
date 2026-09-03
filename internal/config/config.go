@@ -210,6 +210,11 @@ type PluginsConfig struct {
 	Workspace     WorkspacePluginConfig     `json:"workspace"`
 	Notes         NotesPluginConfig         `json:"notes"`
 	Tasks         TasksPluginConfig         `json:"tasks"`
+	// External is the ordered list of external plugin instances Sidecar hosts
+	// over the plugin protocol. It lives under plugins because the settings
+	// page already groups every plugin here and because enablement is
+	// plugins.<id>.enabled for every class.
+	External []PluginInstanceConfig `json:"external,omitempty"`
 }
 
 // Tab positions for the Tasks plugin.
@@ -553,5 +558,10 @@ func (c *Config) Validate() error {
 	default:
 		c.Plugins.Notes.DefaultEditor = NotesEditorBuiltin
 	}
+	external, err := validatePluginInstances(c.Plugins.External)
+	if err != nil {
+		return err
+	}
+	c.Plugins.External = external
 	return validateTerminalResources(&c.TerminalResources)
 }

@@ -174,6 +174,28 @@ type rawPluginsConfig struct {
 	Workspace     rawWorkspaceConfig     `json:"workspace"`
 	Notes         rawNotesConfig         `json:"notes"`
 	Tasks         rawTasksConfig         `json:"tasks"`
+	// External is a pointer so an absent section is distinguishable from an
+	// empty one: an absent key leaves whatever the defaults hold, an explicit
+	// [] is the user emptying the list.
+	External *[]rawPluginInstanceConfig `json:"external"`
+}
+
+// rawPluginInstanceConfig is one plugins.external entry as written. Enabled is
+// a pointer because a configured instance is on unless it says otherwise, and
+// Timeout is a string because the file speaks Go durations.
+//
+// Unknown keys follow the file-wide convention: json.Unmarshal into this typed
+// struct silently ignores what it does not know, so a config written by a newer
+// Sidecar loads on an older one with the newer fields inert.
+type rawPluginInstanceConfig struct {
+	ID         string   `json:"id"`
+	Command    []string `json:"command"`
+	PassEnv    []string `json:"passEnv"`
+	Enabled    *bool    `json:"enabled"`
+	Scope      string   `json:"scope"`
+	Placements []string `json:"placements"`
+	Timeout    string   `json:"timeout"`
+	ClaimHosts []string `json:"claimHosts"`
 }
 
 type rawNotesConfig struct {
@@ -518,6 +540,32 @@ func mergeConfig(cfg *Config, raw *rawConfig) {
 				cfg.UI.Theme.Overrides = nil
 			}
 		}
+	}
+
+	// External plugins
+	if raw.Plugins.External != nil {
+		external := make([]PluginInstanceConfig, 0, len(*raw.Plugins.External))
+		for _, rp := range *raw.Plugins.External {
+			p := PluginInstanceConfig{
+				ID:         rp.ID,
+				Command:    append([]string(nil), rp.Command...),
+				PassEnv:    append([]string(nil), rp.PassEnv...),
+				Enabled:    true,
+				Scope:      rp.Scope,
+				Placements: append([]string(nil), rp.Placements...),
+				ClaimHosts: append([]string(nil), rp.ClaimHosts...),
+			}
+			if rp.Enabled != nil {
+				p.Enabled = *rp.Enabled
+			}
+			if rp.Timeout != "" {
+				if d, err := time.ParseDuration(rp.Timeout); err == nil {
+					p.Timeout = d
+				}
+			}
+			external = append(external, p)
+		}
+		cfg.Plugins.External = external
 	}
 
 	// Terminal resources
