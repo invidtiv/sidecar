@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/features"
+	"github.com/marcus/sidecar/internal/pluginbrowser"
 	"github.com/marcus/sidecar/internal/pluginhost"
 	"github.com/marcus/sidecar/internal/resource"
 	"github.com/marcus/sidecar/internal/resourceview"
@@ -196,6 +197,14 @@ func enabledPluginInstances(cfg *config.Config, resources, protocol bool) []conf
 // resolver to ask, so the surfaces hand back the first load for whatever
 // Resource pane is on screen.
 func (m *Model) publishResourceProviders() tea.Cmd {
+	// The project every protocol plugin is asked about is republished here for
+	// the same reason the matchers are: a global plugin outlives every project
+	// switch, so the context it was constructed with is the wrong answer the
+	// moment the user moves. It is published even when there is no manager,
+	// because the browser reads it on its first list rather than at
+	// construction.
+	m.publishPluginBrowserProject()
+
 	manager := ResourceProviderManager()
 	if manager == nil {
 		return nil
@@ -209,6 +218,14 @@ func (m *Model) publishResourceProviders() tea.Cmd {
 		if cmd := surface.SetResourceResolver(resolve); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
+	}
+	// Every protocol browser is waiting on exactly this: a describe pass has
+	// settled, so its own snapshot is worth re-reading. It is delivered here
+	// rather than returned as a message, so the batch grows only when a browser
+	// actually has work to do — a surface with no protocol plugin configured
+	// still hands back exactly the one command its waiting tab produced.
+	if cmd := m.updateGlobalHosts(pluginbrowser.DescribedMsg{}); cmd != nil {
+		cmds = append(cmds, cmd)
 	}
 	return tea.Batch(cmds...)
 }

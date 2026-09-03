@@ -647,7 +647,8 @@ func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentV
 	// Global-scope plugins are tabs of the global space, so their hosts are
 	// built here rather than registered as project plugins. Constructing one
 	// does no I/O; the model behind it is built by the command start returns.
-	m.globalHosts = newGlobalPluginHosts(GlobalDescriptors(), cfg, reg.Context(), km)
+	m.globalHosts = newGlobalPluginHosts(
+		append(GlobalDescriptors(), globalProtocolDescriptors(cfg)...), cfg, reg.Context(), km)
 	// Restore the top-level space the user left on. It runs here, after the two
 	// fields that decide which global tabs exist are built, and it reads only
 	// the state the process already loaded — no extra file is opened on the

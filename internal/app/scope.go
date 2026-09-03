@@ -634,9 +634,21 @@ func (h *globalPluginHost) id() string {
 }
 
 // label is the header text for this plugin's tab.
+//
+// A protocol plugin's descriptor names it by its configured instance ID,
+// because the descriptor exists before anything has run. Its own display name
+// arrives with describe, and the surface is what carries it, so the plugin is
+// asked first for that class and the descriptor is the fallback. An embedded
+// plugin keeps the descriptor's label: it is a Go literal beside the plugin,
+// and the two cannot disagree.
 func (h *globalPluginHost) label() string {
 	if h == nil {
 		return ""
+	}
+	if h.descriptor.Class == plugin.ClassProtocol && h.plugin != nil {
+		if name := h.plugin.Name(); name != "" {
+			return name
+		}
 	}
 	if h.descriptor.Name != "" {
 		return h.descriptor.Name
