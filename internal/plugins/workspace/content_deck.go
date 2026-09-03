@@ -76,6 +76,7 @@ func (p *Plugin) workspaceDeckConfig() contentpanes.Config {
 	return contentpanes.Config{
 		Renderer:         p.markdownRenderer,
 		ResourceResolver: p.resolveResource,
+		PluginCalls:      p.pluginCalls,
 		ConfigureViewer:  p.configureDeckViewer,
 		Source:           p.documentSource(),
 	}

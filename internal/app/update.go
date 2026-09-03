@@ -981,6 +981,12 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, cmd)
 			}
 		}
+		if msg.Request.Action == uirequest.ActionPluginChanged {
+			if cmd := (&m).handlePluginChangedRequest(msg.Request); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			return m, tea.Batch(cmds...)
+		}
 		if msg.Request.Action == uirequest.ActionConfigReload {
 			if cmd := (&m).handleConfigReloadRequest(msg.Request); cmd != nil {
 				cmds = append(cmds, cmd)

@@ -31,6 +31,13 @@ type CallsFor func(instance string) pluginbrowser.Calls
 // second tab in the same leaf. A Model does not own the strip, so it asks.
 type OpenRow func(ref resource.Reference) tea.Cmd
 
+// OpenRowMsg is the default ask, and the reason both surfaces behave the same:
+// a Model has no leaf, no placement and no deck, so Enter on a row emits this
+// and whichever surface is showing the pane runs its OWN open journey with it.
+// That journey already focuses an open tab rather than fetching it twice, which
+// is what makes the second Enter free.
+type OpenRowMsg struct{ Ref resource.Reference }
+
 // IsPlugin reports that this tab is one of the plugin shapes, so the host is
 // looking at the shared browser rather than the resource card.
 func (m *Model) IsPlugin() bool { return m != nil && m.browser != nil }
@@ -73,8 +80,9 @@ func (m *Model) bindOpenRow() {
 	open := m.openRow
 	instance := m.ref.Instance
 	if open == nil {
-		m.browser.SetOnOpenRow(nil)
-		return
+		open = func(ref resource.Reference) tea.Cmd {
+			return func() tea.Msg { return OpenRowMsg{Ref: ref} }
+		}
 	}
 	m.browser.SetOnOpenRow(func(collection, id string) tea.Cmd {
 		return open(resource.Reference{Instance: instance, Collection: collection, Locator: id})
@@ -128,6 +136,12 @@ func (m *Model) pluginLoad() tea.Cmd {
 	}
 	m.state = StateReady
 	if m.ref.Shape() == resource.ShapeItem {
+		// Selecting a row tab that is already showing its document costs
+		// nothing. That is what makes the second Enter on a row free: the first
+		// opened and fetched, the second only focuses.
+		if m.browser.PaneDocumentShowing(m.ref.Locator) {
+			return m.browser.Refresh()
+		}
 		return batch(m.browser.Refresh(), m.browser.SetPaneDocument(m.ref.Collection, m.ref.Locator))
 	}
 	return m.browser.Refresh()
@@ -138,6 +152,13 @@ func (m *Model) pluginLoad() tea.Cmd {
 func (m *Model) pluginSnapshot() resource.Reference {
 	ref := m.ref
 	if m.browser == nil || ref.Shape() != resource.ShapeCollection {
+		return ref
+	}
+	// Before describe has landed the browser has no state for this collection,
+	// and reading a position out of it would report an empty query for a tab
+	// that has one waiting to be applied. The reference stays authoritative
+	// until the browser has actually adopted it.
+	if !m.browser.PaneViewApplied() {
 		return ref
 	}
 	ref.Query = m.browser.PaneQuery()

@@ -109,7 +109,7 @@ func TestGlobalSurfaceRegistersEveryLiveKind(t *testing.T) {
 	for _, kind := range m.preview.live.Kinds() {
 		got[kind] = true
 	}
-	for _, want := range []string{livePreviewIssues, livePreviewNotes, livePreviewDocs, livePreviewDiffs} {
+	for _, want := range []string{livePreviewIssues, livePreviewNotes, livePreviewDocs, livePreviewDiffs, livePreviewResources} {
 		if !got[want] {
 			t.Errorf("the %q kind is not registered on the global surface", want)
 		}

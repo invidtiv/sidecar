@@ -36,14 +36,19 @@ type Column struct {
 }
 
 type Pane struct {
-	Cell     string   `json:"cell"`
-	Kind     string   `json:"kind"`
-	Pane     int      `json:"pane"`
-	Provider string   `json:"provider,omitempty"`
-	Session  string   `json:"session,omitempty"`
-	Tabs     []string `json:"tabs,omitempty"`
-	Active   int      `json:"active,omitempty"`
-	Box      *Box     `json:"box,omitempty"`
+	Cell     string `json:"cell"`
+	Kind     string `json:"kind"`
+	Pane     int    `json:"pane"`
+	Provider string `json:"provider,omitempty"`
+	// Collection and Query are the active tab's plugin collection, when the
+	// Resource pane is showing one. They round-trip: a get → edit → apply of
+	// this report reopens the same list, searched the same way.
+	Collection string   `json:"collection,omitempty"`
+	Query      string   `json:"query,omitempty"`
+	Session    string   `json:"session,omitempty"`
+	Tabs       []string `json:"tabs,omitempty"`
+	Active     int      `json:"active,omitempty"`
+	Box        *Box     `json:"box,omitempty"`
 }
 
 type Box struct {
@@ -121,7 +126,7 @@ func cellPanes(col int, cells []*panelayout.Node, layout *state.PaneLayoutJSON, 
 			Kind: leaf.Kind.Name(),
 			Pane: leaf.ID,
 		}
-		cell.Tabs, cell.Active, cell.Provider, cell.Session = leafInfo(layout, leaf.Kind)
+		cell.Tabs, cell.Active, cell.Provider, cell.Collection, cell.Query, cell.Session = leafInfo(layout, leaf.Kind)
 		if box, ok := boxes[leaf.ID]; ok {
 			cell.Box = &Box{X: box.X, Y: box.Y, W: box.W, H: box.H}
 		}
@@ -130,10 +135,13 @@ func cellPanes(col int, cells []*panelayout.Node, layout *state.PaneLayoutJSON, 
 	return panes
 }
 
-func leafInfo(layout *state.PaneLayoutJSON, kind panelayout.Kind) (tabs []string, active int, provider, session string) {
+// leafInfo is one leaf's tab labels plus the plugin identity the Resource kind
+// carries. collection and query are the ACTIVE tab's, and empty for every other
+// kind, so a get → edit → apply round trip reopens the list the user was on.
+func leafInfo(layout *state.PaneLayoutJSON, kind panelayout.Kind) (tabs []string, active int, provider, collection, query, session string) {
 	saved := firstLayoutLeaf(layout, persistKind(kind))
 	if saved == nil {
-		return nil, 0, "", ""
+		return nil, 0, "", "", "", ""
 	}
 	session = saved.Session
 	switch saved.Kind {
@@ -142,41 +150,49 @@ func leafInfo(layout *state.PaneLayoutJSON, kind panelayout.Kind) (tabs []string
 		for _, tab := range saved.Tabs {
 			tabs = append(tabs, tab.Path)
 		}
-		return tabs, saved.Active, "", session
+		return tabs, saved.Active, "", "", "", session
 	case panecodec.KindIssue:
 		tabs = make([]string, 0, len(saved.IssueTabs))
 		for _, tab := range saved.IssueTabs {
 			tabs = append(tabs, tab.Issue)
 		}
-		return tabs, saved.Active, "", session
+		return tabs, saved.Active, "", "", "", session
 	case panecodec.KindNote:
 		tabs = make([]string, 0, len(saved.NoteTabs))
 		for _, tab := range saved.NoteTabs {
 			tabs = append(tabs, tab.Note)
 		}
-		return tabs, saved.Active, "", session
+		return tabs, saved.Active, "", "", "", session
 	case panecodec.KindDiff:
 		tabs = make([]string, 0, len(saved.DiffTabs))
 		for _, tab := range saved.DiffTabs {
 			tabs = append(tabs, tab.Spec)
 		}
-		return tabs, saved.Active, "", session
+		return tabs, saved.Active, "", "", "", session
 	case panecodec.KindResource:
 		tabs = make([]string, 0, len(saved.ResourceTabs))
 		for _, tab := range saved.ResourceTabs {
-			tabs = append(tabs, tab.Locator)
+			// A collection tab has no locator; naming it by its empty one would
+			// print a hole in the strip. Its collection is what it is.
+			label := tab.Locator
+			if label == "" {
+				label = tab.Collection
+			}
+			tabs = append(tabs, label)
 			if provider == "" {
 				provider = tab.Provider
 			}
 		}
 		if saved.Active >= 0 && saved.Active < len(saved.ResourceTabs) {
-			if active := saved.ResourceTabs[saved.Active].Provider; active != "" {
-				provider = active
+			active := saved.ResourceTabs[saved.Active]
+			if active.Provider != "" {
+				provider = active.Provider
 			}
+			collection, query = active.Collection, active.Query
 		}
-		return tabs, saved.Active, provider, session
+		return tabs, saved.Active, provider, collection, query, session
 	default:
-		return nil, 0, "", session
+		return nil, 0, "", "", "", session
 	}
 }
 

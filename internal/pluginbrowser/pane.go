@@ -144,6 +144,13 @@ func (m *Model) PaneCursorID() string {
 	return s.items[s.cursor].ID
 }
 
+// PaneViewApplied reports that a restored view position has been folded into
+// live collection state. Until it has, the reference the host holds is still
+// the authority on what this tab is showing.
+func (m *Model) PaneViewApplied() bool {
+	return m != nil && m.paneMode() && !m.restore.pending && m.paneState() != nil
+}
+
 // paneState is the pinned collection's state, created on demand once describe
 // has declared it. It is nil before that, which is the loading card.
 func (m *Model) paneState() *collectionState {
@@ -279,6 +286,13 @@ func (m *Model) PaneDocumentIdentity() string {
 		return ""
 	}
 	return m.detail.doc.Identity
+}
+
+// PaneDocumentShowing reports that this pane is already showing (or fetching)
+// the row named by id, so re-selecting it needs no process.
+func (m *Model) PaneDocumentShowing(id string) bool {
+	return m != nil && m.paneShape == PaneDocument && m.detail.id == id &&
+		(m.detail.loaded || m.detail.loading)
 }
 
 // PaneDocumentID is the row ID a document tab was opened for.
@@ -456,7 +470,7 @@ func (m *Model) PaneScrollAtBoundary(delta int) bool {
 // one is added.
 func IsBrowserMsg(msg tea.Msg) bool {
 	switch msg.(type) {
-	case DescribedMsg, QueryDebouncedMsg, ListedMsg, GotMsg, ActedMsg:
+	case DescribedMsg, QueryDebouncedMsg, ListedMsg, GotMsg, ActedMsg, ChangedMsg:
 		return true
 	}
 	return false
@@ -512,4 +526,34 @@ var namedKeys = map[string]rune{
 	"pgup":      tea.KeyPgUp,
 	"pgdown":    tea.KeyPgDown,
 	"space":     tea.KeySpace,
+}
+
+// ChangedMsg says one plugin's data moved and its visible tabs should re-list.
+//
+// It arrives from `sidecar plugin changed` on the request bus — the poke a
+// plugin gives Sidecar when the change is not a file it declared under
+// refresh.watch. An empty Collection means every collection of that plugin,
+// which is what a tool that does not know what it touched should say.
+type ChangedMsg struct {
+	Instance   string
+	Collection string
+}
+
+// applyChanged re-reads if the message names this browser, and does nothing
+// otherwise. A browser whose plugin was not named is not "unchanged"; it was
+// never being talked about.
+func (m *Model) applyChanged(msg ChangedMsg) tea.Cmd {
+	if m == nil || msg.Instance != m.instance {
+		return nil
+	}
+	if m.paneMode() {
+		if msg.Collection != "" && msg.Collection != m.paneCollection {
+			return nil
+		}
+		return m.PaneRefresh()
+	}
+	if c, ok := m.ActiveCollection(); ok && msg.Collection != "" && msg.Collection != c.ID {
+		return nil
+	}
+	return m.refreshActive()
 }

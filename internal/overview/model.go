@@ -135,7 +135,7 @@ func IsAsyncMessage(msg tea.Msg) bool {
 	case panesMsg, projectMsg, pollMsg, previewAutoScrollTickMsg, workspacePulseTickMsg,
 		sessionsSelectedTickMsg,
 		previewDocLoadedMsg, previewDocSearchMsg, previewIssueLoadedMsg, previewNoteLoadedMsg, previewResourceResolvedMsg, previewHistoryLoadedMsg, previewTerminalSearchLoadedMsg, contentpanes.Result,
-		pluginbrowser.ListedMsg, pluginbrowser.GotMsg, pluginbrowser.ActedMsg, pluginbrowser.DescribedMsg, pluginbrowser.QueryDebouncedMsg,
+		pluginbrowser.ListedMsg, pluginbrowser.GotMsg, pluginbrowser.ActedMsg, pluginbrowser.DescribedMsg, pluginbrowser.QueryDebouncedMsg, pluginbrowser.ChangedMsg, resourceview.OpenRowMsg,
 		renameShellDoneMsg, globalShellCreatedMsg, previewTerminalSplitCreatedMsg, previewSplitSeedFailedMsg, previewSplitCloseProbeMsg, projectMutationRefreshMsg, globalCreateBranchesMsg, previewLinkRevalidatedMsg,
 		createPickerDataMsg, createHostCatalogMsg, workspacecreate.FilesScannedMsg:
 		// creation is a multi-stage async workflow; every result must stay
@@ -944,8 +944,14 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 	case previewResourceResolvedMsg:
 		m.applyPreviewResourceResolved(msg)
 		return nil
+	case resourceview.OpenRowMsg:
+		// Enter on a collection row. It travels as a message rather than a
+		// direct call so the row opens through this surface's own open journey,
+		// which is what focuses a tab that is already there instead of fetching
+		// it twice. Its twin is in internal/plugins/workspace.
+		return m.OpenPreviewResource(msg.Ref)
 	case pluginbrowser.ListedMsg, pluginbrowser.GotMsg, pluginbrowser.ActedMsg,
-		pluginbrowser.DescribedMsg, pluginbrowser.QueryDebouncedMsg:
+		pluginbrowser.DescribedMsg, pluginbrowser.QueryDebouncedMsg, pluginbrowser.ChangedMsg:
 		// A collection or row tab's own answers, delivered as a broadcast each
 		// viewer either owns or does not, so a page for a tab that has closed
 		// lands nowhere rather than in the wrong pane.

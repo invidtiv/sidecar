@@ -1,6 +1,7 @@
 package app
 
 import (
+	"os"
 	"path/filepath"
 	"sync/atomic"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/marcus/sidecar/internal/pluginbrowser"
 	"github.com/marcus/sidecar/internal/pluginhost"
 	"github.com/marcus/sidecar/internal/resource"
+	"github.com/marcus/sidecar/internal/uirequest"
 )
 
 // The protocol half of the global tab row. A configured plugin that declares a
@@ -180,4 +182,40 @@ func (m *Model) publishPluginBrowserProject() {
 		Name:    filepath.Base(root),
 		HostID:  ctx.HostID,
 	})
+}
+
+// handlePluginChangedRequest answers `sidecar plugin changed` on the request
+// bus: every visible tab of the named plugin re-lists.
+//
+// It broadcasts rather than addressing a surface. A plugin's data does not
+// belong to a project or a workspace row, so "which surface" is not a question
+// the request can answer; each browser decides whether it was the one being
+// talked about, exactly as it does for a describe pass.
+func (m *Model) handlePluginChangedRequest(req uirequest.Request) tea.Cmd {
+	payload, err := uirequest.DecodePluginChangedPayload(req.Payload)
+	status, reason := uirequest.StatusOpened, ""
+	if err != nil {
+		status, reason = uirequest.StatusDeclined, err.Error()
+	} else if !features.IsEnabled(features.PluginProtocol.Name) {
+		status, reason = uirequest.StatusDeclined, "plugin_protocol is off in this instance"
+	}
+	_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
+		Instance: uirequest.InstanceID("app"),
+		Host:     uirequest.HostName(),
+		PID:      os.Getpid(),
+		Status:   status,
+		Reason:   reason,
+		Surface:  "plugins",
+	})
+	if status != uirequest.StatusOpened {
+		return nil
+	}
+	changed := pluginbrowser.ChangedMsg{Instance: payload.Instance, Collection: payload.Collection}
+	cmds := []tea.Cmd{func() tea.Msg { return changed }}
+	// The global tabs are hosted here rather than on the message bus, so they
+	// are handed the message directly the way a describe pass is.
+	if cmd := m.updateGlobalHosts(changed); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	return tea.Batch(cmds...)
 }

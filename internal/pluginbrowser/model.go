@@ -468,6 +468,8 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 		return nil
 	case ActedMsg:
 		return m.applyActed(msg)
+	case ChangedMsg:
+		return m.applyChanged(msg)
 	}
 	return nil
 }

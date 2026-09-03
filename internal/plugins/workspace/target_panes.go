@@ -40,6 +40,18 @@ func (p *Plugin) openResourcePaneMsg(msg app.OpenResourcePaneMsg) tea.Cmd {
 	if !ok {
 		return nil
 	}
+	if msg.Collection != "" {
+		// A plugin tab. No matcher is consulted: a collection and a row are
+		// addressed by name, and there is no span for a matcher to have claimed.
+		ref := resourceview.Ref{
+			Instance: msg.Provider, Collection: msg.Collection,
+			Query: msg.Query, Locator: msg.Locator,
+		}
+		if !ref.Valid() {
+			return nil
+		}
+		return p.openRequestedResourcePaneForSurface(root, surface, ref)
+	}
 	ref := resourceview.Ref{Instance: msg.Provider, Matcher: msg.Matcher, Locator: msg.Locator}
 	if msg.Matcher == "" {
 		// No matcher named: only a live snapshot can say which one claims this

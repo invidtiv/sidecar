@@ -36,7 +36,42 @@ const (
 	ActionLayout Action = "layout"
 	// ActionSwitchProject switches the running Sidecar TUI to a configured project.
 	ActionSwitchProject Action = "switch-project"
+	// ActionPluginChanged tells live instances that a protocol plugin's data
+	// moved, so every visible tab of that plugin re-lists. Like notify, its
+	// object is not addressable as a Target — the plugin has no locator — so
+	// the payload is a PluginChangedPayload.
+	//
+	// It is the poke a plugin gives Sidecar when the change is not a file it
+	// declared under refresh.watch: a shell hook after `dex log`, a daemon that
+	// finished indexing. Nothing about it starts a process on its own; it only
+	// says that asking again is now worth a process.
+	ActionPluginChanged Action = "plugin-changed"
 )
+
+// PluginChangedPayload is the ActionPluginChanged record. Collection is
+// optional: empty means every collection of that plugin, which is what a tool
+// that does not know what it touched should say.
+type PluginChangedPayload struct {
+	Instance   string `json:"instance"`
+	Collection string `json:"collection,omitempty"`
+}
+
+// DecodePluginChangedPayload reads the record and refuses one naming no plugin.
+func DecodePluginChangedPayload(raw json.RawMessage) (PluginChangedPayload, error) {
+	var p PluginChangedPayload
+	if len(raw) == 0 {
+		return p, fmt.Errorf("plugin-changed payload is required")
+	}
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return p, fmt.Errorf("invalid plugin-changed payload: %w", err)
+	}
+	p.Instance = strings.TrimSpace(p.Instance)
+	p.Collection = strings.TrimSpace(p.Collection)
+	if p.Instance == "" {
+		return p, fmt.Errorf("plugin-changed payload names no plugin")
+	}
+	return p, nil
+}
 
 // Layout modes. Get answers with the current layout; apply opens panes; move
 // repositions one pane that is already open.
@@ -88,13 +123,17 @@ type LayoutPane struct {
 	Kind    string   `json:"kind"`
 	Targets []string `json:"targets,omitempty"`
 	At      string   `json:"at,omitempty"`
-	// Provider names the configured terminal resource provider instance for
-	// kind resource. Required there and ignored elsewhere: a bare locator is
-	// never guessed at.
+	// Provider names the configured plugin instance for kind resource. Required
+	// there and ignored elsewhere: a bare locator is never guessed at.
 	Provider string `json:"provider,omitempty"`
-	Run      string `json:"run,omitempty"`
-	Type     string `json:"type,omitempty"`
-	Name     string `json:"name,omitempty"`
+	// Collection and Query are the plugin collection form of a resource pane.
+	// With a collection and no targets the pane opens that collection's tab;
+	// with a collection and one target it opens that row's document tab.
+	Collection string `json:"collection,omitempty"`
+	Query      string `json:"query,omitempty"`
+	Run        string `json:"run,omitempty"`
+	Type       string `json:"type,omitempty"`
+	Name       string `json:"name,omitempty"`
 	// Session carries a shell pane's tmux session. Set means CARRY that live
 	// leaf; empty with run/type/name means open a new split beside the origin.
 	Session string `json:"session,omitempty"`
@@ -188,7 +227,7 @@ func validateSpecPane(pane LayoutPane) error {
 	}
 	switch kind {
 	case panelayout.Primary:
-		if len(pane.Targets) > 0 || pane.Provider != "" || pane.Run != "" || pane.Type != "" || pane.Name != "" || pane.Session != "" {
+		if len(pane.Targets) > 0 || pane.Provider != "" || pane.Collection != "" || pane.Query != "" || pane.Run != "" || pane.Type != "" || pane.Name != "" || pane.Session != "" {
 			return fmt.Errorf("the primary pane takes no other fields; it carries the host's own terminal")
 		}
 		return nil
@@ -204,8 +243,17 @@ func validateSpecPane(pane LayoutPane) error {
 		if strings.TrimSpace(pane.Provider) == "" {
 			return fmt.Errorf("a resource pane needs its configured \"provider\" instance")
 		}
+		if strings.TrimSpace(pane.Collection) != "" {
+			if len(pane.Targets) > 1 {
+				return fmt.Errorf("a resource pane with a \"collection\" takes at most one target, the row to open")
+			}
+			return nil
+		}
+		if pane.Query != "" {
+			return fmt.Errorf("\"query\" needs a \"collection\" to search; a matched locator is not searched")
+		}
 		if len(pane.Targets) == 0 {
-			return fmt.Errorf("a resource pane needs at least one target")
+			return fmt.Errorf("a resource pane needs at least one target, or a \"collection\" to list")
 		}
 		return nil
 	default:
@@ -465,6 +513,14 @@ type Target struct {
 	// other kind and for senders (the CLI) with no matcher snapshot, and a host
 	// with one fills it in.
 	Matcher string `json:"matcher,omitempty"`
+	// Collection names a protocol plugin's collection. A TargetKindResource
+	// carrying one is a plugin target rather than a matched locator: with an
+	// empty Value it opens the collection tab, and with a Value it opens that
+	// row's document tab. It is empty for every other kind.
+	Collection string `json:"collection,omitempty"`
+	// Query is the collection tab's opening query. It is meaningful only
+	// alongside Collection with no Value: a row's document is not searched.
+	Query string `json:"query,omitempty"`
 }
 
 // Options specifies optional placement flags. There is deliberately no focus

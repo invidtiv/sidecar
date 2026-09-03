@@ -88,9 +88,14 @@ type Plan struct {
 	Provider string
 	Matcher  string
 	Locator  string
-	Session  string
-	Task     string
-	Note     string
+	// Collection is set on a PlanOpenResource that names a plugin collection
+	// rather than a matched locator. With an empty Locator the plan opens the
+	// collection tab; with one it opens that row's document tab.
+	Collection string
+	Query      string
+	Session    string
+	Task       string
+	Note       string
 }
 
 // PlanKindsFromSpans lists every plan kind a scanned terminal-link span can
@@ -150,11 +155,29 @@ func Resolve(target uirequest.Target) (Plan, error) {
 		if provider == "" {
 			return Plan{}, errors.New("resource target has no provider instance")
 		}
-		if err := plainValue(value, "resource"); err != nil {
-			return Plan{}, err
-		}
 		if strings.ContainsFunc(provider, isControl) || strings.ContainsFunc(target.Matcher, isControl) {
 			return Plan{}, errors.New("resource provider contains control characters")
+		}
+		collection := strings.TrimSpace(target.Collection)
+		if collection != "" {
+			// The plugin shapes. A collection with no row lists; a collection
+			// with a row opens that row. Neither goes near a matcher: a plugin
+			// row is addressed by its collection and ID.
+			if strings.ContainsFunc(collection, isControl) || strings.ContainsFunc(target.Query, isControl) {
+				return Plan{}, errors.New("plugin collection contains control characters")
+			}
+			if value != "" {
+				if err := plainValue(value, "resource"); err != nil {
+					return Plan{}, err
+				}
+			}
+			return Plan{
+				Kind: PlanOpenResource, PluginID: WorkspacePluginID,
+				Provider: provider, Collection: collection, Query: target.Query, Locator: value,
+			}, nil
+		}
+		if err := plainValue(value, "resource"); err != nil {
+			return Plan{}, err
 		}
 		return Plan{
 			Kind: PlanOpenResource, PluginID: WorkspacePluginID,

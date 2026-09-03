@@ -76,21 +76,8 @@ type Pane struct {
 }
 
 // NewPane binds a tab set to a surface.
-//
-// It also installs the leaf's own answer to Enter on a collection row: open the
-// row as a second tab in this same set, and focus it if it is already there.
-// That is the second Enter in the user contract, it costs no process, and it is
-// the same on both surfaces because it is written once here.
 func NewPane(tabs *Tabs, host Host) *Pane {
-	p := &Pane{Tabs: tabs, host: host}
-	if tabs != nil {
-		tabs.SetOpenRow(func(ref Ref) tea.Cmd {
-			cmd := tabs.Open(ref)
-			p.persist()
-			return cmd
-		})
-	}
-	return p
+	return &Pane{Tabs: tabs, host: host}
 }
 
 // ActivateFromTerminal is the click journey: the terminal ritual first, then

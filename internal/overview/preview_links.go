@@ -182,9 +182,11 @@ func (m *Model) activatePreviewPlan(plan targetactivation.Plan) (tea.Cmd, bool) 
 		cmd = m.attachPreviewSession(plan.Session)
 	case targetactivation.PlanOpenResource:
 		cmd = m.activatePreviewResource(resourceview.Ref{
-			Instance: plan.Provider,
-			Matcher:  plan.Matcher,
-			Locator:  plan.Locator,
+			Instance:   plan.Provider,
+			Matcher:    plan.Matcher,
+			Locator:    plan.Locator,
+			Collection: plan.Collection,
+			Query:      plan.Query,
 		})
 	default:
 		return nil, false

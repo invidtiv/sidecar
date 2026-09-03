@@ -903,21 +903,27 @@ The encoded JSON is capped under 768KiB; a payload that would blow that cap is t
 Issue fallback candidates come from this host's configured projects.
 Diff operations are enumerated: working-tree, working-tree-file, commit, range, commit-file, full-file.
 Resource reads return the provider wire document; the viewer sanitizes again. --refresh bypasses the host manager cache.
+The collection and item operations are the plugin protocol's: collection lists one collection of --provider, item expands one row of it. A Resource pane bound to this host asks through them, so it lists this machine's plugins rather than the viewer's.
 
 --json writes the machine contract.
 
 ```
-Usage: sidecar content read --workspace ID --kind file|issue|note|diff|resource --operation OP --target VALUE [--provider ID --matcher ID] [--path PATH] [--parent HASH] [--offset N] [--limit N] [--if-revision REV] [--refresh] [--json]
+Usage: sidecar content read --workspace ID --kind file|issue|note|diff|resource --operation OP [--target VALUE] [--provider ID --matcher ID] [--collection ID --query Q --view ID --sort ID --cursor C] [--path PATH] [--parent HASH] [--offset N] [--limit N] [--if-revision REV] [--refresh] [--json]
 ```
 
 **Options:**
 
 - `--workspace ID`: Unscoped durable workspace id (projectKey:shell:name or projectKey:worktree:path)
 - `--kind KIND`: Content kind (file, issue, note, diff, or resource)
-- `--operation OP`: Read operation (document, card, note, resource, working-tree, working-tree-file, commit, range, commit-file, or full-file)
+- `--operation OP`: Read operation (document, card, note, resource, collection, item, working-tree, working-tree-file, commit, range, commit-file, or full-file)
 - `--target VALUE`: File path, issue/note id, git spec, or resource locator as resolved or as the viewer saw it
 - `--provider ID`: Resource provider instance id
 - `--matcher ID`: Resource matcher id
+- `--collection ID`: Plugin collection id for the collection and item operations
+- `--query Q`: Collection search query
+- `--view ID`: Collection view id
+- `--sort ID`: Collection sort key id
+- `--cursor C`: Opaque page cursor from a previous collection read
 - `--path PATH`: Diff file path for working-tree-file, commit-file, and full-file
 - `--parent HASH`: Merge parent hash for commit-file and full-file
 - `--offset N`: Full-file page offset in lines
@@ -939,6 +945,7 @@ Usage: sidecar content read --workspace ID --kind file|issue|note|diff|resource 
 ```bash
 sidecar content read --workspace /home/me/api:shell:sidecar-sh-1 --kind file --operation document --target README.md --json
 sidecar content read --workspace /home/me/api:shell:sidecar-sh-1 --kind file --operation document --target README.md --if-revision v1:abc --json
+sidecar content read --workspace /home/me/api:shell:sidecar-sh-1 --kind resource --operation collection --provider recall --collection results --query dex --json
 ```
 
 ### `sidecar content resolve`
@@ -967,6 +974,11 @@ Usage: sidecar content resolve --workspace ID --kind file|issue|note|diff|resour
 - `--target VALUE`: File path, issue/note id, git spec, or resource locator as the viewer saw it
 - `--provider ID`: Resource provider instance id
 - `--matcher ID`: Resource matcher id
+- `--collection ID`: Plugin collection id for the collection and item operations
+- `--query Q`: Collection search query
+- `--view ID`: Collection view id
+- `--sort ID`: Collection sort key id
+- `--cursor C`: Opaque page cursor from a previous collection read
 - `--json`: Write the structured result object to stdout (required for the machine contract)
 - `-h, --help`: Show this help
 
@@ -2027,17 +2039,21 @@ sidecar notify test --channel native --source td --json
 
 ## `sidecar open`
 
-Show a file, a td issue, a note, a git diff, or a provider resource in a split pane
+Show a file, a td issue, a note, a git diff, a plugin resource, or a plugin collection in a split pane
 
-Show a file, a td issue, a td note, a git diff, or an external provider resource to the user as a
+Show a file, a td issue, a td note, a git diff, an external resource, or a plugin collection to the user as a
 split pane in a Sidecar workspace. From a Sidecar shell this targets that shell.
 Otherwise it targets the unique running instance, or a specific --shell / --project.
 --sessions addresses the global Sessions surface of a running instance.
 Pass --sessions=ROW for a durable inventory ID or display name; a following
 bare word is the open target, not the row. Mutually exclusive with --shell
 and --project.
---diff with no spec is the working tree. --provider names a configured terminal resource
-provider instance and is required for a resource: a bare locator is never guessed at.
+--diff with no spec is the working tree. --plugin names a configured plugin instance:
+with --collection it opens that collection's tab (add --query to open it searched, or a
+positional row id to open that row's document instead), and without --collection it
+opens a matched locator through the plugin's matchers. --provider is the older spelling
+of the locator form and still works. Either way the instance is required for a resource:
+a bare locator is never guessed at.
 --split only overrides the split axis; it never halves a live terminal after content is open.
 --at places the pane at an explicit grid cell and is a requirement: a kind whose open
 would retarget an existing pane, or any cell that cannot be honored exactly, declines
@@ -2060,13 +2076,17 @@ Usage: sidecar open [options] [<target>]
 - `sidecar://note/nt-xxxx`: A td note, opened as a read-only pane
 - `--diff`: Working-tree diff (wt); add a spec for a commit or range
 - `spec`: A git commit or range (abc1234, A..B); --diff accepts HEAD and branch names
-- `locator`: With --provider, a resource key such as CASH-1245
+- `locator`: With --plugin (or --provider), a resource key such as CASH-1245
+- `row id`: With --plugin and --collection, one row of that collection
 
 **Options:**
 
 - `--line N`: Line to reveal (alternative to "path:line")
 - `--diff`: Open a Diff leaf (working tree if no spec)
-- `--provider ID`: Open a locator through a configured terminal resource provider
+- `--plugin ID`: Open through a configured plugin instance (collection tab with --collection, otherwise a matched locator)
+- `--provider ID`: Alias for --plugin's locator form, kept for the frozen resource protocol
+- `--collection C`: With --plugin, the collection to open as a tab
+- `--query Q`: With --collection, the query the tab opens searched on
 - `--shell NAME`: Target a registered shell by display name or tmux name
 - `--project NAME`: Target a project's Workspaces surface (slug, basename, or path)
 - `--sessions [=ROW]`: Target the global Sessions surface (optional row as --sessions=ID)
@@ -2104,6 +2124,10 @@ sidecar open --diff HEAD
 sidecar open abc1234
 # resource pane for that provider's locator
 sidecar open --provider jira-work CASH-1245
+# a collection tab beside the terminal, opened searched
+sidecar open --plugin recall --collection results --query dex --split right
+# one row's document tab
+sidecar open --plugin ongoing --collection projects recall
 # structured result for the agent
 sidecar open --json --split below README.md
 # explicit cell: second column, top row
@@ -2422,6 +2446,48 @@ Usage: sidecar plugin disable [--json] <id>
 
 ```bash
 sidecar plugin disable recall
+```
+
+### `sidecar plugin changed`
+
+Tell running Sidecar instances a plugin's data moved
+
+Write one request onto the bus saying that a plugin's data changed. Every
+running instance re-lists the visible tabs of that plugin; a tab nobody is
+looking at costs nothing, so this is safe from a shell hook.
+
+It is the poke for a change no declared watch path would catch. A plugin
+whose store is one file should declare it under refresh.watch instead and
+need no hook at all.
+
+--collection narrows the refresh to one collection. Omit it when the tool
+does not know what it touched.
+
+This starts no plugin and reads no configuration: it neither knows nor cares
+whether the id names a configured plugin, because only a running instance
+has the tabs that would answer.
+
+```
+Usage: sidecar plugin changed [--collection C] [--json] <id>
+```
+
+**Options:**
+
+- `--collection C`: Narrow the refresh to one collection
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: the request was written
+- `1`: the request could not be written
+- `2`: usage error
+
+**Examples:**
+
+```bash
+sidecar plugin changed dex --collection people
+sidecar plugin changed recall --json
 ```
 
 ## `sidecar project`

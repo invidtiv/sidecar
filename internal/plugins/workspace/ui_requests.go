@@ -623,7 +623,8 @@ func (p *Plugin) performTargetOpen(req uirequest.Request, root, surface string) 
 		cmd = p.openDiffPaneForSurface(root, surface, spec)
 		opened = p.diffPaneShows(spec)
 	case uirequest.TargetKindResource:
-		ref, refusal := resourceview.ReferenceForLocator(p.resourceMatchers, req.Target.Provider, req.Target.Value)
+		ref, refusal := resourceview.ReferenceForRequest(p.resourceMatchers,
+			req.Target.Provider, req.Target.Matcher, req.Target.Collection, req.Target.Query, req.Target.Value)
 		if refusal != "" {
 			return openOutcome{status: uirequest.StatusDeclined, reason: refusal}, nil
 		}

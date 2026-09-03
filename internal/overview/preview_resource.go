@@ -206,7 +206,10 @@ func (m *Model) openPreviewResourceRefResult(ref resourceview.Ref, fromTerminal 
 	if fromTerminal {
 		m.clearPreviewSelection()
 	}
-	return m.openPreviewContent(contentlink.Ref{Kind: contentlink.KindResource, Provider: ref.Instance, Matcher: ref.Matcher, Value: ref.Locator}, "Resource"), nil
+	return m.openPreviewContent(contentlink.Ref{
+		Kind: contentlink.KindResource, Provider: ref.Instance, Matcher: ref.Matcher, Value: ref.Locator,
+		Collection: ref.Collection, Query: ref.Query,
+	}, "Resource"), nil
 }
 
 // previewResourceResolver wraps the host-supplied resolver so every answer

@@ -138,6 +138,7 @@ func (m *Model) previewDeckConfig(ctx contentpanes.SurfaceContext) contentpanes.
 	return contentpanes.Config{
 		Source:           m.documentSource(ctx),
 		ResourceResolver: m.previewResourceResolver(ctx.Surface, ctx.Epoch),
+		PluginCalls:      m.pluginCalls,
 		ConfigureViewer: func(kind panelayout.Kind, model any) {
 			switch view := model.(type) {
 			case *issueview.Model:
@@ -366,6 +367,7 @@ func (m *Model) syncPreviewDeckProjection(ctx contentpanes.SurfaceContext) {
 			res.surface, res.epoch = ctx.Surface, ctx.Epoch
 			res.tabs.Items = nil
 			res.tabs.SetResolver(m.previewResourceResolver(ctx.Surface, ctx.Epoch))
+			res.tabs.SetCallsFor(m.pluginCalls)
 			res.tabs.SetEpoch(ctx.Epoch)
 			for _, item := range items {
 				if view, ok := item.Viewer.(*resourceview.Model); ok {

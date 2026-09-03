@@ -40,7 +40,10 @@ func (m *Model) activateTarget(req ActivateTargetMsg) tea.Cmd {
 		case targetactivation.PlanOpenDiff:
 			ref = contentlink.Ref{Kind: contentlink.KindDiff, Value: plan.Spec}
 		case targetactivation.PlanOpenResource:
-			ref = contentlink.Ref{Kind: contentlink.KindResource, Provider: plan.Provider, Matcher: plan.Matcher, Value: plan.Locator}
+			ref = contentlink.Ref{
+				Kind: contentlink.KindResource, Provider: plan.Provider, Matcher: plan.Matcher,
+				Value: plan.Locator, Collection: plan.Collection, Query: plan.Query,
+			}
 		}
 		if ref.Kind != "" {
 			return m.openAppContent(h.workdir, h.pluginID, ref)
@@ -73,6 +76,9 @@ func (m *Model) activateTarget(req ActivateTargetMsg) tea.Cmd {
 	case targetactivation.PlanOpenDiff:
 		return tea.Batch(FocusPlugin(plan.PluginID), OpenDiffPane(plan.Spec))
 	case targetactivation.PlanOpenResource:
+		if plan.Collection != "" {
+			return tea.Batch(FocusPlugin(plan.PluginID), OpenPluginPane(plan.Provider, plan.Collection, plan.Query, plan.Locator))
+		}
 		return tea.Batch(FocusPlugin(plan.PluginID), OpenResourcePane(plan.Provider, plan.Matcher, plan.Locator))
 	case targetactivation.PlanAttachSession:
 		return tea.Batch(FocusPlugin(plan.PluginID), AttachSession(plan.Session))

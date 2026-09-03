@@ -179,7 +179,10 @@ func (p *Plugin) openResourcePaneForSurfaceMode(root, surface string, ref resour
 	if p.viewMode == ViewModeInteractive {
 		p.exitInteractiveMode()
 	}
-	return p.openWorkspaceContent(root, surface, contentlink.Ref{Kind: contentlink.KindResource, Provider: ref.Instance, Matcher: ref.Matcher, Value: ref.Locator}, "Resource")
+	return p.openWorkspaceContent(root, surface, contentlink.Ref{
+		Kind: contentlink.KindResource, Provider: ref.Instance, Matcher: ref.Matcher, Value: ref.Locator,
+		Collection: ref.Collection, Query: ref.Query,
+	}, "Resource")
 }
 
 // applyResourceResolved delivers a resolve to the tab that asked for it. The
@@ -451,4 +454,15 @@ func (p *Plugin) visibleResourceTabs() []*resourceview.Model {
 		}
 	}
 	return out
+}
+
+// openRowInResourceLeaf is Enter on a collection row: the row opens as a
+// sibling tab in the same leaf, through the same journey `sidecar open` takes.
+// A row whose tab is already open is focused rather than fetched again.
+func (p *Plugin) openRowInResourceLeaf(ref resourceview.Ref) tea.Cmd {
+	root, surface, ok := p.selectedTerminalSurface()
+	if !ok || !ref.Valid() {
+		return nil
+	}
+	return p.openRequestedResourcePaneForSurface(root, surface, ref)
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/marcus/sidecar/internal/pluginhost"
 	"github.com/marcus/sidecar/internal/plugins/assembly"
 	"github.com/marcus/sidecar/internal/resource"
+	"github.com/marcus/sidecar/internal/uirequest"
 )
 
 // `sidecar plugin` is the non-interactive surface for the plugin ecosystem.
@@ -472,6 +473,43 @@ func pluginCommand() *Command {
 		Run:     runPluginDisable,
 	}
 
+	changedCmd := &Command{
+		Name:    "changed",
+		Summary: "Tell running Sidecar instances a plugin's data moved",
+		Usage:   "sidecar plugin changed [--collection C] [--json] <id>",
+		Long: "Write one request onto the bus saying that a plugin's data changed. Every\n" +
+			"running instance re-lists the visible tabs of that plugin; a tab nobody is\n" +
+			"looking at costs nothing, so this is safe from a shell hook.\n\n" +
+			"It is the poke for a change no declared watch path would catch. A plugin\n" +
+			"whose store is one file should declare it under refresh.watch instead and\n" +
+			"need no hook at all.\n\n" +
+			"--collection narrows the refresh to one collection. Omit it when the tool\n" +
+			"does not know what it touched.\n\n" +
+			"This starts no plugin and reads no configuration: it neither knows nor cares\n" +
+			"whether the id names a configured plugin, because only a running instance\n" +
+			"has the tabs that would answer.",
+		Flags: []Flag{
+			{Name: "--collection", Arg: "C", Summary: "Narrow the refresh to one collection"},
+			jsonFlag, helpFlag,
+		},
+		Args: ArgSpec{Min: 1, Max: 1, Description: "plugin id"},
+		ExitCodes: []ExitCode{
+			{Code: pluginExitOK, Summary: "the request was written"},
+			{Code: pluginExitFailed, Summary: "the request could not be written"},
+			{Code: pluginExitUsage, Summary: "usage error"},
+		},
+		Examples: []Example{
+			{Command: "sidecar plugin changed dex --collection people"},
+			{Command: "sidecar plugin changed recall --json"},
+		},
+		Agent: AgentDoc{
+			Invocation: "sidecar plugin changed <id> [--collection C]",
+			Summary:    "Re-list a plugin's visible tabs after your tool wrote something",
+		},
+		Mutates: true,
+		Run:     runPluginChanged,
+	}
+
 	return &Command{
 		Name:    "plugin",
 		Summary: "Inspect and configure the plugins Sidecar hosts",
@@ -488,7 +526,7 @@ func pluginCommand() *Command {
 			"The draft protocol is behind the plugin_protocol feature flag. Turn it on\n" +
 			"with `sidecar --enable-feature=plugin_protocol`, or set\n" +
 			"features.flags.plugin_protocol.",
-		Sub: []*Command{listCmd, checkCmd, callCmd, addCmd, removeCmd, enableCmd, disableCmd},
+		Sub: []*Command{listCmd, checkCmd, callCmd, addCmd, removeCmd, enableCmd, disableCmd, changedCmd},
 		Run: runPluginRoot,
 	}
 }
@@ -1817,5 +1855,98 @@ func runPluginConfigVerb(env Env, args []string, verb, past string, plan func(co
 		return writeJSON(env, report)
 	}
 	_, _ = fmt.Fprintf(env.Stdout, "%s %s. Restart Sidecar for it to take effect.\n", instance.ID, past)
+	return pluginExitOK
+}
+
+// runPluginChanged writes one plugin-changed request onto the bus.
+//
+// It starts nothing and asks nothing. The request says only that a plugin's
+// data moved; every running instance decides for itself whether it has a tab of
+// that plugin on screen, and only such a tab spends a process. That is what
+// makes this safe to call from a shell hook after every `dex log`.
+func runPluginChanged(env Env, args []string) int {
+	cmd := RootCommand().FindSubcommand("plugin").FindSubcommand("changed")
+	help := RenderHelp(cmd)
+
+	jsonOutput := false
+	collection := ""
+	var positional []string
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "-h" || arg == "--help":
+			_, _ = fmt.Fprint(env.Stdout, help)
+			return pluginExitOK
+		case arg == "--json":
+			jsonOutput = true
+		case arg == "--collection" || strings.HasPrefix(arg, "--collection="):
+			val, next, ok := takeFlagArg(arg, args, i, "--collection")
+			if !ok || val == "" {
+				cliErrf(env.Stderr, "--collection requires a collection id\n\n%s", help)
+				return pluginExitUsage
+			}
+			collection = val
+			i = next
+		default:
+			if strings.HasPrefix(arg, "-") {
+				cliErrf(env.Stderr, "unknown option %q\n\n%s", arg, help)
+				return pluginExitUsage
+			}
+			positional = append(positional, arg)
+		}
+	}
+	if len(positional) != 1 {
+		cliErrf(env.Stderr, "changed requires exactly one plugin id\n\n%s", help)
+		return pluginExitUsage
+	}
+	instance := strings.TrimSpace(positional[0])
+	payload, err := json.Marshal(uirequest.PluginChangedPayload{Instance: instance, Collection: collection})
+	if err != nil {
+		cliErrln(env.Stderr, err)
+		return pluginExitFailed
+	}
+	if _, err := uirequest.DecodePluginChangedPayload(payload); err != nil {
+		cliErrf(env.Stderr, "validation error: %v\n\n%s", err, help)
+		return pluginExitUsage
+	}
+
+	ctx := env.Ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	origin := uirequest.Origin{PID: os.Getpid()}
+	if dest, derr := resolveOpenDestination(ctx, env.StateDir, "", "", resolveProjectOnly); derr == nil {
+		origin = dest.Origin
+	}
+	req := uirequest.Request{
+		Version:   1,
+		ID:        uirequest.NewRequestID(),
+		CreatedAt: time.Now().UTC(),
+		TTLMs:     int(uirequest.DefaultTTL / time.Millisecond),
+		Origin:    origin,
+		Action:    uirequest.ActionPluginChanged,
+		Payload:   payload,
+	}
+	if _, err := uirequest.WriteRequest(env.StateDir, req); err != nil {
+		cliErrln(env.Stderr, err)
+		return pluginExitFailed
+	}
+	if jsonOutput {
+		out := struct {
+			ID         string `json:"id"`
+			Instance   string `json:"instance"`
+			Collection string `json:"collection,omitempty"`
+		}{ID: req.ID, Instance: instance, Collection: collection}
+		if err := json.NewEncoder(env.Stdout).Encode(out); err != nil {
+			cliErrln(env.Stderr, err)
+			return pluginExitFailed
+		}
+		return pluginExitOK
+	}
+	what := instance
+	if collection != "" {
+		what = instance + "/" + collection
+	}
+	_, _ = fmt.Fprintf(env.Stdout, "Told running Sidecar instances that %s changed.\n", what)
 	return pluginExitOK
 }

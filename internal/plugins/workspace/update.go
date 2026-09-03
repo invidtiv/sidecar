@@ -138,7 +138,13 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		p.applyResourceResolved(msg)
 		return p, nil
-	case pluginbrowser.ListedMsg, pluginbrowser.GotMsg, pluginbrowser.ActedMsg, pluginbrowser.DescribedMsg, pluginbrowser.QueryDebouncedMsg:
+	case resourceview.OpenRowMsg:
+		// Enter on a collection row. It travels as a message rather than a
+		// direct call so the row opens through this surface's own open journey,
+		// which is what focuses a tab that is already there instead of fetching
+		// it twice.
+		return p, p.openRowInResourceLeaf(msg.Ref)
+	case pluginbrowser.ListedMsg, pluginbrowser.GotMsg, pluginbrowser.ActedMsg, pluginbrowser.DescribedMsg, pluginbrowser.QueryDebouncedMsg, pluginbrowser.ChangedMsg:
 		// A collection or row tab's own answers. They reach the tab that asked
 		// the same way a resolve reaches a card: as a broadcast each viewer
 		// either owns or does not, so a page for a tab that has closed lands

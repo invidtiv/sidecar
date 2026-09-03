@@ -147,10 +147,15 @@ type (
 	// OpenDiffPaneMsg opens a git spec in a diff pane. The host re-resolves the
 	// spec in its own checkout, so a crafted spec cannot skip rev-parse.
 	OpenDiffPaneMsg struct{ Spec string }
-	// OpenResourcePaneMsg opens an external provider's locator in a resource
-	// pane. Matcher may be empty; the host's live matcher snapshot then decides
-	// which matcher claims the locator, and refuses when none does.
-	OpenResourcePaneMsg struct{ Provider, Matcher, Locator string }
+	// OpenResourcePaneMsg opens one of a Resource leaf's three tab shapes.
+	//
+	// With Collection empty it is a matched locator: Matcher may be empty, and
+	// the host's live matcher snapshot then decides which matcher claims the
+	// locator, refusing out loud when none does. With Collection set it is a
+	// plugin tab — the collection's list when Locator is empty, and that row's
+	// document when it is not — and no matcher is consulted, because a plugin
+	// row is addressed by its collection and ID.
+	OpenResourcePaneMsg struct{ Provider, Matcher, Locator, Collection, Query string }
 	// AttachSessionMsg attaches a tmux session by name. The host honours the
 	// same full-attach feature gate as every other attach path.
 	AttachSessionMsg struct{ Session string }
@@ -171,6 +176,14 @@ func OpenDiffPane(spec string) tea.Cmd {
 func OpenResourcePane(provider, matcher, locator string) tea.Cmd {
 	return func() tea.Msg {
 		return OpenResourcePaneMsg{Provider: provider, Matcher: matcher, Locator: locator}
+	}
+}
+
+// OpenPluginPane returns a command that opens a plugin collection tab, or one
+// row's document tab when row is non-empty.
+func OpenPluginPane(instance, collection, query, row string) tea.Cmd {
+	return func() tea.Msg {
+		return OpenResourcePaneMsg{Provider: instance, Collection: collection, Query: query, Locator: row}
 	}
 }
 
