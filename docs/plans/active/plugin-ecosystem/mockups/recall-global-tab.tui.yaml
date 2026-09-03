@@ -1,0 +1,142 @@
+# ==============================================================================
+# TUI STUDIO MOCKUP SPECIFICATION
+# ==============================================================================
+# WHAT THIS IS:
+# This file defines a high-fidelity Terminal User Interface (TUI) layout mockup.
+# It compiles directly into a deterministic 2D terminal character grid.
+# ==============================================================================
+# Plugin ecosystem M0: a protocol plugin (recall) in a global Tab placement.
+# The plugin sent only data (a results collection, a resource with sections);
+# every key, pill, cursor, and colour below is Sidecar's.
+# ==============================================================================
+
+title: "Recall as a global protocol plugin"
+viewport:
+  cols: 160
+  rows: 45
+theme: "catppuccin-mocha"
+
+states:
+  - name: "Results and detail"
+    layout:
+      type: vertical
+      children:
+        - type: bar
+          height: 1
+          style: "bg:surface0 fg:subtext"
+          left: " [bold][fg:accent]sidecar[/fg][/bold]  [kbd:8] Sessions  [kbd:9] Activity  [kbd:0] [reverse] Recall [/reverse]  [kbd:1] Files  [kbd:2] Git  [kbd:3] Workspaces  [kbd:4] Notes"
+          right: "sidecar · main "
+        - type: horizontal
+          flex: 1
+          children:
+            - type: pane
+              width: 74
+              title: " Recall · Results "
+              border: rounded
+              border_style: "fg:accent"
+              content:
+                - text: " [fg:accent]/[/fg] query: [bold]dex[/bold][reverse] [/reverse]                          [dim]7 results · [/dim][fg:yellow]degraded[/fg]"
+                - divider: ""
+                - table:
+                    headers: ["#", "TITLE", "SOURCE", "EXCERPT"]
+                    widths: [3, 26, 9, "40%"]
+                    selected_row: 0
+                    rows:
+                      - ["1", "DEX schema notes", "notes", "…people are tiered, and the tier…"]
+                      - ["2", "dex context --json", "shell", "…the star command; dumps every…"]
+                      - ["3", "People database, first cut", "notes", "…handles, aliases, relationships…"]
+                      - ["4", "td-3fa2c1 Import people.md", "td", "…import from people.md keeps the…"]
+                      - ["5", "Weekly review 2026-08-18", "notes", "…promote three contacts to inner…"]
+                      - ["6", "dex brief for session boot", "shell", "…inner circle summary…"]
+                      - ["7", "Handles and phone numbers", "notes", "…one phone per handle kind…"]
+                - divider: ""
+                - text: " [fg:yellow]⚠[/fg] 1 of 4 sources did not answer [dim](mail: checkpoint stale)[/dim]"
+            - type: pane
+              flex: 1
+              title: " DEX schema notes "
+              border: rounded
+              border_style: "fg:border"
+              content:
+                - text: " [bold]DEX schema notes[/bold]                       [badge:green:black:exact]  [dim]notes · 2026-08-14[/dim]"
+                - text: " [dim]Source[/dim]   notes          [dim]Locator[/dim]  rc:notes:2026-08-14-dex-design"
+                - text: " [dim]Updated[/dim]  2 weeks ago    [dim]Corroborated[/dim]  2 records"
+                - divider: "Evidence"
+                - text: " People are tiered. The tier drives what [bold]brief[/bold] shows at session"
+                - text: " boot and what [bold]stale[/bold] considers overdue. Promotion and demotion"
+                - text: " are explicit commands so an agent never guesses a tier from"
+                - text: " interaction counts alone."
+                - text: ""
+                - text: " Handles, aliases, links, and phones hang off the person; a merge"
+                - text: " keeps the first and moves everything attached from the second."
+                - divider: "Timeline"
+                - text: " [dim]2w ago[/dim]   Note added"
+                - text: " [dim]13d ago[/dim]  Linked from [fg:accent]td-3fa2c1[/fg]"
+                - text: " [dim]9d ago[/dim]   Corroborated by [fg:accent]rc:shell:dex-context[/fg]"
+        - type: bar
+          height: 1
+          style: "bg:surface0 fg:subtext"
+          left: " [kbd:j/k] Move  [kbd:Enter] Open  [kbd:/] Query  [kbd:r] Refresh  [kbd:a] Actions  [kbd:o] Source  [kbd:n] Pane  [kbd:Tab] Focus"
+          right: "[kbd:?] Help  [kbd:q] Quit "
+
+  - name: "Action form"
+    layout:
+      type: vertical
+      children:
+        - type: bar
+          height: 1
+          style: "bg:surface0 fg:subtext"
+          left: " [bold][fg:accent]sidecar[/fg][/bold]  [kbd:8] Sessions  [kbd:9] Activity  [kbd:0] [reverse] DEX [/reverse]  [kbd:1] Files  [kbd:2] Git  [kbd:3] Workspaces  [kbd:4] Notes"
+          right: "sidecar · main "
+        - type: horizontal
+          flex: 1
+          children:
+            - type: pane
+              width: 74
+              title: " DEX · People "
+              border: rounded
+              border_style: "fg:accent"
+              content:
+                - text: " [reverse] Inner [/reverse] [dim] Circle   Contacts   Stale [/dim]                    [dim]sort:[/dim] recent ↓"
+                - divider: ""
+                - table:
+                    headers: ["NAME", "TIER", "LAST", "NEXT"]
+                    widths: [24, 8, 12, "40%"]
+                    selected_row: 1
+                    rows:
+                      - ["Ada Byron", "inner", "2d ago", "send eval pack"]
+                      - ["Grace Hopper", "inner", "9d ago", "coffee, retrieval demo"]
+                      - ["Linus Pauling", "inner", "3w ago", "[fg:yellow]stale[/fg] · follow up"]
+                      - ["Mary Somerville", "circle", "1d ago", ""]
+            - type: pane
+              flex: 1
+              title: " Grace Hopper "
+              border: rounded
+              border_style: "fg:border"
+              content:
+                - text: " [bold]Grace Hopper[/bold]                                 [badge:accent:black:inner]"
+                - text: " [dim]Handles[/dim]  @grace · grace@example.test      [dim]Phone[/dim]  +1 555 0100"
+                - divider: "Timeline"
+                - text: " [dim]9d ago[/dim]   Call · retrieval eval pack review"
+                - text: " [dim]3w ago[/dim]   Event · conference dinner"
+        - type: bar
+          height: 1
+          style: "bg:surface0 fg:subtext"
+          left: " [kbd:Esc] Cancel  [kbd:Ctrl+Enter] Log note"
+          right: "act · log-note "
+    modals:
+      - title: " Log a note · Grace Hopper "
+        width: 70
+        height: 12
+        border: rounded
+        border_style: "fg:accent"
+        shadow: true
+        content:
+          - text: " [dim]text[/dim] [fg:error]*[/fg]"
+          - text: " ┌────────────────────────────────────────────────────────────────┐"
+          - text: " │ Met at the retrieval workshop; follow up about the eval pack.  │"
+          - text: " │ [reverse] [/reverse]                                                              │"
+          - text: " └────────────────────────────────────────────────────────────────┘"
+          - text: ""
+          - bar:
+              style: "bg:surface1 fg:fg"
+              center: "[ [bold][fg:accent]Ctrl+Enter[/fg][/bold] Log note ]    [ [bold]Esc[/bold] Cancel ]"

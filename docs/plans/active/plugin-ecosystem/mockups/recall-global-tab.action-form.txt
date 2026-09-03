@@ -1,0 +1,45 @@
+ sidecar  [8] Sessions  [9] Activity  [0]  DEX   [1] Files  [2] Git  [3] Workspaces  [4] Notes                                                   sidecar · main
+╭─ DEX · People ─────────────────────────────────────────────────────────╮╭─ Grace Hopper ─────────────────────────────────────────────────────────────────────╮
+│  Inner   Circle   Contacts   Stale                     sort: recent ↓  ││ Grace Hopper                                  inner                                │
+│────────────────────────────────────────────────────────────────────────││ Handles  @grace · grace@example.test      Phone  +1 555 0100                       │
+│NAME                      TIER      LAST          NEXT                  ││── Timeline ────────────────────────────────────────────────────────────────────────│
+│────────────────────────  ────────  ────────────  ───────────────────────│ 9d ago   Call · retrieval eval pack review                                         │
+│Ada Byron                 inner     2d ago        send eval pack        ││ 3w ago   Event · conference dinner                                                 │
+│Grace Hopper              inner     9d ago        coffee, retrieval demo││                                                                                    │
+│Linus Pauling             inner     3w ago        stale · follow up     ││                                                                                    │
+│Mary Somerville           circle    1d ago                              ││                                                                                    │
+│                                                                        ││                                                                                    │
+│                                                                        ││                                                                                    │
+│                                                                        ││                                                                                    │
+│                                                                        ││                                                                                    │
+│                                                                        ││                                                                                    │
+│                                                                        ││                                                                                    │
+│                                            ╭──────────────────── Log a note · Grace Hopper ─────────────────────╮                                            │
+│                                            │  text *                                                            │░░                                          │
+│                                            │  ┌──────────────────────────────────────────────────────────────── │░░                                          │
+│                                            │  │ Met at the retrieval workshop; follow up about the eval pack.   │░░                                          │
+│                                            │  │                                                                 │░░                                          │
+│                                            │  └──────────────────────────────────────────────────────────────── │░░                                          │
+│                                            │                                                                    │░░                                          │
+│                                            │               Ctrl+Enter Log note ]    Esc Cancel ]                │░░                                          │
+│                                            │                                                                    │░░                                          │
+│                                            │                                                                    │░░                                          │
+│                                            │                                                                    │░░                                          │
+│                                            ╰────────────────────────────────────────────────────────────────────╯░░                                          │
+│                                              ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░                                          │
+│                                                                        ││                                                                                    │
+│                                                                        ││                                                                                    │
+│                                                                        ││                                                                                    │
+│                                                                        ││                                                                                    │
+│                                                                        ││                                                                                    │
+│                                                                        ││                                                                                    │
+│                                                                        ││                                                                                    │
+│                                                                        ││                                                                                    │
+│                                                                        ││                                                                                    │
+│                                                                        ││                                                                                    │
+│                                                                        ││                                                                                    │
+│                                                                        ││                                                                                    │
+│                                                                        ││                                                                                    │
+│                                                                        ││                                                                                    │
+╰────────────────────────────────────────────────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────╯
+ [Esc] Cancel  [Ctrl+Enter] Log note                                                                                                             act · log-note
