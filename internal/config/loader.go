@@ -177,10 +177,12 @@ type rawPluginsConfig struct {
 }
 
 type rawNotesConfig struct {
+	Enabled       *bool  `json:"enabled"`
 	DefaultEditor string `json:"defaultEditor"`
 }
 
 type rawTasksConfig struct {
+	Enabled  *bool  `json:"enabled"`
 	Position string `json:"position"`
 }
 
@@ -370,11 +372,19 @@ func mergeConfig(cfg *Config, raw *rawConfig) {
 	}
 
 	// Tasks
+	if raw.Plugins.Tasks.Enabled != nil {
+		enabled := *raw.Plugins.Tasks.Enabled
+		cfg.Plugins.Tasks.Enabled = &enabled
+	}
 	if raw.Plugins.Tasks.Position != "" {
 		cfg.Plugins.Tasks.Position = raw.Plugins.Tasks.Position
 	}
 
 	// Notes
+	if raw.Plugins.Notes.Enabled != nil {
+		enabled := *raw.Plugins.Notes.Enabled
+		cfg.Plugins.Notes.Enabled = &enabled
+	}
 	if raw.Plugins.Notes.DefaultEditor != "" {
 		cfg.Plugins.Notes.DefaultEditor = raw.Plugins.Notes.DefaultEditor
 	}

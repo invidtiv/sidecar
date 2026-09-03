@@ -825,8 +825,8 @@ func (m Model) headerGeometry() headerLayout {
 
 	global := m.globalTabsVisible()
 	for i, tab := range global {
-		ref := globalTabRef(tab)
-		text := styles.RenderTab(tab.Name(), i, len(global), m.inGlobalScope() && tab == m.globalTab, false)
+		ref := globalTabRef(tab.id)
+		text := styles.RenderTab(tab.name, i, len(global), m.inGlobalScope() && tab.id == m.globalTab, false)
 		layout.globalTabs = append(layout.globalTabs, headerTab{ref: ref, text: text})
 	}
 	selectorLabel := "Select Project"
@@ -1194,15 +1194,13 @@ func (m *Model) renderContent(width, height int) string {
 
 // renderGlobalContent renders the visible global tab.
 func (m *Model) renderGlobalContent(width, height int) string {
-	switch m.globalTab {
-	case GlobalTasks:
-		if host := m.globalTasksPlugin(); host != nil {
-			if h := m.activeContentDeck(); h != nil {
-				return m.renderContentDeck(h, width, height)
-			}
-			return host.View(width, height)
+	if host := m.globalPluginPlugin(); host != nil {
+		if h := m.activeContentDeck(); h != nil {
+			return m.renderContentDeck(h, width, height)
 		}
-	case GlobalSessions:
+		return host.View(width, height)
+	}
+	if m.globalTab == GlobalSessions {
 		if m.overview != nil {
 			return m.overview.WorkspacesView(width, height)
 		}
@@ -1352,8 +1350,8 @@ func (m Model) footerHints() []footerHint {
 		// host is app-global Tasks. Its Close/Tab/Focus controls must outrank the
 		// covered host's commands just as its keys and help context do.
 		hints = m.commandFooterHints((&m).appContentCommands(), m.activeContext)
-	case m.globalTasksFocused():
-		hints = m.pluginFooterHints(m.globalTasksPlugin(), m.activeContext)
+	case m.globalPluginFocused():
+		hints = m.pluginFooterHints(m.globalPluginPlugin(), m.activeContext)
 	case m.inGlobalScope() && m.globalTab == GlobalSessions:
 		// Typing is the host's "only ways out" footer — almost every key is
 		// already on its way to the pane. Every other Workspaces context,
@@ -1428,8 +1426,8 @@ func (m Model) globalFooterHints() []footerHint {
 		}
 		var globalKeys []string
 		for _, tab := range m.globalTabsVisible() {
-			if key := globalTabKey(tab); key != "" {
-				globalKeys = append(globalKeys, key)
+			if tab.key != "" {
+				globalKeys = append(globalKeys, tab.key)
 			}
 		}
 		if len(globalKeys) > 0 {
@@ -1637,16 +1635,17 @@ func (m *Model) helpSurface() (title, context string) {
 		return "Notifications", notificationCentreContext
 	}
 	if m.inGlobalScope() {
-		if host := m.globalTasksPlugin(); m.globalTasksFocused() && host != nil {
+		if host := m.globalPluginPlugin(); host != nil {
 			if _, ok := m.appContentContext(); ok {
 				return host.Name() + " content", m.activeContext
 			}
 			return host.Name(), host.FocusContext()
 		}
+		tab, _ := m.activeGlobalSurface()
 		if m.globalWorkspacesVisible() {
-			return m.globalTab.Name(), m.overview.WorkspaceFocusContext()
+			return tab.name, m.overview.WorkspaceFocusContext()
 		}
-		return m.globalTab.Name(), m.globalTab.context()
+		return tab.name, tab.context
 	}
 	if p := m.ActivePlugin(); p != nil {
 		if _, ok := m.appContentContext(); ok {

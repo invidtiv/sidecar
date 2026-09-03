@@ -283,8 +283,8 @@ func TestGlobalWorkspacesActivationDroppedAfterLeavingTheCatalog(t *testing.T) {
 			return asAppModel(t, updated)
 		}},
 		{"on to another global tab", func(t *testing.T, m Model) Model {
-			m.globalTasks = &globalTasksHost{plugin: &hostedTestPlugin{id: "tasks"}, ctx: &plugin.Context{Keymap: m.keymap}}
-			cmd := m.setGlobalTab(GlobalTasks)
+			installGlobalHost(&m, globalTabTasks, "Tasks", &hostedTestPlugin{id: "tasks"})
+			cmd := m.setGlobalTab(globalTabTasks)
 			if cmd != nil {
 				cmd()
 			}

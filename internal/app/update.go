@@ -693,8 +693,8 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case RefreshMsg:
 		m.ui.MarkRefresh()
 		if m.inGlobalScope() {
-			if m.globalTasksFocused() {
-				return m, m.globalTasks.update(msg)
+			if host := m.focusedGlobalHost(); host != nil {
+				return m, host.update(msg)
 			}
 			return m, (&m).startVisibleGlobalTab()
 		}
@@ -1051,10 +1051,10 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, cmd)
 		}
 	}
-	// The global Tasks host is not in the registry, so it is forwarded here.
-	// This is what keeps its file watch, ticks, and agent queue running while
-	// any other tab — global or project — is visible.
-	if cmd := m.globalTasks.update(msg); cmd != nil {
+	// The global plugin hosts are not in the registry, so they are forwarded
+	// here. This is what keeps a global plugin's file watch, ticks, and queues
+	// running while any other tab — global or project — is visible.
+	if cmd := m.updateGlobalHosts(msg); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
 	m.updateContext()
@@ -1079,7 +1079,7 @@ func (m *Model) forwardApplicationFocus(msg tea.Msg) tea.Cmd {
 			cmds = append(cmds, cmd)
 		}
 	}
-	if cmd := m.globalTasks.update(msg); cmd != nil {
+	if cmd := m.updateGlobalHosts(msg); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
 	return tea.Batch(cmds...)
@@ -2053,14 +2053,17 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.selectProjectTabByNumber(int([]rune(msg.String())[0] - '1'))
 	case "8", "9", "0":
-		// The header's global entries, addressed by name. A key whose entry is
-		// disabled does nothing rather than falling through to a plugin tab.
+		// The header's global entries, addressed by name. These three keys are
+		// the global space's whatever the row contains, so a key whose entry is
+		// disabled does nothing at all rather than falling through to a plugin
+		// tab — silently, which is the same answer 1-7 give for a plugin index
+		// that does not exist.
 		if m.consumesTextInput() {
 			break
 		}
-		tab, ok := globalTabForKey(msg.String())
+		tab, ok := m.globalTabForKey(msg.String())
 		if !ok {
-			break
+			return m, nil
 		}
 		return m, m.selectGlobalTab(tab)
 	}
@@ -2278,7 +2281,7 @@ func (m *Model) updateContext() {
 	if m.inGlobalScope() {
 		// The visible global tab owns the context. Tasks reports its own, so a
 		// Tasks overlay keeps sidecar's globals off its keyboard.
-		if host := m.globalTasksPlugin(); m.globalTasksFocused() && host != nil {
+		if host := m.globalPluginPlugin(); host != nil {
 			if ctx, ok := m.appContentContext(); ok {
 				m.activeContext = ctx
 			} else {
@@ -2292,7 +2295,11 @@ func (m *Model) updateContext() {
 			m.activeContext = m.overview.WorkspaceFocusContext()
 			return
 		}
-		m.activeContext = m.globalTab.context()
+		if tab, ok := m.activeGlobalSurface(); ok && tab.context != "" {
+			m.activeContext = tab.context
+		} else {
+			m.activeContext = "overview"
+		}
 		return
 	}
 	if p := m.ActivePlugin(); p != nil {
@@ -2402,11 +2409,11 @@ func (m *Model) quitKeyExits() bool {
 }
 
 // forwardKeyToPlugin hands a key to the focused surface (precedence level 5,
-// and the delivery mechanism for levels 2 and 3). That is the global Tasks host
-// while its tab is visible, and the active project plugin otherwise.
+// and the delivery mechanism for levels 2 and 3). That is the hosted global
+// plugin while its tab is visible, and the active project plugin otherwise.
 func (m *Model) forwardKeyToPlugin(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if m.globalTasksFocused() {
-		cmd := m.globalTasks.update(msg)
+	if host := m.focusedGlobalHost(); host != nil {
+		cmd := host.update(msg)
 		m.updateContext()
 		return m, cmd
 	}

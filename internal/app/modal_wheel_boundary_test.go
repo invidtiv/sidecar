@@ -707,10 +707,10 @@ func TestModalWheelNeverConsultsTheCoveredPlugin(t *testing.T) {
 func TestGlobalTasksBranchAnswersAndIsCoveredByModals(t *testing.T) {
 	hosted := &wheelBoundaryPlugin{atBoundary: true, lastY: -1}
 	m := routerTestModel(t, &wheelBoundaryPlugin{atBoundary: false, lastY: -1})
-	m.globalTasks = &globalTasksHost{plugin: hosted}
+	installGlobalHost(&m, globalTabTasks, "Tasks", hosted)
 	m.scope = ScopeGlobal
-	m.globalTab = GlobalTasks
-	if !m.globalTasksFocused() {
+	m.globalTab = globalTabTasks
+	if !m.globalPluginFocused() {
 		t.Fatal("precondition: global Tasks should be the visible surface")
 	}
 

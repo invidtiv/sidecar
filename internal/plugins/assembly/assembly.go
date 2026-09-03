@@ -1,26 +1,29 @@
-// Package assembly owns the ordered list of plugins sidecar registers, and
+// Package assembly owns the ordered catalog of plugins sidecar can host, and
 // therefore the tab order.
 //
 // It exists so tab order is data rather than the sequence of `if enabled {
-// register(...) }` statements it used to be in cmd/sidecar/main.go. Plan is a
-// pure function of config plus feature flags, so every enabled/disabled
-// combination is unit-testable without booting the application.
+// register(...) }` statements it used to be in cmd/sidecar/main.go. Descriptors
+// is that data; Plan is a pure function of it plus config and feature flags, so
+// every enabled/disabled combination is unit-testable without booting the
+// application.
 //
 // It lives under internal/plugins rather than internal/app because the plugin
 // packages themselves import internal/app; an assembly there would be an
-// import cycle.
+// import cycle. That is also why internal/app keeps its own list of the
+// global-scope descriptors: it cannot import this package, and an assembly test
+// pins the two lists together.
 package assembly
 
 import (
 	"log/slog"
 
 	"github.com/marcus/sidecar/internal/config"
-	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/plugins/conversations"
 	"github.com/marcus/sidecar/internal/plugins/filebrowser"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
 	"github.com/marcus/sidecar/internal/plugins/notes"
+	"github.com/marcus/sidecar/internal/plugins/tasks"
 	"github.com/marcus/sidecar/internal/plugins/tdmonitor"
 	"github.com/marcus/sidecar/internal/plugins/workspace"
 )
@@ -33,7 +36,26 @@ const (
 	IDConversations = "conversations"
 	IDWorkspace     = "workspace-manager"
 	IDNotes         = "notes"
+	IDTasks         = "tasks"
 )
+
+// Descriptors is every plugin Sidecar can host, in the order the header paints
+// them: the project tabs first, in tab order, then the global-space tabs.
+//
+// It is the one list the tab assembly, the settings page, and
+// `sidecar plugin list` read. A plugin that is not here does not exist as far
+// as Sidecar is concerned, whether or not its package compiles.
+func Descriptors() []plugin.Descriptor {
+	return []plugin.Descriptor{
+		tdmonitor.Descriptor(),
+		gitstatus.Descriptor(),
+		filebrowser.Descriptor(),
+		conversations.Descriptor(),
+		workspace.Descriptor(),
+		notes.Descriptor(),
+		tasks.Descriptor(),
+	}
+}
 
 // Entry is one plugin slot in tab order. New is deferred so Plan stays free of
 // plugin construction and callers that only care about order (tests, tooling)
@@ -50,59 +72,53 @@ type Entry struct {
 // must be true. When false, Sidecar must not construct adapters, run Detect,
 // open session-store watchers, or show the Conversations tab.
 func ConversationsWanted(cfg *config.Config) bool {
-	if cfg == nil {
-		cfg = config.Default()
-	}
-	if !features.IsEnabled(features.ConversationsPlugin.Name) {
-		return false
-	}
-	return cfg.Plugins.Conversations.Enabled
+	return conversations.Descriptor().IsEnabled(cfg)
 }
 
 // NotesWanted reports whether the Notes surface belongs in the project tab
 // ring. td owns Notes persistence, so disabling the existing td panel also
 // hides Notes without rewriting the user's independent Notes preference.
 func NotesWanted(cfg *config.Config) bool {
-	if cfg == nil {
-		cfg = config.Default()
-	}
-	return cfg.Plugins.TDMonitor.Enabled && features.IsEnabled(features.NotesPlugin.Name)
+	return notes.Descriptor().IsEnabled(cfg)
 }
 
-// Plan returns the plugins to register, in tab order.
+// Plan returns the project plugins to register, in tab order.
 //
 // Tab shortcut numbers are derived from this list. Nothing may assume a plugin
 // occupies a fixed position: any of the preceding plugins can be disabled.
+//
+// Global-scope descriptors are deliberately absent. Tasks is the standing
+// example: registering it here would put its store, session, and agent queue
+// back under registry.Reinit, which rebuilt the whole Tasks model on every
+// project switch.
 func Plan(cfg *config.Config) []Entry {
 	var base []Entry
-
-	if cfg == nil {
-		cfg = config.Default()
+	for _, d := range Descriptors() {
+		if d.Scope != plugin.ScopeProject || !d.HasPlacement(plugin.PlacementTab) {
+			continue
+		}
+		if !d.IsEnabled(cfg) {
+			continue
+		}
+		base = append(base, Entry{ID: d.ID, New: d.New})
 	}
-
-	if cfg.Plugins.TDMonitor.Enabled {
-		base = append(base, Entry{IDTDMonitor, func() plugin.Plugin { return tdmonitor.New() }})
-	}
-	if cfg.Plugins.GitStatus.Enabled {
-		base = append(base, Entry{IDGitStatus, func() plugin.Plugin { return gitstatus.New() }})
-	}
-	if cfg.Plugins.FileBrowser.Enabled {
-		base = append(base, Entry{IDFileBrowser, func() plugin.Plugin { return filebrowser.New() }})
-	}
-	if ConversationsWanted(cfg) {
-		base = append(base, Entry{IDConversations, func() plugin.Plugin { return conversations.New() }})
-	}
-	// The workspace plugin has no enable switch; it is sidecar's core tab.
-	base = append(base, Entry{IDWorkspace, func() plugin.Plugin { return workspace.New() }})
-	if NotesWanted(cfg) {
-		base = append(base, Entry{IDNotes, func() plugin.Plugin { return notes.New() }})
-	}
-
-	// Tasks is deliberately absent: it is a global tab owned by the app shell
-	// (internal/app/scope.go), not a project plugin. Registering it here would
-	// put its store, session, and agent queue back under registry.Reinit, which
-	// rebuilt the whole Tasks model on every project switch.
 	return base
+}
+
+// GlobalDescriptors returns the enabled global-scope tab descriptors, in
+// header order. internal/app builds one host per entry.
+func GlobalDescriptors(cfg *config.Config) []plugin.Descriptor {
+	var out []plugin.Descriptor
+	for _, d := range Descriptors() {
+		if d.Scope != plugin.ScopeGlobal || !d.HasPlacement(plugin.PlacementTab) {
+			continue
+		}
+		if !d.IsEnabled(cfg) {
+			continue
+		}
+		out = append(out, d)
+	}
+	return out
 }
 
 func indexOf(entries []Entry, id string) int {

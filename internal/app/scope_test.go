@@ -72,13 +72,35 @@ func (p *hostedTestPlugin) FocusContext() string {
 func (p *hostedTestPlugin) ClaimsKey(string) bool { return false }
 func (p *hostedTestPlugin) QuitKeyExits() bool    { return true }
 
+// globalTabTasks is the Tasks descriptor's ID, which is also its persisted tab
+// ID and the identity the header row uses.
+const globalTabTasks = "tasks"
+
+// installGlobalHost attaches a hosted global plugin stand-in the way New does
+// from a descriptor, without opening a real store or starting an agent queue.
+func installGlobalHost(m *Model, id, name string, p plugin.Plugin) *globalPluginHost {
+	host := &globalPluginHost{
+		descriptor: plugin.Descriptor{
+			ID:         id,
+			Name:       name,
+			Class:      plugin.ClassEmbedded,
+			Scope:      plugin.ScopeGlobal,
+			Placements: []plugin.Placement{plugin.PlacementTab},
+		},
+		plugin: p,
+		ctx:    &plugin.Context{Keymap: m.keymap},
+	}
+	m.globalHosts = append(m.globalHosts, host)
+	return host
+}
+
 // scopeModelWithTasks is the baseline four-plugin project model with a hosted
 // Tasks stand-in attached to the global tab owner.
 func scopeModelWithTasks(t *testing.T) (Model, *hostedTestPlugin) {
 	t.Helper()
 	m, _ := scopeBaselineModel(t, "git")
 	host := &hostedTestPlugin{id: "tasks", context: "tasks-list"}
-	m.globalTasks = &globalTasksHost{plugin: host, ctx: &plugin.Context{Keymap: m.keymap}}
+	installGlobalHost(&m, globalTabTasks, "Tasks", host)
 	m.updateContext()
 	return m, host
 }
@@ -378,27 +400,38 @@ func TestStalePersistedScopeFallsBack(t *testing.T) {
 	})
 }
 
-func TestGlobalTabPersistenceReadsLegacyNamesAndWritesNewNames(t *testing.T) {
+// The persisted tab is a descriptor ID, so a plugin-provided global tab
+// restores by name rather than by a position that names something else once the
+// plugin in front of it is disabled. The two surface names state.json used
+// before the header settled on the fleet vocabulary still read back.
+func TestGlobalTabPersistenceReadsLegacyNamesAndDescriptorIDs(t *testing.T) {
 	for _, tc := range []struct {
 		id   string
-		want GlobalTab
+		want string
 	}{
 		{"sessions", GlobalSessions},
 		{"workspaces", GlobalSessions},
 		{"activity", GlobalActivity},
 		{"agents", GlobalActivity},
-		{"tasks", GlobalTasks},
+		{"tasks", globalTabTasks},
+		{"recall", "recall"},
 	} {
 		got, ok := parseGlobalTabID(tc.id)
 		if !ok || got != tc.want {
 			t.Errorf("parseGlobalTabID(%q) = %v, %v; want %v, true", tc.id, got, ok, tc.want)
 		}
 	}
-	if got := GlobalSessions.persistID(); got != "sessions" {
-		t.Errorf("Sessions persist ID = %q", got)
+	if _, ok := parseGlobalTabID(""); ok {
+		t.Error("an absent persisted tab read as a tab")
 	}
-	if got := GlobalActivity.persistID(); got != "activity" {
-		t.Errorf("Activity persist ID = %q", got)
+
+	// A remembered ID with nothing behind it costs the tab, not the space.
+	m, _ := scopeModelWithTasks(t)
+	m.scope = ScopeGlobal
+	m.globalTab = "recall"
+	m.ensureVisibleGlobalTab()
+	if m.globalTab != GlobalSessions {
+		t.Fatalf("unknown persisted tab fell back to %q, want Sessions", m.globalTab)
 	}
 }
 
@@ -424,7 +457,7 @@ func TestPersistedGlobalTabFallsBackWhenFeatureDisabled(t *testing.T) {
 	m.intro.Active, m.intro.Done = false, true
 	m.width, m.height, m.ready = 140, 40, true
 	host := &hostedTestPlugin{id: "tasks", context: "tasks-list"}
-	m.globalTasks = &globalTasksHost{plugin: host, ctx: &plugin.Context{Keymap: m.keymap}}
+	installGlobalHost(&m, globalTabTasks, "Tasks", host)
 	m.updateContext()
 
 	if m.overview != nil {
@@ -436,7 +469,7 @@ func TestPersistedGlobalTabFallsBackWhenFeatureDisabled(t *testing.T) {
 
 	updated, _ := m.Update(tea.KeyPressMsg{Code: 'k', Text: "K", Mod: tea.ModShift})
 	m = asAppModel(t, updated)
-	if !m.inGlobalScope() || m.globalTab != GlobalTasks {
+	if !m.inGlobalScope() || m.globalTab != globalTabTasks {
 		t.Fatalf("disabled persisted tab did not fall back: global=%v tab=%v",
 			m.inGlobalScope(), m.globalTab)
 	}
@@ -526,14 +559,14 @@ func TestTasksIsAGlobalTabOutsideTheProjectRegistry(t *testing.T) {
 	m.scope = ScopeGlobal
 	m.updateContext()
 	tabs := m.visibleTabs()
-	if len(tabs) != 3 || tabs[2].global != GlobalTasks {
+	if len(tabs) != 3 || tabs[2].global != globalTabTasks {
 		t.Fatalf("global tabs = %#v, want Agents/Workspaces/Tasks", tabs)
 	}
 
 	// `0` selects it, and it then owns keys, footer status, and context.
 	updated, _ := m.Update(tea.KeyPressMsg{Code: '0', Text: "0"})
 	m = asAppModel(t, updated)
-	if !m.globalTasksFocused() {
+	if !m.globalPluginFocused() {
 		t.Fatalf("0 did not select the Tasks tab: tab=%v", m.globalTab)
 	}
 	if m.activeContext != "tasks-list" {
@@ -555,7 +588,7 @@ func TestTasksIsAGlobalTabOutsideTheProjectRegistry(t *testing.T) {
 	// q opens the quit modal and stays in the global space.
 	updated, _ = m.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
 	m = asAppModel(t, updated)
-	if !m.inGlobalScope() || !m.showQuitConfirm || m.globalTab != GlobalTasks {
+	if !m.inGlobalScope() || !m.showQuitConfirm || m.globalTab != globalTabTasks {
 		t.Fatalf("q from the Tasks tab: global=%v quit=%v tab=%v",
 			m.inGlobalScope(), m.showQuitConfirm, m.globalTab)
 	}
@@ -564,7 +597,7 @@ func TestTasksIsAGlobalTabOutsideTheProjectRegistry(t *testing.T) {
 func TestEscInAHostedTasksOverlayGoesToTasksNotTheScopeToggle(t *testing.T) {
 	m, host := scopeModelWithTasks(t)
 	m.scope = ScopeGlobal
-	m.globalTab = GlobalTasks
+	m.globalTab = globalTabTasks
 	m.updateContext()
 
 	// An overlay is open inside Tasks: esc is its dismissal, so it must reach
@@ -574,7 +607,7 @@ func TestEscInAHostedTasksOverlayGoesToTasksNotTheScopeToggle(t *testing.T) {
 	keys := host.keys
 	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m = asAppModel(t, updated)
-	if !m.inGlobalScope() || m.globalTab != GlobalTasks {
+	if !m.inGlobalScope() || m.globalTab != globalTabTasks {
 		t.Fatalf("esc left the global space with a Tasks overlay open: global=%v tab=%v",
 			m.inGlobalScope(), m.globalTab)
 	}
@@ -612,7 +645,7 @@ func TestGlobalSpaceStaysReachableWhenOnlyTasksIsEnabled(t *testing.T) {
 	m.intro.Active, m.intro.Done = false, true
 	m.width, m.height, m.ready = 140, 40, true
 	host := &hostedTestPlugin{id: "tasks", context: "tasks-list"}
-	m.globalTasks = &globalTasksHost{plugin: host, ctx: &plugin.Context{Keymap: m.keymap}}
+	installGlobalHost(&m, globalTabTasks, "Tasks", host)
 	m.updateContext()
 
 	if m.overview != nil {
@@ -626,11 +659,11 @@ func TestGlobalSpaceStaysReachableWhenOnlyTasksIsEnabled(t *testing.T) {
 	// remembered Agents tab, which has nothing behind it.
 	updated, _ := m.Update(tea.KeyPressMsg{Code: 'k', Text: "K", Mod: tea.ModShift})
 	m = asAppModel(t, updated)
-	if !m.globalTasksFocused() {
+	if !m.globalPluginFocused() {
 		t.Fatalf("K did not reach the Tasks tab: global=%v tab=%v", m.inGlobalScope(), m.globalTab)
 	}
 	tabs := m.visibleTabs()
-	if len(tabs) != 1 || tabs[0].global != GlobalTasks {
+	if len(tabs) != 1 || tabs[0].global != globalTabTasks {
 		t.Fatalf("global tabs = %#v, want Tasks alone", tabs)
 	}
 
@@ -659,21 +692,54 @@ func TestTasksTabIsAbsentWhenItsFeatureIsDisabled(t *testing.T) {
 	t.Cleanup(func() { features.Init(config.Default()) })
 
 	m := New(plugin.NewRegistry(nil), keymap.NewRegistry(), cfg, "", "/tmp/one", "/tmp/one", "")
-	if m.globalTasks != nil || m.globalTasksPlugin() != nil {
+	if len(m.globalHosts) != 0 || m.globalPluginPlugin() != nil {
 		t.Fatal("the Tasks host was built while its feature is disabled")
 	}
 	m.scope = ScopeGlobal
 	for _, ref := range m.visibleTabs() {
-		if ref.global == GlobalTasks {
+		if ref.global == globalTabTasks {
 			t.Fatal("a disabled Tasks tab is still in the global tab row")
 		}
 	}
 	// Nothing to start, nothing to stop.
-	if cmd := m.globalTasks.start(); cmd != nil {
-		t.Fatal("a nil host produced a start command")
+	if cmds := m.startGlobalHosts(); len(cmds) != 0 {
+		t.Fatal("an empty host list produced start commands")
 	}
-	m.globalTasks.stop()
+	m.stopGlobalHosts()
 }
+
+// plugins.tasks.enabled is the unified switch, and it outranks the deprecated
+// tasks_plugin flag whenever it is written. The flag answers only while the
+// config key is absent, which is what keeps a config written before the key
+// existed working.
+func TestTasksEnablementPrefersTheConfigKeyOverTheLegacyFlag(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		flag bool
+		key  *bool
+		want bool
+	}{
+		{name: "no key, flag off", flag: false, want: false},
+		{name: "no key, flag on", flag: true, want: true},
+		{name: "key on beats flag off", flag: false, key: boolPtr(true), want: true},
+		{name: "key off beats flag on", flag: true, key: boolPtr(false), want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.Default()
+			cfg.Features.Flags[features.TasksPlugin.Name] = tc.flag
+			cfg.Plugins.Tasks.Enabled = tc.key
+			features.Init(cfg)
+			t.Cleanup(func() { features.Init(config.Default()) })
+
+			m := New(plugin.NewRegistry(nil), keymap.NewRegistry(), cfg, "", "/tmp/one", "/tmp/one", "")
+			if got := len(m.globalHosts) == 1; got != tc.want {
+				t.Fatalf("hosted Tasks = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func boolPtr(b bool) *bool { return &b }
 
 func TestTasksHostSurvivesProjectSwitchesAndClosesOnceAtShutdown(t *testing.T) {
 	// A registry with a real context, so Reinit can rewrite it the way a
@@ -690,17 +756,17 @@ func TestTasksHostSurvivesProjectSwitchesAndClosesOnceAtShutdown(t *testing.T) {
 	t.Cleanup(func() { features.Init(config.Default()) })
 	m := New(registry, km, cfg, "", "/tmp/one", "/tmp/one", "git")
 	host := &hostedTestPlugin{id: "tasks", context: "tasks-list"}
-	m.globalTasks = &globalTasksHost{plugin: host, ctx: &plugin.Context{Keymap: km}}
+	installGlobalHost(&m, globalTabTasks, "Tasks", host)
 	m.width, m.height, m.ready = 140, 40, true
 
-	if cmd := m.globalTasks.start(); cmd != nil {
+	for _, cmd := range m.startGlobalHosts() {
 		cmd()
 	}
 	if host.inits != 1 || host.starts != 1 {
 		t.Fatalf("host lifecycle after start: inits=%d starts=%d", host.inits, host.starts)
 	}
 	// Starting twice is a no-op: the model is built once, after the first frame.
-	if cmd := m.globalTasks.start(); cmd != nil {
+	if cmds := m.startGlobalHosts(); len(cmds) != 0 {
 		t.Fatal("a second start rebuilt the host")
 	}
 
@@ -754,7 +820,7 @@ func TestGlobalScopeOwnsFooterAndHelp(t *testing.T) {
 	if title, ctx := m.helpSurface(); title != "Activity" || ctx != "overview" {
 		t.Fatalf("help documents %q/%q on the Activity tab", title, ctx)
 	}
-	m.globalTab = GlobalTasks
+	m.globalTab = globalTabTasks
 	if title, ctx := m.helpSurface(); title != "tasks" || ctx != "tasks-list" {
 		t.Fatalf("help documents %q/%q on the Tasks tab", title, ctx)
 	}
@@ -1057,5 +1123,96 @@ func TestShutdownReleasesTheGlobalBrowsersTerminal(t *testing.T) {
 	m.shutdown()
 	if m.overview.WorkspacesPreviewVisible() {
 		t.Fatal("quitting left the global browser's preview attached")
+	}
+}
+
+// A second global plugin is a descriptor, not an enum value. It joins the
+// header row after the first, takes no number key — 8, 9 and 0 are spoken for,
+// and renumbering them would move Sessions under the user — and is still
+// reachable by cycling, by the palette command its ID names, and by a click.
+func TestSecondGlobalPluginGetsNoNumberKeyAndIsReachableByCycling(t *testing.T) {
+	m, _ := scopeModelWithTasks(t)
+	second := &hostedTestPlugin{id: "recall", context: "recall-list"}
+	installGlobalHost(&m, "recall", "Recall", second)
+	m.scope = ScopeGlobal
+	m.globalTab = GlobalSessions
+	m.updateContext()
+
+	tabs := m.globalTabsVisible()
+	if len(tabs) != 4 {
+		t.Fatalf("global tabs = %d, want Sessions/Activity/Tasks/Recall", len(tabs))
+	}
+	keys := map[string]string{}
+	for _, tab := range tabs {
+		keys[tab.id] = tab.key
+	}
+	want := map[string]string{
+		GlobalSessions: "8",
+		GlobalActivity: "9",
+		globalTabTasks: "0",
+		"recall":       "",
+	}
+	for id, key := range want {
+		if keys[id] != key {
+			t.Fatalf("%s key = %q, want %q", id, keys[id], key)
+		}
+	}
+	// No number key addresses it, and pressing the three that exist never
+	// lands there.
+	for _, key := range []string{"8", "9", "0"} {
+		if id, ok := m.globalTabForKey(key); !ok || id == "recall" {
+			t.Fatalf("%q resolved to %q", key, id)
+		}
+	}
+
+	// `]` from Tasks reaches it: the header is one ring, and the fourth global
+	// entry is in it.
+	m.globalTab = globalTabTasks
+	m.updateContext()
+	updated, _ := m.Update(tea.KeyPressMsg{Code: ']', Text: "]"})
+	m = asAppModel(t, updated)
+	if !m.inGlobalScope() || m.globalTab != "recall" {
+		t.Fatalf("] from Tasks: global=%v tab=%q", m.inGlobalScope(), m.globalTab)
+	}
+	if m.activeContext != "recall-list" {
+		t.Fatalf("activeContext = %q, want the second plugin's own", m.activeContext)
+	}
+	if !m.globalPluginFocused() || m.globalPluginPlugin() != plugin.Plugin(second) {
+		t.Fatal("the second global plugin does not own its own tab")
+	}
+	// Its keys reach it, and the palette command its ID names selects it.
+	before := second.keys
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	m = asAppModel(t, updated)
+	if second.keys != before+1 {
+		t.Fatalf("second global plugin received %d keys, want %d", second.keys, before+1)
+	}
+	if _, handled := m.runHostCommand("focus-" + globalTabTasks); !handled {
+		t.Fatal("focus-tasks is not a host command")
+	}
+	if m.globalTab != globalTabTasks {
+		t.Fatalf("focus-tasks landed on %q", m.globalTab)
+	}
+	if _, handled := m.runHostCommand("focus-recall"); !handled {
+		t.Fatal("focus-<id> does not reach a second global plugin")
+	}
+	if m.globalTab != "recall" {
+		t.Fatalf("focus-recall landed on %q", m.globalTab)
+	}
+
+	// And it starts, receives forwarded messages, and stops exactly once
+	// alongside the first — the same contract, not a second implementation.
+	for _, cmd := range m.startGlobalHosts() {
+		if cmd != nil {
+			cmd()
+		}
+	}
+	if second.inits != 1 || second.starts != 1 {
+		t.Fatalf("second host lifecycle: inits=%d starts=%d", second.inits, second.starts)
+	}
+	m.shutdown()
+	m.shutdown()
+	if second.stops != 1 {
+		t.Fatalf("second host stops = %d, want exactly one", second.stops)
 	}
 }

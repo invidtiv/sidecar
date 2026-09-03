@@ -38,7 +38,7 @@ import (
 type configReturn struct {
 	scope         AppScope
 	activePlugin  int
-	globalTab     GlobalTab
+	globalTab     string
 	pluginFocused bool
 	valid         bool
 }

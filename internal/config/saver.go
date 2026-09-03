@@ -57,10 +57,12 @@ type savePluginsConfig struct {
 }
 
 type saveNotesConfig struct {
+	Enabled       *bool  `json:"enabled,omitempty"`
 	DefaultEditor string `json:"defaultEditor,omitempty"`
 }
 
 type saveTasksConfig struct {
+	Enabled  *bool  `json:"enabled,omitempty"`
 	Position string `json:"position,omitempty"`
 }
 
@@ -131,9 +133,11 @@ func toSaveConfig(cfg *Config) saveConfig {
 				ClaudeDataDir: cfg.Plugins.Conversations.ClaudeDataDir,
 			},
 			Tasks: saveTasksConfig{
+				Enabled:  cfg.Plugins.Tasks.Enabled,
 				Position: cfg.Plugins.Tasks.Position,
 			},
 			Notes: saveNotesConfig{
+				Enabled:       cfg.Plugins.Notes.Enabled,
 				DefaultEditor: cfg.Plugins.Notes.DefaultEditor,
 			},
 			Workspace: saveWorkspaceConfig{

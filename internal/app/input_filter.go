@@ -60,8 +60,8 @@ func (m Model) wheelAtBoundary(msg tea.MouseWheelMsg) bool {
 		// gains a boundary contract, a wheel over the Agents board would be
 		// answered by Tasks and legitimately swallowed.
 		switch {
-		case m.globalTasksFocused():
-			if consumer, ok := m.globalTasksPlugin().(plugin.WheelBoundaryConsumer); ok {
+		case m.globalPluginFocused():
+			if consumer, ok := m.globalPluginPlugin().(plugin.WheelBoundaryConsumer); ok {
 				return consumer.WheelAtBoundary(wheel)
 			}
 			return false
