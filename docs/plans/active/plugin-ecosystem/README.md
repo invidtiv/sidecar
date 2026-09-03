@@ -34,6 +34,7 @@ A protocol plugin will never render as richly as Tasks, and this plan does not p
 9. **No discovery, no manifest, no sandbox.** Sidecar never scans directories or `PATH`, never auto-enables, never lets a repository declare a plugin, and says plainly that a process boundary is crash isolation. `sidecar plugin add` shows what will run and writes one config entry. A Herdr-manifest adapter could be written against these seams later; it is not part of this plan.
 10. **Recall is the reference plugin.** It exercises search, ranked results with excerpts, a `get` that expands a locator, degraded and abstained outcomes, and global scope with optional project context. The protocol freezes after recall and the host have each been revised from what the other found, as `sidecar-jira` did for resource v1.
 11. **Every owned capability has a non-interactive path from the first milestone.** Hosting plugins is something Sidecar owns, so the standing "presentation layer, no CLI parity" exception does not apply to `sidecar plugin`.
+12. **Plugins are theme-aware without doing anything.** A protocol plugin sends tones, kinds, and text; the host maps them to the active theme, so a theme change re-renders every plugin the same way it re-renders a td issue card. An embedded plugin keeps the existing contract: theme injected at construction and again on `ThemeChangedMsg` without resetting its state. Mockups of either class follow Sidecar's design language reference so what is reviewed on the canvas is what ships.
 
 ## Scope boundary
 
@@ -120,6 +121,21 @@ Do not schedule these because the protocol exists:
 | Config migration loses a provider | Alias reads for one minor release; the saver never drops unknown sections; `sidecar plugin list` shows where each entry was read from |
 | A plugin's `watch` path is outside the home directory or is a whole disk | Validated at describe time, bounded to 8, rejected with a typed reason shown in `plugin list --describe` |
 
+## Protocol revisions pending from the M0 recall mockup
+
+Writing recall's screens against its real `--help` surfaced facts the draft cannot carry. Each is a proposed revision to [protocol.md](protocol.md), applied after the maintainer confirms; none blocks M1.
+
+| Gap | Proposed revision |
+| --- | --- |
+| recall's exit state `failed` (every source asked failed, so "no results" claims nothing) has no `outcome` value; a typed `unavailable` error loses the partial page | Add `failed` to `page.outcome`; the host renders it as an error card over an empty list, never as "no matches" |
+| Excerpts carry a kind (matched span, record opening, unmarked) that the mockup fakes with `›`/`~` prefixes the host cannot explain | Add column `kind: "excerpt"` and an optional per-cell `{text, mark}` shape for that kind; the host draws the mark and owns the legend |
+| Suppressed (below relevance floor) and dropped (budget) counts are pushed into free-text notices | Add optional `page.omitted: {suppressed, dropped}` so the footer can say "7 shown · 3 below floor · 2 over budget" as data |
+| `--as-of` changes what every row means and must survive refresh, but `list.params` has only `query`, `view`, `sort`, `cursor` | Add `asOf` (RFC 3339) to `list.params` and to the persisted collection tab; the header shows it as a chip |
+| Scope is a conjunction of up to six keys, not a single-select view, and an applied scope has nowhere to live across refresh | Add `filters[]` to a collection's describe (`{id, label, kind: choice|text, choices?}`) and `params.filters{}` to `list`, persisted with the tab; the host renders applied filters as a chip row under the query |
+| `status.label` length is unbounded but the host must fit it in a reserved column | Add a 24-char bound under Limits |
+| The narrow reflow rule names only the secondary column | State it fully: rank and primary on line one; status label, the remaining short columns, and the secondary text folded into line two |
+| An empty detail box in a `Tab` placement | Host rule, for [host.md](host.md): show the plugin's next collection (recall's `sources`) rather than a blank card, so `abstained` is verifiable in place |
+
 ## Open questions
 
 Not blocking M0 or M1; each has a default the plan proceeds under.
@@ -132,3 +148,4 @@ Not blocking M0 or M1; each has a default the plan proceeds under.
 ## Changelog
 
 - 2026-09-02: opened. Decisions 1–11 settled in conversation with the maintainer; Herdr plugin-hosting plan superseded.
+- 2026-09-02: decision 12 (theme awareness) and the pending-revisions table added from the M0 recall mockup.
