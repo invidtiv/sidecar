@@ -19,6 +19,21 @@ reference `sidecar-jira` provider against a live Jira Cloud site — and revised
 from what both implementations found before being frozen. Changes after this
 point require a new protocol identifier.
 
+**This contract is a subset of the Sidecar plugin protocol.** The plugin
+protocol, `sidecar.plugin/v1-draft`, is this one grown rather than replaced: the
+same invocation model, environment allowlist, process-group rules, sanitization,
+limits, error codes, and matcher rules, plus three methods (`list`, `get`,
+`act`), a `sections` field on the resource object, and declarations of the
+collections and actions a plugin offers. One host runs both — an instance
+configured under `terminalResources.providers` is dispatched with the identifier
+above, one configured under `plugins.external` with the newer one, and the
+dialect comes from the config section rather than from anything the executable
+says. A provider that answers only this protocol keeps working exactly as
+described here and needs no change. Its contract is
+[docs/plans/active/plugin-ecosystem/protocol.md](../plans/active/plugin-ecosystem/protocol.md),
+and `sidecar plugin` is its CLI; `sidecar terminal-links` remains the surface for
+this section.
+
 ## Invocation model
 
 Sidecar runs the configured argv directly — no shell, no `PATH` interpolation of

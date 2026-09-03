@@ -2116,11 +2116,22 @@ sidecar open --sessions README.md
 
 ## `sidecar plugin`
 
-Inspect the plugins Sidecar hosts
+Inspect and configure the plugins Sidecar hosts
 
-Inspect the plugins Sidecar hosts. A plugin is either embedded (compiled into
-Sidecar, with its own UI) or, once the protocol host lands, an external
-executable Sidecar renders.
+Inspect and configure the plugins Sidecar hosts. A plugin is either embedded
+(compiled into Sidecar, with its own UI) or external: an explicitly configured
+executable that answers JSON on stdout and that Sidecar renders itself.
+
+An external plugin speaks one of two protocols, decided by the config section
+it is written in and never by the executable. plugins.external entries speak
+sidecar.plugin/v1-draft, which has describe, resolve, list, get, and act;
+terminalResources.providers entries speak the frozen
+sidecar.terminal-resource/v1, which has describe and resolve. The
+`sidecar terminal-links` verbs remain the surface for that older section.
+
+The draft protocol is behind the plugin_protocol feature flag. Turn it on
+with `sidecar --enable-feature=plugin_protocol`, or set
+features.flags.plugin_protocol.
 
 ```
 Usage: sidecar plugin <command> [options]
@@ -2130,25 +2141,32 @@ Usage: sidecar plugin <command> [options]
 
 List the plugins Sidecar can host
 
-List every plugin Sidecar knows about, in the order the header paints them:
-the project tabs first, then the global-space tabs.
+List every plugin Sidecar knows about: the embedded ones in the order the
+header paints them, then every external plugin configured under
+plugins.external and terminalResources.providers.
 
-Each row reports the plugin's class (who renders it), scope (project plugins are
-rebuilt on a project switch, global ones are built once), the placements its
-content can occupy, and whether it is enabled.
+Each row reports the plugin's class (who renders it), scope (project plugins
+are rebuilt on a project switch, global ones are built once), the placements
+its content can occupy, and whether it is enabled. An external row also
+reports the config section it was read from.
 
 Enablement is plugins.<id>.enabled. Two deprecated feature flags, tasks_plugin
-and notes_plugin, still answer for their plugin while that key is absent.
+and notes_plugin, still answer for their plugin while that key is absent. A
+plugin that is enabled but whose feature flag is off is reported inactive,
+naming the flag.
 
-This reads configuration directly and runs no plugin: it does not require a
-running Sidecar and starts no subprocess.
+Without --describe this reads configuration and runs nothing: no running
+Sidecar, no PATH lookup, no subprocess. --describe opts in to running each
+active external plugin's describe method, with the same environment, working
+directory, and timeout the app uses.
 
 ```
-Usage: sidecar plugin list [--json]
+Usage: sidecar plugin list [--describe] [--json]
 ```
 
 **Options:**
 
+- `--describe`: Run describe on each active external plugin
 - `--json`: Write one structured result object to stdout
 - `-h, --help`: Show this help
 
@@ -2163,6 +2181,247 @@ Usage: sidecar plugin list [--json]
 ```bash
 sidecar plugin list
 sidecar plugin list --json
+sidecar plugin list --describe --json
+```
+
+### `sidecar plugin check`
+
+Describe one external plugin, and optionally call it
+
+Answer "is this plugin configured, startable, and speaking the protocol",
+using the exact base environment, working directory, and timeouts the app
+uses. This is the authoring surface; it is not a replacement for the
+plugin's own CLI.
+
+describe always runs. --list and --get are separate, explicit flags because
+they can perform network access and print private data; neither is ever
+implied. --query applies only to --list, and a collection whose search is
+required needs one.
+
+Only what the host kept is printed, never the plugin's raw stdout: every
+string shown has been through the host's own sanitization and bounds, so what
+you see is what a pane would draw.
+
+```
+Usage: sidecar plugin check [--list COLLECTION [--query Q]] [--get COLLECTION ID] [--json] <id>
+```
+
+**Options:**
+
+- `--list COLLECTION`: Also call list on this collection
+- `--query TEXT`: Query to send with --list
+- `--get COLLECTION ID`: Also call get on this collection row (two values)
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: the plugin answered every requested call
+- `1`: a call failed
+- `2`: usage error
+- `3`: no plugin with that id is configured
+- `4`: the governing feature flag is off
+
+**Examples:**
+
+```bash
+sidecar plugin check recall
+sidecar plugin check recall --list results --query dex --json
+sidecar plugin check recall --get results rc:notes:1 --json
+```
+
+### `sidecar plugin call`
+
+Call one protocol method with the host's envelope
+
+Run one method — describe, resolve, list, get, or act — through the host's own
+envelope, validation, and sanitization, and print what the host would have
+kept. It is the authoring loop for a plugin: write a response, call it, see
+exactly what survives.
+
+--params is the method's params object as JSON:
+  resolve  {"matcher":"issue-key","locator":"CASH-1"}
+  list     {"collection":"results","query":"dex","cursor":"","limit":100}
+  get      {"collection":"results","id":"rc:notes:1"}
+  act      {"action":"log-note","collection":"results","id":"rc:notes:1","inputs":{"text":"…"}}
+
+list first runs describe, because the declared columns are what a page is
+sanitized against — a cell keyed by an undeclared column is dropped, and that
+is a finding worth seeing here rather than in a pane.
+
+No host context is sent: this process has no surface, so it has no project
+and no selection to offer.
+
+```
+Usage: sidecar plugin call [--params JSON] [--json] <id> <method>
+```
+
+**Options:**
+
+- `--params JSON`: The method's params object
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: the plugin answered
+- `1`: the call failed
+- `2`: usage error
+- `3`: no plugin with that id is configured
+- `4`: the governing feature flag is off
+
+**Examples:**
+
+```bash
+sidecar plugin call recall describe --json
+sidecar plugin call recall list --params '{"collection":"results","query":"dex"}' --json
+sidecar plugin call dex act --params '{"action":"log-note","collection":"people","id":"p:ada","inputs":{"text":"hi"}}' --json
+```
+
+### `sidecar plugin add`
+
+Configure an external plugin
+
+Append one entry to plugins.external. This is the whole install flow: Sidecar
+never scans a directory, never runs every sidecar-* binary on PATH, never
+auto-enables anything, and never lets a repository declare a plugin.
+
+Everything after --command is the argv, executed directly with no shell. Put
+it last.
+
+Nothing is started: add prints exactly what will run — every argv element on
+its own line, the working directory, and the variables that will be passed by
+name — and asks for confirmation. --yes skips the question, which is what a
+script or an agent uses.
+
+A process boundary is crash isolation, not a sandbox. Configuring a plugin
+trusts that executable with your full OS privileges.
+
+```
+Usage: sidecar plugin add [--pass-env NAME]... [--scope global] [--placement tab|panes]... [--timeout DURATION] [--claim-host HOST]... [--disabled] [--yes] [--json] <id> --command ARGV...
+```
+
+**Options:**
+
+- `--command ARGV...`: The argv to run; everything after it is part of the command
+- `--pass-env NAME`: Pass this variable's current value through (repeatable, names only)
+- `--scope SCOPE`: Lifecycle: global (the only value this version supports)
+- `--placement WHERE`: tab or panes (repeatable; default both)
+- `--timeout DURATION`: Per-call timeout, clamped to [1s, 60s]
+- `--claim-host HOST`: Hostname whose URLs this plugin may claim (repeatable)
+- `--disabled`: Write the entry turned off
+- `-y, --yes`: Skip the confirmation
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: the entry was written, or the confirmation was declined
+- `1`: the configuration could not be written
+- `2`: usage error, or the entry was refused by validation
+- `4`: plugin_protocol is off
+
+**Examples:**
+
+```bash
+sidecar plugin add recall --yes --command recall sidecar-plugin
+sidecar plugin add dex --pass-env DEX_PROFILE --placement panes --yes --command dex sidecar-plugin
+```
+
+### `sidecar plugin remove`
+
+Remove an external plugin's configuration
+
+Delete one entry from plugins.external. Unknown config sections are preserved,
+and removing the last entry removes the key rather than leaving it empty.
+
+An entry in terminalResources.providers is not removed here: that section
+belongs to the frozen resource protocol, and the message says so.
+
+```
+Usage: sidecar plugin remove [--json] <id>
+```
+
+**Options:**
+
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: the configuration was written
+- `1`: the configuration could not be written
+- `2`: usage error
+- `3`: no plugin with that id is configured
+- `4`: plugin_protocol is off, or the entry is in a section this verb does not own
+
+**Examples:**
+
+```bash
+sidecar plugin remove recall
+```
+
+### `sidecar plugin enable`
+
+Turn an external plugin on
+
+Set enabled:true on the plugins.external entry.
+
+Enablement is read at startup, so a running Sidecar needs a restart.
+
+```
+Usage: sidecar plugin enable [--json] <id>
+```
+
+**Options:**
+
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: the configuration was written
+- `1`: the configuration could not be written
+- `2`: usage error
+- `3`: no plugin with that id is configured
+- `4`: plugin_protocol is off, or the entry is in a section this verb does not own
+
+**Examples:**
+
+```bash
+sidecar plugin enable recall
+```
+
+### `sidecar plugin disable`
+
+Turn an external plugin off
+
+Set enabled:false on the plugins.external entry. The entry is kept, so turning
+it back on needs no argv.
+
+Enablement is read at startup, so a running Sidecar needs a restart.
+
+```
+Usage: sidecar plugin disable [--json] <id>
+```
+
+**Options:**
+
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: the configuration was written
+- `1`: the configuration could not be written
+- `2`: usage error
+- `3`: no plugin with that id is configured
+- `4`: plugin_protocol is off, or the entry is in a section this verb does not own
+
+**Examples:**
+
+```bash
+sidecar plugin disable recall
 ```
 
 ## `sidecar project`
