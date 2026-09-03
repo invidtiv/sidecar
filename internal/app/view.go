@@ -60,7 +60,7 @@ func (m Model) View() tea.View {
 			startuptrace.Mark("first ready frame")
 			// Same branch, same moment: anything that must not run before the
 			// user has a usable UI waits on this latch rather than on Bubble
-			// Tea's command scheduling. See resourceproviders.go.
+			// Tea's command scheduling. See pluginhosts.go.
 			firstReadyFrameLatch.close()
 		})
 	} else {

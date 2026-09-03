@@ -10,8 +10,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/features"
+	"github.com/marcus/sidecar/internal/pluginhost"
 	"github.com/marcus/sidecar/internal/resource"
-	"github.com/marcus/sidecar/internal/resourceprovider"
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/startuptrace"
 )
@@ -53,7 +53,7 @@ var firstReadyFrameLatch = newReadyLatch()
 // about it exists during construction or rendering.
 var resourceProviderHost struct {
 	mu      sync.Mutex
-	manager *resourceprovider.Manager
+	manager *pluginhost.Manager
 	cancel  context.CancelFunc
 	// ctx is the lifetime resolves hang off, so shutdown cancels them.
 	ctx context.Context
@@ -62,7 +62,7 @@ var resourceProviderHost struct {
 // ResourceProvidersDescribedMsg reports the outcome of a describe pass. In M0
 // it is diagnostics only: nothing in the TUI changes shape because of it.
 type ResourceProvidersDescribedMsg struct {
-	Statuses []resourceprovider.Status
+	Statuses []pluginhost.Status
 	// SnapshotError is the error from a refused snapshot replacement, if any.
 	// The previous snapshot stays live when this is set.
 	SnapshotError error
@@ -71,7 +71,7 @@ type ResourceProvidersDescribedMsg struct {
 // ResourceProviderManager returns the live manager, or nil before the first
 // describe pass has started. M1 injects its read-only snapshot and Resolve into
 // both workspace surfaces through this.
-func ResourceProviderManager() *resourceprovider.Manager {
+func ResourceProviderManager() *pluginhost.Manager {
 	resourceProviderHost.mu.Lock()
 	defer resourceProviderHost.mu.Unlock()
 	return resourceProviderHost.manager
@@ -130,7 +130,7 @@ func describeResourceProvidersCmd(cfg *config.Config) tea.Cmd {
 
 		defer startuptrace.Begin("terminal resource providers: describe")()
 
-		providers, disabled, err := resourceprovider.FromConfig(section, resourceprovider.Options{
+		providers, disabled, err := pluginhost.FromConfig(section, pluginhost.Options{
 			Dir: providerWorkingDir(),
 			Log: slog.Default(),
 		})
@@ -139,7 +139,7 @@ func describeResourceProvidersCmd(cfg *config.Config) tea.Cmd {
 			return ResourceProvidersDescribedMsg{}
 		}
 
-		manager := resourceprovider.NewManager(resourceprovider.ManagerOptions{Log: slog.Default()})
+		manager := pluginhost.NewManager(pluginhost.ManagerOptions{Log: slog.Default()})
 		manager.SetProviders(providers, disabled)
 
 		resourceProviderHost.mu.Lock()
@@ -210,7 +210,7 @@ func (m *Model) resourceSurfaces() []resourceview.Surface {
 //
 // The work happens inside the returned command, never in Update or View: that
 // is what keeps an external process off the render path.
-func resourceResolver(manager *resourceprovider.Manager) resourceview.Resolver {
+func resourceResolver(manager *pluginhost.Manager) resourceview.Resolver {
 	return func(modelID int, generation, epoch uint64, ref resource.Reference, refresh bool) tea.Cmd {
 		return func() tea.Msg {
 			msg := resourceview.ResolvedMsg{

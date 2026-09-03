@@ -1,4 +1,4 @@
-package resourceprovider
+package pluginhost
 
 import (
 	"sort"

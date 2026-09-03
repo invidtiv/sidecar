@@ -20,7 +20,7 @@ func buildFixtureProvider(t *testing.T) string {
 	if !ok {
 		t.Fatal("cannot locate the test source")
 	}
-	pkg := filepath.Join(filepath.Dir(thisFile), "..", "resourceprovider", "testdata", "fixtureprovider")
+	pkg := filepath.Join(filepath.Dir(thisFile), "..", "pluginhost", "testdata", "fixtureprovider")
 	cmd := exec.Command("go", "build", "-o", bin, pkg)
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {

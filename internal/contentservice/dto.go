@@ -131,7 +131,7 @@ func (r ReadResult) ValidRemoteResult() bool {
 // DescribeResult is the machine contract for `sidecar content describe --json`.
 //
 // Fingerprint is a hash of the validated, ordered descriptor wire content,
-// never resourceprovider.Snapshot.Generation(). notModified means if-revision
+// never pluginhost.Snapshot.Generation(). notModified means if-revision
 // matched; descriptors are omitted then.
 type DescribeResult struct {
 	Fingerprint string               `json:"fingerprint"`

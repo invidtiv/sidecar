@@ -50,7 +50,6 @@ func HexToRGB(hex string) RGB {
 	return RGB{float64(r), float64(g), float64(b)}
 }
 
-
 // hexToByte converts a 2-character hex string to a byte.
 func hexToByte(s string) uint8 {
 	if len(s) != 2 {
@@ -115,7 +114,6 @@ func (c RGB) ToANSIBg() string {
 	b := clampByte(c.B)
 	return "\x1b[48;2;" + itoa(int(r)) + ";" + itoa(int(g)) + ";" + itoa(int(b)) + "m"
 }
-
 
 // ANSIReset is the ANSI escape code to reset formatting.
 const ANSIReset = "\x1b[0m"

@@ -439,11 +439,11 @@ func TestRenderLineDiff_WithWrapEnabled(t *testing.T) {
 	// Without wrap - should truncate
 	resultNoWrap := RenderLineDiff(diff, 80, 0, 20, 0, nil, false)
 	linesNoWrap := strings.Split(strings.TrimSpace(resultNoWrap), "\n")
-	
+
 	// With wrap - should create multiple lines
 	resultWrap := RenderLineDiff(diff, 80, 0, 20, 0, nil, true)
 	linesWrap := strings.Split(strings.TrimSpace(resultWrap), "\n")
-	
+
 	// Wrapped version should have more lines
 	if len(linesWrap) <= len(linesNoWrap) {
 		t.Errorf("wrapped output should have more lines: got %d vs %d", len(linesWrap), len(linesNoWrap))
@@ -473,7 +473,7 @@ func TestRenderLineDiff_WrapWithEmptyLines(t *testing.T) {
 	if result == "" {
 		t.Error("expected non-empty result with wrap enabled")
 	}
-	
+
 	// Should handle empty lines gracefully
 	if !strings.Contains(result, "short") {
 		t.Error("should contain short line")
@@ -483,7 +483,7 @@ func TestRenderLineDiff_WrapWithEmptyLines(t *testing.T) {
 func TestRenderSideBySide_WithWrapEnabled(t *testing.T) {
 	longOld := strings.Repeat("a", 150)
 	longNew := strings.Repeat("b", 150)
-	
+
 	diff := &ParsedDiff{
 		OldFile: "test.go",
 		NewFile: "test.go",
@@ -504,11 +504,11 @@ func TestRenderSideBySide_WithWrapEnabled(t *testing.T) {
 	// Without wrap
 	resultNoWrap := RenderSideBySide(diff, 120, 0, 20, 0, nil, false)
 	linesNoWrap := strings.Split(strings.TrimSpace(resultNoWrap), "\n")
-	
+
 	// With wrap
 	resultWrap := RenderSideBySide(diff, 120, 0, 20, 0, nil, true)
 	linesWrap := strings.Split(strings.TrimSpace(resultWrap), "\n")
-	
+
 	// Wrapped version should have more lines
 	if len(linesWrap) <= len(linesNoWrap) {
 		t.Errorf("wrapped side-by-side should have more lines: got %d vs %d", len(linesWrap), len(linesNoWrap))
@@ -536,7 +536,7 @@ func TestRenderLineDiff_WrapVeryLongLine(t *testing.T) {
 
 	result := RenderLineDiff(diff, 80, 0, 50, 0, nil, true)
 	lines := strings.Split(strings.TrimSpace(result), "\n")
-	
+
 	// Should wrap into many lines
 	if len(lines) < 10 {
 		t.Errorf("expected at least 10 wrapped lines for 1500 char content, got %d", len(lines))
@@ -683,14 +683,14 @@ func TestRenderFullFileSideBySide_HorizontalOffset(t *testing.T) {
 func TestFullFileDiff_NextChange(t *testing.T) {
 	ffd := &FullFileDiff{
 		Lines: []FullFileLine{
-			{Type: LineContext, OldLineNo: 1, NewLineNo: 1},  // 0
-			{Type: LineContext, OldLineNo: 2, NewLineNo: 2},  // 1
-			{Type: LineRemove, OldLineNo: 3},                 // 2
-			{Type: LineAdd, NewLineNo: 3},                    // 3
-			{Type: LineContext, OldLineNo: 4, NewLineNo: 4},  // 4
-			{Type: LineContext, OldLineNo: 5, NewLineNo: 5},  // 5
-			{Type: LineAdd, NewLineNo: 6},                    // 6
-			{Type: LineContext, OldLineNo: 6, NewLineNo: 7},  // 7
+			{Type: LineContext, OldLineNo: 1, NewLineNo: 1}, // 0
+			{Type: LineContext, OldLineNo: 2, NewLineNo: 2}, // 1
+			{Type: LineRemove, OldLineNo: 3},                // 2
+			{Type: LineAdd, NewLineNo: 3},                   // 3
+			{Type: LineContext, OldLineNo: 4, NewLineNo: 4}, // 4
+			{Type: LineContext, OldLineNo: 5, NewLineNo: 5}, // 5
+			{Type: LineAdd, NewLineNo: 6},                   // 6
+			{Type: LineContext, OldLineNo: 6, NewLineNo: 7}, // 7
 		},
 	}
 
@@ -719,14 +719,14 @@ func TestFullFileDiff_NextChange(t *testing.T) {
 func TestFullFileDiff_PrevChange(t *testing.T) {
 	ffd := &FullFileDiff{
 		Lines: []FullFileLine{
-			{Type: LineContext, OldLineNo: 1, NewLineNo: 1},  // 0
-			{Type: LineRemove, OldLineNo: 2},                 // 1
-			{Type: LineAdd, NewLineNo: 2},                    // 2
-			{Type: LineContext, OldLineNo: 3, NewLineNo: 3},  // 3
-			{Type: LineContext, OldLineNo: 4, NewLineNo: 4},  // 4
-			{Type: LineRemove, OldLineNo: 5},                 // 5
-			{Type: LineAdd, NewLineNo: 5},                    // 6
-			{Type: LineContext, OldLineNo: 6, NewLineNo: 6},  // 7
+			{Type: LineContext, OldLineNo: 1, NewLineNo: 1}, // 0
+			{Type: LineRemove, OldLineNo: 2},                // 1
+			{Type: LineAdd, NewLineNo: 2},                   // 2
+			{Type: LineContext, OldLineNo: 3, NewLineNo: 3}, // 3
+			{Type: LineContext, OldLineNo: 4, NewLineNo: 4}, // 4
+			{Type: LineRemove, OldLineNo: 5},                // 5
+			{Type: LineAdd, NewLineNo: 5},                   // 6
+			{Type: LineContext, OldLineNo: 6, NewLineNo: 6}, // 7
 		},
 	}
 

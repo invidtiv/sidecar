@@ -1,4 +1,4 @@
-// Package resourceprovider runs terminal resource providers: it owns the
+// Package pluginhost runs terminal resource providers: it owns the
 // process boundary, the protocol envelope, the compiled matcher snapshot, and
 // the host-side cache and concurrency policy.
 //
@@ -14,7 +14,7 @@
 // trusts that executable with the user's full OS privileges.
 //
 // See docs/reference/terminal-resource-provider-protocol.md.
-package resourceprovider
+package pluginhost
 
 import (
 	"context"

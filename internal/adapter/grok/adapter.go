@@ -862,7 +862,7 @@ func extractReasoningText(chat ChatLine) string {
 	return extractTextContent(chat.Content)
 }
 
-// encodeProjectKey percent-encodes a path like Python quote(path, safe='').
+// encodeProjectKey percent-encodes a path like Python quote(path, safe=”).
 func encodeProjectKey(abs string) string {
 	var b strings.Builder
 	b.Grow(len(abs) * 3)

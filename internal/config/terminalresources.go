@@ -13,7 +13,7 @@ import (
 // internal/config is deliberately a leaf package: pulling in the resource
 // document types would drag the Markdown renderer into everything that reads
 // configuration. TestTerminalResourceBoundsMatchTheProtocol in
-// internal/resourceprovider fails if the two ever drift.
+// internal/pluginhost fails if the two ever drift.
 const (
 	// MaxTerminalResourceProviders bounds how many instances may be configured.
 	MaxTerminalResourceProviders = 16

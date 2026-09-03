@@ -1,4 +1,4 @@
-package resourceprovider
+package pluginhost
 
 import (
 	"fmt"
@@ -16,7 +16,7 @@ var fixtureBin string
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "sidecar-fixtureprovider-")
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "resourceprovider tests: temp dir:", err)
+		fmt.Fprintln(os.Stderr, "pluginhost tests: temp dir:", err)
 		os.Exit(1)
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
@@ -26,7 +26,7 @@ func TestMain(m *testing.M) {
 	build.Stdout = os.Stderr
 	build.Stderr = os.Stderr
 	if err := build.Run(); err != nil {
-		fmt.Fprintln(os.Stderr, "resourceprovider tests: building the fixture provider:", err)
+		fmt.Fprintln(os.Stderr, "pluginhost tests: building the fixture provider:", err)
 		_ = os.RemoveAll(dir)
 		os.Exit(1)
 	}

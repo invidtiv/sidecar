@@ -653,10 +653,10 @@ func appendParsedPart(parts parsedParts, part Part) parsedParts {
 	case "text":
 		if part.Text != "" {
 			if parts.content != "" {
-			parts.content += "\n" + part.Text
-		} else {
-			parts.content = part.Text
-		}
+				parts.content += "\n" + part.Text
+			} else {
+				parts.content = part.Text
+			}
 		}
 	case "tool":
 		tu := adapter.ToolUse{

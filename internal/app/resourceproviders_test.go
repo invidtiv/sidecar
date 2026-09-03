@@ -13,7 +13,7 @@ import (
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/plugin"
-	"github.com/marcus/sidecar/internal/resourceprovider"
+	"github.com/marcus/sidecar/internal/pluginhost"
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/terminallink"
 )
@@ -236,7 +236,7 @@ func TestPublishingProvidersReturnsTheWorkItStarted(t *testing.T) {
 	}
 	m := New(registry, keymap.NewRegistry(), config.Default(), "", "/tmp/one", "/tmp/one", "workspaces")
 
-	manager := resourceprovider.NewManager(resourceprovider.ManagerOptions{Log: slog.Default()})
+	manager := pluginhost.NewManager(pluginhost.ManagerOptions{Log: slog.Default()})
 	resourceProviderHost.mu.Lock()
 	previous := resourceProviderHost.manager
 	resourceProviderHost.manager = manager

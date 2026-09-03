@@ -1,4 +1,4 @@
-package resourceprovider
+package pluginhost
 
 import (
 	"fmt"
@@ -183,30 +183,30 @@ func (s *SnapshotStore) Replace(sets []DescribedSet) error {
 	defer s.mu.Unlock()
 
 	if len(sets) > resource.MaxProviders {
-		s.lastErr = fmt.Errorf("resourceprovider: %d providers declared matchers, the limit is %d", len(sets), resource.MaxProviders)
+		s.lastErr = fmt.Errorf("pluginhost: %d providers declared matchers, the limit is %d", len(sets), resource.MaxProviders)
 		return s.lastErr
 	}
 
 	compiled := make([]CompiledMatcher, 0, 16)
 	for _, set := range sets {
 		if len(set.Matchers) > resource.MaxMatchersPerProvider {
-			s.lastErr = fmt.Errorf("resourceprovider: instance %q declared %d matchers, the limit is %d", set.Instance, len(set.Matchers), resource.MaxMatchersPerProvider)
+			s.lastErr = fmt.Errorf("pluginhost: instance %q declared %d matchers, the limit is %d", set.Instance, len(set.Matchers), resource.MaxMatchersPerProvider)
 			return s.lastErr
 		}
 		seen := make(map[string]bool, len(set.Matchers))
 		for _, m := range set.Matchers {
 			if m.ID == "" {
-				s.lastErr = fmt.Errorf("resourceprovider: instance %q declared a matcher with no id", set.Instance)
+				s.lastErr = fmt.Errorf("pluginhost: instance %q declared a matcher with no id", set.Instance)
 				return s.lastErr
 			}
 			if seen[m.ID] {
-				s.lastErr = fmt.Errorf("resourceprovider: instance %q declared matcher id %q twice", set.Instance, m.ID)
+				s.lastErr = fmt.Errorf("pluginhost: instance %q declared matcher id %q twice", set.Instance, m.ID)
 				return s.lastErr
 			}
 			seen[m.ID] = true
 			re, err := regexp.Compile(m.Pattern)
 			if err != nil {
-				s.lastErr = fmt.Errorf("resourceprovider: instance %q matcher %q is not a valid RE2 expression", set.Instance, m.ID)
+				s.lastErr = fmt.Errorf("pluginhost: instance %q matcher %q is not a valid RE2 expression", set.Instance, m.ID)
 				return s.lastErr
 			}
 			compiled = append(compiled, CompiledMatcher{

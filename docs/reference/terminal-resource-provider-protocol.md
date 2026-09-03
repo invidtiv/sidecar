@@ -505,11 +505,11 @@ dispatch before any TUI, tmux, state, or log setup.
 ## Fixtures
 
 Canonical request/response JSON lives at the stable path
-`internal/resourceprovider/testdata/protocol/` and may be vendored by external
+`internal/pluginhost/testdata/protocol/` and may be vendored by external
 provider authors implementing this contract.
 
 The reference fixture executable is
-`internal/resourceprovider/testdata/fixtureprovider`, which describes
+`internal/pluginhost/testdata/fixtureprovider`, which describes
 `CASH|GRES|AVATAXUI` and resolves deterministic synthetic documents with no
 network access and no credentials. It also simulates the hostile cases —
 malformed output, oversize output, hanging, crashing, extra stdout, incompatible

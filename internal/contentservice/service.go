@@ -8,8 +8,8 @@ import (
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/noteview"
+	"github.com/marcus/sidecar/internal/pluginhost"
 	"github.com/marcus/sidecar/internal/resource"
-	"github.com/marcus/sidecar/internal/resourceprovider"
 	"github.com/marcus/sidecar/internal/shellstate"
 )
 
@@ -24,7 +24,7 @@ type Service struct {
 	Git                func(ctx context.Context, dir string, args ...string) ([]byte, error)
 	LookupIssue        func(ctx context.Context, workDir, issueID string, fallbacks []issueview.ProjectRef) (*issueview.Data, *issueview.Owner, error)
 	LookupNote         func(ctx context.Context, workDir, noteID string) (*noteview.Data, error)
-	NewResourceManager func() (*resourceprovider.Manager, error)
+	NewResourceManager func() (*pluginhost.Manager, error)
 	ListIssues         func(ctx context.Context, root string, limit int) ([]CatalogIssue, error)
 	ListNotes          func(ctx context.Context, root string, limit int) ([]CatalogNote, error)
 }

@@ -7,20 +7,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/marcus/sidecar/internal/pluginhost"
 	"github.com/marcus/sidecar/internal/resource"
-	"github.com/marcus/sidecar/internal/resourceprovider"
 )
 
 type fakeResProvider struct {
 	instance string
-	desc     resourceprovider.Description
+	desc     pluginhost.Description
 	doc      resource.Document
 	err      error
 	resolves int
 }
 
 func (f *fakeResProvider) Instance() string { return f.instance }
-func (f *fakeResProvider) Describe(context.Context) (resourceprovider.Description, error) {
+func (f *fakeResProvider) Describe(context.Context) (pluginhost.Description, error) {
 	return f.desc, nil
 }
 func (f *fakeResProvider) Resolve(_ context.Context, _ resource.Reference) (resource.Document, error) {
@@ -31,16 +31,16 @@ func (f *fakeResProvider) Resolve(_ context.Context, _ resource.Reference) (reso
 	return f.doc, nil
 }
 
-func testResourceService(t *testing.T, providers ...resourceprovider.Provider) (*Service, string) {
+func testResourceService(t *testing.T, providers ...pluginhost.Provider) (*Service, string) {
 	t.Helper()
 	root := t.TempDir()
 	root = canonical(root)
 	initGitRepo(t, root)
 	id := canonical(root) + ":worktree:" + canonical(root)
-	mgr := resourceprovider.NewManager(resourceprovider.ManagerOptions{})
+	mgr := pluginhost.NewManager(pluginhost.ManagerOptions{})
 	mgr.SetProviders(providers, nil)
 	svc := testService(t, root, nil, nil)
-	svc.NewResourceManager = func() (*resourceprovider.Manager, error) { return mgr, nil }
+	svc.NewResourceManager = func() (*pluginhost.Manager, error) { return mgr, nil }
 	return svc, id
 }
 
@@ -48,9 +48,9 @@ func TestFingerprintDescriptorsIsDeterministicAndIgnoresGeneration(t *testing.T)
 	t.Parallel()
 	p := &fakeResProvider{
 		instance: "jira-work",
-		desc: resourceprovider.Description{
-			Info:     resourceprovider.Info{Kind: "jira", Name: "Jira"},
-			Matchers: []resourceprovider.Matcher{{ID: "issue-key", Pattern: `CASH-\d+`, Priority: 10}},
+		desc: pluginhost.Description{
+			Info:     pluginhost.Info{Kind: "jira", Name: "Jira"},
+			Matchers: []pluginhost.Matcher{{ID: "issue-key", Pattern: `CASH-\d+`, Priority: 10}},
 		},
 	}
 	svc, _ := testResourceService(t, p)
@@ -95,8 +95,8 @@ func TestDescribeNotModifiedWhenIfRevisionMatches(t *testing.T) {
 	t.Parallel()
 	p := &fakeResProvider{
 		instance: "jira-work",
-		desc: resourceprovider.Description{
-			Matchers: []resourceprovider.Matcher{{ID: "issue-key", Pattern: `CASH-\d+`}},
+		desc: pluginhost.Description{
+			Matchers: []pluginhost.Matcher{{ID: "issue-key", Pattern: `CASH-\d+`}},
 		},
 	}
 	svc, _ := testResourceService(t, p)
@@ -147,8 +147,8 @@ func TestResolveAndReadResourceWire(t *testing.T) {
 	t.Parallel()
 	p := &fakeResProvider{
 		instance: "jira-work",
-		desc: resourceprovider.Description{
-			Matchers: []resourceprovider.Matcher{{ID: "issue-key", Pattern: `CASH-\d+`}},
+		desc: pluginhost.Description{
+			Matchers: []pluginhost.Matcher{{ID: "issue-key", Pattern: `CASH-\d+`}},
 		},
 		doc: resource.Document{
 			Identity:  "CASH-1245",

@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/pluginhost"
 	"github.com/marcus/sidecar/internal/resource"
-	"github.com/marcus/sidecar/internal/resourceprovider"
 )
 
 // `sidecar terminal-links` is the protocol/admin surface for terminal resource
@@ -123,13 +123,13 @@ type providerReport struct {
 }
 
 type describeReport struct {
-	OK           bool                       `json:"ok"`
-	Outcome      string                     `json:"outcome"`
-	DurationMs   int64                      `json:"durationMs"`
-	Provider     *resourceprovider.Info     `json:"provider,omitempty"`
-	Matchers     []resourceprovider.Matcher `json:"matchers,omitempty"`
-	MatcherCount int                        `json:"matcherCount"`
-	Error        *errorReport               `json:"error,omitempty"`
+	OK           bool                 `json:"ok"`
+	Outcome      string               `json:"outcome"`
+	DurationMs   int64                `json:"durationMs"`
+	Provider     *pluginhost.Info     `json:"provider,omitempty"`
+	Matchers     []pluginhost.Matcher `json:"matchers,omitempty"`
+	MatcherCount int                  `json:"matcherCount"`
+	Error        *errorReport         `json:"error,omitempty"`
 }
 
 type resolveReport struct {
@@ -299,19 +299,19 @@ func inspectProvider(p config.TerminalResourceProviderConfig) providerReport {
 		Command:  p.Command,
 		PassEnv:  p.PassEnv,
 		Timeout:  p.Timeout.String(),
-		State:    string(resourceprovider.StateUnchecked),
+		State:    string(pluginhost.StateUnchecked),
 	}
 	if !p.Enabled {
-		report.State = string(resourceprovider.StateDisabled)
+		report.State = string(pluginhost.StateDisabled)
 	}
 	if len(p.Command) > 0 {
 		path, err := exec.LookPath(p.Command[0])
 		if err != nil {
 			report.CommandError = "not found on PATH or not executable"
 			if !p.Enabled {
-				report.State = string(resourceprovider.StateDisabled)
+				report.State = string(pluginhost.StateDisabled)
 			} else {
-				report.State = string(resourceprovider.StateIncompatible)
+				report.State = string(pluginhost.StateIncompatible)
 			}
 		} else {
 			report.CommandPath = path
@@ -338,11 +338,11 @@ func describeInstance(ctx context.Context, p config.TerminalResourceProviderConf
 	started := time.Now()
 	desc, err := provider.Describe(ctx)
 	out := &describeReport{
-		Outcome:    resourceprovider.OutcomeCode(err),
+		Outcome:    pluginhost.OutcomeCode(err),
 		DurationMs: time.Since(started).Milliseconds(),
 	}
 	if err != nil {
-		out.Error = toErrorReport(resourceprovider.AsResourceError(err))
+		out.Error = toErrorReport(pluginhost.AsResourceError(err))
 		return out
 	}
 	out.OK = true
@@ -380,9 +380,9 @@ func resolveInstance(ctx context.Context, p config.TerminalResourceProviderConfi
 	started := time.Now()
 	doc, err := provider.Resolve(ctx, resource.Reference{Instance: p.ID, Matcher: matcher, Locator: locator})
 	out.DurationMs = time.Since(started).Milliseconds()
-	out.Outcome = resourceprovider.OutcomeCode(err)
+	out.Outcome = pluginhost.OutcomeCode(err)
 	if err != nil {
-		out.Error = toErrorReport(resourceprovider.AsResourceError(err))
+		out.Error = toErrorReport(pluginhost.AsResourceError(err))
 		return out
 	}
 	out.OK = true
@@ -393,7 +393,7 @@ func resolveInstance(ctx context.Context, p config.TerminalResourceProviderConfi
 // matcherFor picks the declared matcher whose whole match is the locator. The
 // TUI gets this from the scanner; a headless check has to reproduce it, and the
 // same whole-match rule applies.
-func matcherFor(matchers []resourceprovider.Matcher, locator string) (string, bool) {
+func matcherFor(matchers []pluginhost.Matcher, locator string) (string, bool) {
 	for _, m := range matchers {
 		re, err := regexp.Compile(m.Pattern)
 		if err != nil {
@@ -406,15 +406,15 @@ func matcherFor(matchers []resourceprovider.Matcher, locator string) (string, bo
 	return "", false
 }
 
-func newCheckProvider(p config.TerminalResourceProviderConfig) (*resourceprovider.CommandProvider, error) {
-	return resourceprovider.NewCommandProvider(resourceprovider.CommandConfig{
+func newCheckProvider(p config.TerminalResourceProviderConfig) (*pluginhost.CommandProvider, error) {
+	return pluginhost.NewCommandProvider(pluginhost.CommandConfig{
 		Instance:       p.ID,
 		Argv:           p.Command,
 		Dir:            checkWorkingDir(),
 		PassEnv:        p.PassEnv,
 		HostEnv:        os.Environ(),
 		ResolveTimeout: p.Timeout,
-		Host:           resourceprovider.HostInfo{Name: "sidecar", Version: resourceprovider.HostVersion},
+		Host:           pluginhost.HostInfo{Name: "sidecar", Version: pluginhost.HostVersion},
 	})
 }
 
@@ -435,19 +435,19 @@ func checkWorkingDir() string {
 
 func stateFromDescribe(p config.TerminalResourceProviderConfig, d *describeReport) string {
 	if !p.Enabled {
-		return string(resourceprovider.StateDisabled)
+		return string(pluginhost.StateDisabled)
 	}
 	if d == nil {
-		return string(resourceprovider.StateUnchecked)
+		return string(pluginhost.StateUnchecked)
 	}
 	if d.OK {
-		return string(resourceprovider.StateReady)
+		return string(pluginhost.StateReady)
 	}
 	switch d.Outcome {
 	case "protocol", "invalid-describe", "spawn", "shape", "invalid_config", "invalid_request":
-		return string(resourceprovider.StateIncompatible)
+		return string(pluginhost.StateIncompatible)
 	default:
-		return string(resourceprovider.StateTemporarilyFailed)
+		return string(pluginhost.StateTemporarilyFailed)
 	}
 }
 

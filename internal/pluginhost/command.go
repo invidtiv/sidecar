@@ -1,4 +1,4 @@
-package resourceprovider
+package pluginhost
 
 import (
 	"context"
@@ -62,10 +62,10 @@ type CommandConfig struct {
 // NewCommandProvider builds a provider over a configured argv.
 func NewCommandProvider(cfg CommandConfig) (*CommandProvider, error) {
 	if cfg.Instance == "" {
-		return nil, errors.New("resourceprovider: instance id is required")
+		return nil, errors.New("pluginhost: instance id is required")
 	}
 	if len(cfg.Argv) == 0 || cfg.Argv[0] == "" {
-		return nil, errors.New("resourceprovider: command argv is required")
+		return nil, errors.New("pluginhost: command argv is required")
 	}
 	runner := cfg.Runner
 	if runner == nil {
