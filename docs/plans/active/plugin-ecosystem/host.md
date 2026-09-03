@@ -1,6 +1,6 @@
 # Host architecture: one descriptor, two classes, both surfaces
 
-**Status:** M1 implemented on branch `plugin-ecosystem` (td-01b62b); M2 onward are design. **Controlling document:** [README.md](README.md). **Contract:** [protocol.md](protocol.md).
+**Status:** M1 (td-01b62b) and M2a (td-a6d276) implemented on branch `plugin-ecosystem`; M2b onward are design. **Controlling document:** [README.md](README.md). **Contract:** [protocol.md](protocol.md).
 
 This document is the Sidecar-side half: how a plugin is described, enabled, placed, rendered, refreshed, persisted, and reached from the CLI, and which existing seams each of those reuses.
 
@@ -14,7 +14,8 @@ What M1 built, and what the remaining milestones turn each of the rest into.
 | The global tab row is a descriptor-driven ordered slice of surfaces, each hosted by a generic `globalPluginHost` | `internal/app/scope.go` | Built |
 | Enablement is `plugins.<id>.enabled` for every plugin; `tasks_plugin` and `notes_plugin` are read-only aliases | `internal/config/config.go`, each plugin's `descriptor.go` | Built |
 | `configui.Integration{ID, Name, Why, Descriptor}` is a projection of the descriptor, carrying only the install route | `internal/configui/integrations.go` | Built |
-| External executables: `terminalResources.providers[]`, `resourceprovider.Manager`, describe/resolve, the `Resource` leaf | `internal/config/terminalresources.go`, `internal/resourceprovider`, `internal/panelayout/panelayout.go:28` | M2. The protocol class. Config section aliased, manager extended with `list`/`get`/`act`, leaf gains collection tabs |
+| External executables: `plugins.external[]` and `terminalResources.providers[]`, `pluginhost.Manager`, describe/resolve/list/get/act | `internal/config/pluginexternal.go`, `internal/config/terminalresources.go`, `internal/pluginhost` | Built in M2a. The leaf still needs collection tabs (M3) |
+| The `Resource` leaf, one kind for every external plugin's content | `internal/panelayout/panelayout.go:28` | M3. Gains collection tabs |
 | `Resource` leaf has no `livepanes` binding | `internal/livepanes/livepanes.go:11-13` names this as the motivating defect | M3. Gets one, driven by plugin-declared `refresh` |
 | `sidecar open --provider ID LOCATOR`, layout spec `{"kind":"resource","provider":…}`, `terminal-links list/check` | `internal/cli/open.go`, `internal/uirequest/types.go:85`, `internal/cli/registry.go` | M3. `sidecar plugin …` family; `--provider` and `terminal-links` kept as aliases |
 
@@ -144,6 +145,17 @@ The catalog reaches the page through `app.WithPluginDescriptors`, from the proce
 
 Same fields and bounds as the resource section plus `scope` and `placements`. The discovery policy is unchanged and restated because it is the standing decision a plugin-directory proposal has to argue against: Sidecar never scans a directory, never executes every `sidecar-*` binary on `PATH`, never auto-enables, and never lets a repository declare a plugin. `sidecar plugin add` writes one entry after showing exactly what will run; that is the whole install flow.
 
+`Config.PluginInstances()` is the one ordered list the host reads. `plugins.external` entries lead, because order is precedence, and each `terminalResources.providers` entry follows projected onto the same type with the defaults its protocol implies: `scope: "global"`, `placements: ["panes"]`, no navbar tab. Every instance carries the section it was read from, and that section — never anything the executable says — decides which protocol identifier it is dispatched with. An ID configured in both sections is one plugin: `plugins.external` wins and the legacy entry is dropped, so a half-finished migration cannot start two child processes under one identity.
+
+Validation:
+
+- Bounds are the resource section's: 16 instances, a 64-character ID, a timeout clamped to [1s, 60s], 16 claimed hosts each a bare hostname, and `passEnv` names only — an entry containing `=` is refused loudly, with the value redacted out of the message, because a credential pasted into the config file needs removing rather than silently ignoring.
+- `scope` defaults to `global`. `project` is refused with a message saying to remove the key and read project context per call, rather than coerced: a project-scoped plugin would be re-described on every switch and would see a different world each time, so running it as global would answer a question nobody asked. Any other value is refused naming the one that works.
+- `placements` defaults to `["tab", "panes"]` for an entry a user wrote deliberately, and is exactly `["panes"]` for a projected `terminalResources` entry.
+- The saver writes `plugins.external` inside the existing `plugins` block, which is re-marshalled whole on every save, so an emptied list disappears with it and unmanaged top-level sections are preserved as before.
+
+Everything the protocol host does is behind the `plugin_protocol` feature flag, default off. It gates only `plugins.external`: `terminal_resource_providers` still governs the frozen section on its own, so turning the draft protocol off cannot take a working Jira provider down with it.
+
 ## The shared browser
 
 One package, `internal/pluginbrowser`, renders a protocol plugin. It is host-independent in the same way `resourceview` is (`internal/resourceview/doc.go`): it knows `pluginhost` types and nothing about panes, tmux, or which surface is showing it.
@@ -188,25 +200,59 @@ Floors, dividers, chrome, drag, and the compositor are untouched: `paneframe` do
 
 `sidecar plugin` is the owned surface. Hosting plugins is a capability Sidecar owns, so every operation has a non-interactive path from the first milestone.
 
-| Verb | Does | Talks to |
-| --- | --- | --- |
-| `sidecar plugin list [--json]` | Every descriptor: class, scope, placements, enabled. Built; `--describe`, which opts in to running `describe` on protocol plugins, arrives with M2 | config, optionally subprocess |
-| `sidecar plugin check ID [--list COLLECTION [--query Q]] [--get COLLECTION ID] [--json]` | `describe` plus an explicit call, for authors | subprocess |
-| `sidecar plugin call ID METHOD [--params JSON] [--json]` | One raw method call with the host's envelope and validation, printing what the host would have kept | subprocess |
-| `sidecar plugin add ID --command ARGV... [--pass-env V]... [--scope] [--placement]...` | Appends a config entry after printing exactly what will run; `--yes` skips the confirm | config |
-| `sidecar plugin remove|enable|disable ID` | Config edits through the saver, never dropping unknown sections | config |
-| `sidecar plugin changed ID [--collection C]` | One `uirequest` on the file bus; a running Sidecar re-lists that plugin's visible tabs | uirequest bus |
-| `sidecar open --plugin ID [--collection C] [--query Q] [LOCATOR_OR_ID] [--split|--at]` | Opens a document or collection tab on the viewer's screen; `--provider` stays as an alias for the document form | uirequest bus, same declines as today |
-| `sidecar layout apply --spec` | `{"kind":"resource","provider":"recall","collection":"results","query":"dex"}` beside the existing `targets` form | uirequest bus |
-| `sidecar terminal-links …` | Kept as an alias of the matching `plugin` verbs for one minor release, then removed | |
+| Verb | Does | Talks to | State |
+| --- | --- | --- | --- |
+| `sidecar plugin list [--describe] [--json]` | Every descriptor: class, scope, placements, enabled, and for an external one the config section and protocol identifier. `--describe` opts in to running `describe` | config, optionally subprocess | Built |
+| `sidecar plugin check ID [--list COLLECTION [--query Q]] [--get COLLECTION ID] [--json]` | `describe` plus an explicit call, for authors | subprocess | Built |
+| `sidecar plugin call ID METHOD [--params JSON] [--json]` | One raw method call with the host's envelope and validation, printing what the host would have kept | subprocess | Built |
+| `sidecar plugin add ID --command ARGV... [--pass-env V]... [--scope] [--placement]... [--timeout] [--claim-host] [--disabled] [--yes]` | Appends a config entry after printing exactly what will run; `--yes` skips the confirm | config | Built |
+| `sidecar plugin remove\|enable\|disable ID` | Config edits through the saver, never dropping unknown sections | config | Built |
+| `sidecar plugin changed ID [--collection C]` | One `uirequest` on the file bus; a running Sidecar re-lists that plugin's visible tabs | uirequest bus | M3 |
+| `sidecar open --plugin ID [--collection C] [--query Q] [LOCATOR_OR_ID] [--split\|--at]` | Opens a document or collection tab on the viewer's screen; `--provider` stays as an alias for the document form | uirequest bus, same declines as today | M3 |
+| `sidecar layout apply --spec` | `{"kind":"resource","provider":"recall","collection":"results","query":"dex"}` beside the existing `targets` form | uirequest bus | M3 |
+| `sidecar terminal-links …` | The surface for `terminalResources.providers`, unchanged | config, subprocess | Built (kept) |
 
 `recall query dex` from the request becomes `sidecar open --plugin recall --collection results --query dex`, and `ongoing show recall` becomes `sidecar open --plugin ongoing --collection projects recall`. Both are one line an agent can run from any pane with no keypress.
 
-The `Agent` doc on each verb and `sidecar --agents` cover them; `docs/reference/cli.md` gains the family.
+Exit codes are uniform across the family: `0` success, `1` a call or a write failed, `2` usage, `3` no plugin with that id is configured, `4` refused — the `plugin_protocol` flag is off, or the entry belongs to a section the verb does not own.
+
+Two rules the verbs hold rather than merely document:
+
+- **`list` starts nothing** without `--describe`, and **`add` starts nothing at all.** `add` validates the entry, then prints the argv one element per line — a joined line hides where an argument containing a space begins — plus the working directory, the protocol, and the variables passed by name, and then asks. Without a readable stdin it refuses and says to pass `--yes`.
+- **Only what the host kept is printed**, never the plugin's raw stdout: everything on screen has been through the same sanitization and bounds a pane would apply, which is what makes `call` an authoring loop rather than a pretty-printer.
+
+`remove`, `enable`, and `disable` refuse a `terminalResources` entry rather than editing it. That section belongs to the frozen protocol and `terminal-links` is its surface; two commands owning one section is how they start disagreeing.
+
+The `Agent` doc on each verb and `sidecar --agents` cover them; `docs/reference/cli.md` carries the generated family.
+
+## The manager
+
+One `pluginhost.Manager` answers both dialects, with one cache, one dedupe table, and one global and per-instance concurrency budget. A plugin's `list` is a child process exactly as a provider's `resolve` is, so one budget has to cover both or the budget covers nothing.
+
+What the plugin protocol added to it:
+
+- `Description` grew `Context`, `Collections`, and `Actions`. A resource provider leaves all three empty, which is what "a plugin that declares no collections and no actions is exactly a resource provider" means inside the host.
+- `List`, `Get`, and `Act`. `List` refuses a collection the newest successful `describe` did not declare, before spawning anything: the declaration is what says which columns exist, and a page sanitized against no declaration would carry cells the host has nowhere to paint.
+- `Get` shares the resolve cache and dedupe under a `get`-prefixed key, so a second Enter on the same row costs no process. `Act` shares neither — two identical acts are two intentions, and collapsing them would drop a change the user asked for twice on purpose.
+- A `ListRequest` carries a `PaneKey`. A second list for the same pane cancels the first, which kills its process group; `CancelPane` does the same when a pane closes. That is what makes search-as-you-type affordable before there is any resident transport.
+- Context is filtered at the process boundary, in `CommandProvider`, against what the plugin declared in its last successful describe — so "an undeclared kind is never sent" is a property of the host rather than a promise each caller keeps, and a plugin that has never described successfully receives nothing.
 
 ## Startup
 
-The startup posture is unchanged: no subprocess, no `LookPath`, no config read of the plugin section before the first ready frame, enforced by the same explicit latch the resource providers use (`internal/app/resourceproviders.go:19-46`). Building a `globalPluginHost` constructs the plugin value and does no I/O; its model is built by the command `start` returns, after the first frame. `assembly.Plan` and `assembly.Descriptors` read only config and construct nothing. A global protocol tab will render a loading state until its describe snapshot lands.
+The startup posture is unchanged: no subprocess, no `LookPath`, no config read of either plugin section before the first ready frame, enforced by the same explicit latch the resource providers use (`internal/app/resourceproviders.go`). The describe pass builds from `Config.PluginInstances()` filtered by each section's own feature flag, inside the command, after the latch opens. Building a `globalPluginHost` constructs the plugin value and does no I/O; its model is built by the command `start` returns, after the first frame. `assembly.Plan`, `assembly.Descriptors`, and `plugin.ProtocolDescriptors` read only config and construct nothing. A global protocol tab will render a loading state until its describe snapshot lands.
+
+## Deviations from the design, recorded in M2a
+
+1. **`internal/resourceprovider` was renamed, not wrapped.** The plan allowed either. Renaming is what makes "one manager, one cache, one process policy" literally true rather than a convention two packages agree to keep.
+2. **The descriptor carries `*config.PluginInstance`, not `*config.PluginInstanceConfig`.** The wider type also knows which config section the entry came from, which is what lets `plugin list` report it — the mitigation the plan's risk table asks for.
+3. **Describe validation is all-or-nothing for the whole result**, not just for matchers. A plugin that declares a 13-column collection, an action naming a collection it never declared, or a watch path outside the home directory is refused entirely. Publishing the rest would hide a bug while changing what the scanner recognises and what the host watches on disk.
+4. **An unrecognised `page.outcome` coerces to `degraded`.** The protocol names three values; a fourth from a later version is a claim this host cannot read, and of the two ways to be wrong, "coverage may be incomplete" is the one that does not invent a guarantee on the plugin's behalf.
+5. **The identity block is accepted under either spelling.** `plugin` wins, `provider` is honoured — an author who copied a resource provider's response is describing the same thing under the older name.
+6. **The home directory itself is not a valid `watch` path**, only somewhere under it. Watching a whole home directory is watching a whole disk with extra steps.
+7. **A cell keyed by an undeclared column is dropped.** It has no width, no header, and no place in the row; keeping it would be keeping a string nothing can paint.
+8. **M2 was split** into M2a (this) and M2b (the browser and the tab), because the host half is independently useful and independently provable.
+
+None of the [pending protocol revisions](README.md#protocol-revisions-pending-from-the-m0-recall-mockup) was implemented. The draft is implemented as written.
 
 ## What does not change
 

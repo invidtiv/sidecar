@@ -96,3 +96,28 @@ func BuildEnv(passEnv []string, host []string) []string {
 	sort.Strings(out)
 	return out
 }
+
+// PluginMarker is the one variable the host sets rather than inherits, so a
+// tool whose ordinary CLI and whose plugin subcommand share a binary can tell
+// which one it is running as.
+//
+// It is added only for the plugin protocol. The frozen resource protocol
+// publishes its child environment exactly, and adding a variable to it would
+// change a contract that is closed.
+const PluginMarker = "SIDECAR_PLUGIN=1"
+
+// withPluginMarker returns env plus the host marker, keeping the sort order
+// BuildEnv established. A passEnv entry cannot shadow it: the marker is added
+// last and the name is not inheritable.
+func withPluginMarker(env []string) []string {
+	out := make([]string, 0, len(env)+1)
+	for _, kv := range env {
+		if name, _, ok := strings.Cut(kv, "="); ok && name == "SIDECAR_PLUGIN" {
+			continue
+		}
+		out = append(out, kv)
+	}
+	out = append(out, PluginMarker)
+	sort.Strings(out)
+	return out
+}

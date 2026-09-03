@@ -848,3 +848,29 @@ func TestFromInstancesDispatchesEachSectionOnItsOwnProtocol(t *testing.T) {
 		t.Fatalf("terminalResources entry dispatched with %q", jira.Protocol())
 	}
 }
+
+// The one variable the host sets rather than inherits, so a tool whose ordinary
+// CLI and whose plugin subcommand share a binary can tell them apart. It exists
+// only on the plugin protocol: the frozen resource protocol publishes its child
+// environment exactly.
+func TestPluginMarkerIsSetOnlyForThePluginProtocol(t *testing.T) {
+	provider, _ := newFixturePlugin(t, "fixture")
+	doc, err := provider.Get(context.Background(), GetParams{Collection: "results", ID: "mode:env-report:row"}, nil)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !strings.Contains(doc.Body.Text, PluginMarker) {
+		t.Fatalf("the plugin marker was not set:\n%s", doc.Body.Text)
+	}
+
+	legacy := newFixtureProvider(t, "legacy")
+	legacyDoc, err := legacy.Resolve(context.Background(), resource.Reference{
+		Instance: "legacy", Matcher: "issue-key", Locator: "mode:env-report:CASH-1",
+	})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if strings.Contains(legacyDoc.Body.Text, "SIDECAR_PLUGIN") {
+		t.Fatalf("the marker reached a frozen-protocol provider:\n%s", legacyDoc.Body.Text)
+	}
+}

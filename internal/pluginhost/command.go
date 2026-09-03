@@ -103,11 +103,15 @@ func NewCommandProvider(cfg CommandConfig) (*CommandProvider, error) {
 	if protocol != resource.Protocol && protocol != Protocol {
 		return nil, errors.New("pluginhost: unsupported protocol " + protocol)
 	}
+	env := BuildEnv(cfg.PassEnv, cfg.HostEnv)
+	if protocol == Protocol {
+		env = withPluginMarker(env)
+	}
 	return &CommandProvider{
 		instance:        cfg.Instance,
 		argv:            append([]string(nil), cfg.Argv...),
 		dir:             cfg.Dir,
-		env:             BuildEnv(cfg.PassEnv, cfg.HostEnv),
+		env:             env,
 		claimHosts:      normalizeClaimHosts(cfg.ClaimHosts),
 		protocol:        protocol,
 		home:            resolveHome(cfg.Home, cfg.HostEnv),

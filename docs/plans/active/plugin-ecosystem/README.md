@@ -1,6 +1,6 @@
 # Plugin ecosystem: protocol plugins, embedded plugins, one host
 
-**Status:** M1 (descriptor and generalized global host, td-01b62b) is implemented on branch `plugin-ecosystem`. M0's mockups are in [mockups/](mockups/) and the protocol revisions they surfaced are still pending the maintainer's confirmation. M2 onward are proposed. Decisions settled with the maintainer on 2026-09-02. **Tracking:** td-f9f007.
+**Status:** implemented on branch `plugin-ecosystem`: M1 (descriptor and generalized global host, td-01b62b) and M2a (the protocol host half — `internal/pluginhost`, `plugins.external`, the fixture and conformance suite, and the `sidecar plugin` CLI — td-a6d276). M0's mockups are in [mockups/](mockups/) and the protocol revisions they surfaced are still pending the maintainer's confirmation, so none of them is implemented. The rest of M2 (`internal/pluginbrowser` and the global tab), M3, and M4 are proposed. Decisions settled with the maintainer on 2026-09-02. **Tracking:** td-f9f007.
 
 **Related:** [Terminal resource providers](../../implemented/terminal-resource-providers.md) built the executable protocol, the `Resource` leaf, and the trust posture this plan extends; its protocol stays frozen and keeps working. [Hosting Herdr plugins in Sidecar](../../deprecated/herdr-plugin-support.md) is superseded by this plan. [Pane switcher everywhere](../pane-switcher-everywhere.md) and [Cross-project td issue links](../cross-project-issue-links.md) are the two nearest live plans and neither conflicts.
 
@@ -76,13 +76,20 @@ Each milestone ends net-better than the tree before it, lands on main, and is ga
 - Unified enablement: `plugins.notes.enabled` and `plugins.tasks.enabled` with the two flags as read-only aliases; the settings page is one loop over descriptors; `sidecar plugin list [--json]`.
 - **Evidence:** `go test ./...` green; an isolated `tmux-drive.sh` run at 160x45 whose stripped header capture is byte-identical before and after, with `0`/`8`/`9` opening Tasks, Sessions, and Activity in both builds, and with `plugins.tasks.enabled: false` removing the Tasks tab while `tasks_plugin` is still true; `TestSecondGlobalPluginGetsNoNumberKeyAndIsReachableByCycling` proving the fourth global entry takes no number key.
 
-### M2. Protocol host and the browser in a tab
+### M2a. Protocol host and CLI — implemented, td-a6d276
 
-- `internal/pluginhost` (a rename and extension of `resourceprovider`): the new envelope, `list`/`get`/`act`, the describe snapshot with collections and actions, cancellation of superseded `list` calls, the new limits. Old providers are dispatched with the old identifier by the same manager.
+- `internal/pluginhost` (a rename and extension of `resourceprovider`): the new envelope, `list`/`get`/`act`, the describe snapshot with context kinds, collections and actions, cancellation of superseded `list` calls per pane, and the new limits. Old providers are dispatched with the old identifier by the same manager, the same cache, and the same concurrency budget.
+- `plugins.external[]` with `Config.PluginInstances()` as the one ordered list both sections load into; `scope: "project"` refused with a message naming what to do instead.
+- Protocol descriptors projected from configured instances (`plugin.ProtocolDescriptors`), so `sidecar plugin list` reports them.
+- The fixture plugin speaks both identifiers from one binary and simulates every hostile case in [protocol.md](protocol.md#fixtures); the conformance suite runs against the real process, with canonical JSON under `internal/pluginhost/testdata/protocol/`.
+- `sidecar plugin list --describe|check|call|add|remove|enable|disable`, all with `--json` and Agent docs; `terminal-links` unchanged as the frozen section's surface.
+- Everything behind the `plugin_protocol` feature flag, default off.
+- **Evidence:** `go test ./...` green; the fixture driven from an isolated config through `plugin list`, `check --list/--get`, `call describe|list|get|act`, and `add/disable/remove`; every hostile fixture case bounded, including an `act` that never returns ending in a killed process group at its configured timeout.
+
+### M2b. The browser in a tab
+
 - `internal/pluginbrowser`: the shared list-and-detail browser with host-owned keys, view pills, sort picker, query line, notices, action menu and input form, and the capability interfaces implemented once.
-- Protocol descriptors projected from `plugins.external[]`; a global tab for each enabled one with a `tab` placement.
-- The fixture plugin, extended from the resource fixture, with the hostile cases in [protocol.md](protocol.md#fixtures); conformance tests over `testdata/protocol/`.
-- `sidecar plugin check|call|add|remove|enable|disable`.
+- A global tab for each enabled protocol plugin with a `tab` placement, hosted through M1's `globalPluginHost`.
 - **Evidence:** the fixture plugin driven end to end in an isolated run: query, open, action with inputs, degraded notice, setup card; every hostile fixture case produces a bounded card and never a frozen frame.
 
 ### M3. Panes, persistence, refresh, and `open`
@@ -119,7 +126,7 @@ Do not schedule these because the protocol exists:
 | Live search spawns a process per keystroke | Debounce, cancel superseded calls, keep the previous page visible; measure on recall before considering resident mode |
 | A second livepanes binding per surface drifts | One `Binding` literal per surface, `Kinds()` parity test, and the Resource viewer shared through `contentpanes` |
 | Config migration loses a provider | Alias reads for one minor release; the saver never drops unknown sections; `sidecar plugin list` shows where each entry was read from |
-| A plugin's `watch` path is outside the home directory or is a whole disk | Validated at describe time, bounded to 8, rejected with a typed reason shown in `plugin list --describe` |
+| A plugin's `watch` path is outside the home directory or is a whole disk | Validated at describe time, bounded to 8 per plugin, and refused with a typed reason shown by `plugin list --describe` and `plugin check`. The refusal fails the whole describe, as an uncompilable matcher pattern already does: a plugin that would have the host watching `/etc` has a bug the user must see, not one to publish half of |
 
 ## Protocol revisions pending from the M0 recall mockup
 
@@ -150,3 +157,4 @@ Not blocking M0 or M1; each has a default the plan proceeds under.
 - 2026-09-02: opened. Decisions 1–11 settled in conversation with the maintainer; Herdr plugin-hosting plan superseded.
 - 2026-09-02: decision 12 (theme awareness) and the pending-revisions table added from the M0 recall mockup.
 - 2026-09-02: M1 implemented on branch `plugin-ecosystem` (td-01b62b). One deviation from the design: `tabRef.global` is the surface ID rather than an index into the global slice, because the persisted value is an ID already and carrying one identity instead of two removes a whole class of staleness.
+- 2026-09-02: M2 split into M2a (protocol host and CLI) and M2b (the browser and the tab); M2a implemented on branch `plugin-ecosystem` (td-a6d276). `internal/resourceprovider` was renamed to `internal/pluginhost` rather than wrapped, so there is literally one manager, one cache, and one process policy. Deviations from the design are recorded in [host.md](host.md#deviations-from-the-design-recorded-in-m2a). None of the pending protocol revisions above was implemented: the draft is implemented as written.
