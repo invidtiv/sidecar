@@ -119,6 +119,9 @@ type Document struct {
 	UpdatedAt time.Time
 	// FreshFor is the clamped freshness hint the cache honors.
 	FreshFor time.Duration
+	// Sections are the titled blocks under the card. Empty for every document
+	// a frozen-protocol provider returns.
+	Sections []Section
 }
 
 // Reference is {provider instance, matcher, locator}: what a match produces

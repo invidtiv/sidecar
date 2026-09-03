@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"os"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/marcus/sidecar/internal/resource"
@@ -20,6 +23,14 @@ type CommandProvider struct {
 	dir        string
 	env        []string
 	claimHosts []string
+	// protocol is the identifier this instance is dispatched with. It is
+	// decided once, from the config section the entry was read from, and never
+	// negotiated: a plugin does not get to upgrade itself by answering with a
+	// different string.
+	protocol string
+	// home bounds declared watch paths. Resolved at construction so no
+	// validation pass reads the environment.
+	home string
 
 	describeTimeout time.Duration
 	resolveTimeout  time.Duration
@@ -27,9 +38,17 @@ type CommandProvider struct {
 	runner Runner
 	host   HostInfo
 	log    *slog.Logger
+
+	// declaredContext is the context kinds the most recent successful describe
+	// declared. Filtering against it here, at the process boundary, is what
+	// makes "an undeclared kind is never sent" a property of the host rather
+	// than a promise each caller has to keep.
+	mu              sync.RWMutex
+	declaredContext []ContextKind
 }
 
 var _ Provider = (*CommandProvider)(nil)
+var _ PluginProvider = (*CommandProvider)(nil)
 var _ claimHostsProvider = (*CommandProvider)(nil)
 
 // CommandConfig is everything a CommandProvider needs. It is resolved once, at
@@ -57,6 +76,12 @@ type CommandConfig struct {
 	Host HostInfo
 	// Log receives metadata-only invocation records. Nil discards them.
 	Log *slog.Logger
+	// Protocol is the wire identifier to dispatch with. Empty means the frozen
+	// resource protocol, so an existing caller keeps the behaviour it had.
+	Protocol string
+	// Home bounds declared watch paths. Empty resolves from HostEnv's HOME and
+	// then from the OS, once, here — never on an invocation path.
+	Home string
 }
 
 // NewCommandProvider builds a provider over a configured argv.
@@ -71,12 +96,21 @@ func NewCommandProvider(cfg CommandConfig) (*CommandProvider, error) {
 	if runner == nil {
 		runner = ExecRunner{}
 	}
+	protocol := cfg.Protocol
+	if protocol == "" {
+		protocol = resource.Protocol
+	}
+	if protocol != resource.Protocol && protocol != Protocol {
+		return nil, errors.New("pluginhost: unsupported protocol " + protocol)
+	}
 	return &CommandProvider{
 		instance:        cfg.Instance,
 		argv:            append([]string(nil), cfg.Argv...),
 		dir:             cfg.Dir,
 		env:             BuildEnv(cfg.PassEnv, cfg.HostEnv),
 		claimHosts:      normalizeClaimHosts(cfg.ClaimHosts),
+		protocol:        protocol,
+		home:            resolveHome(cfg.Home, cfg.HostEnv),
 		describeTimeout: resource.DescribeTimeout,
 		resolveTimeout:  resource.ClampResolveTimeout(cfg.ResolveTimeout),
 		runner:          runner,
@@ -84,6 +118,32 @@ func NewCommandProvider(cfg CommandConfig) (*CommandProvider, error) {
 		log:             cfg.Log,
 	}, nil
 }
+
+// resolveHome picks the home directory watch paths are bounded to. It reads the
+// environment the child will see first, so a test that hands the provider a
+// synthetic environment gets the same answer the child would.
+func resolveHome(configured string, hostEnv []string) string {
+	if configured != "" {
+		return configured
+	}
+	for _, kv := range hostEnv {
+		if name, value, ok := strings.Cut(kv, "="); ok && name == "HOME" {
+			return value
+		}
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return home
+}
+
+// Protocol reports the wire identifier this instance is dispatched with.
+func (p *CommandProvider) Protocol() string { return p.protocol }
+
+// SpeaksPluginProtocol reports whether list, get, and act are available on this
+// instance.
+func (p *CommandProvider) SpeaksPluginProtocol() bool { return p.protocol == Protocol }
 
 // Instance reports the configured instance ID.
 func (p *CommandProvider) Instance() string { return p.instance }
@@ -104,12 +164,7 @@ func (p *CommandProvider) ResolveTimeout() time.Duration { return p.resolveTimeo
 
 // Describe runs the describe method and validates the result.
 func (p *CommandProvider) Describe(ctx context.Context) (Description, error) {
-	req := Request{
-		Protocol:   resource.Protocol,
-		Method:     MethodDescribe,
-		Instance:   p.instance,
-		DeadlineMs: p.describeTimeout.Milliseconds(),
-	}
+	req := p.newRequest(MethodDescribe, p.describeTimeout, nil)
 	if p.host.Name != "" || p.host.Version != "" {
 		host := p.host
 		req.Host = &host
@@ -119,19 +174,31 @@ func (p *CommandProvider) Describe(ctx context.Context) (Description, error) {
 		return Description{}, err
 	}
 	if resp.Error != nil {
-		// A typed error is authoritative: the provider is telling the host it
-		// has no matchers right now.
+		// A typed error is authoritative: the plugin is telling the host it
+		// has nothing to declare right now.
+		p.setDeclaredContext(nil)
 		return Description{}, resource.SanitizeError(resp.Error)
 	}
-	if resp.Resource != nil {
+	if resp.Resource != nil || resp.Page != nil || resp.Outcome != nil {
 		return Description{}, &TransportError{
 			Instance: p.instance,
 			Method:   MethodDescribe,
 			Reason:   ReasonShape,
-			Detail:   "describe returned a resource result",
+			Detail:   "describe returned a result of another method",
 		}
 	}
-	return ValidateDescription(p.instance, resp.Provider, resp.Matchers)
+	if !p.SpeaksPluginProtocol() {
+		// A resource provider's describe is validated by the frozen rules and
+		// nothing else. Collections and actions it happened to send are not
+		// read, because the identifier it was asked on does not have them.
+		return ValidateDescription(p.instance, resp.identity(), resp.Matchers)
+	}
+	desc, err := ValidateDescribe(p.instance, resp, p.home)
+	if err != nil {
+		return Description{}, err
+	}
+	p.setDeclaredContext(desc.Context)
+	return desc, nil
 }
 
 // Resolve runs the resolve method and sanitizes the document.
@@ -144,14 +211,95 @@ func (p *CommandProvider) Resolve(ctx context.Context, ref resource.Reference) (
 			Detail:   "reference is not addressed to this instance or exceeds its bounds",
 		}
 	}
-	req := Request{
-		Protocol:   resource.Protocol,
-		Method:     MethodResolve,
-		Instance:   p.instance,
-		DeadlineMs: p.resolveTimeout.Milliseconds(),
-		Params:     &ResolveParams{Matcher: ref.Matcher, Locator: ref.Locator},
+	req := p.newRequest(MethodResolve, p.resolveTimeout, &ResolveParams{Matcher: ref.Matcher, Locator: ref.Locator})
+	return p.document(ctx, MethodResolve, req)
+}
+
+// List runs the list method and sanitizes the page.
+//
+// A `search: required` collection with an empty query is answered here, without
+// starting a process: the plugin has nothing to say until there is a query, and
+// spawning a child to be told so once per keystroke is exactly the cost this
+// protocol is trying not to pay.
+func (p *CommandProvider) List(ctx context.Context, params ListParams, callCtx *Context, collection Collection) (Page, error) {
+	if err := p.requirePluginMethod(MethodList); err != nil {
+		return Page{}, err
 	}
-	resp, err := p.invoke(ctx, MethodResolve, req, p.resolveTimeout)
+	if params.Collection == "" {
+		return Page{}, p.invalidRequest(MethodList, "list names no collection")
+	}
+	if collection.Search == SearchRequired && strings.TrimSpace(params.Query) == "" {
+		return Page{Outcome: OutcomeAbstained}, nil
+	}
+	params.Limit = ClampListLimit(params.Limit)
+	req := p.newRequest(MethodList, p.resolveTimeout, &params)
+	req.Context = p.allowedContext(callCtx)
+
+	resp, err := p.invoke(ctx, MethodList, req, p.resolveTimeout)
+	if err != nil {
+		return Page{}, err
+	}
+	if resp.Error != nil {
+		return Page{}, resource.SanitizeError(resp.Error)
+	}
+	if resp.Page == nil {
+		return Page{}, &TransportError{
+			Instance: p.instance,
+			Method:   MethodList,
+			Reason:   ReasonShape,
+			Detail:   "list did not return a page",
+		}
+	}
+	return SanitizePage(resp.Page, collection), nil
+}
+
+// Get runs the get method and sanitizes the document, sections included.
+func (p *CommandProvider) Get(ctx context.Context, params GetParams, callCtx *Context) (resource.Document, error) {
+	if err := p.requirePluginMethod(MethodGet); err != nil {
+		return resource.Document{}, err
+	}
+	if params.Collection == "" || params.ID == "" {
+		return resource.Document{}, p.invalidRequest(MethodGet, "get needs both a collection and an id")
+	}
+	req := p.newRequest(MethodGet, p.resolveTimeout, &params)
+	req.Context = p.allowedContext(callCtx)
+	return p.document(ctx, MethodGet, req)
+}
+
+// Act runs the act method and sanitizes the outcome. It is the only method that
+// mutates, and the host never calls it without the user having confirmed.
+func (p *CommandProvider) Act(ctx context.Context, params ActParams, callCtx *Context) (Outcome, error) {
+	if err := p.requirePluginMethod(MethodAct); err != nil {
+		return Outcome{}, err
+	}
+	if params.Action == "" {
+		return Outcome{}, p.invalidRequest(MethodAct, "act names no action")
+	}
+	req := p.newRequest(MethodAct, p.resolveTimeout, &params)
+	req.Context = p.allowedContext(callCtx)
+
+	resp, err := p.invoke(ctx, MethodAct, req, p.resolveTimeout)
+	if err != nil {
+		return Outcome{}, err
+	}
+	if resp.Error != nil {
+		return Outcome{}, resource.SanitizeError(resp.Error)
+	}
+	if resp.Outcome == nil {
+		return Outcome{}, &TransportError{
+			Instance: p.instance,
+			Method:   MethodAct,
+			Reason:   ReasonShape,
+			Detail:   "act did not return an outcome",
+		}
+	}
+	return SanitizeOutcome(resp.Outcome), nil
+}
+
+// document runs a method that returns a resource and sanitizes it. resolve and
+// get differ only in what they are addressed by, so they share this.
+func (p *CommandProvider) document(ctx context.Context, method string, req Request) (resource.Document, error) {
+	resp, err := p.invoke(ctx, method, req, p.resolveTimeout)
 	if err != nil {
 		return resource.Document{}, err
 	}
@@ -161,9 +309,9 @@ func (p *CommandProvider) Resolve(ctx context.Context, ref resource.Reference) (
 	if resp.hasDescribeShape() {
 		return resource.Document{}, &TransportError{
 			Instance: p.instance,
-			Method:   MethodResolve,
+			Method:   method,
 			Reason:   ReasonShape,
-			Detail:   "resolve returned a describe result",
+			Detail:   method + " returned a describe result",
 		}
 	}
 	// A resource the host cannot key or label is a protocol violation, not a
@@ -172,13 +320,59 @@ func (p *CommandProvider) Resolve(ctx context.Context, ref resource.Reference) (
 	if structural != nil {
 		return resource.Document{}, &TransportError{
 			Instance: p.instance,
-			Method:   MethodResolve,
+			Method:   method,
 			Reason:   ReasonInvalidResource,
 			Detail:   structural.Detail,
 			Err:      structural,
 		}
 	}
 	return doc, nil
+}
+
+func (p *CommandProvider) newRequest(method string, timeout time.Duration, params any) Request {
+	return Request{
+		Protocol:   p.protocol,
+		Method:     method,
+		Instance:   p.instance,
+		DeadlineMs: timeout.Milliseconds(),
+		Params:     params,
+	}
+}
+
+// requirePluginMethod refuses list, get, and act on an instance dispatched with
+// the frozen resource identifier — before a process is started, because a
+// resource provider asked for a method its protocol does not have would either
+// crash or answer something the host cannot read.
+func (p *CommandProvider) requirePluginMethod(method string) error {
+	if p.SpeaksPluginProtocol() {
+		return nil
+	}
+	return &TransportError{
+		Instance: p.instance,
+		Method:   method,
+		Reason:   ReasonInvalidRequest,
+		Detail:   "this instance speaks " + resource.Protocol + ", which has no " + method + " method",
+	}
+}
+
+func (p *CommandProvider) invalidRequest(method, detail string) error {
+	return &TransportError{Instance: p.instance, Method: method, Reason: ReasonInvalidRequest, Detail: detail}
+}
+
+// allowedContext narrows what the caller offered to what the plugin declared it
+// reads. A plugin that has never described successfully has declared nothing,
+// so it receives nothing.
+func (p *CommandProvider) allowedContext(callCtx *Context) *Context {
+	p.mu.RLock()
+	declared := p.declaredContext
+	p.mu.RUnlock()
+	return callCtx.filter(declared)
+}
+
+func (p *CommandProvider) setDeclaredContext(kinds []ContextKind) {
+	p.mu.Lock()
+	p.declaredContext = append([]ContextKind(nil), kinds...)
+	p.mu.Unlock()
 }
 
 // invoke is the whole process boundary: encode, run, decode, log. Everything it
@@ -219,7 +413,7 @@ func (p *CommandProvider) invoke(ctx context.Context, method string, req Request
 	if result.ExitCode != 0 {
 		return nil, &TransportError{Instance: p.instance, Method: method, Reason: ReasonExit, Detail: "the provider exited non-zero"}
 	}
-	resp, reason, detail := decodeResponse(result.Stdout)
+	resp, reason, detail := decodeResponse(result.Stdout, p.protocol)
 	if reason != "" {
 		return nil, &TransportError{Instance: p.instance, Method: method, Reason: reason, Detail: detail}
 	}
@@ -232,7 +426,7 @@ func (p *CommandProvider) record(method string, result RunResult, err error) {
 	}
 	// Locator, title, body, URL, credentials, stdout and stderr are absent by
 	// construction: none of them is in scope here.
-	p.log.Debug("terminal resource provider invocation",
+	p.log.Debug("plugin invocation",
 		"instance", p.instance,
 		"method", method,
 		"duration_ms", result.Duration.Milliseconds(),

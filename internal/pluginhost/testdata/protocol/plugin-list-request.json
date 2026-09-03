@@ -1,0 +1,22 @@
+{
+  "protocol": "sidecar.plugin/v1-draft",
+  "method": "list",
+  "instance": "recall",
+  "deadlineMs": 10000,
+  "context": {
+    "project": {
+      "root": "/path/to/checkout",
+      "workDir": "/path/to/checkout",
+      "name": "sidecar",
+      "branch": "main"
+    }
+  },
+  "params": {
+    "collection": "results",
+    "query": "dex",
+    "view": "",
+    "sort": {"key": "", "dir": ""},
+    "cursor": "",
+    "limit": 100
+  }
+}

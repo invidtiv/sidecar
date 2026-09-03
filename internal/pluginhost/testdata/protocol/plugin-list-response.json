@@ -1,0 +1,24 @@
+{
+  "protocol": "sidecar.plugin/v1-draft",
+  "page": {
+    "outcome": "degraded",
+    "items": [
+      {
+        "id": "rc:notes:2026-08-14-dex-design",
+        "cells": {
+          "rank": "1",
+          "title": "DEX schema notes",
+          "source": "notes",
+          "excerpt": "…people are tiered, and the tier drives what brief shows…"
+        },
+        "status": {"label": "exact", "tone": "success"},
+        "sourceUrl": ""
+      }
+    ],
+    "nextCursor": "",
+    "total": 7,
+    "notices": [
+      {"tone": "warning", "text": "1 of 4 sources did not answer (mail: checkpoint stale)"}
+    ]
+  }
+}

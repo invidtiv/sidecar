@@ -61,6 +61,14 @@ type Manager struct {
 	// which is why it is kept per instance rather than read back out of the
 	// snapshot: one provider timing out must not disturb another's.
 	lastGood map[string][]Matcher
+	// descriptions is the newest validated describe result per instance. It is
+	// what list, get, and act read to know which collections and actions exist
+	// — the host never takes a collection ID from the caller on trust.
+	descriptions map[string]Description
+	// pending maps a pane key onto the cancel func of the list call in flight
+	// for it. A second list for the same pane supersedes the first: search as
+	// you type must not leave a process per keystroke running.
+	pending map[string]*pendingCall
 
 	snapshots *SnapshotStore
 
@@ -115,18 +123,20 @@ func NewManager(opts ManagerOptions) *Manager {
 		now = time.Now
 	}
 	return &Manager{
-		disabled:  make(map[string]bool),
-		statuses:  make(map[string]*Status),
-		lastGood:  make(map[string][]Matcher),
-		snapshots: NewSnapshotStore(),
-		cache:     make(map[cacheKey]cacheEntry),
-		alias:     make(map[cacheKey]string),
-		inflight:  make(map[cacheKey]*resolveCall),
-		globalSem: make(chan struct{}, maxConcurrent),
-		perSem:    make(map[string]chan struct{}),
-		perLimit:  perProvider,
-		log:       opts.Log,
-		now:       now,
+		disabled:     make(map[string]bool),
+		statuses:     make(map[string]*Status),
+		lastGood:     make(map[string][]Matcher),
+		descriptions: make(map[string]Description),
+		pending:      make(map[string]*pendingCall),
+		snapshots:    NewSnapshotStore(),
+		cache:        make(map[cacheKey]cacheEntry),
+		alias:        make(map[cacheKey]string),
+		inflight:     make(map[cacheKey]*resolveCall),
+		globalSem:    make(chan struct{}, maxConcurrent),
+		perSem:       make(map[string]chan struct{}),
+		perLimit:     perProvider,
+		log:          opts.Log,
+		now:          now,
 	}
 }
 
@@ -175,6 +185,7 @@ func (m *Manager) SetProviders(providers []Provider, disabled []string) {
 			st.State = StateRemoved
 			st.MatcherCount = 0
 			delete(m.lastGood, id)
+			delete(m.descriptions, id)
 			m.order = append(m.order, id)
 		}
 	}
@@ -261,6 +272,7 @@ func (m *Manager) DescribeAll(ctx context.Context) []Status {
 
 			if authoritativeDescribeFailure(r.err) {
 				delete(m.lastGood, r.instance)
+				delete(m.descriptions, r.instance)
 				st.MatcherCount = 0
 				continue
 			}
@@ -277,6 +289,7 @@ func (m *Manager) DescribeAll(ctx context.Context) []Status {
 		st.Info = r.desc.Info
 		st.MatcherCount = len(r.desc.Matchers)
 		m.lastGood[r.instance] = r.desc.Matchers
+		m.descriptions[r.instance] = r.desc
 		sets = append(sets, DescribedSet{Instance: r.instance, Order: r.order, Matchers: r.desc.Matchers, ClaimHosts: claims[r.index]})
 	}
 	m.mu.Unlock()
@@ -289,7 +302,7 @@ func (m *Manager) DescribeAll(ctx context.Context) []Status {
 
 	if m.log != nil {
 		for _, r := range results {
-			m.log.Debug("terminal resource provider describe",
+			m.log.Debug("plugin describe",
 				"instance", r.instance,
 				"method", MethodDescribe,
 				"duration_ms", r.took.Milliseconds(),
@@ -363,16 +376,29 @@ func (m *Manager) Resolve(ctx context.Context, ref resource.Reference, refresh b
 		}
 	}
 
+	return m.fetch(ctx, ref.Instance, MethodResolve, ref.Locator, refresh, func(ctx context.Context) (resource.Document, error) {
+		return provider.Resolve(ctx, ref)
+	})
+}
+
+// fetch is the cache, dedupe, and concurrency policy every document-returning
+// method shares. resolve and get differ only in what they are addressed by, so
+// they must not differ in whether a second click costs a process.
+//
+// lookup is the address within the instance: a locator for resolve, a
+// collection-qualified row id for get. They cannot collide because get's key
+// carries a separator no locator survives sanitization with.
+func (m *Manager) fetch(ctx context.Context, instance, method, lookup string, refresh bool, run func(context.Context) (resource.Document, error)) (resource.Document, error) {
 	gen := m.snapshots.Current().Generation()
-	lookup := cacheKey{generation: gen, instance: ref.Instance, key: ref.Locator}
+	key := cacheKey{generation: gen, instance: instance, key: lookup}
 
 	if !refresh {
-		if doc, ok := m.cached(lookup); ok {
+		if doc, ok := m.cached(key); ok {
 			return doc, nil
 		}
 	}
 
-	call, leader := m.joinInflight(lookup)
+	call, leader := m.joinInflight(key)
 	if !leader {
 		select {
 		case <-call.done:
@@ -380,30 +406,30 @@ func (m *Manager) Resolve(ctx context.Context, ref resource.Reference, refresh b
 		case <-ctx.Done():
 			// Withdrawing from a shared call never cancels it for the caller
 			// that started it.
-			return resource.Document{}, &TransportError{Instance: ref.Instance, Method: MethodResolve, Reason: ReasonCanceled, Detail: "the request was withdrawn"}
+			return resource.Document{}, &TransportError{Instance: instance, Method: method, Reason: ReasonCanceled, Detail: "the request was withdrawn"}
 		}
 	}
 
-	doc, resolveErr := m.runResolve(ctx, provider, ref)
-	if resolveErr == nil {
-		m.store(gen, ref, doc)
+	doc, runErr := m.runGuarded(ctx, instance, run)
+	if runErr == nil {
+		m.store(gen, instance, lookup, doc)
 	}
 
 	m.mu.Lock()
-	delete(m.inflight, lookup)
+	delete(m.inflight, key)
 	m.mu.Unlock()
-	call.doc, call.err = doc, resolveErr
+	call.doc, call.err = doc, runErr
 	close(call.done)
 
-	return doc, resolveErr
+	return doc, runErr
 }
 
-func (m *Manager) runResolve(ctx context.Context, provider Provider, ref resource.Reference) (resource.Document, error) {
-	if err := m.acquire(ctx, ref.Instance); err != nil {
+func (m *Manager) runGuarded(ctx context.Context, instance string, run func(context.Context) (resource.Document, error)) (resource.Document, error) {
+	if err := m.acquire(ctx, instance); err != nil {
 		return resource.Document{}, err
 	}
-	defer m.release(ref.Instance)
-	return provider.Resolve(ctx, ref)
+	defer m.release(instance)
+	return run(ctx)
 }
 
 func (m *Manager) providerFor(instance string) (Provider, error) {
@@ -434,12 +460,12 @@ func (m *Manager) cached(key cacheKey) (resource.Document, bool) {
 	return entry.doc, true
 }
 
-func (m *Manager) store(gen uint64, ref resource.Reference, doc resource.Document) {
+func (m *Manager) store(gen uint64, instance, lookup string, doc resource.Document) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	identityKey := cacheKey{generation: gen, instance: ref.Instance, key: doc.Identity}
+	identityKey := cacheKey{generation: gen, instance: instance, key: doc.Identity}
 	m.cache[identityKey] = cacheEntry{doc: doc, expires: m.now().Add(doc.FreshFor)}
-	m.alias[cacheKey{generation: gen, instance: ref.Instance, key: ref.Locator}] = doc.Identity
+	m.alias[cacheKey{generation: gen, instance: instance, key: lookup}] = doc.Identity
 }
 
 func (m *Manager) joinInflight(key cacheKey) (*resolveCall, bool) {

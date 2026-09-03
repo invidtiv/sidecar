@@ -41,6 +41,10 @@ type WireDocument struct {
 	SourceURL       string      `json:"sourceUrl,omitempty"`
 	UpdatedAt       string      `json:"updatedAt,omitempty"`
 	FreshForSeconds float64     `json:"freshForSeconds,omitempty"`
+	// Sections is the plugin protocol's extension to the resource object. A
+	// frozen-protocol provider never sends it and a document without it renders
+	// exactly as it did before.
+	Sections []WireSection `json:"sections,omitempty"`
 }
 
 // WireError is the `error` object of a typed failure response. Retryable is a
@@ -109,23 +113,8 @@ func SanitizeDocument(w *WireDocument) (Document, *StructuralError) {
 		}
 	}
 
-	if len(w.Fields) > 0 {
-		fields := make([]Field, 0, min(len(w.Fields), MaxFields))
-		for _, f := range w.Fields {
-			if len(fields) == MaxFields {
-				break
-			}
-			label := SanitizeLine(f.Label, MaxFieldLabelChars)
-			value := SanitizeLine(f.Value, MaxFieldValueChars)
-			if label == "" && value == "" {
-				continue
-			}
-			fields = append(fields, Field{Label: label, Value: value, Kind: CoerceFieldKind(f.Kind)})
-		}
-		if len(fields) > 0 {
-			doc.Fields = fields
-		}
-	}
+	doc.Fields = sanitizeFields(w.Fields)
+	doc.Sections = SanitizeSections(w.Sections)
 
 	if w.Body != nil {
 		text, truncated := SanitizeBodyText(w.Body.Text, MaxBodyBytes)
@@ -138,6 +127,31 @@ func SanitizeDocument(w *WireDocument) (Document, *StructuralError) {
 	doc.UpdatedAt = parseTimestamp(w.UpdatedAt)
 
 	return doc, nil
+}
+
+// sanitizeFields enforces the field-grid bounds. It is shared by the document's
+// own grid and by a section's, so a section cannot become a way around the
+// count and length limits.
+func sanitizeFields(wire []WireField) []Field {
+	if len(wire) == 0 {
+		return nil
+	}
+	fields := make([]Field, 0, min(len(wire), MaxFields))
+	for _, f := range wire {
+		if len(fields) == MaxFields {
+			break
+		}
+		label := SanitizeLine(f.Label, MaxFieldLabelChars)
+		value := SanitizeLine(f.Value, MaxFieldValueChars)
+		if label == "" && value == "" {
+			continue
+		}
+		fields = append(fields, Field{Label: label, Value: value, Kind: CoerceFieldKind(f.Kind)})
+	}
+	if len(fields) == 0 {
+		return nil
+	}
+	return fields
 }
 
 // parseTimestamp accepts RFC 3339, with or without fractional seconds, and

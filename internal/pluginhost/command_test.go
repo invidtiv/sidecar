@@ -399,7 +399,7 @@ func decodeGolden(t *testing.T, name string) *Response {
 	if err != nil {
 		t.Fatalf("read golden: %v", err)
 	}
-	resp, reason, detail := decodeResponse(raw)
+	resp, reason, detail := decodeResponse(raw, resource.Protocol)
 	if reason != "" {
 		t.Fatalf("golden %s rejected: %s (%s)", name, reason, detail)
 	}
