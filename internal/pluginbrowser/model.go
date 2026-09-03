@@ -2,6 +2,7 @@ package pluginbrowser
 
 import (
 	"strings"
+	"sync/atomic"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -140,6 +141,11 @@ type Model struct {
 	restore         paneRestore
 	pendingCursorID string
 
+	// id distinguishes this browser from every other one in the process. Two
+	// browsers of one plugin are two independent readers, and an answer that
+	// did not name which asked would land in both.
+	id uint64
+
 	// describeGeneration counts adopted describe results, so the live-refresh
 	// binding validates its watch set once per generation rather than on every
 	// reconcile.
@@ -159,6 +165,7 @@ func New(instance, name string, calls Calls, renderer *markdown.Renderer) *Model
 		name = instance
 	}
 	return &Model{
+		id:           nextBrowserID.Add(1),
 		instance:     instance,
 		focused:      true,
 		name:         name,
@@ -171,6 +178,10 @@ func New(instance, name string, calls Calls, renderer *markdown.Renderer) *Model
 		detail:       detailState{bodyForW: -1},
 	}
 }
+
+// nextBrowserID hands each browser a distinct identity for the lifetime of the
+// process.
+var nextBrowserID atomic.Uint64
 
 // Instance is the configured instance ID this browser renders.
 func (m *Model) Instance() string { return m.instance }
@@ -430,7 +441,8 @@ func (m *Model) list(c pluginhost.Collection, s *collectionState, appendPage boo
 	}
 	call := ListCall{
 		Instance: m.instance,
-		PaneKey:  paneKey(m.instance, c.ID),
+		Browser:  m.id,
+		PaneKey:  paneKey(m.id, m.instance, c.ID),
 		Params: pluginhost.ListParams{
 			Collection: c.ID,
 			Query:      s.query,
@@ -503,7 +515,7 @@ func (m *Model) applyDebounce(msg QueryDebouncedMsg) tea.Cmd {
 }
 
 func (m *Model) applyListed(msg ListedMsg) tea.Cmd {
-	if msg.Instance != m.instance {
+	if msg.Instance != m.instance || msg.Browser != m.id {
 		return nil
 	}
 	s, ok := m.states[msg.Collection]
@@ -545,7 +557,7 @@ func (m *Model) applyListed(msg ListedMsg) tea.Cmd {
 }
 
 func (m *Model) applyGot(msg GotMsg) {
-	if msg.Instance != m.instance || msg.Generation != m.detail.generation {
+	if msg.Instance != m.instance || msg.Browser != m.id || msg.Generation != m.detail.generation {
 		return
 	}
 	m.detail.loading = false
@@ -566,7 +578,7 @@ func (m *Model) applyGot(msg GotMsg) {
 }
 
 func (m *Model) applyActed(msg ActedMsg) tea.Cmd {
-	if msg.Instance != m.instance || msg.Generation != m.seq {
+	if msg.Instance != m.instance || msg.Browser != m.id || msg.Generation != m.seq {
 		return nil
 	}
 	if msg.Err != nil {
@@ -656,6 +668,7 @@ func (m *Model) openDocument(collection, id string, refresh bool) tea.Cmd {
 	m.detail.invalidateBody()
 	return m.calls.Get(GetCall{
 		Instance:   m.instance,
+		Browser:    m.id,
 		Params:     pluginhost.GetParams{Collection: collection, ID: id},
 		Context:    m.context(),
 		Refresh:    refresh,

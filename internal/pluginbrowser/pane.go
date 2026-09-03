@@ -64,6 +64,20 @@ func (m *Model) SetPaneDocument(collection, id string) tea.Cmd {
 	return m.openDocument(m.paneCollection, strings.TrimSpace(id), false)
 }
 
+// ArmPaneDocument points the browser at one row without fetching it. A restored
+// tab starts here, so relaunch does not fan out one process per remembered tab
+// and the strip still names what each tab is.
+func (m *Model) ArmPaneDocument(collection, id string) {
+	if m == nil {
+		return
+	}
+	m.paneShape = PaneDocument
+	m.paneCollection = strings.TrimSpace(collection)
+	m.focus = FocusDetail
+	m.detail.collection = m.paneCollection
+	m.detail.id = strings.TrimSpace(id)
+}
+
 // PaneShape reports which shape the browser is in, if any.
 func (m *Model) PaneShape() PaneShape {
 	if m == nil {

@@ -72,6 +72,7 @@ func pluginBrowserCalls(instance string) pluginbrowser.Calls {
 			return func() tea.Msg {
 				msg := pluginbrowser.ListedMsg{
 					Instance:   call.Instance,
+					Browser:    call.Browser,
 					Collection: call.Params.Collection,
 					Generation: call.Generation,
 					Append:     call.Append,
@@ -95,6 +96,7 @@ func pluginBrowserCalls(instance string) pluginbrowser.Calls {
 			return func() tea.Msg {
 				msg := pluginbrowser.GotMsg{
 					Instance:   call.Instance,
+					Browser:    call.Browser,
 					Collection: call.Params.Collection,
 					ID:         call.Params.ID,
 					Generation: call.Generation,
@@ -118,6 +120,7 @@ func pluginBrowserCalls(instance string) pluginbrowser.Calls {
 			return func() tea.Msg {
 				msg := pluginbrowser.ActedMsg{
 					Instance:   call.Instance,
+					Browser:    call.Browser,
 					Action:     call.Params.Action,
 					Generation: call.Generation,
 				}

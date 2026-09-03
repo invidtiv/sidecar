@@ -37,7 +37,7 @@ func (c *globalCollectionCalls) callsFor() resourceview.CallsFor {
 				c.lists++
 				return func() tea.Msg {
 					return pluginbrowser.ListedMsg{
-						Instance: call.Instance, Collection: call.Params.Collection,
+						Instance: call.Instance, Browser: call.Browser, Collection: call.Params.Collection,
 						Generation: call.Generation,
 						Page: pluginhost.Page{
 							Outcome: pluginhost.OutcomeAnswered,
@@ -52,7 +52,7 @@ func (c *globalCollectionCalls) callsFor() resourceview.CallsFor {
 				c.gets++
 				return func() tea.Msg {
 					return pluginbrowser.GotMsg{
-						Instance: call.Instance, Collection: call.Params.Collection,
+						Instance: call.Instance, Browser: call.Browser, Collection: call.Params.Collection,
 						ID: call.Params.ID, Generation: call.Generation,
 						Document: resource.Document{Identity: call.Params.ID, Title: "dex schema notes"},
 					}

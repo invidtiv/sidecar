@@ -485,8 +485,12 @@ func (v *resourceViewer) arm(ctx SurfaceContext, ref contentlink.Ref, id int, st
 	v.view.Arm(id, rf, ctx.Epoch)
 	v.view.SetPendingScroll(state.Scroll)
 }
-func (v *resourceViewer) focus(_ SurfaceContext, _ contentlink.Ref, _ int) tea.Cmd {
-	return v.view.Resolve()
+func (v *resourceViewer) focus(_ SurfaceContext, ref contentlink.Ref, _ int) tea.Cmd {
+	// A focus may carry a view position the tab is not showing — an `open`
+	// naming a query for a collection that is already open. The tab's identity
+	// is the collection, so that open focuses rather than creating; dropping
+	// the query here would silently answer a different question.
+	return v.view.FocusRef(resourceRef(ref))
 }
 func (v *resourceViewer) apply(_ SurfaceContext, msg any) (tea.Cmd, bool) {
 	if m, ok := msg.(resourceview.ResolvedMsg); ok {

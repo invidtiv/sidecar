@@ -169,3 +169,38 @@ func TestEncodeKeepsTheCollectionsViewPosition(t *testing.T) {
 		t.Fatalf("query lost: %+v", found.Ref)
 	}
 }
+
+// A collection tab's identity is the collection, so a second open focuses it.
+// The view position that open named must still take effect: otherwise
+// `sidecar open --plugin recall --collection results --query dex` would mean
+// something different the second time it is run.
+func TestOpeningAnOpenCollectionAppliesTheNewQuery(t *testing.T) {
+	d := New(testContext(t.TempDir()), Config{PluginCalls: describedCalls("results")})
+	first := d.Open(testContext(""), collectionRef("recall", "results", "dex"), testPlacement())
+	if !first.Accepted() {
+		t.Fatalf("first open refused: %s", first.Refusal)
+	}
+	view, _ := d.Viewer(first.LeafID).(*resourceview.Model)
+	if view == nil {
+		t.Fatal("no viewer")
+	}
+	if got := view.Reference().Query; got != "dex" {
+		t.Fatalf("first query = %q, want dex", got)
+	}
+	again := d.Open(testContext(""), collectionRef("recall", "results", "ongoing"), testPlacement())
+	if again.Status != StatusFocused {
+		t.Fatalf("the second open created a tab instead of focusing (status %v)", again.Status)
+	}
+	if got := view.Reference().Query; got != "ongoing" {
+		t.Fatalf("the focused tab kept query %q; the open named ongoing", got)
+	}
+	// An open naming no query focuses the tab as it is rather than clearing
+	// what the user typed.
+	bare := d.Open(testContext(""), collectionRef("recall", "results", ""), testPlacement())
+	if bare.Status != StatusFocused {
+		t.Fatalf("a bare open created a tab (status %v)", bare.Status)
+	}
+	if got := view.Reference().Query; got != "ongoing" {
+		t.Fatalf("a bare open cleared the query to %q", got)
+	}
+}

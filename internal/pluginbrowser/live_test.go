@@ -35,7 +35,7 @@ func liveCalls(t *testing.T, manager *pluginhost.Manager, opened *[]string) Call
 					Context: call.Context, PaneKey: call.PaneKey,
 				})
 				return ListedMsg{
-					Instance: call.Instance, Collection: call.Params.Collection,
+					Instance: call.Instance, Browser: call.Browser, Collection: call.Params.Collection,
 					Generation: call.Generation, Append: call.Append, Page: page, Err: err,
 				}
 			}
@@ -47,7 +47,7 @@ func liveCalls(t *testing.T, manager *pluginhost.Manager, opened *[]string) Call
 					Context: call.Context, Refresh: call.Refresh,
 				})
 				return GotMsg{
-					Instance: call.Instance, Collection: call.Params.Collection,
+					Instance: call.Instance, Browser: call.Browser, Collection: call.Params.Collection,
 					ID: call.Params.ID, Generation: call.Generation, Document: doc, Err: err,
 				}
 			}
@@ -58,7 +58,7 @@ func liveCalls(t *testing.T, manager *pluginhost.Manager, opened *[]string) Call
 					Instance: call.Instance, Params: call.Params, Context: call.Context,
 				})
 				return ActedMsg{
-					Instance: call.Instance, Action: call.Params.Action,
+					Instance: call.Instance, Browser: call.Browser, Action: call.Params.Action,
 					Generation: call.Generation, Outcome: outcome, Err: err,
 				}
 			}

@@ -115,7 +115,10 @@ func (m *Model) bindPlugin(ref resource.Reference) {
 		m.browser.SetPaneCollection(ref.Collection)
 		m.browser.RestorePaneView(ref.Query, ref.View, ref.Sort, ref.CursorID)
 	case resource.ShapeItem:
-		m.browser.SetPaneCollection(ref.Collection)
+		// Armed, not fetched: a restored row tab must name the row in the strip
+		// before anything is asked for, or the tab reads as its collection until
+		// the document lands.
+		m.browser.ArmPaneDocument(ref.Collection, ref.Locator)
 	}
 	m.bindOpenRow()
 }
@@ -145,6 +148,45 @@ func (m *Model) pluginLoad() tea.Cmd {
 		return batch(m.browser.Refresh(), m.browser.SetPaneDocument(m.ref.Collection, m.ref.Locator))
 	}
 	return m.browser.Refresh()
+}
+
+// FocusRef points an already-open tab at a reference that names the SAME tab
+// with a different view position, and starts whatever that needs.
+//
+// It is what makes `sidecar open --plugin recall --collection results --query
+// dex` mean the same thing whether or not that collection is already open: the
+// tab's identity is deliberately just {instance, collection}, so a second open
+// focuses it, and without this the query the user asked for would be dropped on
+// the floor by the focus.
+func (m *Model) FocusRef(ref resource.Reference) tea.Cmd {
+	if m == nil {
+		return nil
+	}
+	if !ref.IsPlugin() || m.browser == nil {
+		return m.Resolve()
+	}
+	if !m.viewPositionDiffers(ref) {
+		return m.Resolve()
+	}
+	m.ref = ref
+	m.bindPlugin(ref)
+	return m.pluginLoad()
+}
+
+// viewPositionDiffers reports that a reference asks for something the browser is
+// not showing. An empty field asks for nothing: `open` with no --query focuses
+// the tab as it is rather than clearing a query the user typed.
+func (m *Model) viewPositionDiffers(ref resource.Reference) bool {
+	if ref.Shape() != resource.ShapeCollection {
+		return false
+	}
+	if ref.Query != "" && ref.Query != m.browser.PaneQuery() {
+		return true
+	}
+	if ref.View != "" && ref.View != m.browser.PaneView() {
+		return true
+	}
+	return ref.Sort != "" && ref.Sort != m.browser.PaneSort()
 }
 
 // pluginSnapshot folds the browser's live view position back into the

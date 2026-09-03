@@ -345,8 +345,12 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// the plugins like any other broadcast; every host drops what is not
 		// addressed to it. Pane-switcher picker results share for the same
 		// reason: whichever host has its modal open fired the loaders, and
-		// both hosts' forms answer to their own types.
-		if !overview.IsSharedDiffMessage(msg) && !overview.IsSharedPickerMessage(msg) {
+		// both hosts' forms answer to their own types. A protocol plugin's page,
+		// document, action outcome and debounce tick are shared for exactly the
+		// same reason: the project workspace hosts the same browser, and a page
+		// claimed here would leave a project pane refreshing forever.
+		if !overview.IsSharedDiffMessage(msg) && !overview.IsSharedPickerMessage(msg) &&
+			!overview.IsSharedPluginMessage(msg) {
 			return m, cmd
 		}
 		if cmd != nil {

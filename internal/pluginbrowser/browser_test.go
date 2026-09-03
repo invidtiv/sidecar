@@ -44,6 +44,7 @@ func (f *fakeHost) calls() Calls {
 			return func() tea.Msg {
 				return ListedMsg{
 					Instance:   call.Instance,
+					Browser:    call.Browser,
 					Collection: call.Params.Collection,
 					Generation: call.Generation,
 					Append:     call.Append,
@@ -57,6 +58,7 @@ func (f *fakeHost) calls() Calls {
 			return func() tea.Msg {
 				return GotMsg{
 					Instance:   call.Instance,
+					Browser:    call.Browser,
 					Collection: call.Params.Collection,
 					ID:         call.Params.ID,
 					Generation: call.Generation,
@@ -70,6 +72,7 @@ func (f *fakeHost) calls() Calls {
 			return func() tea.Msg {
 				return ActedMsg{
 					Instance:   call.Instance,
+					Browser:    call.Browser,
 					Action:     call.Params.Action,
 					Generation: call.Generation,
 					Outcome:    f.outcome,
@@ -347,7 +350,7 @@ func TestStalePageIsDiscarded(t *testing.T) {
 		t.Fatalf("items = %d, want 3", len(s.items))
 	}
 	m.Update(ListedMsg{
-		Instance: "fixture", Collection: "results", Generation: s.generation - 1,
+		Instance: "fixture", Browser: m.id, Collection: "results", Generation: s.generation - 1,
 		Page: pluginhost.Page{Outcome: pluginhost.OutcomeAbstained},
 	})
 	if len(s.items) != 3 {
@@ -765,5 +768,63 @@ func TestUnselectedRowsKeepEveryColumn(t *testing.T) {
 				t.Fatalf("the heading row was truncated: %q", candidate)
 			}
 		}
+	}
+}
+
+// Two browsers of one plugin are two independent readers. A global tab and a
+// pane showing the same collection each keep their own query and their own
+// generation, and a page fetched for one must not land in the other — which is
+// exactly what happened while the answer named only the instance, the
+// collection and a generation both browsers happened to be on.
+func TestAPageDoesNotLandInAnotherBrowser(t *testing.T) {
+	tabHost := &fakeHost{desc: testDescription(), described: true,
+		status: pluginhost.Status{Instance: "fixture", State: pluginhost.StateReady}}
+	tabHost.page = pluginhost.Page{Outcome: pluginhost.OutcomeAnswered, Items: []pluginhost.Item{
+		{ID: "tab-row", Cells: map[string]string{"title": "the tab's page"}},
+	}}
+	tab := New("fixture", "fixture", tabHost.calls(), nil)
+	tab.SetPaneCollection("sources")
+	tab.SetSize(160, 45)
+	run(t, tab, tab.Refresh())
+
+	paneHost := &fakeHost{desc: testDescription(), described: true,
+		status: pluginhost.Status{Instance: "fixture", State: pluginhost.StateReady}}
+	paneHost.page = pluginhost.Page{Outcome: pluginhost.OutcomeAnswered, Items: []pluginhost.Item{
+		{ID: "pane-row", Cells: map[string]string{"title": "the pane's page"}},
+	}}
+	pane := New("fixture", "fixture", paneHost.calls(), nil)
+	pane.SetPaneCollection("sources")
+	pane.SetSize(80, 30)
+	run(t, pane, pane.Refresh())
+
+	if tab.id == pane.id {
+		t.Fatal("two browsers were handed the same identity")
+	}
+	tabState := tab.states["sources"]
+	paneState := pane.states["sources"]
+	if tabState == nil || paneState == nil {
+		t.Fatalf("a browser never listed: tab=%v pane=%v", tabState != nil, paneState != nil)
+	}
+	if len(tabState.items) != 1 || tabState.items[0].ID != "tab-row" {
+		t.Fatalf("the tab shows %+v, want its own page", tabState.items)
+	}
+	if len(paneState.items) != 1 || paneState.items[0].ID != "pane-row" {
+		t.Fatalf("the pane shows %+v, want its own page", paneState.items)
+	}
+
+	// And a page addressed to one is refused by the other outright.
+	pane.Update(ListedMsg{
+		Instance: "fixture", Browser: tab.id, Collection: "sources",
+		Generation: paneState.generation,
+		Page:       pluginhost.Page{Outcome: pluginhost.OutcomeAnswered},
+	})
+	if len(paneState.items) != 1 || paneState.items[0].ID != "pane-row" {
+		t.Fatalf("another browser's page landed in this one: %+v", paneState.items)
+	}
+
+	// Their list calls are superseded independently, so a pane re-querying does
+	// not kill the tab's in-flight process group.
+	if tabHost.lists[0].PaneKey == paneHost.lists[0].PaneKey {
+		t.Fatalf("two browsers share the cancellation key %q", tabHost.lists[0].PaneKey)
 	}
 }

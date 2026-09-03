@@ -578,6 +578,7 @@ func (m *Model) runAction(action pluginhost.Action, inputs map[string]string) te
 	m.flash, m.flashErr = "", false
 	return m.calls.Act(ActCall{
 		Instance:   m.instance,
+		Browser:    m.id,
 		Params:     params,
 		Context:    m.context(),
 		Generation: m.seq,

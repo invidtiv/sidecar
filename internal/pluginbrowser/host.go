@@ -1,6 +1,7 @@
 package pluginbrowser
 
 import (
+	"strconv"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -52,6 +53,11 @@ type Calls struct {
 // ListCall is one request for a page of one collection.
 type ListCall struct {
 	Instance string
+	// Browser identifies the asking browser. Two browsers of one plugin — a
+	// global tab and a pane showing the same collection — are two independent
+	// readers with independent generations, so an answer must name which one
+	// asked or the tab's page lands in the pane.
+	Browser uint64
 	// PaneKey identifies the asking surface. A second list for the same key
 	// supersedes the first, which kills the earlier call's process group; that
 	// is what makes search-as-you-type affordable with one-shot processes.
@@ -70,6 +76,7 @@ type ListCall struct {
 // GetCall is one request to expand a row.
 type GetCall struct {
 	Instance string
+	Browser  uint64
 	Params   pluginhost.GetParams
 	Context  *pluginhost.Context
 	// Refresh bypasses cached freshness for this call.
@@ -81,6 +88,7 @@ type GetCall struct {
 // ActCall is one typed operation.
 type ActCall struct {
 	Instance string
+	Browser  uint64
 	Params   pluginhost.ActParams
 	Context  *pluginhost.Context
 
@@ -90,6 +98,7 @@ type ActCall struct {
 // ListedMsg is one page answer.
 type ListedMsg struct {
 	Instance   string
+	Browser    uint64
 	Collection string
 	Generation uint64
 	Append     bool
@@ -100,6 +109,7 @@ type ListedMsg struct {
 // GotMsg is one document answer.
 type GotMsg struct {
 	Instance   string
+	Browser    uint64
 	Collection string
 	ID         string
 	Generation uint64
@@ -110,6 +120,7 @@ type GotMsg struct {
 // ActedMsg is one action answer.
 type ActedMsg struct {
 	Instance   string
+	Browser    uint64
 	Action     string
 	Generation uint64
 	Outcome    pluginhost.Outcome
@@ -127,7 +138,9 @@ type DescribedMsg struct{}
 // paneKey is the identity a list call is superseded by. One collection of one
 // instance in one browser is one key: two collections of the same plugin can
 // legitimately be in flight at once, and cancelling one because the other moved
-// would be the host inventing a conflict.
-func paneKey(instance, collection string) string {
-	return "pluginbrowser\x00" + instance + "\x00" + collection
+// would be the host inventing a conflict — and so can two BROWSERS of the same
+// collection, which is why the asking browser is part of the key rather than
+// having a pane cancel the tab's page out from under it.
+func paneKey(browser uint64, instance, collection string) string {
+	return "pluginbrowser\x00" + strconv.FormatUint(browser, 10) + "\x00" + instance + "\x00" + collection
 }

@@ -172,6 +172,20 @@ func IsSharedPickerMessage(msg tea.Msg) bool {
 // are shared by construction; raw workspacediff messages predate Deck and are
 // shared for the same reason. Routing either family here alone leaves the
 // project pane that issued the load waiting forever.
+// IsSharedPluginMessage reports a protocol plugin's own answer or tick.
+//
+// It is background work like a diff result, and it is SHARED for the same
+// reason: the project workspace hosts the same browser this surface does, and a
+// page claimed here would leave a project pane refreshing forever. The app
+// offers it to this surface and then lets it reach the plugins like any other
+// broadcast; every host drops what is not addressed to it.
+func IsSharedPluginMessage(msg tea.Msg) bool {
+	if _, ok := msg.(resourceview.OpenRowMsg); ok {
+		return true
+	}
+	return pluginbrowser.IsBrowserMsg(msg)
+}
+
 func IsSharedDiffMessage(msg tea.Msg) bool {
 	if _, ok := msg.(contentpanes.Result); ok {
 		return true
