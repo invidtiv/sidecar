@@ -250,6 +250,32 @@ If your declaration is refused, `check` reports the instance as `incompatible` w
 
 Then restart Sidecar. Enablement and configuration are read at startup.
 
+### `resolves`, and why it is the line to read first
+
+Read `resolves` before anything else when a plugin works at your prompt and fails inside Sidecar. Sidecar runs your argv directly, with no shell, so a bare `argv[0]` is resolved against whatever `PATH` the Sidecar process was started with — not against the `PATH` you have when you type the command yourself.
+
+Those two are often different, and the difference is invisible. A shell started by mosh, by `ssh host cmd`, or by launchd is not interactive, so on zsh it reads `~/.zshenv` and `~/.zprofile` and never reads `~/.zshrc`; on bash it reads `~/.bash_profile` and never `~/.bashrc`. Any directory added to `PATH` only in the interactive file is missing. macOS makes it worse in a second way: `/etc/zprofile` runs `path_helper`, which rebuilds `PATH` with `/etc/paths.d` first, so entries added before it survive but are **demoted** behind `/opt/homebrew/bin`.
+
+Two builds of one tool on a machine is completely ordinary — a Homebrew release and a development build in `~/.local/bin` or `~/go/bin` — and this is what decides which one Sidecar runs. When the older one wins and does not know the plugin subcommand yet, it exits non-zero without writing a response, and the plugin's tab shows the configured id in place of its declared name because `describe` never landed:
+
+```console
+$ sidecar plugin check recall
+recall  [enabled, temporarily-failed]  plugins.external
+  command   recall sidecar-plugin
+  resolves  /opt/homebrew/bin/recall      # not the ~/.local/bin build you tested
+  describe  failed in 10ms — exit
+            internal: The provider command exited without answering.
+```
+
+The failing card in the app names the same file, under **Command**, for the same reason.
+
+Two ways to be sure of the answer:
+
+- **Configure an absolute path.** `sidecar plugin add hello --command /Users/you/.local/bin/hello sidecar-plugin` takes `PATH` out of the question entirely. This is the right choice when you are developing the plugin and running a build that is not the installed one.
+- **Put your `PATH` additions where every shell reads them.** On zsh that means a file sourced from both `~/.zshenv` (for non-interactive shells) and `~/.zprofile` (to get back in front of `path_helper` on login shells), rather than from `~/.zshrc` alone.
+
+Tell your users which one you expect. A plugin whose install instructions say "put it on your `PATH`" is relying on a `PATH` its users may not have where it matters.
+
 ## What the host draws for what you declared
 
 Read [the M0 mockups](../../plans/implemented/plugin-ecosystem/mockups/README.md) once; they are rendered from the same components the real app paints with, so they are an accurate picture of what your declarations become.

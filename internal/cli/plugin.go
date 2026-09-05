@@ -345,7 +345,13 @@ func pluginCommand() *Command {
 			"host actually sent, so a key that was dropped shows as dropped.\n\n" +
 			"Only what the host kept is printed, never the plugin's raw stdout: every\n" +
 			"string shown has been through the host's own sanitization and bounds, so what\n" +
-			"you see is what a pane would draw.",
+			"you see is what a pane would draw.\n\n" +
+			"The `resolves` line is the one to read first when a plugin that works at a\n" +
+			"prompt fails inside Sidecar. A bare command name is resolved against whatever\n" +
+			"PATH Sidecar was started with, and a session started by mosh, `ssh host cmd`\n" +
+			"or launchd runs a shell that never reads an interactive shell's rc file. Two\n" +
+			"builds of one tool on a machine is ordinary; `resolves` says which of them\n" +
+			"answered.",
 		Flags: []Flag{
 			{Name: "--list", Arg: "COLLECTION", Summary: "Also call list on this collection"},
 			{Name: "--query", Arg: "TEXT", Summary: "Query to send with --list"},

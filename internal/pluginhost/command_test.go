@@ -559,3 +559,44 @@ func TestTransportInvalidRequestMapsToInvalidRequest(t *testing.T) {
 		t.Fatal("invalid_request must not be retryable")
 	}
 }
+
+// ResolvedCommand answers the question a describe failure raises: which file
+// did the configured name actually run?
+//
+// The fixture provider is configured with an absolute argv[0], so the lookup is
+// deterministic here. What it proves is the shape both callers rely on — the
+// configured argv comes back whole, and the path is empty rather than an error
+// when the name resolves to nothing.
+func TestCommandProviderResolvedCommand(t *testing.T) {
+	p := newFixtureProvider(t, "fixture")
+	argv, path := p.ResolvedCommand()
+	if len(argv) == 0 {
+		t.Fatal("argv came back empty")
+	}
+	if path != argv[0] {
+		t.Fatalf("path = %q, want the absolute argv[0] %q", path, argv[0])
+	}
+
+	// The returned argv is a copy: a caller that keeps it must not be able to
+	// rewrite the command the next invocation runs.
+	argv[0] = "mutated"
+	if again, _ := p.ResolvedCommand(); again[0] == "mutated" {
+		t.Fatal("the caller's slice aliases the provider's argv")
+	}
+
+	missing, err := NewCommandProvider(CommandConfig{
+		Instance: "missing",
+		Argv:     []string{"sidecar-no-such-plugin-executable", "sidecar-plugin"},
+		Protocol: Protocol,
+	})
+	if err != nil {
+		t.Fatalf("NewCommandProvider: %v", err)
+	}
+	gotArgv, gotPath := missing.ResolvedCommand()
+	if gotPath != "" {
+		t.Fatalf("path = %q, want empty for a name that resolves to nothing", gotPath)
+	}
+	if len(gotArgv) != 2 || gotArgv[0] != "sidecar-no-such-plugin-executable" {
+		t.Fatalf("argv = %v, want the configured command even when it resolves to nothing", gotArgv)
+	}
+}

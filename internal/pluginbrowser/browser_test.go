@@ -959,3 +959,78 @@ func TestAPageDoesNotLandInAnotherBrowser(t *testing.T) {
 		t.Fatalf("two browsers share the cancellation key %q", tabHost.lists[0].PaneKey)
 	}
 }
+
+// A failing card names the executable it actually ran.
+//
+// This is the mosh failure: PATH resolved `recall` to an older Homebrew build
+// that has no plugin subcommand, so the card said the provider misbehaved while
+// the working build sat one directory earlier on an interactive PATH. Printing
+// the file turns "this plugin is broken" into "PATH found the wrong one".
+func TestDescribeFailureNamesTheExecutableItRan(t *testing.T) {
+	host := &fakeHost{described: true, status: pluginhost.Status{
+		Instance: "recall",
+		State:    pluginhost.StateTemporarilyFailed,
+		LastError: &resource.Error{
+			Code:      resource.CodeInternal,
+			Message:   "The provider command exited without answering.",
+			SetupHint: "sidecar plugin check recall",
+		},
+		Command:     []string{"recall", "sidecar-plugin"},
+		CommandPath: "/opt/homebrew/bin/recall",
+	}}
+	m := New("recall", "recall", host.calls(), nil)
+	m.SetSize(120, 30)
+	run(t, m, m.Refresh())
+	view := strip(m.View())
+	for _, want := range []string{"exited without answering", "Command", "recall sidecar-plugin", "/opt/homebrew/bin/recall", "sidecar plugin check recall"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("failing card is missing %q:\n%s", want, view)
+		}
+	}
+}
+
+// A command that resolves to nothing says so, rather than showing a blank line
+// where the path would be.
+func TestDescribeFailureSaysWhenTheCommandIsNotOnPath(t *testing.T) {
+	host := &fakeHost{described: true, status: pluginhost.Status{
+		Instance: "recall",
+		State:    pluginhost.StateTemporarilyFailed,
+		LastError: &resource.Error{
+			Code:    resource.CodeInvalidConfig,
+			Message: "The configured provider command could not be started.",
+		},
+		Command: []string{"recall", "sidecar-plugin"},
+	}}
+	m := New("recall", "recall", host.calls(), nil)
+	m.SetSize(120, 30)
+	run(t, m, m.Refresh())
+	if view := strip(m.View()); !strings.Contains(view, "not found on PATH") {
+		t.Fatalf("card does not say the command is missing:\n%s", view)
+	}
+}
+
+// A plugin that is working owes no explanation of its binary. The host records
+// a command only for a failed describe, so a typed failure from a healthy
+// provider renders no Command block.
+func TestWorkingPluginErrorsSayNothingAboutTheBinary(t *testing.T) {
+	host := &fakeHost{
+		described: true,
+		status:    pluginhost.Status{Instance: "fixture", State: pluginhost.StateReady},
+		desc:      testDescription(),
+		pageErr:   &resource.Error{Code: resource.CodeNotFound, Message: "nothing matched"},
+	}
+	m := newTestModel(t, host)
+	m.SetSize(120, 30)
+	press(t, m, "/")
+	typeQuery(t, m, "dex")
+	state := m.activeState()
+	run(t, m, m.Update(QueryDebouncedMsg{Instance: "fixture", Collection: "results", Sequence: state.debounce}))
+	view := strip(m.View())
+	// The card has to be on screen for its silence to mean anything.
+	if !strings.Contains(view, "nothing matched") {
+		t.Fatalf("the error card is not showing, so this proves nothing:\n%s", view)
+	}
+	if strings.Contains(view, "Command") {
+		t.Fatalf("a working plugin's error card named a binary:\n%s", view)
+	}
+}

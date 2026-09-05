@@ -626,6 +626,7 @@ func (m *Model) errorLines(err *resource.Error, width int) []string {
 			lines = append(lines, styles.Body.Render(centre(line, width)))
 		}
 	}
+	lines = append(lines, m.commandLines(width)...)
 	if err.SetupHint != "" {
 		lines = append(lines, "", styles.Muted.Render(centre("Setup", width)))
 		// The hint is text the user may copy. Sidecar never runs it, and saying
@@ -635,6 +636,38 @@ func (m *Model) errorLines(err *resource.Error, width int) []string {
 		}
 	}
 	lines = append(lines, "", styles.Muted.Render(centre("r  try again", width)))
+	return lines
+}
+
+// commandLines names the executable behind a failed plugin: the command as it
+// is configured, and the file it resolved to.
+//
+// It is the difference between "this plugin is broken" and "PATH found an older
+// build of it", which is the likelier of the two and the one a message about
+// the protocol sends a user away from. Two builds of the same tool on one
+// machine is ordinary, and a bare command name resolves against whatever PATH
+// Sidecar was started with, which for a session launched by mosh, `ssh host
+// cmd` or launchd is not the PATH an interactive shell has.
+//
+// The host records the command only when a describe failed, so this renders
+// exactly then: a typed failure from a working plugin says nothing about a
+// binary, and neither does this.
+func (m *Model) commandLines(width int) []string {
+	if len(m.status.Command) == 0 {
+		return nil
+	}
+	origin := []string{strings.Join(m.status.Command, " ")}
+	if m.status.CommandPath == "" {
+		origin = append(origin, "not found on PATH")
+	} else if m.status.CommandPath != m.status.Command[0] {
+		origin = append(origin, m.status.CommandPath)
+	}
+	lines := []string{"", styles.Muted.Render(centre("Command", width))}
+	for _, entry := range origin {
+		for _, line := range wrapToWidth(entry, width) {
+			lines = append(lines, styles.Subtle.Render(centre(line, width)))
+		}
+	}
 	return lines
 }
 

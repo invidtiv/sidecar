@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -50,6 +51,27 @@ type CommandProvider struct {
 var _ Provider = (*CommandProvider)(nil)
 var _ PluginProvider = (*CommandProvider)(nil)
 var _ claimHostsProvider = (*CommandProvider)(nil)
+var _ commandPathProvider = (*CommandProvider)(nil)
+
+// ResolvedCommand reports the configured argv and the file argv[0] resolves to
+// right now, or "" if it resolves to nothing.
+//
+// The lookup is deliberately performed on call rather than cached at
+// construction: PATH is the thing under suspicion whenever this is asked for,
+// and a value frozen at startup would answer for a lookup nobody is debugging.
+// It runs the same PATH resolution the Runner will, but spawns nothing, and the
+// Manager only asks after a describe has already failed.
+func (p *CommandProvider) ResolvedCommand() (argv []string, path string) {
+	argv = append([]string(nil), p.argv...)
+	if len(argv) == 0 {
+		return argv, ""
+	}
+	resolved, err := exec.LookPath(argv[0])
+	if err != nil {
+		return argv, ""
+	}
+	return argv, resolved
+}
 
 // CommandConfig is everything a CommandProvider needs. It is resolved once, at
 // construction, so no invocation reads configuration or the environment.

@@ -244,6 +244,15 @@ type claimHostsProvider interface {
 	ClaimHosts() []string
 }
 
+// commandPathProvider is the optional capability by which an adapter surfaces
+// the executable it runs: the configured argv, and the file argv[0] resolved
+// to, or "" when it resolves to nothing. CommandProvider implements it; the
+// Manager reads it when a describe fails, so a failing card can name the file
+// rather than leaving the user to guess which of two builds answered.
+type commandPathProvider interface {
+	ResolvedCommand() (argv []string, path string)
+}
+
 // normalizeClaimHosts lowercases and trims claimed-hostname entries and drops
 // anything that is not a bare hostname. internal/config already refuses
 // malformed entries loudly; this second pass keeps programmatic callers from

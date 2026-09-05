@@ -65,6 +65,17 @@ func (e *TransportError) Error() string {
 
 func (e *TransportError) Unwrap() error { return e.Err }
 
+// checkHint names the one command that reports which executable a configured
+// command resolved to, which is the question every wrong-binary failure is
+// really asking. It is host-authored text the user may copy; Sidecar never runs
+// a SetupHint.
+func checkHint(instance string) string {
+	if instance == "" {
+		return ""
+	}
+	return "sidecar plugin check " + instance
+}
+
 // ResourceError maps a transport failure onto the typed code a card shows.
 //
 // The mapping is deliberate: `unavailable` means "the thing on the other end
@@ -72,6 +83,14 @@ func (e *TransportError) Unwrap() error { return e.Err }
 // `invalid_config` means "this instance is not set up", which is what an
 // unstartable command is; everything else is the provider misbehaving, which is
 // `internal` and retryable because a retry is free and sometimes works.
+//
+// The three reasons that a wrong executable produces — it would not start, it
+// exited without answering, it wrote something that is not a response — each
+// say so in their own words rather than sharing one. A bare command name is
+// resolved against whatever PATH Sidecar was started with, so the commonest
+// cause of all three is a second, older build of the right tool winning the
+// lookup, and a message that blames the protocol sends the user to read the
+// wrong thing. Each carries the hint that prints the file actually run.
 func (e *TransportError) ResourceError() *resource.Error {
 	switch e.Reason {
 	case ReasonSpawn:
@@ -79,6 +98,21 @@ func (e *TransportError) ResourceError() *resource.Error {
 			Code:      resource.CodeInvalidConfig,
 			Message:   "The configured provider command could not be started.",
 			Retryable: false,
+			SetupHint: checkHint(e.Instance),
+		}
+	case ReasonExit:
+		return &resource.Error{
+			Code:      resource.CodeInternal,
+			Message:   "The provider command exited without answering.",
+			Retryable: true,
+			SetupHint: checkHint(e.Instance),
+		}
+	case ReasonMalformed:
+		return &resource.Error{
+			Code:      resource.CodeInternal,
+			Message:   "The provider wrote no response Sidecar could read.",
+			Retryable: true,
+			SetupHint: checkHint(e.Instance),
 		}
 	case ReasonTimeout:
 		return &resource.Error{
@@ -97,6 +131,7 @@ func (e *TransportError) ResourceError() *resource.Error {
 			Code:      resource.CodeInvalidConfig,
 			Message:   "The provider does not speak " + resource.Protocol + ".",
 			Retryable: false,
+			SetupHint: checkHint(e.Instance),
 		}
 	case ReasonInvalidRequest:
 		return &resource.Error{

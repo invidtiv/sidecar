@@ -2265,6 +2265,13 @@ Only what the host kept is printed, never the plugin's raw stdout: every
 string shown has been through the host's own sanitization and bounds, so what
 you see is what a pane would draw.
 
+The `resolves` line is the one to read first when a plugin that works at a
+prompt fails inside Sidecar. A bare command name is resolved against whatever
+PATH Sidecar was started with, and a session started by mosh, `ssh host cmd`
+or launchd runs a shell that never reads an interactive shell's rc file. Two
+builds of one tool on a machine is ordinary; `resolves` says which of them
+answered.
+
 ```
 Usage: sidecar plugin check [--list COLLECTION [--query Q]] [--get COLLECTION ID] [--json] <id>
 ```

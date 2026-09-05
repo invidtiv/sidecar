@@ -616,3 +616,77 @@ func TestManagerRemovalDropsMatchersButKeepsStatus(t *testing.T) {
 		t.Fatalf("status = %+v ok=%v", st, ok)
 	}
 }
+
+// commandFakeProvider is a fakeProvider that also reports the executable it
+// runs, the way CommandProvider does.
+type commandFakeProvider struct {
+	fakeProvider
+	argv []string
+	path string
+	// asked counts the lookups, so a test can prove the happy path pays for
+	// none of them.
+	asked int
+}
+
+func (f *commandFakeProvider) ResolvedCommand() ([]string, string) {
+	f.asked++
+	return f.argv, f.path
+}
+
+// A failed describe records which file the configured command resolved to, and
+// a success clears it.
+//
+// The recording is what lets a card say "PATH found /opt/homebrew/bin/recall"
+// rather than leaving the user to guess which of two builds answered. The
+// clearing is why a working plugin's status carries no stale path, and the
+// lookup count is why a working plugin pays nothing for the feature.
+func TestManagerRecordsTheResolvedCommandOnlyWhenDescribeFails(t *testing.T) {
+	p := &commandFakeProvider{
+		fakeProvider: fakeProvider{instance: "recall", desc: Description{Matchers: []Matcher{{ID: "m", Pattern: "A-[0-9]+"}}}},
+		argv:         []string{"recall", "sidecar-plugin"},
+		path:         "/opt/homebrew/bin/recall",
+	}
+	m := NewManager(ManagerOptions{})
+	m.SetProviders([]Provider{p}, nil)
+
+	statuses := m.DescribeAll(context.Background())
+	if len(statuses) != 1 {
+		t.Fatalf("statuses = %d", len(statuses))
+	}
+	if statuses[0].Command != nil || statuses[0].CommandPath != "" {
+		t.Fatalf("a successful describe recorded %v %q", statuses[0].Command, statuses[0].CommandPath)
+	}
+	if p.asked != 0 {
+		t.Fatalf("a successful describe cost %d PATH lookups", p.asked)
+	}
+
+	p.descErr = &TransportError{Instance: "recall", Method: "describe", Reason: ReasonExit}
+	statuses = m.DescribeAll(context.Background())
+	if !slices.Equal(statuses[0].Command, []string{"recall", "sidecar-plugin"}) {
+		t.Fatalf("command = %v", statuses[0].Command)
+	}
+	if statuses[0].CommandPath != "/opt/homebrew/bin/recall" {
+		t.Fatalf("path = %q", statuses[0].CommandPath)
+	}
+
+	// Recovering clears it: a card that later fails for an unrelated reason
+	// must not show a path from a failure two describes ago.
+	p.descErr = nil
+	statuses = m.DescribeAll(context.Background())
+	if statuses[0].Command != nil || statuses[0].CommandPath != "" {
+		t.Fatalf("recovery kept %v %q", statuses[0].Command, statuses[0].CommandPath)
+	}
+}
+
+// A provider that runs no process reports nothing, and the manager does not
+// mind. The capability is optional exactly so an in-memory fake and a future
+// resident transport stay complete implementations.
+func TestManagerToleratesAProviderWithNoCommand(t *testing.T) {
+	p := &fakeProvider{instance: "p", descErr: &TransportError{Instance: "p", Reason: ReasonExit}}
+	m := NewManager(ManagerOptions{})
+	m.SetProviders([]Provider{p}, nil)
+	statuses := m.DescribeAll(context.Background())
+	if statuses[0].Command != nil || statuses[0].CommandPath != "" {
+		t.Fatalf("a command-less provider reported %v %q", statuses[0].Command, statuses[0].CommandPath)
+	}
+}

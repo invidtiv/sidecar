@@ -31,6 +31,17 @@ type Status struct {
 	// LastOutcome is the single-token outcome of the last describe.
 	LastOutcome string
 	Duration    time.Duration
+	// Command is the configured argv of a command-backed provider, and
+	// CommandPath the file argv[0] resolved to, recorded when the last describe
+	// failed.
+	//
+	// Both are empty after a successful describe and for a provider that runs
+	// no process. Recording them only on failure is the point: a bare command
+	// name resolves against whatever PATH Sidecar was started with, so "which
+	// file did it actually run" is the answer to most describe failures and a
+	// PATH lookup nobody needs when the plugin works.
+	Command     []string
+	CommandPath string
 }
 
 // ManagerOptions configure a Manager. The zero value is usable.
@@ -225,6 +236,13 @@ func (m *Manager) DescribeAll(ctx context.Context) []Status {
 			claims[i] = source.ClaimHosts()
 		}
 	}
+	// Resolved commands are looked up lazily, per failing instance, below.
+	commands := make([]commandPathProvider, len(providers))
+	for i, p := range providers {
+		if source, ok := p.(commandPathProvider); ok {
+			commands[i] = source
+		}
+	}
 
 	var wg sync.WaitGroup
 	for i, p := range providers {
@@ -269,6 +287,9 @@ func (m *Manager) DescribeAll(ctx context.Context) []Status {
 		if r.err != nil {
 			st.State = stateForDescribeError(r.err)
 			st.LastError = AsResourceError(r.err)
+			if source := commands[r.index]; source != nil {
+				st.Command, st.CommandPath = source.ResolvedCommand()
+			}
 
 			if authoritativeDescribeFailure(r.err) {
 				delete(m.lastGood, r.instance)
@@ -286,6 +307,7 @@ func (m *Manager) DescribeAll(ctx context.Context) []Status {
 
 		st.State = StateReady
 		st.LastError = nil
+		st.Command, st.CommandPath = nil, ""
 		st.Info = r.desc.Info
 		st.MatcherCount = len(r.desc.Matchers)
 		m.lastGood[r.instance] = r.desc.Matchers
