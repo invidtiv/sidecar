@@ -66,6 +66,18 @@ type Service struct {
 	Verify time.Duration
 	// StallAfter is the PromptStallWindow, overridable for tests.
 	StallAfter time.Duration
+	// ShellInitGrace bounds how long waitShellReady will let an otherwise-live
+	// pane finish initializing its interactive shell before Start refuses it.
+	// It is still capped by the caller's own start timeout. Overridable for
+	// tests. Zero means defaultShellInitGrace.
+	ShellInitGrace time.Duration
+	// StartGrace is how long after launch a pane may still read as a bare
+	// interactive shell before Start concludes the provider exited without ever
+	// running. It only matters for a provider whose own foreground command is a
+	// shell name, which is the one shape shellReady cannot tell from an empty
+	// pane; a real provider stops matching interactiveShell the moment it
+	// execs. Overridable for tests. Zero means defaultStartGrace.
+	StartGrace time.Duration
 	Detect     Detector
 	// Transcript is nil until M3 binds an exact provider session. A nil reader
 	// is a documented refusal, never a fallback to guessing.
@@ -90,6 +102,12 @@ func (s Service) defaults() Service {
 	}
 	if s.StallAfter <= 0 {
 		s.StallAfter = PromptStallWindow
+	}
+	if s.StartGrace <= 0 {
+		s.StartGrace = defaultStartGrace
+	}
+	if s.ShellInitGrace <= 0 {
+		s.ShellInitGrace = defaultShellInitGrace
 	}
 	if s.Detect == nil {
 		s.Detect = detect
@@ -238,7 +256,7 @@ func (s Service) Start(ctx context.Context, req StartRequest) (Agent, error) {
 			if snap.Dead {
 				return Agent{}, &Error{Code: ErrStartFailed, Message: fmt.Sprintf("agent %s exited while starting", req.Kind), Target: &pinned}
 			}
-			if err := shellReady(snap); err == nil && (providerObserved || s.Now().Sub(launchedAt) >= 500*time.Millisecond) {
+			if err := shellReady(snap); err == nil && (providerObserved || s.Now().Sub(launchedAt) >= s.StartGrace) {
 				return Agent{}, &Error{Code: ErrStartFailed, Message: fmt.Sprintf("agent %s exited before it became ready", req.Kind), Target: &pinned}
 			}
 			state := s.Detect(snap, &tracker)
@@ -270,7 +288,7 @@ func (s Service) waitShellReady(ctx context.Context, initial Snapshot, timeout t
 	if initial.PaneCount != 1 || initial.Dead || initial.CopyMode || !interactiveShell(initial.CurrentCommand) || initial.PaneID == "" || initial.PanePID <= 0 || initial.ServerPID <= 0 {
 		return Snapshot{}, shellReady(initial)
 	}
-	grace := 2 * time.Second
+	grace := s.ShellInitGrace
 	if timeout > 0 && timeout < grace {
 		grace = timeout
 	}
@@ -308,6 +326,15 @@ func (s Service) waitShellReady(ctx context.Context, initial Snapshot, timeout t
 		}
 	}
 }
+
+// defaultShellInitGrace is how long an otherwise-live pane still reporting an
+// uninitialized interactive shell is given to finish initializing.
+const defaultShellInitGrace = 2 * time.Second
+
+// defaultStartGrace is the post-launch window in which a pane still reporting
+// its interactive shell is treated as "the provider has not painted yet"
+// rather than "the provider exited".
+const defaultStartGrace = 500 * time.Millisecond
 
 func shellReady(s Snapshot) error {
 	t := s.Target

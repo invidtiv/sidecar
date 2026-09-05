@@ -34,7 +34,15 @@ func TestIsolatedTmuxFakeProviderSteelThread(t *testing.T) {
 		}
 		return AgentState{Kind: "fake", Status: status, Freshness: "current", Evidence: "fake.screen", CapturedAt: s.CapturedAt}
 	}
-	svc := Service{Terminal: terminal, Poll: 20 * time.Millisecond, Detect: detect}
+	// This fake provider runs as `sh`, so its pane keeps reporting an
+	// interactive shell for the agent's whole life — the one shape shellReady
+	// cannot distinguish from a pane where nothing started. With the default
+	// grace the test would then be racing tmux to paint FAKE_IDLE within 500ms
+	// of launch, which a loaded machine loses. A grace beyond this Start's own
+	// timeout removes the race; the provider-exit path it would otherwise
+	// exercise is covered deterministically by
+	// TestStartReportsProviderExitInsteadOfTimingOut.
+	svc := Service{Terminal: terminal, Poll: 20 * time.Millisecond, Detect: detect, ShellInitGrace: 10 * time.Second, StartGrace: time.Minute}
 	// Markers are built from $m so the echoed launch line does not itself read
 	// as a finished agent; see fakeProviderScript for why that matters.
 	script := `m=FAKE; printf '%s_IDLE\n' "$m"; while IFS= read -r line; do printf '%s_WORKING:%s\n' "$m" "$line"; sleep 0.2; if [ "$line" = block ]; then printf '%s_BLOCKED\n' "$m"; else printf '%s_DONE\n' "$m"; fi; done`
@@ -42,7 +50,7 @@ func TestIsolatedTmuxFakeProviderSteelThread(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	agent, err := svc.Start(context.Background(), StartRequest{Target: ready.Target, Kind: "fake", Argv: []string{"sh", "-c", script}, Timeout: 3 * time.Second})
+	agent, err := svc.Start(context.Background(), StartRequest{Target: ready.Target, Kind: "fake", Argv: []string{"sh", "-c", script}, Timeout: 30 * time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}

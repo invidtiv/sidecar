@@ -74,13 +74,18 @@ func startFakeAgent(t *testing.T, name string) (Service, *LocalTerminal, Target)
 
 	terminal := NewLocalTerminal()
 	t.Cleanup(terminal.Close)
-	svc := Service{Terminal: terminal, Poll: 20 * time.Millisecond, Observe: 20 * time.Millisecond, Verify: 200 * time.Millisecond, ShellStableFor: 100 * time.Millisecond, Detect: fakeProviderDetect}
+	// These fixtures drive real tmux, and their fake provider runs as `sh`, so
+	// both readiness heuristics are timing races on a loaded machine: a shell
+	// that has not finished initializing inside the default grace, and a pane
+	// that still reads as a bare shell because the provider *is* one. Give both
+	// room here rather than letting machine load decide the result.
+	svc := Service{Terminal: terminal, Poll: 20 * time.Millisecond, Observe: 20 * time.Millisecond, Verify: 200 * time.Millisecond, ShellStableFor: 100 * time.Millisecond, Detect: fakeProviderDetect, ShellInitGrace: 10 * time.Second, StartGrace: time.Minute}
 	target := Target{Host: "local", Project: "fixture", Session: session, Name: name, Namespace: tmuxenv.Namespace()}
 	ready, err := svc.WaitShellReady(context.Background(), target, 5*time.Second)
 	if err != nil {
 		t.Fatalf("%s shell never became ready: %v", name, err)
 	}
-	agent, err := svc.Start(context.Background(), StartRequest{Target: ready.Target, Kind: "fake", Argv: []string{"sh", "-c", fakeProviderScript}, Timeout: 5 * time.Second})
+	agent, err := svc.Start(context.Background(), StartRequest{Target: ready.Target, Kind: "fake", Argv: []string{"sh", "-c", fakeProviderScript}, Timeout: 30 * time.Second})
 	if err != nil {
 		t.Fatalf("%s did not start: %v", name, err)
 	}
