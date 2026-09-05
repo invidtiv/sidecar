@@ -64,6 +64,29 @@ type ResumePlan struct {
 	Ref Ref `json:"ref"`
 }
 
+// PlanCandidatePrefill builds text a human may review and submit. It is kept
+// separate from PlanResume so a discovered reference can never become auto
+// resume authority by passing through the wrong caller.
+func PlanCandidatePrefill(kind string, candidate Candidate) (ResumePlan, error) {
+	family, ok := agentcatalog.Lookup(kind)
+	if !ok {
+		return ResumePlan{}, fmt.Errorf("unknown agent kind %q", kind)
+	}
+	var argv []string
+	var err error
+	if candidate.Picker {
+		argv, err = family.ResumePickerArgv()
+	} else {
+		argv, err = family.ResumeArgv(string(candidate.Ref.Kind), candidate.Ref.Value, nil)
+	}
+	if err != nil {
+		return ResumePlan{}, err
+	}
+	ref := candidate.Ref
+	ref.Reported = false
+	return ResumePlan{Kind: family.ID, Argv: argv, Ref: ref}, nil
+}
+
 // PlanResume builds the structured resume for a bound conversation.
 //
 // It refuses an unreported reference: only an official integration's report is

@@ -1,6 +1,7 @@
 package tty
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -8,10 +9,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/shellliveness"
 	"github.com/marcus/sidecar/internal/tmuxenv"
+	"github.com/marcus/sidecar/internal/tmuxserver"
 )
 
 // HistoryLimit is the minimum scrollback retained for sidecar-managed panes.
@@ -37,6 +40,11 @@ func prepareServer() error {
 		"start-server", ";",
 		"set-option", "-s", "exit-empty", "off",
 	).Run(); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if status, _ := tmuxserver.Inspect(ctx); status.State == tmuxserver.StateExitPending {
+			return fmt.Errorf("tmux server is shutting down behind attached Sidecar control clients; run sidecar session status to inspect them and sidecar session restore to clear verified orphans")
+		}
 		return fmt.Errorf("prepare tmux server: %w", err)
 	}
 

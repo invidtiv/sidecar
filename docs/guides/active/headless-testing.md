@@ -36,6 +36,21 @@ isolates sidecar's own sessions.**
 | `$TMUX_TMPDIR/tmux-$(id -u)/default` | `sidecar-sh-*`, `sidecar-edit-*` | Sessions sidecar creates — private only because `TMUX_TMPDIR` moved them |
 | `-L sidecar-view` | `viewer` | Optional real client, only needed for cursor checks |
 
+### Hand-rolled tmux proofs
+
+`TMUX` overrides `TMUX_TMPDIR`. Source the shared guard before issuing any tmux commands, and use its explicit-socket wrapper for setup and cleanup:
+
+```bash
+source scripts/proof-tmux-env.sh
+proof_run=$(mktemp -d /tmp/sidecar-proof.XXXXXX)
+proof_tmux_env "$proof_run/tmux"
+trap 'proof_tmux kill-server 2>/dev/null || true' EXIT
+proof_tmux new-session -d -s proof
+proof_tmux list-sessions
+```
+
+The guard clears inherited `TMUX`, `TMUX_PANE`, and `SIDECAR_TMUX_SERVER`, exports `TMUX_TMPDIR` and `PROOF_TMUX_SOCKET`, and refuses the default socket directory. Both standard harnesses source it. This guards transport only: launching Sidecar also requires the separate state/config isolation below. Proofs do not inspect the default server.
+
 ### Axis 2 — Sidecar state
 
 | Lever | What it actually moves |
@@ -317,3 +332,17 @@ def w(s): return sum(2 if unicodedata.east_asian_width(c) in 'WF' else 1 for c i
 for i, l in enumerate(open('plain.txt'), 1): print(i, w(l.rstrip()))
 "
 ```
+
+## Cold session recovery proofs
+
+The reboot harness seeds its own project and shells, terminates only its private server, and checks the real CLI. Each gate uses a fresh binary and cleans up its private server. Use a distinct `HARNESS_ROOT` for concurrent runs:
+
+```bash
+HARNESS_ROOT=/tmp/sidecar-recovery-proof ./scripts/session-restore-reboot.sh paths
+HARNESS_ROOT=/tmp/sidecar-recovery-proof ./scripts/session-restore-reboot.sh gate-prefill
+HARNESS_ROOT=/tmp/sidecar-recovery-proof ./scripts/session-restore-reboot.sh gate-candidates
+HARNESS_ROOT=/tmp/sidecar-recovery-proof ./scripts/session-restore-reboot.sh gate-stuck
+HARNESS_ROOT=/tmp/sidecar-recovery-proof ./scripts/session-restore-reboot.sh gate-worktrees
+```
+
+The prefill gate checks an exact command at the prompt, no provider execution, and byte-identical output after a second restore. The candidate gate seeds Grok's provider-store format and verifies distinct nearest times, tied picker fallback, and no execution under `auto`. The stuck gate fills a control client's unread output pipe, proves that a live parent prevents cleanup, then lets the parent exit and checks orphan cleanup and shell recreation. The worktree gate verifies worktree and saved-layout split recreation, candidate prefill, missing-directory refusal, and repeat safety. These tests never inspect the default server.

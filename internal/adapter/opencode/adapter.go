@@ -61,6 +61,16 @@ func New() *Adapter {
 	}
 }
 
+// NewWithDBPath creates an adapter pinned to one SQLite store. It is used by
+// read-only recovery consumers and fixtures that must prove directory scoping.
+func NewWithDBPath(dbPath string) *Adapter {
+	return &Adapter{
+		dbPath:       dbPath,
+		projectIndex: make(map[string]*Project),
+		metaCache:    make(map[string]sessionMetaCacheEntry),
+	}
+}
+
 // findOpenCodeStorageDir searches candidate paths for the OpenCode storage directory.
 // Returns the first path that exists, or the primary default if none found.
 func findOpenCodeStorageDir(home string) string {
@@ -260,6 +270,53 @@ func (a *Adapter) Sessions(projectRoot string) ([]adapter.Session, error) {
 		// Keep legacy compatibility when SQLite is present but unreadable/incomplete.
 	}
 	return a.sessionsJSON(projectRoot)
+}
+
+// RecoverySessions applies the stronger exact-directory rule required before
+// suggesting a native conversation for a restored shell. OpenCode projects may
+// span worktrees, so project_id alone is insufficient evidence.
+func (a *Adapter) RecoverySessions(workDir string) ([]adapter.Session, error) {
+	if !a.useSQLite() {
+		// Legacy project records do not carry a trustworthy exact session cwd.
+		// A project-wide match is insufficient recovery evidence.
+		return nil, nil
+	}
+	abs, err := filepath.Abs(workDir)
+	if err != nil {
+		return nil, err
+	}
+	db, err := a.getDB()
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), queryTimeout)
+	defer cancel()
+	rows, err := db.QueryContext(ctx, `
+		SELECT id, title, parent_id, time_created, time_updated
+		FROM session WHERE directory = ? ORDER BY time_updated DESC`, filepath.Clean(abs))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var sessions []adapter.Session
+	for rows.Next() {
+		var id string
+		var title, parent sql.NullString
+		var createdMS, updatedMS int64
+		if err := rows.Scan(&id, &title, &parent, &createdMS, &updatedMS); err != nil {
+			return nil, err
+		}
+		name := strings.TrimSpace(title.String)
+		if name == "" {
+			name = shortID(id)
+		}
+		sessions = append(sessions, adapter.Session{
+			ID: id, Name: name, AdapterID: adapterID, AdapterName: adapterName,
+			CreatedAt: time.UnixMilli(createdMS).Local(), UpdatedAt: time.UnixMilli(updatedMS).Local(),
+			IsSubAgent: parent.Valid && strings.TrimSpace(parent.String) != "",
+		})
+	}
+	return sessions, rows.Err()
 }
 
 func (a *Adapter) sessionsJSON(projectRoot string) ([]adapter.Session, error) {

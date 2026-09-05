@@ -43,6 +43,10 @@ type ShellSpec struct {
 	// editor especially — lays itself out for 24 rows. Zero means let tmux
 	// decide.
 	Cols, Rows int
+	// PreserveRecoveryEvidence keeps an inferred candidate and loss marker
+	// until the cold-restore executor has made its prefill decision. Ordinary
+	// creation leaves this false and starts a fresh observed lifetime.
+	PreserveRecoveryEvidence bool
 }
 
 // ShellResult reports what was created. PaneID is empty when tmux created the
@@ -369,6 +373,12 @@ func CreateShell(spec ShellSpec) (ShellResult, error) {
 	}
 	if err := NewSessionWithIdentity(args, spec.SessionName, spec.DisplayName); err != nil {
 		return result, fmt.Errorf("create shell session: %w", err)
+	}
+	if strings.HasPrefix(spec.SessionName, WorktreeSessionPrefix) || strings.HasPrefix(spec.SessionName, "sidecar-tp-") {
+		if err := recordRecoverableSession(spec.SessionName, spec.WorkDir, spec.DisplayName, "", spec.PreserveRecoveryEvidence); err != nil {
+			_ = exec.Command("tmux", "kill-session", "-t", spec.SessionName).Run()
+			return result, fmt.Errorf("record recovery identity: %w", err)
+		}
 	}
 	result.PaneID = PaneID(spec.SessionName)
 	return result, nil

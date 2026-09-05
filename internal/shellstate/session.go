@@ -162,6 +162,7 @@ func BindSessionAtPath(path string, id Identity, update SessionUpdate) (SessionO
 				ref.ReportedAt = now().UTC()
 			}
 			def.Agent.Session = &ref
+			def.Agent.Candidate = nil
 		}
 		if def.Agent.Kind == "" && def.Agent.Session == nil && len(def.Agent.LaunchArgv) == 0 {
 			def.Agent = nil
@@ -190,6 +191,59 @@ func BindSessionAtPath(path string, id Identity, update SessionUpdate) (SessionO
 		return SessionOutcome{}, err
 	}
 	return out, nil
+}
+
+// RecordCandidateAtPath records or clears a provider-store recovery proposal.
+// Candidate references are always downgraded to Reported=false at this trust
+// boundary, and a reported binding always wins over discovery.
+func RecordCandidateAtPath(path string, id Identity, candidate *agentsession.Candidate) (bool, error) {
+	changed := false
+	err := mutateManifest(path, func(m *manifest) error {
+		idx := -1
+		for i := range m.Shells {
+			if m.Shells[i].TmuxName == id.TmuxName && sameNamespace(m.Shells[i].Namespace, id.Namespace) {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			return &Error{Kind: KindNotFound, Msg: "no managed shell named " + id.TmuxName + " is recorded in this project"}
+		}
+		def := m.Shells[idx]
+		if def.Agent != nil && def.Agent.Session != nil && !def.Agent.Session.Empty() {
+			candidate = nil
+		}
+		var next *agentsession.Candidate
+		if candidate != nil {
+			copyCandidate := *candidate
+			copyCandidate.Ref.Reported = false
+			copyCandidate.Ref.ReportedAt = time.Time{}
+			next = &copyCandidate
+		}
+		if def.Agent == nil {
+			if next == nil {
+				return errSessionUnchanged{}
+			}
+			def.Agent = &AgentBinding{}
+		} else if (def.Agent.Candidate == nil && next == nil) ||
+			(def.Agent.Candidate != nil && next != nil && *def.Agent.Candidate == *next) {
+			return errSessionUnchanged{}
+		} else {
+			clone := *def.Agent
+			def.Agent = &clone
+		}
+		def.Agent.Candidate = next
+		if def.Agent.Kind == "" && def.Agent.Session == nil && def.Agent.Candidate == nil && len(def.Agent.LaunchArgv) == 0 {
+			def.Agent = nil
+		}
+		m.Shells[idx] = def
+		changed = true
+		return nil
+	})
+	if _, ok := err.(errSessionUnchanged); ok {
+		return false, nil
+	}
+	return changed, err
 }
 
 // errSessionUnchanged aborts the mutation without an error reaching the caller.

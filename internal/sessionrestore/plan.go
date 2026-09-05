@@ -29,6 +29,7 @@ import (
 
 	"github.com/marcus/sidecar/internal/agentsession"
 	"github.com/marcus/sidecar/internal/shellstate"
+	"github.com/marcus/sidecar/internal/tmuxserver"
 )
 
 // Action is the verdict for one managed shell. The vocabulary is the plan's:
@@ -45,6 +46,9 @@ const (
 	// ActionResumeAgent means the shell will be recreated and the exact bound
 	// conversation resumed in it. This is the only action that runs an agent.
 	ActionResumeAgent Action = "resume-agent"
+	// ActionPrefillResume recreates the shell and types its resume command at an
+	// empty prompt without pressing Enter.
+	ActionPrefillResume Action = "prefill-resume"
 	// ActionManual means the record is kept and recoverable, but Sidecar will not
 	// act on it automatically. The user can recreate or resume it deliberately.
 	ActionManual Action = "manual"
@@ -116,7 +120,9 @@ const (
 	// ReasonAgentsNotRequested — the caller did not ask for agent resumes.
 	ReasonAgentsNotRequested Reason = "agents_not_requested"
 	// ReasonPolicyResume — the resume is authorized and will run.
-	ReasonPolicyResume Reason = "policy_resume"
+	ReasonPolicyResume     Reason = "policy_resume"
+	ReasonPolicyPrefill    Reason = "policy_prefill"
+	ReasonAlreadyPrefilled Reason = "already_prefilled"
 	// ReasonKindDisagreement — the record names two different providers, so
 	// which CLI would be handed the conversation is not knowable from it. The
 	// shell is recreated; the conversation is not resumed by either.
@@ -205,6 +211,8 @@ type Shell struct {
 	ManifestPath string
 	// Def is the stored record.
 	Def shellstate.Definition
+	// Synthesized is a legacy layout identity not yet in its recovery manifest.
+	Synthesized bool
 }
 
 // Request is what the caller asked for, as distinct from what is configured.
@@ -216,12 +224,18 @@ type Request struct {
 	// Agents is the --agents flag: the caller is asking for eligible resumes.
 	// Without it a CLI restore does shells only, whatever the policy allows.
 	Agents bool
+	// Prefill asks for the reviewable ask-policy action: type the exact resume
+	// command at the prompt without executing it.
+	Prefill bool
 	// Confirmed records that a human confirmed — --yes, or a TUI confirmation.
 	// It is what turns an ask-policy resume from planned into executable.
 	Confirmed bool
 	// Startup marks the automatic post-first-frame restore, which follows
 	// configuration rather than an explicit request and so implies Agents.
 	Startup bool
+	// RecordCandidates persists provider-store findings during an executing
+	// restore. Status and dry-run leave the manifest byte-identical.
+	RecordCandidates bool
 }
 
 // Input is everything the planner is allowed to know.
@@ -243,7 +257,8 @@ type Input struct {
 	// means "assume available", which is only correct in tests.
 	ProviderAvailable func(kind string) bool
 	// Request is the caller's ask.
-	Request Request
+	Request      Request
+	ServerStatus *tmuxserver.Status
 }
 
 // AgentStep is the resume verdict for one shell.
@@ -261,10 +276,15 @@ type AgentStep struct {
 	Reported bool `json:"reported"`
 	// Resume is whether this plan would actually resume the conversation.
 	Resume bool `json:"resume"`
+	// Prefill is whether the resume command will be typed without Enter.
+	Prefill bool `json:"prefill,omitempty"`
 	// Reason explains the verdict either way.
 	Reason Reason `json:"reason"`
 	// ConflictWith names the shell that won deduplication, when this one lost.
-	ConflictWith string `json:"conflictWith,omitempty"`
+	ConflictWith    string `json:"conflictWith,omitempty"`
+	Candidate       bool   `json:"candidate,omitempty"`
+	Confidence      string `json:"confidence,omitempty"`
+	CandidateReason string `json:"candidateReason,omitempty"`
 }
 
 // Step is the ordered verdict for one managed shell.
@@ -316,14 +336,15 @@ type Plan struct {
 	PriorServers []string `json:"priorServers,omitempty"`
 	// Steps are ordered by project then session name, so two runs over the same
 	// state produce the same document.
-	Steps []Step `json:"steps"`
+	Steps      []Step             `json:"steps"`
+	TmuxStatus *tmuxserver.Status `json:"tmuxStatus,omitempty"`
 }
 
 // Executable reports the steps the executor would actually perform.
 func (p Plan) Executable() []Step {
 	var out []Step
 	for _, s := range p.Steps {
-		if s.Action == ActionRecreateShell || s.Action == ActionResumeAgent {
+		if s.Action == ActionRecreateShell || s.Action == ActionResumeAgent || s.Action == ActionPrefillResume {
 			out = append(out, s)
 		}
 	}
@@ -375,7 +396,7 @@ func Build(in Input) Plan {
 
 	winners := dedupWinners(shells)
 
-	plan := Plan{CurrentServer: in.CurrentServer}
+	plan := Plan{CurrentServer: in.CurrentServer, TmuxStatus: in.ServerStatus}
 	priorSeen := map[string]bool{}
 	for _, sh := range shells {
 		step := planShell(in, sh, dirExists, providerAvailable, winners)
@@ -576,6 +597,10 @@ func planShell(in Input, sh Shell, dirExists func(string) bool, providerAvailabl
 		step.Reason = ReasonPolicyResume
 		step.Detail = "recreate the shell and resume its exact conversation"
 		step.ExternalExecution = true
+	case agent.Prefill:
+		step.Action = ActionPrefillResume
+		step.Reason = ReasonPolicyPrefill
+		step.Detail = "recreate the shell and type its exact resume command; press Enter to run it"
 	case agent.Reason == ReasonKindDisagreement:
 		// The shell part is unaffected and still happens. Naming both providers
 		// here is the whole remediation an affected user gets: the record is not
@@ -614,10 +639,19 @@ func agentNoop(def shellstate.Definition, reason Reason) *AgentStep {
 func decideAgent(in Input, sh Shell, policy agentsession.Policy, providerAvailable func(string) bool, winners map[string]agentsession.Holder) *AgentStep {
 	def := sh.Def
 	ref, kind, bound := binding(def)
+	candidate, hasCandidate := candidateOf(def)
+	if !bound && hasCandidate {
+		ref, bound = candidate.Ref, true
+	}
 	if !bound && strings.TrimSpace(kind) == "" {
 		return nil
 	}
 	out := &AgentStep{Kind: kind}
+	if hasCandidate && (def.Agent == nil || def.Agent.Session == nil || def.Agent.Session.Empty()) {
+		out.Candidate = true
+		out.Confidence = string(candidate.Confidence)
+		out.CandidateReason = candidate.Reason
+	}
 	if bound {
 		out.RefKind = string(ref.Kind)
 		out.Reported = ref.Reported
@@ -639,8 +673,29 @@ func decideAgent(in Input, sh Shell, policy agentsession.Policy, providerAvailab
 		out.Reason = ReasonNoSessionRef
 		return out
 	}
-	if !ref.Reported {
+	if !ref.Reported && !out.Candidate {
 		out.Reason = ReasonUnreportedRef
+		return out
+	}
+	if out.Candidate {
+		if !in.Request.Agents && !in.Request.Prefill && !in.Request.Startup {
+			out.Reason = ReasonAgentsNotRequested
+			return out
+		}
+		if def.Restore != nil && (!def.Restore.PrefilledAt.IsZero() || !def.Restore.PrefillClaimedAt.IsZero()) {
+			out.Reason = ReasonAlreadyPrefilled
+			return out
+		}
+		if !providerAvailable(kind) {
+			out.Reason = ReasonProviderUnavailable
+			return out
+		}
+		if _, err := agentsession.PlanCandidatePrefill(kind, candidate); err != nil {
+			out.Reason = ReasonProviderRejectedRef
+			return out
+		}
+		out.Prefill = true
+		out.Reason = ReasonPolicyPrefill
 		return out
 	}
 
@@ -678,8 +733,17 @@ func decideAgent(in Input, sh Shell, policy agentsession.Policy, providerAvailab
 		effective = ResumeAuto
 	}
 
-	if !in.Request.Agents && !in.Request.Startup {
+	if !in.Request.Agents && !in.Request.Prefill && !in.Request.Startup {
 		out.Reason = ReasonAgentsNotRequested
+		return out
+	}
+	if in.Request.Prefill {
+		if def.Restore != nil && (!def.Restore.PrefilledAt.IsZero() || !def.Restore.PrefillClaimedAt.IsZero()) {
+			out.Reason = ReasonAlreadyPrefilled
+			return out
+		}
+		out.Prefill = true
+		out.Reason = ReasonPolicyPrefill
 		return out
 	}
 	switch effective {
@@ -696,9 +760,25 @@ func decideAgent(in Input, sh Shell, policy agentsession.Policy, providerAvailab
 			out.Reason = ReasonPolicyResume
 			return out
 		}
+		if in.Request.Prefill || in.Request.Startup {
+			if def.Restore != nil && (!def.Restore.PrefilledAt.IsZero() || !def.Restore.PrefillClaimedAt.IsZero()) {
+				out.Reason = ReasonAlreadyPrefilled
+				return out
+			}
+			out.Prefill = true
+			out.Reason = ReasonPolicyPrefill
+			return out
+		}
 		out.Reason = ReasonNeedsConfirmation
 		return out
 	}
+}
+
+func candidateOf(def shellstate.Definition) (agentsession.Candidate, bool) {
+	if def.Agent == nil || def.Agent.Candidate == nil {
+		return agentsession.Candidate{}, false
+	}
+	return *def.Agent.Candidate, true
 }
 
 // resumeRefusal maps agentsession's typed refusals onto plan reasons.

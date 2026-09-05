@@ -4,16 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/marcus/sidecar/internal/agentcatalog"
 	"github.com/marcus/sidecar/internal/agentsession"
 	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/tmuxserver"
+	"github.com/marcus/sidecar/internal/workspaceops"
 )
 
 // Collecting the planner's input from the real machine.
@@ -32,6 +35,9 @@ type Collector struct {
 	// StateDir is Sidecar's state root; project manifests live under
 	// <StateDir>/projects/<key>/shells.json.
 	StateDir string
+	// LayoutStateDir contains state.json. Setting it lets a headless caller
+	// inspect saved layouts without initializing the UI state singleton.
+	LayoutStateDir string
 	// Namespace is the tmux socket path this restore is scoped to. Records from
 	// another namespace belong to a different tmux server and are not this
 	// restore's business.
@@ -48,6 +54,10 @@ type Collector struct {
 	DirExists func(string) bool
 	// ProviderAvailable answers whether a provider binary is installed.
 	ProviderAvailable func(string) bool
+	ServerStatus      func(context.Context) (tmuxserver.Status, error)
+	CandidateFinder   interface {
+		Find(agentsession.CandidateQuery) (agentsession.Candidate, bool, error)
+	}
 }
 
 func (c Collector) withDefaults() Collector {
@@ -66,6 +76,9 @@ func (c Collector) withDefaults() Collector {
 	if c.ProviderAvailable == nil {
 		c.ProviderAvailable = providerInstalled
 	}
+	if c.ServerStatus == nil {
+		c.ServerStatus = tmuxserver.Inspect
+	}
 	return c
 }
 
@@ -82,13 +95,23 @@ func (c Collector) Collect(ctx context.Context, cfg Config, req Request) (Input,
 	if err != nil {
 		return Input{}, err
 	}
-	liveNames, err := c.LiveSessions(ctx)
+	serverStatus, err := c.ServerStatus(ctx)
+	if err != nil {
+		return Input{}, err
+	}
+	liveNames := map[string]bool{}
+	if serverStatus.State != tmuxserver.StateExitPending {
+		liveNames, err = c.LiveSessions(ctx)
+	}
 	if err != nil {
 		return Input{}, err
 	}
 
 	live := map[string]LiveState{}
-	for _, sh := range shells {
+	currentServer := c.ServerID()
+	now := time.Now().UTC()
+	for i := range shells {
+		sh := &shells[i]
 		name := sh.Def.TmuxName
 		if !liveNames[name] {
 			live[name] = LiveAbsent
@@ -100,16 +123,144 @@ func (c Collector) Collect(ctx context.Context, cfg Config, req Request) (Input,
 			live[name] = LiveForeign
 		}
 	}
+	// Candidate discovery is only meaningful for shells positively absent from
+	// a dead or replaced server. A status read derives the loss instant in
+	// memory; an executing restore persists the same transition once.
+	if serverStatus.State != tmuxserver.StateExitPending {
+		for i := range shells {
+			def := &shells[i].Def
+			if live[def.TmuxName] != LiveAbsent || def.Restore == nil || !def.Restore.Eligible {
+				continue
+			}
+			lost := currentServer == "" || (def.Restore.LastSeenServer != "" && def.Restore.LastSeenServer != currentServer)
+			if !lost {
+				continue
+			}
+			if def.Restore.ServerLostAt.IsZero() {
+				updated, _ := shellstate.RecordServerLoss(*def, now, def.Restore.LastAgentActivity)
+				*def = updated
+				if req.RecordCandidates {
+					state := shellstate.ServerGone()
+					if currentServer != "" {
+						state = shellstate.ServerRunning(currentServer)
+					}
+					_, _ = shellstate.ForgetOrPreserveAtPath(shells[i].ManifestPath, shellstate.Identity{TmuxName: def.TmuxName, Namespace: def.Namespace}, now, state, def.Restore.LastAgentActivity)
+				}
+			}
+		}
+		if err := c.discoverCandidates(shells, req.RecordCandidates); err != nil {
+			return Input{}, err
+		}
+	}
 
 	return Input{
 		Config:            cfg,
-		CurrentServer:     c.ServerID(),
+		CurrentServer:     currentServer,
 		Live:              live,
 		Shells:            shells,
 		DirExists:         c.DirExists,
 		ProviderAvailable: c.ProviderAvailable,
 		Request:           req,
+		ServerStatus:      &serverStatus,
 	}, nil
+}
+
+func (c Collector) discoverCandidates(shells []Shell, persist bool) error {
+	finder := c.CandidateFinder
+	if finder == nil {
+		finder = agentsession.NewCandidateFinder()
+	}
+	claimed := make(map[string][]agentsession.Ref)
+	for _, sh := range shells {
+		if sh.Def.Agent != nil && sh.Def.Agent.Session != nil && !sh.Def.Agent.Session.Empty() {
+			kind, _ := shellstate.AgentKindOf(sh.Def)
+			claimed[kind] = append(claimed[kind], *sh.Def.Agent.Session)
+		}
+	}
+	for i := range shells {
+		def := &shells[i].Def
+		if persist && shells[i].Synthesized {
+			if err := shellstate.AddAtPath(shells[i].ManifestPath, *def); err != nil {
+				return err
+			}
+			shells[i].Synthesized = false
+		}
+		if (def.Agent != nil && def.Agent.Session != nil && !def.Agent.Session.Empty()) || def.Restore == nil {
+			continue
+		}
+		kind, conflict := shellstate.AgentKindOf(*def)
+		if conflict != "" {
+			continue
+		}
+		var candidate agentsession.Candidate
+		var ok bool
+		var err error
+		if kind == "" && (strings.HasPrefix(def.TmuxName, workspaceops.WorktreeSessionPrefix) || strings.HasPrefix(def.TmuxName, "sidecar-tp-")) {
+			matches := 0
+			inferenceReadable := true
+			for _, possible := range []string{"claude", "grok", "antigravity", "opencode"} {
+				found, foundOK, findErr := finder.Find(agentsession.CandidateQuery{WorkDir: def.WorkDir, AgentKind: possible, CreatedAt: def.CreatedAt, ServerLostAt: def.Restore.ServerLostAt, Claimed: claimed[possible]})
+				if findErr != nil {
+					inferenceReadable = false
+					continue
+				}
+				if foundOK {
+					matches++
+					kind, candidate, ok = possible, found, true
+				}
+			}
+			if !inferenceReadable || matches != 1 {
+				continue
+			}
+			candidate.Reason += "; provider inferred because exactly one supported store matched this recovered pane"
+			candidate.AgentKind = kind
+			def.AgentType = kind
+			def.Agent = &shellstate.AgentBinding{Kind: kind}
+		} else if kind != "" {
+			candidate, ok, err = finder.Find(agentsession.CandidateQuery{WorkDir: def.WorkDir, AgentKind: kind, CreatedAt: def.CreatedAt, ServerLostAt: def.Restore.ServerLostAt, Claimed: claimed[kind]})
+		} else {
+			continue
+		}
+		if err != nil {
+			// A provider-store read failure cannot authorize a stale persisted
+			// suggestion. Suppress it for this plan, but keep it on disk so a
+			// transient error does not destroy the last useful evidence.
+			if def.Agent != nil && def.Agent.Candidate != nil {
+				clone := *def.Agent
+				clone.Candidate = nil
+				def.Agent = &clone
+			}
+			continue
+		}
+		if !ok {
+			if def.Agent != nil && def.Agent.Candidate != nil {
+				clone := *def.Agent
+				clone.Candidate = nil
+				def.Agent = &clone
+				if persist {
+					if _, err := shellstate.RecordCandidateAtPath(shells[i].ManifestPath, shellstate.Identity{TmuxName: def.TmuxName, Namespace: def.Namespace}, nil); err != nil {
+						return err
+					}
+				}
+			}
+			continue
+		}
+		clone := shellstate.AgentBinding{Kind: kind}
+		if def.Agent != nil {
+			clone = *def.Agent
+		}
+		clone.Candidate = &candidate
+		def.Agent = &clone
+		if !candidate.Picker && !candidate.Ref.Empty() {
+			claimed[kind] = append(claimed[kind], candidate.Ref)
+		}
+		if persist {
+			if _, err := shellstate.RecordCandidateAtPath(shells[i].ManifestPath, shellstate.Identity{TmuxName: def.TmuxName, Namespace: def.Namespace}, &candidate); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // ManagedSessionOrDefault answers whether a live session is a Sidecar-managed
@@ -133,10 +284,10 @@ func (c Collector) candidates() ([]Shell, error) {
 	root := filepath.Join(c.StateDir, "projects")
 	entries, err := os.ReadDir(root)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
+		if !os.IsNotExist(err) {
+			return nil, err
 		}
-		return nil, err
+		entries = nil
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 
@@ -166,6 +317,11 @@ func (c Collector) candidates() ([]Shell, error) {
 			})
 		}
 	}
+	supplemental, err := c.SupplementalCandidates(out)
+	if err != nil {
+		return nil, err
+	}
+	out = append(out, supplemental...)
 	return out, nil
 }
 
@@ -292,4 +448,39 @@ func ResumePlanFor(step Step, namespace string) (agentsession.ResumePlan, error)
 		return agentsession.ResumePlan{}, ErrNoBinding
 	}
 	return agentsession.PlanResume(kind, ref)
+}
+
+// PrefillPlanFor re-reads either the official binding or the discovered
+// candidate. Candidate construction is accepted only on this no-Enter path.
+func PrefillPlanFor(step Step, namespace string) (agentsession.ResumePlan, error) {
+	if strings.TrimSpace(step.ManifestPath()) == "" {
+		return agentsession.ResumePlan{}, errors.New("this step has no manifest path; rebuild the plan before executing it")
+	}
+	defs, err := shellstate.ListAtPath(step.ManifestPath())
+	if err != nil {
+		return agentsession.ResumePlan{}, err
+	}
+	for _, def := range defs {
+		if def.TmuxName != step.Session || (namespace != "" && def.Namespace != "" && def.Namespace != namespace) {
+			continue
+		}
+		kind, conflict := shellstate.AgentKindOf(def)
+		if conflict != "" {
+			return agentsession.ResumePlan{}, fmt.Errorf("shell record names both %s and %s", kind, conflict)
+		}
+		if def.Agent != nil && def.Agent.Session != nil && !def.Agent.Session.Empty() {
+			return agentsession.PlanResume(kind, *def.Agent.Session)
+		}
+		if def.Agent != nil && def.Agent.Candidate != nil {
+			if kind == "" {
+				kind = def.Agent.Candidate.AgentKind
+			}
+			if kind == "" {
+				return agentsession.ResumePlan{}, ErrNoBinding
+			}
+			return agentsession.PlanCandidatePrefill(kind, *def.Agent.Candidate)
+		}
+		return agentsession.ResumePlan{}, ErrNoBinding
+	}
+	return agentsession.ResumePlan{}, ErrNoBinding
 }

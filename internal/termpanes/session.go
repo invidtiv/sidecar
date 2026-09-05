@@ -32,6 +32,9 @@ func SessionName(selector string) string {
 // EnsureSession reuses a split session when it exists, otherwise creates it.
 func EnsureSession(session, workDir string) (string, error) {
 	if pane := workspaceops.PaneID(session); pane != "" {
+		if err := workspaceops.RecordRecoverableSession(session, workDir, "Terminal", ""); err != nil {
+			return "", fmt.Errorf("record terminal split recovery identity: %w", err)
+		}
 		return pane, nil
 	}
 	if _, err := exec.LookPath("tmux"); err != nil {
@@ -39,6 +42,10 @@ func EnsureSession(session, workDir string) (string, error) {
 	}
 	if err := tty.NewSession("new-session", "-d", "-s", session, "-c", workDir); err != nil {
 		return "", fmt.Errorf("create terminal panel session: %w", err)
+	}
+	if err := workspaceops.RecordRecoverableSession(session, workDir, "Terminal", ""); err != nil {
+		_ = exec.Command("tmux", "kill-session", "-t", session).Run()
+		return "", fmt.Errorf("record terminal split recovery identity: %w", err)
 	}
 	return workspaceops.PaneID(session), nil
 }
@@ -135,7 +142,9 @@ func KillSession(session string) tea.Cmd {
 		return nil
 	}
 	return func() tea.Msg {
-		_ = exec.Command("tmux", "kill-session", "-t", session).Run()
+		if err := exec.Command("tmux", "kill-session", "-t", session).Run(); err == nil || !workspaceops.SessionExists(session) {
+			_ = workspaceops.ForgetRecoverableSession(session)
+		}
 		return nil
 	}
 }

@@ -42,7 +42,7 @@ set -euo pipefail
 
 # Never let the caller's attached tmux client select a server implicitly. Every
 # driver operation below uses either the private outer -L name or inner -S path.
-unset TMUX
+unset TMUX TMUX_PANE
 
 SOCKET="sidecar-drive"
 SESSION="host"
@@ -129,7 +129,8 @@ case "$OUT_DIR" in
         exit 1
         ;;
 esac
-export TMUX_TMPDIR="$RUN_DIR/tmux"
+source "$REPO_DIR/scripts/proof-tmux-env.sh"
+proof_tmux_env "$RUN_DIR/tmux"
 export XDG_STATE_HOME="$RUN_DIR/state"
 export XDG_CACHE_HOME="$RUN_DIR/cache"
 export SIDECAR_ISOLATED_STATE=1

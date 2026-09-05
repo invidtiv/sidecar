@@ -29,6 +29,7 @@ import (
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/shellliveness"
+	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tabs"
 	"github.com/marcus/sidecar/internal/terminallink"
@@ -1551,20 +1552,29 @@ func (p *Plugin) rebuildNestedShells(defs []ShellDefinition, paneID func(string)
 // so removing the manifest entry and rebuilding is the whole of it — there is
 // no second list to keep in step. Reports whether the name was a nested row,
 // so callers can tell "not mine" from "removed".
-func (p *Plugin) dropNestedShell(tmuxName string) bool {
+func (p *Plugin) dropNestedShell(tmuxName string, observedServer ...shellstate.ServerState) bool {
 	parent, shell := p.findNestedShell(tmuxName)
 	if shell == nil {
 		return false
 	}
+	evidence := ""
 	if shell.Agent != nil {
+		evidence = shellstate.DescribeLastAgentActivity(string(shell.Agent.Type), shell.Agent.Activity.DisplayState(), shell.Agent.Activity.ChangedAt)
+
 		shell.Agent.OutputBuf = nil
 		shell.Agent = nil
 	}
 	delete(p.managedSessions, tmuxName)
 	globalPaneCache.remove(tmuxName)
 	globalActiveRegistry.remove(tmuxName)
+	preserveLayout := false
 	if p.shellManifest != nil {
-		_ = p.shellManifest.RemoveShell(tmuxName)
+		if len(observedServer) > 0 {
+			outcome, err := p.shellManifest.ReapShell(tmuxName, observedServer[0], evidence)
+			preserveLayout = err != nil || outcome == shellstate.ReapPreserved || outcome == shellstate.ReapDeferred
+		} else {
+			_ = p.shellManifest.RemoveShell(tmuxName)
+		}
 	}
 	dir := filepath.Clean(p.worktrees[parent].Path)
 	// Jump to the parent while the nested identity is still resolvable so
@@ -1573,7 +1583,9 @@ func (p *Plugin) dropNestedShell(tmuxName string) bool {
 	if p.selectedNestedTmux == tmuxName {
 		p.selectWorktreeAt(parent)
 	}
-	p.forgetPaneSurfaces("shell:" + tmuxName)
+	if !preserveLayout {
+		p.forgetPaneSurfaces("shell:" + tmuxName)
+	}
 	remaining := make([]*ShellSession, 0, len(p.nestedByWorkDir[dir]))
 	for _, candidate := range p.nestedByWorkDir[dir] {
 		if candidate.TmuxName != tmuxName {

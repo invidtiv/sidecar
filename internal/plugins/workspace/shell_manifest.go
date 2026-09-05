@@ -292,6 +292,13 @@ func (m *ShellManifest) MarkRestoreEligible(tmuxName, serverID string, now time.
 			next.Eligible = true
 			next.LastSeenServer = serverID
 			next.LastSeenAliveAt = now
+			next.ServerLostAt = time.Time{}
+			next.LastAgentActivity = ""
+			if s.Agent != nil && s.Agent.Candidate != nil {
+				agent := *s.Agent
+				agent.Candidate = nil
+				s.Agent = &agent
+			}
 			s.Restore = &next
 			shells[i] = s
 			return shells, true
@@ -316,7 +323,7 @@ func (m *ShellManifest) MarkRestoreEligible(tmuxName, serverID string, now time.
 // running at all, is preserved and marked as a cold-restore candidate. Only a
 // shell that vanished inside a server that is still up is tombstoned, because
 // that is a terminal someone closed.
-func (m *ShellManifest) ReapShell(tmuxName string, server shellstate.ServerState) (shellstate.ReapOutcome, error) {
+func (m *ShellManifest) ReapShell(tmuxName string, server shellstate.ServerState, activityEvidence ...string) (shellstate.ReapOutcome, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	outcome := shellstate.ReapAbsent
@@ -340,17 +347,13 @@ func (m *ShellManifest) ReapShell(tmuxName string, server shellstate.ServerState
 				return shells, false
 			case !server.Running(), lastSeen != server.ID():
 				outcome = shellstate.ReapPreserved
-				if s.Restore != nil && s.Restore.Eligible {
-					return shells, false
+				evidence := ""
+				if len(activityEvidence) > 0 {
+					evidence = activityEvidence[0]
 				}
-				next := shellstate.RestoreState{}
-				if s.Restore != nil {
-					next = *s.Restore
-				}
-				next.Eligible = true
-				s.Restore = &next
-				shells[i] = s
-				return shells, true
+				next, changed := shellstate.RecordServerLoss(s, time.Now().UTC(), evidence)
+				shells[i] = next
+				return shells, changed
 			}
 			outcome = shellstate.ReapTombstoned
 			m.Tombstones = appendWorkspaceTombstone(m.Tombstones, s)

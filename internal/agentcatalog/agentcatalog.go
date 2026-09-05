@@ -292,6 +292,20 @@ func (f Family) ResumeArgv(kind, value string, extra []string) ([]string, error)
 	return argv, nil
 }
 
+// ResumePickerArgv builds a provider's own interactive conversation picker.
+// Only providers with a verified picker shape opt in here; callers must never
+// obtain one by dropping the value from ResumeArgv.
+func (f Family) ResumePickerArgv() ([]string, error) {
+	switch f.ID {
+	case "grok":
+		return []string{f.Command, "--resume"}, nil
+	case "opencode":
+		return []string{f.Command}, nil
+	default:
+		return nil, fmt.Errorf("provider %q has no verified resume picker", f.ID)
+	}
+}
+
 // BuildResume resolves a catalog id — canonical, alias, or legacy — and builds
 // its structured resume argv.
 func BuildResume(id, kind, value string, extra []string) ([]string, error) {

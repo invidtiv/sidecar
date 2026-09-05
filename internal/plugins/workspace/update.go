@@ -23,6 +23,7 @@ import (
 	"github.com/marcus/sidecar/internal/pluginbrowser"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
 	"github.com/marcus/sidecar/internal/resourceview"
+	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
@@ -1299,9 +1300,14 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// Shell session externally terminated (user typed 'exit' in shell)
 		// Remove the dead shell from the list
 		removedIdx := -1
+		preserveLayout := false
 		for i, shell := range p.shells {
 			if shell.TmuxName == msg.TmuxName {
 				removedIdx = i
+				activityEvidence := ""
+				if shell.Agent != nil {
+					activityEvidence = shellstate.DescribeLastAgentActivity(string(shell.Agent.Type), shell.Agent.Activity.DisplayState(), shell.Agent.Activity.ChangedAt)
+				}
 				// Clean up Agent resources
 				if shell.Agent != nil {
 					shell.Agent.OutputBuf = nil
@@ -1319,18 +1325,21 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				// N per-shell death verdicts arriving at once is exactly how a
 				// server crash used to empty shells.json.
 				if p.shellManifest != nil {
-					_, _ = p.shellManifest.ReapShell(msg.TmuxName, workspaceops.ServerStateOf(p.observedServer()))
+					outcome, err := p.shellManifest.ReapShell(msg.TmuxName, workspaceops.ServerStateOf(p.observedServer()), activityEvidence)
+					preserveLayout = err != nil || outcome == shellstate.ReapPreserved || outcome == shellstate.ReapDeferred
 				}
 				break
 			}
 		}
 		// A nested shell can die on its own too, and its row is not in p.shells.
-		if removedIdx < 0 && p.dropNestedShell(msg.TmuxName) {
+		if removedIdx < 0 && p.dropNestedShell(msg.TmuxName, workspaceops.ServerStateOf(p.observedServer())) {
 			p.saveSelectionState()
 			return p, p.loadSelectedContent()
 		}
 		if removedIdx >= 0 {
-			p.forgetPaneSurfaces("shell:" + msg.TmuxName)
+			if !preserveLayout {
+				p.forgetPaneSurfaces("shell:" + msg.TmuxName)
+			}
 			p.retargetAfterKilledTopShell(removedIdx)
 			p.saveSelectionState()
 			if len(p.shells) > 0 || len(p.worktrees) > 0 {

@@ -257,6 +257,8 @@ func runCreateWorktree(env Env, args []string) int {
 		_, launchErr = workspaceops.LaunchWorktreeSession(ctx, workspaceops.AgentLaunchSpec{
 			SessionName:  session,
 			WorkDir:      record.Path,
+			DisplayName:  record.Name,
+			AgentType:    agent,
 			AgentCommand: command,
 			Env:          workspaceops.BuildEnvOverrides(plan.MainWorktree),
 			StartAgent:   startAgent,

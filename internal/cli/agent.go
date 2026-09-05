@@ -997,6 +997,19 @@ func (c *sessionRefCache) decorate(a *agentcontrol.Agent, manifestPath, session,
 		if def.Agent != nil && def.Agent.Session != nil && !def.Agent.Session.Empty() {
 			ref, ok = *def.Agent.Session, true
 		}
+		if def.Agent != nil && def.Agent.Candidate != nil {
+			candidate := def.Agent.Candidate
+			projected := &agentcontrol.SessionCandidate{
+				Kind: string(candidate.Ref.Kind), LastWriteAt: candidate.LastWriteAt,
+				Confidence: string(candidate.Confidence), Picker: candidate.Picker,
+			}
+			if includeValue {
+				projected.Value = candidate.Ref.Value
+				projected.Title = candidate.Title
+				projected.Reason = candidate.Reason
+			}
+			a.Agent.Candidate = projected
+		}
 		break
 	}
 	if !ok || ref.Empty() {

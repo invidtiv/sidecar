@@ -427,6 +427,36 @@ func TestRedactionPinsWhoMaySeeAConversationValue(t *testing.T) {
 	})
 }
 
+func TestCandidateValueUsesSessionReferenceRedaction(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shells.json")
+	const value = "candidate-secret"
+	if err := shellstate.AddAtPath(path, shellstate.Definition{
+		TmuxName: "shell", DisplayName: "restore", Namespace: "/tmp/private", WorkDir: "/repo",
+		Agent: &shellstate.AgentBinding{Kind: "grok", Candidate: &agentsession.Candidate{
+			Ref:   agentsession.Ref{Kind: agentsession.RefID, Value: value, Source: "sidecar.candidate.grok"},
+			Title: "restore " + value, Confidence: agentsession.CandidateLikely, Reason: "nearest conversation " + value,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	project := func(include bool) *agentcontrol.SessionCandidate {
+		a := agentcontrol.Agent{}
+		newSessionRefCache().decorate(&a, path, "shell", "/tmp/private", include)
+		return a.Agent.Candidate
+	}
+	redacted := project(false)
+	if redacted == nil || redacted.Value != "" || redacted.Title != "" || redacted.Reason != "" {
+		t.Fatalf("redacted candidate = %+v", redacted)
+	}
+	if blob, err := json.Marshal(redacted); err != nil || strings.Contains(string(blob), value) {
+		t.Fatalf("redacted candidate JSON leaked identifier: %s (%v)", blob, err)
+	}
+	revealed := project(true)
+	if revealed == nil || revealed.Value != value || revealed.Title != "restore "+value || revealed.Reason == "" {
+		t.Fatalf("revealed candidate = %+v", revealed)
+	}
+}
+
 // TestTheListPathNeverRevealsAValueByDefault pins the call site rather than the
 // helper: the property is that `agent list` does not pass includeValue unless
 // the caller asked, which a test of decorate alone would not catch.

@@ -11,10 +11,13 @@ import (
 // fakeWorld is a tmux server that only has names in it, which is all the
 // executor's rechecks ever ask about.
 type fakeWorld struct {
-	live    map[string]LiveState
-	server  string
-	created []string
-	resumed []string
+	live      map[string]LiveState
+	server    string
+	created   []string
+	resumed   []string
+	prefilled []string
+	claimed   bool
+	completed bool
 
 	noted      []string
 	createErr  error
@@ -72,6 +75,42 @@ func (w *fakeWorld) deps() Deps {
 			}
 			return nil
 		},
+		PrefillPlanFor: func(step Step) (agentsession.ResumePlan, error) {
+			return agentsession.PlanResume("codex", agentsession.Ref{Kind: agentsession.RefID, Value: "sess-1", Source: agentsession.OfficialSourceFor("codex"), Reported: true})
+		},
+		MarkPrefilled: func(Step) (bool, error) {
+			if w.claimed {
+				return false, nil
+			}
+			w.claimed = true
+			return true, nil
+		},
+		PreparePrefill: func(_ context.Context, step Step) (func(context.Context, agentsession.ResumePlan) error, error) {
+			return func(_ context.Context, _ agentsession.ResumePlan) error {
+				w.prefilled = append(w.prefilled, step.Session)
+				return w.resumeErr
+			}, nil
+		},
+		CompletePrefilled: func(Step) error { w.completed = true; return nil },
+	}
+}
+
+func TestExecutePrefillsWithoutResumingAndClaimsAtMostOnce(t *testing.T) {
+	w := newWorld()
+	in := baseInput(shell("a", withAgent("codex", "sess-1", true)))
+	in.Config.ResumeAgents = ResumeAsk
+	in.Request = Request{Startup: true}
+	in.Live = w.live
+	first := onlyOutcome(t, runPlan(t, w, in))
+	if first.Status != StatusPrefilled || len(w.prefilled) != 1 || len(w.resumed) != 0 || !w.completed {
+		t.Fatalf("first = %+v, prefilled=%v resumed=%v completed=%v", first, w.prefilled, w.resumed, w.completed)
+	}
+	// Model an interrupted retry plan against an absent name: the durable claim
+	// prevents a second terminal write even if the completion record was lost.
+	w.live["a"] = LiveAbsent
+	second := onlyOutcome(t, Execute(context.Background(), Build(in), w.deps()))
+	if second.Status != StatusConverged || len(w.prefilled) != 1 {
+		t.Fatalf("retry = %+v prefilled=%v", second, w.prefilled)
 	}
 }
 

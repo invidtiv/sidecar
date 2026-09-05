@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/marcus/sidecar/internal/sessionrestore"
 	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/tmuxenv"
+	"github.com/marcus/sidecar/internal/tmuxserver"
 )
 
 // The cold-restore command group.
@@ -45,9 +47,9 @@ func sessionCommand() *Command {
 		Summary: "Report what a cold restore would do, without doing it",
 		Usage:   "sidecar session status [--host ID] [--json]",
 		Long: "Reads Sidecar's managed shell records and the current tmux inventory and prints the ordered restore plan.\n\n" +
-			"Every managed shell is named as reattach, recreate-shell, resume-agent, manual, skip, or refuse, with the reason " +
+			"Every recoverable session is named as reattach, recreate-shell, prefill-resume, resume-agent, manual, skip, or refuse, with the reason " +
 			"and whether performing it would run an agent process. This command is read-only: it creates nothing, starts nothing, " +
-			"and does not require a running Sidecar.",
+			"and does not require a running Sidecar. A stuck server is reported with the Sidecar control clients holding it open; status never terminates them.",
 		Flags:     []Flag{{Name: "--host", Arg: "ID", Summary: "Read the plan on a registered remote host instead of this machine"}, jsonFlag, helpFlag},
 		Args:      ArgSpec{Min: 0, Max: 0},
 		ExitCodes: sessionExitCodes(),
@@ -65,20 +67,21 @@ func sessionCommand() *Command {
 	restore := &Command{
 		Name:    "restore",
 		Summary: "Recreate managed shells, and optionally resume their exact conversations",
-		Usage:   "sidecar session restore [--dry-run] [--shell TARGET] [--agents] [--yes] [--host ID] [--json]",
+		Usage:   "sidecar session restore [--dry-run] [--shell TARGET] [--prefill | --agents --yes] [--host ID] [--json]",
 		Long: "Executes the plan `session status` prints.\n\n" +
 			"Shells are recreated under their own tmux session names and existing working directories; no --run command, dev server, " +
 			"or test watcher is ever replayed. A missing working directory is a refusal, never a fallback to another directory, and a " +
 			"tmux session name held by something else is a refusal too — Sidecar never closes a live session to take its name.\n\n" +
-			"Conversations are resumed only with --agents, only from an exact reference an official integration reported, and only when " +
-			"the policy allows it. Under the default ask policy a non-interactive resume additionally requires --yes.\n\n" +
-			"The tmux session name is the idempotency key, so running this twice does not produce two shells or two agents, and a run " +
-			"interrupted at any point converges when it is run again. Nothing here ever deletes a shell record: a failure is reported " +
-			"and left retryable.",
+			"--prefill types an eligible resume command at a verified empty shell prompt without pressing Enter. Conversations are executed " +
+			"only with --agents, only from an exact reference an official integration reported, and only when the policy allows it. Under " +
+			"the default ask policy a non-interactive resume additionally requires --yes. Startup prepares commands under ask. A provider-store candidate can only be typed, even under auto; tied candidates use the provider picker where supported. --prefill cannot be combined with --agents or --yes.\n\n" +
+			"The tmux session name is the idempotency key, so running this twice does not produce two shells or two agents. Prefill only writes into a fresh shell whose input is verified empty; an existing pane or an uncertain prior delivery is left unchanged for manual review. No --run command is typed or executed.\n\n" +
+			"If tmux is shutting down behind orphaned Sidecar control clients, restore terminates only those verified clients and waits for the server to exit on its own. A client with a live parent prevents recovery. The server itself is never signalled by restore. Nothing here deletes a shell record.",
 		Flags: []Flag{
 			{Name: "--dry-run", Summary: "Print the plan and exit without creating or starting anything", Bool: true},
 			{Name: "--shell", Arg: "TARGET", Summary: "Restore only this shell, by tmux session name or display name"},
 			{Name: "--agents", Summary: "Also resume eligible exact agent conversations", Bool: true},
+			{Name: "--prefill", Summary: "Type eligible resume commands without pressing Enter", Bool: true},
 			{Name: "--yes", Summary: "Confirm agent resumes non-interactively when the policy is ask", Bool: true},
 			{Name: "--host", Arg: "ID", Summary: "Restore on a registered remote host instead of this machine"},
 			jsonFlag,
@@ -89,6 +92,7 @@ func sessionCommand() *Command {
 		Mutates:   true,
 		Examples: []Example{
 			{Description: "Recreate eligible shells, no agents", Command: "sidecar session restore"},
+			{Description: "Type resume commands for review", Command: "sidecar session restore --prefill"},
 			{Description: "See exactly what would happen first", Command: "sidecar session restore --agents --dry-run"},
 			{Description: "Recreate one shell and resume its conversation", Command: "sidecar session restore --shell reviewer --agents --yes"},
 		},
@@ -199,7 +203,7 @@ func sessionConfig() sessionrestore.Config {
 }
 
 func sessionCollector(env Env) sessionrestore.Collector {
-	return sessionrestore.Collector{StateDir: env.StateDir, Namespace: tmuxenv.Namespace()}
+	return sessionrestore.Collector{StateDir: env.StateDir, LayoutStateDir: filepath.Dir(config.ConfigPath()), Namespace: tmuxenv.Namespace()}
 }
 
 func sessionContext(env Env) context.Context {
@@ -217,6 +221,7 @@ type planDocument struct {
 	ResumePolicy  string                `json:"resumePolicy"`
 	RecreateShell bool                  `json:"recreateShells"`
 	Steps         []sessionrestore.Step `json:"steps"`
+	TmuxStatus    *tmuxserver.Status    `json:"tmuxStatus,omitempty"`
 }
 
 func newPlanDocument(plan sessionrestore.Plan, cfg sessionrestore.Config) planDocument {
@@ -227,6 +232,7 @@ func newPlanDocument(plan sessionrestore.Plan, cfg sessionrestore.Config) planDo
 		ResumePolicy:  string(cfg.ResumeAgents),
 		RecreateShell: cfg.RecreateShells,
 		Steps:         plan.Steps,
+		TmuxStatus:    plan.TmuxStatus,
 	}
 }
 
@@ -266,7 +272,7 @@ func runSessionStatus(env Env, args []string) int {
 	// status reports what the configured policy would do, so it asks for agents
 	// without confirming them: the point is to disclose that a resume is
 	// possible, not to authorize one.
-	plan, code := buildSessionPlan(env, cfg, sessionrestore.Request{Agents: true}, jsonOutput)
+	plan, code := buildSessionPlan(env, cfg, sessionrestore.Request{Startup: true}, jsonOutput)
 	if code != 0 {
 		return code
 	}
@@ -298,8 +304,8 @@ func runSessionRestore(env Env, args []string) int {
 	}
 
 	var (
-		jsonOutput, dryRun, agents, yes bool
-		shellTargetName, host           string
+		jsonOutput, dryRun, agents, yes, prefill bool
+		shellTargetName, host                    string
 	)
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -314,6 +320,8 @@ func runSessionRestore(env Env, args []string) int {
 			dryRun = true
 		case arg == "--agents":
 			agents = true
+		case arg == "--prefill":
+			prefill = true
 		case arg == "--yes":
 			yes = true
 		case name == "--shell":
@@ -332,17 +340,36 @@ func runSessionRestore(env Env, args []string) int {
 			return usage("unknown option %q", arg)
 		}
 	}
+	if prefill && agents {
+		return usage("--prefill and --agents are mutually exclusive")
+	}
+	if prefill && yes {
+		return usage("--yes applies to --agents and cannot be combined with --prefill")
+	}
 	if host != "" {
 		// The host applies its own policy and its own ask/--yes rule. Forwarding
 		// the flags rather than deciding here is what keeps a remote restore
 		// answerable by the machine that would run the agents.
 		return runRemoteSessionDocument(env, host, jsonOutput, func(c agentremote.Client) ([]string, error) {
-			return c.SessionRestoreArgs(dryRun, agents, yes, shellTargetName), nil
+			return c.SessionRestoreArgsWithPrefill(dryRun, agents, yes, prefill, shellTargetName), nil
 		})
 	}
 
 	cfg := sessionConfig()
-	req := sessionrestore.Request{OnlyShell: shellTargetName, Agents: agents, Confirmed: yes}
+	if !dryRun {
+		status, err := tmuxserver.Inspect(sessionContext(env))
+		if err != nil {
+			cliErrf(env.Stderr, "inspect tmux server: %v", err)
+			return 1
+		}
+		if status.State == tmuxserver.StateExitPending {
+			if _, err := tmuxserver.RecoverExitPending(sessionContext(env), status); err != nil {
+				cliErrf(env.Stderr, "tmux server is shutting down behind attached Sidecar control clients: %v", err)
+				return 1
+			}
+		}
+	}
+	req := sessionrestore.Request{OnlyShell: shellTargetName, Agents: agents, Prefill: prefill, Confirmed: yes, RecordCandidates: !dryRun}
 	plan, code := buildSessionPlan(env, cfg, req, jsonOutput)
 	if code != 0 {
 		return code
@@ -424,6 +451,16 @@ func newResultDocument(result sessionrestore.Result, cfg sessionrestore.Config) 
 
 func writeSessionPlanHuman(env Env, plan sessionrestore.Plan, cfg sessionrestore.Config, dryRun bool) {
 	out := env.Stdout
+	if plan.TmuxStatus != nil && plan.TmuxStatus.State == tmuxserver.StateExitPending {
+		_, _ = fmt.Fprintln(out, "tmux: server is shutting down behind attached Sidecar control clients")
+		for _, client := range plan.TmuxStatus.Clients {
+			state := "live parent"
+			if client.Orphaned {
+				state = "orphaned"
+			}
+			_, _ = fmt.Fprintf(out, "  control client pid %d parent %d (%s)\n", client.PID, client.ParentPID, state)
+		}
+	}
 	switch {
 	case plan.CurrentServer == "":
 		_, _ = fmt.Fprintln(out, "tmux: no server is running")
@@ -459,7 +496,7 @@ func writeSessionPlanHuman(env Env, plan sessionrestore.Plan, cfg sessionrestore
 	_, _ = fmt.Fprintln(out)
 	shells, resumes := 0, 0
 	for _, s := range plan.Steps {
-		if s.Action == sessionrestore.ActionRecreateShell || s.Action == sessionrestore.ActionResumeAgent {
+		if s.Action == sessionrestore.ActionRecreateShell || s.Action == sessionrestore.ActionResumeAgent || s.Action == sessionrestore.ActionPrefillResume {
 			shells++
 		}
 		if s.Agent != nil && s.Agent.Resume {
