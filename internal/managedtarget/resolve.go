@@ -1,7 +1,7 @@
 // Package managedtarget resolves a caller-facing shell name into one
-// host-shaped Sidecar-owned target. It is state-free: callers supply the
-// candidates they are authorized to expose, so local and future remote hosts
-// share ambiguity and precedence rules without sharing storage.
+// host-shaped Sidecar-owned target. Resolve is state-free: callers supply the
+// candidates they are authorized to expose. List/Candidates load that universe
+// from a Sidecar state directory so the CLI and the TUI cannot disagree.
 package managedtarget
 
 import (

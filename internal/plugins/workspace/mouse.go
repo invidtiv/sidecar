@@ -193,6 +193,9 @@ func (p *Plugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
 // ViewModeFilePicker stays unknown: it is not one of the modal mouse branches
 // and renders its own overlay over the list regions.
 func (p *Plugin) modalWheelAtBoundary(msg tea.MouseWheelMsg) (bounded, ok bool) {
+	if p.broadcast != nil {
+		return p.broadcast.WheelAtBoundary(msg, p.mouseHandler), true
+	}
 	if p.paneLayoutModal != nil {
 		return p.paneLayoutModal.Modal().WheelAtBoundary(msg, p.mouseHandler), true
 	}
@@ -293,6 +296,9 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	// them or not: the shared key gate reads that clock to tell the bracket of a
 	// split SGR report from a typed one, and the component owns it.
 	p.noteTerminalMouseActivity()
+	if p.broadcast != nil {
+		return p.handleBroadcastModalMouse(msg)
+	}
 	if p.paneLayoutModal != nil {
 		return p.handlePaneLayoutModalMouse(msg)
 	}

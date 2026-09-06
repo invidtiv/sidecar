@@ -161,6 +161,7 @@ There is no watched-preview focus: hiding the sidebar is layout only. `l` / `→
 | `q` | Quit Sidecar (confirmation modal) |
 | `K` | Toggle the global space |
 | `M` | Open the reposition modal on the focused pane, or on the selected row's Primary terminal from the list (`pane_move`) |
+| `B` | Open Broadcast to agents (`broadcast-agents`, `agent_control`) |
 
 `ctrl+]` attach stays project-only and is off unless `tmux_full_attach` is enabled. While typing, `i` and `q` go to the pane.
 
@@ -432,6 +433,7 @@ A file opened in an app content pane beside Files uses the shared `workspace-doc
 | `F` | find-file | Open a file pane on the fuzzy file finder |
 | `P` | fetch-pr | Fetch a remote PR as a workspace |
 | `M` | move-pane | Open the reposition modal on the selected row's Primary terminal (`pane_move`) |
+| `B` | broadcast-agents | Open Broadcast to agents (`agent_control`) |
 
 
 ### Preview Shortcuts

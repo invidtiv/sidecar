@@ -16,7 +16,7 @@ const LayoutMoveModalOpenReason = "the reposition modal is open on that surface;
 // Primary leaf. Input and overlay states retain printable keys.
 func (m *Model) paneLayoutShortcutLeaf() int {
 	if m == nil || !features.IsEnabled(features.PaneMove.Name) || m.preview.paneRoot == nil ||
-		m.paneLayoutModal != nil || m.PreviewInteractive() || m.renameOpen || m.createOpen ||
+		m.paneLayoutModal != nil || m.broadcast != nil || m.PreviewInteractive() || m.renameOpen || m.createOpen ||
 		m.deleteOpen || m.viewFlyoutOpen || m.WorkspacesFilterFocused() ||
 		m.previewDocEditing() || m.previewDocSearchActive() || m.previewDocFindActive() ||
 		m.terminalSearch.InputActive {

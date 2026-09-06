@@ -79,8 +79,8 @@ func TestTransitionVocabularyIsFrozen(t *testing.T) {
 	if !reflect.DeepEqual(classes, wantClasses) {
 		t.Fatalf("transition classes = %#v", classes)
 	}
-	ids := []SourceID{SourceAgent, SourceWaiting, SourceSession, SourceTasks, SourceTD, SourceSystem}
-	wantIDs := []SourceID{"agent", "waiting", "session", "tasks", "td", "system"}
+	ids := []SourceID{SourceAgent, SourceWaiting, SourceSession, SourceTasks, SourceTD, SourceSystem, SourceBroadcast}
+	wantIDs := []SourceID{"agent", "waiting", "session", "tasks", "td", "system", "broadcast"}
 	if !reflect.DeepEqual(ids, wantIDs) {
 		t.Fatalf("source ids = %#v", ids)
 	}

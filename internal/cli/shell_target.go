@@ -348,106 +348,15 @@ func projectManifestPath(proj registeredProject) string {
 // decides which project a working directory belongs to (uniqueProjectContaining),
 // so a rename resolved from inside a worktree writes the display name the
 // global listing reads back.
+//
+// The scan itself lives in managedtarget.Candidates so the TUI broadcast
+// modal and this CLI share one universe.
 func managedTargetCandidates(env Env, projects []registeredProject) ([]managedtarget.Target, error) {
-	var candidates []managedtarget.Target
-	type rootClaim struct {
-		proj     registeredProject
-		manifest string
-		tier     int
+	converted := make([]managedtarget.Project, len(projects))
+	for i, p := range projects {
+		converted[i] = managedtarget.Project{Key: p.Key, Path: p.Path, Dir: p.Dir, Worktrees: p.Worktrees}
 	}
-	const (
-		tierCreated = iota
-		tierCheckout
-		tierDiscovered
-	)
-	claims := map[string]rootClaim{}
-	var roots []string
-	claim := func(root string, proj registeredProject, manifest string, tier int) {
-		root = strings.TrimSpace(root)
-		if root == "" {
-			return
-		}
-		root = canonicalOpenPath(root)
-		current, ok := claims[root]
-		if !ok {
-			claims[root] = rootClaim{proj: proj, manifest: manifest, tier: tier}
-			roots = append(roots, root)
-			return
-		}
-		if tier < current.tier {
-			claims[root] = rootClaim{proj: proj, manifest: manifest, tier: tier}
-		}
-	}
-	for _, proj := range projects {
-		manifest := projectManifestPath(proj)
-		defs, err := shellstate.ListAtPath(manifest)
-		if err != nil {
-			return nil, err
-		}
-		for _, def := range defs {
-			workDir := def.WorkDir
-			if workDir == "" {
-				workDir = proj.Path
-			}
-			candidates = append(candidates, managedtarget.Target{Host: "local", Project: proj.Key, ProjectRoot: proj.Path, Kind: shellTargetKindShell, Session: def.TmuxName, Name: def.DisplayName, Namespace: def.Namespace, WorkDir: workDir, ManifestPath: manifest, Priority: 0})
-		}
-		if strings.TrimSpace(proj.Path) == "" {
-			continue
-		}
-		for _, root := range proj.Worktrees {
-			claim(root, proj, manifest, tierCreated)
-		}
-		claim(proj.Path, proj, manifest, tierCheckout)
-		for _, root := range discoveredWorktreeRoots(env, proj) {
-			claim(root, proj, manifest, tierDiscovered)
-		}
-	}
-	for _, root := range roots {
-		c := claims[root]
-		priority := 1
-		if c.tier == tierDiscovered {
-			priority = 2
-		}
-		name, _ := workspaceops.LookupWorktreeDisplayName(env.StateDir, c.proj.Path, root)
-		candidates = append(candidates, managedtarget.Target{Host: "local", Project: c.proj.Key, ProjectRoot: c.proj.Path, Kind: shellTargetKindWorktree, Session: workspaceops.WorktreeSessionName(root, ""), Name: name, Namespace: tmuxenv.Namespace(), WorkDir: root, WorktreeRoot: root, ManifestPath: c.manifest, Priority: priority})
-	}
-	return candidates, nil
-}
-
-// discoveredWorktreeRoots is every worktree Git lists for this project's
-// checkout, whether or not Sidecar registered it.
-//
-// proj.Worktrees is the set Sidecar CREATED (<projectDir>/worktrees/*). Git's
-// own `worktree list` is a superset that also holds a worktree the user made
-// by hand — and locally RenameWorktreeDisplayName creates the state directory
-// on demand, so renaming one of those works. Scoped to the created set, a
-// remote rename of a hand-made worktree exited 3 while the identical local
-// rename succeeded, for a row the user could see either way.
-//
-// The caller ranks these below the registered tiers, because a session name
-// is derived from a basename and collides across directories, and because a
-// repository's inventory is visible from every one of its checkouts. A
-// repository Git cannot read simply has no discovered tier.
-func discoveredWorktreeRoots(env Env, proj registeredProject) []string {
-	if proj.Path == "" {
-		return nil
-	}
-	ctx := env.Ctx
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	states, err := workspaceops.ListWorktreeStates(ctx, proj.Path)
-	if err != nil {
-		return nil
-	}
-	var discovered []string
-	for _, state := range states {
-		if state.Bare || state.Path == "" {
-			continue
-		}
-		discovered = append(discovered, state.Path)
-	}
-	return discovered
+	return managedtarget.Candidates(env.Ctx, env.StateDir, converted)
 }
 
 // sameTmuxServer reports whether a recorded namespace names the tmux server

@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/activitystore"
 	"github.com/marcus/sidecar/internal/agentstatus"
+	"github.com/marcus/sidecar/internal/broadcastmodal"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/contentpanes"
 	"github.com/marcus/sidecar/internal/hosts"
@@ -422,6 +423,7 @@ type Model struct {
 	hoverPreviewClose  panelayout.Kind
 	hoverPreviewLayout int
 	paneLayoutModal    *panereposition.Controller
+	broadcast          *broadcastmodal.Host
 	paneZoom           panereposition.Zoom
 	// hoverTabClose is the per-tab × under the pointer, keyed by preview kind.
 	hoverTabClose tabs.CloseHover
@@ -844,6 +846,11 @@ func (m *Model) pulseCmd() tea.Cmd {
 
 func (m *Model) update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
+	case broadcastmodal.PlannedMsg:
+		m.applyBroadcastPlan(msg)
+		return nil
+	case broadcastmodal.SentMsg:
+		return m.applyBroadcastSent(msg)
 	case termpreview.HostBackgroundMsg:
 		m.terminalDefaultBackground = msg.ANSI
 		return nil

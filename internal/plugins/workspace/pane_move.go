@@ -14,7 +14,7 @@ import (
 // Primary leaf. Text inputs and overlays keep printable keys for themselves.
 func (p *Plugin) paneLayoutShortcutLeaf() int {
 	if p == nil || !features.IsEnabled(features.PaneMove.Name) || p.viewMode != ViewModeList ||
-		p.paneRoot == nil || p.paneLayoutModal != nil || p.docInfo != nil ||
+		p.paneRoot == nil || p.paneLayoutModal != nil || p.broadcast != nil || p.docInfo != nil ||
 		p.viewFlyoutActive() || p.docEditActive() || p.docSearchActive() || p.docFindActive() ||
 		p.terminalSearch.InputActive || p.filterFocused() {
 		return 0

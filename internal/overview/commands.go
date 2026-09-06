@@ -1,6 +1,7 @@
 package overview
 
 import (
+	"github.com/marcus/sidecar/internal/broadcastmodal"
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/panereposition"
 	"github.com/marcus/sidecar/internal/plugin"
@@ -32,6 +33,12 @@ const (
 // WorkspaceFocusContext. Bindings live in the keymap; names and priorities
 // live here so a focused issue or document cannot advertise the list's keys.
 func (m *Model) Commands() []plugin.Command {
+	if m.broadcast != nil {
+		return []plugin.Command{
+			{ID: "broadcast-send", Name: "Send", Description: "Send the broadcast", Context: ctxGlobalWorkspaces, Priority: 1},
+			{ID: "broadcast-cancel", Name: "Cancel", Description: "Close without sending", Context: ctxGlobalWorkspaces, Priority: 2},
+		}
+	}
 	switch m.WorkspaceFocusContext() {
 	case ctxGlobalWorkspacesFilter:
 		return []plugin.Command{
@@ -174,6 +181,9 @@ func (m *Model) Commands() []plugin.Command {
 				ID: "open-in-git", Name: "Git", Description: "Open the selected workspace in Git",
 				Context: ctxGlobalWorkspaces, Priority: 9,
 			})
+		}
+		if broadcastmodal.Enabled() {
+			cmds = append(cmds, broadcastmodal.Command(ctxGlobalWorkspaces, m.openBroadcast))
 		}
 		return m.withPaneMoveCommand(cmds, ctxGlobalWorkspaces)
 	}

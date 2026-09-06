@@ -10,6 +10,7 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/broadcastmodal"
 	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/contentpanes"
 	"github.com/marcus/sidecar/internal/docview"
@@ -255,6 +256,7 @@ type Plugin struct {
 	paneNextID      int
 	paneDragSplitID int
 	paneLayoutModal *panereposition.Controller
+	broadcast       *broadcastmodal.Host
 	paneZoom        panereposition.Zoom
 	paneRestoreCmd  tea.Cmd
 	// paneLayoutSurface is the surface the live tree currently represents.
@@ -918,6 +920,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.paneFocus = 0
 	p.paneNextID = 1
 	p.paneDragSplitID = 0
+	p.broadcast = nil
 	p.paneRestoreCmd = nil
 	p.paneLayoutSurface = ""
 	p.hiddenPaneLayout = nil

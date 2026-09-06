@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"github.com/marcus/sidecar/internal/broadcastmodal"
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/panereposition"
@@ -11,6 +12,12 @@ import (
 
 // Commands returns the available commands.
 func (p *Plugin) Commands() []plugin.Command {
+	if p.broadcast != nil {
+		return []plugin.Command{
+			{ID: "broadcast-send", Name: "Send", Description: "Send the broadcast", Context: "workspace-list", Priority: 1},
+			{ID: "broadcast-cancel", Name: "Cancel", Description: "Close without sending", Context: "workspace-list", Priority: 2},
+		}
+	}
 	if p.viewMode == ViewModeList && p.docSearchActive() {
 		return []plugin.Command{
 			{ID: "search-open", Name: "Open", Description: "Open the selected file in this pane", Context: "workspace-doc-search", Priority: 1},
@@ -369,7 +376,7 @@ func (p *Plugin) Commands() []plugin.Command {
 				cmds = append(cmds, plugin.Command{ID: "delete-workspace", Name: "Delete", Description: "Delete selected shell", Context: "workspace-list", Priority: 11})
 			}
 			cmds = append(cmds, plugin.Command{ID: "rename-shell", Name: "Rename", Description: "Rename shell", Context: "workspace-list", Priority: 12})
-			return cmds
+			return p.withBroadcastCommand(cmds, "workspace-list")
 		}
 
 		wt := p.selectedWorktree()
@@ -420,12 +427,15 @@ func (p *Plugin) Commands() []plugin.Command {
 				plugin.Command{ID: "toggle-terminal", Name: termName, Description: "Toggle terminal panel", Context: "workspace-list", Priority: 19},
 			)
 		}
-		return p.withPaneMoveCommand(cmds, "workspace-list")
+		return p.withPaneMoveCommand(p.withBroadcastCommand(cmds, "workspace-list"), "workspace-list")
 	}
 }
 
 // FocusContext returns the current focus context for keybinding dispatch.
 func (p *Plugin) FocusContext() string {
+	if p.broadcast != nil {
+		return "workspace-list"
+	}
 	if p.paneLayoutModal != nil {
 		return panereposition.ModalContext
 	}
@@ -520,6 +530,13 @@ func (p *Plugin) FocusContext() string {
 	}
 }
 
+func (p *Plugin) withBroadcastCommand(cmds []plugin.Command, context string) []plugin.Command {
+	if !broadcastmodal.Enabled() {
+		return cmds
+	}
+	return append(cmds, broadcastmodal.Command(context, p.openBroadcast))
+}
+
 func (p *Plugin) withPaneMoveCommand(cmds []plugin.Command, context string) []plugin.Command {
 	if p.paneLayoutShortcutLeaf() == 0 {
 		return cmds
@@ -533,6 +550,9 @@ func (p *Plugin) withPaneMoveCommand(cmds []plugin.Command, context string) []pl
 // ConsumesTextInput reports whether the workspace plugin is currently in a
 // mode that expects typed text input.
 func (p *Plugin) ConsumesTextInput() bool {
+	if p.broadcast != nil {
+		return true
+	}
 	if p.docSearchActive() || p.docFindActive() {
 		return true
 	}
@@ -565,6 +585,9 @@ func (p *Plugin) ConsumesTextInput() bool {
 
 // BlocksGlobalKeys reports whether a plugin-owned modal has keyboard focus.
 func (p *Plugin) BlocksGlobalKeys() bool {
+	if p.broadcast != nil {
+		return true
+	}
 	if p.docInfo != nil {
 		return true
 	}

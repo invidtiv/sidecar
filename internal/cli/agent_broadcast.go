@@ -220,7 +220,7 @@ func runAgentBroadcast(env Env, args []string) int {
 
 	svc := agentbroadcast.Service{
 		Control:    agentcontrol.Service{Terminal: newAgentTerminal()},
-		Candidates: broadcastCandidates(env),
+		Candidates: agentbroadcast.CandidatesFromState(env.StateDir),
 	}
 	ctx := env.Ctx
 	if ctx == nil {
@@ -244,25 +244,10 @@ func runAgentBroadcast(env Env, args []string) int {
 	return emitBroadcastResult(env, f.json, result, false)
 }
 
-// broadcastCandidates is a CLI-local closure over scanProjects and
-// managedTargetCandidates, the same universe agent list uses. Extracting those
-// into a package the TUI can import is S2's job — they are bound to CLI types
-// (registeredProject, matchProject, worktree claims) and the move is not
-// mechanical.
+// broadcastCandidates keeps the S1 name so CLI tests that inject a candidate
+// source still compile. It is the extracted listing, not a second scan.
 func broadcastCandidates(env Env) func(context.Context, agentbroadcast.PlanRequest) ([]managedtarget.Target, error) {
-	return func(_ context.Context, req agentbroadcast.PlanRequest) ([]managedtarget.Target, error) {
-		projectFlag := ""
-		globalExplicit := true
-		if req.ScopeKind == agentbroadcast.ScopeProject && len(req.To) == 0 {
-			projectFlag = req.Project
-			globalExplicit = false
-		}
-		projects, _, err := scanProjects(env, "", projectFlag, globalExplicit)
-		if err != nil {
-			return nil, err
-		}
-		return managedTargetCandidates(env, projects)
-	}
+	return agentbroadcast.CandidatesFromState(env.StateDir)
 }
 
 func broadcastText(env Env, positional string) (string, error) {

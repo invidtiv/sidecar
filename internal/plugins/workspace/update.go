@@ -10,6 +10,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	app "github.com/marcus/sidecar/internal/app"
+	"github.com/marcus/sidecar/internal/broadcastmodal"
 	"github.com/marcus/sidecar/internal/contentpanes"
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/gitinit"
@@ -2180,6 +2181,12 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			p.toastTime = time.Now()
 		}
 
+	case broadcastmodal.PlannedMsg:
+		p.applyBroadcastPlan(msg)
+		return p, nil
+	case broadcastmodal.SentMsg:
+		return p, p.applyBroadcastSent(msg)
+
 	case tea.KeyPressMsg:
 		cmd := p.handleKeyPress(msg)
 		if cmd != nil {
@@ -2190,6 +2197,11 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// The reposition modal owns the keyboard outright. Bracketed paste is a
 		// separate Bubble Tea message, so it must be stopped here as well as keys
 		// or it can still reach a previously focused filter behind the overlay.
+		if p.broadcast != nil {
+			p.broadcast.Ensure(p.width)
+			p.broadcast.HandlePaste(msg.Content)
+			break
+		}
 		if p.paneLayoutModal != nil {
 			break
 		}

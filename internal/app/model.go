@@ -2273,6 +2273,8 @@ func (m *Model) runGlobalWorkspacesCommand(id string) tea.Cmd {
 		return m.overview.OpenRenameWorktree()
 	case "open-in-git":
 		return m.overview.OpenSelectedInGit()
+	case "broadcast-agents":
+		return m.overview.OpenBroadcast()
 	default:
 		return nil
 	}
