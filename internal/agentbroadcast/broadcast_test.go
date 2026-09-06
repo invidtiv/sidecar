@@ -102,6 +102,21 @@ func TestPlanSkipsBlockedUnknownStale(t *testing.T) {
 	assertOutcome(t, plan, "dead", OutcomeSkipped, string(agentcontrol.ErrPaneBusy))
 }
 
+func TestPlanOmitsObserveFailure(t *testing.T) {
+	term := newStage()
+	cands := []managedtarget.Target{managed("gone", "missing", "p")}
+	plan, err := testService(term, cands).Plan(context.Background(), PlanRequest{ScopeKind: ScopeProject, Project: "p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Recipients) != 0 {
+		t.Fatalf("recipients = %+v, want none", plan.Recipients)
+	}
+	if plan.ShellsWithoutAgent != 1 {
+		t.Fatalf("ShellsWithoutAgent = %d, want 1", plan.ShellsWithoutAgent)
+	}
+}
+
 func TestPlanOmitsNoProviderPane(t *testing.T) {
 	term := newStage()
 	term.add("agent", "live", "p", "claude:idle")

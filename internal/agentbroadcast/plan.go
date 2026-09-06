@@ -50,19 +50,12 @@ func (s Service) Plan(ctx context.Context, req PlanRequest) (Plan, error) {
 	for _, cand := range selected {
 		target := controlTarget(cand)
 		snap, state, err := s.observe(ctx, target)
-		if err != nil {
-			plan.Recipients = append(plan.Recipients, Recipient{
-				Target:  target,
-				Outcome: OutcomeSkipped,
-				Reason:  reasonFromErr(err),
-			})
-			continue
-		}
-		target = snap.Target
-		if state.Kind == "" {
+		if err != nil || state.Kind == "" {
+			// No identified provider: absent from the plan, same as agent list.
 			plan.ShellsWithoutAgent++
 			continue
 		}
+		target = snap.Target
 		row := Recipient{Target: target, Agent: state, Outcome: OutcomeWouldSend}
 		if req.SenderSession != "" && cand.Session == req.SenderSession && !req.IncludeSelf {
 			row.Outcome = OutcomeSkipped
