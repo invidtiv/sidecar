@@ -203,6 +203,10 @@ func runAgentBroadcast(env Env, args []string) int {
 			req.SenderName = origin.TmuxName
 		}
 		req.SenderProject = origin.ProjectKey
+	} else {
+		// No identified calling shell: the envelope is from the user, not an
+		// invented "cli" / "local" sender.
+		req.FromUser = true
 	}
 	if req.ScopeKind == "" && len(req.To) == 0 {
 		if req.SenderProject != "" {
@@ -211,15 +215,6 @@ func runAgentBroadcast(env Env, args []string) int {
 		} else {
 			cliErrf(env.Stderr, "agent broadcast requires --project NAME or --all outside a managed shell\n\n%s", help)
 			return 2
-		}
-	}
-	if req.SenderName == "" {
-		req.SenderName = "cli"
-	}
-	if req.SenderProject == "" {
-		req.SenderProject = req.Project
-		if req.SenderProject == "" {
-			req.SenderProject = "local"
 		}
 	}
 

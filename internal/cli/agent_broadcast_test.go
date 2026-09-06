@@ -132,6 +132,47 @@ func TestAgentBroadcastOutsideManagedShellRequiresScope(t *testing.T) {
 	}
 }
 
+func TestAgentBroadcastEnvelopeIsFromTheUserWithoutACallingShell(t *testing.T) {
+	_, terminal := broadcastWorkingPanes(t)
+	t.Setenv(shellstate.SessionEnv, "")
+	want := `[Sidecar broadcast from the user] hold pushes`
+
+	code, out, errOut := runAgentCLI(t, "agent", "broadcast", "hold pushes", "--project", "demo", "--json")
+	if code != 0 || errOut != "" {
+		t.Fatalf("project = %d stdout=%q stderr=%q", code, out, errOut)
+	}
+	var result agentbroadcast.Result
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Text != want {
+		t.Fatalf("project text = %q, want %q", result.Text, want)
+	}
+	if len(terminal.submitted) == 0 {
+		t.Fatal("expected a submit")
+	}
+	for _, got := range terminal.submitted {
+		if got != want {
+			t.Fatalf("submitted %q, want %q", got, want)
+		}
+	}
+
+	terminal.submitted = nil
+	code, out, errOut = runAgentCLI(t, "agent", "broadcast", "hold pushes", "--all", "--dry-run", "--json")
+	if code != 0 || errOut != "" {
+		t.Fatalf("all dry-run = %d stdout=%q stderr=%q", code, out, errOut)
+	}
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Text != want {
+		t.Fatalf("all dry-run text = %q, want %q", result.Text, want)
+	}
+	if len(terminal.submitted) != 0 {
+		t.Fatalf("dry-run wrote %q", terminal.submitted)
+	}
+}
+
 func TestAgentBroadcastEmptyPlanIsNoRecipients(t *testing.T) {
 	targetProject(t)
 	terminal := &cliAgentTerminal{}
