@@ -905,6 +905,13 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if cmd, ok := m.keymap.GetCommand(msg.CommandID); ok && cmd.Handler != nil {
 			return m, cmd.Handler()
 		}
+		// Sessions is not a plugin, so a plugin Handler (or pluginCommandHandler's
+		// unmatched-context fallback) must not run before the surface that is
+		// actually on screen. new-worktree / broadcast-agents land here the same
+		// way their keys land in overview.WorkspacesKey.
+		if cmd := m.runGlobalWorkspacesCommand(msg.CommandID); cmd != nil {
+			return m, cmd
+		}
 		// Plugins may carry the handler on the command itself rather than
 		// registering a keymap command. Prefer an exact context match: one
 		// command ID can mean different things in different plugin contexts.
@@ -917,9 +924,6 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// global context whenever the focused context's binding has no handler, so
 		// a registered global would fire for every context that rebinds its key.
 		if cmd, ok := (&m).runHostCommand(msg.CommandID); ok {
-			return m, cmd
-		}
-		if cmd := m.runGlobalWorkspacesCommand(msg.CommandID); cmd != nil {
 			return m, cmd
 		}
 		// Fallback for contextual plugin commands: if entry has a key bound, forward to active plugin

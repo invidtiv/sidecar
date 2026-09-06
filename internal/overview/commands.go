@@ -183,7 +183,7 @@ func (m *Model) Commands() []plugin.Command {
 			})
 		}
 		if broadcastmodal.Enabled() {
-			cmds = append(cmds, broadcastmodal.Command(ctxGlobalWorkspaces, m.openBroadcast))
+			cmds = append(cmds, broadcastmodal.Command(ctxGlobalWorkspaces))
 		}
 		return m.withPaneMoveCommand(cmds, ctxGlobalWorkspaces)
 	}

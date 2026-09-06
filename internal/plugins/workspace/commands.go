@@ -534,7 +534,7 @@ func (p *Plugin) withBroadcastCommand(cmds []plugin.Command, context string) []p
 	if !broadcastmodal.Enabled() {
 		return cmds
 	}
-	return append(cmds, broadcastmodal.Command(context, p.openBroadcast))
+	return append(cmds, broadcastmodal.Command(context))
 }
 
 func (p *Plugin) withPaneMoveCommand(cmds []plugin.Command, context string) []plugin.Command {

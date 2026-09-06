@@ -62,6 +62,18 @@ func TestGlobalBroadcastModalOwnsKeys(t *testing.T) {
 	}
 }
 
+func TestGlobalBroadcastLateSentDoesNotCloseAReopenedModal(t *testing.T) {
+	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
+	first := broadcastmodal.New("", t.TempDir(), broadcastmodal.ScopeAllProjects, false)
+	m.broadcast = first
+	second := broadcastmodal.New("", t.TempDir(), broadcastmodal.ScopeAllProjects, false)
+	m.broadcast = second
+	m.applyBroadcastSent(broadcastmodal.SentMsg{Host: first})
+	if m.broadcast != second {
+		t.Fatal("a late SentMsg closed a broadcast modal it did not open")
+	}
+}
+
 func TestGlobalBroadcastNotesRemoteAgents(t *testing.T) {
 	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
 	m.catalog["remote"] = workspaceinventory.Workspace{ID: "remote", HostID: "mac-mini", Name: "remote-shell"}

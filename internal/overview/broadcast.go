@@ -71,8 +71,12 @@ func (m *Model) applyBroadcastPlan(msg broadcastmodal.PlannedMsg) {
 	}
 }
 
+func (m *Model) BroadcastOpen() bool { return m != nil && m.broadcast != nil }
+
 func (m *Model) applyBroadcastSent(msg broadcastmodal.SentMsg) tea.Cmd {
-	m.broadcast = nil
+	if m.broadcast != nil && m.broadcast == msg.Host {
+		m.broadcast = nil
+	}
 	if msg.Err != nil {
 		return broadcastmodal.NotifyError(msg.Err)
 	}

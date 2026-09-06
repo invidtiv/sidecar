@@ -35,7 +35,10 @@ func (p *Plugin) broadcastProjectKey() string {
 }
 
 func (p *Plugin) handleBroadcastKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
-	if msg.String() != "B" || !broadcastmodal.Enabled() || p.activePane != PaneSidebar {
+	if msg.String() != "B" || !broadcastmodal.Enabled() {
+		return false, nil
+	}
+	if p.FocusContext() != "workspace-list" {
 		return false, nil
 	}
 	if p.broadcast != nil {
@@ -75,7 +78,9 @@ func (p *Plugin) applyBroadcastPlan(msg broadcastmodal.PlannedMsg) {
 }
 
 func (p *Plugin) applyBroadcastSent(msg broadcastmodal.SentMsg) tea.Cmd {
-	p.broadcast = nil
+	if p.broadcast != nil && p.broadcast == msg.Host {
+		p.broadcast = nil
+	}
 	if msg.Err != nil {
 		return broadcastmodal.NotifyError(msg.Err)
 	}

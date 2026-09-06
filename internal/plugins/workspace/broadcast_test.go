@@ -33,6 +33,39 @@ func TestProjectBroadcastFlagHidesKeyAndCommand(t *testing.T) {
 	}
 }
 
+func TestProjectBroadcastBDoesNotOpenWhenFilterFocused(t *testing.T) {
+	p := filterPlugin(t)
+	enableWorkspaceFeature(t, features.AgentControl.Name)
+	p.handleKeyPress(key("/"))
+	if !p.filterFocused() || p.FocusContext() != "workspace-filter" {
+		t.Fatal("fixture did not focus the list filter")
+	}
+	p.handleKeyPress(moveKey('B'))
+	if p.broadcast != nil {
+		t.Fatal("B opened the broadcast modal while the filter owned the keyboard")
+	}
+	if p.listFilter.Query() != "B" {
+		t.Fatalf("filter query = %q, want B", p.listFilter.Query())
+	}
+}
+
+func TestProjectBroadcastLateSentDoesNotCloseAReopenedModal(t *testing.T) {
+	p := docPaneTestPlugin(t, t.TempDir(), false)
+	p.activePane = PaneSidebar
+	first := broadcastmodal.New("demo", t.TempDir(), broadcastmodal.ScopeThisProject, false)
+	p.broadcast = first
+	second := broadcastmodal.New("demo", t.TempDir(), broadcastmodal.ScopeThisProject, false)
+	p.broadcast = second
+	p.applyBroadcastSent(broadcastmodal.SentMsg{Host: first})
+	if p.broadcast != second {
+		t.Fatal("a late SentMsg closed a broadcast modal it did not open")
+	}
+	p.applyBroadcastSent(broadcastmodal.SentMsg{Host: second})
+	if p.broadcast != nil {
+		t.Fatal("matching SentMsg left the modal open")
+	}
+}
+
 func TestProjectBroadcastBDoesNotOpenFromPreview(t *testing.T) {
 	p := docPaneTestPlugin(t, t.TempDir(), false)
 	enableWorkspaceFeature(t, features.AgentControl.Name)

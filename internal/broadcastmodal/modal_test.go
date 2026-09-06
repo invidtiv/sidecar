@@ -2,10 +2,13 @@ package broadcastmodal
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/agentbroadcast"
 	"github.com/marcus/sidecar/internal/agentcontrol"
+	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/notify"
 )
 
@@ -164,5 +167,17 @@ func TestHostInitialSelectionFollowsPlan(t *testing.T) {
 	}
 	if !lines[0].Checked || lines[1].Checked || !lines[2].Checked {
 		t.Fatalf("initial checks = %+v", lines)
+	}
+}
+
+func TestRenderDrawsProjectSectionLabelsWhenGrouped(t *testing.T) {
+	h := New("", t.TempDir(), ScopeAllProjects, false)
+	h.ApplyPlan(PlannedMsg{Gen: h.gen, Plan: fixturePlan()})
+	view := ansi.Strip(h.Render(80, 24, mouse.NewHandler()))
+	if !strings.Contains(view, "demo") || !strings.Contains(view, "other") {
+		t.Fatalf("grouped modal omitted project sections:\n%s", view)
+	}
+	if !strings.Contains(view, "tacoma-fable") || !strings.Contains(view, "inventory") {
+		t.Fatalf("grouped modal omitted recipient rows:\n%s", view)
 	}
 }

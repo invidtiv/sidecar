@@ -72,6 +72,7 @@ type PlannedMsg struct {
 }
 
 type SentMsg struct {
+	Host   *Host
 	Result agentbroadcast.Result
 	Err    error
 }
@@ -96,10 +97,10 @@ func Enabled() bool {
 	return features.IsEnabled(features.AgentControl.Name)
 }
 
-func Command(context string, handler func() tea.Cmd) plugin.Command {
+func Command(context string) plugin.Command {
 	return plugin.Command{
 		ID: CommandID, Name: CommandName, Description: CommandDescription,
-		Context: context, Priority: 21, Handler: handler,
+		Context: context, Priority: 21,
 	}
 }
 
@@ -248,33 +249,45 @@ func (h *Host) renderRecipients(contentWidth int, focusID, hoverID string) modal
 	}
 
 	h.clampList(len(rows))
-	visible := rows
-	start := 0
+	start, end := 0, len(rows)
 	if len(rows) > maxList {
 		start = h.listOffset
-		end := start + maxList
+		end = start + maxList
 		if end > len(rows) {
 			end = len(rows)
 		}
-		visible = rows[start:end]
 	}
 
 	y := 1
-	for i, row := range visible {
-		b.WriteByte('\n')
-		abs := start + i
-		cursor := abs == h.listCursor && focusID == listID
-		b.WriteString(h.renderRow(row, contentWidth, cursor, hoverID == rcptPrefix+row.ID))
-		focusables = append(focusables, modal.FocusableInfo{
-			ID: rcptPrefix + row.ID, OffsetX: 0, OffsetY: y,
-			Width: max(1, contentWidth), Height: 1, MouseOnly: true,
-		})
-		y++
-	}
+	rowIndex := -1
+	var pending Line
 	for _, line := range lines {
-		if line.Kind == lineCount {
+		switch line.Kind {
+		case lineSection:
+			pending = line
+		case lineRow:
+			rowIndex++
+			if rowIndex < start || rowIndex >= end {
+				continue
+			}
+			if pending.Kind == lineSection {
+				b.WriteByte('\n')
+				b.WriteString(styles.Muted.Render(fit(pending.Label, contentWidth)))
+				pending = Line{}
+				y++
+			}
+			b.WriteByte('\n')
+			cursor := rowIndex == h.listCursor && focusID == listID
+			b.WriteString(h.renderRow(line, contentWidth, cursor, hoverID == rcptPrefix+line.ID))
+			focusables = append(focusables, modal.FocusableInfo{
+				ID: rcptPrefix + line.ID, OffsetX: 0, OffsetY: y,
+				Width: max(1, contentWidth), Height: 1, MouseOnly: true,
+			})
+			y++
+		case lineCount:
 			b.WriteByte('\n')
 			b.WriteString(styles.Muted.Render("    " + line.Label))
+			y++
 		}
 	}
 	focusables[0].Height = y
@@ -480,9 +493,10 @@ func (h *Host) send() tea.Cmd {
 	})
 	plan.FromUser = true
 	svc := h.service()
+	host := h
 	return func() tea.Msg {
 		result, err := svc.Send(context.Background(), plan, text)
-		return SentMsg{Result: result, Err: err}
+		return SentMsg{Host: host, Result: result, Err: err}
 	}
 }
 
