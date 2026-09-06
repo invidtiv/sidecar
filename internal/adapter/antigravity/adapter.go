@@ -23,6 +23,8 @@ const (
 // Adapter implements the adapter.Adapter interface for Antigravity CLI sessions.
 type Adapter struct {
 	brainDir     string
+	cacheDir     string
+	historyPath  string
 	sessionIndex map[string]string // sessionID -> transcript.jsonl path cache
 	indexMu      sync.RWMutex
 	metaCache    map[string]sessionMetaCacheEntry
@@ -41,9 +43,84 @@ func New() *Adapter {
 	home, _ := os.UserHomeDir()
 	return &Adapter{
 		brainDir:     filepath.Join(home, ".gemini", "antigravity-cli", "brain"),
+		cacheDir:     filepath.Join(home, ".gemini", "antigravity-cli", "cache"),
+		historyPath:  filepath.Join(home, ".gemini", "antigravity-cli", "history.jsonl"),
 		sessionIndex: make(map[string]string),
 		metaCache:    make(map[string]sessionMetaCacheEntry),
 	}
+}
+
+// NewWithRecoveryPaths creates an adapter with the CLI's workspace index and
+// history locations overridden. It supports provider-store recovery fixtures.
+func NewWithRecoveryPaths(cacheDir, historyPath string) *Adapter {
+	a := NewWithBrainDir(filepath.Join(filepath.Dir(cacheDir), "brain"))
+	a.cacheDir = cacheDir
+	a.historyPath = historyPath
+	return a
+}
+
+// RecoverySessions returns only conversations explicitly associated with the
+// exact workspace. Antigravity's transcript store itself has no cwd field, so
+// recovery uses the CLI-owned workspace index and history evidence.
+func (a *Adapter) RecoverySessions(workDir string) ([]adapter.Session, error) {
+	abs, err := filepath.Abs(workDir)
+	if err != nil {
+		return nil, err
+	}
+	indexBytes, err := os.ReadFile(filepath.Join(a.cacheDir, "last_conversations.json"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var index map[string]string
+	if err := json.Unmarshal(indexBytes, &index); err != nil {
+		return nil, fmt.Errorf("parse antigravity last conversations: %w", err)
+	}
+	id := strings.TrimSpace(index[filepath.Clean(abs)])
+	if id == "" {
+		return nil, nil
+	}
+
+	file, err := os.Open(a.historyPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+	var updated time.Time
+	var title string
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	for scanner.Scan() {
+		var row struct {
+			ConversationID string  `json:"conversationId"`
+			Workspace      string  `json:"workspace"`
+			Display        string  `json:"display"`
+			Timestamp      float64 `json:"timestamp"`
+		}
+		if json.Unmarshal(scanner.Bytes(), &row) != nil || row.ConversationID != id || filepath.Clean(row.Workspace) != filepath.Clean(abs) {
+			continue
+		}
+		at := time.UnixMilli(int64(row.Timestamp))
+		if at.After(updated) {
+			updated = at
+			title = strings.TrimSpace(row.Display)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	if updated.IsZero() {
+		return nil, nil
+	}
+	if title == "" {
+		title = id
+	}
+	return []adapter.Session{{ID: id, Name: title, AdapterID: adapterID, AdapterName: adapterName, UpdatedAt: updated}}, nil
 }
 
 // NewWithBrainDir creates an adapter with a custom brain directory (for testing).

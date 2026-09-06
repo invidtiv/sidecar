@@ -38,6 +38,9 @@ const (
 	// StatusResumed means the shell was restored and its exact conversation
 	// resumed. It is the only status that implies an agent process was run.
 	StatusResumed Status = "resumed"
+	// StatusPrefilled means a resume command is waiting at the shell prompt and
+	// no provider process was started.
+	StatusPrefilled Status = "prefilled"
 	// StatusConverged means the work was already done — by a previous
 	// interrupted run, another Sidecar, or the user. Nothing was created.
 	StatusConverged Status = "converged"
@@ -106,9 +109,20 @@ type Deps struct {
 	// binding recheck: the reference can have been rotated or cleared by the
 	// provider's own integration since the plan was built.
 	ResumePlanFor func(Step) (agentsession.ResumePlan, error)
+	// PrefillPlanFor may build an unreported candidate command; it is separate
+	// from ResumePlanFor so candidates cannot cross into automatic execution.
+	PrefillPlanFor func(Step) (agentsession.ResumePlan, error)
 	// ResumeAgent runs the resume in the shell and returns once the provider is
 	// identified and ready.
 	ResumeAgent func(context.Context, Step, agentsession.ResumePlan) error
+	// PreparePrefill establishes an empty, pinned shell before the durable claim
+	// and returns the final recheck-and-write closure.
+	PreparePrefill func(context.Context, Step) (func(context.Context, agentsession.ResumePlan) error, error)
+	// MarkPrefilled durably claims the one permitted write before terminal input.
+	MarkPrefilled func(Step) (bool, error)
+	// CompletePrefilled records a successful terminal write after the durable
+	// claim. It keeps "typed" distinct from "an attempt may have typed".
+	CompletePrefilled func(Step) error
 	// NoteLive records that this shell is now running under the current tmux
 	// server. It is optional, and skipping it costs only accuracy in a later
 	// restore.
@@ -165,7 +179,7 @@ func Execute(ctx context.Context, plan Plan, deps Deps) Result {
 		// there is, and the moment to record it.
 		if deps.NoteLive != nil {
 			switch out.Status {
-			case StatusReattached, StatusRestored, StatusResumed, StatusConverged:
+			case StatusReattached, StatusRestored, StatusResumed, StatusPrefilled, StatusConverged:
 				deps.NoteLive(out.Step)
 			}
 		}
@@ -242,7 +256,7 @@ func executeStep(ctx context.Context, step Step, deps Deps, run *serverPin) Outc
 		}
 	}
 
-	if step.Action != ActionResumeAgent {
+	if step.Action != ActionResumeAgent && step.Action != ActionPrefillResume {
 		return Outcome{Step: step, Status: status, Reason: step.Reason, Detail: step.Detail}
 	}
 
@@ -263,7 +277,11 @@ func executeStep(ctx context.Context, step Step, deps Deps, run *serverPin) Outc
 			Detail: "the restored shell was gone again before its conversation could be resumed",
 		}
 	}
-	if deps.ResumePlanFor == nil || deps.ResumeAgent == nil {
+	planFor := deps.ResumePlanFor
+	if step.Action == ActionPrefillResume {
+		planFor = deps.PrefillPlanFor
+	}
+	if planFor == nil {
 		return Outcome{Step: step, Status: status, Reason: ReasonResumeOff, Detail: "no resume path is configured"}
 	}
 
@@ -271,12 +289,44 @@ func executeStep(ctx context.Context, step Step, deps Deps, run *serverPin) Outc
 	// integration can have rotated or cleared it, and resuming a reference that
 	// is no longer the shell's is the exact mistake exact binding exists to
 	// prevent.
-	resumePlan, err := deps.ResumePlanFor(step)
+	resumePlan, err := planFor(step)
 	if err != nil {
 		return Outcome{
 			Step: step, Status: status, Reason: resumeRefusal(err),
 			Detail: fmt.Sprintf("the shell was restored; its conversation was not resumed: %v", err), Err: err,
 		}
+	}
+	if step.Action == ActionPrefillResume {
+		// A session that predated this executor call may contain input the user
+		// typed. Only the shell this run just created has a known-empty input
+		// line; never paste into a converged pane on inference.
+		if status == StatusConverged {
+			return Outcome{Step: step, Status: status, Reason: ReasonAlreadyPrefilled, Detail: "the shell already exists; left its input line unchanged"}
+		}
+		if deps.PreparePrefill == nil || deps.MarkPrefilled == nil || deps.CompletePrefilled == nil {
+			return Outcome{Step: step, Status: status, Reason: ReasonResumeOff, Detail: "no prefill path is configured"}
+		}
+		writePrefill, prepareErr := deps.PreparePrefill(ctx, step)
+		if prepareErr != nil {
+			return Outcome{Step: step, Status: status, Reason: step.Reason, Detail: fmt.Sprintf("the shell was restored; its prompt was not safe to prefill: %v", prepareErr), Err: prepareErr}
+		}
+		claimed, markErr := deps.MarkPrefilled(step)
+		if markErr != nil {
+			return Outcome{Step: step, Status: status, Reason: step.Reason, Detail: fmt.Sprintf("the shell was restored; its prefill could not be recorded: %v", markErr), Err: markErr}
+		}
+		if !claimed {
+			return Outcome{Step: step, Status: StatusConverged, Reason: ReasonAlreadyPrefilled, Detail: "the resume command was already typed; left the pane unchanged"}
+		}
+		if err := writePrefill(ctx, resumePlan); err != nil {
+			return Outcome{Step: step, Status: status, Reason: step.Reason, Detail: fmt.Sprintf("the shell was restored; the prefill attempt failed and a retry will not type again because terminal delivery is uncertain: %v", err), Err: err}
+		}
+		if err := deps.CompletePrefilled(step); err != nil {
+			return Outcome{Step: step, Status: status, Reason: step.Reason, Detail: fmt.Sprintf("the resume command was typed, but recording completion failed; a retry will leave the pane unchanged: %v", err), Err: err}
+		}
+		return Outcome{Step: step, Status: StatusPrefilled, Reason: ReasonPolicyPrefill, Detail: "restored the shell and typed its resume command; press Enter to run it"}
+	}
+	if deps.ResumeAgent == nil {
+		return Outcome{Step: step, Status: status, Reason: ReasonResumeOff, Detail: "no agent resume path is configured"}
 	}
 	if err := deps.ResumeAgent(ctx, step, resumePlan); err != nil {
 		return Outcome{

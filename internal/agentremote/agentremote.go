@@ -183,6 +183,11 @@ func (c Client) SessionStatusArgs() []string { return []string{"session", "statu
 // when the caller supplied it, so the host's own `ask` policy still refuses an
 // unconfirmed remote resume rather than the viewer deciding on its behalf.
 func (c Client) SessionRestoreArgs(dryRun, agents, yes bool, shell string) []string {
+	return c.SessionRestoreArgsWithPrefill(dryRun, agents, yes, false, shell)
+}
+
+// SessionRestoreArgsWithPrefill includes the reviewable no-Enter action.
+func (c Client) SessionRestoreArgsWithPrefill(dryRun, agents, yes, prefill bool, shell string) []string {
 	args := []string{"session", "restore", "--json"}
 	if dryRun {
 		args = append(args, "--dry-run")
@@ -192,6 +197,9 @@ func (c Client) SessionRestoreArgs(dryRun, agents, yes bool, shell string) []str
 	}
 	if yes {
 		args = append(args, "--yes")
+	}
+	if prefill {
+		args = append(args, "--prefill")
 	}
 	if strings.TrimSpace(shell) != "" {
 		args = append(args, "--shell", shell)

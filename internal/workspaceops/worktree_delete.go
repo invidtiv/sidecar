@@ -75,7 +75,7 @@ func KillWorktreeSession(ctx context.Context, sessionName string) error {
 	cmd := exec.CommandContext(ctx, "tmux", "kill-session", "-t", sessionName)
 	output, err := cmd.CombinedOutput()
 	if err == nil || !SessionExists(sessionName) {
-		return nil
+		return ForgetRecoverableSession(sessionName)
 	}
 	return fmt.Errorf("close worktree session %s: %s: %w", sessionName, strings.TrimSpace(string(output)), err)
 }

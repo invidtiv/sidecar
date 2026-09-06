@@ -1,6 +1,6 @@
 # Session restore: resume the conversation, not only the shell
 
-**Status:** Planning, opened 2026-09-04. This is the controlling plan for the restore work that remains after [Herdr gap closure: agent control and cold session restoration](herdr-agent-control-and-session-restore.md) shipped M3 (exact session binding) and M4 (cold shell and layout restoration). Nothing here reopens those milestones; every slice below builds on the planner, executor, and manifest fields they left in place.
+**Status:** Implemented 2026-09-04. All six slices build on the planner, executor, and manifest fields from M3 (exact session binding) and M4 (cold shell and layout restoration) in [Herdr gap closure: agent control and cold session restoration](../active/herdr-agent-control-and-session-restore.md).
 
 ## Outcome
 
@@ -34,7 +34,7 @@ What the manual recovery relied on, per provider, is the evidence Slice 2 has to
 1. **Typing is the `ask` policy's answer.** Under `ask`, the executor types the resume command into the recreated shell and does not press Enter. The user reviews it in the shell itself, where the command will run, rather than in a modal. `sidecar create shell --type` already types without Enter; the executor reuses that primitive.
 2. **A found conversation is a candidate, never a report.** Slice 2 proposes; it never sets `agentsession.Ref.Reported`. A candidate is typed under `ask` and is never started under `auto`. This is the rule M3 wrote down and it does not move.
 3. **Sidecar owns its control clients, not the server.** A `tmux -C attach-session` client whose parent Sidecar process no longer exists is Sidecar's own leftover, and Sidecar may terminate it. Sidecar still never signals, restarts, or replaces the tmux server itself.
-4. **Never replay, but typing is not replay.** A `--run` command is still never executed by restore. Whether it may be typed is open question 1.
+4. **Never replay, but typing is not replay.** A `--run` command is still never executed by restore. Recorded `--run` commands are not typed either; this work only prepares provider resume commands.
 5. **Binding starts at the next session start.** A provider integration installed after a conversation began cannot report it; that population, and every provider without an integration, is exactly what Slice 2 exists for. No work goes into making a hook report retroactively.
 
 ## Work sequence
@@ -45,7 +45,7 @@ Slices are ordered by how much of the incident each one removes. Slices 1 and 2 
 
 - Add `ActionPrefillResume` to `internal/sessionrestore`. The planner emits it in place of `resume-agent` when the effective policy is `ask` and the shell has a reported reference; when the shell has a candidate from Slice 2 it emits it under both `ask` and `auto`.
 - The typed text is `agentcatalog.DisplayCommand` over the same argv `ResumeArgv` builds for `resume-agent`, so what the user sees is what `auto` would have run. Provider launch flags Sidecar itself adds at start (the Claude system-prompt flag, grok's approval flag) come from the same catalog entry; the plan must not grow a second place that knows them.
-- Idempotency: the tmux session name remains the key. Before typing, the executor checks that the pane's foreground process is the shell and the pane's input line is empty, and it records `restore.prefilledAt` on the shell record so a second run reports `already typed` rather than typing twice.
+- Idempotency: the tmux session name remains the key. Before typing, the executor checks that the pane's foreground process is the shell and the pane's input line is empty, and it records a durable `restore.prefillClaimedAt` before delivery and `restore.prefilledAt` after successful typing. A second run leaves the pane untouched. An uncertain delivery or an already existing pane is left for manual review rather than risking duplicate input.
 - `sidecar session restore` gains `--prefill` as the non-interactive spelling of this action, `session status` names it, and the `ask` summary the TUI shows after first frame lists which shells have a command waiting for Enter.
 
 **Exit gate:** on the reboot harness (`scripts/session-restore-reboot.sh`), a bound fake agent under `ask` ends with its exact resume command visible at the prompt, nothing executed, and a second restore run leaves the pane byte-identical.
@@ -53,7 +53,7 @@ Slices are ordered by how much of the incident each one removes. Slices 1 and 2 
 ### Slice 2 — Candidates for unbound shells (medium)
 
 - Add a candidate finder in `internal/agentsession` (or a sibling package that imports `internal/adapter` and nothing from tmux or the TUI). Input: the shell's working directory, agent kind, `createdAt`, and the moment the server was lost (Slice 3 records it). Output: zero or one candidate with the reference, a title, the last-write time, a confidence, and the reason in words.
-- Ranking: sessions whose directory equals the shell's working directory, whose last write falls inside the shell's alive window, ordered by last write nearest the loss. A single match is `likely`. Several matches in one directory for one provider are `ambiguous` and no candidate is chosen unless another shell in the same directory has already claimed the other match; the step then says which conversations are in contention and the typed command becomes the provider's own picker where one exists (`grok --resume`, `opencode` with no session flag).
+- Ranking: sessions whose directory equals the shell's working directory, whose last write falls inside the shell's alive window, ordered by last write nearest the loss. A single match is `likely`. A uniquely nearest last-write time wins, with the alternatives named in the reason. Equally near matches in one directory for one provider are `ambiguous` and no candidate is chosen unless another shell in the same directory has already claimed the other match; the step then says which conversations are in contention and the typed command becomes the provider's own picker where one exists (`grok --resume`, `opencode` with no session flag).
 - The manifest gains `agent.candidate`, additive and distinct from `agent.session`, so a v3 reader that does not know the field drops nothing that matters. `sidecar agent get` shows it under the same redaction rule as the reference: value only for the shell's own query or with `--include-session-ref`.
 - Provider order: Claude and grok first, since their stores carry per-session write times; antigravity next; opencode last, with its weaker time evidence stated in the reason.
 
@@ -76,25 +76,43 @@ Slices are ordered by how much of the incident each one removes. Slices 1 and 2 
 
 - Recreate `sidecar-ws-*` sessions for worktrees whose directory still exists, using the same eligibility marker managed shells use, so a conversation that lived in a worktree has a shell to be typed into. A worktree whose directory is gone is a refusal with the path in the reason, matching the managed-shell rule.
 - `sidecar-tp-*` splits are recreated from the saved pane layout, since the layout already names them.
-- Both go through the Slice 2 candidate finder with the worktree path as the working directory.
+- Both go through the Slice 2 candidate finder with the worktree path as the working directory. Worktree and split identities use the same manifest schema in a separate `recovery-sessions.json` so they do not become duplicate shell rows. Untyped sessions may infer a provider only when exactly one supported, readable provider store matches; incomplete or conflicting evidence leaves a plain shell.
 
 ### Slice 6 — Keep proofs off the default server (small)
 
-- `AGENTS.md` states the rule: `$TMUX` overrides `TMUX_TMPDIR`, so a proof run inside a Sidecar shell that only sets `TMUX_TMPDIR` is talking to the default server; every tmux command in a proof either runs after `unset TMUX TMUX_PANE` or passes `-S` with the private socket path. This is done in this plan's first commit.
+- `AGENTS.md` states the rule: `$TMUX` overrides `TMUX_TMPDIR`, so a proof run inside a Sidecar shell that only sets `TMUX_TMPDIR` is talking to the default server; every tmux command in a proof either runs after `unset TMUX TMUX_PANE` or passes `-S` with the private socket path. The existing repository rule is retained and the shared guard enforces it for these proofs.
 - `scripts/tmux-drive.sh` and `scripts/session-restore-reboot.sh` already unset `$TMUX`; a proof that hand-rolls its own tmux commands should source the same guard. Add `scripts/proof-tmux-env.sh`, one file that exports the private socket and unsets `$TMUX`, and point the headless-testing guide at it.
-- Harness-side guard, optional and per harness: a Claude Code PreToolUse hook in this repository that refuses a Bash command containing `kill-server` unless it also contains `-S ` or `-L ` or `unset TMUX`. Recorded here so the maintainer can decide whether one more guard is worth its noise.
+- Harness-side guard, optional and per harness: a Claude Code PreToolUse hook in this repository that could refuse a Bash command containing `kill-server` unless it also contains `-S ` or `-L ` or `unset TMUX`. Not installed by this implementation; the shared socket guard is harness-agnostic.
+
+## Reference implementation
+
+The local MIT-licensed Herdr checkout at `~/code/herdr` provides reference material in `src/persist/restore.rs`: it separates native resume plans from persisted session identity, suppresses duplicate resumes, and restores layout identities. Sidecar retains its tmux lifecycle and existing provider-reader adapters. No Herdr source is vendored or copied by this implementation.
 
 ## Verification
 
 The reboot harness is the proof surface for Slices 1 through 5; each exit gate above runs on it and none of them may inspect or mutate the default server. Slice 6 is verified by reading the changed files and by running one hand-rolled proof through the guard script.
 
-## Open questions
+The isolated gates passed against the implementation:
 
-1. May restore type a recorded `--run` command (for example `npm run dev`) the way it types a resume command? It is never executed, but a typed command is one keystroke from running.
-2. Should the `ask` summary in the TUI offer one action that presses Enter in every shell that has a typed command, or is per-shell Enter the whole point?
-3. Where does the candidate finder live once the Conversations plugin is removed ([plan](remove-conversations-plugin.md))? It must depend on `internal/adapter`, not on the plugin, whichever way that plan lands.
+| Gate | Evidence |
+|---|---|
+| `gate-prefill` | Exact reported resume command, no Enter, durable claim/completion retained, byte-identical second restore. |
+| `gate-candidates` | Real Grok store fixtures: nearest candidate, tied picker, alternatives explained, never reported or executed under auto. |
+| `gate-stuck` | Real exit-pending server: live-parent refusal before signalling, orphan cleanup, replacement server and restored shells. |
+| `gate-worktrees` | Worktree and saved-layout split recreation, candidate prefill once, missing-directory refusal, convergent second restore. |
+| Shared proof guard | Hand-rolled private create/list/cleanup plus unsafe-directory refusal checks. |
+
+Provider-specific evidence uses fixtures for Claude, Grok, Antigravity CLI, and OpenCode rather than live runs of every provider. OpenCode's legacy JSON store is excluded because it cannot prove exact working-directory ownership. Real private tmux tests cover Bash and Zsh prompt safety, including existing input. Interrupted or uncertain prefill delivery remains manual; the durable claim prevents duplicate typing. Sol agents independently reviewed all implementation slices in batches, including shared lifecycle and proof safety. `go test ./...` passed on the integrated rerun; the existing OpenCode ordering harness had one timing failure under parallel validation and passed its focused rerun. Final marker-lifetime changes passed the affected package tests. `go build ./...` and `make lint` passed.
+
+## Implementation decisions and deferred options
+
+1. Recorded `--run` commands remain untouched. Only provider resume commands are eligible for prefill.
+2. Confirmation stays per shell. There is no bulk action that presses Enter across prefilled shells.
+3. The candidate finder lives in `internal/agentsession` and depends on provider readers in `internal/adapter`, independently of the Conversations plugin and its [removal plan](../active/remove-conversations-plugin.md).
 4. Provider "active session" registries (grok's `active_sessions.json` was empty at the loss) are not evidence this plan relies on. Revisit if one proves reliable.
 
 ## Changelog
 
 - 2026-09-04: opened after the default tmux server was lost to a mis-scoped proof; recovery performed by hand and recorded above as the acceptance case.
+
+- 2026-09-04: completed all six slices with isolated recovery gates and batched independent Sol review.

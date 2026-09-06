@@ -13,6 +13,7 @@ import (
 	"github.com/marcus/sidecar/internal/sessionrestore"
 	"github.com/marcus/sidecar/internal/startuptrace"
 	"github.com/marcus/sidecar/internal/tmuxenv"
+	"github.com/marcus/sidecar/internal/tmuxserver"
 )
 
 // Automatic cold restore, after the first frame.
@@ -127,10 +128,17 @@ func runSessionRestoreWork(ctx context.Context, restoreCfg sessionrestore.Config
 		StateDir:  config.StateDir(),
 		Namespace: tmuxenv.Namespace(),
 	}
+	if status, err := tmuxserver.Inspect(ctx); err != nil {
+		return SessionRestoredMsg{Err: err}
+	} else if status.State == tmuxserver.StateExitPending {
+		if _, err := tmuxserver.RecoverExitPending(ctx, status); err != nil {
+			return SessionRestoredMsg{Err: err}
+		}
+	}
 	// Startup follows configuration rather than an explicit request, and it is
 	// never Confirmed: an `auto` policy is the user's standing authorization and
 	// resumes, while `ask` produces a pending list and runs nothing.
-	in, err := collector.Collect(ctx, restoreCfg, sessionrestore.Request{Startup: true})
+	in, err := collector.Collect(ctx, restoreCfg, sessionrestore.Request{Startup: true, RecordCandidates: true})
 	if err != nil {
 		return SessionRestoredMsg{Err: err}
 	}
@@ -178,6 +186,7 @@ func summariseRestore(msg SessionRestoredMsg) (title, body string, targets []not
 	counts := msg.Result.Counts()
 	restored := counts[sessionrestore.StatusRestored] + counts[sessionrestore.StatusResumed]
 	resumed := counts[sessionrestore.StatusResumed]
+	prefilled := counts[sessionrestore.StatusPrefilled]
 	failed := counts[sessionrestore.StatusFailed]
 	refused := counts[sessionrestore.StatusRefused]
 
@@ -191,6 +200,9 @@ func summariseRestore(msg SessionRestoredMsg) (title, body string, targets []not
 	}
 	if resumed > 0 {
 		parts = append(parts, fmt.Sprintf("%s resumed", plural(resumed, "conversation")))
+	}
+	if prefilled > 0 {
+		parts = append(parts, fmt.Sprintf("%s waiting for Enter", plural(prefilled, "command")))
 	}
 	if refused > 0 {
 		parts = append(parts, fmt.Sprintf("%s refused", plural(refused, "shell")))
@@ -206,7 +218,7 @@ func summariseRestore(msg SessionRestoredMsg) (title, body string, targets []not
 	var lines []string
 	for _, o := range msg.Result.Outcomes {
 		switch o.Status {
-		case sessionrestore.StatusRestored, sessionrestore.StatusResumed, sessionrestore.StatusRefused, sessionrestore.StatusFailed:
+		case sessionrestore.StatusRestored, sessionrestore.StatusResumed, sessionrestore.StatusPrefilled, sessionrestore.StatusRefused, sessionrestore.StatusFailed:
 			label := o.Step.Name
 			if label == "" {
 				label = o.Step.Session

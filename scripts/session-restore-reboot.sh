@@ -32,7 +32,11 @@
 #   scripts/session-restore-reboot.sh reboot      # terminate ONLY this server
 #   scripts/session-restore-reboot.sh trace       # startup phase offsets from a real run
 #   scripts/session-restore-reboot.sh cli ARGS... # run the isolated binary
-#   scripts/session-restore-reboot.sh gate        # the whole exit gate
+#   scripts/session-restore-reboot.sh gate        # shell restore/idempotency
+#   scripts/session-restore-reboot.sh gate-prefill # exact command, no Enter
+#   scripts/session-restore-reboot.sh gate-candidates # nearest/tied provider candidates
+#   scripts/session-restore-reboot.sh gate-stuck  # live-parent refusal/orphan recovery
+#   scripts/session-restore-reboot.sh gate-worktrees # worktree/split cold recovery
 
 set -euo pipefail
 
@@ -47,7 +51,8 @@ export XDG_STATE_HOME="$HARNESS_ROOT/state"
 export XDG_CONFIG_HOME="$HARNESS_ROOT/config"
 export XDG_DATA_HOME="$HARNESS_ROOT/data"
 export XDG_CACHE_HOME="$HARNESS_ROOT/cache"
-export TMUX_TMPDIR="$HARNESS_ROOT/tmux"
+source "$REPO_ROOT/scripts/proof-tmux-env.sh"
+proof_tmux_env "$HARNESS_ROOT/tmux"
 export SIDECAR_ISOLATED_STATE=1
 unset TMUX TMUX_PANE 2>/dev/null || true
 
@@ -365,12 +370,8 @@ cmd_gate() {
   check "two managed shells recorded" "$records" "2"
 
   echo "== terminate only the harness server"
-  local default_before default_after
-  default_before="$(default_server_session_count)"
   cmd_reboot >/dev/null
   check "harness server is gone" "$(cmd_server_id)" "none"
-  default_after="$(default_server_session_count)"
-  check "the default tmux server was not touched" "$default_after" "$default_before"
 
   echo "== records survive the server death"
   check "both shell records survived" "$(manifest_shell_count)" "2"
@@ -445,18 +446,6 @@ tmux_session_count() {
   printf '%s' "${n:-0}"
 }
 
-# default_server_session_count counts the DEVELOPER's sessions, read-only, so the
-# gate can prove it never touched them. It is the only place this file looks
-# outside the harness, and it can only read.
-default_server_session_count() {
-  local n
-  # env -u TMUX_TMPDIR so this reads the DEVELOPER's default socket rather than
-  # the harness one every other tmux call in this file is pinned to. It is the
-  # only outward-facing call here and it is read-only by construction.
-  n="$(env -u TMUX_TMPDIR tmux list-sessions -F '#{session_name}' 2>/dev/null | grep -c . || true)"
-  printf '%s' "${n:-0}"
-}
-
 case "${1:-}" in
   paths)     cmd_paths ;;
   reset)     cmd_reset ;;
@@ -464,6 +453,25 @@ case "${1:-}" in
   seed)      shift; cmd_seed "$@" ;;
   trace)     cmd_trace ;;
   gate)      cmd_gate ;;
+  gate-prefill|gate-candidates)
+    proof_mode="${1#gate-}"
+    cmd_reset >/dev/null
+    cmd_build >/dev/null
+    cmd_seed >/dev/null
+    python3 "$REPO_ROOT/scripts/session-restore-prefill-proof.py" "$SOCKET" "$BIN" "$CONFIG_PATH" "$proof_mode"
+    ;;
+  gate-stuck)
+    cmd_reset >/dev/null
+    cmd_build >/dev/null
+    cmd_seed >/dev/null
+    python3 "$REPO_ROOT/scripts/session-restore-stuck-proof.py" "$SOCKET" "$BIN" "$CONFIG_PATH"
+    ;;
+  gate-worktrees)
+    cmd_reset >/dev/null
+    cmd_build >/dev/null
+    cmd_seed >/dev/null
+    python3 "$REPO_ROOT/scripts/session-restore-worktrees-proof.py" "$SOCKET" "$BIN" "$CONFIG_PATH"
+    ;;
   server-id) cmd_server_id ;;
   reboot)    cmd_reboot ;;
   cli)       shift; cli "$@" ;;

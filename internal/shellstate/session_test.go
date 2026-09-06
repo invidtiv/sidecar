@@ -37,6 +37,36 @@ func reportRef(value, generation string) agentsession.Ref {
 	}
 }
 
+func TestRecordCandidateIsIdempotentClearableAndNeverReported(t *testing.T) {
+	path := seedShell(t, "sidecar-sh-p-1")
+	id := Identity{TmuxName: "sidecar-sh-p-1", Namespace: testNS}
+	candidate := &agentsession.Candidate{
+		Ref:   agentsession.Ref{Kind: agentsession.RefID, Value: "candidate", Source: "discovery", Reported: true, ReportedAt: time.Now()},
+		Title: "work", Confidence: agentsession.CandidateLikely, Reason: "nearest",
+	}
+	changed, err := RecordCandidateAtPath(path, id, candidate)
+	if err != nil || !changed {
+		t.Fatalf("record = (%v, %v), want changed", changed, err)
+	}
+	defs, err := ListAtPath(path)
+	if err != nil || len(defs) != 1 || defs[0].Agent == nil || defs[0].Agent.Candidate == nil {
+		t.Fatalf("definitions = (%#v, %v)", defs, err)
+	}
+	if defs[0].Agent.Candidate.Ref.Reported || !defs[0].Agent.Candidate.Ref.ReportedAt.IsZero() {
+		t.Fatalf("candidate retained report authority: %#v", defs[0].Agent.Candidate.Ref)
+	}
+	before, _ := os.ReadFile(path)
+	changed, err = RecordCandidateAtPath(path, id, defs[0].Agent.Candidate)
+	after, _ := os.ReadFile(path)
+	if err != nil || changed || string(before) != string(after) {
+		t.Fatalf("repeat = (%v, %v), manifest changed=%v", changed, err, string(before) != string(after))
+	}
+	changed, err = RecordCandidateAtPath(path, id, nil)
+	if err != nil || !changed {
+		t.Fatalf("clear = (%v, %v), want changed", changed, err)
+	}
+}
+
 // TestAHookCanReportRotateAndClearAndOnlyTheLiveGenerationWins is the M3 exit
 // gate driven through the real persistence path: a fake hook reports, rotates,
 // clears, and attempts a stale late update, and the manifest agrees with the

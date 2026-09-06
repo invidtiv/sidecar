@@ -425,6 +425,9 @@ type AgentBinding struct {
 	// Session is the exact native conversation reference, when an official
 	// integration has reported one.
 	Session *agentsession.Ref `json:"session,omitempty"`
+	// Candidate is a provider-store match proposed for human review. Its Ref is
+	// never Reported and therefore never authorizes automatic resume.
+	Candidate *agentsession.Candidate `json:"candidate,omitempty"`
 }
 
 // RestoreState is the schema-v3 restore eligibility and policy for one shell.
@@ -439,6 +442,19 @@ type RestoreState struct {
 	LastSeenServer string `json:"lastSeenServer,omitempty"`
 	// LastSeenAliveAt is when that confirmation happened.
 	LastSeenAliveAt time.Time `json:"lastSeenAliveAt,omitzero"`
+	// ServerLostAt is stamped once, when liveness evidence first proves that the
+	// server hosting this shell disappeared or was replaced.
+	ServerLostAt time.Time `json:"serverLostAt,omitzero"`
+	// LastAgentActivity is the last privacy-safe activity evidence available at
+	// the loss transition. It is presentation context, never restore authority.
+	LastAgentActivity string `json:"lastAgentActivity,omitempty"`
+	// PrefilledAt records the at-most-once transition before Sidecar types a
+	// resume command. A retry therefore cannot append the command twice.
+	PrefilledAt time.Time `json:"prefilledAt,omitzero"`
+	// PrefillClaimedAt is written before terminal input. If Sidecar exits in the
+	// narrow interval before PrefilledAt is written, a retry refuses to type a
+	// possibly duplicated command and reports the incomplete attempt honestly.
+	PrefillClaimedAt time.Time `json:"prefillClaimedAt,omitzero"`
 }
 
 // Tombstone is a forgotten shell definition kept so RestoreAtPath can move it

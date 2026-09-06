@@ -857,6 +857,7 @@ func (m *Model) launchCreatedWorktree(project Project, plan *workspaceops.Worktr
 	}
 	spec := workspaceops.AgentLaunchSpec{
 		SessionName: workspaceops.WorktreeSessionName(record.Path, record.Name), WorkDir: record.Path,
+		DisplayName: record.Name, AgentType: plan.AgentType,
 		TaskID: plan.TaskID, Env: workspaceops.BuildEnvOverrides(plan.MainWorktree), StartAgent: false,
 	}
 	m.createBusy = true

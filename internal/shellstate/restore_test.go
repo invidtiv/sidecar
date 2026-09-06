@@ -209,6 +209,35 @@ func TestObserveLiveWritesOnlyOnTransition(t *testing.T) {
 	}
 }
 
+func TestObserveRestoredLivePreservesPrefillDeliveryMarker(t *testing.T) {
+	claimed := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	completed := claimed.Add(time.Second)
+	for _, tc := range []struct {
+		name      string
+		completed time.Time
+	}{{"completed delivery", completed}, {"uncertain claim only", time.Time{}}} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := liveShell("sh-a")
+			a.Restore = &RestoreState{Eligible: true, LastSeenServer: "pid=100", ServerLostAt: claimed.Add(-time.Minute), PrefillClaimedAt: claimed, PrefilledAt: tc.completed}
+			path := writeManifest(t, a)
+			if _, err := ObserveRestoredLiveAtPath(path, "pid=200", []Identity{idOf(a)}, completed.Add(time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			got := readShells(t, path)[0].Restore
+			if !got.PrefillClaimedAt.Equal(claimed) || !got.PrefilledAt.Equal(tc.completed) || got.LastSeenServer != "pid=200" || !got.ServerLostAt.IsZero() {
+				t.Fatalf("restored observation = %+v", got)
+			}
+			if _, err := ObserveLiveAtPath(path, "pid=300", []Identity{idOf(a)}, completed.Add(2*time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			got = readShells(t, path)[0].Restore
+			if !got.PrefillClaimedAt.IsZero() || !got.PrefilledAt.IsZero() {
+				t.Fatalf("ordinary new lifetime retained prefill markers: %+v", got)
+			}
+		})
+	}
+}
+
 // TestObserveLiveIgnoresAnUnknownServer pins that "no observation" never becomes
 // a marker: a stored eligibility that names no server could never be compared
 // against anything later.

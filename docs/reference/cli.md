@@ -3107,12 +3107,14 @@ Executes the plan `session status` prints.
 
 Shells are recreated under their own tmux session names and existing working directories; no --run command, dev server, or test watcher is ever replayed. A missing working directory is a refusal, never a fallback to another directory, and a tmux session name held by something else is a refusal too — Sidecar never closes a live session to take its name.
 
-Conversations are resumed only with --agents, only from an exact reference an official integration reported, and only when the policy allows it. Under the default ask policy a non-interactive resume additionally requires --yes.
+--prefill types an eligible resume command at a verified empty shell prompt without pressing Enter. Conversations are executed only with --agents, only from an exact reference an official integration reported, and only when the policy allows it. Under the default ask policy a non-interactive resume additionally requires --yes. Startup prepares commands under ask. A provider-store candidate can only be typed, even under auto; tied candidates use the provider picker where supported. --prefill cannot be combined with --agents or --yes.
 
-The tmux session name is the idempotency key, so running this twice does not produce two shells or two agents, and a run interrupted at any point converges when it is run again. Nothing here ever deletes a shell record: a failure is reported and left retryable.
+The tmux session name is the idempotency key, so running this twice does not produce two shells or two agents. Prefill only writes into a fresh shell whose input is verified empty; an existing pane or an uncertain prior delivery is left unchanged for manual review. No --run command is typed or executed.
+
+If tmux is shutting down behind orphaned Sidecar control clients, restore terminates only those verified clients and waits for the server to exit on its own. A client with a live parent prevents recovery. The server itself is never signalled by restore. Nothing here deletes a shell record.
 
 ```
-Usage: sidecar session restore [--dry-run] [--shell TARGET] [--agents] [--yes] [--host ID] [--json]
+Usage: sidecar session restore [--dry-run] [--shell TARGET] [--prefill | --agents --yes] [--host ID] [--json]
 ```
 
 **Options:**
@@ -3120,6 +3122,7 @@ Usage: sidecar session restore [--dry-run] [--shell TARGET] [--agents] [--yes] [
 - `--dry-run`: Print the plan and exit without creating or starting anything
 - `--shell TARGET`: Restore only this shell, by tmux session name or display name
 - `--agents`: Also resume eligible exact agent conversations
+- `--prefill`: Type eligible resume commands without pressing Enter
 - `--yes`: Confirm agent resumes non-interactively when the policy is ask
 - `--host ID`: Restore on a registered remote host instead of this machine
 - `--json`: Write the stable structured document to stdout
@@ -3137,6 +3140,8 @@ Usage: sidecar session restore [--dry-run] [--shell TARGET] [--agents] [--yes] [
 ```bash
 # Recreate eligible shells, no agents
 sidecar session restore
+# Type resume commands for review
+sidecar session restore --prefill
 # See exactly what would happen first
 sidecar session restore --agents --dry-run
 # Recreate one shell and resume its conversation
@@ -3149,7 +3154,7 @@ Report what a cold restore would do, without doing it
 
 Reads Sidecar's managed shell records and the current tmux inventory and prints the ordered restore plan.
 
-Every managed shell is named as reattach, recreate-shell, resume-agent, manual, skip, or refuse, with the reason and whether performing it would run an agent process. This command is read-only: it creates nothing, starts nothing, and does not require a running Sidecar.
+Every recoverable session is named as reattach, recreate-shell, prefill-resume, resume-agent, manual, skip, or refuse, with the reason and whether performing it would run an agent process. This command is read-only: it creates nothing, starts nothing, and does not require a running Sidecar. A stuck server is reported with the Sidecar control clients holding it open; status never terminates them.
 
 ```
 Usage: sidecar session status [--host ID] [--json]

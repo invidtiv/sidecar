@@ -538,3 +538,13 @@ func TestParseResumeMode(t *testing.T) {
 		}
 	}
 }
+
+func TestAskStartupPrefillsReportedConversationWithoutExecutingIt(t *testing.T) {
+	in := baseInput(shell("a", withAgent("codex", "sess-1", true)))
+	in.Config.ResumeAgents = ResumeAsk
+	in.Request = Request{Startup: true}
+	step := only(t, Build(in))
+	if step.Action != ActionPrefillResume || step.Agent == nil || !step.Agent.Prefill || step.ExternalExecution {
+		t.Fatalf("step = %+v, want no-Enter prefill", step)
+	}
+}

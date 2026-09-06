@@ -132,3 +132,24 @@ func TestMarkRestoreEligibleWritesOnlyOnTransition(t *testing.T) {
 		t.Fatal("repeated marking of an unchanged fact rewrote shells.json")
 	}
 }
+
+func TestNestedShellLossPreservesManifestAndActivity(t *testing.T) {
+	m := newReapManifest(t)
+	const name = "sidecar-sh-one"
+	dir := t.TempDir()
+	p := &Plugin{
+		shellManifest:   m,
+		worktrees:       []*Worktree{{Path: dir}},
+		nestedByWorkDir: map[string][]*ShellSession{dir: {{TmuxName: name, Agent: &Agent{Type: AgentClaude}}}},
+	}
+	if !p.dropNestedShell(name, shellstate.ServerGone()) {
+		t.Fatal("nested shell not found")
+	}
+	def := m.FindShell(name)
+	if def == nil || def.Restore == nil || def.Restore.ServerLostAt.IsZero() || def.Restore.LastAgentActivity != "was running claude" {
+		t.Fatalf("lost nested record or evidence: %+v", def)
+	}
+	if len(m.Tombstones) != 0 {
+		t.Fatal("server loss tombstoned nested shell")
+	}
+}

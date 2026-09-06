@@ -128,6 +128,18 @@ func (s ServerState) Running() bool { return s.running }
 // It returns the number of records it changed, which is zero on the overwhelming
 // majority of calls.
 func ObserveLiveAtPath(path, serverID string, live []Identity, now time.Time) (int, error) {
+	return observeLiveAtPath(path, serverID, live, now, false)
+}
+
+// ObserveRestoredLiveAtPath records the new server reached by a recovery
+// transaction while retaining its durable prefill delivery marker. Ordinary
+// live observations intentionally clear that marker for a genuinely new
+// lifetime.
+func ObserveRestoredLiveAtPath(path, serverID string, live []Identity, now time.Time) (int, error) {
+	return observeLiveAtPath(path, serverID, live, now, true)
+}
+
+func observeLiveAtPath(path, serverID string, live []Identity, now time.Time, preservePrefill bool) (int, error) {
 	serverID = strings.TrimSpace(serverID)
 	if serverID == "" || len(live) == 0 {
 		// No observed server means no evidence worth recording. Writing "eligible
@@ -161,7 +173,18 @@ func ObserveLiveAtPath(path, serverID string, live []Identity, now time.Time) (i
 				next.Eligible = true
 				next.LastSeenServer = serverID
 				next.LastSeenAliveAt = now
+				next.ServerLostAt = time.Time{}
+				next.LastAgentActivity = ""
+				if !preservePrefill {
+					next.PrefilledAt = time.Time{}
+					next.PrefillClaimedAt = time.Time{}
+				}
 				def.Restore = &next
+				if def.Agent != nil && def.Agent.Candidate != nil {
+					agent := *def.Agent
+					agent.Candidate = nil
+					def.Agent = &agent
+				}
 				m.Shells[i] = def
 				changed++
 				break
@@ -204,7 +227,7 @@ func ObserveLiveAtPath(path, serverID string, live []Identity, now time.Time) (i
 // The CreatedAt fence from RemoveIfUnchangedAtPath is preserved for the
 // tombstone branch: a record rewritten since it was observed is a different
 // shell wearing a reused name.
-func ForgetOrPreserveAtPath(path string, id Identity, observedAt time.Time, server ServerState) (ReapOutcome, error) {
+func ForgetOrPreserveAtPath(path string, id Identity, observedAt time.Time, server ServerState, activityEvidence ...string) (ReapOutcome, error) {
 	if strings.TrimSpace(id.TmuxName) == "" {
 		return ReapAbsent, &Error{Kind: KindValidation, Msg: "shell session name is required"}
 	}
@@ -244,15 +267,15 @@ func ForgetOrPreserveAtPath(path string, id Identity, observedAt time.Time, serv
 			// tmux said there is no server. The shell did not exit; its host
 			// did, which is the case a cold restore exists to undo.
 			outcome = ReapPreserved
-			if def.Restore != nil && def.Restore.Eligible {
-				return errRestoreUnchanged{} // already a candidate; no write
+			evidence := ""
+			if len(activityEvidence) > 0 {
+				evidence = activityEvidence[0]
 			}
-			next := RestoreState{}
-			if def.Restore != nil {
-				next = *def.Restore
+			next, changed := RecordServerLoss(def, time.Now().UTC(), evidence)
+			if !changed {
+				return errRestoreUnchanged{}
 			}
-			next.Eligible = true
-			def.Restore = &next
+			def = next
 			m.Shells[idx] = def
 			return nil
 
@@ -270,15 +293,15 @@ func ForgetOrPreserveAtPath(path string, id Identity, observedAt time.Time, serv
 			// It was last alive in a different server from the one running now,
 			// so it went away with that one.
 			outcome = ReapPreserved
-			if def.Restore != nil && def.Restore.Eligible {
+			evidence := ""
+			if len(activityEvidence) > 0 {
+				evidence = activityEvidence[0]
+			}
+			next, changed := RecordServerLoss(def, time.Now().UTC(), evidence)
+			if !changed {
 				return errRestoreUnchanged{}
 			}
-			next := RestoreState{}
-			if def.Restore != nil {
-				next = *def.Restore
-			}
-			next.Eligible = true
-			def.Restore = &next
+			def = next
 			m.Shells[idx] = def
 			return nil
 		}
@@ -300,6 +323,73 @@ func ForgetOrPreserveAtPath(path string, id Identity, observedAt time.Time, serv
 		return ReapAbsent, err
 	}
 	return outcome, nil
+}
+
+// MarkRestorePrefilledAtPath claims the one permitted prefill for a shell.
+// The claim is persisted before terminal input so a crash can never cause a
+// retry to type a second command into the same prompt.
+func MarkRestorePrefilledAtPath(path string, id Identity, at time.Time) (bool, error) {
+	changed := false
+	err := mutateManifestLive(path, false, func(m *manifest) error {
+		for i := range m.Shells {
+			if m.Shells[i].TmuxName != id.TmuxName || !sameNamespace(m.Shells[i].Namespace, id.Namespace) {
+				continue
+			}
+			def := m.Shells[i]
+			if def.Restore != nil && (!def.Restore.PrefilledAt.IsZero() || !def.Restore.PrefillClaimedAt.IsZero()) {
+				return errRestoreUnchanged{}
+			}
+			next := RestoreState{}
+			if def.Restore != nil {
+				next = *def.Restore
+			}
+			if at.IsZero() {
+				at = time.Now()
+			}
+			next.PrefillClaimedAt = at.UTC()
+			def.Restore = &next
+			m.Shells[i] = def
+			changed = true
+			return nil
+		}
+		return &Error{Kind: KindNotFound, Msg: "managed shell not found"}
+	})
+	if _, ok := err.(errRestoreUnchanged); ok {
+		return false, nil
+	}
+	return changed, err
+}
+
+// CompleteRestorePrefillAtPath records that the claimed terminal write
+// succeeded. It never creates a claim by itself.
+func CompleteRestorePrefillAtPath(path string, id Identity, at time.Time) error {
+	err := mutateManifestLive(path, false, func(m *manifest) error {
+		for i := range m.Shells {
+			if m.Shells[i].TmuxName != id.TmuxName || !sameNamespace(m.Shells[i].Namespace, id.Namespace) {
+				continue
+			}
+			def := m.Shells[i]
+			if def.Restore == nil || def.Restore.PrefillClaimedAt.IsZero() {
+				return &Error{Kind: KindValidation, Msg: "restore prefill was not claimed"}
+			}
+			if !def.Restore.PrefilledAt.IsZero() {
+				return errRestoreUnchanged{}
+			}
+			next := *def.Restore
+			if at.IsZero() {
+				at = time.Now()
+			}
+			next.PrefilledAt = at.UTC()
+			def.Restore = &next
+			m.Shells[i] = def
+			return nil
+		}
+		return &Error{Kind: KindNotFound, Msg: "managed shell not found"}
+	})
+	if _, ok := err.(errRestoreUnchanged); ok {
+		return nil
+	}
+	return err
 }
 
 // SetRestorePolicyAtPath sets one shell's per-shell restore policy.

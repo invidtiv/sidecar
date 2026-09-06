@@ -56,6 +56,10 @@ type AgentState struct {
 	// SessionRef reports whether this shell is bound to an exact provider
 	// conversation. It is absent when there is no binding.
 	SessionRef *SessionRef `json:"sessionRef,omitempty"`
+	// Candidate is a provider-store match for a shell without an exact reported
+	// binding. Value, title, and reason follow SessionRef's redaction rule because
+	// provider titles and explanatory alternatives may themselves contain IDs.
+	Candidate *SessionCandidate `json:"candidate,omitempty"`
 }
 
 // SessionRef is what an agent query says about a shell's exact conversation
@@ -71,6 +75,18 @@ type SessionRef struct {
 	Kind     string `json:"kind,omitempty"`
 	Reported bool   `json:"reported"`
 	Value    string `json:"value,omitempty"`
+}
+
+// SessionCandidate is the stable agent-query projection of a recovery
+// candidate. Reported is intentionally absent: candidates are never reports.
+type SessionCandidate struct {
+	Kind        string    `json:"kind,omitempty"`
+	Value       string    `json:"value,omitempty"`
+	Title       string    `json:"title,omitempty"`
+	LastWriteAt time.Time `json:"lastWriteAt,omitzero"`
+	Confidence  string    `json:"confidence"`
+	Reason      string    `json:"reason"`
+	Picker      bool      `json:"picker,omitempty"`
 }
 
 // Agent is the stable result shared by list, get, and start.

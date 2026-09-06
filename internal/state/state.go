@@ -533,6 +533,23 @@ func InitWithDir(dir string) error {
 	return Load()
 }
 
+// ReadPaneLayoutsWithDir reads persisted pane layouts without changing the
+// process-global UI state. Headless recovery uses this before any TUI exists.
+func ReadPaneLayoutsWithDir(dir string) (map[string]*PaneLayoutJSON, map[string]*PaneLayoutJSON, error) {
+	data, err := os.ReadFile(filepath.Join(dir, "state.json"))
+	if os.IsNotExist(err) {
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	var saved State
+	if err := json.Unmarshal(data, &saved); err != nil {
+		return nil, nil, err
+	}
+	return cloneSessionsPaneLayouts(saved.SessionsPaneLayouts), workspacePaneLayouts(&saved), nil
+}
+
 // Load reads state from disk.
 func Load() error {
 	mu.Lock()
@@ -1309,9 +1326,51 @@ func GetSessionsPaneLayouts() map[string]*PaneLayoutJSON {
 	if current == nil || len(current.SessionsPaneLayouts) == 0 {
 		return nil
 	}
-	out := make(map[string]*PaneLayoutJSON, len(current.SessionsPaneLayouts))
-	for id, layout := range current.SessionsPaneLayouts {
+	return cloneSessionsPaneLayouts(current.SessionsPaneLayouts)
+}
+
+func cloneSessionsPaneLayouts(layouts map[string]*PaneLayoutJSON) map[string]*PaneLayoutJSON {
+	if len(layouts) == 0 {
+		return nil
+	}
+	out := make(map[string]*PaneLayoutJSON, len(layouts))
+	for id, layout := range layouts {
 		out[id] = clonePaneLayout(layout)
+	}
+	return out
+}
+
+// GetWorkspacePaneLayouts returns copies of every project-surface pane tree,
+// keyed by its persisted surface identity. Recovery uses this alongside the
+// global Sessions layouts because either surface may have been the last writer.
+func GetWorkspacePaneLayouts() map[string]*PaneLayoutJSON {
+	mu.RLock()
+	defer mu.RUnlock()
+	if current == nil {
+		return nil
+	}
+	return workspacePaneLayouts(current)
+}
+
+func workspacePaneLayouts(saved *State) map[string]*PaneLayoutJSON {
+	out := map[string]*PaneLayoutJSON{}
+	for _, workspace := range saved.Workspace {
+		for surface, layout := range workspace.PaneLayouts {
+			if cloned := clonePaneLayout(layout); cloned != nil {
+				out[surface] = cloned
+			}
+		}
+		if len(workspace.PaneLayouts) == 0 && workspace.PaneLayout != nil && workspace.PaneLayout.Surface != "" {
+			if cloned := clonePaneLayout(workspace.PaneLayout); cloned != nil {
+				if cloned.Split != nil {
+					cloned.Open = true
+				}
+				out[cloned.Surface] = cloned
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }

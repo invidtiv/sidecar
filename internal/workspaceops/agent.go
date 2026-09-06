@@ -262,9 +262,9 @@ func (ExecTmuxRunner) Run(ctx context.Context, args ...string) ([]byte, error) {
 }
 
 type AgentLaunchSpec struct {
-	SessionName, WorkDir, AgentCommand, TaskID string
-	Env                                        map[string]string
-	StartAgent                                 bool
+	SessionName, WorkDir, DisplayName, AgentType, AgentCommand, TaskID string
+	Env                                                                map[string]string
+	StartAgent                                                         bool
 }
 
 type AgentLaunchResult struct {
@@ -273,17 +273,17 @@ type AgentLaunchResult struct {
 }
 
 func LaunchWorktreeSession(ctx context.Context, spec AgentLaunchSpec) (AgentLaunchResult, error) {
-	return launchWorktreeSession(ctx, spec, ExecTmuxRunner{}, tty.NewSession)
+	return launchWorktreeSession(ctx, spec, ExecTmuxRunner{}, tty.NewSession, RecordRecoverableSession)
 }
 
 func LaunchWorktreeSessionWithRunner(ctx context.Context, spec AgentLaunchSpec, runner TmuxRunner) (AgentLaunchResult, error) {
 	return launchWorktreeSession(ctx, spec, runner, func(args ...string) error {
 		_, err := runner.Run(ctx, args...)
 		return err
-	})
+	}, func(string, string, string, string) error { return nil })
 }
 
-func launchWorktreeSession(ctx context.Context, spec AgentLaunchSpec, runner TmuxRunner, newSession func(...string) error) (AgentLaunchResult, error) {
+func launchWorktreeSession(ctx context.Context, spec AgentLaunchSpec, runner TmuxRunner, newSession func(...string) error, record func(string, string, string, string) error) (AgentLaunchResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -294,6 +294,9 @@ func launchWorktreeSession(ctx context.Context, spec AgentLaunchSpec, runner Tmu
 	if _, err := runner.Run(ctx, "has-session", "-t", spec.SessionName); err == nil {
 		result.Reconnected = true
 		result.PaneID = paneIDWithRunner(ctx, spec.SessionName, runner)
+		if err := record(spec.SessionName, spec.WorkDir, spec.DisplayName, spec.AgentType); err != nil {
+			return result, err
+		}
 		return result, nil
 	}
 	if err := newSession("new-session", "-d", "-s", spec.SessionName, "-c", spec.WorkDir); err != nil {
@@ -336,6 +339,9 @@ func launchWorktreeSession(ctx context.Context, spec AgentLaunchSpec, runner Tmu
 		}
 	}
 	result.PaneID = paneIDWithRunner(ctx, spec.SessionName, runner)
+	if err := record(spec.SessionName, spec.WorkDir, spec.DisplayName, spec.AgentType); err != nil {
+		return failCreatedSession(fmt.Errorf("record recovery identity: %w", err))
+	}
 	return result, nil
 }
 

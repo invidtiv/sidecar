@@ -262,7 +262,7 @@ binary refuse to start rather than touch the real tree). Note that
 `TMUX_TMPDIR`. A proof that only sets `TMUX_TMPDIR` is therefore talking to the
 default server, and `TMUX_TMPDIR=$SOCK tmux kill-server` kills every live shell
 (this happened on 2026-09-04; see
-`docs/plans/active/session-restore-resume-conversations.md`). Every tmux command
+`docs/plans/implemented/session-restore-resume-conversations.md`). Every tmux command
 in a proof runs after `unset TMUX TMUX_PANE`, or passes `-S` with the private
 socket path. `tmux-drive.sh` does this for you; a hand-rolled proof must do it
 itself, and must do it on the cleanup line too, not only on the setup line.
