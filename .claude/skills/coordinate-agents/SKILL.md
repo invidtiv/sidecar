@@ -1,6 +1,6 @@
 ---
 name: coordinate-agents
-description: Drive another Sidecar-managed agent from a shell — discover targets, create the layout, start a provider, prompt and wait, read before sending keys, and stay out of the user's way. Use when you need a second agent to review a diff, run a long task in parallel, or when a coordinated agent comes back blocked. Covers sidecar agent list/get/start/prompt/wait/read/send-keys and the refusal codes they return.
+description: Drive another Sidecar-managed agent from a shell — discover targets, create the layout, start a provider, prompt and wait, read before sending keys, broadcast to every live agent, and stay out of the user's way. Use when you need a second agent to review a diff, run a long task in parallel, tell every live agent something, or when a coordinated agent comes back blocked. Covers sidecar agent list/get/start/prompt/wait/read/send-keys/broadcast and the refusal codes they return.
 user-invocable: false
 ---
 
@@ -119,6 +119,18 @@ Keys are named, not typed: `enter`, `esc`, `tab`, `space`, `backspace`, `delete`
 `send-keys` is for answering a UI. **Prompt text goes through `agent prompt`** — it is bracketed-paste aware and submits correctly; a string of characters through `send-keys` is not the same thing.
 
 With two or more positional arguments the first is the target. With exactly one, the key goes to `SIDECAR_SHELL`.
+
+## Tell every agent something
+
+```bash
+sidecar agent broadcast "Code freeze on main until td-1a2b3c lands; hold pushes. Details: comms peek msg_01J9…" --json
+```
+
+Default recipients are the live agents in your project, minus you. `--all` reaches every registered project on this machine. `--dry-run --json` prints the plan and sends nothing.
+
+Receipts, not acknowledgements: each row is `submitted`, `skipped`, or `unknown`. There is no `--wait`; use `agent wait` per target if you need them to settle.
+
+Durable content belongs in comms. The broadcast carries a one-line summary plus the message id, so agents that were not live still have a place to read it. `--host` is not in this slice; `--all` means this machine.
 
 ## Reading the output
 

@@ -30,6 +30,12 @@ type cliAgentTerminal struct {
 	submitted []string
 	keys      []string
 	captured  []agentcontrol.ReadRequest
+	// launchCalls counts Launch invocations so a broadcast test can prove the
+	// fan-out never starts a provider.
+	launchCalls int
+	// screenBySession, when set, answers Inspect per tmux session so one
+	// terminal can model two panes in different states.
+	screenBySession map[string]string
 }
 
 func (t *cliAgentTerminal) Inspect(_ context.Context, target agentcontrol.Target) (agentcontrol.Snapshot, error) {
@@ -41,7 +47,15 @@ func (t *cliAgentTerminal) Inspect(_ context.Context, target agentcontrol.Target
 	target.ServerIncarnation = "server-fixture"
 	t.inspects++
 	snapshot := agentcontrol.Snapshot{Target: target, PaneCount: 1, CurrentCommand: "zsh", ProcessIdentity: "shell", ShellReady: true, CapturedAt: time.Unix(1000, int64(t.inspects))}
-	if t.launched {
+	screen := t.screen
+	launched := t.launched
+	if t.screenBySession != nil {
+		if s, ok := t.screenBySession[target.Session]; ok {
+			screen = s
+			launched = true
+		}
+	}
+	if launched {
 		snapshot.CurrentCommand = "codex"
 		snapshot.ProcessIdentity = "codex"
 		snapshot.ShellReady = false
@@ -50,8 +64,8 @@ func (t *cliAgentTerminal) Inspect(_ context.Context, target agentcontrol.Target
 		// the title the codex fixtures these screens come from were captured
 		// with, so a screen and its title describe the same pane.
 		snapshot.Title = "sidecar-agent-status"
-		snapshot.Screen = t.screen
-		if len(t.screens) > 0 {
+		snapshot.Screen = screen
+		if t.screenBySession == nil && len(t.screens) > 0 {
 			snapshot.Screen = t.screens[min(t.inspects-1, len(t.screens)-1)]
 		}
 	}
@@ -59,6 +73,7 @@ func (t *cliAgentTerminal) Inspect(_ context.Context, target agentcontrol.Target
 }
 
 func (t *cliAgentTerminal) Launch(_ context.Context, _ agentcontrol.Snapshot, argv []string) error {
+	t.launchCalls++
 	t.launched = true
 	t.argv = append([]string(nil), argv...)
 	return nil
