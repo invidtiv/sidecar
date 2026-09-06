@@ -1993,7 +1993,7 @@ Usage: sidecar notify post [options] <title>
 
 - `--body TEXT`: Detail line shown under the title
 - `--target SPEC`: Call to action, kind:value[:line][@project]; repeatable
-- `--source ID`: Source: agent, waiting, session, tasks, td, system (default agent)
+- `--source ID`: Source: agent, waiting, session, tasks, td, system, broadcast (default agent)
 - `--expiry DURATION`: Toast lifetime (e.g. 10s), or "never" (default: the source's)
 - `--json`: Write one structured result object to stdout
 - `-h, --help`: Show this help

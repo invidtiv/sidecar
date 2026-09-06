@@ -795,7 +795,7 @@ func notifyCommand() *Command {
 			{Name: "--json", Summary: "Write the resulting resolved source rule as JSON", Bool: true},
 			{Name: "--help", Short: "-h", Summary: "Show this help", Bool: true},
 		},
-		Args:      ArgSpec{Min: 1, Max: 1, Description: "Registered source: agent, waiting, session, tasks, td, or system"},
+		Args:      ArgSpec{Min: 1, Max: 1, Description: "Registered source: agent, waiting, session, tasks, td, system, or broadcast"},
 		ExitCodes: []ExitCode{{Code: 0, Summary: "saved"}, {Code: 1, Summary: "configuration I/O failure"}, {Code: 2, Summary: "usage or validation error"}},
 		Examples: []Example{
 			{Command: "sidecar notify source set waiting --toast on --native on --sound attention --expiry sticky"},
@@ -837,7 +837,7 @@ func notifyCommand() *Command {
 		Flags: []Flag{
 			{Name: "--body", Arg: "TEXT", Summary: "Detail line shown under the title"},
 			{Name: "--target", Arg: "SPEC", Summary: "Call to action, kind:value[:line][@project]; repeatable"},
-			{Name: "--source", Arg: "ID", Summary: "Source: agent, waiting, session, tasks, td, system (default agent)"},
+			{Name: "--source", Arg: "ID", Summary: "Source: agent, waiting, session, tasks, td, system, broadcast (default agent)"},
 			{Name: "--expiry", Arg: "DURATION", Summary: "Toast lifetime (e.g. 10s), or \"never\" (default: the source's)"},
 			{Name: "--json", Summary: "Write one structured result object to stdout", Bool: true},
 			{Name: "--help", Short: "-h", Summary: "Show this help", Bool: true},

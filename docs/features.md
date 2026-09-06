@@ -118,6 +118,7 @@ Sidecar puts your entire software engineering workflow into a single, unified te
 - **Cross-Project Overview:**
   - Kanban board and list views of running agents across all active workspaces.
   - Real-time agent status indicators (Active, Waiting, Idle) with animated status icons.
+- **Broadcast to agents (`B`):** One message to every live agent in the project (workspace list) or every live agent Sidecar can see (Sessions), via `sidecar agent broadcast` or the `B` modal. Sidecar reports per-target receipts (`submitted`, `skipped`, `unknown`), not acknowledgements that the agent did anything with the text. Gated on `agent_control` (default off). Remote hosts are not included.
 
 ---
 
@@ -210,7 +211,7 @@ Sidecar puts your entire software engineering workflow into a single, unified te
 | `r` | Refresh View |
 | `?` | Toggle Global Help Menu |
 
-*Additional plugin-specific keybindings available in Git Status (`s`, `u`, `d`, `v`, `c`), Workspaces (`n`, `D`, `a`, `t`, `m`, `p`, `o`), Conversations (`/`), and Notes.*
+*Additional plugin-specific keybindings available in Git Status (`s`, `u`, `d`, `v`, `c`), Workspaces (`n`, `D`, `a`, `t`, `m`, `p`, `o`, `B`), Conversations (`/`), and Notes.*
 
 ---
 

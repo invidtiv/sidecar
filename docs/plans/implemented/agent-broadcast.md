@@ -1,6 +1,6 @@
 # Agent broadcast: one message to every live agent
 
-**Status:** in progress. **Scope:** a new application core (`internal/agentbroadcast`), a `sidecar agent broadcast` verb, one modal hosted by the workspace list and the Sessions surface, `sidecar agents` help, the coordinate-agents skill, `docs/reference/cli.md`. **Created:** 2026-09-05
+**Status:** implemented. **Scope:** a new application core (`internal/agentbroadcast`), a `sidecar agent broadcast` verb, one modal hosted by the workspace list and the Sessions surface, `sidecar agents` help, the coordinate-agents skill, `docs/reference/cli.md`. **Created:** 2026-09-05
 
 One sentence: **an agent or a human can put one short message in front of every live agent in a project, or every live agent Sidecar can see, without starting anything, and get back a per-target receipt for what was and was not delivered.**
 
