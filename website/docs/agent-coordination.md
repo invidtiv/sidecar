@@ -7,6 +7,24 @@ title: Agent Coordination & Automation
 
 Programmatically start, prompt, monitor, and coordinate multiple AI coding agents across Sidecar-managed shells using the non-interactive CLI.
 
+:::info Turn agent control on first
+
+Everything on this page is behind the `agent_control` feature flag, which is off by default. Turn it on in `~/.config/sidecar/config.json`:
+
+```json
+{
+  "features": {
+    "flags": {
+      "agent_control": true
+    }
+  }
+}
+```
+
+Until it is on, the `sidecar agent` verbs refuse with `feature_disabled` and the `B` key does nothing.
+
+:::
+
 ## Overview
 
 Sidecar enables multi-agent orchestration, allowing an agent or automated script to safely drive a secondary coding agent in a separate shell. Agent coordination is designed with strict boundaries to ensure the user's focus is preserved and commands are never sent blindly.
@@ -105,7 +123,88 @@ sidecar agent send-keys reviewer "Enter"
 sidecar agent send-keys reviewer "C-c"
 ```
 
-### 7. `sidecar agent explain`
+### 7. `sidecar agent broadcast`
+
+Put one short prompt in front of every live agent at once — a code freeze, a branch rename, a "stop and read this" — without walking the fleet target by target:
+
+```bash
+# every live agent in the caller's project, minus the caller
+sidecar agent broadcast "Code freeze on main until td-1a2b3c lands; hold pushes."
+
+# every live agent on this machine
+sidecar agent broadcast "Rebase on main before you push." --all
+
+# see the plan without sending anything
+sidecar agent broadcast "stop" --all --dry-run --json
+```
+
+Recipients are discovered, not declared. Every one still has to pass the same promptable check `agent prompt` uses, so a pane with no identified provider is never a recipient, a blocked agent is skipped rather than answered for you, and **nothing is ever started** by a broadcast.
+
+| Flag | Effect |
+|------|--------|
+| `--project NAME` | Scope to one project (slug, basename, or path) |
+| `--all` | Scope to every registered project on this machine |
+| `--to TARGET` | Add an explicit recipient (repeatable); alone, this is the whole set |
+| `--exclude TARGET` | Drop a discovered recipient (repeatable) |
+| `--status STATUS` | Narrow discovery to these states (default `idle`, `done`, `working`) |
+| `--include-self` | Keep the calling shell, which is otherwise dropped |
+| `--raw` | Deliver the text exactly as given, without the envelope |
+| `--dry-run` | Print the plan and send nothing |
+
+#### Receipts, not acknowledgements
+
+Each row of the result is `submitted`, `skipped`, or `unknown` — a statement about delivery, never a claim that the agent read the text or acted on it. `unknown` means a write may have landed and must not be retried automatically. There is no `--wait`: if the recipients need to settle, use `sidecar agent wait` per target.
+
+Durable content belongs somewhere an agent can go back and read. The convention is to put it there and broadcast a one-line summary with the pointer, so agents that were not live when you sent it still have somewhere to look.
+
+#### The envelope
+
+Delivered text is prefixed so the receiving agent can tell a broadcast from its own user typing:
+
+```
+[Sidecar broadcast from "reviewer" in sidecar] Code freeze on main until td-1a2b3c lands; hold pushes.
+```
+
+From the TUI the sender is `the user`. `--raw` sends the text with no prefix at all.
+
+#### Broadcast from the TUI (`B`)
+
+`B` on the workspace list or in Sessions opens the same plan as a checklist, so a human and an agent are looking at one truth:
+
+```
+┌─ Broadcast to agents ──────────────────────────────────────┐
+│  SCOPE                                                     │
+│  [   this project    |    all projects   ]                 │
+│                                                            │
+│  RECIPIENTS  2 of 3 selected                               │
+│  [x] tacoma-fable          claude working                  │
+│  [ ] inventory             muse   unknown  not current     │
+│  [x] Shell 19              claude idle                     │
+│                                                            │
+│  MESSAGE                                                   │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │Code freeze on main until td-1a2b3c lands.            │  │
+│  └──────────────────────────────────────────────────────┘  │
+│  ctrl+s send   enter newline   tab move   esc cancel       │
+└────────────────────────────────────────────────────────────┘
+```
+
+| Key | Action |
+|-----|--------|
+| `B` | Open the modal from the workspace list or Sessions |
+| `tab` | Move between scope, the recipient list, and the message |
+| `space` | Toggle the recipient under the cursor |
+| `a` / `n` | Select all / none |
+| `j`, `k` | Move the cursor through the recipients |
+| `ctrl+s` | Send |
+| `enter` | Open a line in the message; send from the recipient list |
+| `esc` | Close without sending |
+
+The scope segments switch between this project and every project Sidecar can see, and re-plan as you switch. Rows that cannot receive the message stay visible with the reason beside them rather than disappearing. When live shells in scope have no agent running, a line under the list says how many, so a short list is explained rather than mysterious. The result arrives as a toast plus one row per target in the notification centre under the `broadcast` source, where a skipped reason is one keypress away.
+
+Remote agents are not recipients yet. `--all` means this machine, `--host` is a usage error, and the modal says so when a remote host is in view.
+
+### 8. `sidecar agent explain`
 
 Explain the lifecycle authority and state evidence for a pane:
 

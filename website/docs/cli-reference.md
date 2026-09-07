@@ -57,6 +57,20 @@ Send prompt text to an agent.
 - `--timeout DURATION`: Timeout for completion (e.g. `5m`, `10m`).
 - `--json`: Output structured JSON.
 
+#### `sidecar agent broadcast TEXT`
+Send one prompt to every live agent in scope. Discovers recipients, applies the same promptable check as `agent prompt`, and starts nothing.
+- `--project NAME`: Scope to one project (slug, basename, or path).
+- `--all`: Scope to every registered project on this machine.
+- `--to TARGET`: Add an explicit recipient (repeatable); alone, this is the whole set.
+- `--exclude TARGET`: Drop a discovered recipient (repeatable).
+- `--status STATUS`: Narrow discovery to these states (default `idle`, `done`, `working`).
+- `--include-self`: Keep the calling shell, which is otherwise dropped.
+- `--raw`: Deliver the text without the `[Sidecar broadcast from …]` envelope.
+- `--dry-run`: Print the plan and send nothing; exits 0 even when the plan is empty.
+- `--json`: Output structured JSON.
+
+Each recipient row is a receipt — `submitted`, `skipped`, or `unknown` — not an acknowledgement. There is no `--wait`; use `sidecar agent wait` per target. `--host` is not accepted. See [Agent Coordination](./agent-coordination#7-sidecar-agent-broadcast).
+
 #### `sidecar agent read TARGET`
 Read the terminal output buffer from an agent shell.
 - `--source SOURCE`: `recent-unwrapped` (default) or `scrollback`.

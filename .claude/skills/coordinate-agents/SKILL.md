@@ -128,7 +128,7 @@ sidecar agent broadcast "Code freeze on main until td-1a2b3c lands; hold pushes.
 
 Default recipients are the live agents in your project, minus you. `--all` reaches every registered project on this machine. `--dry-run --json` prints the plan and sends nothing.
 
-Receipts, not acknowledgements: each row is `submitted`, `skipped`, or `unknown`. There is no `--wait`; use `agent wait` per target if you need them to settle.
+Receipts, not acknowledgements: each row is `submitted`, `skipped`, or `unknown`. There is no `--wait`; use `agent wait` per target if you need them to settle. `summary.shellsWithoutAgent` counts the managed shells in scope that answered but had no identified provider — live shells with nothing running in them, not registry rows for directories that are gone.
 
 Durable content belongs in comms. The broadcast carries a one-line summary plus the message id, so agents that were not live still have a place to read it. `--host` is not in this slice; `--all` means this machine.
 

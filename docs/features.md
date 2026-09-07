@@ -119,6 +119,9 @@ Sidecar puts your entire software engineering workflow into a single, unified te
   - Kanban board and list views of running agents across all active workspaces.
   - Real-time agent status indicators (Active, Waiting, Idle) with animated status icons.
 - **Broadcast to agents (`B`):** One message to every live agent in the project (workspace list) or every live agent Sidecar can see (Sessions), via `sidecar agent broadcast` or the `B` modal. Sidecar reports per-target receipts (`submitted`, `skipped`, `unknown`), not acknowledgements that the agent did anything with the text. Gated on `agent_control` (default off). Remote hosts are not included.
+  - The modal is the CLI's `--dry-run` plan rendered as a checklist: `space` toggles a row, `a`/`n` select all or none, `j`/`k` move the cursor, and the scope segments re-plan between this project and every project. Rows that cannot receive the message keep their reason beside them, and a line under the list counts live shells in scope with no agent running.
+  - The message field is a four-line text area: `enter` opens a line, `ctrl+s` (or `ctrl+enter`) sends, `esc` closes. `enter` still sends from the recipient list.
+  - A deselected recipient is not reported afterwards — unchecking a box is not news. The result is a toast plus one notification-centre row per target under the `broadcast` source.
 
 ---
 

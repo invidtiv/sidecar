@@ -209,6 +209,7 @@ Press `m` on any workspace to launch the multi-step merge workflow:
 | `m` | Launch merge & PR workflow |
 | `T` | Link / unlink TD task |
 | `s` / `S` | Start / Stop agent |
+| `B` | Broadcast one message to every live agent in this project ([agent_control](./agent-coordination)) |
 | `y` / `Y` / `N` | Approve / Approve All / Reject pending agent prompt |
 | `enter` | Enter interactive terminal mode |
 | `\` | Toggle sidebar visibility |
