@@ -105,7 +105,7 @@ func TestGlobalWorkspacesListsEveryProjectsShellsAndWorktrees(t *testing.T) {
 
 	for _, want := range []string{
 		"Workspaces", "Activity",
-		"◆ NEEDS ATTENTION (1)", "● WORKING (1)", "● LIVE (1)",
+		"◆ NEEDS ATTENTION (1)", "● WORKING (1)", "● LIVE SHELLS (1)",
 		"modal", "Shell 1", "pipeline",
 		"sidecar", "braid",
 	} {
@@ -429,7 +429,7 @@ func TestLocalLiveMainCheckoutStaysVisible(t *testing.T) {
 	m.syncBoard()
 	got, ok := visibleByID(m)["s-main"]
 	if !ok || got.Group != workspacelist.GroupLive {
-		t.Fatalf("local live main = %#v ok=%v, want a LIVE row", got, ok)
+		t.Fatalf("local live main = %#v ok=%v, want a LIVE SHELLS row", got, ok)
 	}
 }
 

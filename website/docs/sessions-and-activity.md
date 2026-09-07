@@ -26,7 +26,7 @@ Both views sit in the global header tier alongside your project tabs and can be 
 │   sidecar · main                        │ On branch main                   │
 │   ● sidecar-sh-sidecar-1                │ Your branch is up to date.       │
 │                                         │                                  │
-│ ● LIVE (3)                              │ $ sidecar layout apply --json    │
+│ ● LIVE SHELLS (3)                       │ $ sidecar layout apply --json    │
 │   sidecar · fix-auth                    │ {                                │
 │   ● claude (Working) · 12m ago          │   "applied": true,               │
 │   backend · api-v2                      │   "panes": 3                     │
@@ -47,7 +47,7 @@ Press `8` from anywhere in Sidecar to open the Sessions browser.
 ### Visual Card Hierarchy
 
 Sessions presents your workspaces as organized cards with clean visual hierarchy:
-- **Status Section Headers**: Headings group sessions into `📌 PINNED`, `● LIVE`, `○ IDLE`, `◆ NEEDS ATTENTION`, and `● WORKING`.
+- **Status Section Headers**: Headings group sessions into `📌 PINNED`, `● LIVE SHELLS`, `○ IDLE`, `◆ NEEDS ATTENTION`, and `● WORKING`.
 - **Project Color Accent**: Each project's section header and glyph inherit that project's stable theme hue, making it easy to distinguish projects at a glance.
 - **Remote Host Indicators**: Sessions running on remote hosts display a `⇅` provenance glyph with a host-derived accent color.
 

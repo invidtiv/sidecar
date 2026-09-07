@@ -252,7 +252,7 @@ func TestSectionHeadersUseSharedCategoryGrammarRuleAndActionGeometry(t *testing.
 		{"Pinned", "📌 PINNED (2) ─"},
 		{"Needs Attention", "◆ NEEDS ATTENTION (2) ─"},
 		{"Working", "● WORKING (2) ─"},
-		{"Live", "● LIVE (2) ─"},
+		{"Live Shells", "● LIVE SHELLS (2) ─"},
 		{"Idle", "○ IDLE (2) ─"},
 	}
 	for _, tc := range cases {

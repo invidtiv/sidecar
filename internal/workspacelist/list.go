@@ -36,7 +36,7 @@ const (
 	GroupNeedsAttention Group = "Needs Attention"
 	GroupWorking        Group = "Working"
 	GroupDone           Group = "Done"
-	GroupLive           Group = "Live"
+	GroupLive           Group = "Live Shells"
 	GroupIdle           Group = "Idle"
 	GroupPaused         Group = "Paused"
 	GroupNoSession      Group = "No Session"

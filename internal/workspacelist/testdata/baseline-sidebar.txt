@@ -35,7 +35,7 @@ Workspaces                                  ⇅ Activity
  ● ❯ sidecar fix terminal resize                    9m │
      ▶ codex  working                                  │
                                                        │
-● LIVE (1) ────────────────────────────────────────────│
+● LIVE SHELLS (1) ─────────────────────────────────────│
  ◎ ❯ sidecar scratch                               50m │
 
 
@@ -75,7 +75,7 @@ Workspaces                  ⇅ Activity
  ● ❯ sidecar fix terminal resize    9m │
      ▶ codex  working                  │
                                        │
-● LIVE (1) ────────────────────────────│
+● LIVE SHELLS (1) ─────────────────────│
  ◎ ❯ sidecar scratch               50m │
 
 
@@ -112,7 +112,7 @@ Workspaces    ⇅ Activity
 
  ● ❯ fix termi… · ▶ codex
 
-● LIVE (1) ──────────────
+● LIVE SHELLS (1) ───────
  ◎ ❯ scratch
 
 ○ IDLE (1) ──────────────
@@ -152,7 +152,7 @@ Workspaces     ⇅
 
  ● ❯ fix… · ▶ co…
 
-● LIVE (1) ──────
+● LIVE SHELLS (1)
  ◎ ❯ scratch
 
 ○ IDLE (1) ──────

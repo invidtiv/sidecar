@@ -635,7 +635,7 @@ func sectionHeaderGlyph(title string) (string, lipgloss.Style) {
 		return "📌", lipgloss.NewStyle().Foreground(styles.Warning)
 	case "needs attention":
 		return "◆", lipgloss.NewStyle().Foreground(styles.Error)
-	case "working", "done", "live":
+	case "working", "done", "live", "live shells":
 		return "●", lipgloss.NewStyle().Foreground(styles.Success)
 	default:
 		return "○", styles.Muted
