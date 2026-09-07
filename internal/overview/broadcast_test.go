@@ -74,6 +74,18 @@ func TestGlobalBroadcastLateSentDoesNotCloseAReopenedModal(t *testing.T) {
 	}
 }
 
+func TestGlobalBroadcastCarriesSelectedProject(t *testing.T) {
+	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
+	enableGlobalBroadcast(t)
+	run(t, m, m.focusList())
+	if handled, _ := m.WorkspacesKey(globalMoveKey('B')); !handled || m.broadcast == nil {
+		t.Fatal("B did not open the modal")
+	}
+	if m.broadcast.ProjectKey != "sidecar" {
+		t.Fatalf("Sessions broadcast project = %q, want the selected workspace's project so this-project lists local agents", m.broadcast.ProjectKey)
+	}
+}
+
 func TestGlobalBroadcastNotesRemoteAgents(t *testing.T) {
 	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
 	m.catalog["remote"] = workspaceinventory.Workspace{ID: "remote", HostID: "mac-mini", Name: "remote-shell"}

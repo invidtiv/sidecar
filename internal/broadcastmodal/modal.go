@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
@@ -30,9 +31,10 @@ const (
 	listID    = "recipients"
 	messageID = "message"
 
-	hintText   = "enter send   space toggle   a all   n none   esc cancel"
-	rcptPrefix = "rcpt:"
-	maxList    = 8
+	hintText    = "enter send   space toggle   a all   n none   esc cancel"
+	rcptPrefix  = "rcpt:"
+	maxList     = 8
+	planTimeout = 12 * time.Second
 )
 
 type Scope int
@@ -136,7 +138,12 @@ func (h *Host) Replan() tea.Cmd {
 	req := h.planRequest()
 	svc := h.service()
 	return func() tea.Msg {
-		plan, err := svc.Plan(context.Background(), req)
+		ctx, cancel := context.WithTimeout(context.Background(), planTimeout)
+		defer cancel()
+		plan, err := svc.Plan(ctx, req)
+		if err != nil && ctx.Err() != nil {
+			err = fmt.Errorf("timed out looking up agents")
+		}
 		return PlannedMsg{Gen: gen, Plan: plan, Err: err}
 	}
 }
@@ -230,7 +237,7 @@ func (h *Host) renderRecipients(contentWidth int, focusID, hoverID string) modal
 	checked, total := selectedCount(lines)
 	header := fmt.Sprintf("RECIPIENTS  %d of %d selected", checked, total)
 	if h.planning {
-		header = "RECIPIENTS  loading…"
+		header = "RECIPIENTS  looking up live agents…"
 	} else if h.planErr != nil {
 		header = "RECIPIENTS  " + h.planErr.Error()
 	}
@@ -242,9 +249,19 @@ func (h *Host) renderRecipients(contentWidth int, focusID, hoverID string) modal
 	}}
 
 	rows := recipientLines(lines)
-	if len(rows) == 0 && !h.planning && h.planErr == nil {
+	if len(rows) == 0 {
 		b.WriteByte('\n')
-		b.WriteString(styles.Muted.Render("No live agents in scope"))
+		b.WriteString(styles.Muted.Render(fit(h.emptyReason(), contentWidth)))
+		y := 1
+		for _, line := range lines {
+			if line.Kind != lineCount {
+				continue
+			}
+			b.WriteByte('\n')
+			b.WriteString(styles.Muted.Render("    " + line.Label))
+			y++
+		}
+		focusables[0].Height = y + 1
 		return modal.RenderedSection{Content: b.String(), Focusables: focusables}
 	}
 
@@ -384,6 +401,19 @@ func (h *Host) ensureListVisible(n int) {
 	if h.listCursor >= h.listOffset+maxList {
 		h.listOffset = h.listCursor - maxList + 1
 	}
+}
+
+func (h *Host) emptyReason() string {
+	if h.planning {
+		return "Checking every managed shell in scope."
+	}
+	if h.planErr != nil {
+		return h.planErr.Error()
+	}
+	if h.scopeIdx == int(ScopeThisProject) && strings.TrimSpace(h.ProjectKey) == "" {
+		return "Select a workspace so this project has a scope, or switch to all projects."
+	}
+	return "No live agents to send to."
 }
 
 func (h *Host) toggle(id string) {

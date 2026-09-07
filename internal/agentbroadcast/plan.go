@@ -5,10 +5,13 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/marcus/sidecar/internal/agentcontrol"
 	"github.com/marcus/sidecar/internal/managedtarget"
 )
+
+const planConcurrency = 4
 
 type candidateIdent struct {
 	host, project, kind, session, namespace string
@@ -47,27 +50,25 @@ func (s Service) Plan(ctx context.Context, req PlanRequest) (Plan, error) {
 		SenderProject: req.SenderProject,
 	}
 
-	for _, cand := range selected {
-		target := controlTarget(cand)
-		snap, state, err := s.observe(ctx, target)
-		if err != nil || state.Kind == "" {
+	for _, item := range s.observeAll(ctx, selected) {
+		if item.err != nil || item.state.Kind == "" {
 			// No identified provider: absent from the plan, same as agent list.
 			plan.ShellsWithoutAgent++
 			continue
 		}
-		target = snap.Target
-		row := Recipient{Target: target, Agent: state, Outcome: OutcomeWouldSend}
-		if req.SenderSession != "" && cand.Session == req.SenderSession && !req.IncludeSelf {
+		target := item.snap.Target
+		row := Recipient{Target: target, Agent: item.state, Outcome: OutcomeWouldSend}
+		if req.SenderSession != "" && item.cand.Session == req.SenderSession && !req.IncludeSelf {
 			row.Outcome = OutcomeSkipped
 			row.Reason = &Reason{Code: reasonSender, Message: "calling shell is excluded unless --include-self"}
-		} else if r := eligibility(snap, state); r != nil {
+		} else if r := eligibility(item.snap, item.state); r != nil {
 			row.Outcome = OutcomeSkipped
 			row.Reason = r
-		} else if !statusWanted(state.Status, wanted) {
+		} else if !statusWanted(item.state.Status, wanted) {
 			row.Outcome = OutcomeSkipped
 			row.Reason = &Reason{
 				Code:    reasonStatus,
-				Message: fmt.Sprintf("agent status is %s; status filter does not include it", state.Status),
+				Message: fmt.Sprintf("agent status is %s; status filter does not include it", item.state.Status),
 			}
 		}
 		plan.Recipients = append(plan.Recipients, row)
@@ -131,19 +132,37 @@ func selectCandidates(universe []managedtarget.Target, req PlanRequest) ([]manag
 	return out, nil
 }
 
-func (s Service) observe(ctx context.Context, target agentcontrol.Target) (agentcontrol.Snapshot, agentcontrol.AgentState, error) {
-	if s.Control.Terminal == nil {
-		return agentcontrol.Snapshot{}, agentcontrol.AgentState{}, &agentcontrol.Error{Code: agentcontrol.ErrTransport, Message: "terminal adapter is unavailable"}
+type observed struct {
+	cand  managedtarget.Target
+	snap  agentcontrol.Snapshot
+	state agentcontrol.AgentState
+	err   error
+}
+
+func (s Service) observeAll(ctx context.Context, selected []managedtarget.Target) []observed {
+	out := make([]observed, len(selected))
+	if len(selected) == 0 {
+		return out
 	}
-	snap, err := s.Control.Terminal.Inspect(ctx, target)
-	if err != nil {
-		return agentcontrol.Snapshot{}, agentcontrol.AgentState{}, err
+	sem := make(chan struct{}, planConcurrency)
+	var wg sync.WaitGroup
+	for i, cand := range selected {
+		wg.Add(1)
+		go func(i int, cand managedtarget.Target) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				out[i] = observed{cand: cand, err: ctx.Err()}
+				return
+			}
+			snap, state, err := s.Control.InspectState(ctx, controlTarget(cand))
+			out[i] = observed{cand: cand, snap: snap, state: state, err: err}
+		}(i, cand)
 	}
-	agent, err := s.Control.Get(ctx, target)
-	if err != nil {
-		return snap, agentcontrol.AgentState{}, err
-	}
-	return snap, agent.Agent, nil
+	wg.Wait()
+	return out
 }
 
 // eligibility is the promptable check minus the no-provider branch: that case

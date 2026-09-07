@@ -16,6 +16,7 @@ import (
 type stageTerminal struct {
 	mu       sync.Mutex
 	panes    map[string]*stagePane
+	inspects int
 	launches int
 	submits  int
 }
@@ -64,6 +65,7 @@ func (t *stageTerminal) pane(session string) *stagePane {
 func (t *stageTerminal) Inspect(_ context.Context, target agentcontrol.Target) (agentcontrol.Snapshot, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.inspects++
 	pane, ok := t.panes[target.Session]
 	if !ok {
 		return agentcontrol.Snapshot{}, &agentcontrol.Error{Code: agentcontrol.ErrNotFound, Message: "no pane for " + target.Session}
@@ -133,6 +135,12 @@ func (t *stageTerminal) submitted(session string) []string {
 		return nil
 	}
 	return append([]string(nil), pane.submitted...)
+}
+
+func (t *stageTerminal) inspectCount() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.inspects
 }
 
 func (t *stageTerminal) launchCount() int {

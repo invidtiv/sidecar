@@ -1,6 +1,8 @@
 package overview
 
 import (
+	"strings"
+
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/broadcastmodal"
 	"github.com/marcus/sidecar/internal/config"
@@ -12,8 +14,19 @@ func (m *Model) openBroadcast() tea.Cmd {
 	if !broadcastmodal.Enabled() {
 		return nil
 	}
-	m.broadcast = broadcastmodal.New("", config.StateDir(), broadcastmodal.ScopeAllProjects, m.broadcastShowsRemote())
+	m.broadcast = broadcastmodal.New(m.broadcastProjectKey(), config.StateDir(), broadcastmodal.ScopeAllProjects, m.broadcastShowsRemote())
 	return m.broadcast.Replan()
+}
+
+func (m *Model) broadcastProjectKey() string {
+	ws, ok := m.SelectedWorkspace()
+	if !ok {
+		return ""
+	}
+	if key := attentionProjectKey(ws.ProjectKey); key != "" {
+		return key
+	}
+	return strings.TrimSpace(ws.ProjectName)
 }
 
 func (m *Model) broadcastShowsRemote() bool {

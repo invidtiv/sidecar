@@ -134,6 +134,9 @@ func TestPlanOmitsNoProviderPane(t *testing.T) {
 		t.Fatalf("no-provider pane listed as a row: %+v", plan.Recipients)
 	}
 	assertOutcome(t, plan, "agent", OutcomeWouldSend, "")
+	if term.inspectCount() != 2 {
+		t.Fatalf("Plan inspected %d times, want 1 per candidate", term.inspectCount())
+	}
 
 	res, err := svc.Send(context.Background(), plan, "hello")
 	if err != nil {

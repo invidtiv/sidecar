@@ -170,6 +170,27 @@ func TestHostInitialSelectionFollowsPlan(t *testing.T) {
 	}
 }
 
+func TestRenderEmptyPlanExplainsWhy(t *testing.T) {
+	h := New("demo", t.TempDir(), ScopeThisProject, false)
+	h.ApplyPlan(PlannedMsg{Gen: h.gen, Plan: agentbroadcast.Plan{ShellsWithoutAgent: 31}})
+	view := ansi.Strip(h.Render(80, 24, mouse.NewHandler()))
+	if !strings.Contains(view, "No live agents to send to.") {
+		t.Fatalf("empty plan did not say why:\n%s", view)
+	}
+	if !strings.Contains(view, "31 shells have no live agent and are not listed") {
+		t.Fatalf("empty plan omitted the shells-without-agent count:\n%s", view)
+	}
+}
+
+func TestRenderThisProjectWithoutKeyExplainsScope(t *testing.T) {
+	h := New("", t.TempDir(), ScopeThisProject, false)
+	h.ApplyPlan(PlannedMsg{Gen: h.gen, Plan: agentbroadcast.Plan{}})
+	view := ansi.Strip(h.Render(80, 24, mouse.NewHandler()))
+	if !strings.Contains(view, "Select a workspace so this project has a scope") {
+		t.Fatalf("empty this-project scope was silent:\n%s", view)
+	}
+}
+
 func TestRenderDrawsProjectSectionLabelsWhenGrouped(t *testing.T) {
 	h := New("", t.TempDir(), ScopeAllProjects, false)
 	h.ApplyPlan(PlannedMsg{Gen: h.gen, Plan: fixturePlan()})

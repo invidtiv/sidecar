@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 )
 
 type cliAgentTerminal struct {
+	mu       sync.Mutex
 	launched bool
 	argv     []string
 	screen   string
@@ -39,6 +41,8 @@ type cliAgentTerminal struct {
 }
 
 func (t *cliAgentTerminal) Inspect(_ context.Context, target agentcontrol.Target) (agentcontrol.Snapshot, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	target.Host = "local"
 	target.Namespace = tmuxenv.Namespace()
 	target.PaneID = "%11"
@@ -73,6 +77,8 @@ func (t *cliAgentTerminal) Inspect(_ context.Context, target agentcontrol.Target
 }
 
 func (t *cliAgentTerminal) Launch(_ context.Context, _ agentcontrol.Snapshot, argv []string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.launchCalls++
 	t.launched = true
 	t.argv = append([]string(nil), argv...)
@@ -80,6 +86,8 @@ func (t *cliAgentTerminal) Launch(_ context.Context, _ agentcontrol.Snapshot, ar
 }
 
 func (t *cliAgentTerminal) Submit(_ context.Context, _ agentcontrol.Snapshot, text string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.submitted = append(t.submitted, text)
 	return nil
 }
@@ -88,11 +96,15 @@ func (t *cliAgentTerminal) SendKeys(_ context.Context, _ agentcontrol.Snapshot, 
 	if err := agentcontrol.ValidateKeys(names); err != nil {
 		return err
 	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.keys = append(t.keys, names...)
 	return nil
 }
 
 func (t *cliAgentTerminal) Capture(_ context.Context, _ agentcontrol.Snapshot, req agentcontrol.ReadRequest) (string, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.captured = append(t.captured, req)
 	return string(req.Source) + " capture\n", nil
 }
