@@ -7,6 +7,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/styles"
 )
 
@@ -178,6 +179,18 @@ type textareaSection struct {
 	label  string
 	model  *textarea.Model
 	height int // Desired height in lines
+	// scrollbar draws a static bar inside the box once the wrapped value is
+	// taller than the visible rows. Opt-in: a textarea that is only ever a few
+	// lines long gains nothing from a column that is always a spacer.
+	scrollbar bool
+}
+
+// WithTextareaScrollbar draws a draw-only scrollbar inside the textarea box
+// whenever the wrapped value is taller than the visible rows, so a field that
+// has scrolled says so. The bar answers no gestures: the textarea's own cursor
+// movement is what scrolls it.
+func WithTextareaScrollbar() TextareaOption {
+	return func(s *textareaSection) { s.scrollbar = true }
 }
 
 // Textarea creates a textarea section wrapping a textarea.Model.
@@ -231,7 +244,12 @@ func (s *textareaSection) Render(contentWidth int, focusID, hoverID string) Rend
 	}
 
 	if s.model != nil {
-		s.model.SetWidth(textareaInnerWidth)
+		modelWidth := textareaInnerWidth
+		if s.scrollbar {
+			// One column for the bar and one of air before it.
+			modelWidth = max(1, modelWidth-2)
+		}
+		s.model.SetWidth(modelWidth)
 		s.model.SetHeight(s.height)
 		if isFocused {
 			s.model.Focus()
@@ -263,6 +281,15 @@ func (s *textareaSection) Render(contentWidth int, focusID, hoverID string) Rend
 	areaView := ""
 	if s.model != nil {
 		areaView = s.model.View()
+		if s.scrollbar {
+			rows := lipgloss.Height(areaView)
+			gap := make([]string, rows)
+			for i := range gap {
+				gap[i] = " "
+			}
+			areaView = lipgloss.JoinHorizontal(lipgloss.Top, areaView, strings.Join(gap, "\n"),
+				staticBarColumn(textareaRows(*s.model), s.model.ScrollYOffset(), s.height, rows))
+		}
 	}
 	sb.WriteString(areaStyle.Render(areaView))
 
@@ -287,8 +314,28 @@ func (s *textareaSection) Update(msg tea.Msg, focusID string) (string, tea.Cmd) 
 		return "", nil
 	}
 
-	// Textareas always treat Enter as newline, never submit
+	// A textarea takes enter as a newline, so the modal must not also read it
+	// as an implicit submit: reporting the key as consumed is what stops a
+	// declared primary action from firing on the same keystroke that opened a
+	// line (td-cd1706).
 	var cmd tea.Cmd
 	*s.model, cmd = s.model.Update(msg)
-	return "", cmd
+	return actionOverlayIdle, cmd
+}
+
+// textareaRows is how many visual rows the model's value occupies at its
+// current width: the count a bar needs, which the widget itself does not
+// report. Soft wraps are counted the way the textarea wraps them, so a bar
+// drawn from this agrees with what the box is showing.
+func textareaRows(m textarea.Model) int {
+	width := m.Width()
+	if width < 1 {
+		return m.LineCount()
+	}
+	rows := 0
+	for _, line := range strings.Split(m.Value(), "\n") {
+		w := ansi.StringWidth(line)
+		rows += max(1, (w+width-1)/width)
+	}
+	return max(rows, 1)
 }

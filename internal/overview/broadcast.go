@@ -14,7 +14,7 @@ func (m *Model) openBroadcast() tea.Cmd {
 	if !broadcastmodal.Enabled() {
 		return nil
 	}
-	m.broadcast = broadcastmodal.New(m.broadcastProjectKey(), config.StateDir(), broadcastmodal.ScopeAllProjects, m.broadcastShowsRemote())
+	m.broadcast = broadcastmodal.New(broadcastmodal.SurfaceSessions, m.broadcastProjectKey(), config.StateDir(), broadcastmodal.ScopeAllProjects, m.broadcastShowsRemote())
 	return m.broadcast.Replan()
 }
 
@@ -86,8 +86,24 @@ func (m *Model) applyBroadcastPlan(msg broadcastmodal.PlannedMsg) {
 
 func (m *Model) BroadcastOpen() bool { return m != nil && m.broadcast != nil }
 
+// CloseBroadcast drops the modal when Sessions stops being the visible
+// surface. A modal belongs to the surface that opened it: left standing behind
+// a tab switch it reappears later over whatever the user has moved on to
+// (td-cd1706).
+func (m *Model) CloseBroadcast() {
+	if m != nil {
+		m.broadcast = nil
+	}
+}
+
+// applyBroadcastSent reports a result this surface asked for. The project
+// workspace sees the same message, so a result each surface reported would
+// arrive as two identical notifications for one broadcast (td-cd1706).
 func (m *Model) applyBroadcastSent(msg broadcastmodal.SentMsg) tea.Cmd {
-	if m.broadcast != nil && m.broadcast == msg.Host {
+	if !msg.Host.OwnedBy(broadcastmodal.SurfaceSessions) {
+		return nil
+	}
+	if m.broadcast == msg.Host {
 		m.broadcast = nil
 	}
 	if msg.Err != nil {

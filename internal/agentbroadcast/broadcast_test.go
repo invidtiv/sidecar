@@ -102,7 +102,11 @@ func TestPlanSkipsBlockedUnknownStale(t *testing.T) {
 	assertOutcome(t, plan, "dead", OutcomeSkipped, string(agentcontrol.ErrPaneBusy))
 }
 
-func TestPlanOmitsObserveFailure(t *testing.T) {
+// A candidate nothing answered for is a registry row, not a shell: the plan
+// omits it and the shells-without-agent count does not speak for it either.
+// Registered worktrees nobody has opened are the common case, and counting
+// them told the user about dozens of shells that were not there (td-cd1706).
+func TestPlanOmitsObserveFailureEntirely(t *testing.T) {
 	term := newStage()
 	cands := []managedtarget.Target{managed("gone", "missing", "p")}
 	plan, err := testService(term, cands).Plan(context.Background(), PlanRequest{ScopeKind: ScopeProject, Project: "p"})
@@ -112,8 +116,8 @@ func TestPlanOmitsObserveFailure(t *testing.T) {
 	if len(plan.Recipients) != 0 {
 		t.Fatalf("recipients = %+v, want none", plan.Recipients)
 	}
-	if plan.ShellsWithoutAgent != 1 {
-		t.Fatalf("ShellsWithoutAgent = %d, want 1", plan.ShellsWithoutAgent)
+	if plan.ShellsWithoutAgent != 0 {
+		t.Fatalf("ShellsWithoutAgent = %d, want 0", plan.ShellsWithoutAgent)
 	}
 }
 

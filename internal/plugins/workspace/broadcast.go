@@ -13,7 +13,7 @@ func (p *Plugin) openBroadcast() tea.Cmd {
 	if !broadcastmodal.Enabled() {
 		return nil
 	}
-	p.broadcast = broadcastmodal.New(p.broadcastProjectKey(), config.StateDir(), broadcastmodal.ScopeThisProject, false)
+	p.broadcast = broadcastmodal.New(broadcastmodal.SurfaceProject, p.broadcastProjectKey(), config.StateDir(), broadcastmodal.ScopeThisProject, false)
 	return p.broadcast.Replan()
 }
 
@@ -77,8 +77,14 @@ func (p *Plugin) applyBroadcastPlan(msg broadcastmodal.PlannedMsg) {
 	}
 }
 
+// applyBroadcastSent reports a result this surface asked for. Sessions sees the
+// same message, so a result each surface reported would arrive as two
+// identical notifications for one broadcast (td-cd1706).
 func (p *Plugin) applyBroadcastSent(msg broadcastmodal.SentMsg) tea.Cmd {
-	if p.broadcast != nil && p.broadcast == msg.Host {
+	if !msg.Host.OwnedBy(broadcastmodal.SurfaceProject) {
+		return nil
+	}
+	if p.broadcast == msg.Host {
 		p.broadcast = nil
 	}
 	if msg.Err != nil {

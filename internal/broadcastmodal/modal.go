@@ -6,8 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/agentbroadcast"
 	"github.com/marcus/sidecar/internal/agentcontrol"
@@ -17,6 +18,7 @@ import (
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/ui"
 )
 
 const (
@@ -31,9 +33,23 @@ const (
 	listID    = "recipients"
 	messageID = "message"
 
-	hintText   = "enter send   space toggle   a all   n none   esc cancel"
-	rcptPrefix = "rcpt:"
-	maxList    = 8
+	messageHint = "ctrl+s send   enter newline   tab move   esc cancel"
+	listHint    = "space toggle   a all   n none   ctrl+s send   esc cancel"
+	rcptPrefix  = "rcpt:"
+	maxList     = 8
+	// messageLines is how tall the message field is before it scrolls. A
+	// broadcast is usually a sentence; four lines shows a short paragraph
+	// whole without turning the modal into an editor.
+	messageLines = 4
+	// barColumns is what the recipients list reserves on its right: one column
+	// for the scrollbar and one of air before it, so a row's last column does
+	// not touch the rail. Reserved whether or not the list scrolls, so the
+	// columns beside it do not shift as rows arrive.
+	barColumns = 2
+	// Column floors. Below these a column stops being readable, so the row
+	// truncates rather than shrinking further.
+	minNameCol   = 8
+	minReasonCol = 6
 )
 
 // planTimeout bounds a Replan cmd even if Plan ignores cancel. Tests may lower it.
@@ -46,6 +62,15 @@ const (
 	ScopeAllProjects
 )
 
+// Surface names the Workspaces surface a modal was opened from. Both surfaces
+// see every plan and every result (see overview.IsSharedBroadcastMessage), so
+// the answer has to say who asked: without it both of them reported the same
+// send, and one broadcast arrived as two notifications.
+const (
+	SurfaceProject  = "project"
+	SurfaceSessions = "sessions"
+)
+
 // Host is the one Broadcast-to-agents modal. Both Workspaces surfaces overlay
 // it; they do not fork a second copy.
 type Host struct {
@@ -53,10 +78,13 @@ type Host struct {
 	StateDir   string
 	RemoteNote bool
 	Service    agentbroadcast.Service
+	// Surface is the surface that opened this modal, one of the Surface
+	// constants. A surface answers only for its own results.
+	Surface string
 
 	width, height int
 	scopeIdx      int
-	input         textinput.Model
+	input         textarea.Model
 	selected      map[string]bool
 	plan          agentbroadcast.Plan
 	planErr       error
@@ -69,7 +97,12 @@ type Host struct {
 	sending       bool
 }
 
+// PlannedMsg carries a plan back to the host that asked for it. Host is that
+// host: both Workspaces surfaces receive this message (see
+// overview.IsSharedBroadcastMessage), so a modal left open on the surface the
+// user is not looking at must not adopt the other one's plan.
 type PlannedMsg struct {
+	Host *Host
 	Gen  int
 	Plan agentbroadcast.Plan
 	Err  error
@@ -81,18 +114,26 @@ type SentMsg struct {
 	Err    error
 }
 
-func New(projectKey, stateDir string, scope Scope, remoteNote bool) *Host {
-	ti := textinput.New()
-	ti.Prompt = "❯ "
-	ti.Placeholder = ""
-	ti.CharLimit = 240
-	ti.Focus()
+// New builds a modal for one surface. surface is SurfaceProject or
+// SurfaceSessions and decides which surface reports the result.
+func New(surface, projectKey, stateDir string, scope Scope, remoteNote bool) *Host {
+	ta := textarea.New()
+	ta.Prompt = ""
+	ta.Placeholder = "Message every selected agent receives"
+	ta.ShowLineNumbers = false
+	ta.CharLimit = 0
+	taStyles := ta.Styles()
+	taStyles.Focused.Placeholder = lipgloss.NewStyle().Foreground(styles.TextSecondary)
+	ta.SetStyles(taStyles)
+	ta.SetHeight(messageLines)
+	ta.Focus()
 	return &Host{
+		Surface:    surface,
 		ProjectKey: projectKey,
 		StateDir:   stateDir,
 		RemoteNote: remoteNote,
 		scopeIdx:   int(scope),
-		input:      ti,
+		input:      ta,
 		selected:   map[string]bool{},
 	}
 }
@@ -139,6 +180,7 @@ func (h *Host) Replan() tea.Cmd {
 	gen := h.gen
 	req := h.planRequest()
 	svc := h.service()
+	host := h
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), planTimeout)
 		ch := make(chan PlannedMsg, 1)
@@ -148,19 +190,22 @@ func (h *Host) Replan() tea.Cmd {
 			if err != nil && ctx.Err() != nil {
 				err = fmt.Errorf("timed out looking up agents")
 			}
-			ch <- PlannedMsg{Gen: gen, Plan: plan, Err: err}
+			ch <- PlannedMsg{Host: host, Gen: gen, Plan: plan, Err: err}
 		}()
 		select {
 		case msg := <-ch:
 			return msg
 		case <-time.After(planTimeout):
 			cancel()
-			return PlannedMsg{Gen: gen, Err: fmt.Errorf("timed out looking up agents")}
+			return PlannedMsg{Host: host, Gen: gen, Err: fmt.Errorf("timed out looking up agents")}
 		}
 	}
 }
 
 func (h *Host) ApplyPlan(msg PlannedMsg) {
+	if msg.Host != nil && msg.Host != h {
+		return
+	}
 	if msg.Gen != h.gen {
 		return
 	}
@@ -193,30 +238,36 @@ func (h *Host) Ensure(width int) {
 	if modalW < 20 {
 		modalW = 20
 	}
-	key := fmt.Sprintf("%d|%d|%d|%v|%q", modalW, h.scopeIdx, h.gen, h.RemoteNote, errString(h.planErr))
-	if h.modal != nil && h.cacheKey == key {
-		return
-	}
 	focus := messageID
 	if h.modal != nil {
 		if id := h.modal.FocusedID(); id != "" {
 			focus = id
 		}
 	}
+	// The hint answers for whatever has focus, so the key it names is the key
+	// that is live: enter is a newline in the message and a send in the list.
+	key := fmt.Sprintf("%d|%d|%d|%v|%q|%s", modalW, h.scopeIdx, h.gen, h.RemoteNote, errString(h.planErr), focus)
+	if h.modal != nil && h.cacheKey == key {
+		return
+	}
 	h.cacheKey = key
-	h.modal = h.build(modalW)
+	h.modal = h.build(modalW, focus)
 	h.modal.SetFocus(focus)
 }
 
-func (h *Host) build(width int) *modal.Modal {
+func (h *Host) build(width int, focus string) *modal.Modal {
 	scopeItems := []modal.SelectItem{
 		{ID: "this-project", Label: "this project"},
 		{ID: "all-projects", Label: "all projects"},
 	}
+	hint := listHint
+	if focus == messageID {
+		hint = messageHint
+	}
 	m := modal.New("Broadcast to agents",
 		modal.WithWidth(width),
 		modal.WithPrimaryAction(ActionSend),
-		modal.WithHintText(hintText),
+		modal.WithHintText(hint),
 		modal.WithCloseOnBackdropClick(true),
 	).
 		AddSection(modal.Text("SCOPE")).
@@ -227,21 +278,85 @@ func (h *Host) build(width int) *modal.Modal {
 			modal.Text("Remote agents are not yet recipients."))).
 		AddSection(modal.Spacer()).
 		AddSection(modal.Text("MESSAGE")).
-		AddSection(modal.Input(messageID, &h.input))
+		AddSection(modal.Textarea(messageID, &h.input, messageLines, modal.WithTextareaScrollbar()))
 	return m
 }
 
 func (h *Host) recipientsSection() modal.Section {
-	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
-		return h.renderRecipients(contentWidth, focusID, hoverID)
-	}, func(msg tea.Msg, focusID string) (string, tea.Cmd) {
-		return h.updateRecipients(msg, focusID)
-	})
+	return modal.ScrollingCustom(
+		func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
+			return h.renderRecipients(contentWidth, focusID, hoverID)
+		},
+		func(msg tea.Msg, focusID string) (string, tea.Cmd) {
+			return h.updateRecipients(msg, focusID)
+		},
+		func(regionID string) bool {
+			return regionID == listID || strings.HasPrefix(regionID, rcptPrefix)
+		},
+		func(delta int) bool { return !h.canScrollList(delta) },
+	)
 }
 
 func (h *Host) lines() []Line {
 	group := h.scopeIdx == int(ScopeAllProjects)
 	return Checklist(h.plan, group, h.selected)
+}
+
+// columns is the width of each recipient column for one render. Every column
+// takes the width its own content asks for and the name column absorbs what is
+// left, so a row truncates only when the modal genuinely runs out of space.
+type columns struct{ name, kind, status, reason int }
+
+func columnWidths(rows []Line, width int) columns {
+	var c columns
+	reasons := false
+	for _, row := range rows {
+		c.name = max(c.name, ansi.StringWidth(row.Name))
+		c.kind = max(c.kind, ansi.StringWidth(row.Agent))
+		c.status = max(c.status, ansi.StringWidth(row.Status))
+		if reason := rowReason(row); reason != "" {
+			reasons = true
+			c.reason = max(c.reason, ansi.StringWidth(reason))
+		}
+	}
+	fixed := 4 + 2 // "[x] ", plus the single space before kind and before status
+	if reasons {
+		fixed++
+	}
+	avail := max(0, width-fixed)
+	need := c.name + c.kind + c.status + c.reason
+	if need <= avail {
+		c.name += avail - need
+		return c
+	}
+	over := need - avail
+	if take := min(over, max(0, c.reason-minReasonCol)); take > 0 {
+		c.reason -= take
+		over -= take
+	}
+	if take := min(over, max(0, c.name-minNameCol)); take > 0 {
+		c.name -= take
+		over -= take
+	}
+	if over > 0 {
+		// Narrower than both floors: the reason goes first — it explains a row
+		// rather than naming one — and the name takes whatever remains.
+		if take := min(over, c.reason); take > 0 {
+			c.reason -= take
+			over -= take
+		}
+		c.name = max(1, c.name-over)
+	}
+	return c
+}
+
+// rowReason is the short explanation a row carries, shown only for rows that
+// are not being sent to: a checked row's status is the whole story.
+func rowReason(row Line) string {
+	if row.Checked {
+		return ""
+	}
+	return row.Reason
 }
 
 func (h *Host) renderRecipients(contentWidth int, focusID, hoverID string) modal.RenderedSection {
@@ -278,16 +393,12 @@ func (h *Host) renderRecipients(contentWidth int, focusID, hoverID string) modal
 	}
 
 	h.clampList(len(rows))
-	start, end := 0, len(rows)
-	if len(rows) > maxList {
-		start = h.listOffset
-		end = start + maxList
-		if end > len(rows) {
-			end = len(rows)
-		}
-	}
+	start, end := h.window(len(rows))
+	listWidth := max(1, contentWidth-barColumns)
+	cols := columnWidths(rows, listWidth)
 
-	y := 1
+	var block []string
+	var regions []modal.FocusableInfo
 	rowIndex := -1
 	var pending Line
 	for _, line := range lines {
@@ -300,50 +411,69 @@ func (h *Host) renderRecipients(contentWidth int, focusID, hoverID string) modal
 				continue
 			}
 			if pending.Kind == lineSection {
-				b.WriteByte('\n')
-				b.WriteString(styles.Muted.Render(fit(pending.Label, contentWidth)))
+				block = append(block, styles.Muted.Render(fit(pending.Label, listWidth)))
 				pending = Line{}
-				y++
 			}
-			b.WriteByte('\n')
 			cursor := rowIndex == h.listCursor && focusID == listID
-			b.WriteString(h.renderRow(line, contentWidth, cursor, hoverID == rcptPrefix+line.ID))
-			focusables = append(focusables, modal.FocusableInfo{
-				ID: rcptPrefix + line.ID, OffsetX: 0, OffsetY: y,
-				Width: max(1, contentWidth), Height: 1, MouseOnly: true,
+			block = append(block, h.renderRow(line, cols, listWidth, cursor, hoverID == rcptPrefix+line.ID))
+			regions = append(regions, modal.FocusableInfo{
+				ID: rcptPrefix + line.ID, OffsetX: 0, OffsetY: len(block) - 1,
+				Width: listWidth, Height: 1, MouseOnly: true,
 			})
-			y++
-		case lineCount:
-			b.WriteByte('\n')
-			b.WriteString(styles.Muted.Render("    " + line.Label))
-			y++
 		}
+	}
+
+	gap := make([]string, len(block))
+	for i := range gap {
+		gap[i] = " "
+	}
+	body := lipgloss.JoinHorizontal(lipgloss.Top, strings.Join(block, "\n"), strings.Join(gap, "\n"),
+		ui.RenderScrollbar(ui.ScrollbarParams{
+			TotalItems:   len(rows),
+			ScrollOffset: h.listOffset,
+			VisibleItems: min(maxList, len(rows)),
+			TrackHeight:  len(block),
+		}))
+	b.WriteByte('\n')
+	b.WriteString(body)
+
+	// The header occupies the section's first row; every region below it is
+	// offset by that one line.
+	for i := range regions {
+		regions[i].OffsetY++
+	}
+	focusables = append(focusables, regions...)
+	y := 1 + len(block)
+	for _, line := range lines {
+		if line.Kind != lineCount {
+			continue
+		}
+		b.WriteByte('\n')
+		b.WriteString(styles.Muted.Render("    " + line.Label))
+		y++
 	}
 	focusables[0].Height = y
 	return modal.RenderedSection{Content: b.String(), Focusables: focusables}
 }
 
-func (h *Host) renderRow(row Line, width int, cursor, hover bool) string {
+func (h *Host) renderRow(row Line, cols columns, width int, cursor, hover bool) string {
 	box := "[ ]"
 	if row.Checked {
 		box = "[x]"
 	}
-	nameW, kindW, statusW := 18, 8, 8
-	reasonW := width - 4 - nameW - kindW - statusW - 3
-	if reasonW < 6 {
-		reasonW = 6
-		nameW = max(8, width-4-kindW-statusW-reasonW-3)
+	line := box + " " + fit(row.Name, cols.name) + " " + fit(row.Agent, cols.kind) + " " + fit(row.Status, cols.status)
+	if reason := rowReason(row); reason != "" && cols.reason > 0 {
+		line += " " + fit(reason, cols.reason)
 	}
-	line := box + " " + fit(row.Name, nameW) + " " + fit(row.Agent, kindW) + " " + fit(row.Status, statusW)
-	if row.Reason != "" && !row.Checked {
-		line += " " + fit(row.Reason, reasonW)
-	}
+	// A row is a list row, not a button: the pointer and the cursor colour it
+	// where it already sits rather than indenting it under them.
 	style := styles.Body
-	if cursor {
-		style = styles.ButtonFocused
-	} else if hover {
-		style = styles.ButtonHover
-	} else if !row.Checked {
+	switch {
+	case cursor:
+		style = styles.ListItemFocused
+	case hover:
+		style = styles.ListItemSelected
+	case !row.Checked:
 		style = styles.Muted
 	}
 	return style.Render(fit(line, width))
@@ -387,21 +517,32 @@ func (h *Host) updateRecipients(msg tea.Msg, focusID string) (string, tea.Cmd) {
 	return "", nil
 }
 
+// window is the half-open range of recipient rows currently drawn.
+func (h *Host) window(n int) (int, int) {
+	if n <= maxList {
+		return 0, n
+	}
+	start := h.listOffset
+	end := min(start+maxList, n)
+	return start, end
+}
+
+// clampList keeps the cursor and the window inside a list of n rows. It does
+// not pull the window back to the cursor: a wheel scroll leaves the cursor
+// where it was, and a render that dragged the window back would undo the
+// gesture on the next frame.
 func (h *Host) clampList(n int) {
 	if n <= 0 {
 		h.listCursor = 0
 		h.listOffset = 0
 		return
 	}
-	if h.listCursor >= n {
-		h.listCursor = n - 1
-	}
-	if h.listCursor < 0 {
-		h.listCursor = 0
-	}
-	h.ensureListVisible(n)
+	h.listCursor = clampInt(h.listCursor, 0, n-1)
+	h.listOffset = clampInt(h.listOffset, 0, max(0, n-maxList))
 }
 
+// ensureListVisible scrolls the window so the cursor is on screen. It runs
+// when the cursor moves, not on every render.
 func (h *Host) ensureListVisible(n int) {
 	if n <= maxList {
 		h.listOffset = 0
@@ -413,6 +554,39 @@ func (h *Host) ensureListVisible(n int) {
 	if h.listCursor >= h.listOffset+maxList {
 		h.listOffset = h.listCursor - maxList + 1
 	}
+	h.listOffset = clampInt(h.listOffset, 0, n-maxList)
+}
+
+// canScrollList reports whether the recipient window can still move delta rows.
+// It is read-only: WheelAtBoundary asks it before anything is rebuilt.
+func (h *Host) canScrollList(delta int) bool {
+	n := len(recipientLines(h.lines()))
+	if n <= maxList || delta == 0 {
+		return false
+	}
+	next := clampInt(h.listOffset+delta, 0, n-maxList)
+	return next != h.listOffset
+}
+
+// scrollList moves the recipient window without moving the cursor, which is
+// what a wheel over the list means.
+func (h *Host) scrollList(delta int) {
+	n := len(recipientLines(h.lines()))
+	if n <= maxList {
+		h.listOffset = 0
+		return
+	}
+	h.listOffset = clampInt(h.listOffset+delta, 0, n-maxList)
+}
+
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
 func (h *Host) emptyReason() string {
@@ -452,6 +626,13 @@ func (h *Host) HandleKey(msg tea.KeyPressMsg) (close bool, cmd tea.Cmd) {
 		}
 		return false, nil
 	}
+	// The message field is a text area: enter opens a line there, so the send
+	// key has to be one the field does not want. It is the same pair the
+	// commit modal uses, and it works from every focus.
+	switch msg.String() {
+	case "ctrl+s", "ctrl+enter":
+		return false, h.send()
+	}
 	if h.modal.FocusedID() != messageID {
 		switch msg.String() {
 		case "a":
@@ -484,7 +665,16 @@ func (h *Host) HandleMouse(msg tea.MouseMsg, handler *mouse.Handler) (close bool
 	if h.modal == nil {
 		return false, nil
 	}
+	if h.wheelOverList(msg, handler) {
+		return false, nil
+	}
+	prevScope := h.scopeIdx
 	action := h.modal.HandleMouse(msg, handler)
+	// A scope click changes what the plan is a plan of, exactly as the key
+	// does; without this the segmented control only relabels the old answer.
+	if h.scopeIdx != prevScope {
+		return false, h.Replan()
+	}
 	switch {
 	case action == ActionCancel:
 		return true, nil
@@ -496,6 +686,35 @@ func (h *Host) HandleMouse(msg tea.MouseMsg, handler *mouse.Handler) (close bool
 	return false, nil
 }
 
+// wheelOverList scrolls the recipient window when the wheel turns over it, and
+// reports that it consumed the event. The modal body would otherwise absorb a
+// wheel it has nothing to scroll.
+func (h *Host) wheelOverList(msg tea.MouseMsg, handler *mouse.Handler) bool {
+	wheel, ok := msg.(tea.MouseWheelMsg)
+	if !ok || handler == nil || handler.HitMap == nil {
+		return false
+	}
+	mm := wheel.Mouse()
+	var delta int
+	switch mm.Button {
+	case tea.MouseWheelUp:
+		delta = -1
+	case tea.MouseWheelDown:
+		delta = 1
+	default:
+		return false
+	}
+	region := handler.HitMap.Test(mm.X, mm.Y)
+	if region == nil {
+		return false
+	}
+	if region.ID != listID && !strings.HasPrefix(region.ID, rcptPrefix) {
+		return false
+	}
+	h.scrollList(delta)
+	return true
+}
+
 func (h *Host) HandlePaste(text string) {
 	if h == nil || h.sending {
 		return
@@ -504,7 +723,7 @@ func (h *Host) HandlePaste(text string) {
 	if h.modal == nil || h.modal.FocusedID() != messageID {
 		return
 	}
-	h.input.SetValue(h.input.Value() + text)
+	h.input.InsertString(text)
 }
 
 func (h *Host) WheelAtBoundary(msg tea.MouseWheelMsg, handler *mouse.Handler) bool {
@@ -561,4 +780,10 @@ func errString(err error) string {
 		return ""
 	}
 	return err.Error()
+}
+
+// OwnedBy reports whether this modal belongs to the given surface, so a
+// surface can ignore the other one's plan and result.
+func (h *Host) OwnedBy(surface string) bool {
+	return h != nil && h.Surface == surface
 }

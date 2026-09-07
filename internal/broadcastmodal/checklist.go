@@ -87,7 +87,7 @@ func shortReason(row agentbroadcast.Recipient) string {
 		return "sender"
 	case "status":
 		return "status"
-	case "excluded":
+	case agentbroadcast.ReasonExcluded:
 		return "deselected"
 	default:
 		return row.Reason.Code

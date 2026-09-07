@@ -22,6 +22,12 @@ const (
 
 	reasonSender = "sender"
 	reasonStatus = "status"
+
+	// ReasonExcluded is the verdict a row carries when the caller deselected
+	// it: nothing was attempted and nothing refused it. The modal reads it to
+	// keep a deselection out of the result notifications — the user already
+	// knows, having just unchecked the box.
+	ReasonExcluded = "excluded"
 )
 
 type Outcome string

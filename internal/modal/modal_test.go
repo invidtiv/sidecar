@@ -1,6 +1,7 @@
 package modal
 
 import (
+	"charm.land/bubbles/v2/textarea"
 	"strings"
 	"testing"
 
@@ -934,5 +935,30 @@ func TestHandleKeyEnterWithoutFocusSubmitsPrimary(t *testing.T) {
 	action, _ = plain.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if action != "" {
 		t.Errorf("enter without focus or primary = %q, want empty", action)
+	}
+}
+
+// A textarea opens a line on enter. A modal with a declared primary action
+// must not read the same keystroke as a submit, or the field sends the moment
+// the user tries to write a second line (td-cd1706).
+func TestEnterInATextareaOpensALineAndDoesNotSubmit(t *testing.T) {
+	area := textarea.New()
+	area.SetWidth(40)
+	area.SetHeight(3)
+	area.Focus()
+	m := New("Compose", WithWidth(50), WithPrimaryAction("send")).
+		AddSection(Textarea("body", &area, 3))
+	m.Render(80, 24, mouse.NewHandler())
+	m.SetFocus("body")
+
+	if action, _ := m.HandleKey(tea.KeyPressMsg{Code: 'a', Text: "a"}); action != "" {
+		t.Fatalf("typing returned action %q", action)
+	}
+	action, _ := m.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if action != "" {
+		t.Fatalf("enter in the textarea returned %q, want no action", action)
+	}
+	if !strings.Contains(area.Value(), "\n") {
+		t.Fatalf("enter did not open a line: %q", area.Value())
 	}
 }

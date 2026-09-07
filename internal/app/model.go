@@ -1585,6 +1585,7 @@ func (m *Model) leaveOverview(restoreProject bool) tea.Cmd {
 		}
 	}
 	if wasGlobal && m.overview != nil {
+		m.overview.CloseBroadcast()
 		m.overview.Stop()
 	}
 	m.scope = ScopeProject

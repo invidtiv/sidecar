@@ -51,8 +51,18 @@ func (s Service) Plan(ctx context.Context, req PlanRequest) (Plan, error) {
 	}
 
 	for _, item := range s.observeAll(ctx, selected) {
-		if item.err != nil || item.state.Kind == "" {
-			// No identified provider: absent from the plan, same as agent list.
+		if item.err != nil {
+			// Nothing answered for this target: its session is gone, or the
+			// lookup itself failed. Either way no shell was observed, so it is
+			// neither a recipient nor one of the shells the count speaks for —
+			// a registry row for a worktree nobody has opened is not a shell
+			// sitting there without an agent (td-cd1706).
+			continue
+		}
+		if item.state.Kind == "" {
+			// A live shell with no identified provider: absent from the plan,
+			// same as agent list, but counted so the modal can say why the
+			// list is shorter than the workspace.
 			plan.ShellsWithoutAgent++
 			continue
 		}

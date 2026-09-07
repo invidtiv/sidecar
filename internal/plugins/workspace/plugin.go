@@ -789,6 +789,12 @@ func (p *Plugin) SetFocused(f bool) {
 	// resize and consume frames for the same pane.
 	if !f {
 		p.focused = false
+		// A modal belongs to the surface that opened it. Left standing, the
+		// Broadcast modal is an overlay on a surface nobody is looking at: it
+		// keeps absorbing this plugin's keys and reappears, plan and all, the
+		// next time the user comes back to a tab they thought they had left
+		// (td-cd1706).
+		p.broadcast = nil
 		p.deactivateTerminalOwnership()
 		return
 	}

@@ -64,9 +64,9 @@ func TestGlobalBroadcastModalOwnsKeys(t *testing.T) {
 
 func TestGlobalBroadcastLateSentDoesNotCloseAReopenedModal(t *testing.T) {
 	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
-	first := broadcastmodal.New("", t.TempDir(), broadcastmodal.ScopeAllProjects, false)
+	first := broadcastmodal.New(broadcastmodal.SurfaceSessions, "", t.TempDir(), broadcastmodal.ScopeAllProjects, false)
 	m.broadcast = first
-	second := broadcastmodal.New("", t.TempDir(), broadcastmodal.ScopeAllProjects, false)
+	second := broadcastmodal.New(broadcastmodal.SurfaceSessions, "", t.TempDir(), broadcastmodal.ScopeAllProjects, false)
 	m.broadcast = second
 	m.applyBroadcastSent(broadcastmodal.SentMsg{Host: first})
 	if m.broadcast != second {
@@ -116,4 +116,34 @@ func hasBroadcastCommand(commands []plugin.Command, id string) bool {
 		}
 	}
 	return false
+}
+
+// Sessions gives up its modal when it stops being the visible surface: the app
+// calls this on a global tab change and on the way back to a project, so a
+// modal cannot reappear over a surface that never opened it (td-cd1706).
+func TestGlobalBroadcastClosesWhenSessionsIsCovered(t *testing.T) {
+	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
+	run(t, m, m.focusList())
+	enableGlobalBroadcast(t)
+	if handled, _ := m.WorkspacesKey(globalMoveKey('B')); !handled || m.broadcast == nil {
+		t.Fatal("fixture did not open the broadcast modal")
+	}
+	m.CloseBroadcast()
+	if m.BroadcastOpen() {
+		t.Fatal("Sessions kept its broadcast modal open after being covered")
+	}
+}
+
+// The mirror of the project workspace's rule: Sessions answers only for the
+// results it asked for (td-cd1706).
+func TestGlobalBroadcastIgnoresProjectResult(t *testing.T) {
+	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
+	project := broadcastmodal.New(broadcastmodal.SurfaceProject, "demo", t.TempDir(), broadcastmodal.ScopeThisProject, false)
+	if cmd := m.applyBroadcastSent(broadcastmodal.SentMsg{Host: project}); cmd != nil {
+		t.Fatal("Sessions reported the project workspace's broadcast")
+	}
+	own := broadcastmodal.New(broadcastmodal.SurfaceSessions, "demo", t.TempDir(), broadcastmodal.ScopeAllProjects, false)
+	if cmd := m.applyBroadcastSent(broadcastmodal.SentMsg{Host: own}); cmd == nil {
+		t.Fatal("Sessions did not report its own broadcast")
+	}
 }

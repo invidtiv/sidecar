@@ -52,9 +52,9 @@ func TestProjectBroadcastBDoesNotOpenWhenFilterFocused(t *testing.T) {
 func TestProjectBroadcastLateSentDoesNotCloseAReopenedModal(t *testing.T) {
 	p := docPaneTestPlugin(t, t.TempDir(), false)
 	p.activePane = PaneSidebar
-	first := broadcastmodal.New("demo", t.TempDir(), broadcastmodal.ScopeThisProject, false)
+	first := broadcastmodal.New(broadcastmodal.SurfaceProject, "demo", t.TempDir(), broadcastmodal.ScopeThisProject, false)
 	p.broadcast = first
-	second := broadcastmodal.New("demo", t.TempDir(), broadcastmodal.ScopeThisProject, false)
+	second := broadcastmodal.New(broadcastmodal.SurfaceProject, "demo", t.TempDir(), broadcastmodal.ScopeThisProject, false)
 	p.broadcast = second
 	p.applyBroadcastSent(broadcastmodal.SentMsg{Host: first})
 	if p.broadcast != second {
@@ -101,4 +101,37 @@ func hasBroadcastCommand(commands []plugin.Command, id string) bool {
 		}
 	}
 	return false
+}
+
+// A modal belongs to the surface that opened it. Losing focus is this
+// plugin's visibility contract, and a Broadcast modal left standing behind it
+// reappeared over whatever the user came back to (td-cd1706).
+func TestProjectBroadcastClosesWhenThePluginIsCovered(t *testing.T) {
+	p := docPaneTestPlugin(t, t.TempDir(), false)
+	p.activePane = PaneSidebar
+	p.sidebarVisible = true
+	enableWorkspaceFeature(t, features.AgentControl.Name)
+	p.handleKeyPress(moveKey('B'))
+	if p.broadcast == nil {
+		t.Fatal("fixture did not open the broadcast modal")
+	}
+	p.focused = true
+	p.SetFocused(false)
+	if p.broadcast != nil {
+		t.Fatal("the covered plugin kept its broadcast modal open")
+	}
+}
+
+// Both surfaces receive every SentMsg. Only the surface that asked reports it,
+// or one broadcast arrives as two identical notifications (td-cd1706).
+func TestProjectBroadcastIgnoresSessionsResult(t *testing.T) {
+	p := docPaneTestPlugin(t, t.TempDir(), false)
+	sessions := broadcastmodal.New(broadcastmodal.SurfaceSessions, "demo", t.TempDir(), broadcastmodal.ScopeAllProjects, false)
+	if cmd := p.applyBroadcastSent(broadcastmodal.SentMsg{Host: sessions}); cmd != nil {
+		t.Fatal("the project workspace reported the Sessions broadcast")
+	}
+	own := broadcastmodal.New(broadcastmodal.SurfaceProject, "demo", t.TempDir(), broadcastmodal.ScopeThisProject, false)
+	if cmd := p.applyBroadcastSent(broadcastmodal.SentMsg{Host: own}); cmd == nil {
+		t.Fatal("the project workspace did not report its own broadcast")
+	}
 }

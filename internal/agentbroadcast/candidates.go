@@ -35,7 +35,7 @@ func (p Plan) WithRequested(keep func(Recipient) bool) Plan {
 		}
 		if row.Outcome == OutcomeWouldSend {
 			out.Recipients[i].Outcome = OutcomeSkipped
-			out.Recipients[i].Reason = &Reason{Code: "excluded", Message: "deselected"}
+			out.Recipients[i].Reason = &Reason{Code: ReasonExcluded, Message: "deselected"}
 		}
 	}
 	return out
