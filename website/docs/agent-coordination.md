@@ -193,10 +193,10 @@ From the TUI the sender is `the user`. `--raw` sends the text with no prefix at 
 |-----|--------|
 | `B` | Open the modal from the workspace list or Sessions |
 | `tab` | Move between scope, the recipient list, and the message |
-| `space` | Toggle the recipient under the cursor |
-| `a` / `n` | Select all / none |
-| `j`, `k` | Move the cursor through the recipients |
-| `ctrl+s` | Send |
+| `space` | Toggle the recipient under the cursor (recipient list) |
+| `a` / `n` | Select all / none (anywhere except the message field) |
+| `j`, `k` | Move the cursor through the recipients (recipient list) |
+| `ctrl+s` | Send, from any focus |
 | `enter` | Open a line in the message; send from the recipient list |
 | `esc` | Close without sending |
 
