@@ -375,6 +375,10 @@ func (m *Model) setGlobalTab(id string) tea.Cmd {
 		return nil
 	}
 	previous := m.globalTab
+	if m.overview != nil {
+		// Sessions is about to be covered by another global tab.
+		m.overview.CloseBroadcast()
+	}
 	var deckCmd tea.Cmd
 	if h := m.currentContentDeck(); h != nil {
 		h.releaseAppContentInputs()

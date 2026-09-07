@@ -12,10 +12,9 @@ import (
 type Env struct {
 	Stdout io.Writer
 	Stderr io.Writer
-	// Stdin is the caller's standard input. It is used only by surfaces that
-	// accept a bounded structured payload — today, a provider hook handing
-	// `agent report-session` its event JSON — and is nil for every command that
-	// does not read one.
+	// Stdin is the caller's standard input. Commands that accept a body —
+	// `agent broadcast TEXT` as `-`, and `agent report-session --hook-stdin` —
+	// read it here. defaultEnv sets it to os.Stdin; tests inject a reader.
 	Stdin                io.Reader
 	StateDir             string
 	Ctx                  context.Context

@@ -2,6 +2,12 @@
 
 All notable changes to sidecar are documented here.
 
+## [Unreleased]
+
+### Features
+
+- **One message to every live agent.** `sidecar agent broadcast TEXT` puts one short prompt in front of every live agent in the caller's project, or every live agent on this machine with `--all`, without starting anything. `B` on the workspace list or Sessions opens the same plan as a checklist: `space` toggles a row, `a`/`n` select all or none, the scope segments re-plan between this project and every project, and the message is a four-line text area where `enter` opens a line and `ctrl+s` sends. Each row is a receipt — `submitted`, `skipped`, or `unknown` — not an acknowledgement that the agent did anything with the text. Gated on `agent_control` (default off). Remote hosts are out of scope; `--host` is a usage error and `--all` means this machine. (td-3c3245)
+
 ## [v1.14.0] - 2026-09-05
 
 ### Features

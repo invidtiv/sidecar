@@ -22,12 +22,13 @@ type SourceID string
 // The hardcoded source set. External registration is a later phase; the ids
 // are stable because they are written into the JSONL store.
 const (
-	SourceAgent   SourceID = "agent"
-	SourceWaiting SourceID = "waiting"
-	SourceSession SourceID = "session"
-	SourceTasks   SourceID = "tasks"
-	SourceTD      SourceID = "td"
-	SourceSystem  SourceID = "system"
+	SourceAgent     SourceID = "agent"
+	SourceWaiting   SourceID = "waiting"
+	SourceSession   SourceID = "session"
+	SourceTasks     SourceID = "tasks"
+	SourceTD        SourceID = "td"
+	SourceSystem    SourceID = "system"
+	SourceBroadcast SourceID = "broadcast"
 )
 
 // Severity ranks a notification within its source.
@@ -93,6 +94,7 @@ type Source struct {
 var sources = []Source{
 	{ID: SourceWaiting, Label: "WAITING", Glyph: "?", Hue: HueWarning, Priority: 60, DefaultExpiry: 0},
 	{ID: SourceAgent, Label: "AGENTS", Glyph: "◆", Hue: HuePrimary, Priority: 50, DefaultExpiry: 12 * time.Second},
+	{ID: SourceBroadcast, Label: "BROADCAST", Glyph: "»", Hue: HueAccent, Priority: 45, DefaultExpiry: 0},
 	{ID: SourceSession, Label: "SESSIONS", Glyph: "✓", Hue: HueSuccess, Priority: 40, DefaultExpiry: 10 * time.Second},
 	{ID: SourceTD, Label: "TD", Glyph: "■", Hue: HueSecondary, Priority: 30, DefaultExpiry: 10 * time.Second},
 	{ID: SourceTasks, Label: "TASKS", Glyph: "○", Hue: HueInfo, Priority: 20, DefaultExpiry: 10 * time.Second},

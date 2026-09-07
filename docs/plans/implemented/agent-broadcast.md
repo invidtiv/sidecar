@@ -1,6 +1,6 @@
 # Agent broadcast: one message to every live agent
 
-**Status:** proposed; for discussion. **Scope:** a new application core (`internal/agentbroadcast`), a `sidecar agent broadcast` verb, one modal hosted by the workspace list and the Sessions surface, `sidecar agents` help, the coordinate-agents skill, `docs/reference/cli.md`. **Created:** 2026-09-05
+**Status:** implemented. **Scope:** a new application core (`internal/agentbroadcast`), a `sidecar agent broadcast` verb, one modal hosted by the workspace list and the Sessions surface, `sidecar agents` help, the coordinate-agents skill, `docs/reference/cli.md`. **Created:** 2026-09-05
 
 One sentence: **an agent or a human can put one short message in front of every live agent in a project, or every live agent Sidecar can see, without starting anything, and get back a per-target receipt for what was and was not delivered.**
 
@@ -216,11 +216,11 @@ Not in the first slice. `--all` means this machine. The per-verb `--host ID` pat
 - A blocked agent's screen is unchanged after a broadcast that listed it.
 - A fan-out to eight agents completes in under ten seconds on the demo environment.
 
-## Open questions
+## Settled decisions
 
-1. **Envelope wording.** The prefix above is a proposal. The sender description (`"tacoma-fable" in clara-home` versus `the user`) and whether to include a timestamp are worth a minute of taste before S1 writes the tests.
-2. **Should `working` agents be recipients by default?** This plan says yes because queued-as-next-turn is what every provider does and is what "be aware of X" wants. The alternative is default `idle`/`done` with `--status working` opt-in, which is safer for a message that expects immediate action and worse for the code-freeze case. Decide once; do not add a config setting.
-3. **`B` versus a palette-only entry.** Two unbound `B`s exist and the action is rare. If the keyboard surface feels like clutter, palette plus the CLI is enough for a first slice.
+1. **Envelope wording.** Delivered text is `[Sidecar broadcast from "<shell>" in <project>] …` from the CLI and `[Sidecar broadcast from the user] …` from the TUI. No timestamp: the point is framing, not a log line. `--raw` skips the envelope. Tests pin this exact string.
+2. **`working` agents are recipients by default.** Queued-as-next-turn is what every provider does and is what "be aware of X" wants. A caller who wants only idle/done passes `--status idle --status done`. No config setting.
+3. **`B` plus a palette entry.** Two unbound `B`s exist (`workspace-list` and `global-workspaces`). Bind both, gate on `agent_control`, and add a palette entry "Broadcast to agents" so the same modal is reachable from anywhere the flag is on.
 
 ## Rejected alternatives
 

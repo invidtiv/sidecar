@@ -18,6 +18,60 @@ The report, end, release, and explain commands are a separate surface: they reco
 Usage: sidecar agent <command>
 ```
 
+### `sidecar agent broadcast`
+
+Send one prompt to every live agent in scope
+
+Recipients are the live agents in the caller's project, minus the caller.
+Outside a managed shell, --project NAME or --all is required. --to TARGET
+alone is the whole set; with a scope flag it adds. Each recipient still
+has to pass the same promptable check agent prompt uses: a pane with no
+identified provider is never a recipient, and nothing is started.
+
+TEXT is a positional argument or - for stdin. Delivered text is prefixed
+with [Sidecar broadcast from "<shell>" in <project>] unless --raw.
+
+There is no --wait: use agent wait per target if the recipients need to
+settle. Receipts, not acknowledgements — each row is submitted, skipped,
+or unknown. --host is not accepted; remote hosts are not in this slice.
+
+--dry-run prints the plan (would_send / skipped) and sends nothing, and
+exits 0 even when the plan is empty.
+
+```
+Usage: sidecar agent broadcast TEXT [--project NAME | --all] [--to TARGET ...] [--exclude TARGET ...] [--status STATUS ...] [--include-self] [--raw] [--dry-run] [--json]
+```
+
+**Options:**
+
+- `--project NAME`: Scope to one project (slug, basename, or path; or a worktree it created, by path or basename)
+- `--all`: Scope to every registered project on this machine
+- `--to TARGET`: Add an explicit recipient (repeatable); alone, this is the whole set
+- `--exclude TARGET`: Remove a discovered recipient (repeatable)
+- `--status STATUS`: Narrow discovery to these states (repeatable; default idle, done, working)
+- `--include-self`: Do not drop the calling shell
+- `--raw`: Deliver the text exactly as given, without the envelope
+- `--dry-run`: Print the plan and send nothing
+- `--json`: Write stable structured JSON
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: success
+- `1`: transport, timeout, or internal failure
+- `2`: usage error or version skew
+- `3`: target is not registered
+- `5`: feature disabled or semantic/value refusal
+
+**Examples:**
+
+```bash
+# the caller's project, minus the caller
+sidecar agent broadcast "Code freeze on main; hold pushes." --json
+# every live agent on this machine, send nothing
+sidecar agent broadcast "stop" --all --dry-run --json
+```
+
 ### `sidecar agent end`
 
 Report that the current agent run ended
@@ -1939,7 +1993,7 @@ Usage: sidecar notify post [options] <title>
 
 - `--body TEXT`: Detail line shown under the title
 - `--target SPEC`: Call to action, kind:value[:line][@project]; repeatable
-- `--source ID`: Source: agent, waiting, session, tasks, td, system (default agent)
+- `--source ID`: Source: agent, waiting, session, tasks, td, system, broadcast (default agent)
 - `--expiry DURATION`: Toast lifetime (e.g. 10s), or "never" (default: the source's)
 - `--json`: Write one structured result object to stdout
 - `-h, --help`: Show this help

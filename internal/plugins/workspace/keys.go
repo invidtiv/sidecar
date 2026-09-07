@@ -44,6 +44,10 @@ func (p *Plugin) paneSwitcherKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 }
 
 func (p *Plugin) handleKeyPress(msg tea.KeyPressMsg) tea.Cmd {
+	if p.broadcast != nil {
+		p.broadcast.Ensure(p.width)
+		return p.handleBroadcastModalKey(msg)
+	}
 	if p.paneLayoutModal != nil {
 		return p.handlePaneLayoutModalKey(msg)
 	}
@@ -421,6 +425,9 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 	// The resolver targets the focused preview leaf or the sidebar row's Primary
 	// leaf and declines every text-input/overlay state.
 	if handled, cmd := p.handlePaneMoveKey(msg); handled {
+		return cmd
+	}
+	if handled, cmd := p.handleBroadcastKey(msg); handled {
 		return cmd
 	}
 	// Tab walks every window on screen — sidebar, tree leaves, terminal panel —

@@ -1,3 +1,4 @@
+sidecar agent broadcast TEXT [--json]
 sidecar agent get [TARGET] --json
 sidecar agent list --json
 sidecar agent start [TARGET] --kind KIND

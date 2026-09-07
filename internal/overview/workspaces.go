@@ -446,6 +446,10 @@ func (m *Model) WorkspacesView(width, height int) string {
 	if m.viewFlyoutOpen {
 		view = m.overlayViewFlyout(view, width, height)
 	}
+	if m.broadcast != nil {
+		m.broadcast.Ensure(width)
+		view = ui.OverlayModal(view, m.broadcast.Render(width, height, m.workspacesMouse), width, height)
+	}
 	if m.paneLayoutModal != nil {
 		view = ui.OverlayModal(view, m.paneLayoutModal.Render(width, height, m.workspacesMouse), width, height)
 	}
@@ -827,6 +831,9 @@ func (m *Model) WorkspacesConsumesTextInput() bool {
 	if m == nil {
 		return false
 	}
+	if m.broadcast != nil {
+		return true
+	}
 	if m.WorkspacesFilterFocused() {
 		return true
 	}
@@ -840,6 +847,9 @@ func (m *Model) WorkspacesConsumesTextInput() bool {
 func (m *Model) WorkspacesBlocksGlobalKeys() bool {
 	if m == nil {
 		return false
+	}
+	if m.broadcast != nil {
+		return true
 	}
 	tabs := m.focusedResourceTabs()
 	return tabs != nil && tabs.BlocksGlobalKeys()
@@ -873,6 +883,11 @@ func (m *Model) WorkspacesPaneLayoutModalOpen() bool {
 // WorkspacesPaste appends pasted text to a focused filter. An open pane-layout
 // modal absorbs the paste before the previously focused surface can see it.
 func (m *Model) WorkspacesPaste(text string) bool {
+	if m.broadcast != nil {
+		m.broadcast.Ensure(m.width)
+		m.broadcast.HandlePaste(text)
+		return true
+	}
 	if m.WorkspacesPaneLayoutModalOpen() {
 		return true
 	}
@@ -897,6 +912,10 @@ func (m *Model) WorkspacesPreviewCmd() tea.Cmd { return m.previewSync() }
 // printable characters mid-query.
 func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	key := msg.String()
+	if m.broadcast != nil {
+		m.broadcast.Ensure(m.width)
+		return true, m.handleBroadcastModalKey(msg)
+	}
 	if m.paneLayoutModal != nil {
 		return true, m.handlePaneLayoutModalKey(msg)
 	}
@@ -961,6 +980,9 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	// the selected list row's Primary terminal. Input and overlays were answered
 	// above, so they retain the printable key.
 	if handled, cmd := m.handlePaneMoveKey(msg); handled {
+		return true, cmd
+	}
+	if handled, cmd := m.handleBroadcastKey(msg); handled {
 		return true, cmd
 	}
 	if key == "\\" {
@@ -1214,6 +1236,9 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 	mouseMsg, ok := msg.(tea.MouseMsg)
 	if !ok {
 		return nil
+	}
+	if m.broadcast != nil {
+		return m.handleBroadcastModalMouse(mouseMsg)
 	}
 	if m.paneLayoutModal != nil {
 		return m.handlePaneLayoutModalMouse(mouseMsg)
@@ -1477,6 +1502,9 @@ func (m *Model) pressInSecondaryLeaf(action mouse.MouseAction) bool {
 // mutating visible state. It is called before Bubble Tea Update/View so an
 // inertial tail at a real boundary can be discarded cheaply.
 func (m *Model) WorkspacesWheelAtBoundary(msg tea.MouseWheelMsg) bool {
+	if m != nil && m.broadcast != nil && m.workspacesMouse != nil {
+		return m.broadcast.WheelAtBoundary(msg, m.workspacesMouse)
+	}
 	if m != nil && m.paneLayoutModal != nil && m.workspacesMouse != nil {
 		return m.paneLayoutModal.Modal().WheelAtBoundary(msg, m.workspacesMouse)
 	}

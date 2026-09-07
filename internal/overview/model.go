@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/activitystore"
 	"github.com/marcus/sidecar/internal/agentstatus"
+	"github.com/marcus/sidecar/internal/broadcastmodal"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/contentpanes"
 	"github.com/marcus/sidecar/internal/hosts"
@@ -149,6 +150,13 @@ func IsAsyncMessage(msg tea.Msg) bool {
 		// Auto-close of a dead shell is background work; it must land whether
 		// or not this browser is the visible surface (td-6a4100).
 		return true
+	case broadcastmodal.PlannedMsg, broadcastmodal.SentMsg:
+		// Broadcast plan/send are tea.Cmds from this host. They are not in the
+		// plugin registry, so without this they die at the app while the modal
+		// stays on "looking up live agents…". Shared with the project plugin
+		// (see IsSharedBroadcastMessage) so whichever surface opened the modal
+		// still receives the result.
+		return true
 	default:
 		return false
 	}
@@ -161,6 +169,18 @@ func IsAsyncMessage(msg tea.Msg) bool {
 func IsSharedPickerMessage(msg tea.Msg) bool {
 	switch msg.(type) {
 	case createPickerDataMsg, workspacecreate.FilesScannedMsg:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsSharedBroadcastMessage reports plan/send results for the Broadcast modal.
+// Sessions and the project workspace both host it; the app must offer the
+// message to the browser and then keep broadcasting to plugins.
+func IsSharedBroadcastMessage(msg tea.Msg) bool {
+	switch msg.(type) {
+	case broadcastmodal.PlannedMsg, broadcastmodal.SentMsg:
 		return true
 	default:
 		return false
@@ -422,6 +442,7 @@ type Model struct {
 	hoverPreviewClose  panelayout.Kind
 	hoverPreviewLayout int
 	paneLayoutModal    *panereposition.Controller
+	broadcast          *broadcastmodal.Host
 	paneZoom           panereposition.Zoom
 	// hoverTabClose is the per-tab × under the pointer, keyed by preview kind.
 	hoverTabClose tabs.CloseHover
@@ -844,6 +865,11 @@ func (m *Model) pulseCmd() tea.Cmd {
 
 func (m *Model) update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
+	case broadcastmodal.PlannedMsg:
+		m.applyBroadcastPlan(msg)
+		return nil
+	case broadcastmodal.SentMsg:
+		return m.applyBroadcastSent(msg)
 	case termpreview.HostBackgroundMsg:
 		m.terminalDefaultBackground = msg.ANSI
 		return nil

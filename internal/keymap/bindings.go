@@ -482,6 +482,9 @@ func DefaultBindings() []Binding {
 		// workspace-* context names for their own passive leaves and now open the
 		// same modal from them. Plugin browse, input, search, editor, and live
 		// terminal contexts are intentionally absent.
+		{Key: "B", Command: "broadcast-agents", Context: "workspace-list", Feature: "agent_control"},
+		{Key: "B", Command: "broadcast-agents", Context: "global-workspaces", Feature: "agent_control"},
+
 		{Key: "M", Command: "move-pane", Context: "workspace-preview", Feature: "pane_move"},
 		{Key: "M", Command: "move-pane", Context: "workspace-list", Feature: "pane_move"},
 		{Key: "M", Command: "move-pane", Context: "workspace-doc", Feature: "pane_move"},

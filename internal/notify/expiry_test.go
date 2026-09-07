@@ -17,6 +17,12 @@ func TestExpiryForFallsBackToTheRegistryDefault(t *testing.T) {
 	if got := ExpiryFor(SourceWaiting); got != 0 {
 		t.Fatalf("waiting default expiry = %s, want sticky (0)", got)
 	}
+	if got := ExpiryFor(SourceBroadcast); got != 0 {
+		t.Fatalf("broadcast default expiry = %s, want sticky (0)", got)
+	}
+	if _, ok := Lookup(SourceBroadcast); !ok {
+		t.Fatal("SourceBroadcast is not registered")
+	}
 }
 
 func TestConfiguredExpiryReachesNormalize(t *testing.T) {

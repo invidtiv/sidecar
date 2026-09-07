@@ -281,3 +281,38 @@ func (m *Modal) isViewportBarRegion(region *mouse.Region) bool {
 	idx, ok := m.barIndexAt(region)
 	return ok && m.bars[idx].section < 0
 }
+
+// staticBarColumn is a draw-only vertical bar: trackHeight rows, thumb sized
+// and positioned for a viewport of visibleItems over totalItems. It carries no
+// hit regions and answers no gestures — a section uses it to say "there is more
+// here" where an interactive bar would be more machinery than the affordance is
+// worth. Everything fits, or the track is too short, renders a spacer column so
+// the layout beside it never jitters.
+func staticBarColumn(totalItems, scrollOffset, visibleItems, trackHeight int) string {
+	if trackHeight < 1 {
+		return ""
+	}
+	spacer := func() string {
+		lines := make([]string, trackHeight)
+		for i := range lines {
+			lines[i] = " "
+		}
+		return strings.Join(lines, "\n")
+	}
+	loc := scroll.ThumbLocFor(totalItems, scrollOffset, visibleItems, trackHeight)
+	if !loc.Has {
+		return spacer()
+	}
+	theme := styles.GetCurrentTheme()
+	trackChar := barPartStyle(styles.ScrollbarTrackColor, theme.Colors.ScrollbarTrack, false, false).Render("│")
+	thumbChar := barPartStyle(styles.ScrollbarThumbColor, theme.Colors.ScrollbarThumb, false, false).Render("┃")
+	lines := make([]string, trackHeight)
+	for i := range trackHeight {
+		if i >= loc.Pos && i < loc.Pos+loc.Size {
+			lines[i] = thumbChar
+		} else {
+			lines[i] = trackChar
+		}
+	}
+	return strings.Join(lines, "\n")
+}

@@ -1,0 +1,113 @@
+package overview
+
+import (
+	"strings"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/broadcastmodal"
+	"github.com/marcus/sidecar/internal/config"
+)
+
+func (m *Model) OpenBroadcast() tea.Cmd { return m.openBroadcast() }
+
+func (m *Model) openBroadcast() tea.Cmd {
+	if !broadcastmodal.Enabled() {
+		return nil
+	}
+	m.broadcast = broadcastmodal.New(broadcastmodal.SurfaceSessions, m.broadcastProjectKey(), config.StateDir(), broadcastmodal.ScopeAllProjects, m.broadcastShowsRemote())
+	return m.broadcast.Replan()
+}
+
+func (m *Model) broadcastProjectKey() string {
+	ws, ok := m.SelectedWorkspace()
+	if !ok {
+		return ""
+	}
+	if key := attentionProjectKey(ws.ProjectKey); key != "" {
+		return key
+	}
+	return strings.TrimSpace(ws.ProjectName)
+}
+
+func (m *Model) broadcastShowsRemote() bool {
+	if m == nil {
+		return false
+	}
+	for _, ws := range m.catalog {
+		if ws.HostID != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *Model) handleBroadcastKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
+	if msg.String() != "B" || !broadcastmodal.Enabled() {
+		return false, nil
+	}
+	if m.WorkspaceFocusContext() != ctxGlobalWorkspaces {
+		return false, nil
+	}
+	if m.broadcast != nil {
+		return true, nil
+	}
+	return true, m.openBroadcast()
+}
+
+func (m *Model) handleBroadcastModalKey(msg tea.KeyPressMsg) tea.Cmd {
+	if m.broadcast == nil {
+		return nil
+	}
+	m.broadcast.Ensure(m.width)
+	close, cmd := m.broadcast.HandleKey(msg)
+	if close {
+		m.broadcast = nil
+	}
+	return cmd
+}
+
+func (m *Model) handleBroadcastModalMouse(msg tea.MouseMsg) tea.Cmd {
+	if m.broadcast == nil {
+		return nil
+	}
+	m.broadcast.Ensure(m.width)
+	close, cmd := m.broadcast.HandleMouse(msg, m.workspacesMouse)
+	if close {
+		m.broadcast = nil
+	}
+	return cmd
+}
+
+func (m *Model) applyBroadcastPlan(msg broadcastmodal.PlannedMsg) {
+	if m.broadcast != nil {
+		m.broadcast.ApplyPlan(msg)
+	}
+}
+
+func (m *Model) BroadcastOpen() bool { return m != nil && m.broadcast != nil }
+
+// CloseBroadcast drops the modal when Sessions stops being the visible
+// surface. A modal belongs to the surface that opened it: left standing behind
+// a tab switch it reappears later over whatever the user has moved on to
+// (td-cd1706).
+func (m *Model) CloseBroadcast() {
+	if m != nil {
+		m.broadcast = nil
+	}
+}
+
+// applyBroadcastSent reports a result this surface asked for. The project
+// workspace sees the same message, so a result each surface reported would
+// arrive as two identical notifications for one broadcast (td-cd1706).
+func (m *Model) applyBroadcastSent(msg broadcastmodal.SentMsg) tea.Cmd {
+	if !msg.Host.OwnedBy(broadcastmodal.SurfaceSessions) {
+		return nil
+	}
+	if m.broadcast == msg.Host {
+		m.broadcast = nil
+	}
+	if msg.Err != nil {
+		return broadcastmodal.NotifyError(msg.Err)
+	}
+	return broadcastmodal.NotifyCmd(msg.Result)
+}

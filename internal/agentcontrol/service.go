@@ -115,23 +115,32 @@ func (s Service) defaults() Service {
 	return s
 }
 
-func (s Service) Get(ctx context.Context, target Target) (Agent, error) {
+// InspectState is one inspect plus detection. Get and broadcast Plan share it
+// so a fan-out does not pay two tmux captures per pane.
+func (s Service) InspectState(ctx context.Context, target Target) (Snapshot, AgentState, error) {
 	s = s.defaults()
 	if s.Terminal == nil {
-		return Agent{}, &Error{Code: ErrTransport, Message: "terminal adapter is unavailable"}
+		return Snapshot{}, AgentState{}, &Error{Code: ErrTransport, Message: "terminal adapter is unavailable"}
 	}
 	snap, err := s.Terminal.Inspect(ctx, target)
 	if err != nil {
-		return Agent{}, transport(target, err)
+		return Snapshot{}, AgentState{}, transport(target, err)
 	}
 	var tracker agentactivity.Tracker
-	// Get is deliberately a one-shot passive read. Once Inspect has positively
-	// identified a live provider process, seed the tracker as a process-change
-	// observation so providers whose stable composer has no explicit idle
-	// marker can report inferred idle without an impossible second observation.
-	// This remains quiet (never "done") and does not relax provider identity.
+	// A one-shot read. Once Inspect has positively identified a live provider
+	// process, seed the tracker as a process-change observation so providers
+	// whose stable composer has no explicit idle marker can report inferred
+	// idle without an impossible second observation. This remains quiet (never
+	// "done") and does not relax provider identity.
 	tracker.ResetForProcessChange(snap.CapturedAt)
-	state := s.Detect(snap, &tracker)
+	return snap, s.Detect(snap, &tracker), nil
+}
+
+func (s Service) Get(ctx context.Context, target Target) (Agent, error) {
+	snap, state, err := s.InspectState(ctx, target)
+	if err != nil {
+		return Agent{}, err
+	}
 	return Agent{Target: snap.Target, Agent: state}, nil
 }
 

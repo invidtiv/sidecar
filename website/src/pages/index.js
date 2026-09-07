@@ -279,6 +279,11 @@ const DETAILS = [
     'Switch between worktrees instantly inside any repository with state restored automatically.',
   ],
   [
+    'Broadcast to agents',
+    'B',
+    'One message to every live agent in a project, or every agent on the machine, with a per-target receipt for each. Behind the agent_control flag.',
+  ],
+  [
     'Notification Centre',
     'N',
     'Corner toast stacks and slide-over notification history with actionable jumps into files and tasks.',
@@ -513,6 +518,7 @@ export default function Home() {
                 'Fleet overview as a list or kanban board — Working, Blocked, Done, Idle, Paused',
                 'Live output preview for any agent shell with zero latency',
                 'One key opens the full project workspace with tabs, files, and state preserved',
+                'Broadcast one message to every live agent at once, with a receipt for each',
                 'Lightweight background monitoring that keeps you informed in real time',
               ]}>
               <Mock screen="sessions" />

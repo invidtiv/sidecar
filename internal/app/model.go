@@ -1585,6 +1585,7 @@ func (m *Model) leaveOverview(restoreProject bool) tea.Cmd {
 		}
 	}
 	if wasGlobal && m.overview != nil {
+		m.overview.CloseBroadcast()
 		m.overview.Stop()
 	}
 	m.scope = ScopeProject
@@ -2273,6 +2274,8 @@ func (m *Model) runGlobalWorkspacesCommand(id string) tea.Cmd {
 		return m.overview.OpenRenameWorktree()
 	case "open-in-git":
 		return m.overview.OpenSelectedInGit()
+	case "broadcast-agents":
+		return m.overview.OpenBroadcast()
 	default:
 		return nil
 	}

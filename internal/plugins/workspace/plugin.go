@@ -10,6 +10,7 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/broadcastmodal"
 	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/contentpanes"
 	"github.com/marcus/sidecar/internal/docview"
@@ -255,6 +256,7 @@ type Plugin struct {
 	paneNextID      int
 	paneDragSplitID int
 	paneLayoutModal *panereposition.Controller
+	broadcast       *broadcastmodal.Host
 	paneZoom        panereposition.Zoom
 	paneRestoreCmd  tea.Cmd
 	// paneLayoutSurface is the surface the live tree currently represents.
@@ -787,6 +789,12 @@ func (p *Plugin) SetFocused(f bool) {
 	// resize and consume frames for the same pane.
 	if !f {
 		p.focused = false
+		// A modal belongs to the surface that opened it. Left standing, the
+		// Broadcast modal is an overlay on a surface nobody is looking at: it
+		// keeps absorbing this plugin's keys and reappears, plan and all, the
+		// next time the user comes back to a tab they thought they had left
+		// (td-cd1706).
+		p.broadcast = nil
 		p.deactivateTerminalOwnership()
 		return
 	}
@@ -918,6 +926,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.paneFocus = 0
 	p.paneNextID = 1
 	p.paneDragSplitID = 0
+	p.broadcast = nil
 	p.paneRestoreCmd = nil
 	p.paneLayoutSurface = ""
 	p.hiddenPaneLayout = nil

@@ -100,5 +100,6 @@ You can perform full workspace lifecycle actions directly on any row in the Sess
 | `D` | Delete | Closes the tmux session and moves the shell record to a recoverable tombstone |
 | `O` | Open in Git | Opens the selected worktree in the Git Status plugin |
 | `M` | Reposition Pane | Opens the visual layout reposition modal to move composed preview panes |
+| `B` | Broadcast | Sends one message to every live agent Sidecar can see, as a checklist you edit before sending ([agent_control](./agent-coordination)) |
 
 Actions on remote rows execute transparently on the remote host via secure SSH commands. See [Remote Hosts](./remote-hosts) for full details on remote fleet management.
