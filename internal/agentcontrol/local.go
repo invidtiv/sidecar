@@ -202,8 +202,13 @@ func (t *LocalTerminal) Inspect(ctx context.Context, target Target) (Snapshot, e
 	if t.Now != nil {
 		now = t.Now()
 	}
-	processIdentity := agentactivity.ResolveForegroundProcess(pid)
-	return Snapshot{Target: target, Dead: parts[2] == "1", CopyMode: parts[3] != "0", PaneCount: 1, CurrentCommand: parts[4], ProcessIdentity: processIdentity, ShellReady: agentactivity.ForegroundShellReady(pid, parts[4]), Title: parts[5], Screen: string(screenOut), PaneHeight: paneHeight, CapturedAt: now}, nil
+	processIdentity := ""
+	shellReady := false
+	if ctx.Err() == nil {
+		processIdentity = agentactivity.ResolveForegroundProcess(pid)
+		shellReady = agentactivity.ForegroundShellReady(pid, parts[4])
+	}
+	return Snapshot{Target: target, Dead: parts[2] == "1", CopyMode: parts[3] != "0", PaneCount: 1, CurrentCommand: parts[4], ProcessIdentity: processIdentity, ShellReady: shellReady, Title: parts[5], Screen: string(screenOut), PaneHeight: paneHeight, CapturedAt: now}, nil
 }
 
 func (t *LocalTerminal) Launch(ctx context.Context, snap Snapshot, argv []string) error {

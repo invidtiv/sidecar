@@ -1,13 +1,16 @@
 package broadcastmodal
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/agentbroadcast"
 	"github.com/marcus/sidecar/internal/agentcontrol"
+	"github.com/marcus/sidecar/internal/managedtarget"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/notify"
 )
@@ -167,6 +170,31 @@ func TestHostInitialSelectionFollowsPlan(t *testing.T) {
 	}
 	if !lines[0].Checked || lines[1].Checked || !lines[2].Checked {
 		t.Fatalf("initial checks = %+v", lines)
+	}
+}
+
+func TestReplanUnblocksWhenPlanHangs(t *testing.T) {
+	prev := planTimeout
+	planTimeout = 40 * time.Millisecond
+	t.Cleanup(func() { planTimeout = prev })
+
+	release := make(chan struct{})
+	h := New("demo", t.TempDir(), ScopeThisProject, false)
+	h.Service = agentbroadcast.Service{
+		Candidates: func(context.Context, agentbroadcast.PlanRequest) ([]managedtarget.Target, error) {
+			<-release
+			return nil, nil
+		},
+	}
+	start := time.Now()
+	msg := h.Replan()()
+	if time.Since(start) > 300*time.Millisecond {
+		t.Fatal("Replan waited on a hung Plan")
+	}
+	close(release)
+	planned, ok := msg.(PlannedMsg)
+	if !ok || planned.Err == nil || !strings.Contains(planned.Err.Error(), "timed out") {
+		t.Fatalf("msg = %#v", msg)
 	}
 }
 

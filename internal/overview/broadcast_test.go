@@ -74,6 +74,18 @@ func TestGlobalBroadcastLateSentDoesNotCloseAReopenedModal(t *testing.T) {
 	}
 }
 
+func TestBroadcastPlanMessagesAreAsync(t *testing.T) {
+	if !IsAsyncMessage(broadcastmodal.PlannedMsg{}) {
+		t.Fatal("PlannedMsg must be async so Sessions receives the plan")
+	}
+	if !IsAsyncMessage(broadcastmodal.SentMsg{}) {
+		t.Fatal("SentMsg must be async so Sessions receives the send result")
+	}
+	if !IsSharedBroadcastMessage(broadcastmodal.PlannedMsg{}) || !IsSharedBroadcastMessage(broadcastmodal.SentMsg{}) {
+		t.Fatal("plan/send must stay shared so the project workspace still receives them")
+	}
+}
+
 func TestGlobalBroadcastCarriesSelectedProject(t *testing.T) {
 	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
 	enableGlobalBroadcast(t)

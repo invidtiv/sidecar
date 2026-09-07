@@ -374,7 +374,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// same reason: the project workspace hosts the same browser, and a page
 		// claimed here would leave a project pane refreshing forever.
 		if !overview.IsSharedDiffMessage(msg) && !overview.IsSharedPickerMessage(msg) &&
-			!overview.IsSharedPluginMessage(msg) {
+			!overview.IsSharedPluginMessage(msg) && !overview.IsSharedBroadcastMessage(msg) {
 			return m, cmd
 		}
 		if cmd != nil {

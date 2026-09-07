@@ -161,7 +161,15 @@ func (s Service) observeAll(ctx context.Context, selected []managedtarget.Target
 			out[i] = observed{cand: cand, snap: snap, state: state, err: err}
 		}(i, cand)
 	}
-	wg.Wait()
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
 	return out
 }
 

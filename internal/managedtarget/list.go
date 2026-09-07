@@ -148,6 +148,9 @@ func Candidates(ctx context.Context, stateDir string, projects []Project) ([]Tar
 		}
 	}
 	for _, proj := range projects {
+		if ctx.Err() != nil {
+			break
+		}
 		manifest := projectManifestPath(proj)
 		defs, err := shellstate.ListAtPath(manifest)
 		if err != nil {

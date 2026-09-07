@@ -31,11 +31,13 @@ const (
 	listID    = "recipients"
 	messageID = "message"
 
-	hintText    = "enter send   space toggle   a all   n none   esc cancel"
-	rcptPrefix  = "rcpt:"
-	maxList     = 8
-	planTimeout = 12 * time.Second
+	hintText   = "enter send   space toggle   a all   n none   esc cancel"
+	rcptPrefix = "rcpt:"
+	maxList    = 8
 )
+
+// planTimeout bounds a Replan cmd even if Plan ignores cancel. Tests may lower it.
+var planTimeout = 12 * time.Second
 
 type Scope int
 
@@ -139,12 +141,22 @@ func (h *Host) Replan() tea.Cmd {
 	svc := h.service()
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), planTimeout)
-		defer cancel()
-		plan, err := svc.Plan(ctx, req)
-		if err != nil && ctx.Err() != nil {
-			err = fmt.Errorf("timed out looking up agents")
+		ch := make(chan PlannedMsg, 1)
+		go func() {
+			defer cancel()
+			plan, err := svc.Plan(ctx, req)
+			if err != nil && ctx.Err() != nil {
+				err = fmt.Errorf("timed out looking up agents")
+			}
+			ch <- PlannedMsg{Gen: gen, Plan: plan, Err: err}
+		}()
+		select {
+		case msg := <-ch:
+			return msg
+		case <-time.After(planTimeout):
+			cancel()
+			return PlannedMsg{Gen: gen, Err: fmt.Errorf("timed out looking up agents")}
 		}
-		return PlannedMsg{Gen: gen, Plan: plan, Err: err}
 	}
 }
 
