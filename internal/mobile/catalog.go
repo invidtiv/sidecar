@@ -140,18 +140,24 @@ func QueryCatalog(ctx context.Context, provider CatalogProvider, resolver Resolv
 	if err := authorizeCatalogRows(ctx, rows, resolver, candidateResolver, identity); err != nil {
 		return mobileproto.CatalogSnapshot{}, err
 	}
+	return projectCatalog(query, mode, identity, input.ObservedAt, input.Hosts, items, rows, failures)
+}
+
+// projectCatalog is the single query, ordering, grouping and envelope path for
+// both one-owner collection and already-authorized hub composition.
+func projectCatalog(query mobileproto.CatalogQuery, mode workspacelist.Sort, identity CatalogIdentity, observedAt time.Time, catalogHosts []mobileproto.CatalogHost, items []workspacelist.Item, rows map[string]mobileproto.CatalogRow, failures []mobileproto.CatalogFailure) (mobileproto.CatalogSnapshot, error) {
 	allRows := make([]mobileproto.CatalogRow, 0, len(rows))
 	for _, row := range rows {
 		allRows = append(allRows, row)
 	}
-	generation, err := catalogGeneration(identity, input.Hosts, allRows, failures)
+	generation, err := catalogGeneration(identity, catalogHosts, allRows, failures)
 	if err != nil {
 		return mobileproto.CatalogSnapshot{}, err
 	}
 	items = workspacelist.Filtered(items, query.Search)
 	items = filterCatalogItems(items, rows, query)
 	items = workspacelist.Sorted(items, mode)
-	sections := workspacelist.GroupedAt(items, mode, input.ObservedAt, nil)
+	sections := workspacelist.GroupedAt(items, mode, observedAt, nil)
 	wireSections := make([]mobileproto.CatalogSection, 0, len(sections))
 	total := 0
 	for _, section := range sections {
@@ -162,17 +168,17 @@ func QueryCatalog(ctx context.Context, provider CatalogProvider, resolver Resolv
 		}
 		wireSections = append(wireSections, wire)
 	}
-	hosts := append([]mobileproto.CatalogHost(nil), input.Hosts...)
-	if hosts == nil {
-		hosts = []mobileproto.CatalogHost{}
+	catalogHosts = append([]mobileproto.CatalogHost(nil), catalogHosts...)
+	if catalogHosts == nil {
+		catalogHosts = []mobileproto.CatalogHost{}
 	}
 	if failures == nil {
 		failures = []mobileproto.CatalogFailure{}
 	}
 	snapshot := mobileproto.CatalogSnapshot{
-		Generation: generation, ObservedAt: input.ObservedAt.UTC().Format(time.RFC3339Nano),
+		Generation: generation, ObservedAt: observedAt.UTC().Format(time.RFC3339Nano),
 		HubID: identity.HubID, OwnerHostID: identity.OwnerHostID, OwnerConfigGeneration: identity.OwnerConfigGeneration,
-		Query: query, Hosts: hosts, Sections: wireSections, Failures: failures, Total: total,
+		Query: query, Hosts: catalogHosts, Sections: wireSections, Failures: failures, Total: total,
 	}
 	if err := mobileproto.ValidateCatalogCandidates(snapshot); err != nil {
 		return mobileproto.CatalogSnapshot{}, &ResolveError{Code: mobileproto.ErrorIdentityChanged, Message: err.Error()}
