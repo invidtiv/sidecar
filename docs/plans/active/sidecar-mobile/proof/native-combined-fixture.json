@@ -2,8 +2,56 @@
   "schema": "sidecar-mobile-m1-combined-native-fixture-v0",
   "task": "td-f76d95",
   "parent_task": "td-a56f0d",
-  "status": "ready_for_native_proof",
-  "native_result": "pending",
+  "status": "complete",
+  "native_result": {
+    "task": "td-0635ae",
+    "status": "approved",
+    "source_base": "fba9baaab89b702e7c2d80e840914fb72a049942",
+    "production_source_changed": false,
+    "ui_test_source_sha256": "480ccf24f9513cfd638811e077234b8c8afbc03e032a54d6fcb49c49048ba470",
+    "evidence_note": {
+      "path": "/Users/marcus/code/sidecar-mobile/docs/readiness/native-combined-catalog.md",
+      "sha256": "675a3807ffd888a96fcb67d3a5c332abe46c918a94b8a49c1f8a1a78bf3dbe75"
+    },
+    "manifest": {
+      "path": "/Users/marcus/code/sidecar-mobile/artifacts/native-combined-catalog-freeze-v1.json",
+      "sha256": "336f6b04112af3cd875907c8e0a05cb1cd8eedfc84a86e3a8b68fbc8a1b6a7bb"
+    },
+    "phone": {
+      "tests": 1,
+      "failures": 0,
+      "skips": 0,
+      "duration_seconds": 47.437,
+      "log_sha256": "e3b7b503936b792134bbaabf8a46665838d0e01437e5cb89f523818dda47b4fe",
+      "xcresult_tree_sha256": "c79658304c4bf355c9c67902150c861984c065dae77ce68bfdc1c729fe18baa7",
+      "screenshots_tree_sha256": "8f919350241fc492b9a8e38ddc40f1b93a81ee428fc881e4b629e65b1c99c183"
+    },
+    "ipad": {
+      "tests": 1,
+      "failures": 0,
+      "skips": 0,
+      "duration_seconds": 35.352,
+      "log_sha256": "1b3498947a6ae834deb4a12556b14f811f69ecf8ec4801162744dcd1b8fb7574",
+      "xcresult_tree_sha256": "16e2bb006c520538938cb41a6eafde4845bb37a6873b8c30a96db10ffdea60a3",
+      "screenshots_tree_sha256": "a49006aeed68ba80d83b3af80b15fd938a861d60d9f732517190c355173b96e5"
+    },
+    "facts": [
+      "four exact same-config rows and groups visible",
+      "host filter isolated remote-combined",
+      "local and remote Details labels matched owner session and pane",
+      "both ready terminals opened view-only",
+      "source geometry and owner tokens unchanged",
+      "tests invoked no control input resize or History actions; no native protocol wire trace was recorded"
+    ],
+    "limits": [
+      "signed Simulator proof",
+      "view-only terminal opens",
+      "no native protocol trace",
+      "physical-device and compact-window proof separate"
+    ],
+    "reviewer_session": "ses_6e4678",
+    "commit": "d0d23c6ec8f5003a9a3054e59b6e3c79bebf8b6b"
+  },
   "source_revision": "ba78d35cf836f87f772223f254acda5fae95da20",
   "endpoint": {
     "host": "127.0.0.1",
@@ -137,6 +185,27 @@
       "geometry": "80x24",
       "owner": "",
       "durable_created_at": "2026-09-08T05:20:59.524957-07:00"
+    },
+    "after_native": {
+      "local": {
+        "server_pid": 95936,
+        "session_created": 1788870058,
+        "session": "sidecar-sh-project-1",
+        "pane": "%0",
+        "geometry": "80x24",
+        "owner": "",
+        "durable_created_at": "2026-09-08T05:20:58.154505-07:00"
+      },
+      "remote": {
+        "server_pid": 81166,
+        "session_created": 1788870059,
+        "session": "sidecar-sh-project-1",
+        "pane": "%0",
+        "geometry": "80x24",
+        "owner": "",
+        "durable_created_at": "2026-09-08T05:20:59.524957-07:00"
+      },
+      "facts_sha256": "504d4b75f2992cbfb20a9df328f4d14df994db508a510ae2499af4fdf7a58f3d"
     }
   },
   "desktop_setup": {
@@ -153,10 +222,18 @@
     "native_baseline_owners_empty": true
   },
   "cleanup": {
-    "deferred_until_native_and_root_done": true,
+    "deferred_until_native_and_root_done": false,
     "script": "/tmp/sidecar-mobile-m1-combined-ssh/cleanup.sh",
-    "script_sha256": "3a312d7bb8cbc6e8a396b9c06f3155a7d80f127d3b88b6724a6f60c409c731a3",
-    "guard": "marker + socket inode + server PID/session creation/session/pane + empty owner + SSH PID/command"
+    "script_sha256": "89161f57db60fa1be6da8dc0eb6b36f76b9cf405f6f47268cb88524d6f24c4f8",
+    "guard": "marker + socket inode + server PID/session creation/session/pane + empty owner + SSH PID/command",
+    "remote_stop_verification": "SSH transport must succeed; tmux status is parsed separately and must report an explicit no-server condition",
+    "status": "complete",
+    "output_sha256": "8bec3dd3a438e13b09998ea84eab0ef27bbd08d8e6c6f03be49366020a74ae5d",
+    "receipt_sha256": "b7475aadbdd091f410fa302eb070e1407e344b8c9ed1309fa0e99df8be6d1182",
+    "endpoint_22231_listening": false,
+    "local_private_server_running": false,
+    "remote_private_server_running": false,
+    "remote_ssh_verification_succeeded": true
   },
   "artifacts": {
     "catalog-four-row-final.json": {
@@ -244,8 +321,20 @@
       "bytes": 117
     },
     "ssh/cleanup.sh": {
-      "sha256": "3a312d7bb8cbc6e8a396b9c06f3155a7d80f127d3b88b6724a6f60c409c731a3",
-      "bytes": 2918
+      "sha256": "89161f57db60fa1be6da8dc0eb6b36f76b9cf405f6f47268cb88524d6f24c4f8",
+      "bytes": 3591
+    },
+    "native-after-facts.txt": {
+      "sha256": "504d4b75f2992cbfb20a9df328f4d14df994db508a510ae2499af4fdf7a58f3d",
+      "bytes": 96
+    },
+    "cleanup-output.txt": {
+      "sha256": "8bec3dd3a438e13b09998ea84eab0ef27bbd08d8e6c6f03be49366020a74ae5d",
+      "bytes": 74
+    },
+    "cleanup-receipt.json": {
+      "sha256": "b7475aadbdd091f410fa302eb070e1407e344b8c9ed1309fa0e99df8be6d1182",
+      "bytes": 825
     }
   }
 }
