@@ -34,6 +34,11 @@ const (
 	DocumentResolutionRequest
 	DocumentResolutionCacheHit
 	RowAnalyzerBypass
+	FilesFrameBuilt
+	FilesFrameCacheHit
+	FilesLinkScan
+	FilesLinkScanCacheHit
+	DeckComposeCacheHit
 	eventMax
 )
 
@@ -61,6 +66,11 @@ type Counters struct {
 	documentResolutionRequests     atomic.Uint64
 	documentResolutionCacheHits    atomic.Uint64
 	rowAnalyzerBypasses            atomic.Uint64
+	filesFramesBuilt               atomic.Uint64
+	filesFrameCacheHits            atomic.Uint64
+	filesLinkScans                 atomic.Uint64
+	filesLinkScanCacheHits         atomic.Uint64
+	deckComposeCacheHits           atomic.Uint64
 	outputToFrameMu                sync.Mutex
 	outputToFrameSamples           uint64
 	outputToFrameMaxUS             uint64
@@ -91,6 +101,11 @@ type Snapshot struct {
 	DocumentResolutionRequests     uint64 `json:"document_resolution_requests"`
 	DocumentResolutionCacheHits    uint64 `json:"document_resolution_cache_hits"`
 	RowAnalyzerBypasses            uint64 `json:"row_analyzer_bypasses"`
+	FilesFramesBuilt               uint64 `json:"files_frames_built"`
+	FilesFrameCacheHits            uint64 `json:"files_frame_cache_hits"`
+	FilesLinkScans                 uint64 `json:"files_link_scans"`
+	FilesLinkScanCacheHits         uint64 `json:"files_link_scan_cache_hits"`
+	DeckComposeCacheHits           uint64 `json:"deck_compose_cache_hits"`
 	OutputToFrameSamples           uint64 `json:"output_to_frame_samples"`
 	OutputToFrameP95US             uint64 `json:"output_to_frame_p95_us"`
 	OutputToFrameMaxUS             uint64 `json:"output_to_frame_max_us"`
@@ -171,6 +186,16 @@ func Add(event Event, count int) {
 		counters.documentResolutionCacheHits.Add(n)
 	case RowAnalyzerBypass:
 		counters.rowAnalyzerBypasses.Add(n)
+	case FilesFrameBuilt:
+		counters.filesFramesBuilt.Add(n)
+	case FilesFrameCacheHit:
+		counters.filesFrameCacheHits.Add(n)
+	case FilesLinkScan:
+		counters.filesLinkScans.Add(n)
+	case FilesLinkScanCacheHit:
+		counters.filesLinkScanCacheHits.Add(n)
+	case DeckComposeCacheHit:
+		counters.deckComposeCacheHits.Add(n)
 	}
 }
 
@@ -257,6 +282,11 @@ func (c *Counters) Snapshot() Snapshot {
 		DocumentResolutionRequests:     c.documentResolutionRequests.Load(),
 		DocumentResolutionCacheHits:    c.documentResolutionCacheHits.Load(),
 		RowAnalyzerBypasses:            c.rowAnalyzerBypasses.Load(),
+		FilesFramesBuilt:               c.filesFramesBuilt.Load(),
+		FilesFrameCacheHits:            c.filesFrameCacheHits.Load(),
+		FilesLinkScans:                 c.filesLinkScans.Load(),
+		FilesLinkScanCacheHits:         c.filesLinkScanCacheHits.Load(),
+		DeckComposeCacheHits:           c.deckComposeCacheHits.Load(),
 		OutputToFrameSamples:           latencySamples,
 		OutputToFrameP95US:             latencyP95,
 		OutputToFrameMaxUS:             latencyMax,
