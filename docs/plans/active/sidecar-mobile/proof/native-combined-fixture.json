@@ -1,0 +1,251 @@
+{
+  "schema": "sidecar-mobile-m1-combined-native-fixture-v0",
+  "task": "td-f76d95",
+  "parent_task": "td-a56f0d",
+  "status": "ready_for_native_proof",
+  "native_result": "pending",
+  "source_revision": "ba78d35cf836f87f772223f254acda5fae95da20",
+  "endpoint": {
+    "host": "127.0.0.1",
+    "port": 22231,
+    "username": "proof",
+    "password": "PROOF-SSH-PASSWORD-REDACTED",
+    "fixed_command": "/tmp/sidecar-mobile-m1-combined-ssh/serve-combined",
+    "host_key_type": "ssh-ed25519",
+    "host_key": "SSH-HOST-KEY-REDACTED",
+    "host_key_fingerprint": "SHA256:SSH-HOST-KEY-FINGERPRINT-REDACTED",
+    "loopback_only": true,
+    "no_pty": true,
+    "server_pid": 5487,
+    "server_binary_sha256": "ad8705b4f5d11eac65bd0911561d6f11ced3cf544f8e35267727d7f1b19601e0",
+    "wrapper_sha256": "92c86e5b7b91126de12f9a561113b8ef170529c1d7e67ee019f7bf9f262d1d69"
+  },
+  "catalog": {
+    "cold_same_process_attempt_totals": [
+      2,
+      2,
+      4
+    ],
+    "final_generation": "ef49810d57abbebfbe3c8302c8c02873",
+    "total": 4,
+    "hosts": [
+      {
+        "id": "local:aerie",
+        "state": "online",
+        "local": true
+      },
+      {
+        "id": "remote-combined",
+        "state": "online",
+        "local": false
+      }
+    ],
+    "rows_in_order": [
+      {
+        "owner_host_id": "local:aerie",
+        "workspace_kind": "shell",
+        "display_name": "Twin",
+        "status": "live",
+        "attachment_ready": true,
+        "target": "hub_target_v0_0bf9c35b1f6247347781ebd4f8de5253",
+        "expected_target": {
+          "hub_id": "aerie",
+          "owner_config_generation": "049befd98e60eec5f4428c8026c6bca7",
+          "owner_host_id": "local:aerie",
+          "pane": "%0",
+          "server_incarnation": "pid=95936",
+          "session": "sidecar-sh-project-1",
+          "target_generation": "49cf545efbd1c909632b34d0fde62bd6",
+          "workspace_id": "local:aerie\u001fproject",
+          "workspace_kind": "shell"
+        }
+      },
+      {
+        "owner_host_id": "remote-combined",
+        "workspace_kind": "shell",
+        "display_name": "Twin",
+        "status": "live",
+        "attachment_ready": true,
+        "target": "hub_target_v0_a99aa65a499f373c311d0c521657f6a2",
+        "expected_target": {
+          "hub_id": "aerie",
+          "owner_config_generation": "6903a9c79ac64aed3a434ec194482f5d",
+          "owner_host_id": "remote-combined",
+          "pane": "%0",
+          "server_incarnation": "pid=81166",
+          "session": "sidecar-sh-project-1",
+          "target_generation": "de434a3750d4f94a166bce53813cb2da",
+          "workspace_id": "remote-combined\u001fproject",
+          "workspace_kind": "shell"
+        }
+      },
+      {
+        "owner_host_id": "local:aerie",
+        "workspace_kind": "worktree",
+        "display_name": "project",
+        "status": "session ended",
+        "attachment_ready": false,
+        "target": null,
+        "expected_target": null
+      },
+      {
+        "owner_host_id": "remote-combined",
+        "workspace_kind": "worktree",
+        "display_name": "project",
+        "status": "session ended",
+        "attachment_ready": false,
+        "target": null,
+        "expected_target": null
+      }
+    ],
+    "failures": [],
+    "desktop_same_config_exact_four_rows": true,
+    "desktop_screen": "desktop-four-row-final.txt",
+    "desktop_ansi": "desktop-four-row-final.ansi"
+  },
+  "isolation": {
+    "local_root": "/private/tmp/sidecar-mobile-m1-combined-20260908",
+    "remote_root": "/private/tmp/sidecar-mobile-m1-combined-owner-20260908",
+    "ssh_root": "/tmp/sidecar-mobile-m1-combined-ssh",
+    "marker": "sidecar-mobile-m1-combined-proof-v0",
+    "local_socket": "/private/tmp/sidecar-mobile-m1-combined-20260908/tmux/tmux-501/default",
+    "local_socket_identity": "16777234:312138981",
+    "remote_socket": "/private/tmp/sidecar-mobile-m1-combined-owner-20260908/tmux/tmux-501/default",
+    "remote_socket_identity": "16777232:11791803282",
+    "local_binary_sha256": "7d522e53f2c058eb2a4a14279aff5d5af6036942f15d31e3373a293c5181d66b",
+    "remote_binary_sha256": "cdff90a0105f21f2d0ca1072d69869fc43981c49f291cecf1bacaac69b3e5867",
+    "synthetic_terminal_data_only": true,
+    "stable_22229_22230_touched": false,
+    "default_tmux_touched": false,
+    "global_config_touched": false
+  },
+  "targets": {
+    "local": {
+      "server_pid": 95936,
+      "session_created": 1788870058,
+      "session": "sidecar-sh-project-1",
+      "pane": "%0",
+      "geometry": "80x24",
+      "owner": "",
+      "durable_created_at": "2026-09-08T05:20:58.154505-07:00"
+    },
+    "remote": {
+      "server_pid": 81166,
+      "session_created": 1788870059,
+      "session": "sidecar-sh-project-1",
+      "pane": "%0",
+      "geometry": "80x24",
+      "owner": "",
+      "durable_created_at": "2026-09-08T05:20:59.524957-07:00"
+    }
+  },
+  "desktop_setup": {
+    "actual_sessions_surface": true,
+    "show_idle_worktrees": true,
+    "sections": {
+      "Live Shells": 2,
+      "No Session": 2
+    },
+    "normal_preview_observed": "selected local row; no output captured at screenshot",
+    "viewer_exit_left_exact_stale_private_token": "aerie-1642:1:30",
+    "viewer_pid_absent_before_clear": true,
+    "private_setup_token_conditionally_cleared": true,
+    "native_baseline_owners_empty": true
+  },
+  "cleanup": {
+    "deferred_until_native_and_root_done": true,
+    "script": "/tmp/sidecar-mobile-m1-combined-ssh/cleanup.sh",
+    "script_sha256": "3a312d7bb8cbc6e8a396b9c06f3155a7d80f127d3b88b6724a6f60c409c731a3",
+    "guard": "marker + socket inode + server PID/session creation/session/pane + empty owner + SSH PID/command"
+  },
+  "artifacts": {
+    "catalog-four-row-final.json": {
+      "sha256": "b49bf0b18feaac29e5b3b97699285d549edf8c964c48d9d7963f9432bc3bb7cd",
+      "bytes": 4094
+    },
+    "desktop-four-row-final.txt": {
+      "sha256": "1199a831ea00f7a449719a8e760e3b1af015086c7fadb1bb41889054fd3f4d10",
+      "bytes": 7633
+    },
+    "desktop-four-row-final.ansi": {
+      "sha256": "240a13e206dcfadd6272cbd6e106aefae9d41c29c6757854ea4ff85a675e2b51",
+      "bytes": 7707
+    },
+    "desktop-during-facts.txt": {
+      "sha256": "f59db9162ff06996c48804f6a22c25182d9d391c4ceb8d5ec04d05343a3a2290",
+      "bytes": 97
+    },
+    "desktop-viewer-cleanup.txt": {
+      "sha256": "fa4230f96c727c603c5252c559703d5a08154a57098e57300a323befa295d197",
+      "bytes": 66
+    },
+    "native-baseline-facts.txt": {
+      "sha256": "504d4b75f2992cbfb20a9df328f4d14df994db508a510ae2499af4fdf7a58f3d",
+      "bytes": 96
+    },
+    "endpoint-sessions-response.json": {
+      "sha256": "ef92c845d1c131dc04a52c6f5b50db8a67054b12090b5c40a3eb690d8b0f4462",
+      "bytes": 6118
+    },
+    "endpoint-refresh-cadence.json": {
+      "sha256": "2c5175d6f8c5bbf1cdb1356237dee4f915c6567184952a861cc00102629db5f1",
+      "bytes": 70
+    },
+    "local-create.json": {
+      "sha256": "1c29f4665f7ec54054d45dd38d10f9fbcab51bd584227da51320409e13050891",
+      "bytes": 193
+    },
+    "remote-create.json": {
+      "sha256": "d4df6ad47eb2ed451515546b331700d56686b690dac5ffd78f9eb2fbef82eb16",
+      "bytes": 199
+    },
+    "config/hub.json": {
+      "sha256": "5b5da6c37495bc057abb6da3fecc81e27ef38a938fad26910f69eb30e6f6767e",
+      "bytes": 396
+    },
+    "config/state.json": {
+      "sha256": "10831528a2f40364fd67f0b2b1b31044ce509238ea5d6d3afb794d1cb0e90dc0",
+      "bytes": 753
+    },
+    "state/sidecar/projects/project/shells.json": {
+      "sha256": "54e8d1d6b2b86d812b044bf85f3afa902b59afb1c525af1ee35abbead92fb0bb",
+      "bytes": 494
+    },
+    "remote-shells.json": {
+      "sha256": "1c854bbfbc52fc28978de2c62aa0af381a46e5a394391bf78cc55d577be4c965",
+      "bytes": 506
+    },
+    "remote-hashes.txt": {
+      "sha256": "7f0661f05b17070b101bdcdaf465d6c6885c33e52056fb310af900de22dab1a9",
+      "bytes": 952
+    },
+    "ssh/main.go": {
+      "sha256": "8aa963fb1e6ca83c29b417b4df8170587a2f6099bb7ea010fe0cd3377512aaa4",
+      "bytes": 3430
+    },
+    "ssh/server": {
+      "sha256": "ad8705b4f5d11eac65bd0911561d6f11ced3cf544f8e35267727d7f1b19601e0",
+      "bytes": 6165826
+    },
+    "ssh/serve-combined": {
+      "sha256": "92c86e5b7b91126de12f9a561113b8ef170529c1d7e67ee019f7bf9f262d1d69",
+      "bytes": 373
+    },
+    "ssh/known-host-key.txt": {
+      "sha256": "e9c4d57782b77ee3a96c04b2e0c960a6d874e314b53aed5de499fe46eb73e0f5",
+      "bytes": 128
+    },
+    "ssh/verify.go": {
+      "sha256": "04aad673b256a3a4c9c7e859f61e1d0104dfae35870627df3509ce378a21796d",
+      "bytes": 4326
+    },
+    "ssh/verify.log": {
+      "sha256": "bf854b3075a1bfa29c83d5bf3d6ed1b45a90395ae51926d94ea6b21a2d17db29",
+      "bytes": 117
+    },
+    "ssh/cleanup.sh": {
+      "sha256": "3a312d7bb8cbc6e8a396b9c06f3155a7d80f127d3b88b6724a6f60c409c731a3",
+      "bytes": 2918
+    }
+  }
+}
