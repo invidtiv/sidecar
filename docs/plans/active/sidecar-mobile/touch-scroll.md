@@ -1,6 +1,6 @@
 # Sidecar mobile: touch scrolling over a controlled terminal
 
-**Status:** proposed. Nothing here is implemented. **Parent:** [Sidecar mobile](../sidecar-mobile.md), execution in [execution.md](execution.md). **Desktop authority this mirrors:** [Consistent terminal scroll](../../implemented/consistent-terminal-scroll.md) and the shared rule in `internal/tty/wheel.go` and `internal/tty/wheel_route.go`. **Verified against:** sidecar `f5fc0248`, sidecar-mobile `05c68b5`. Every file:line below was read in those trees.
+**Status:** proposed. Nothing here is implemented. **Task:** td-9eecab. **Parent:** [Sidecar mobile](../sidecar-mobile.md), execution in [execution.md](execution.md). **Desktop authority this mirrors:** [Consistent terminal scroll](../../implemented/consistent-terminal-scroll.md) and the shared rule in `internal/tty/wheel.go` and `internal/tty/wheel_route.go`. **Verified against:** sidecar `f5fc0248`, sidecar-mobile `05c68b5`. Every file:line below was read in those trees.
 
 ## 0. The one-paragraph answer
 
