@@ -376,7 +376,7 @@ func runHostList(env Env, args []string) int {
 	sort.SliceStable(list, func(a, b int) bool {
 		return config.HostIDFor(list[a]) < config.HostIDFor(list[b])
 	})
-	enabled := features.IsEnabled(features.SidecarRemoteHosts.Name)
+	enabled := remoteHostsEnabled(env, cfg)
 
 	if flags.jsonOutput {
 		entries := make([]hostEntryJSON, 0, len(list))

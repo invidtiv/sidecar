@@ -79,10 +79,9 @@ func TestHostRegistryVerbs(t *testing.T) {
 	if host.ID != "book" || host.Target != "marcusbook.local" || !host.Disabled {
 		t.Fatalf("listed host = %+v, want the edited entry", host)
 	}
-	// A registered host connects to nothing while the flag is off, and the
-	// listing has to say so rather than reading as a working setup.
-	if listed.FeatureEnabled != features.IsEnabled(features.SidecarRemoteHosts.Name) {
-		t.Fatalf("featureEnabled = %v, want the running answer", listed.FeatureEnabled)
+	// This fixture leaves the config-backed flag off.
+	if listed.FeatureEnabled {
+		t.Fatalf("featureEnabled = true, want false from the current config")
 	}
 
 	if code, out, _ := run("remove", "book", "--json"); code != 0 || !strings.Contains(out, hostStatusRemoved) {
@@ -90,6 +89,63 @@ func TestHostRegistryVerbs(t *testing.T) {
 	}
 	if _, out, _ := run("list"); !strings.Contains(out, "No remote hosts registered") {
 		t.Fatalf("list after remove = %q", out)
+	}
+}
+
+func TestHostListUsesConfigBackedFeatureStateAndCLIOverrides(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	config.SetTestConfigPath(path)
+	t.Cleanup(func() { config.SetConfigPath(defaultTestConfigPath) })
+
+	writeConfig := func(enabled bool) {
+		t.Helper()
+		contents := `{"features":{"flags":{"sidecar_remote_hosts":false}},"hosts":{"list":[{"id":"book","target":"book.local"}]}}`
+		if enabled {
+			contents = strings.Replace(contents, `false`, `true`, 1)
+		}
+		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	list := func(overrides map[string]bool, args ...string) (int, string, string) {
+		t.Helper()
+		var out, errOut bytes.Buffer
+		code := runHostList(Env{Stdout: &out, Stderr: &errOut, FeatureOverrides: overrides}, args)
+		return code, out.String(), errOut.String()
+	}
+	featureEnabled := func(overrides map[string]bool) bool {
+		t.Helper()
+		code, out, errOut := list(overrides, "--json")
+		if code != 0 || errOut != "" {
+			t.Fatalf("host list code=%d stderr=%q", code, errOut)
+		}
+		var result hostListResult
+		if err := json.Unmarshal([]byte(out), &result); err != nil {
+			t.Fatalf("decode host list: %v\n%s", err, out)
+		}
+		return result.FeatureEnabled
+	}
+
+	writeConfig(true)
+	if !featureEnabled(nil) {
+		t.Fatal("config-backed enabled feature was reported disabled")
+	}
+	if featureEnabled(map[string]bool{features.SidecarRemoteHosts.Name: false}) {
+		t.Fatal("explicit disable override did not win")
+	}
+	if code, out, errOut := list(map[string]bool{features.SidecarRemoteHosts.Name: false}); code != 0 || errOut != "" ||
+		!strings.Contains(out, "feature flag is off") {
+		t.Fatalf("disabled human list code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+
+	writeConfig(false)
+	if !featureEnabled(map[string]bool{features.SidecarRemoteHosts.Name: true}) {
+		t.Fatal("explicit enable override did not win")
+	}
+	if code, out, errOut := list(map[string]bool{features.SidecarRemoteHosts.Name: true}); code != 0 || errOut != "" ||
+		strings.Contains(out, "feature flag is off") {
+		t.Fatalf("enabled human list code=%d stdout=%q stderr=%q", code, out, errOut)
 	}
 }
 
