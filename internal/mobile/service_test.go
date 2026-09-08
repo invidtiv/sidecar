@@ -1,6 +1,7 @@
 package mobile
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -114,6 +115,24 @@ func TestResolveRequiresExpectedIdentityForCandidateSelector(t *testing.T) {
 	responses := decodeResponses(t, &output)
 	if len(responses) != 1 || responses[0].Error == nil || responses[0].Error.Code != mobileproto.ErrorInvalidRequest {
 		t.Fatalf("responses = %+v", responses)
+	}
+}
+
+func TestRequestScannerStopsWhenContextCancelsWithQueuedInput(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	scanner := bufio.NewScanner(strings.NewReader("first\nsecond\n"))
+	lines := make(chan []byte)
+	done := make(chan error, 1)
+	terminal := make(chan struct{})
+	go scanMobileRequests(ctx, scanner, lines, terminal, done)
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("scanner cancellation error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("request scanner remained blocked forwarding queued input")
 	}
 }
 

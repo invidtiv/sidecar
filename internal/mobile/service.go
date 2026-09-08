@@ -174,6 +174,8 @@ func New(config Config) (*Service, error) {
 }
 
 func (s *Service) Run(ctx context.Context) error {
+	runCtx, cancelRun := context.WithCancel(ctx)
+	defer cancelRun()
 	defer func() {
 		s.closeAll()
 		s.out.close()
@@ -182,17 +184,7 @@ func (s *Service) Run(ctx context.Context) error {
 	scanner.Buffer(make([]byte, 64<<10), mobileproto.MaxLineBytes)
 	lines := make(chan []byte)
 	scanDone := make(chan error, 1)
-	go func() {
-		for scanner.Scan() {
-			line := append([]byte(nil), scanner.Bytes()...)
-			select {
-			case lines <- line:
-			case <-s.terminal:
-				return
-			}
-		}
-		scanDone <- scanner.Err()
-	}()
+	go scanMobileRequests(runCtx, scanner, lines, s.terminal, scanDone)
 	handshake := false
 	for {
 		var line []byte
@@ -237,6 +229,22 @@ func (s *Service) Run(ctx context.Context) error {
 		}
 		s.handle(ctx, request)
 	}
+}
+
+func scanMobileRequests(ctx context.Context, scanner *bufio.Scanner, lines chan<- []byte, terminal <-chan struct{}, done chan<- error) {
+	for scanner.Scan() {
+		line := append([]byte(nil), scanner.Bytes()...)
+		select {
+		case lines <- line:
+		case <-ctx.Done():
+			done <- ctx.Err()
+			return
+		case <-terminal:
+			done <- fmt.Errorf("mobile service: outbound transport unavailable")
+			return
+		}
+	}
+	done <- scanner.Err()
 }
 
 func decodeRequest(line []byte) (mobileproto.Request, error) {
