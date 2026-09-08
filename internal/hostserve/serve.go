@@ -607,6 +607,7 @@ var serveVerbCapabilities = hostproto.VerbCapabilities{
 	ContentTreeV1:    true,
 	RepoReadV1:       true,
 	UIRequestRelayV1: true,
+	MobileServeV0:    true,
 }
 
 func buildHello(opts Options) *hostproto.Hello {

@@ -208,6 +208,12 @@ type VerbCapabilities struct {
 	// viewer must not expect announcements. Serve still does not apply the
 	// request or write an ack.
 	UIRequestRelayV1 bool `json:"uiRequestRelayV1,omitempty"`
+
+	// MobileServeV0 is `sidecar mobile serve --stdio` with the bounded v0
+	// protocol. A hub must still start that stream and validate its own mobile
+	// hello before routing; this bit only says the registered build accepts the
+	// owner command.
+	MobileServeV0 bool `json:"mobileServeV0,omitempty"`
 }
 
 // Snapshot is the complete observable state of the host at one instant. Serve

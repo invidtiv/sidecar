@@ -626,4 +626,7 @@ func TestHelloAdvertisesVerbCapabilities(t *testing.T) {
 	if !hello.Capabilities.Verbs.UIRequestRelayV1 {
 		t.Error("the host does not advertise ui request relay, so no viewer will expect announcements")
 	}
+	if !hello.Capabilities.Verbs.MobileServeV0 {
+		t.Error("the host does not advertise the bounded mobile owner service")
+	}
 }
