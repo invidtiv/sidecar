@@ -57,6 +57,8 @@ Use one selected terminal and one shared client state model across device classe
 
 Use platform navigation, sheets, menus, materials, accessibility, and SF Symbols for the native chrome. Read the actual palette from [`SidecarModernTheme`](../../../internal/styles/themes.go), not a guessed approximation. Keep the terminal grid opaque and faithful to host colors; Liquid Glass belongs to the controls around it. Browser mockups are for agreeing on screens and states; SwiftUI previews and simulator/device proof settle native material, keyboard, safe-area, split-view, and reduced-transparency behavior.
 
+Use the connection heading “Connect Sidecar to see all your sessions.” Keep in-app copy informative and omit marketing taglines, including the Settings subtitle. First takeover explains shared terminal sizing once; subsequent deliberate takeovers proceed directly. While controlling a terminal, place Release in the terminal header and remove the large lower control capsule to preserve vertical room for output and the keyboard. In phone landscape, place the Sessions title, search, and filter on one row to conserve vertical space.
+
 Mock these reviewable states first: hub connection and host-key verification; Sessions with needs-input, working, idle, plain-shell, and stale-host rows; ambiguous worktree picker; terminal in view and control modes; reconnect/target-gone states; compact iPhone and regular/narrow iPad layouts. Attention and Settings can be previewed for the full journey without implying M2/M3 implementation.
 
 ### Connect
