@@ -1,6 +1,6 @@
 # Sidecar mobile: Sessions on iPhone and iPad
 
-**Status:** readiness and screen exploration in progress; M0 and M1 are not implemented. **Created:** 2026-09-07. **Execution epic:** td-5d82c2. **Plan task:** td-09d533. **Original planning task:** td-c2870b.
+**Status:** readiness and screen study approved; M0-A/B terminal strategy independently reviewed; native shell and M0 service implementation underway. The live M0 journey and M1 are not complete. **Created:** 2026-09-07. **Execution epic:** td-5d82c2. **Plan task:** td-09d533. **Original planning task:** td-c2870b.
 
 This is the controlling product and architecture plan. Read [M0/M1 execution](sidecar-mobile/execution.md) next for exact source seams, ownership, task dependencies, readiness gates, and the terminal-seed decision. Implementation is delegated to sub-agents; the coordinator integrates independently reviewed slices. Tooling and screen artifacts live in `../sidecar-mobile`; their existence does not prove terminal attachment.
 
@@ -18,7 +18,7 @@ The first product is a native Sessions browser with one embedded terminal at a t
 - **Reuse notification events, add mobile delivery.** Foreground alerts are the first slice. Background alerts require an always-on observer and APNs delivery; propose an optional push relay for a distributed app, with generic alert text and no terminal traffic passing through it.
 - **Android later.** Preserve the backend contract and fixtures across platforms. Accept a future Android client implementation instead of paying for two platforms before the iPhone and iPad terminal experience is proven.
 
-Marcus selected `aerie`, a universal native app, iOS/iPadOS 26 support, Apple team `<APPLE_TEAM_ID>`, and native Liquid Glass with Sidecar colors. His connected iPhone and iPad run 27 beta; local device proof records that distinction. Public-supported-OS hardware proof is a distribution gate, not a reason to stop M0/M1. The optional push relay and its operator remain an M3 decision. App Store Connect tooling is useful for distribution, but its authentication and app record are not prerequisites for local M0/M1 work.
+Marcus selected `aerie`, a universal native app, iOS/iPadOS 26 support, Apple team `<APPLE_TEAM_ID>`, bundle identifier `com.haplab.sidecar`, and native Liquid Glass with Sidecar colors. His connected iPhone and iPad run 27 beta; local device proof records that distinction. Public-supported-OS hardware proof is a distribution gate, not a reason to stop M0/M1. The optional push relay and its operator remain an M3 decision. App Store Connect tooling is useful for distribution, but its authentication and app record are not prerequisites for local M0/M1 work.
 
 ### SwiftUI versus React Native
 

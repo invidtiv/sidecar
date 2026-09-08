@@ -1,6 +1,6 @@
 # Sidecar mobile: M0 and M1 execution
 
-**Controlling plan:** [Sidecar mobile](../sidecar-mobile.md). **Status:** readiness and mockups in progress; terminal strategy is unproven. **Epic:** td-5d82c2. **Source baseline:** Sidecar `352c7eb7`, Jumar `ae72637bb88736a71f8ce4822ebe7d7d31f83b5d`, inspected 2026-09-07. Recheck the exact source revisions and active ownership at dispatch.
+**Controlling plan:** [Sidecar mobile](../sidecar-mobile.md). **Status:** readiness and mockups approved; M0-A/B independently approved; native shell and production M0 service underway. The live M0 journey remains unproved. **Epic:** td-5d82c2. **Source baseline:** Sidecar `352c7eb7`, Jumar `ae72637bb88736a71f8ce4822ebe7d7d31f83b5d`, inspected 2026-09-07. Recheck the exact source revisions and active ownership at dispatch.
 
 ## Start here
 
@@ -44,6 +44,8 @@ Jumar pins SwiftTerm 1.18.0 (`7691f85b222a67a66b58499e1b2647443cf0dda7`), NIO SS
 Jumar has no root license file at this inspected revision. The existing plan records the upstream author's permission reported by Marcus. Local exploration may proceed under that permission; any import needs its exact revision, file paths, attribution and local delta recorded. Before sharing a build or publishing imported source, record concrete reuse/distribution terms. Do not copy unrelated `JumarHerdr`, voice or notification-policy modules merely because they are adjacent to the terminal code.
 
 ## Terminal-seed decision gate
+
+**Reviewed result (2026-09-07):** td-415417 and td-322041 passed independent cross-review. Capture seed plus raw continuation was falsified by hidden rendition and wrap state. Proceed with ordered tmux-authoritative normalized presentation frames and explicit input modes. The pinned SwiftTerm consumer passes 11 focused tests, including Unicode, colored blanks, mode handling, reply discard, and sequence-gap reseeding. The [producer proof](proof/seed-spike.md) and mobile `Spikes/TerminalSeed/REVIEW.md` record the bounded evidence and limits. This approval permits the M0-C extraction; real transport, capture cost, supported-tmux capability probes, attachment ownership, and physical-device terminal proof remain required.
 
 The Go spike owner starts in a fresh isolated Sidecar worktree and runs `make worktree-init` first. Own only `internal/tty/mobile_seed_spike_test.go`, `testdata/mobile-protocol/v0/experimental-terminal/**`, and `docs/plans/active/sidecar-mobile/proof/seed-spike.md`. Package-local tests can inspect existing private seed methods without adding a public production API. The Swift spike owner owns `../sidecar-mobile/Spikes/TerminalSeed/**`, consumes those fixtures, and uses the pinned SwiftTerm emulator without importing Jumar application code. This division permits early harness setup while the producer finishes fixtures.
 
