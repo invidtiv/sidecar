@@ -629,4 +629,7 @@ func TestHelloAdvertisesVerbCapabilities(t *testing.T) {
 	if !hello.Capabilities.Verbs.MobileServeV0 {
 		t.Error("the host does not advertise the bounded mobile owner service")
 	}
+	if !hello.Capabilities.Verbs.MobileOwnerServeV0 {
+		t.Error("the host does not advertise the explicit owner-only mobile service")
+	}
 }

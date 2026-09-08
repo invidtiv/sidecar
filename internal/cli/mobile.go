@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,23 +33,23 @@ func mobileCommand() *Command {
 		Examples: []Example{{Command: "sidecar mobile status --json"}},
 	}
 	serve := &Command{
-		Name: "serve", Summary: "Serve one bounded mobile terminal protocol stream", Usage: "sidecar mobile serve --stdio",
-		Long:      "Read versioned JSONL requests from stdin and write JSONL responses and terminal frames to stdout. The local service resolves Sidecar-managed shells and catalog-issued worktree terminal candidates. Candidate selectors require their paired expected_target identity. Multi-pane candidates resize and verify the exact selected pane; layouts that cannot accept the requested pane geometry are refused.",
-		Flags:     []Flag{{Name: "--stdio", Summary: "Use stdin and stdout for the protocol", Bool: true}, {Name: "--help", Short: "-h", Summary: "Show this help", Bool: true}},
+		Name: "serve", Summary: "Serve one bounded mobile terminal protocol stream", Usage: "sidecar mobile serve --stdio [--owner-only]",
+		Long:      "Read versioned JSONL requests from stdin and write JSONL responses and terminal frames to stdout. With remote hosts enabled, the hub routes each selected terminal to its owning Sidecar. --owner-only is the internal registered-host boundary: it serves only this machine and prevents recursive hubs. Candidate selectors require their paired expected_target identity. Multi-pane candidates resize and verify the exact selected pane; layouts that cannot accept the requested pane geometry are refused.",
+		Flags:     []Flag{{Name: "--stdio", Summary: "Use stdin and stdout for the protocol", Bool: true}, {Name: "--owner-only", Summary: "Serve only terminals owned by this machine", Bool: true}, {Name: "--help", Short: "-h", Summary: "Show this help", Bool: true}},
 		ExitCodes: []ExitCode{{Code: 0, Summary: "stream closed normally"}, {Code: 1, Summary: "service failed"}, {Code: 2, Summary: "usage error"}},
 		Examples:  []Example{{Command: "sidecar mobile serve --stdio"}},
 		Mutates:   true, Run: runMobileServe,
 	}
 	sessions := &Command{
-		Name: "sessions", Summary: "Query the local mobile Sessions catalog", Usage: "sidecar mobile sessions --json [--sort MODE] [--search TEXT] [--host ID] [--provider NAME] [--state STATE]",
-		Long: "Collect the same local workspace inventory and apply the same Activity, Project, Recent, or Name ordering as the Sessions browser. Filters are repeatable and server-applied. Worktrees expose zero, one, or several exact server-owned terminal candidates; several choices keep the parent row ambiguous until the client echoes one candidate selector with its expected identity.",
+		Name: "sessions", Summary: "Query the mobile Sessions catalog", Usage: "sidecar mobile sessions --json [--sort MODE] [--search TEXT] [--host ID] [--provider NAME] [--state STATE]",
+		Long: "Collect the same workspace inventory from this hub and each available registered owner, then apply the same Activity, Project, Recent, or Name ordering as the Sessions browser. A newly started one-shot query waits briefly for initial remote health and returns connecting or unavailable hosts as explicit partial failures. Filters are repeatable and server-applied. Worktrees expose zero, one, or several exact server-owned terminal candidates; several choices keep the parent row ambiguous until the client echoes one candidate selector with its expected identity.",
 		Flags: []Flag{{Name: "--json", Summary: "Write one structured catalog snapshot to stdout", Bool: true},
 			{Name: "--sort", Arg: "MODE", Summary: "activity, project, recent, or name"}, {Name: "--search", Arg: "TEXT", Summary: "Match Sessions fields"},
 			{Name: "--host", Arg: "ID", Summary: "Include one owning host (repeatable)"}, {Name: "--provider", Arg: "NAME", Summary: "Include one provider (repeatable)"},
 			{Name: "--state", Arg: "STATE", Summary: "Include one status, group, or attachment state (repeatable)"}, {Name: "--help", Short: "-h", Summary: "Show this help", Bool: true}},
 		ExitCodes: []ExitCode{{Code: 0, Summary: "success"}, {Code: 1, Summary: "catalog unavailable"}, {Code: 2, Summary: "usage error"}},
 		Examples:  []Example{{Command: "sidecar mobile sessions --json --sort activity"}, {Command: "sidecar mobile sessions --json --search sidecar --state working"}},
-		Agent:     AgentDoc{Invocation: "sidecar mobile sessions --json", Summary: "Query the ordered local Sessions catalog and attachment readiness"}, Run: runMobileSessions,
+		Agent:     AgentDoc{Invocation: "sidecar mobile sessions --json", Summary: "Query the ordered Sessions catalog and attachment readiness"}, Run: runMobileSessions,
 	}
 	return &Command{Name: "mobile", Summary: "Serve the native mobile terminal client", Usage: "sidecar mobile <command>", Sub: []*Command{serve, sessions, status}, Run: runMobileRoot}
 }
@@ -96,7 +97,19 @@ func runMobileServe(env Env, args []string) int {
 		_, _ = fmt.Fprint(env.Stdout, RenderHelp(cmd))
 		return 0
 	}
-	if len(args) != 1 || args[0] != "--stdio" {
+	stdio, ownerOnly := false, false
+	for _, arg := range args {
+		switch arg {
+		case "--stdio":
+			stdio = true
+		case "--owner-only":
+			ownerOnly = true
+		default:
+			cliErrf(env.Stderr, "unknown mobile serve flag %q\n\n%s", arg, RenderHelp(cmd))
+			return 2
+		}
+	}
+	if !stdio {
 		cliErrf(env.Stderr, "--stdio is required\n\n%s", RenderHelp(cmd))
 		return 2
 	}
@@ -105,20 +118,34 @@ func runMobileServe(env Env, args []string) int {
 	// server instead of the configured Sidecar namespace.
 	_ = os.Unsetenv("TMUX")
 	_ = os.Unsetenv("TMUX_PANE")
-	host, _ := os.Hostname()
-	service, err := mobile.New(mobile.Config{
-		Input: env.Stdin, Output: env.Stdout, HubID: host, OwnerHostID: "local:" + host,
-		OwnerConfigGeneration: mobileConfigGeneration(), Resolver: mobileResolver(env), Revalidator: mobileTargetRevalidator(env), Catalog: mobileCatalogProvider(env),
-		OwnerConfigGenerationProvider: currentMobileConfigGeneration,
-	})
-	if err == nil {
-		err = service.Run(env.Ctx)
+	var err error
+	if ownerOnly {
+		err = runMobileOwnerService(env)
+	} else {
+		err = runMobileHubOrOwner(env)
 	}
 	if err != nil {
 		cliErrln(env.Stderr, err)
 		return 1
 	}
 	return 0
+}
+
+func runMobileOwnerService(env Env) error {
+	service, err := newMobileOwnerService(env, env.Stdin, env.Stdout)
+	if err != nil {
+		return err
+	}
+	return service.Run(env.Ctx)
+}
+
+func newMobileOwnerService(env Env, input io.Reader, output io.Writer) (*mobile.Service, error) {
+	host, _ := os.Hostname()
+	return mobile.New(mobile.Config{
+		Input: input, Output: output, HubID: host, OwnerHostID: "local:" + host,
+		OwnerConfigGeneration: mobileConfigGeneration(), Resolver: mobileResolver(env), Revalidator: mobileTargetRevalidator(env), Catalog: mobileCatalogProvider(env),
+		OwnerConfigGenerationProvider: currentMobileConfigGeneration,
+	})
 }
 
 func runMobileSessions(env Env, args []string) int {
@@ -133,24 +160,9 @@ func runMobileSessions(env Env, args []string) int {
 	}
 	_ = os.Unsetenv("TMUX")
 	_ = os.Unsetenv("TMUX_PANE")
-	host, _ := os.Hostname()
-	configGeneration, err := currentMobileConfigGeneration(env.Ctx)
+	snapshot, err := queryMobileCatalog(env, query)
 	if err != nil {
 		cliErrln(env.Stderr, err)
-		return 1
-	}
-	snapshot, err := mobile.QueryCatalog(env.Ctx, mobileCatalogProvider(env), mobileResolver(env), query, mobile.CatalogIdentity{HubID: host, OwnerHostID: "local:" + host, OwnerConfigGeneration: configGeneration})
-	if err != nil {
-		cliErrln(env.Stderr, err)
-		return 1
-	}
-	currentGeneration, err := currentMobileConfigGeneration(env.Ctx)
-	if err != nil {
-		cliErrln(env.Stderr, err)
-		return 1
-	}
-	if currentGeneration != configGeneration {
-		cliErrln(env.Stderr, "owner configuration changed during catalog collection")
 		return 1
 	}
 	if err := json.NewEncoder(env.Stdout).Encode(snapshot); err != nil {

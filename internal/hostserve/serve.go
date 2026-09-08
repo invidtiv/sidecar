@@ -602,12 +602,13 @@ func pollInterval(snapshot hostproto.Snapshot, opts Options) time.Duration {
 // that gains an option a viewer must know about gains a field here in the same
 // change.
 var serveVerbCapabilities = hostproto.VerbCapabilities{
-	CreateShellAgent: true,
-	ContentReadV1:    true,
-	ContentTreeV1:    true,
-	RepoReadV1:       true,
-	UIRequestRelayV1: true,
-	MobileServeV0:    true,
+	CreateShellAgent:   true,
+	ContentReadV1:      true,
+	ContentTreeV1:      true,
+	RepoReadV1:         true,
+	UIRequestRelayV1:   true,
+	MobileServeV0:      true,
+	MobileOwnerServeV0: true,
 }
 
 func buildHello(opts Options) *hostproto.Hello {

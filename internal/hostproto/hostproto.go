@@ -214,6 +214,12 @@ type VerbCapabilities struct {
 	// hello before routing; this bit only says the registered build accepts the
 	// owner command.
 	MobileServeV0 bool `json:"mobileServeV0,omitempty"`
+
+	// MobileOwnerServeV0 is the explicit local-owner form of mobile v0. Hubs
+	// require this separate bit before passing --owner-only, so an older host
+	// that advertised MobileServeV0 is refused instead of failing after it was
+	// presented as routable.
+	MobileOwnerServeV0 bool `json:"mobileOwnerServeV0,omitempty"`
 }
 
 // Snapshot is the complete observable state of the host at one instant. Serve

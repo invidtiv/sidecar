@@ -3,6 +3,7 @@ package hosts
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/marcus/sidecar/internal/hostproto"
@@ -13,7 +14,7 @@ func routeTestRegistry(t *testing.T, host Host, mobile bool) (*Registry, *Client
 	registry := NewRegistry(ClientOptions{})
 	client := NewClient(host, ClientOptions{Dial: func(context.Context) (*Conn, error) { return nil, context.Canceled }, ControlDir: t.TempDir()})
 	client.mu.Lock()
-	client.health = Health{State: StateOnline, Hello: &hostproto.Hello{Capabilities: hostproto.Capabilities{Verbs: hostproto.VerbCapabilities{MobileServeV0: mobile}}}}
+	client.health = Health{State: StateOnline, Hello: &hostproto.Hello{Capabilities: hostproto.Capabilities{Verbs: hostproto.VerbCapabilities{MobileServeV0: mobile, MobileOwnerServeV0: mobile}}}}
 	client.mu.Unlock()
 	registry.clients[host.ID] = client
 	registry.incarnations[host.ID] = 41
@@ -36,6 +37,8 @@ func TestMobileRouteAuthorityIsStableForTheCurrentOnlineCapableClient(t *testing
 	}
 	if command, err := registry.MobileSidecarCommand(context.Background(), authority); err != nil || command == nil {
 		t.Fatalf("owner command = %v, %v", command, err)
+	} else if rendered := strings.Join(command.Args, " "); !strings.Contains(rendered, "mobile serve") || !strings.Contains(rendered, "--owner-only") {
+		t.Fatalf("owner command can recurse through another hub: %s", rendered)
 	}
 }
 
@@ -46,7 +49,7 @@ func TestMobileRouteAuthorityRefusesHealthOrCapabilityLossAfterBinding(t *testin
 		wantErr error
 	}{
 		{name: "stale", mutate: func(client *Client) { client.health.State = StateStale }, wantErr: ErrMobileRouteUnavailable},
-		{name: "capability", mutate: func(client *Client) { client.health.Hello.Capabilities.Verbs.MobileServeV0 = false }, wantErr: ErrMobileRouteUnsupported},
+		{name: "capability", mutate: func(client *Client) { client.health.Hello.Capabilities.Verbs.MobileOwnerServeV0 = false }, wantErr: ErrMobileRouteUnsupported},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			registry, client := routeTestRegistry(t, Host{ID: "book", Target: "book"}, true)
@@ -83,6 +86,16 @@ func TestMobileRouteAuthorityRefusesUnavailableAndMissingCapability(t *testing.T
 	}
 }
 
+func TestMobileRouteAuthorityRefusesLegacyRecursiveMobileCapability(t *testing.T) {
+	registry, client := routeTestRegistry(t, Host{ID: "book", Target: "book"}, false)
+	client.mu.Lock()
+	client.health.Hello.Capabilities.Verbs.MobileServeV0 = true
+	client.mu.Unlock()
+	if _, err := registry.BindMobileRoute("book"); !errors.Is(err, ErrMobileRouteUnsupported) {
+		t.Fatalf("legacy mobile capability was accepted for owner-only route: %v", err)
+	}
+}
+
 func TestMobileRouteAuthorityRefusesRemovalRetargetAndReplacement(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -93,7 +106,7 @@ func TestMobileRouteAuthorityRefusesRemovalRetargetAndReplacement(t *testing.T) 
 		{name: "replaced", mutate: func(r *Registry) {
 			replacement := NewClient(Host{ID: "book", Target: "book"}, ClientOptions{Dial: func(context.Context) (*Conn, error) { return nil, context.Canceled }, ControlDir: t.TempDir()})
 			replacement.mu.Lock()
-			replacement.health = Health{State: StateOnline, Hello: &hostproto.Hello{Capabilities: hostproto.Capabilities{Verbs: hostproto.VerbCapabilities{MobileServeV0: true}}}}
+			replacement.health = Health{State: StateOnline, Hello: &hostproto.Hello{Capabilities: hostproto.Capabilities{Verbs: hostproto.VerbCapabilities{MobileServeV0: true, MobileOwnerServeV0: true}}}}
 			replacement.mu.Unlock()
 			r.clients["book"] = replacement
 			r.incarnations["book"]++

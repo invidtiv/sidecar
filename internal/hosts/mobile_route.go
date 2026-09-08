@@ -86,16 +86,18 @@ func validateMobileClient(client *Client, hostID string) error {
 	if health.State != StateOnline {
 		return fmt.Errorf("%w: host %s is %s", ErrMobileRouteUnavailable, hostID, health.State)
 	}
-	if health.Hello == nil || !health.Hello.Capabilities.Verbs.MobileServeV0 {
-		return fmt.Errorf("%w: host %s did not advertise mobile serve v0", ErrMobileRouteUnsupported, hostID)
+	if health.Hello == nil || !health.Hello.Capabilities.Verbs.MobileOwnerServeV0 {
+		return fmt.Errorf("%w: host %s did not advertise mobile owner serve v0", ErrMobileRouteUnsupported, hostID)
 	}
 	return nil
 }
 
-// MobileSidecarCommand validates and builds an owner command on the exact
-// captured client. The registry lock keeps a retarget from replacing that
-// client while the command is constructed; the router validates again after
-// the actual owner mobile hello before forwarding any target request.
+// MobileSidecarCommand validates and builds an owner-only command on the exact
+// captured client. The explicit owner mode prevents a registered machine that
+// is itself a hub from recursively aggregating its remote hosts. The registry
+// lock keeps a retarget from replacing that client while the command is
+// constructed; the router validates again after the actual owner mobile hello
+// before forwarding any target request.
 func (r *Registry) MobileSidecarCommand(ctx context.Context, authority MobileRouteAuthority) (*exec.Cmd, error) {
 	if err := r.ValidateMobileRoute(authority); err != nil {
 		return nil, err
@@ -107,5 +109,5 @@ func (r *Registry) MobileSidecarCommand(ctx context.Context, authority MobileRou
 		RegistrationFingerprint(client.Host()) != authority.RegistrationFingerprint {
 		return nil, fmt.Errorf("%w: host %s was removed, retargeted or replaced", ErrMobileRouteChanged, authority.HostID)
 	}
-	return client.SidecarCommand(ctx, "mobile", "serve", "--stdio")
+	return client.SidecarCommand(ctx, "mobile", "serve", "--stdio", "--owner-only")
 }
