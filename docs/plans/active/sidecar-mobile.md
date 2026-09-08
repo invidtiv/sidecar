@@ -1,6 +1,6 @@
 # Sidecar mobile: Sessions on iPhone and iPad
 
-**Status:** readiness and screen study approved; M0-A/B terminal strategy independently reviewed; native shell and M0 service implementation underway. The live M0 journey and M1 are not complete. **Created:** 2026-09-07. **Execution epic:** td-5d82c2. **Plan task:** td-09d533. **Original planning task:** td-c2870b.
+**Status:** readiness and screen study approved; M0-A/B terminal strategy and M0-C Go service independently approved and committed. Native live integration and device proof are underway; M1-A local catalog has started. M0 and M1 remain incomplete until their live acceptance journeys pass. **Created:** 2026-09-07. **Execution epic:** td-5d82c2. **Plan task:** td-09d533. **Original planning task:** td-c2870b.
 
 This is the controlling product and architecture plan. Read [M0/M1 execution](sidecar-mobile/execution.md) next for exact source seams, ownership, task dependencies, readiness gates, and the terminal-seed decision. Implementation is delegated to sub-agents; the coordinator integrates independently reviewed slices. Tooling and screen artifacts live in `../sidecar-mobile`; their existence does not prove terminal attachment.
 
