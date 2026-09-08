@@ -1,6 +1,6 @@
 # Files tab idle CPU — stop paying for unchanged frames
 
-**Status:** Active **Created:** 2026-09-08 **Tracking:** `td-8cdc05` (M0+M1 `td-5f1e01`, M2 `td-4fc78e`)
+**Status:** M0–M2 landed on main 2026-09-08 (M3 measured unnecessary, M4 open) **Created:** 2026-09-08 **Tracking:** `td-8cdc05` (M0+M1 `td-5f1e01`, M2 `td-4fc78e`)
 
 One sentence: **an idle Files tab must cost no more than any other idle tab, without changing how quickly the tree and preview follow the filesystem.**
 
@@ -71,6 +71,21 @@ Acceptance: `DeckComposeCacheHits` grows at the render rate while idle; the drag
 ### M4 — Follow-up, separately gated: render rate on a busy instance
 
 Not part of this fix. Measure `application_views_rendered` per second on the live instance with `SIDECAR_TERMINAL_PERF=1` while idle on each tab and record which message types arrive when nothing on screen changes (off-screen terminal deliveries, agent watchers, td monitor). If the idle rate is well above the 1/s app tick, open a separate plan for suppressing renders from messages that touched no visible surface. That is a whole-app change and must not be smuggled into this one.
+
+## Result (2026-09-08)
+
+M0, M1, and M2 are on main (`scripts/files-idle-cpu.sh`, the deck scan cache in `internal/app/content_deck.go`, the frame memo in `internal/plugins/filebrowser/view_memo.go`), reviewed by a fresh-context agent with one should-fix applied (the memo is invalidated before the remote-bound early return in `Update`). Same harness, same seeded state, two chatty shells, 20s per surface:
+
+| Surface | Renders/s | CPU over 20s | Render path per frame | Cache counters |
+| --- | --- | --- | --- | --- |
+| Workspaces (chatty panes visible) | 11.0 | 1.24s | ~2.0ms | — |
+| Files | 3.0 | 280ms | 0.83ms (deck 0.33, link scan 0.17, Compose 0.33) | 0 frames built / 60 hits; 0 scans / 60 hits |
+
+Files went from ~6.7ms to under 1ms per rendered frame and now costs less than Workspaces per frame. Freshness was proved live on both branches: a file created in an expanded directory and a line appended to the previewed file each appeared within the watcher's existing window at the cost of exactly one rebuild and one scan.
+
+M3 is not needed: `paneframe.Compose` is 0.33ms per frame after M1 and M2, below the threshold that would justify a compose cache. Keep the `DeckComposeCacheHit` counter for the day that changes.
+
+Two review nits are recorded here rather than fixed, because neither affects correctness: the `reuseViewOnce` field is now write-only and can be deleted with its wheel-burst comment, and the image-preview bypass could be narrowed to when the preview pane is on screen.
 
 ## Acceptance for the whole plan
 
