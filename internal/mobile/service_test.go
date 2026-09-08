@@ -103,6 +103,34 @@ func TestResolveRefusesCatalogIdentityChangedAfterListing(t *testing.T) {
 	}
 }
 
+func TestResolveRequiresExpectedIdentityForCandidateSelector(t *testing.T) {
+	var output bytes.Buffer
+	s := testService(&output)
+	s.resolve = func(context.Context, string) (ResolvedTarget, error) {
+		t.Fatal("candidate without expected identity reached resolver")
+		return ResolvedTarget{}, nil
+	}
+	s.resolveTarget(context.Background(), mobileproto.Request{RequestID: "candidate-without-identity", Target: candidateSelectorPrefix + strings.Repeat("a", 32)})
+	responses := decodeResponses(t, &output)
+	if len(responses) != 1 || responses[0].Error == nil || responses[0].Error.Code != mobileproto.ErrorInvalidRequest {
+		t.Fatalf("responses = %+v", responses)
+	}
+}
+
+func TestResolveRequiresExpectedIdentityForWhitespaceCandidateSelector(t *testing.T) {
+	var output bytes.Buffer
+	s := testService(&output)
+	s.resolve = func(context.Context, string) (ResolvedTarget, error) {
+		t.Fatal("whitespace-wrapped candidate without expected identity reached resolver")
+		return ResolvedTarget{}, nil
+	}
+	s.resolveTarget(context.Background(), mobileproto.Request{RequestID: "candidate-without-identity", Target: " \t" + candidateSelectorPrefix + strings.Repeat("a", 32) + "\n"})
+	responses := decodeResponses(t, &output)
+	if len(responses) != 1 || responses[0].Error == nil || responses[0].Error.Code != mobileproto.ErrorInvalidRequest {
+		t.Fatalf("responses = %+v", responses)
+	}
+}
+
 func TestSessionsRefusesToBlockAnActiveTerminalStream(t *testing.T) {
 	var output bytes.Buffer
 	s := testService(&output)
@@ -197,6 +225,27 @@ func TestRevalidationRejectsChangedDurableShellRecord(t *testing.T) {
 	}
 	if err := s.revalidate(context.Background(), target); err == nil {
 		t.Fatal("unchanged tmux process with replaced durable shell record was accepted")
+	}
+}
+
+func TestRevalidationUsesTheBoundTargetSeamInsteadOfGlobalResolution(t *testing.T) {
+	var output bytes.Buffer
+	s := testService(&output)
+	target := testTarget()
+	s.resolve = func(context.Context, string) (ResolvedTarget, error) {
+		t.Fatal("global resolver was called during bound target revalidation")
+		return ResolvedTarget{}, nil
+	}
+	calls := 0
+	s.revalidateTarget = func(_ context.Context, previous ResolvedTarget) (ResolvedTarget, error) {
+		calls++
+		return previous, nil
+	}
+	if err := s.revalidate(context.Background(), target); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("bound target revalidation calls = %d, want 1", calls)
 	}
 }
 

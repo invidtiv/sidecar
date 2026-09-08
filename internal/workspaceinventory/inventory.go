@@ -656,23 +656,7 @@ func (c Collector) observe(workspace *Workspace, matches []Pane, now time.Time) 
 }
 
 func (c Collector) observeContext(ctx context.Context, workspace *Workspace, matches []Pane, now time.Time) {
-	workspace.Live, workspace.Ambiguous = false, false
-	workspace.TerminalCandidates = nil
-	for _, pane := range matches {
-		if pane.Dead {
-			continue
-		}
-		workspace.TerminalCandidates = append(workspace.TerminalCandidates, TerminalCandidate{
-			Session: pane.Session, Pane: pane.ID, Title: pane.Title, Command: pane.Command,
-		})
-	}
-	switch {
-	case len(matches) > 1:
-		workspace.Ambiguous = true
-	case len(matches) == 1:
-		workspace.PaneID, workspace.TmuxName = matches[0].ID, matches[0].Session
-		workspace.Live = !matches[0].Dead
-	}
+	setTerminalMatches(workspace, matches)
 	// Plain is durable inventory: it says no agent was selected when this
 	// worktree was created. Provider, by contrast, may be transient live
 	// evidence. Clear the prior poll's observation before deciding whether the
@@ -765,6 +749,42 @@ func (c Collector) observeContext(ctx context.Context, workspace *Workspace, mat
 		}
 	}
 	workspace.Presentation = agentstatus.Resolve(input)
+}
+
+func setTerminalMatches(workspace *Workspace, matches []Pane) {
+	workspace.Live, workspace.Ambiguous = false, false
+	workspace.TerminalCandidates = nil
+	for _, pane := range matches {
+		if pane.Dead {
+			continue
+		}
+		workspace.TerminalCandidates = append(workspace.TerminalCandidates, TerminalCandidate{
+			Session: pane.Session, Pane: pane.ID, Title: pane.Title, Command: pane.Command,
+		})
+	}
+	switch {
+	case len(matches) > 1:
+		workspace.Ambiguous = true
+	case len(matches) == 1:
+		workspace.PaneID, workspace.TmuxName = matches[0].ID, matches[0].Session
+		workspace.Live = !matches[0].Dead
+	}
+}
+
+// RefreshWorktreeTerminalCandidates refreshes only the source-owned terminal
+// candidate set for one already-inventoried worktree. It performs no Git or
+// provider capture; callers separately decide how fresh project membership
+// must be before using the result as authority.
+func (c Collector) RefreshWorktreeTerminalCandidates(workspace Workspace, allRoots []string, panes []Pane) Workspace {
+	c = c.defaults()
+	workspace.PaneID, workspace.TmuxName = "", ""
+	if workspace.Kind != KindWorktree {
+		setTerminalMatches(&workspace, nil)
+		return workspace
+	}
+	matches := resolveWorktreePanes(workspace, panesForPath(workspace.Path, allRoots, panes, c.reservedSessions))
+	setTerminalMatches(&workspace, matches)
+	return workspace
 }
 
 // clearTracker ends a transiently detected agent episode. Without this reset,
@@ -1091,6 +1111,32 @@ func BuildShellClaims(results []ProjectResult) ShellClaims {
 				} else if !exists {
 					claims.Owners[workspace.TmuxName] = result.ProjectKey
 				}
+			}
+		}
+	}
+	return claims
+}
+
+// ConfiguredShellClaims reads only durable shell manifests for configured
+// projects. It preserves global shell-session exclusion for narrow live-pane
+// refreshes without running Git inventory or capturing terminal content.
+func ConfiguredShellClaims(projectRoots []string) ShellClaims {
+	claims := ShellClaims{Sessions: make(map[string]bool), Owners: make(map[string]string)}
+	for _, root := range projectRoots {
+		projectKey := canonical(root)
+		stateDir, ok := lookupProject(root)
+		if !ok {
+			continue
+		}
+		for _, shell := range readShells(filepath.Join(stateDir, "shells.json")) {
+			if shell.TmuxName == "" {
+				continue
+			}
+			claims.Sessions[shell.TmuxName] = true
+			if owner, exists := claims.Owners[shell.TmuxName]; exists && owner != projectKey {
+				claims.Owners[shell.TmuxName] = ""
+			} else if !exists {
+				claims.Owners[shell.TmuxName] = projectKey
 			}
 		}
 	}

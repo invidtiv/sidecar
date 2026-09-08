@@ -221,6 +221,48 @@ func TestMobileCatalogProviderColdProcessesKeepGenerationStable(t *testing.T) {
 	}
 }
 
+func TestCandidateRevalidationUsesOnlyBoundProjectInventory(t *testing.T) {
+	base := t.TempDir()
+	root, worktree := filepath.Join(base, "repo"), filepath.Join(base, "worktree")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(worktree, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runner := &mobileCandidateRunner{root: root, worktree: worktree}
+	collector := workspaceinventory.Collector{Runner: runner}.WithDefaults()
+	loadProjects := func() ([]hostserve.Project, error) {
+		return []hostserve.Project{{Name: "Repo", Path: root}}, nil
+	}
+	source := newMobileCandidateWorkspaceProvider(loadProjects, collector)
+	workspaceID := canonicalMobileSourcePath(root) + ":worktree:" + canonicalMobileSourcePath(worktree)
+	seed := mobile.ResolvedTarget{WorkspaceID: workspaceID, WorkspaceKind: string(workspaceinventory.KindWorktree),
+		SourceProjectKey: canonicalMobileSourcePath(root), SourceWorkspacePath: canonicalMobileSourcePath(worktree)}
+	workspace, err := source(context.Background(), seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	generation, candidates, err := mobile.WorkspaceCandidates(workspace, "local:hub")
+	if err != nil || len(candidates) != 1 {
+		t.Fatalf("initial candidates generation=%q candidates=%+v err=%v", generation, candidates, err)
+	}
+	previous := seed
+	previous.ProjectRoot, previous.Selector, previous.SourceGeneration = canonicalMobileSourcePath(worktree), candidates[0].Selector, generation
+	previous.Session, previous.Pane = candidates[0].Session, candidates[0].Pane
+	previous.ServerPID, previous.SessionID, previous.SessionCreated = 202, "$1", "1700000000"
+	runner.gitCalls, runner.paneCalls = 0, 0
+	got, err := mobile.RevalidateCatalogCandidate(context.Background(), previous, "local:hub", source, func(context.Context, string) (tty.HeadlessTargetIdentity, error) {
+		return tty.HeadlessTargetIdentity{ServerPID: 202, SessionID: "$1", SessionCreated: "1700000000", Session: "agent", Pane: "%7", Width: 80, Height: 24}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Selector != previous.Selector || runner.gitCalls != 2 || runner.paneCalls != 2 {
+		t.Fatalf("narrow revalidation target=%+v git_calls=%d pane_calls=%d", got, runner.gitCalls, runner.paneCalls)
+	}
+}
+
 type mobileCatalogRunner struct{ root string }
 
 func (r mobileCatalogRunner) Output(_ context.Context, name string, _ ...string) ([]byte, error) {
@@ -229,6 +271,24 @@ func (r mobileCatalogRunner) Output(_ context.Context, name string, _ ...string)
 		return []byte(fmt.Sprintf("%%1\tsidecar-sh-repo-1\t%s\tcodex\trepo\t0\t101\t202\t24\n", r.root)), nil
 	case "git":
 		return []byte(fmt.Sprintf("worktree %s\nHEAD 0123456789abcdef\nbranch refs/heads/main\n", r.root)), nil
+	default:
+		return nil, fmt.Errorf("unexpected command %s", name)
+	}
+}
+
+type mobileCandidateRunner struct {
+	root, worktree      string
+	gitCalls, paneCalls int
+}
+
+func (r *mobileCandidateRunner) Output(_ context.Context, name string, _ ...string) ([]byte, error) {
+	switch name {
+	case "git":
+		r.gitCalls++
+		return []byte(fmt.Sprintf("worktree %s\nHEAD 0123456789abcdef\nbranch refs/heads/main\n\nworktree %s\nHEAD fedcba9876543210\nbranch refs/heads/codex/mobile\n", r.root, r.worktree)), nil
+	case "tmux":
+		r.paneCalls++
+		return []byte(fmt.Sprintf("%%7\tagent\t%s\tcodex\tAgent\t0\t101\t202\t24\n", r.worktree)), nil
 	default:
 		return nil, fmt.Errorf("unexpected command %s", name)
 	}

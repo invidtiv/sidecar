@@ -95,6 +95,83 @@ func TestHeadlessClaimRefusesFailedOrForeignOwnerWrite(t *testing.T) {
 	}
 }
 
+func TestHeadlessMultiPaneClaimResizesAndVerifiesTheSelectedPane(t *testing.T) {
+	geometry, channel := headlessGeometryHarness(t)
+	geometry.expected.PaneCount = 2
+	done := make(chan error, 1)
+	go func() { done <- geometry.ClaimResize(46, 23) }()
+	owner := waitForControlCommand(t, channel, "#{session_created}", 0)
+	respondHeadless(owner, []string{"42\t$3\t1700000000\tmobile\t%7\t"}, nil)
+	layout := waitForControlCommand(t, channel, "#{window_id}\t#{window_width}", 0)
+	respondHeadless(layout, []string{"42\t$3\t1700000000\tmobile\t%7\t@1\t80\t24\t39\t24\t2"}, nil)
+	claim := waitForControlCommand(t, channel, "if-shell", 0)
+	if !strings.Contains(claim.text, "resize-window -t %7 -x 87 -y 23") || !strings.Contains(claim.text, "resize-pane -t %7 -x 46 -y 23") {
+		t.Fatalf("multi-pane claim did not preserve sibling extent around selected geometry: %q", claim.text)
+	}
+	if !strings.Contains(claim.text, "#{window_id}|#{window_width}|#{window_height}|#{pane_width}|#{pane_height}|#{window_panes},@1|80|24|39|24|2") {
+		t.Fatalf("multi-pane claim did not bind the observed layout: %q", claim.text)
+	}
+	respondHeadlessCommand(channel, claim.text, controlResponse{Lines: []string{headlessOwnerSuccess}})
+	verified := waitForControlCommand(t, channel, "#{window_id}\t#{window_width}", 1)
+	respondHeadless(verified, []string{"42\t$3\t1700000000\tmobile\t%7\t@1\t87\t23\t46\t23\t2"}, nil)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if geometry.token == "" {
+		t.Fatal("verified multi-pane claim did not retain ownership")
+	}
+}
+
+func TestHeadlessMultiPaneClaimRefusesUnacceptedPaneGeometry(t *testing.T) {
+	geometry, channel := headlessGeometryHarness(t)
+	geometry.expected.PaneCount = 2
+	done := make(chan error, 1)
+	go func() { done <- geometry.ClaimResize(46, 23) }()
+	owner := waitForControlCommand(t, channel, "#{session_created}", 0)
+	respondHeadless(owner, []string{"42\t$3\t1700000000\tmobile\t%7\t"}, nil)
+	layout := waitForControlCommand(t, channel, "#{window_id}\t#{window_width}", 0)
+	respondHeadless(layout, []string{"42\t$3\t1700000000\tmobile\t%7\t@1\t80\t24\t39\t24\t2"}, nil)
+	claim := waitForControlCommand(t, channel, "if-shell", 0)
+	respondHeadlessCommand(channel, claim.text, controlResponse{Lines: []string{headlessOwnerSuccess}})
+	verified := waitForControlCommand(t, channel, "#{window_id}\t#{window_width}", 1)
+	respondHeadless(verified, []string{"42\t$3\t1700000000\tmobile\t%7\t@1\t87\t23\t45\t23\t2"}, nil)
+	cleanup := waitForControlCommand(t, channel, "set-option -u", 0)
+	respondHeadlessCommand(channel, cleanup.text, controlResponse{Lines: []string{headlessOwnerSuccess}})
+	if err := <-done; err == nil || !strings.Contains(err.Error(), "selected pane accepted 45x23") {
+		t.Fatalf("unaccepted geometry error = %v", err)
+	}
+	if geometry.token != "" {
+		t.Fatalf("unaccepted geometry retained token %q", geometry.token)
+	}
+}
+
+func TestHeadlessMultiPaneClaimRefusesLayoutChangeAtMutation(t *testing.T) {
+	geometry, channel := headlessGeometryHarness(t)
+	geometry.expected.PaneCount = 2
+	done := make(chan error, 1)
+	go func() { done <- geometry.ClaimResize(46, 23) }()
+	owner := waitForControlCommand(t, channel, "#{session_created}", 0)
+	respondHeadless(owner, []string{"42\t$3\t1700000000\tmobile\t%7\t"}, nil)
+	layout := waitForControlCommand(t, channel, "#{window_id}\t#{window_width}", 0)
+	respondHeadless(layout, []string{"42\t$3\t1700000000\tmobile\t%7\t@1\t80\t24\t39\t24\t2"}, nil)
+	claim := waitForControlCommand(t, channel, "if-shell", 0)
+	if !strings.Contains(claim.text, "@1|80|24|39|24|2") {
+		t.Fatalf("claim omitted observed layout guard: %q", claim.text)
+	}
+	// An external client changes the layout after the read but before this
+	// conditional mutation. tmux evaluates the guard against the new values and
+	// takes the refusal branch without running either resize command.
+	respondHeadlessCommand(channel, claim.text, controlResponse{Lines: []string{headlessOwnerMismatch}})
+	cleanup := waitForControlCommand(t, channel, "set-option -u", 0)
+	respondHeadlessCommand(channel, cleanup.text, controlResponse{Lines: []string{headlessOwnerMismatch}})
+	if err := <-done; err == nil || !strings.Contains(err.Error(), "target layout changed") {
+		t.Fatalf("layout race error = %v", err)
+	}
+	if geometry.token != "" {
+		t.Fatalf("layout race retained token %q", geometry.token)
+	}
+}
+
 func TestHeadlessReleaseConditionallyClearsOnlyItsExactToken(t *testing.T) {
 	geometry, channel := headlessGeometryHarness(t)
 	claimed := make(chan error, 1)

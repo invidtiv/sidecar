@@ -19,6 +19,7 @@ import (
 
 	"github.com/marcus/sidecar/internal/mobileproto"
 	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
 const (
@@ -29,9 +30,10 @@ const (
 
 type ResolvedTarget struct {
 	WorkspaceID, WorkspaceKind, ProjectRoot, Session, Pane, DisplayName string
+	Selector, SourceGeneration, SourceProjectKey, SourceWorkspacePath   string
 	ServerPID                                                           int
 	SessionID, SessionCreated, DurableSessionCreated                    string
-	Width, Height                                                       int
+	Width, Height, PaneCount                                            int
 }
 
 type ResolveError struct{ Code, Message string }
@@ -39,6 +41,7 @@ type ResolveError struct{ Code, Message string }
 func (e *ResolveError) Error() string { return e.Message }
 
 type Resolver func(context.Context, string) (ResolvedTarget, error)
+type TargetRevalidator func(context.Context, ResolvedTarget) (ResolvedTarget, error)
 type HistoryCapturer func(target string, start, end, maxBytes int) (tty.CaptureRange, error)
 type OwnerConfigGenerationProvider func(context.Context) (string, error)
 
@@ -46,6 +49,7 @@ type Config struct {
 	Input                                     io.Reader
 	Output                                    io.Writer
 	Resolver                                  Resolver
+	Revalidator                               TargetRevalidator
 	Catalog                                   CatalogProvider
 	HistoryCapturer                           HistoryCapturer
 	OwnerConfigGenerationProvider             OwnerConfigGenerationProvider
@@ -57,6 +61,7 @@ type Service struct {
 	in                                             io.Reader
 	out                                            *safeEncoder
 	resolve                                        Resolver
+	revalidateTarget                               TargetRevalidator
 	catalog                                        CatalogProvider
 	historyCapture                                 HistoryCapturer
 	ownerConfigGeneration                          OwnerConfigGenerationProvider
@@ -154,7 +159,7 @@ func New(config Config) (*Service, error) {
 		historyCapture = tty.CapturePaneRangeBounded
 	}
 	s := &Service{
-		in: config.Input, out: newSafeEncoder(config.Output), resolve: config.Resolver, catalog: config.Catalog,
+		in: config.Input, out: newSafeEncoder(config.Output), resolve: config.Resolver, revalidateTarget: config.Revalidator, catalog: config.Catalog,
 		historyCapture:        historyCapture,
 		ownerConfigGeneration: config.OwnerConfigGenerationProvider,
 		manager:               config.Manager, instance: instance, hubID: config.HubID,
@@ -340,8 +345,13 @@ func (s *Service) sessions(ctx context.Context, request mobileproto.Request) {
 }
 
 func (s *Service) resolveTarget(ctx context.Context, request mobileproto.Request) {
-	if request.Target == "" || len(request.Target) > mobileproto.MaxTargetBytes {
+	target := strings.TrimSpace(request.Target)
+	if target == "" || len(target) > mobileproto.MaxTargetBytes {
 		s.writeError(request.RequestID, mobileproto.ErrorInvalidRequest, "target is required and bounded", false)
+		return
+	}
+	if IsCandidateSelector(target) && request.ExpectedTarget == nil {
+		s.writeError(request.RequestID, mobileproto.ErrorInvalidRequest, "terminal candidate target requires its paired expected_target identity", false)
 		return
 	}
 	s.mu.Lock()
@@ -356,7 +366,7 @@ func (s *Service) resolveTarget(ctx context.Context, request mobileproto.Request
 		s.writeError(request.RequestID, mobileproto.ErrorBackend, err.Error(), true)
 		return
 	}
-	resolved, wire, err := s.resolveWireTarget(ctx, request.Target, handle)
+	resolved, wire, err := s.resolveWireTarget(ctx, target, handle)
 	if err != nil {
 		s.resolveFailure(request.RequestID, err)
 		return
@@ -427,7 +437,11 @@ func (s *Service) resolveWireTarget(ctx context.Context, selector, handle string
 
 func targetIdentity(identity CatalogIdentity, resolved ResolvedTarget) mobileproto.TargetIdentity {
 	incarnation := fmt.Sprintf("pid=%d", resolved.ServerPID)
-	generationBytes := sha256.Sum256([]byte(strings.Join([]string{resolved.WorkspaceID, resolved.WorkspaceKind, resolved.Session, resolved.Pane, resolved.SessionID, resolved.SessionCreated, resolved.DurableSessionCreated, incarnation}, "\x00")))
+	generationParts := []string{resolved.WorkspaceID, resolved.WorkspaceKind, resolved.Session, resolved.Pane, resolved.SessionID, resolved.SessionCreated, resolved.DurableSessionCreated, incarnation}
+	if resolved.SourceGeneration != "" {
+		generationParts = append(generationParts, resolved.SourceGeneration)
+	}
+	generationBytes := sha256.Sum256([]byte(strings.Join(generationParts, "\x00")))
 	return mobileproto.TargetIdentity{
 		HubID: identity.HubID, OwnerHostID: identity.OwnerHostID, OwnerConfigGeneration: identity.OwnerConfigGeneration,
 		WorkspaceID: resolved.WorkspaceID, WorkspaceKind: resolved.WorkspaceKind, Session: resolved.Session, Pane: resolved.Pane,
@@ -455,16 +469,30 @@ func (s *Service) revalidatedTarget(ctx context.Context, target targetState) (Re
 	if err := s.requireOwnerConfigGeneration(ctx, expectedConfig); err != nil {
 		return ResolvedTarget{}, err
 	}
-	current, err := s.resolve(ctx, target.resolved.Session)
+	var current ResolvedTarget
+	var err error
+	if s.revalidateTarget != nil {
+		current, err = s.revalidateTarget(ctx, target.resolved)
+	} else {
+		selector := target.resolved.Selector
+		if selector == "" {
+			selector = target.resolved.Session
+		}
+		current, err = s.resolve(ctx, selector)
+	}
 	if err != nil {
 		return ResolvedTarget{}, err
 	}
 	want, got := target.resolved, current
-	if want.WorkspaceID != got.WorkspaceID || want.WorkspaceKind != got.WorkspaceKind || want.ProjectRoot != got.ProjectRoot || want.Session != got.Session ||
-		want.Pane != got.Pane || want.ServerPID != got.ServerPID || want.SessionID != got.SessionID || want.SessionCreated != got.SessionCreated {
+	if want.WorkspaceID != got.WorkspaceID || want.WorkspaceKind != got.WorkspaceKind || want.ProjectRoot != got.ProjectRoot ||
+		want.SourceProjectKey != got.SourceProjectKey || want.SourceWorkspacePath != got.SourceWorkspacePath || want.Session != got.Session ||
+		want.Pane != got.Pane || want.ServerPID != got.ServerPID || want.SessionID != got.SessionID || want.SessionCreated != got.SessionCreated || want.PaneCount != got.PaneCount {
 		return ResolvedTarget{}, &ResolveError{Code: mobileproto.ErrorIdentityChanged, Message: "managed terminal identity changed"}
 	}
-	if want.DurableSessionCreated == "" || want.DurableSessionCreated != got.DurableSessionCreated {
+	if want.WorkspaceKind == string(workspaceinventory.KindShell) && (want.DurableSessionCreated == "" || want.DurableSessionCreated != got.DurableSessionCreated) {
+		return ResolvedTarget{}, &ResolveError{Code: mobileproto.ErrorIdentityChanged, Message: "managed terminal identity changed"}
+	}
+	if want.WorkspaceKind == string(workspaceinventory.KindWorktree) && (want.SourceGeneration == "" || want.SourceGeneration != got.SourceGeneration) {
 		return ResolvedTarget{}, &ResolveError{Code: mobileproto.ErrorIdentityChanged, Message: "managed terminal identity changed"}
 	}
 	if err := s.requireOwnerConfigGeneration(ctx, expectedConfig); err != nil {
@@ -694,7 +722,7 @@ func (s *Service) control(ctx context.Context, request mobileproto.Request) {
 	owner := mobileOwnerID(a.handle, a.generation, request.OperationSequence)
 	expected := tty.HeadlessTargetIdentity{ServerPID: a.target.resolved.ServerPID, SessionID: a.target.resolved.SessionID,
 		SessionCreated: a.target.resolved.SessionCreated, Session: a.target.resolved.Session, Pane: a.target.resolved.Pane,
-		Width: a.target.resolved.Width, Height: a.target.resolved.Height}
+		Width: a.target.resolved.Width, Height: a.target.resolved.Height, PaneCount: a.target.resolved.PaneCount}
 	geometry, err := tty.NewHeadlessGeometry(s.manager, expected, owner)
 	if err == nil {
 		err = geometry.ClaimResize(request.Columns, request.Rows)

@@ -44,6 +44,10 @@ type CatalogInput struct {
 	ObservedAt time.Time
 	Hosts      []mobileproto.CatalogHost
 	Projects   []CatalogProject
+	// CandidateResolver authorizes selectors against this exact inventory
+	// observation. It avoids rebuilding the global catalog for every candidate;
+	// target open and every later operation still perform fresh source checks.
+	CandidateResolver Resolver
 }
 
 type CatalogProvider func(context.Context) (CatalogInput, error)
@@ -121,8 +125,19 @@ func QueryCatalog(ctx context.Context, provider CatalogProvider, resolver Resolv
 			rows[item.ID] = catalogRow(workspace, item, project.Stale, identity.OwnerHostID)
 		}
 	}
+	totalCandidates := 0
+	for _, row := range rows {
+		totalCandidates += len(row.Candidates)
+		if totalCandidates > mobileproto.MaxCatalogCandidates {
+			return mobileproto.CatalogSnapshot{}, &ResolveError{Code: mobileproto.ErrorOverflow, Message: "mobile catalog exceeds terminal candidate limit"}
+		}
+	}
 	refuseDuplicateTargets(rows)
-	if err := authorizeCatalogRows(ctx, rows, resolver, identity); err != nil {
+	candidateResolver := input.CandidateResolver
+	if candidateResolver == nil {
+		candidateResolver = resolver
+	}
+	if err := authorizeCatalogRows(ctx, rows, resolver, candidateResolver, identity); err != nil {
 		return mobileproto.CatalogSnapshot{}, err
 	}
 	allRows := make([]mobileproto.CatalogRow, 0, len(rows))
@@ -159,6 +174,9 @@ func QueryCatalog(ctx context.Context, provider CatalogProvider, resolver Resolv
 		HubID: identity.HubID, OwnerHostID: identity.OwnerHostID, OwnerConfigGeneration: identity.OwnerConfigGeneration,
 		Query: query, Hosts: hosts, Sections: wireSections, Failures: failures, Total: total,
 	}
+	if err := mobileproto.ValidateCatalogCandidates(snapshot); err != nil {
+		return mobileproto.CatalogSnapshot{}, &ResolveError{Code: mobileproto.ErrorIdentityChanged, Message: err.Error()}
+	}
 	if err := validateCatalogPayload(snapshot); err != nil {
 		return mobileproto.CatalogSnapshot{}, err
 	}
@@ -170,13 +188,59 @@ func QueryCatalog(ctx context.Context, provider CatalogProvider, resolver Resolv
 // a later resolve can exact-match it and refuse a replacement created after
 // listing. This precedes filtering and generation: both describe the final
 // authoritative verdict rather than the optimistic inventory candidate.
-func authorizeCatalogRows(ctx context.Context, rows map[string]mobileproto.CatalogRow, resolver Resolver, identity CatalogIdentity) error {
+func authorizeCatalogRows(ctx context.Context, rows map[string]mobileproto.CatalogRow, resolver, candidateResolver Resolver, identity CatalogIdentity) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	for id, value := range rows {
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		if len(value.Candidates) > 0 {
+			row := value
+			if candidateResolver == nil {
+				refuseCatalogRow(&row, AttachUnsupported, mobileproto.ErrorUnsupported, "mobile terminal resolver is unavailable")
+				rows[id] = row
+				continue
+			}
+			validated := append([]mobileproto.CatalogCandidate(nil), row.Candidates...)
+			failed := false
+			for index, candidate := range validated {
+				resolved, err := candidateResolver(ctx, candidate.Selector)
+				if err != nil {
+					state, code := catalogResolveState(err)
+					refuseCatalogRow(&row, state, code, err.Error())
+					failed = true
+					break
+				}
+				if resolved.Selector != candidate.Selector || resolved.SourceGeneration != row.CandidateGeneration ||
+					resolved.WorkspaceID != candidate.WorkspaceID || resolved.WorkspaceKind != candidate.WorkspaceKind ||
+					resolved.Session != candidate.Session || resolved.Pane != candidate.Pane {
+					refuseCatalogRow(&row, AttachStale, mobileproto.ErrorIdentityChanged, "terminal candidate identity changed after catalog observation")
+					failed = true
+					break
+				}
+				validated[index].ExpectedTarget = targetIdentity(identity, resolved)
+			}
+			if failed {
+				rows[id] = row
+				continue
+			}
+			row.Candidates = validated
+			row.Live, row.Stale = true, false
+			if len(validated) == 1 {
+				candidate := validated[0]
+				row.Session, row.Pane, row.Target = candidate.Session, candidate.Pane, candidate.Selector
+				row.ExpectedTarget = &candidate.ExpectedTarget
+				row.AttachState, row.AttachmentReady, row.Ambiguous = AttachReady, true, false
+				row.RefusalCode, row.Refusal = "", ""
+			} else {
+				row.Target, row.ExpectedTarget, row.AttachmentReady = "", nil, false
+				row.AttachState, row.Ambiguous = AttachAmbiguous, true
+				row.RefusalCode, row.Refusal = mobileproto.ErrorAmbiguous, fmt.Sprintf("choose one of %d terminal panes", len(validated))
+			}
+			rows[id] = row
+			continue
 		}
 		if value.AttachState != AttachCandidate {
 			continue
@@ -189,20 +253,7 @@ func authorizeCatalogRows(ctx context.Context, rows map[string]mobileproto.Catal
 		}
 		resolved, err := resolver(ctx, row.Target)
 		if err != nil {
-			code := mobileproto.ErrorBackend
-			state := AttachUnavailable
-			var resolveErr *ResolveError
-			if errors.As(err, &resolveErr) {
-				code = resolveErr.Code
-				switch code {
-				case mobileproto.ErrorAmbiguous:
-					state = AttachAmbiguous
-				case mobileproto.ErrorUnsupported, mobileproto.ErrorUnsupportedMode:
-					state = AttachUnsupported
-				case mobileproto.ErrorIdentityChanged:
-					state = AttachStale
-				}
-			}
+			state, code := catalogResolveState(err)
 			refuseCatalogRow(&row, state, code, err.Error())
 			rows[id] = row
 			continue
@@ -220,6 +271,24 @@ func authorizeCatalogRows(ctx context.Context, rows map[string]mobileproto.Catal
 		rows[id] = row
 	}
 	return nil
+}
+
+func catalogResolveState(err error) (string, string) {
+	code := mobileproto.ErrorBackend
+	state := AttachUnavailable
+	var resolveErr *ResolveError
+	if errors.As(err, &resolveErr) {
+		code = resolveErr.Code
+		switch code {
+		case mobileproto.ErrorAmbiguous:
+			state = AttachAmbiguous
+		case mobileproto.ErrorUnsupported, mobileproto.ErrorUnsupportedMode, mobileproto.ErrorOverflow:
+			state = AttachUnsupported
+		case mobileproto.ErrorIdentityChanged:
+			state = AttachStale
+		}
+	}
+	return state, code
 }
 
 func normalizeCatalogQuery(query mobileproto.CatalogQuery) (mobileproto.CatalogQuery, workspacelist.Sort, error) {
@@ -324,6 +393,19 @@ func catalogRow(workspace workspaceinventory.Workspace, item workspacelist.Item,
 	switch {
 	case stale:
 		row.AttachState, row.RefusalCode, row.Refusal = AttachStale, mobileproto.ErrorIdentityChanged, "catalog observation is stale"
+	case workspace.Kind == workspaceinventory.KindWorktree && len(workspace.TerminalCandidates) > 0:
+		generation, candidates, err := WorkspaceCandidates(workspace, owner)
+		if err != nil {
+			code := mobileproto.ErrorBackend
+			var resolveErr *ResolveError
+			if errors.As(err, &resolveErr) {
+				code = resolveErr.Code
+			}
+			row.AttachState, row.RefusalCode, row.Refusal = AttachUnsupported, code, err.Error()
+			break
+		}
+		row.Live, row.WorkspaceID, row.CandidateGeneration, row.Candidates = true, workspace.ID, generation, candidates
+		row.AttachState = AttachCandidate
 	case workspace.Ambiguous:
 		row.AttachState, row.RefusalCode, row.Refusal = AttachAmbiguous, mobileproto.ErrorAmbiguous, "workspace matches multiple terminal panes"
 	case !workspace.Live || workspace.PaneID == "":
@@ -341,7 +423,7 @@ func catalogRow(workspace workspaceinventory.Workspace, item workspacelist.Item,
 
 func refuseCatalogRow(row *mobileproto.CatalogRow, state, code, reason string) {
 	row.AttachState, row.RefusalCode, row.Refusal = state, code, reason
-	row.Target, row.CandidateGeneration, row.ExpectedTarget, row.AttachmentReady = "", "", nil, false
+	row.Target, row.CandidateGeneration, row.Candidates, row.ExpectedTarget, row.AttachmentReady = "", "", nil, nil, false
 }
 
 func catalogCandidateGeneration(workspace workspaceinventory.Workspace, owner string) string {
@@ -375,7 +457,7 @@ func candidateGeneration(workspaceID, workspaceKind, session, pane, created, own
 func refuseDuplicateTargets(rows map[string]mobileproto.CatalogRow) {
 	byTarget := make(map[string][]string)
 	for id, row := range rows {
-		if row.AttachState == AttachCandidate {
+		if row.AttachState == AttachCandidate && len(row.Candidates) == 0 {
 			key := row.OwnerHostID + "\x00" + row.Target
 			byTarget[key] = append(byTarget[key], id)
 		}

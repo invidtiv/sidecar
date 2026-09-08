@@ -735,6 +735,36 @@ func TestAgentShellClaimsRefuseDuplicateDurableOwners(t *testing.T) {
 	}
 }
 
+func TestConfiguredShellClaimsReserveOtherProjectsWithoutGitInventory(t *testing.T) {
+	stateBase := t.TempDir()
+	config.SetTestStateDir(stateBase)
+	t.Cleanup(config.ResetTestStateDir)
+	one, two := filepath.Join(t.TempDir(), "one"), filepath.Join(t.TempDir(), "two")
+	for index, root := range []string{one, two} {
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		stateDir, err := projectdir.ResolveWithBase(stateBase, root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if index == 1 {
+			if err := os.WriteFile(filepath.Join(stateDir, "shells.json"), []byte(`{"shells":[{"tmuxName":"owned-by-two"}]}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	claims := ConfiguredShellClaims([]string{one, two})
+	if !claims.Sessions["owned-by-two"] || claims.Owners["owned-by-two"] != canonical(two) {
+		t.Fatalf("configured shell claims = %#v", claims)
+	}
+	workspace := Workspace{ID: "one:worktree", Kind: KindWorktree, ProjectKey: one, ProjectRoot: one, Path: one}
+	refreshed := (Collector{}.WithShellClaims(claims)).RefreshWorktreeTerminalCandidates(workspace, []string{one, two}, []Pane{{ID: "%9", Session: "owned-by-two", Path: one}})
+	if len(refreshed.TerminalCandidates) != 0 {
+		t.Fatalf("other-project shell entered worktree candidates: %+v", refreshed.TerminalCandidates)
+	}
+}
+
 func TestShellMetadataRefusesBlockingFIFO(t *testing.T) {
 	fifo := filepath.Join(t.TempDir(), "shells.json")
 	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
@@ -1144,6 +1174,24 @@ func TestListPanesNeverReportsTheHostingPane(t *testing.T) {
 	}
 	if len(panes) != 1 || panes[0].ID != "%19" {
 		t.Fatalf("panes = %#v, want only %%19 with the env default", panes)
+	}
+}
+
+func TestRefreshWorktreeTerminalCandidatesUsesOnlyCurrentPaneMembership(t *testing.T) {
+	workspace := Workspace{ID: "demo:worktree:one", Kind: KindWorktree, ProjectKey: "/demo", ProjectRoot: "/demo", Path: "/demo/one",
+		PaneID: "%old", TmuxName: "old", TerminalCandidates: []TerminalCandidate{{Session: "old", Pane: "%old"}}}
+	collector := Collector{}.WithDefaults()
+	current := collector.RefreshWorktreeTerminalCandidates(workspace, []string{"/demo"}, []Pane{
+		{ID: "%1", Session: "agent", Path: "/demo/one", Title: "Agent"},
+		{ID: "%2", Session: shellSessionPrefix + "demo-1", Path: "/demo/one", Title: "Sidecar shell"},
+		{ID: "%3", Session: "dead", Path: "/demo/one", Dead: true},
+	})
+	if !current.Ambiguous || current.PaneID != "" || current.TmuxName != "" || len(current.TerminalCandidates) != 1 || current.TerminalCandidates[0].Pane != "%1" {
+		t.Fatalf("current candidate source = %+v", current)
+	}
+	empty := collector.RefreshWorktreeTerminalCandidates(current, []string{"/demo"}, nil)
+	if empty.Live || empty.Ambiguous || empty.PaneID != "" || empty.TmuxName != "" || len(empty.TerminalCandidates) != 0 {
+		t.Fatalf("removed panes survived refresh = %+v", empty)
 	}
 }
 

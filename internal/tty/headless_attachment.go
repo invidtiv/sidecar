@@ -59,9 +59,17 @@ func (g *HeadlessGeometry) ClaimResize(width, height int) error {
 	g.lastInput = now
 	g.lastPresence = now
 	next := g.nextToken(now)
-	resize := "resize-window -t " + controlQuote(g.expected.Pane) + " -x " + strconv.Itoa(width) + " -y " + strconv.Itoa(height)
-	if err := g.compareAndRun(observed, next, resize); err != nil {
+	operations, verify, layoutGuard, err := g.resizeOperations(width, height)
+	if err != nil {
+		return err
+	}
+	if err := g.compareAndRunGuarded(observed, next, layoutGuard, operations...); err != nil {
 		return g.cleanupAttempted(next, err)
+	}
+	if verify {
+		if err := g.verifyPaneGeometry(width, height); err != nil {
+			return g.cleanupAttempted(next, err)
+		}
 	}
 	g.token = next
 	return nil
@@ -81,14 +89,105 @@ func (g *HeadlessGeometry) Resize(width, height int) error {
 		return err
 	}
 	next := g.nextToken(now)
-	resize := "resize-window -t " + controlQuote(g.expected.Pane) + " -x " + strconv.Itoa(width) + " -y " + strconv.Itoa(height)
-	if err := g.compareAndRun(g.token, next, resize); err != nil {
+	operations, verify, layoutGuard, err := g.resizeOperations(width, height)
+	if err != nil {
+		return err
+	}
+	if err := g.compareAndRunGuarded(g.token, next, layoutGuard, operations...); err != nil {
 		g.token = ""
 		return g.cleanupAttempted(next, err)
+	}
+	if verify {
+		if err := g.verifyPaneGeometry(width, height); err != nil {
+			g.token = ""
+			return g.cleanupAttempted(next, err)
+		}
 	}
 	g.token = next
 	g.lastPresence = now
 	return nil
+}
+
+type headlessPaneLayout struct {
+	windowID                  string
+	windowWidth, windowHeight int
+	paneWidth, paneHeight     int
+	paneCount                 int
+}
+
+func (g *HeadlessGeometry) resizeOperations(width, height int) ([]string, bool, string, error) {
+	if g.expected.PaneCount <= 1 {
+		return []string{"resize-window -t " + controlQuote(g.expected.Pane) + " -x " + strconv.Itoa(width) + " -y " + strconv.Itoa(height)}, false, "", nil
+	}
+	layout, err := g.readLayout()
+	if err != nil {
+		return nil, false, "", err
+	}
+	windowWidth := layout.windowWidth + width - layout.paneWidth
+	windowHeight := layout.windowHeight + height - layout.paneHeight
+	if windowWidth < width || windowHeight < height || windowWidth < 2 || windowHeight < 1 {
+		return nil, false, "", fmt.Errorf("tmux control: selected pane cannot reach requested geometry")
+	}
+	return []string{
+		"resize-window -t " + controlQuote(g.expected.Pane) + " -x " + strconv.Itoa(windowWidth) + " -y " + strconv.Itoa(windowHeight),
+		"resize-pane -t " + controlQuote(g.expected.Pane) + " -x " + strconv.Itoa(width) + " -y " + strconv.Itoa(height),
+	}, true, layout.guard(), nil
+}
+
+// guard is evaluated by tmux in the same if-shell transaction as the resize.
+// It prevents a delta computed from one layout from being applied after an
+// external client has moved or resized the selected pane without changing the
+// Sidecar ownership token.
+func (l headlessPaneLayout) guard() string {
+	observed := strings.Join([]string{
+		l.windowID,
+		strconv.Itoa(l.windowWidth),
+		strconv.Itoa(l.windowHeight),
+		strconv.Itoa(l.paneWidth),
+		strconv.Itoa(l.paneHeight),
+		strconv.Itoa(l.paneCount),
+	}, "|")
+	return "#{==:#{window_id}|#{window_width}|#{window_height}|#{pane_width}|#{pane_height}|#{window_panes}," + observed + "}"
+}
+
+func (g *HeadlessGeometry) verifyPaneGeometry(width, height int) error {
+	layout, err := g.readLayout()
+	if err != nil {
+		return err
+	}
+	if layout.paneWidth != width || layout.paneHeight != height {
+		return fmt.Errorf("tmux control: selected pane accepted %dx%d, requested %dx%d", layout.paneWidth, layout.paneHeight, width, height)
+	}
+	return nil
+}
+
+func (g *HeadlessGeometry) readLayout() (headlessPaneLayout, error) {
+	command := "display-message -t " + controlQuote(g.expected.Pane) + " -p " + controlQuote(
+		"#{pid}\t#{session_id}\t#{session_created}\t#{session_name}\t#{pane_id}\t#{window_id}\t#{window_width}\t#{window_height}\t#{pane_width}\t#{pane_height}\t#{window_panes}")
+	responses, err := g.manager.requestControlBatch(g.expected.Session, command)
+	if err != nil || len(responses) != 1 || len(responses[0].Lines) != 1 {
+		if err == nil {
+			err = fmt.Errorf("missing layout response")
+		}
+		return headlessPaneLayout{}, fmt.Errorf("tmux control: strict layout read failed: %w", err)
+	}
+	parts := strings.Split(responses[0].Lines[0], "\t")
+	if len(parts) != 11 {
+		return headlessPaneLayout{}, fmt.Errorf("tmux control: malformed layout response")
+	}
+	pid, errPID := strconv.Atoi(parts[0])
+	windowWidth, errWindowWidth := strconv.Atoi(parts[6])
+	windowHeight, errWindowHeight := strconv.Atoi(parts[7])
+	paneWidth, errPaneWidth := strconv.Atoi(parts[8])
+	paneHeight, errPaneHeight := strconv.Atoi(parts[9])
+	paneCount, errPaneCount := strconv.Atoi(parts[10])
+	if errPID != nil || errWindowWidth != nil || errWindowHeight != nil || errPaneWidth != nil || errPaneHeight != nil || errPaneCount != nil ||
+		pid != g.expected.ServerPID || parts[1] != g.expected.SessionID || parts[2] != g.expected.SessionCreated ||
+		parts[3] != g.expected.Session || parts[4] != g.expected.Pane || parts[5] == "" || paneCount != g.expected.PaneCount ||
+		windowWidth < paneWidth || windowHeight < paneHeight || paneWidth < 2 || paneHeight < 1 {
+		return headlessPaneLayout{}, fmt.Errorf("tmux control: target layout identity changed")
+	}
+	return headlessPaneLayout{windowID: parts[5], windowWidth: windowWidth, windowHeight: windowHeight, paneWidth: paneWidth, paneHeight: paneHeight, paneCount: paneCount}, nil
 }
 
 func (g *HeadlessGeometry) Heartbeat() error {
@@ -232,7 +331,14 @@ func (g *HeadlessGeometry) readCurrent() (string, error) {
 }
 
 func (g *HeadlessGeometry) compareAndRun(observed, next string, operations ...string) error {
+	return g.compareAndRunGuarded(observed, next, "", operations...)
+}
+
+func (g *HeadlessGeometry) compareAndRunGuarded(observed, next, extraGuard string, operations ...string) error {
 	condition := "#{==:#{" + leaseOptionName + "}," + observed + "}"
+	if extraGuard != "" {
+		condition = "#{&&:" + condition + "," + extraGuard + "}"
+	}
 	commands := []string{"set-option -t " + controlQuote(g.expected.Session) + " " + leaseOptionName + " " + controlQuote(next)}
 	commands = append(commands, operations...)
 	commands = append(commands, "display-message -p "+controlQuote(headlessOwnerSuccess))
@@ -243,7 +349,7 @@ func (g *HeadlessGeometry) compareAndRun(observed, next string, operations ...st
 		return fmt.Errorf("tmux control: strict owner write failed: %w", err)
 	}
 	if responseHasLine(responses, headlessOwnerMismatch) {
-		return fmt.Errorf("tmux control: geometry owner changed")
+		return fmt.Errorf("tmux control: geometry owner or target layout changed")
 	}
 	if !responseHasLine(responses, headlessOwnerSuccess) {
 		return fmt.Errorf("tmux control: strict owner completion missing")

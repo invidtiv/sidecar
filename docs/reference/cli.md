@@ -1841,7 +1841,7 @@ Usage: sidecar mobile <command>
 
 Serve one bounded mobile terminal protocol stream
 
-Read versioned JSONL requests from stdin and write JSONL responses and terminal frames to stdout. The service resolves only Sidecar-managed local sessions and refuses multi-pane layouts.
+Read versioned JSONL requests from stdin and write JSONL responses and terminal frames to stdout. The local service resolves Sidecar-managed shells and catalog-issued worktree terminal candidates. Candidate selectors require their paired expected_target identity. Multi-pane candidates resize and verify the exact selected pane; layouts that cannot accept the requested pane geometry are refused.
 
 ```
 Usage: sidecar mobile serve --stdio
@@ -1868,7 +1868,7 @@ sidecar mobile serve --stdio
 
 Query the local mobile Sessions catalog
 
-Collect the same local workspace inventory and apply the same Activity, Project, Recent, or Name ordering as the Sessions browser. Filters are repeatable and server-applied.
+Collect the same local workspace inventory and apply the same Activity, Project, Recent, or Name ordering as the Sessions browser. Filters are repeatable and server-applied. Worktrees expose zero, one, or several exact server-owned terminal candidates; several choices keep the parent row ambiguous until the client echoes one candidate selector with its expected identity.
 
 ```
 Usage: sidecar mobile sessions --json [--sort MODE] [--search TEXT] [--host ID] [--provider NAME] [--state STATE]
