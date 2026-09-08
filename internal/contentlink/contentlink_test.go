@@ -3,7 +3,9 @@ package contentlink
 import (
 	"fmt"
 	"net/url"
+	"reflect"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -295,6 +297,47 @@ func TestScanFrameReadyOnlyResolutionReturnsBoundedPendingWork(t *testing.T) {
 	}
 	if second.Spans[0].Ref() != (Ref{Kind: KindFile, Value: "README.md"}) {
 		t.Fatalf("resolved file ref = %+v", second.Spans[0].Ref())
+	}
+}
+
+// Consulted is what a caching host re-asks about. Pending alone cannot serve
+// that purpose: a candidate the snapshot answered negatively leaves no span and
+// no pending entry, so a host tracking only Pending would forget it exists and
+// stop chasing a file that had not been created yet.
+func TestScanFrameReportsEveryConsultedFileAndDiffCandidate(t *testing.T) {
+	frame := "open README.md at main.go:12 from abc1234; issue td-abcd"
+	consulted := func(result FrameResult) []string {
+		var raws []string
+		for _, candidate := range result.Consulted {
+			raws = append(raws, string(candidate.Kind)+":"+candidate.Raw)
+		}
+		sort.Strings(raws)
+		return raws
+	}
+
+	first := ScanFrame(frame, FrameOptions{})
+	want := []string{"diff:abc1234", "file:README.md", "file:main.go"}
+	if got := consulted(first); !reflect.DeepEqual(got, want) {
+		t.Fatalf("unresolved consulted = %v, want %v", got, want)
+	}
+
+	index := NewResolutionIndex(8)
+	index.Put(Pending{Kind: KindFile, Raw: "README.md"}, Ref{Kind: KindFile, Value: "README.md"}, true)
+	index.Put(Pending{Kind: KindFile, Raw: "main.go"}, Ref{}, false)
+	index.Put(Pending{Kind: KindDiff, Raw: "abc1234"}, Ref{Kind: KindDiff, Value: "abc1234"}, true)
+	second := ScanFrame(frame, FrameOptions{Ready: index.Snapshot()})
+	if len(second.Pending) != 0 {
+		t.Fatalf("ready results were requeued: %+v", second.Pending)
+	}
+	if got := consulted(second); !reflect.DeepEqual(got, want) {
+		t.Fatalf("resolved consulted = %v, want the same %v", got, want)
+	}
+
+	// A kind the surface does not allow is never asked about, so it must not
+	// appear as a dependency of the output either.
+	none := ScanFrame(frame, FrameOptions{AllowedKinds: NewKindSet(KindIssue)})
+	if len(none.Consulted) != 0 {
+		t.Fatalf("a disallowed kind was consulted: %+v", none.Consulted)
 	}
 }
 
