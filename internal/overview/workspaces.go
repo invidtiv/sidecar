@@ -9,7 +9,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/marcus/sidecar/internal/agentstatus"
 	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
@@ -25,6 +24,7 @@ import (
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
+	"github.com/marcus/sidecar/internal/workspacecatalog"
 	"github.com/marcus/sidecar/internal/workspacediff"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 	"github.com/marcus/sidecar/internal/workspacelist"
@@ -224,78 +224,7 @@ func (m *Model) pruneGonePins() {
 // where they receive their presentation bucket — "live" or "no session" —
 // instead of a fabricated semantic state.
 func listItem(item workspaceinventory.Item, projectName string, order int, stale bool) workspacelist.Item {
-	row := workspacelist.Item{
-		ID:           item.ID,
-		Name:         item.Name,
-		Project:      projectName,
-		ProjectKey:   item.ProjectKey,
-		ProjectOrder: order,
-		Branch:       item.Branch,
-		Task:         item.TaskID,
-		Provider:     item.Provider,
-		TmuxName:     item.TmuxName,
-		Kind:         string(item.Kind),
-		// Provenance the catalog has carried all along and this projection used
-		// to drop. It earns the row the shared host glyph and the host's colour;
-		// the machine's NAME stays in the project label, which is where the
-		// heading and the filter already read it from.
-		Host: item.HostID,
-	}
-	if row.Project == "" {
-		row.Project = item.ProjectName
-	}
-	switch {
-	case item.Agent != nil:
-		row.Status = item.Agent.Label
-		row.ChangedAt = item.Agent.ChangedAt
-		row.Group = laneGroup(item.Agent.Lane)
-		row.Marker = workspacelist.RowMarker{Icon: item.Agent.Icon, Lane: string(item.Agent.Lane)}
-		if item.Agent.Health {
-			row.Marker.Lane = ""
-			switch item.Agent.Icon {
-			case "✗":
-				row.Marker.Tone = workspacelist.MarkerError
-			case "⚠":
-				row.Marker.Tone = workspacelist.MarkerWarning
-			default:
-				row.Marker.Tone = workspacelist.MarkerMuted
-			}
-		}
-		if !item.Live && !item.Ambiguous {
-			row.Group = workspacelist.GroupNoSession
-		}
-	case item.Ambiguous:
-		row.Status, row.Group = "ambiguous panes", workspacelist.GroupPaused
-		row.Marker = workspacelist.RowMarker{Icon: "?", Tone: workspacelist.MarkerWarning}
-	case item.Live:
-		row.Status, row.Group = "live", workspacelist.GroupLive
-		row.Marker = workspacelist.RowMarker{Icon: "◎", Tone: workspacelist.MarkerLive}
-	default:
-		row.Status, row.Group = "no session", workspacelist.GroupNoSession
-		if item.IsMain {
-			row.Marker = workspacelist.RowMarker{Icon: "◉", Tone: workspacelist.MarkerMain}
-		} else {
-			row.Marker = workspacelist.RowMarker{Icon: "○", Tone: workspacelist.MarkerMuted}
-		}
-	}
-	if stale {
-		row.Status += " · stale"
-	}
-	// A shell has neither task nor branch, and its tmux session name is an
-	// identity key rather than something a reader acts on, so it shows nothing.
-	detail := item.TaskID
-	if detail == "" {
-		detail = item.Branch
-	}
-	row.Detail = detail
-	return row
-}
-
-// laneGroup is the vertical projection of the shared Kanban lanes. The mapping
-// itself lives in workspacelist so the project sidebar and this list cannot
-// come to different conclusions about where a blocked agent belongs.
-func laneGroup(lane agentstatus.LaneID) workspacelist.Group {
-	return workspacelist.GroupForLane(string(lane))
+	return workspacecatalog.ProjectItem(item, projectName, order, stale)
 }
 
 // workspacesLayout is the tab's one placement rule. Three arrangements are

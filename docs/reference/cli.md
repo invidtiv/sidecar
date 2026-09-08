@@ -1864,6 +1864,39 @@ Usage: sidecar mobile serve --stdio
 sidecar mobile serve --stdio
 ```
 
+### `sidecar mobile sessions`
+
+Query the local mobile Sessions catalog
+
+Collect the same local workspace inventory and apply the same Activity, Project, Recent, or Name ordering as the Sessions browser. Filters are repeatable and server-applied.
+
+```
+Usage: sidecar mobile sessions --json [--sort MODE] [--search TEXT] [--host ID] [--provider NAME] [--state STATE]
+```
+
+**Options:**
+
+- `--json`: Write one structured catalog snapshot to stdout
+- `--sort MODE`: activity, project, recent, or name
+- `--search TEXT`: Match Sessions fields
+- `--host ID`: Include one owning host (repeatable)
+- `--provider NAME`: Include one provider (repeatable)
+- `--state STATE`: Include one status, group, or attachment state (repeatable)
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: success
+- `1`: catalog unavailable
+- `2`: usage error
+
+**Examples:**
+
+```bash
+sidecar mobile sessions --json --sort activity
+sidecar mobile sessions --json --search sidecar --state working
+```
+
 ### `sidecar mobile status`
 
 Report the local mobile terminal protocol

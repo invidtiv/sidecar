@@ -4,6 +4,19 @@
 
 The first request is `hello`. `status` reports the same capabilities. `resolve` takes a `target` name and returns a process-scoped opaque target handle plus the exact stable identity the server resolved. M0 resolves a Sidecar-managed shell with one tmux pane. Multi-pane windows, worktree targets without a durable shell record, oversized panes, and ambiguous names are refused.
 
+`sessions` returns the bounded Sessions catalog owned by the hub process. Its optional `catalog_query` contains `sort` (`activity`, `project`, `recent`, or `name`), `search`, and repeatable `hosts`, `providers`, and `states` filters. Search, sorting, activity groups, project groups, and recent buckets use the same state-free `workspacelist` rules as desktop Sessions. The combined query text is limited to 512 bytes, each filter kind to 32 values, hosts to 128, rows to 2,048, and collection failures to 128. The producer also checks the fully JSON-encoded snapshot against the line limit with room for the stdio response envelope. Unknown sort values, exceeded collection bounds, and an oversized serialized result are refused as errors by both CLI and service paths.
+
+Every catalog snapshot carries the hub, owning-host, and configuration-generation authority that produced it, an observation time, a generation over the final authorized row facts, explicit host states, ordered sections, and project collection failures. Every row carries its source-backed catalog `id` and `project_id`, owning host, observed status, live/ambiguous/stale facts, and one attachment verdict. State filters run against that final verdict, including resolver failures. `workspace_id` is present when the row has been resolved into the terminal service's stable workspace identity:
+
+- `ready` includes a target selector and `expected_target`, the full server-resolved identity that selector named at observation time.
+- `unavailable` has no live unique pane.
+- `ambiguous` has multiple pane matches or a terminal selector claimed by multiple rows.
+- `stale` has stale collection or changed identity.
+- `unknown` lacks durable managed-shell identity.
+- `unsupported` is visible but cannot be opened by this protocol slice. Local worktree terminals are currently in this state; M0 resolution supports managed shells only.
+
+Selecting a `ready` row sends both its `target` and `expected_target` in the subsequent `resolve` request. The server resolves the selector again and exact-matches the expected hub, host/config generation, workspace/session/pane, tmux server incarnation, and target generation before issuing an opaque handle. A same-name replacement between catalog and resolve is therefore refused as `identity_changed`. A target name by itself is the explicit M0 direct-resolution path and does not inherit a catalog row's readiness. Catalog collection can perform Git, state, process, and tmux reads, so a terminal stream with a live attachment refuses `sessions`; clients query on a catalog-only stream or after closing its attachment rather than delaying input and heartbeat handling.
+
 `open` takes `target_handle` and a client-generated diagnostic `attachment_id`. It returns an opaque `attachment_handle`, attachment generation 1, and reset generation 1 before any asynchronous event for that attachment. Handles and `api_instance` are valid only for this server process.
 
 Every full frame carries `attachment_handle`, `attachment_generation`, strictly increasing `output_sequence`, `reset_generation`, geometry, terminal modes, and `render_vt_base64`. The decoded bytes are a complete normalized VT replacement generated from an authoritative ordered tmux capture. The receiver replaces its parser on a newer reset generation and applies only a contiguous sequence within a generation. v0 emits full frames only. It never forwards terminal replies produced by the native emulator back to tmux.
@@ -18,4 +31,4 @@ Reconnect after backgrounding starts a fresh SSH exec and API process. It does n
 
 Outbound responses use a bounded queue. If the peer stops reading or the writer fails, the service enters a terminal state, revokes attachments, and exits; it does not accept later mutations after a missing acknowledgment.
 
-The canonical synthetic transcript and SHA-256 manifest live under `testdata/mobile-protocol/v0`. `scripts/mobile-service-proof.sh` builds a temporary binary, creates a private tmux socket and isolated Sidecar state/config, and exercises the stream locally or through `ssh -T aerie.local` without changing the installed Sidecar binary or default tmux server.
+The canonical synthetic terminal transcript and catalog query/response corpus, with their SHA-256 manifest, live under `testdata/mobile-protocol/v0`. `scripts/mobile-service-proof.sh` builds a temporary binary, creates a private tmux socket and isolated Sidecar state/config, and exercises the terminal stream locally or through `ssh -T aerie.local` without changing the installed Sidecar binary or default tmux server.

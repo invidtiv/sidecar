@@ -11,6 +11,11 @@ const (
 	MaxInputBytes        = 64 << 10
 	MaxColumns           = 512
 	MaxRows              = 256
+	MaxCatalogRows       = 2048
+	MaxCatalogHosts      = 128
+	MaxCatalogFailures   = 128
+	MaxCatalogQueryBytes = 512
+	MaxCatalogFilters    = 32
 	OutboundQueueDepth   = 8
 	HeartbeatIntervalMS  = 5000
 	PresenceTimeoutMS    = 15000
@@ -19,6 +24,7 @@ const (
 const (
 	RequestHello     = "hello"
 	RequestStatus    = "status"
+	RequestSessions  = "sessions"
 	RequestResolve   = "resolve"
 	RequestOpen      = "open"
 	RequestControl   = "control"
@@ -33,6 +39,7 @@ const (
 const (
 	ResponseHello       = "hello"
 	ResponseStatus      = "status"
+	ResponseSessions    = "sessions"
 	ResponseResolved    = "resolved"
 	ResponseOpened      = "opened"
 	ResponseReconnected = "reconnected"
@@ -83,6 +90,85 @@ type Request struct {
 	LastResetGeneration          uint64          `json:"last_reset_generation,omitempty"`
 	PreviousAttachmentGeneration uint64          `json:"previous_attachment_generation,omitempty"`
 	ExpectedTarget               *TargetIdentity `json:"expected_target,omitempty"`
+	CatalogQuery                 *CatalogQuery   `json:"catalog_query,omitempty"`
+}
+
+// CatalogQuery is a bounded, server-applied Sessions view. The server owns
+// ordering and filtering semantics; clients persist preferences and send them
+// back rather than reimplementing the rules.
+type CatalogQuery struct {
+	Sort      string   `json:"sort,omitempty"`
+	Search    string   `json:"search,omitempty"`
+	Hosts     []string `json:"hosts,omitempty"`
+	Providers []string `json:"providers,omitempty"`
+	States    []string `json:"states,omitempty"`
+}
+
+type CatalogHost struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	State  string `json:"state"`
+	Detail string `json:"detail,omitempty"`
+	Local  bool   `json:"local,omitempty"`
+}
+
+type CatalogRow struct {
+	ID                  string          `json:"id"`
+	OwnerHostID         string          `json:"owner_host_id"`
+	ProjectID           string          `json:"project_id"`
+	ProjectName         string          `json:"project_name"`
+	WorkspaceID         string          `json:"workspace_id,omitempty"`
+	WorkspaceKind       string          `json:"workspace_kind"`
+	DisplayName         string          `json:"display_name"`
+	Branch              string          `json:"branch,omitempty"`
+	Task                string          `json:"task,omitempty"`
+	Provider            string          `json:"provider,omitempty"`
+	Status              string          `json:"status"`
+	Group               string          `json:"group"`
+	Session             string          `json:"session,omitempty"`
+	Pane                string          `json:"pane,omitempty"`
+	Target              string          `json:"target,omitempty"`
+	CandidateGeneration string          `json:"candidate_generation,omitempty"`
+	ExpectedTarget      *TargetIdentity `json:"expected_target,omitempty"`
+	AttachState         string          `json:"attach_state"`
+	RefusalCode         string          `json:"refusal_code,omitempty"`
+	Refusal             string          `json:"refusal,omitempty"`
+	ObservedAt          string          `json:"observed_at"`
+	ChangedAt           string          `json:"changed_at,omitempty"`
+	Live                bool            `json:"live"`
+	Ambiguous           bool            `json:"ambiguous"`
+	Stale               bool            `json:"stale"`
+	SemanticStatus      bool            `json:"semantic_status"`
+	Attention           bool            `json:"attention"`
+	AttachmentReady     bool            `json:"attachment_ready"`
+}
+
+type CatalogSection struct {
+	Title string       `json:"title,omitempty"`
+	Key   string       `json:"key,omitempty"`
+	Group string       `json:"group,omitempty"`
+	Rows  []CatalogRow `json:"rows"`
+}
+
+type CatalogFailure struct {
+	Scope  string `json:"scope"`
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	State  string `json:"state"`
+	Detail string `json:"detail"`
+}
+
+type CatalogSnapshot struct {
+	Generation            string           `json:"generation"`
+	ObservedAt            string           `json:"observed_at"`
+	HubID                 string           `json:"hub_id"`
+	OwnerHostID           string           `json:"owner_host_id"`
+	OwnerConfigGeneration string           `json:"owner_config_generation"`
+	Query                 CatalogQuery     `json:"query"`
+	Hosts                 []CatalogHost    `json:"hosts"`
+	Sections              []CatalogSection `json:"sections"`
+	Failures              []CatalogFailure `json:"failures"`
+	Total                 int              `json:"total"`
 }
 
 // TargetIdentity is the stable, cross-process authority a reconnect must
@@ -152,6 +238,7 @@ type Capabilities struct {
 	Input                bool `json:"input"`
 	Resize               bool `json:"resize"`
 	Reconnect            bool `json:"reconnect"`
+	CatalogSnapshots     bool `json:"catalog_snapshots"`
 	MaximumColumns       int  `json:"maximum_columns"`
 	MaximumRows          int  `json:"maximum_rows"`
 	MaximumInputBytes    int  `json:"maximum_input_bytes"`
@@ -169,24 +256,25 @@ type Error struct {
 // Response is the server-to-client envelope for both correlated responses and
 // asynchronous presentation events.
 type Response struct {
-	Version              int           `json:"version"`
-	Type                 string        `json:"type"`
-	RequestID            string        `json:"request_id,omitempty"`
-	APIInstance          string        `json:"api_instance,omitempty"`
-	Target               *Target       `json:"target,omitempty"`
-	Capabilities         *Capabilities `json:"capabilities,omitempty"`
-	AttachmentHandle     string        `json:"attachment_handle,omitempty"`
-	AttachmentGeneration uint64        `json:"attachment_generation,omitempty"`
-	Control              bool          `json:"control,omitempty"`
-	OperationSequence    uint64        `json:"operation_sequence,omitempty"`
-	OutputSequence       uint64        `json:"output_sequence,omitempty"`
-	ResetGeneration      uint64        `json:"reset_generation,omitempty"`
-	FrameKind            string        `json:"frame_kind,omitempty"`
-	Geometry             *Geometry     `json:"geometry,omitempty"`
-	Modes                *Modes        `json:"modes,omitempty"`
-	RenderVTBase64       string        `json:"render_vt_base64,omitempty"`
-	Reason               string        `json:"reason,omitempty"`
-	Error                *Error        `json:"error,omitempty"`
+	Version              int              `json:"version"`
+	Type                 string           `json:"type"`
+	RequestID            string           `json:"request_id,omitempty"`
+	APIInstance          string           `json:"api_instance,omitempty"`
+	Target               *Target          `json:"target,omitempty"`
+	Catalog              *CatalogSnapshot `json:"catalog,omitempty"`
+	Capabilities         *Capabilities    `json:"capabilities,omitempty"`
+	AttachmentHandle     string           `json:"attachment_handle,omitempty"`
+	AttachmentGeneration uint64           `json:"attachment_generation,omitempty"`
+	Control              bool             `json:"control,omitempty"`
+	OperationSequence    uint64           `json:"operation_sequence,omitempty"`
+	OutputSequence       uint64           `json:"output_sequence,omitempty"`
+	ResetGeneration      uint64           `json:"reset_generation,omitempty"`
+	FrameKind            string           `json:"frame_kind,omitempty"`
+	Geometry             *Geometry        `json:"geometry,omitempty"`
+	Modes                *Modes           `json:"modes,omitempty"`
+	RenderVTBase64       string           `json:"render_vt_base64,omitempty"`
+	Reason               string           `json:"reason,omitempty"`
+	Error                *Error           `json:"error,omitempty"`
 }
 
 func DefaultCapabilities() Capabilities {
@@ -196,6 +284,7 @@ func DefaultCapabilities() Capabilities {
 		Input:                true,
 		Resize:               true,
 		Reconnect:            true,
+		CatalogSnapshots:     true,
 		MaximumColumns:       MaxColumns,
 		MaximumRows:          MaxRows,
 		MaximumInputBytes:    MaxInputBytes,

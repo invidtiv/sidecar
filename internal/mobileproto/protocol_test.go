@@ -101,3 +101,59 @@ func TestProductionCorpusManifestAndFreshProcessReconnect(t *testing.T) {
 		t.Fatalf("mutation acknowledgments = %d", mutationAcks)
 	}
 }
+
+func TestProductionCatalogCorpusCarriesSafeSelectionsAndSharedQueries(t *testing.T) {
+	path := filepath.Join("..", "..", "testdata", "mobile-protocol", "v0", "sessions-catalog.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Schema string `json:"schema"`
+		Cases  []struct {
+			ID       string   `json:"id"`
+			Request  Request  `json:"request"`
+			Response Response `json:"response"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	if fixture.Schema != "sidecar.mobile.catalog.v0" || len(fixture.Cases) != 10 {
+		t.Fatalf("catalog fixture header = %q, cases=%d", fixture.Schema, len(fixture.Cases))
+	}
+	wantCases := map[string]bool{"activity": true, "project": true, "recent": true, "name": true, "provider-codex": true, "state-ready": true, "state-ambiguous": true, "state-stale": true, "state-unsupported": true, "search-local-shell": true}
+	states := make(map[string]bool)
+	ready := 0
+	for _, test := range fixture.Cases {
+		delete(wantCases, test.ID)
+		if test.Request.Version != Version || test.Request.Type != RequestSessions || test.Request.CatalogQuery == nil || test.Response.Type != ResponseSessions || test.Response.Catalog == nil || test.Response.RequestID != test.Request.RequestID {
+			t.Fatalf("invalid %s exchange: request=%+v response=%+v", test.ID, test.Request, test.Response)
+		}
+		catalog := test.Response.Catalog
+		if catalog.HubID == "" || catalog.OwnerHostID == "" || catalog.OwnerConfigGeneration == "" || catalog.Generation == "" || catalog.Total > MaxCatalogRows {
+			t.Fatalf("invalid %s catalog authority: %+v", test.ID, catalog)
+		}
+		for _, section := range catalog.Sections {
+			for _, row := range section.Rows {
+				states[row.AttachState] = true
+				if row.AttachmentReady {
+					ready++
+					if row.Target == "" || row.CandidateGeneration == "" || row.ExpectedTarget == nil || row.ExpectedTarget.OwnerHostID != row.OwnerHostID {
+						t.Fatalf("ready row lacks exact selection authority: %+v", row)
+					}
+				} else if row.ExpectedTarget != nil {
+					t.Fatalf("refused row carries target authority: %+v", row)
+				}
+			}
+		}
+	}
+	if len(wantCases) != 0 || ready == 0 {
+		t.Fatalf("missing cases=%v ready=%d", wantCases, ready)
+	}
+	for _, state := range []string{"ready", "unavailable", "ambiguous", "stale", "unknown", "unsupported"} {
+		if !states[state] {
+			t.Fatalf("catalog corpus does not cover attach state %q", state)
+		}
+	}
+}

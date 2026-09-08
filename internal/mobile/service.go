@@ -28,10 +28,10 @@ const (
 )
 
 type ResolvedTarget struct {
-	WorkspaceID, WorkspaceKind, Session, Pane, DisplayName string
-	ServerPID                                              int
-	SessionID, SessionCreated, DurableSessionCreated       string
-	Width, Height                                          int
+	WorkspaceID, WorkspaceKind, ProjectRoot, Session, Pane, DisplayName string
+	ServerPID                                                           int
+	SessionID, SessionCreated, DurableSessionCreated                    string
+	Width, Height                                                       int
 }
 
 type ResolveError struct{ Code, Message string }
@@ -44,6 +44,7 @@ type Config struct {
 	Input                                     io.Reader
 	Output                                    io.Writer
 	Resolver                                  Resolver
+	Catalog                                   CatalogProvider
 	HubID, OwnerHostID, OwnerConfigGeneration string
 	Manager                                   *tty.ControlManager
 }
@@ -52,6 +53,7 @@ type Service struct {
 	in                                             io.Reader
 	out                                            *safeEncoder
 	resolve                                        Resolver
+	catalog                                        CatalogProvider
 	manager                                        *tty.ControlManager
 	instance, hubID, ownerHostID, configGeneration string
 	mu                                             sync.Mutex
@@ -142,7 +144,7 @@ func New(config Config) (*Service, error) {
 		return nil, err
 	}
 	s := &Service{
-		in: config.Input, out: newSafeEncoder(config.Output), resolve: config.Resolver,
+		in: config.Input, out: newSafeEncoder(config.Output), resolve: config.Resolver, catalog: config.Catalog,
 		manager: config.Manager, instance: instance, hubID: config.HubID,
 		ownerHostID: config.OwnerHostID, configGeneration: config.OwnerConfigGeneration,
 		targets: make(map[string]targetState), attachments: make(map[string]*attachment),
@@ -269,6 +271,8 @@ func (s *Service) handle(ctx context.Context, request mobileproto.Request) {
 	case mobileproto.RequestStatus:
 		caps := mobileproto.DefaultCapabilities()
 		s.emit(mobileproto.Response{Version: mobileproto.Version, Type: mobileproto.ResponseStatus, RequestID: request.RequestID, APIInstance: s.instance, Capabilities: &caps})
+	case mobileproto.RequestSessions:
+		s.sessions(ctx, request)
 	case mobileproto.RequestResolve:
 		s.resolveTarget(ctx, request)
 	case mobileproto.RequestOpen:
@@ -290,6 +294,26 @@ func (s *Service) handle(ctx context.Context, request mobileproto.Request) {
 	default:
 		s.writeError(request.RequestID, mobileproto.ErrorInvalidRequest, "unknown request type", false)
 	}
+}
+
+func (s *Service) sessions(ctx context.Context, request mobileproto.Request) {
+	s.mu.Lock()
+	activeAttachments := len(s.attachments) > 0
+	s.mu.Unlock()
+	if activeAttachments {
+		s.writeError(request.RequestID, mobileproto.ErrorUnsupported, "catalog queries require a stream without a terminal attachment", true)
+		return
+	}
+	query := mobileproto.CatalogQuery{}
+	if request.CatalogQuery != nil {
+		query = *request.CatalogQuery
+	}
+	snapshot, err := QueryCatalog(ctx, s.catalog, s.resolve, query, CatalogIdentity{HubID: s.hubID, OwnerHostID: s.ownerHostID, OwnerConfigGeneration: s.configGeneration})
+	if err != nil {
+		s.resolveFailure(request.RequestID, err)
+		return
+	}
+	s.emit(mobileproto.Response{Version: mobileproto.Version, Type: mobileproto.ResponseSessions, RequestID: request.RequestID, APIInstance: s.instance, Catalog: &snapshot})
 }
 
 func (s *Service) resolveTarget(ctx context.Context, request mobileproto.Request) {
@@ -315,6 +339,10 @@ func (s *Service) resolveTarget(ctx context.Context, request mobileproto.Request
 		return
 	}
 	wire := s.wireTarget(handle, resolved)
+	if request.ExpectedTarget != nil && wire.Identity() != *request.ExpectedTarget {
+		s.writeError(request.RequestID, mobileproto.ErrorIdentityChanged, "managed terminal identity changed after catalog observation", false)
+		return
+	}
 	s.mu.Lock()
 	s.targets[handle] = targetState{wire: wire, resolved: resolved}
 	s.mu.Unlock()
@@ -322,14 +350,23 @@ func (s *Service) resolveTarget(ctx context.Context, request mobileproto.Request
 }
 
 func (s *Service) wireTarget(handle string, resolved ResolvedTarget) mobileproto.Target {
+	identity := targetIdentity(CatalogIdentity{HubID: s.hubID, OwnerHostID: s.ownerHostID, OwnerConfigGeneration: s.configGeneration}, resolved)
+	return mobileproto.Target{
+		Handle: handle, HubID: identity.HubID, HubInstance: s.instance, OwnerHostID: identity.OwnerHostID,
+		OwnerConfigGeneration: identity.OwnerConfigGeneration, WorkspaceID: identity.WorkspaceID,
+		WorkspaceKind: identity.WorkspaceKind, Session: identity.Session, Pane: identity.Pane,
+		ServerIncarnation: identity.ServerIncarnation, TargetGeneration: identity.TargetGeneration,
+		DisplayName: resolved.DisplayName, Geometry: mobileproto.Geometry{Columns: resolved.Width, Rows: resolved.Height},
+	}
+}
+
+func targetIdentity(identity CatalogIdentity, resolved ResolvedTarget) mobileproto.TargetIdentity {
 	incarnation := fmt.Sprintf("pid=%d", resolved.ServerPID)
 	generationBytes := sha256.Sum256([]byte(strings.Join([]string{resolved.WorkspaceID, resolved.WorkspaceKind, resolved.Session, resolved.Pane, resolved.SessionID, resolved.SessionCreated, resolved.DurableSessionCreated, incarnation}, "\x00")))
-	return mobileproto.Target{
-		Handle: handle, HubID: s.hubID, HubInstance: s.instance, OwnerHostID: s.ownerHostID,
-		OwnerConfigGeneration: s.configGeneration, WorkspaceID: resolved.WorkspaceID,
-		WorkspaceKind: resolved.WorkspaceKind, Session: resolved.Session, Pane: resolved.Pane,
+	return mobileproto.TargetIdentity{
+		HubID: identity.HubID, OwnerHostID: identity.OwnerHostID, OwnerConfigGeneration: identity.OwnerConfigGeneration,
+		WorkspaceID: resolved.WorkspaceID, WorkspaceKind: resolved.WorkspaceKind, Session: resolved.Session, Pane: resolved.Pane,
 		ServerIncarnation: incarnation, TargetGeneration: hex.EncodeToString(generationBytes[:16]),
-		DisplayName: resolved.DisplayName, Geometry: mobileproto.Geometry{Columns: resolved.Width, Rows: resolved.Height},
 	}
 }
 
@@ -346,7 +383,7 @@ func (s *Service) revalidate(ctx context.Context, target targetState) error {
 		return err
 	}
 	want, got := target.resolved, current
-	if want.WorkspaceID != got.WorkspaceID || want.WorkspaceKind != got.WorkspaceKind || want.Session != got.Session ||
+	if want.WorkspaceID != got.WorkspaceID || want.WorkspaceKind != got.WorkspaceKind || want.ProjectRoot != got.ProjectRoot || want.Session != got.Session ||
 		want.Pane != got.Pane || want.ServerPID != got.ServerPID || want.SessionID != got.SessionID || want.SessionCreated != got.SessionCreated {
 		return &ResolveError{Code: mobileproto.ErrorIdentityChanged, Message: "managed terminal identity changed"}
 	}

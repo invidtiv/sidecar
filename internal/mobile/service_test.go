@@ -12,6 +12,7 @@ import (
 
 	"github.com/marcus/sidecar/internal/mobileproto"
 	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
 func testTarget() targetState {
@@ -55,6 +56,57 @@ func TestDecodeRequestRejectsUnknownAndTrailingJSON(t *testing.T) {
 		if _, err := decodeRequest([]byte(line)); err == nil {
 			t.Fatalf("decodeRequest(%q) accepted malformed envelope", line)
 		}
+	}
+}
+
+func TestSessionsUsesTheServiceCatalogAndCorrelatesResponse(t *testing.T) {
+	now := time.Date(2026, 9, 7, 18, 0, 0, 0, time.UTC)
+	var output bytes.Buffer
+	s := testService(&output)
+	s.instance, s.hubID, s.ownerHostID, s.configGeneration = "api", "hub", "local:test", "config"
+	s.resolve = func(context.Context, string) (ResolvedTarget, error) {
+		return ResolvedTarget{WorkspaceID: "demo", WorkspaceKind: "shell", ProjectRoot: "demo", Session: "mobile", Pane: "%7", ServerPID: 42, SessionID: "$3", SessionCreated: "1700000000", DurableSessionCreated: now.Add(-time.Hour).Format(time.RFC3339Nano), Width: 80, Height: 24}, nil
+	}
+	workspace := catalogShell("demo:shell:mobile", "Shell", "mobile", "%7", now)
+	workspace.ProjectKey = "demo"
+	s.catalog = func(context.Context) (CatalogInput, error) {
+		return CatalogInput{ObservedAt: now, Hosts: []mobileproto.CatalogHost{{ID: "local:test", Name: "test", State: "online", Local: true}}, Projects: []CatalogProject{{Label: "Repo", Result: workspaceinventory.ProjectResult{Workspaces: []workspaceinventory.Workspace{workspace}}}}}, nil
+	}
+	s.sessions(context.Background(), mobileproto.Request{RequestID: "sessions", CatalogQuery: &mobileproto.CatalogQuery{Sort: "name"}})
+	responses := decodeResponses(t, &output)
+	if len(responses) != 1 || responses[0].Type != mobileproto.ResponseSessions || responses[0].RequestID != "sessions" || responses[0].APIInstance != "api" || responses[0].Catalog == nil {
+		t.Fatalf("responses = %+v", responses)
+	}
+	if responses[0].Catalog.Total != 1 || responses[0].Catalog.Sections[0].Rows[0].Target != "mobile" || responses[0].Catalog.Sections[0].Rows[0].ExpectedTarget == nil {
+		t.Fatalf("catalog = %+v", responses[0].Catalog)
+	}
+}
+
+func TestResolveRefusesCatalogIdentityChangedAfterListing(t *testing.T) {
+	var output bytes.Buffer
+	s := testService(&output)
+	s.hubID, s.ownerHostID, s.configGeneration = "hub", "local:test", "config"
+	expected := targetIdentity(CatalogIdentity{HubID: "hub", OwnerHostID: "local:test", OwnerConfigGeneration: "config"}, testTarget().resolved)
+	expected.TargetGeneration = "stale-catalog-generation"
+	before := len(s.targets)
+	s.resolveTarget(context.Background(), mobileproto.Request{RequestID: "resolve-stale", Target: "mobile", ExpectedTarget: &expected})
+	responses := decodeResponses(t, &output)
+	if len(responses) != 1 || responses[0].Error == nil || responses[0].Error.Code != mobileproto.ErrorIdentityChanged {
+		t.Fatalf("responses = %+v", responses)
+	}
+	if len(s.targets) != before {
+		t.Fatal("stale catalog selection created a target handle")
+	}
+}
+
+func TestSessionsRefusesToBlockAnActiveTerminalStream(t *testing.T) {
+	var output bytes.Buffer
+	s := testService(&output)
+	s.attachments["active"] = &attachment{handle: "active"}
+	s.sessions(context.Background(), mobileproto.Request{RequestID: "sessions-active"})
+	responses := decodeResponses(t, &output)
+	if len(responses) != 1 || responses[0].Error == nil || responses[0].Error.Code != mobileproto.ErrorUnsupported || !responses[0].Error.Retry {
+		t.Fatalf("responses = %+v", responses)
 	}
 }
 
