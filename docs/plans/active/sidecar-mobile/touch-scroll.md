@@ -1,6 +1,6 @@
 # Sidecar mobile: touch scrolling over a controlled terminal
 
-**Status:** proposed. Nothing here is implemented. **Task:** td-9eecab. **Parent:** [Sidecar mobile](../sidecar-mobile.md), execution in [execution.md](execution.md). **Desktop authority this mirrors:** [Consistent terminal scroll](../../implemented/consistent-terminal-scroll.md) and the shared rule in `internal/tty/wheel.go` and `internal/tty/wheel_route.go`. **Verified against:** sidecar `f5fc0248`, sidecar-mobile `05c68b5`. Every file:line below was read in those trees.
+**Status:** S1, S2 and S3 are implemented and independently reviewed in the mobile repo (commits `0fb3763`, `e862a8a`, `01ccec3`, `cd89745`, `ab2806f`; 88 focused tests). S4's protocol note is in `docs/reference/mobile-protocol.md`. Open: the device proof in §5, including the rubber-band check added there. **Task:** td-9eecab (children td-85712c, td-af3ffe, td-c882df closed). **Parent:** [Sidecar mobile](../sidecar-mobile.md), execution in [execution.md](execution.md). **Desktop authority this mirrors:** [Consistent terminal scroll](../../implemented/consistent-terminal-scroll.md) and the shared rule in `internal/tty/wheel.go` and `internal/tty/wheel_route.go`. **Verified against:** sidecar `f5fc0248`, sidecar-mobile `05c68b5`. Every file:line below was read in those trees.
 
 ## 0. The one-paragraph answer
 
@@ -104,12 +104,14 @@ No protocol change. `docs/reference/mobile-protocol.md` gains two sentences: whe
 
 Each slice is a reviewed commit in the mobile repo unless noted; the parent plan's delegation and independent-review rules apply.
 
-1. **S1 Throughput.** `SidecarScrollBurst` with translated `WheelBurst` tests; the scroll `LivePendingCommand` case, drain-time encoding, and `mergePendingScroll`; the two-finger path adopts both. Behavior visible immediately: a two-finger flick travels its full distance in a handful of requests and can no longer overflow the buffer.
-2. **S2 One finger.** The routing table in §2.3, arbitration narrowing, `linesPerNotch`, and the education sheet copy in `App/TerminalPreviewView.swift:289` changed from "Use two fingers to scroll a full-screen terminal app" to describe one-finger scrolling with two fingers as the alternative. Update `docs/readiness/native-terminal-interactions.md` to the new current state.
-3. **S3 Momentum** for `.remoteWheel` per §2.4, with an injected clock so tests drive a whole decay without sleeping.
-4. **S4 Proof and docs.** The device proof in §5; the two-sentence addition to `docs/reference/mobile-protocol.md` in this repo; status updates in this file, [sidecar-mobile.md](../sidecar-mobile.md) and [execution.md](execution.md).
+1. **S1 Throughput (done).** `SidecarScrollBurst` with translated `WheelBurst` tests; the scroll `LivePendingCommand` case, drain-time encoding, and `mergePendingScroll`; the two-finger path adopts both. Behavior visible immediately: a two-finger flick travels its full distance in a handful of requests and can no longer overflow the buffer.
+2. **S2 One finger (done).** The routing table in §2.3, arbitration narrowing, `linesPerNotch`, and the education sheet copy in `App/TerminalPreviewView.swift:289` changed from "Use two fingers to scroll a full-screen terminal app" to describe one-finger scrolling with two fingers as the alternative. Update `docs/readiness/native-terminal-interactions.md` to the new current state.
+3. **S3 Momentum (done)** for `.remoteWheel` per §2.4, with an injected clock so tests drive a whole decay without sleeping.
+4. **S4 Proof and docs (device proof open).** The device proof in §5; the two-sentence addition to `docs/reference/mobile-protocol.md` in this repo; status updates in this file, [sidecar-mobile.md](../sidecar-mobile.md) and [execution.md](execution.md).
 
 S1 is independent and the highest value per risk. S2 and S3 depend on S1. S4 closes the plan.
+
+Implementation notes that refine §2: the 10-notch cap applies to flushes the burst emits while the finger moves; a merge into a pending flush and the flush at gesture end carry the whole remaining distance (ceiling 400 notches), because on mobile one flush is one request whatever its size, so the desktop cap buys nothing there. A scroll flush offered while the frame is stale after a resize is dropped rather than queued, so it cannot overtake a held keystroke. Control loss and a route change stop momentum silently; a finished decay or a new touch flushes the remainder. The burst clock is monotonic system uptime. SwiftTerm's own single-finger pan recognizers are refused and disabled whenever the pane owns scrolling, keyboard up or down, and are handed back when the pane returns to a normal buffer.
 
 ## 5. Acceptance evidence
 
@@ -127,9 +129,11 @@ Live, on a personal device against a Claude Code 2.1.x pane on the hub, with the
 - The same drag over a plain zsh pane opens History and the metadata log shows zero `input` requests.
 - The two-finger gesture still works over the same pane.
 - `linesPerNotch` = 3 is confirmed or adjusted from the observed ratio of transcript movement to finger travel, and the chosen value is recorded here.
+- The live grid does not rubber-band under the finger while notches are forwarded. The terminal view keeps `alwaysBounceVertical` on while controlling, which lets UIScrollView bounce a content size that never exceeds its bounds; if the grid visibly springs, set it false and confirm the one-finger handler still receives events.
+- Momentum feels right on a real flick and stops when a new touch lands; the display-link path is exercised only on a device, never by the unit tests.
 
-## 6. Open decisions
+## 6. Decisions taken
 
-- **One finger over a wheel-owning pane with the keyboard up scrolls rather than dismisses** (§2.3). Recommended, because UIKit's interactive dismissal already covers dragging into the keyboard and the header button covers the rest, and because a drag over an app that owns scrolling means scroll everywhere else on iOS. The alternative keeps the approved dismissal-first rule everywhere and accepts that scrolling Claude Code requires the keyboard to be hidden first. Marcus decides; the default is the recommendation.
-- **Momentum in the first delivery** (§2.4). Recommended for `.remoteWheel` because a flick is how a long transcript is read; it can be deferred to S3 without affecting S1 and S2.
-- **`linesPerNotch` default of 3** pending the §5 device check.
+- **One finger over a wheel-owning pane with the keyboard up scrolls rather than dismisses** (§2.3). Implemented as recommended; keyboard dismissal on those panes is UIKit's interactive drag into the keyboard and the header keyboard button. The explicit 12 pt swipe-down dismissal remains on normal-buffer panes.
+- **Momentum shipped in the first delivery** for `.remoteWheel` only.
+- **`linesPerNotch` = 3** is the shipped default, pending the §5 device check.
