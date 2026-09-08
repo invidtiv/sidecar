@@ -37,15 +37,35 @@ func InspectHeadlessTarget(ctx context.Context, session string) (HeadlessTargetI
 	if len(lines) != 1 || lines[0] == "" {
 		return HeadlessTargetIdentity{}, fmt.Errorf("mobile target: session %q has %d panes; select-one-pane layouts are not yet supported", session, len(lines))
 	}
-	parts := strings.Split(lines[0], "\t")
-	if len(parts) != 7 || !controlPanePattern.MatchString(parts[4]) || parts[3] != session {
-		return HeadlessTargetIdentity{}, fmt.Errorf("mobile target: invalid tmux identity %q", lines[0])
+	return parseHeadlessTargetIdentity(lines[0], session, "")
+}
+
+// InspectHeadlessPane resolves one exact pane selected from a server-owned
+// candidate set. display-message targets the pane itself, so a multi-pane
+// window does not silently substitute its active pane.
+func InspectHeadlessPane(ctx context.Context, pane string) (HeadlessTargetIdentity, error) {
+	if !controlPanePattern.MatchString(strings.TrimSpace(pane)) {
+		return HeadlessTargetIdentity{}, fmt.Errorf("mobile target: invalid pane %q", pane)
+	}
+	format := "#{pid}\t#{session_id}\t#{session_created}\t#{session_name}\t#{pane_id}\t#{pane_width}\t#{pane_height}"
+	out, err := exec.CommandContext(ctx, "tmux", "display-message", "-p", "-t", pane, "-F", format).CombinedOutput()
+	if err != nil {
+		return HeadlessTargetIdentity{}, fmt.Errorf("mobile target: inspect pane: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return parseHeadlessTargetIdentity(strings.TrimSpace(string(out)), "", pane)
+}
+
+func parseHeadlessTargetIdentity(line, expectedSession, expectedPane string) (HeadlessTargetIdentity, error) {
+	parts := strings.Split(line, "\t")
+	if len(parts) != 7 || parts[3] == "" || !controlPanePattern.MatchString(parts[4]) ||
+		(expectedSession != "" && parts[3] != expectedSession) || (expectedPane != "" && parts[4] != expectedPane) {
+		return HeadlessTargetIdentity{}, fmt.Errorf("mobile target: invalid tmux identity %q", line)
 	}
 	serverPID, errPID := strconv.Atoi(parts[0])
 	width, errWidth := strconv.Atoi(parts[5])
 	height, errHeight := strconv.Atoi(parts[6])
 	if errPID != nil || errWidth != nil || errHeight != nil || serverPID <= 0 || width < 2 || height < 1 {
-		return HeadlessTargetIdentity{}, fmt.Errorf("mobile target: invalid tmux identity %q", lines[0])
+		return HeadlessTargetIdentity{}, fmt.Errorf("mobile target: invalid tmux identity %q", line)
 	}
 	if err := validHeadlessGeometry(width, height); err != nil {
 		return HeadlessTargetIdentity{}, fmt.Errorf("mobile target: unsupported capture geometry: %w", err)

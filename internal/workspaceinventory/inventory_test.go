@@ -332,12 +332,18 @@ func TestAmbiguousWorktreePanesAreUnavailableAndNotCaptured(t *testing.T) {
 	runner := &fakeRunner{git: map[string]string{root: "worktree " + root + "\nbranch refs/heads/main\n"}}
 	captures := 0
 	collector := Collector{Runner: runner, Capture: func(string, int) (string, tty.PaneState, error) { captures++; return "", tty.PaneState{}, nil }}
-	result := collector.CollectProject(context.Background(), "repo", root, []string{root}, []Pane{{ID: "%1", Path: root}, {ID: "%2", Path: root}})
+	result := collector.CollectProject(context.Background(), "repo", root, []string{root}, []Pane{
+		{ID: "%1", Session: "one", Path: root, Title: "Agent"},
+		{ID: "%2", Session: "two", Path: root, Title: "Shell"},
+	})
 	if len(result.Workspaces) != 1 || result.Workspaces[0].Presentation.Freshness != agentstatus.FreshnessUnavailable || !result.Workspaces[0].IsMain {
 		t.Fatalf("ambiguous result = %#v", result)
 	}
 	if captures != 0 {
 		t.Fatalf("ambiguous panes captured %d times", captures)
+	}
+	if got := result.Workspaces[0].TerminalCandidates; len(got) != 2 || got[0].Pane != "%1" || got[0].Session != "one" || got[0].Title != "Agent" || got[1].Pane != "%2" {
+		t.Fatalf("terminal candidates = %#v", got)
 	}
 }
 

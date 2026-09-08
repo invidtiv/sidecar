@@ -89,11 +89,19 @@ type Workspace struct {
 	// separate is what lets the catalog carry plain workspaces without
 	// fabricating an agentstatus value for them.
 	Live, Ambiguous bool
-	Presentation    agentstatus.Presentation
-	ObservedAt      time.Time
+	// TerminalCandidates is the current source-owned set of live tmux panes
+	// that can represent this workspace. Presentation surfaces may display it,
+	// but only an owning resolver can turn one candidate into authority.
+	TerminalCandidates []TerminalCandidate
+	Presentation       agentstatus.Presentation
+	ObservedAt         time.Time
 	// CreatedAt is the shell manifest's record of when this identity was
 	// written. Empty for worktrees, which have no such record.
 	CreatedAt time.Time
+}
+
+type TerminalCandidate struct {
+	Session, Pane, Title, Command string
 }
 
 // Remote reports whether this workspace lives on another machine. Every
@@ -649,6 +657,15 @@ func (c Collector) observe(workspace *Workspace, matches []Pane, now time.Time) 
 
 func (c Collector) observeContext(ctx context.Context, workspace *Workspace, matches []Pane, now time.Time) {
 	workspace.Live, workspace.Ambiguous = false, false
+	workspace.TerminalCandidates = nil
+	for _, pane := range matches {
+		if pane.Dead {
+			continue
+		}
+		workspace.TerminalCandidates = append(workspace.TerminalCandidates, TerminalCandidate{
+			Session: pane.Session, Pane: pane.ID, Title: pane.Title, Command: pane.Command,
+		})
+	}
 	switch {
 	case len(matches) > 1:
 		workspace.Ambiguous = true
