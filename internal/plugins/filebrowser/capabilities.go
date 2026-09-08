@@ -41,6 +41,14 @@ func (p *Plugin) PaneFocus() string {
 
 // SetPaneFocus directly selects a visible browser pane.
 func (p *Plugin) SetPaneFocus(id string) tea.Cmd {
+	before := p.activePane
+	defer func() {
+		// The deck re-asserts focus on every pass, so only a real move may
+		// invalidate the frame memo; see view_memo.go.
+		if p.activePane != before {
+			p.invalidateView()
+		}
+	}()
 	switch id {
 	case filesTreeFocusID:
 		if p.treeVisible {
@@ -58,8 +66,14 @@ func (p *Plugin) SetPaneFocus(id string) tea.Cmd {
 // a passive leaf owns focus. The managed bit preserves the browser's historical
 // behavior until a host opts into this capability.
 func (p *Plugin) SetPaneFocusActive(active bool) {
+	// syncInnerFocus calls this on every pass with the same value almost every
+	// time, so the memo is invalidated by a change of chrome, not by the call.
+	before := p.innerPaneFocusActive()
 	p.paneFocusManaged = true
 	p.paneFocusActive = active
+	if p.innerPaneFocusActive() != before {
+		p.invalidateView()
+	}
 }
 
 func (p *Plugin) innerPaneFocusActive() bool {

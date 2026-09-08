@@ -25,6 +25,7 @@ import (
 	"github.com/marcus/sidecar/internal/queryfield"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tabs"
+	"github.com/marcus/sidecar/internal/terminalperf"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 )
@@ -333,13 +334,18 @@ type Plugin struct {
 	wheelBursts  tty.WheelBursts
 	wheelNow     func() time.Time
 
-	// A held wheel event changed no visible state. Reuse exactly the preceding
-	// same-dimension frame once instead of rebuilding both panes and hit maps.
+	// The frame memo (see view_memo.go). viewCache holds the last frame that
+	// was built for viewCacheW x viewCacheH; viewDirty says a handled message
+	// or an app-side setter has changed something drawn since. A held wheel
+	// event that changed no visible state clears viewDirty through
+	// keepViewCache and sets reuseViewOnce, which is only the record that the
+	// burst path (not the memo) asked for the frame back.
 	reuseViewOnce bool
 	viewCache     string
 	viewCacheW    int
 	viewCacheH    int
 	viewCacheOK   bool
+	viewDirty     bool
 
 	// treePreviewGen owns the one quiet-period preview activation in flight.
 	// Every newer selection or direct tab activation invalidates the old timer.
@@ -430,6 +436,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.wheelBursts = tty.WheelBursts{}
 	p.reuseViewOnce = false
 	p.viewCacheOK = false
+	p.invalidateView()
 	if p.edit.Model != nil {
 		p.edit.Model.Close()
 	}
@@ -499,6 +506,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 
 // Start begins plugin operation.
 func (p *Plugin) Start() tea.Cmd {
+	p.invalidateView()
 	if p.remoteBound() {
 		// No watcher: internal/livewatch is a filesystem signal and does not
 		// cross the host boundary. A bound tree refreshes on request and on
@@ -515,6 +523,7 @@ func (p *Plugin) Start() tea.Cmd {
 // Stop cleans up plugin resources.
 func (p *Plugin) Stop() {
 	p.stopped = true
+	p.invalidateView()
 	p.treePreviewGen++
 	p.wheelBursts = tty.WheelBursts{}
 	if p.watcher != nil {
@@ -877,6 +886,13 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 }
 
 func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
+	// Every message this plugin acts on is assumed to change what is drawn.
+	// The memo is only allowed to survive a message the plugin ignores, which
+	// is the type switch below falling through to its final `return p, nil`.
+	if viewInvalidatingMsg(msg) {
+		p.invalidateView()
+	}
+
 	// The watcher's listen loop is one-shot: whoever handles an event has to
 	// re-arm it. Both are handled before the early returns below, because a
 	// single event swallowed by a modal or the inline editor would kill
@@ -1370,23 +1386,35 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	return p, nil
 }
 
-// View renders the plugin.
+// View renders the plugin, returning the memoized frame while it is still true
+// for these dimensions. See view_memo.go for what makes it stale.
 func (p *Plugin) View(width, height int) string {
 	p.width = width
 	p.height = height
-	if p.reuseViewOnce && p.viewCacheOK && p.viewCacheW == width && p.viewCacheH == height {
+	bypassed := p.viewMemoBypassed()
+	if p.viewMemoHit(width, height, bypassed) {
 		p.reuseViewOnce = false
+		terminalperf.Record(terminalperf.FilesFrameCacheHit)
 		return p.viewCache
 	}
 	p.reuseViewOnce = false
+	terminalperf.Record(terminalperf.FilesFrameBuilt)
 	content := p.renderView()
 	// Constrain output to allocated height to prevent header scrolling off-screen.
 	// MaxHeight truncates content that exceeds the allocated space.
 	view := lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(content)
+	if bypassed {
+		// tmux owns these pixels; nothing here may be served again later.
+		p.viewCache = ""
+		p.viewCacheOK = false
+		p.viewDirty = true
+		return view
+	}
 	p.viewCache = view
 	p.viewCacheW = width
 	p.viewCacheH = height
 	p.viewCacheOK = true
+	p.viewDirty = false
 	return view
 }
 
@@ -1399,7 +1427,15 @@ func (p *Plugin) SetFocused(f bool) {
 	// sees) ends any drag gesture: the release will be delivered somewhere else,
 	// if at all.
 	if !f {
+		if p.dragArmed || p.dragActive || p.dragSourcePath != "" || p.dragDropIdx >= 0 {
+			// A drop target or drag highlight is on screen; losing focus
+			// removes it.
+			p.invalidateView()
+		}
 		p.clearDragState()
+	}
+	if p.focused != f {
+		p.invalidateView()
 	}
 	p.focused = f
 	if p.edit.Model != nil {

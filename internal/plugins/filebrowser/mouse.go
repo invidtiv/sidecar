@@ -552,7 +552,9 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) (*Plugin, tea.Cmd) 
 	}
 	delta, flush := p.wheelBursts.For(surface).Add(action.Delta, now)
 	if !flush {
-		p.reuseViewOnce = true
+		// The notch was absorbed into the pending delta: nothing drawn moved,
+		// so the memoized frame is still the right one.
+		p.keepViewCache()
 		return p, nil
 	}
 
