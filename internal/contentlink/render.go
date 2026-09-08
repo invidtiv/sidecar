@@ -59,6 +59,15 @@ type FrameResult struct {
 	Output  string
 	Spans   []Span
 	Pending []Pending
+	// Consulted is every file and diff candidate whose ready answer shaped this
+	// output, deduplicated: the ones the snapshot resolved, the ones it answered
+	// negatively, and the ones it could not answer at all (those also appear in
+	// Pending). It exists so a host caching a scan can re-ask the snapshot about
+	// exactly these candidates and decide whether the stored output is still
+	// true, instead of invalidating on the root's whole generation counter —
+	// which advances every time any negative expires, whether or not this frame
+	// ever mentioned that token.
+	Consulted []Pending
 	// ReadyHits counts file/diff candidates answered by the immutable snapshot,
 	// including cached negatives. It is diagnostic metadata only.
 	ReadyHits int
@@ -104,6 +113,7 @@ func ScanFrame(frame string, opts FrameOptions) FrameResult {
 				return "", Extra{}, false
 			}
 			ref, found, ready := opts.Ready.Lookup(kind, raw)
+			result.Consulted = appendPending(result.Consulted, Pending{Kind: kind, Raw: raw})
 			if !ready {
 				pending = appendPending(pending, Pending{Kind: kind, Raw: raw})
 				return "", Extra{}, false

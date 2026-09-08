@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -95,13 +96,16 @@ type appContentDeck struct {
 	pending           map[appContentResolutionKey]bool
 	resourceMatchers  []contentlink.ResourceMatcher
 	matcherGeneration uint64
-	dragSplit         int
-	search            appDeckSearch
-	info              *docview.Info
-	infoLeaf          int
-	live              *livepanes.Set
-	suppressRefresh   bool
-	edit              *appDeckDocumentEdit
+	// scan memoizes the primary leaf's content-link scan across renders that
+	// would produce byte-identical output. See appDeckScanCache.
+	scan            appDeckScanCache
+	dragSplit       int
+	search          appDeckSearch
+	info            *docview.Info
+	infoLeaf        int
+	live            *livepanes.Set
+	suppressRefresh bool
+	edit            *appDeckDocumentEdit
 	// wheel holds one flick per scrollable leaf this deck draws, and wheelNow
 	// is its clock (nil is the wall clock, replaced by tests). Each leaf
 	// scrolls independently, so the delta one of them holds back belongs to it
@@ -659,16 +663,99 @@ func (r appDeckRegions) Body(n *panelayout.Node, b paneframe.Box) {
 	r.h.registerAppContentScrollbars(n, b)
 }
 
+// appDeckScanKey is the visual identity of one scanPrimary call: the exact
+// bytes the plugin drew, the surfaces it declared over them, and everything
+// outside the frame that changes what a scan of those bytes would produce. The
+// pane origin is deliberately absent — hits are recorded relative to the frame
+// and replayed where it was drawn, so moving or resizing the pane around an
+// unchanged primary leaf does not re-scan it.
+type appDeckScanKey struct {
+	frame             string
+	surfaces          string
+	matcherGeneration uint64
+}
+
+// appDeckScanCache is the primary surface's equivalent of docview.PreparedFrame.
+//
+// docview's version cannot be reused here, and extracting it would not help.
+// PrepareFrame is a method on the viewer model: it keys on that model's own
+// visual revision, width, height and renderer style key, and it scans a body
+// the model rendered itself. The deck's primary leaf is an arbitrary plugin's
+// frame, scanned only inside the rectangles that plugin declares, with no
+// viewer model to key on — adopting docview's machinery would mean giving the
+// deck a docview.Model it does not host, which is exactly the coupling the
+// plan's open question asked us to avoid. The shape below is deliberately the
+// same one (key by visual identity, store relative hits, replay at the origin,
+// re-offer unresolved work), and the scan itself is still contentlink.ScanFrame,
+// which stays the single owner of recognition.
+type appDeckScanCache struct {
+	valid     bool
+	key       appDeckScanKey
+	output    string
+	hits      []appDeckScanHit
+	consulted []appDeckScanConsulted
+}
+
+// appDeckScanHit is one recognized reference in frame-relative coordinates.
+type appDeckScanHit struct {
+	Ref  contentlink.Ref
+	Rect mouse.Rect
+}
+
+// appDeckScanConsulted is one file or diff candidate this scan asked the
+// resolution index about, the root it asked under, and the answer it got. Only
+// Found and Ref shape the output: an unresolved candidate and a cached negative
+// both draw nothing, which is why readiness itself is not recorded.
+type appDeckScanConsulted struct {
+	Root      string
+	Candidate contentlink.Pending
+	Ref       contentlink.Ref
+	Found     bool
+}
+
 func (h *appContentDeck) scanPrimary(frame string, origin mouse.Rect) string {
 	provider, ok := h.plugin.(plugin.ContentLinkProvider)
 	if !ok {
 		return frame
 	}
-	lines := strings.Split(frame, "\n")
-	for _, surface := range provider.ContentLinkSurfaces() {
-		if !surface.ReadOnly || surface.Rect.W <= 0 || surface.Rect.H <= 0 {
+	surfaces := provider.ContentLinkSurfaces()
+	// One resolution snapshot per root rather than one per row. The snapshot is
+	// immutable for the whole frame, so taking it once is both cheaper and more
+	// consistent than taking a fresh one between two rows of one rectangle.
+	ready := make(map[string]contentlink.ResolutionSnapshot, len(surfaces))
+	var key strings.Builder
+	scannable := 0
+	for _, surface := range surfaces {
+		if !scannableSurface(surface) {
 			continue
 		}
+		scannable++
+		if _, ok := ready[surface.WorkDir]; !ok {
+			ready[surface.WorkDir] = h.resolution.SnapshotForRoot(surface.WorkDir)
+		}
+		writeAppDeckSurfaceKey(&key, surface)
+	}
+	if scannable == 0 {
+		// Nothing to scan and nothing to replay. Returning here keeps the
+		// counters honest: a plugin that declares no readable rectangle is not
+		// a scan the cache saved.
+		return frame
+	}
+	wanted := appDeckScanKey{frame: frame, surfaces: key.String(), matcherGeneration: h.matcherGeneration}
+	if h.scan.valid && h.scan.key == wanted && h.scan.answersHold(ready) {
+		terminalperf.Record(terminalperf.FilesLinkScanCacheHit)
+		h.replayPrimaryScan(origin, ready)
+		return h.scan.output
+	}
+	terminalperf.Record(terminalperf.FilesLinkScan)
+
+	scan := appDeckScanCache{valid: true, key: wanted}
+	lines := strings.Split(frame, "\n")
+	for _, surface := range surfaces {
+		if !scannableSurface(surface) {
+			continue
+		}
+		snapshot := ready[surface.WorkDir]
 		for row := 0; row < surface.Rect.H && surface.Rect.Y+row < len(lines); row++ {
 			y := surface.Rect.Y + row
 			segment := ansi.Cut(lines[y], surface.Rect.X, surface.Rect.X+surface.Rect.W)
@@ -679,23 +766,111 @@ func (h *appContentDeck) scanPrimary(frame string, origin mouse.Rect) string {
 				// contracts explicitly at this boundary.
 				allowedKinds = contentlink.KindSet{}
 			}
-			result := contentlink.ScanFrame(segment, contentlink.FrameOptions{Ready: h.resolution.SnapshotForRoot(surface.WorkDir), Matchers: h.resourceMatchers,
+			result := contentlink.ScanFrame(segment, contentlink.FrameOptions{Ready: snapshot, Matchers: h.resourceMatchers,
 				InternalNamespaces: sidecarIntentNamespaces, AllowedKinds: allowedKinds, Decorate: true,
 				RendererOwned: surface.RendererOwned})
 			for _, span := range result.Spans {
-				h.links = append(h.links, appContentLinkHit{Generation: h.generation, Ref: span.Ref(), Rect: mouse.Rect{
-					X: origin.X + surface.Rect.X + span.StartCol, Y: origin.Y + y, W: span.EndCol - span.StartCol + 1, H: 1,
+				scan.hits = append(scan.hits, appDeckScanHit{Ref: span.Ref(), Rect: mouse.Rect{
+					X: surface.Rect.X + span.StartCol, Y: y, W: span.EndCol - span.StartCol + 1, H: 1,
 				}})
 			}
-			for _, candidate := range result.Pending {
-				h.queueContentLinkResolve(surface.WorkDir, candidate)
+			for _, candidate := range result.Consulted {
+				ref, found, _ := snapshot.Lookup(candidate.Kind, candidate.Raw)
+				scan.consulted = append(scan.consulted, appDeckScanConsulted{
+					Root: surface.WorkDir, Candidate: candidate, Ref: answerRef(ref, found), Found: found,
+				})
 			}
 			prefix := ansi.Cut(lines[y], 0, surface.Rect.X)
 			suffix := ansi.Cut(lines[y], surface.Rect.X+surface.Rect.W, ansi.StringWidth(lines[y]))
 			lines[y] = prefix + result.Output + suffix
 		}
 	}
-	return strings.Join(lines, "\n")
+	scan.output = strings.Join(lines, "\n")
+	h.scan = scan
+	h.replayPrimaryScan(origin, ready)
+	return h.scan.output
+}
+
+// answersHold reports whether every file and diff answer this scan depended on
+// still says the same thing.
+//
+// The plan proposed keying on the root's ResolutionSnapshot generation. Measured
+// on the M0 harness, that key hit on only a third of idle frames: an unresolved
+// file token is re-requested, answered negatively, expires two seconds later
+// (contentlink's fileNegativeTTL), is re-requested, and every one of those steps
+// advances the root's generation even though the drawn frame never changes. What
+// the output actually depends on is narrower — whether each candidate resolved
+// and to what — so that is what is compared here. A negative and an expired
+// negative draw the same nothing and compare equal; a candidate that starts
+// resolving, stops resolving, or resolves somewhere else does not.
+func (c appDeckScanCache) answersHold(ready map[string]contentlink.ResolutionSnapshot) bool {
+	for _, consulted := range c.consulted {
+		snapshot, ok := ready[consulted.Root]
+		if !ok {
+			return false
+		}
+		ref, found, _ := snapshot.Lookup(consulted.Candidate.Kind, consulted.Candidate.Raw)
+		if found != consulted.Found || answerRef(ref, found) != consulted.Ref {
+			return false
+		}
+	}
+	return true
+}
+
+// answerRef normalizes the reference a negative answer carries. Only a found
+// answer's reference reaches the frame, so two negatives must compare equal
+// whatever the resolver left behind.
+func answerRef(ref contentlink.Ref, found bool) contentlink.Ref {
+	if !found {
+		return contentlink.Ref{}
+	}
+	return ref
+}
+
+// replayPrimaryScan is the only place a primary-surface scan reaches the deck's
+// mutable state, so a hit and a miss register identically.
+//
+// Every candidate the scan consulted that the index cannot currently answer is
+// re-offered, which is exactly what a fresh scan would do with its Pending list:
+// a cached frame therefore keeps chasing a file that does not exist yet, and a
+// negative that expires under the cache is re-requested rather than forgotten.
+// queueContentLinkResolve deduplicates, so work already in flight is not
+// re-queued however many times a cached frame is read.
+func (h *appContentDeck) replayPrimaryScan(origin mouse.Rect, ready map[string]contentlink.ResolutionSnapshot) {
+	for _, hit := range h.scan.hits {
+		h.links = append(h.links, appContentLinkHit{Generation: h.generation, Ref: hit.Ref, Rect: mouse.Rect{
+			X: origin.X + hit.Rect.X, Y: origin.Y + hit.Rect.Y, W: hit.Rect.W, H: hit.Rect.H,
+		}})
+	}
+	for _, consulted := range h.scan.consulted {
+		if _, _, resolved := ready[consulted.Root].Lookup(consulted.Candidate.Kind, consulted.Candidate.Raw); resolved {
+			continue
+		}
+		h.queueContentLinkResolve(consulted.Root, consulted.Candidate)
+	}
+}
+
+func scannableSurface(surface contentlink.Surface) bool {
+	return surface.ReadOnly && surface.Rect.W > 0 && surface.Rect.H > 0
+}
+
+// writeAppDeckSurfaceKey encodes everything about a surface that changes what a
+// scan of the same bytes would produce. A nil Kinds set and an empty one mean
+// the same thing here (allow none) and encode the same way.
+func writeAppDeckSurfaceKey(key *strings.Builder, surface contentlink.Surface) {
+	key.WriteString(surface.ID)
+	key.WriteByte(0)
+	key.WriteString(surface.WorkDir)
+	key.WriteByte(0)
+	fmt.Fprintf(key, "%d,%d,%d,%d,%t;", surface.Rect.X, surface.Rect.Y, surface.Rect.W, surface.Rect.H,
+		surface.RendererOwned)
+	kinds := make([]string, 0, len(surface.Kinds))
+	for kind := range surface.Kinds {
+		kinds = append(kinds, string(kind))
+	}
+	sort.Strings(kinds)
+	key.WriteString(strings.Join(kinds, ","))
+	key.WriteByte('\n')
 }
 
 // prepareDocumentLeaf recognizes tokens in a document leaf the deck drew beside
