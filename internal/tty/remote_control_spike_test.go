@@ -182,6 +182,11 @@ func (c *countingChannel) SendTriple(a, b, d string, ca, cb, cd func(controlResp
 	return c.inner.SendTriple(a, b, d, ca, cb, cd)
 }
 
+func (c *countingChannel) SendUntilMarker(command, markerCommand, marker string, callback func([]controlResponse)) error {
+	c.commands.Add(1)
+	return c.inner.SendUntilMarker(command, markerCommand, marker, callback)
+}
+
 func (c *countingChannel) Events() <-chan controlEvent { return c.events }
 func (c *countingChannel) Done() <-chan error          { return c.inner.Done() }
 func (c *countingChannel) Close() error                { return c.inner.Close() }

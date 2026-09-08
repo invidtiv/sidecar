@@ -67,6 +67,13 @@ func (f *fakeControlChannel) SendTriple(first, second, third string, firstCallba
 	return nil
 }
 
+func (f *fakeControlChannel) SendUntilMarker(command, markerCommand, marker string, callback func([]controlResponse)) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.commands = append(f.commands, fakeControlCommand{text: command, callback: func(response controlResponse) { callback([]controlResponse{response}) }})
+	return nil
+}
+
 func (f *fakeControlChannel) Events() <-chan controlEvent { return f.events }
 func (f *fakeControlChannel) Done() <-chan error          { return f.done }
 func (f *fakeControlChannel) Close() error {
@@ -483,6 +490,29 @@ func TestControlManagerDropsStaleGenerationAndStopsIdempotently(t *testing.T) {
 	manager.Stop()
 }
 
+func TestControlSubscriptionRequestSnapshotCapturesAnIdlePane(t *testing.T) {
+	factory := newFakeControlFactory()
+	manager := newControlManager(factory.create, 0)
+	defer manager.Stop()
+
+	sub, err := manager.Subscribe(ControlRequest{Session: "one", Pane: "%1", Visible: true, Focused: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Close()
+	var channel *fakeControlChannel
+	waitFor(t, func() bool {
+		channel = factory.channel("one")
+		return channel != nil && channel.commandCountContaining("capture-pane") == 1
+	})
+	if !channel.respondCapture(0, controlResponse{Lines: []string{"0,0,1,24,80,0", "idle"}}) {
+		t.Fatal("initial capture was not pending")
+	}
+
+	sub.RequestSnapshot()
+	waitFor(t, func() bool { return channel.commandCountContaining("capture-pane") == 2 })
+}
+
 func TestControlManagerRevalidatesQueuedDeliveriesAfterClose(t *testing.T) {
 	factory := newFakeControlFactory()
 	manager := newControlManager(factory.create, 0)
@@ -650,6 +680,27 @@ func TestBuildAndParseControlCapture(t *testing.T) {
 	legacy, err := parseControlSnapshot("session", "%12", 900, []string{"9,4,0,30,100,1250", "line"})
 	if err != nil || legacy.MouseReporting || legacy.CurrentCommand != "" || legacy.PaneTitle != "" {
 		t.Fatalf("legacy metadata = %#v, err=%v", legacy, err)
+	}
+}
+
+func TestParseFullMetadataSeparatesRequiredInputFromCosmeticCursorModes(t *testing.T) {
+	for _, tc := range []struct {
+		name, metadata string
+		wantInput      bool
+		wantShape      string
+	}{
+		{name: "tmux 3.4 missing bracket and cursor cosmetics", metadata: "0,0,1,3,8,0,0,0,0,,0,0,1,0,0,0,2,,,42,$1,1700000000,0,sh,title", wantInput: false},
+		{name: "current tmux bar cursor", metadata: "0,0,1,3,8,0,0,0,0,1,0,0,1,0,0,0,2,bar,1,42,$1,1700000000,0,sh,title", wantInput: true, wantShape: "bar"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			snapshot, _, err := parseControlSnapshotMode("mobile", "%1", 1, []string{tc.metadata, "        ", "        ", "        "}, false, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if snapshot.InputModesKnown != tc.wantInput || snapshot.CursorShape != tc.wantShape {
+				t.Fatalf("snapshot = %+v", snapshot)
+			}
+		})
 	}
 }
 

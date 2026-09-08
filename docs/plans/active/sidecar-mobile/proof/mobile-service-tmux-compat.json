@@ -1,0 +1,74 @@
+[
+  {
+    "version": "tmux 3.4",
+    "cases": [
+      {
+        "name": "success",
+        "response_blocks": 6,
+        "nested_error": false,
+        "completion_before_next_response": true
+      },
+      {
+        "name": "early_failure",
+        "response_blocks": 4,
+        "nested_error": true,
+        "completion_before_next_response": true
+      },
+      {
+        "name": "false_branch",
+        "response_blocks": 4,
+        "nested_error": false,
+        "completion_before_next_response": true
+      }
+    ],
+    "capabilities": {
+      "cursor_shape": "",
+      "cursor_blinking": "",
+      "bracket_paste_flag": "",
+      "keypad_cursor_flag": "1",
+      "keypad_flag": "0",
+      "wrap_flag": "1",
+      "origin_flag": "0",
+      "insert_flag": "0",
+      "scroll_region_upper": "0",
+      "scroll_region_lower": "23"
+    },
+    "accepted_geometry": "70x20"
+  },
+  {
+    "version": "tmux 3.7c",
+    "cases": [
+      {
+        "name": "success",
+        "response_blocks": 6,
+        "nested_error": false,
+        "completion_before_next_response": true
+      },
+      {
+        "name": "early_failure",
+        "response_blocks": 4,
+        "nested_error": true,
+        "completion_before_next_response": true
+      },
+      {
+        "name": "false_branch",
+        "response_blocks": 4,
+        "nested_error": false,
+        "completion_before_next_response": true
+      }
+    ],
+    "capabilities": {
+      "cursor_shape": "bar",
+      "cursor_blinking": "1",
+      "bracket_paste_flag": "1",
+      "keypad_cursor_flag": "1",
+      "keypad_flag": "0",
+      "wrap_flag": "1",
+      "origin_flag": "0",
+      "insert_flag": "0",
+      "scroll_region_upper": "0",
+      "scroll_region_lower": "23"
+    },
+    "accepted_geometry": "70x20"
+  }
+]

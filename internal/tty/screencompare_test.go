@@ -92,6 +92,18 @@ func TestBothMetadataLayoutsProduceTheSameSnapshot(t *testing.T) {
 	}
 }
 
+func TestOrdinaryMetadataKeepsCommaRichPaneTitle(t *testing.T) {
+	title := strings.Repeat("part,", 30) + "end"
+	snapshot, _, err := parseControlSnapshotMode("sess", "%1", 600,
+		[]string{"7,3,1,24,80,120,1,zsh," + title, "row"}, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.PaneTitle != title || snapshot.CurrentCommand != "zsh" || snapshot.InputModesKnown {
+		t.Fatalf("ordinary metadata was misclassified: %+v", snapshot)
+	}
+}
+
 // buildModelFrame runs bytes through a real model and returns its frame.
 func buildModelFrame(t *testing.T, width, height int, payload string) screenmodel.DiagnosticFrame {
 	t.Helper()

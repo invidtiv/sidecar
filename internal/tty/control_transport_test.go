@@ -118,6 +118,36 @@ func TestProcessControlChannelCorrelatesResponsesFIFO(t *testing.T) {
 	}
 }
 
+func TestProcessControlChannelDrainsNestedFailureThroughTopLevelMarker(t *testing.T) {
+	writer := &testWriteCloser{}
+	channel := &processControlChannel{stdin: writer, events: make(chan controlEvent, 4), done: make(chan error, 1), dead: make(chan struct{}), ready: make(chan struct{}), readyOK: true}
+	var transaction []controlResponse
+	if err := channel.SendUntilMarker("if-shell nested", "display-message -p nonce", "nonce", func(got []controlResponse) { transaction = got }); err != nil {
+		t.Fatal(err)
+	}
+	var later string
+	if err := channel.Send("capture-pane", func(response controlResponse) { later = strings.Join(response.Lines, "") }); err != nil {
+		t.Fatal(err)
+	}
+	channel.dispatch(controlEvent{Kind: controlEventResponse, Response: controlResponse{}}) // if-shell outer response
+	channel.dispatch(controlEvent{Kind: controlEventResponse, Response: controlResponse{Err: errors.New("nested mutation failed")}})
+	if len(channel.events) != 0 {
+		t.Fatal("nested response escaped the transaction")
+	}
+	channel.dispatch(controlEvent{Kind: controlEventResponse, Response: controlResponse{Lines: []string{"nonce"}}})
+	channel.dispatch(controlEvent{Kind: controlEventResponse, Response: controlResponse{Lines: []string{"later"}}})
+	for range 2 {
+		event := <-channel.Events()
+		event.Callback(event.Response)
+	}
+	if len(transaction) != 3 || transaction[1].Err == nil {
+		t.Fatalf("transaction = %#v", transaction)
+	}
+	if later != "later" {
+		t.Fatalf("later callback shifted: %q", later)
+	}
+}
+
 func TestProcessControlChannelWriteFailureSignalsDone(t *testing.T) {
 	writer := &testWriteCloser{writeErr: errors.New("broken pipe")}
 	channel := &processControlChannel{

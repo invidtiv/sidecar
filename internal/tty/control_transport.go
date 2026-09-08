@@ -27,6 +27,10 @@ type controlChannel interface {
 	// SendTriple has the same atomic-write and FIFO-response contract as
 	// SendPair for transactions that require three distinct tmux responses.
 	SendTriple(first, second, third string, firstCallback, secondCallback, thirdCallback func(controlResponse)) error
+	// SendUntilMarker writes a possibly nested command followed by a fresh
+	// top-level marker command. Every response through that marker is drained as
+	// one transaction, including a short nested list after an early error.
+	SendUntilMarker(command, markerCommand, marker string, callback func([]controlResponse)) error
 	Events() <-chan controlEvent
 	Done() <-chan error
 	Close() error
@@ -51,11 +55,18 @@ type processControlChannel struct {
 
 	writeMu sync.Mutex
 	mu      sync.Mutex
-	pending []func(controlResponse)
+	pending []controlPending
 	readyOK bool
 
 	closeOnce  sync.Once
 	finishOnce sync.Once
+}
+
+type controlPending struct {
+	callback    func(controlResponse)
+	marker      string
+	transaction func([]controlResponse)
+	responses   []controlResponse
 }
 
 func newProcessControlChannel(session string) (controlChannel, error) {
@@ -213,6 +224,34 @@ func (c *processControlChannel) SendTriple(first, second, third string, firstCal
 	)
 }
 
+func (c *processControlChannel) SendUntilMarker(command, markerCommand, marker string, callback func([]controlResponse)) error {
+	if marker == "" || callback == nil || strings.ContainsAny(command+markerCommand, "\r\n") {
+		return fmt.Errorf("tmux control: invalid marker transaction")
+	}
+	var payload strings.Builder
+	payload.WriteString(command)
+	payload.WriteByte('\n')
+	payload.WriteString(markerCommand)
+	payload.WriteByte('\n')
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	c.mu.Lock()
+	c.pending = append(c.pending, controlPending{marker: marker, transaction: callback})
+	c.mu.Unlock()
+	if written, err := io.WriteString(c.stdin, payload.String()); err != nil {
+		if written == 0 {
+			c.mu.Lock()
+			if len(c.pending) > 0 {
+				c.pending = c.pending[:len(c.pending)-1]
+			}
+			c.mu.Unlock()
+		}
+		c.finish(fmt.Errorf("tmux control write: %w", err))
+		return err
+	}
+	return nil
+}
+
 // write emits every command in one io.WriteString so tmux reads the whole group
 // in a single read and queues the commands together.
 //
@@ -234,7 +273,9 @@ func (c *processControlChannel) write(commands []string, callbacks []func(contro
 	defer c.writeMu.Unlock()
 
 	c.mu.Lock()
-	c.pending = append(c.pending, callbacks...)
+	for _, callback := range callbacks {
+		c.pending = append(c.pending, controlPending{callback: callback})
+	}
 	c.mu.Unlock()
 	if written, err := io.WriteString(c.stdin, payload.String()); err != nil {
 		// Unregistering the callbacks is only sound when nothing reached tmux: a
@@ -312,9 +353,23 @@ func (c *processControlChannel) dispatch(event controlEvent) {
 			c.mu.Unlock()
 			return
 		}
-		event.Callback = c.pending[0]
-		copy(c.pending, c.pending[1:])
-		c.pending = c.pending[:len(c.pending)-1]
+		pending := &c.pending[0]
+		if pending.transaction != nil {
+			pending.responses = append(pending.responses, event.Response)
+			if !responseHasLine([]controlResponse{event.Response}, pending.marker) {
+				c.mu.Unlock()
+				return
+			}
+			responses := append([]controlResponse(nil), pending.responses...)
+			transaction := pending.transaction
+			copy(c.pending, c.pending[1:])
+			c.pending = c.pending[:len(c.pending)-1]
+			event.Callback = func(controlResponse) { transaction(responses) }
+		} else {
+			event.Callback = pending.callback
+			copy(c.pending, c.pending[1:])
+			c.pending = c.pending[:len(c.pending)-1]
+		}
 		c.mu.Unlock()
 		if event.Callback == nil {
 			return

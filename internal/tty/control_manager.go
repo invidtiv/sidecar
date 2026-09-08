@@ -42,7 +42,23 @@ type ControlSnapshot struct {
 	// pane has enabled at least one mouse tracking mode. It is asked of tmux
 	// rather than scanned out of the capture because `capture-pane -e` emits
 	// rendering escapes only — DECSET mode sequences never survive it.
-	MouseReporting bool
+	MouseReporting    bool
+	MouseSGR          bool
+	AltScreen         bool
+	BracketedPaste    bool
+	ApplicationCursor bool
+	ApplicationKeypad bool
+	Autowrap          bool
+	OriginMode        bool
+	InsertMode        bool
+	InputModesKnown   bool
+	CursorShape       string
+	CursorBlinking    bool
+	ScrollRegionUpper int
+	ScrollRegionLower int
+	ServerPID         int
+	SessionID         string
+	SessionCreated    string
 	// PaneTitle and CurrentCommand are captured in the same control-mode
 	// metadata response as the screen. Semantic agent probes must never reuse
 	// identity from an older ordinary poll while that polling path is suspended.
@@ -61,8 +77,12 @@ type ControlRequest struct {
 	Scrollback int
 	Visible    bool
 	Focused    bool
-	OnSnapshot func(ControlSnapshot)
-	OnFallback func(error)
+	// FullMetadata asks the capture transaction for tmux's terminal input modes
+	// and stable server/session identity. Ordinary desktop subscribers retain
+	// the smaller, established metadata query.
+	FullMetadata bool
+	OnSnapshot   func(ControlSnapshot)
+	OnFallback   func(error)
 	// ModelPresentation permits a live byte-fed model to suppress capture for
 	// ordinary output bursts. It is separate from OnModelFrame because the
 	// diagnostic comparison oracle deliberately retains independent captures.
@@ -114,6 +134,15 @@ func (s *ControlSubscription) SetFocused(focused bool) {
 func (s *ControlSubscription) Resize(width, height int) {
 	if s != nil && s.manager != nil {
 		s.manager.resize(s.id, width, height)
+	}
+}
+
+// RequestSnapshot asks the existing ordered capture actor for a fresh screen.
+// It is non-blocking and has no effect after the subscription is hidden or
+// closed.
+func (s *ControlSubscription) RequestSnapshot() {
+	if s != nil && s.manager != nil {
+		s.manager.requestSnapshot(s.id)
 	}
 }
 
@@ -347,6 +376,21 @@ func (m *ControlManager) resize(id uint64, width, height int) {
 	}
 }
 
+func (m *ControlManager) requestSnapshot(id uint64) {
+	m.mu.Lock()
+	sub := m.subs[id]
+	if sub == nil || !sub.request.Visible {
+		m.mu.Unlock()
+		return
+	}
+	client := m.clients[sub.request.Session]
+	pane := sub.request.Pane
+	m.mu.Unlock()
+	if client != nil {
+		client.markDirty(pane)
+	}
+}
+
 func (m *ControlManager) usingControl(id uint64) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -519,6 +563,44 @@ func (m *ControlManager) requestControlBatch(session string, commands ...string)
 	for _, response := range responses {
 		if response.Err != nil {
 			return nil, response.Err
+		}
+	}
+	return responses, nil
+}
+
+// requestControlResponses sends one tmux command that deliberately expands
+// into a fixed number of control-protocol response blocks. It is used only for
+// conditional mutation command lists whose true and false branches have been
+// padded to the same length.
+var controlTransactionSequence atomic.Uint64
+
+func (m *ControlManager) requestControlTransaction(session, command string) ([]controlResponse, error) {
+	if session == "" || command == "" {
+		return nil, fmt.Errorf("tmux control: invalid transaction request")
+	}
+	client, err := m.clientForCommand(session)
+	if err != nil {
+		return nil, err
+	}
+	marker := fmt.Sprintf("__sidecar_control_tx_%d__", controlTransactionSequence.Add(1))
+	markerCommand := "display-message -p " + controlQuote(marker)
+	done := make(chan []controlResponse, 1)
+	if err := client.channel.SendUntilMarker(command, markerCommand, marker, func(responses []controlResponse) { done <- responses }); err != nil {
+		return nil, err
+	}
+	timer := time.NewTimer(4 * time.Second)
+	defer timer.Stop()
+	var responses []controlResponse
+	select {
+	case responses = <-done:
+	case <-timer.C:
+		err := fmt.Errorf("tmux control: conditional command response timeout")
+		m.clientFailed(client, err)
+		return nil, err
+	}
+	for _, response := range responses {
+		if response.Err != nil {
+			return responses, response.Err
 		}
 	}
 	return responses, nil
@@ -1063,7 +1145,11 @@ func (c *sessionControlClient) startCapture(pane string) {
 		return
 	}
 	scrollback := DefaultScrollbackLines
+	fullMetadata := false
 	for _, sub := range c.subs {
+		if sub.request.Pane == pane && sub.request.FullMetadata {
+			fullMetadata = true
+		}
 		if sub.request.Pane == pane && sub.request.Focused && sub.request.Scrollback > 0 {
 			scrollback = sub.request.Scrollback
 			break
@@ -1073,18 +1159,18 @@ func (c *sessionControlClient) startCapture(pane string) {
 	state.inFlight = true
 	c.mu.Unlock()
 
-	metadataCommand, captureCommand, err := buildControlCaptureCommands(pane, scrollback)
+	metadataCommand, captureCommand, err := buildControlCaptureCommandsMode(pane, scrollback, ScreenCompareEnabled(), fullMetadata)
 	if err != nil {
-		c.captureFinished(pane, scrollback, controlResponse{Err: err})
+		c.captureFinished(pane, scrollback, fullMetadata, controlResponse{Err: err})
 		return
 	}
 	var responseMu sync.Mutex
 	var metadata controlResponse
 	var finished sync.Once
 	finish := func(response controlResponse) {
-		finished.Do(func() { c.captureFinished(pane, scrollback, response) })
+		finished.Do(func() { c.captureFinished(pane, scrollback, fullMetadata, response) })
 	}
-	if err := c.channel.Send(metadataCommand, func(response controlResponse) {
+	if err := c.channel.SendPair(metadataCommand, captureCommand, func(response controlResponse) {
 		// On the ordered actor: opening the window in which pane bytes would
 		// make this capture's metadata older than its screen.
 		if state := c.comparePane(pane); state != nil {
@@ -1098,11 +1184,7 @@ func (c *sessionControlClient) startCapture(pane string) {
 		if response.Err != nil {
 			finish(response)
 		}
-	}); err != nil {
-		c.manager.clientFailed(c, fmt.Errorf("tmux control metadata write: %w", err))
-		return
-	}
-	if err := c.channel.Send(captureCommand, func(response controlResponse) {
+	}, func(response controlResponse) {
 		responseMu.Lock()
 		meta := metadata
 		responseMu.Unlock()
@@ -1117,16 +1199,16 @@ func (c *sessionControlClient) startCapture(pane string) {
 		response.Lines = append(append([]string(nil), meta.Lines...), response.Lines...)
 		finish(response)
 	}); err != nil {
-		c.manager.clientFailed(c, fmt.Errorf("tmux control capture write: %w", err))
+		c.manager.clientFailed(c, fmt.Errorf("tmux control capture transaction write: %w", err))
 	}
 }
 
-func (c *sessionControlClient) captureFinished(pane string, scrollback int, response controlResponse) {
+func (c *sessionControlClient) captureFinished(pane string, scrollback int, fullMetadata bool, response controlResponse) {
 	if response.Err != nil {
 		c.manager.clientFailed(c, response.Err)
 		return
 	}
-	snapshot, extras, err := parseControlSnapshotLayout(c.session, pane, scrollback, response.Lines, ScreenCompareEnabled())
+	snapshot, extras, err := parseControlSnapshotMode(c.session, pane, scrollback, response.Lines, ScreenCompareEnabled(), fullMetadata)
 	if err != nil {
 		c.manager.clientFailed(c, err)
 		return
@@ -1293,11 +1375,21 @@ const captureCompareMetadataFields = "#{cursor_x},#{cursor_y},#{cursor_flag},#{p
 	"#{history_size},#{mouse_any_flag},#{alternate_on},#{mouse_sgr_flag},#{client_discarded}," +
 	"#{pane_current_command},#{pane_title}"
 
+const captureFullMetadataFields = "#{cursor_x},#{cursor_y},#{cursor_flag},#{pane_height},#{pane_width}," +
+	"#{history_size},#{mouse_any_flag},#{alternate_on},#{mouse_sgr_flag},#{bracket_paste_flag}," +
+	"#{keypad_cursor_flag},#{keypad_flag},#{wrap_flag},#{origin_flag},#{insert_flag}," +
+	"#{scroll_region_upper},#{scroll_region_lower},#{cursor_shape},#{cursor_blinking}," +
+	"#{pid},#{session_id},#{session_created},#{client_discarded},#{pane_current_command},#{pane_title}"
+
 func buildControlCaptureCommands(pane string, scrollback int) (metadata, capture string, err error) {
 	return buildControlCaptureCommandsLayout(pane, scrollback, ScreenCompareEnabled())
 }
 
 func buildControlCaptureCommandsLayout(pane string, scrollback int, extended bool) (metadata, capture string, err error) {
+	return buildControlCaptureCommandsMode(pane, scrollback, extended, false)
+}
+
+func buildControlCaptureCommandsMode(pane string, scrollback int, compare, full bool) (metadata, capture string, err error) {
 	if !controlPanePattern.MatchString(pane) {
 		return "", "", fmt.Errorf("tmux control: invalid pane %q", pane)
 	}
@@ -1305,7 +1397,9 @@ func buildControlCaptureCommandsLayout(pane string, scrollback int, extended boo
 		scrollback = DefaultScrollbackLines
 	}
 	fields := captureMetadataFields
-	if extended {
+	if full {
+		fields = captureFullMetadataFields
+	} else if compare {
 		fields = captureCompareMetadataFields
 	}
 	metadata = "display-message -p -t " + pane + " '" + fields + "'"
@@ -1352,6 +1446,10 @@ func captureBaseFor(historySize, scrollback, captureRows, paneHeight int) int {
 }
 
 func parseControlSnapshotLayout(session, pane string, scrollback int, lines []string, extended bool) (ControlSnapshot, captureExtras, error) {
+	return parseControlSnapshotMode(session, pane, scrollback, lines, extended, false)
+}
+
+func parseControlSnapshotMode(session, pane string, scrollback int, lines []string, extended, full bool) (ControlSnapshot, captureExtras, error) {
 	var extras captureExtras
 	if len(lines) == 0 {
 		return ControlSnapshot{}, extras, errors.New("tmux control capture: missing cursor metadata")
@@ -1362,6 +1460,9 @@ func parseControlSnapshotLayout(session, pane string, scrollback int, lines []st
 	limit := 9
 	if extended {
 		limit = 12
+	}
+	if full {
+		limit = 25
 	}
 	parts := strings.SplitN(strings.TrimSpace(lines[0]), ",", limit)
 	// Fields past the sixth are optional so a metadata line produced before they
@@ -1381,20 +1482,27 @@ func parseControlSnapshotLayout(session, pane string, scrollback int, lines []st
 	if scrollback <= 0 {
 		scrollback = DefaultScrollbackLines
 	}
-	mouseReporting := len(parts) >= 7 && parts[6] != "0" && parts[6] != ""
+	mouseReporting := len(parts) >= 7 && tmuxFormatBool(parts[6])
+	// The full layout is optional on parse so stored unit-test responses
+	// and an older tmux that leaves a format unknown fail closed only for input,
+	// while screen viewing remains available.
+	expanded := full && len(parts) >= 24
 	commandIndex, titleIndex := 7, 8
-	if extended {
+	clientDiscardedIndex := -1
+	if expanded {
+		clientDiscardedIndex = 22
+		commandIndex, titleIndex = 23, 24
+	} else if extended && len(parts) >= 12 {
+		clientDiscardedIndex = 9
 		commandIndex, titleIndex = 10, 11
-		if len(parts) >= 10 {
-			extras.Valid = true
-			extras.AltScreen = parts[7] != "" && parts[7] != "0"
-			extras.MouseSGR = parts[8] != "" && parts[8] != "0"
-			// client_discarded is empty outside a control client; zero, not a
-			// parse failure.
-			if parts[9] != "" {
-				if value, err := strconv.ParseInt(parts[9], 10, 64); err == nil && value >= 0 {
-					extras.Discarded = value
-				}
+	}
+	if extended && (expanded || len(parts) >= 12) {
+		extras.Valid = true
+		extras.AltScreen = tmuxFormatBool(parts[7])
+		extras.MouseSGR = tmuxFormatBool(parts[8])
+		if clientDiscardedIndex >= 0 && parts[clientDiscardedIndex] != "" {
+			if value, err := strconv.ParseInt(parts[clientDiscardedIndex], 10, 64); err == nil && value >= 0 {
+				extras.Discarded = value
 			}
 		}
 	}
@@ -1408,7 +1516,7 @@ func parseControlSnapshotLayout(session, pane string, scrollback int, lines []st
 	}
 	captureRows := len(lines) - 1
 	paneRows := min(max(height, 0), captureRows)
-	return ControlSnapshot{
+	snapshot := ControlSnapshot{
 		Session:        session,
 		Pane:           pane,
 		Output:         strings.Join(lines[1:], "\n"),
@@ -1425,5 +1533,28 @@ func parseControlSnapshotLayout(session, pane string, scrollback int, lines []st
 		MouseReporting: mouseReporting,
 		PaneTitle:      paneTitle,
 		CurrentCommand: currentCommand,
-	}, extras, nil
+	}
+	if expanded {
+		snapshot.AltScreen = tmuxFormatBool(parts[7])
+		snapshot.MouseSGR = tmuxFormatBool(parts[8])
+		snapshot.BracketedPaste = tmuxFormatBool(parts[9])
+		snapshot.ApplicationCursor = tmuxFormatBool(parts[10])
+		snapshot.ApplicationKeypad = tmuxFormatBool(parts[11])
+		snapshot.Autowrap = tmuxFormatBool(parts[12])
+		snapshot.OriginMode = tmuxFormatBool(parts[13])
+		snapshot.InsertMode = tmuxFormatBool(parts[14])
+		snapshot.InputModesKnown = tmuxFormatKnown(parts[9]) && tmuxFormatKnown(parts[10]) && tmuxFormatKnown(parts[11])
+		snapshot.ScrollRegionUpper, _ = strconv.Atoi(parts[15])
+		snapshot.ScrollRegionLower, _ = strconv.Atoi(parts[16])
+		snapshot.CursorShape = parts[17]
+		snapshot.CursorBlinking = tmuxFormatBool(parts[18])
+		snapshot.ServerPID, _ = strconv.Atoi(parts[19])
+		snapshot.SessionID = parts[20]
+		snapshot.SessionCreated = parts[21]
+	}
+	return snapshot, extras, nil
 }
+
+func tmuxFormatKnown(value string) bool { return value == "0" || value == "1" }
+
+func tmuxFormatBool(value string) bool { return value != "" && value != "0" }

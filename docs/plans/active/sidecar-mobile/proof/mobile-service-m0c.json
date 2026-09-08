@@ -1,0 +1,44 @@
+{
+  "api_instances_distinct": true,
+  "attachment_generations": [
+    1,
+    2
+  ],
+  "base_commit": "85a3364a74842ffcadb21a772b6d6651b1ddca75",
+  "canonical_transcript_sha256": "1441836b225657ce6dbc4eb4ddfd167bd737cf187f56060392291ff4c94a8b99",
+  "final_geometry": {
+    "columns": 70,
+    "rows": 20
+  },
+  "first_exit": 0,
+  "fixture_content": "synthetic colored blanks, Unicode combining sequence, Unicode wide cell, and terminal token only",
+  "isolation": {
+    "config": "explicit temporary -config",
+    "home_override": false,
+    "sidecar_state": "isolated XDG_STATE_HOME",
+    "tmux": "private socket stopped after proof"
+  },
+  "latency_ms": {
+    "hello_resolve_open_frame": 1323.321,
+    "input_to_visible_frame": 34.336,
+    "resize_to_replacement_frame": 33.208
+  },
+  "no_input_replay": true,
+  "proof_script": "scripts/mobile-service-proof.sh",
+  "proof_transport_script": "scripts/mobile-service-proof.py",
+  "reset_transition": [
+    1,
+    2,
+    2
+  ],
+  "schema": 1,
+  "second_exit": 0,
+  "synthetic_token_occurrences": {
+    "after_reconnect": 1,
+    "before_disconnect": 1
+  },
+  "tmux_version": "3.7c",
+  "transcript": "testdata/mobile-protocol/v0/ssh-fresh-reconnect.jsonl",
+  "transport": "ssh",
+  "transport_command": "ssh -T aerie.local <private-wrapper>"
+}

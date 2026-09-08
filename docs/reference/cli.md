@@ -1829,6 +1829,65 @@ sidecar layout move 1.1 --to left --json
 sidecar layout move --focused --to up --sessions
 ```
 
+## `sidecar mobile`
+
+Serve the native mobile terminal client
+
+```
+Usage: sidecar mobile <command>
+```
+
+### `sidecar mobile serve`
+
+Serve one bounded mobile terminal protocol stream
+
+Read versioned JSONL requests from stdin and write JSONL responses and terminal frames to stdout. The service resolves only Sidecar-managed local sessions and refuses multi-pane layouts.
+
+```
+Usage: sidecar mobile serve --stdio
+```
+
+**Options:**
+
+- `--stdio`: Use stdin and stdout for the protocol
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: stream closed normally
+- `1`: service failed
+- `2`: usage error
+
+**Examples:**
+
+```bash
+sidecar mobile serve --stdio
+```
+
+### `sidecar mobile status`
+
+Report the local mobile terminal protocol
+
+```
+Usage: sidecar mobile status --json
+```
+
+**Options:**
+
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: success
+- `2`: usage error
+
+**Examples:**
+
+```bash
+sidecar mobile status --json
+```
+
 ## `sidecar notify`
 
 Configure, test, post, dismiss, and list Sidecar notifications

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/marcus/sidecar/internal/managedtarget"
 	"github.com/marcus/sidecar/internal/shellstate"
@@ -50,6 +51,7 @@ type shellTarget struct {
 	WorktreeRoot string
 	Project      registeredProject
 	ManifestPath string
+	CreatedAt    string
 }
 
 func resolveShellTarget(env Env, target, shellFlag, projectFlag, help string) (shellTarget, int) {
@@ -220,7 +222,14 @@ func (l *shellTargetLookup) resolve(env Env, target, shellFlag, projectFlag stri
 		}
 	}
 	proj := byProject[resolved.Project]
-	return shellTarget{Kind: resolved.Kind, Session: resolved.Session, DisplayName: resolved.Name, Namespace: resolved.Namespace, WorkDir: resolved.WorkDir, WorktreeRoot: resolved.WorktreeRoot, Project: proj, ManifestPath: resolved.ManifestPath}, 0, nil
+	createdAt := ""
+	for _, definition := range proj.Shells {
+		if definition.TmuxName == resolved.Session && definition.Namespace == resolved.Namespace && !definition.CreatedAt.IsZero() {
+			createdAt = definition.CreatedAt.UTC().Format(time.RFC3339Nano)
+			break
+		}
+	}
+	return shellTarget{Kind: resolved.Kind, Session: resolved.Session, DisplayName: resolved.Name, Namespace: resolved.Namespace, WorkDir: resolved.WorkDir, WorktreeRoot: resolved.WorktreeRoot, Project: proj, ManifestPath: resolved.ManifestPath, CreatedAt: createdAt}, 0, nil
 }
 
 // find is resolve with the namespace this process's own shell belongs to,
