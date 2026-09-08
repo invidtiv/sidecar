@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -63,6 +64,50 @@ func TestMissingTmuxServerIsAnEmptyInventory(t *testing.T) {
 	panes, err := (Collector{Runner: runner}).ListPanes(context.Background())
 	if err != nil || len(panes) != 0 {
 		t.Fatalf("missing server panes=%v err=%v", panes, err)
+	}
+}
+
+func TestListPanesPreservesMachineFieldsWithoutALocale(t *testing.T) {
+	name := fmt.Sprintf("sidecar-locale-free-inventory-%d", time.Now().UnixNano())
+	if out, err := exec.Command("tmux", "new-session", "-d", "-s", name).CombinedOutput(); err != nil {
+		t.Fatalf("start private tmux session: %v: %s", err, out)
+	}
+	t.Cleanup(func() { _ = exec.Command("tmux", "kill-session", "-t", name).Run() })
+	if out, err := exec.Command("tmux", "select-pane", "-t", name, "-T", "界 locale-free").CombinedOutput(); err != nil {
+		t.Fatalf("set private pane title: %v: %s", err, out)
+	}
+
+	withoutLocale(t)
+	panes, err := (Collector{}).ListPanes(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pane := range panes {
+		if pane.Session == name {
+			if pane.Title != "界 locale-free" || pane.ID == "" || pane.ServerPID <= 0 {
+				t.Fatalf("locale-free pane = %#v", pane)
+			}
+			return
+		}
+	}
+	t.Fatalf("private locale-free session %q missing from %#v", name, panes)
+}
+
+func TestListPanesRejectsMalformedNonemptyMachineOutput(t *testing.T) {
+	panes, err := (Collector{Runner: &fakeRunner{tmux: "%1_sidecar-sh_demo"}}).ListPanes(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "malformed pane row") || panes != nil {
+		t.Fatalf("panes=%#v err=%v", panes, err)
+	}
+}
+
+func withoutLocale(t *testing.T) {
+	t.Helper()
+	for _, key := range []string{"LANG", "LC_ALL", "LC_CTYPE", "TERM"} {
+		value := os.Getenv(key)
+		t.Setenv(key, value)
+		if err := os.Unsetenv(key); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

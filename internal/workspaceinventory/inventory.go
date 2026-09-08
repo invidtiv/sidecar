@@ -22,6 +22,7 @@ import (
 	"github.com/marcus/sidecar/internal/agentstatus"
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/tmuxenv"
+	"github.com/marcus/sidecar/internal/tmuxformat"
 	"github.com/marcus/sidecar/internal/tty"
 )
 
@@ -468,7 +469,8 @@ func ServerPIDOf(panes []Pane) int {
 // ListPanes takes the single global tmux inventory used by an Overview refresh.
 func (c Collector) ListPanes(ctx context.Context) ([]Pane, error) {
 	c = c.defaults()
-	out, err := c.Runner.Output(ctx, "tmux", "list-panes", "-a", "-F", "#{pane_id}\t#{session_name}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_title}\t#{pane_dead}\t#{pane_pid}\t#{pid}\t#{pane_height}")
+	args := tmuxformat.ClientArgs("list-panes", "-a", "-F", "#{pane_id}\t#{session_name}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_title}\t#{pane_dead}\t#{pane_pid}\t#{pid}\t#{pane_height}")
+	out, err := c.Runner.Output(ctx, "tmux", args...)
 	if err != nil {
 		message := strings.ToLower(string(out))
 		if strings.Contains(message, "no server running") || strings.Contains(message, "no sessions") ||
@@ -488,7 +490,7 @@ func (c Collector) ListPanes(ctx context.Context) ([]Pane, error) {
 		// have instead of being discarded whole.
 		parts := strings.SplitN(line, "\t", 9)
 		if len(parts) < 6 {
-			continue
+			return nil, fmt.Errorf("tmux inventory: malformed pane row")
 		}
 		p := Pane{ID: parts[0], Session: parts[1], Path: filepath.Clean(parts[2]), Command: parts[3], Title: parts[4], Dead: parts[5] == "1"}
 		if len(parts) >= 7 {

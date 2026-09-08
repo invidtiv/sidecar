@@ -9,6 +9,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/tmuxformat"
 )
 
 // CursorStyle returns the cursor style using current theme colors.
@@ -94,8 +95,8 @@ func QueryPaneStateSync(target string) (PaneState, bool) {
 		return PaneState{}, false
 	}
 
-	cmd := exec.Command("tmux", "display-message", "-t", target,
-		"-p", "#{cursor_x},#{cursor_y},#{cursor_flag},#{pane_height},#{pane_width},#{mouse_any_flag}")
+	cmd := exec.Command("tmux", tmuxformat.ClientArgs("display-message", "-t", target,
+		"-p", "#{cursor_x},#{cursor_y},#{cursor_flag},#{pane_height},#{pane_width},#{mouse_any_flag}")...)
 	output, err := cmd.Output()
 	if err != nil {
 		return PaneState{}, false

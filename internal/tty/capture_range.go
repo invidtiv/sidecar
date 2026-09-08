@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/marcus/sidecar/internal/tmuxformat"
 )
 
 const captureRangeTimeout = 2 * time.Second
@@ -60,7 +62,7 @@ func CapturePaneRangeBounded(target string, start, end, maxBytes int) (CaptureRa
 
 	ctx, cancel := context.WithTimeout(context.Background(), captureRangeTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "tmux", capturePaneRangeArgs(target, start, end)...)
+	cmd := exec.CommandContext(ctx, "tmux", tmuxformat.ClientArgs(capturePaneRangeArgs(target, start, end)...)...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return CaptureRange{}, fmt.Errorf("capture pane range: stdout: %w", err)

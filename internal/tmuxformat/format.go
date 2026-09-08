@@ -10,6 +10,16 @@ import (
 // formatted output are represented. Fields() q-escapes this byte in values.
 const Separator = "|"
 
+// ClientArgs returns arguments for a tmux client whose output must preserve
+// UTF-8 exactly. Without -u, tmux started from a locale-free SSH command can
+// replace both non-ASCII bytes and C0 separators in formatted output, turning
+// a valid machine response into an ambiguous one.
+func ClientArgs(args ...string) []string {
+	out := make([]string, 1, len(args)+1)
+	out[0] = "-u"
+	return append(out, args...)
+}
+
 // Fields returns one tmux format expression whose values can be decoded with
 // Split. The q modifier escapes separators, whitespace, backslashes, and
 // control bytes without changing the number of output fields.

@@ -11,6 +11,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/marcus/sidecar/internal/tmuxformat"
 )
 
 // Geometry ownership across sidecar instances (td-ee222a).
@@ -138,7 +140,7 @@ func ReadTmuxSessionOwner(session string) string {
 	if session == "" {
 		return ""
 	}
-	out, err := exec.Command("tmux", "display-message", "-t", session, "-p", "#{"+leaseOptionName+"}").Output()
+	out, err := exec.Command("tmux", tmuxformat.ClientArgs("display-message", "-t", session, "-p", "#{"+leaseOptionName+"}")...).Output()
 	if err != nil {
 		return ""
 	}
@@ -402,8 +404,8 @@ func (tmuxLeaseStore) read(target string) (string, string, bool) {
 	if target == "" {
 		return "", "", false
 	}
-	out, err := exec.Command("tmux", "display-message", "-t", target, "-p",
-		"#{session_name}\t#{"+leaseOptionName+"}").Output()
+	out, err := exec.Command("tmux", tmuxformat.ClientArgs("display-message", "-t", target, "-p",
+		"#{session_name}\t#{"+leaseOptionName+"}")...).Output()
 	if err != nil {
 		return "", "", false
 	}
@@ -441,8 +443,8 @@ func (tmuxLeaseStore) inputMark(session string) string {
 	if session == "" || tty == "" {
 		return ""
 	}
-	out, err := exec.Command("tmux", "list-clients", "-t", session, "-F",
-		"#{client_tty}\t#{client_activity}").Output()
+	out, err := exec.Command("tmux", tmuxformat.ClientArgs("list-clients", "-t", session, "-F",
+		"#{client_tty}\t#{client_activity}")...).Output()
 	if err != nil {
 		return ""
 	}

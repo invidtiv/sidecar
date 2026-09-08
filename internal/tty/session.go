@@ -14,6 +14,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/shellliveness"
 	"github.com/marcus/sidecar/internal/tmuxenv"
+	"github.com/marcus/sidecar/internal/tmuxformat"
 	"github.com/marcus/sidecar/internal/tmuxserver"
 )
 
@@ -377,7 +378,7 @@ func CapturePaneOutput(target string, scrollback int) (string, error) {
 	if scrollback > 0 {
 		args = append(args, "-S", fmt.Sprintf("-%d", scrollback))
 	}
-	cmd := exec.Command("tmux", args...)
+	cmd := exec.Command("tmux", tmuxformat.ClientArgs(args...)...)
 	output, err := cmd.Output()
 	if err != nil {
 		return "", err

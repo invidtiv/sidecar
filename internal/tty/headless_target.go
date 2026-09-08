@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+
+	"github.com/marcus/sidecar/internal/tmuxformat"
 )
 
 // HeadlessTargetIdentity is the tmux-owned half of a validated mobile target.
@@ -30,7 +32,7 @@ func InspectHeadlessTarget(ctx context.Context, session string) (HeadlessTargetI
 		return HeadlessTargetIdentity{}, fmt.Errorf("mobile target: empty session")
 	}
 	format := "#{pid}\t#{session_id}\t#{session_created}\t#{session_name}\t#{pane_id}\t#{pane_width}\t#{pane_height}\t#{window_panes}"
-	out, err := exec.CommandContext(ctx, "tmux", "list-panes", "-t", session, "-F", format).CombinedOutput()
+	out, err := exec.CommandContext(ctx, "tmux", tmuxformat.ClientArgs("list-panes", "-t", session, "-F", format)...).CombinedOutput()
 	if err != nil {
 		return HeadlessTargetIdentity{}, fmt.Errorf("mobile target: inspect session: %w: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -49,7 +51,7 @@ func InspectHeadlessPane(ctx context.Context, pane string) (HeadlessTargetIdenti
 		return HeadlessTargetIdentity{}, fmt.Errorf("mobile target: invalid pane %q", pane)
 	}
 	format := "#{pid}\t#{session_id}\t#{session_created}\t#{session_name}\t#{pane_id}\t#{pane_width}\t#{pane_height}\t#{window_panes}"
-	out, err := exec.CommandContext(ctx, "tmux", "display-message", "-p", "-t", pane, "-F", format).CombinedOutput()
+	out, err := exec.CommandContext(ctx, "tmux", tmuxformat.ClientArgs("display-message", "-p", "-t", pane, "-F", format)...).CombinedOutput()
 	if err != nil {
 		return HeadlessTargetIdentity{}, fmt.Errorf("mobile target: inspect pane: %w: %s", err, strings.TrimSpace(string(out)))
 	}

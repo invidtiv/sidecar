@@ -71,7 +71,11 @@ func controlChildCPU() (time.Duration, bool) {
 	wantParent := strconv.Itoa(os.Getpid())
 	for _, line := range strings.Split(string(out), "\n") {
 		fields := strings.Fields(line)
-		if len(fields) < 3 || fields[0] != wantParent || !strings.Contains(strings.Join(fields[2:], " "), "tmux -C attach-session") {
+		if len(fields) < 3 || fields[0] != wantParent {
+			continue
+		}
+		command := strings.Join(fields[2:], " ")
+		if !strings.Contains(command, "tmux ") || !strings.Contains(command, " -C attach-session") {
 			continue
 		}
 		cpu, parseErr := parseCPUTime(fields[1])

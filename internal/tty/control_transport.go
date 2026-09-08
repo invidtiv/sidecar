@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/marcus/sidecar/internal/tmuxformat"
 )
 
 type controlChannel interface {
@@ -71,7 +73,7 @@ type controlPending struct {
 
 func newProcessControlChannel(session string) (controlChannel, error) {
 	return newProcessControlChannelCommand(session, exec.Command(
-		"tmux", "-C", "attach-session", "-f", "ignore-size", "-t", session,
+		"tmux", tmuxformat.ClientArgs("-C", "attach-session", "-f", "ignore-size", "-t", session)...,
 	))
 }
 
@@ -80,9 +82,8 @@ func newProcessControlChannel(session string) (controlChannel, error) {
 // running inside tmux can never resolve a target against the developer's live
 // default server.
 func newProcessControlChannelForSocket(socket, session string) (controlChannel, error) {
-	cmd := exec.Command( //nolint:gosec
-		"tmux", "-S", socket, "-C", "attach-session", "-f", "ignore-size", "-t", session,
-	)
+	args := append([]string{"-S", socket}, tmuxformat.ClientArgs("-C", "attach-session", "-f", "ignore-size", "-t", session)...)
+	cmd := exec.Command("tmux", args...) //nolint:gosec
 	cmd.Env = append(os.Environ(), "TMUX=")
 	return newProcessControlChannelCommand(session, cmd)
 }
