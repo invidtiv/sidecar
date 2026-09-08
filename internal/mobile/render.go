@@ -77,6 +77,61 @@ func normalizedFullFrame(snapshot tty.ControlSnapshot) ([]byte, mobileproto.Mode
 	return out.Bytes(), modes, nil
 }
 
+// normalizedHistorySnapshot creates one frozen terminal transcript: the
+// captured history rows scroll above a final live grid of PaneHeight rows.
+// Autowrap is disabled and the last row has no line advance, so feeding the
+// bytes once produces exactly HistoryRows of emulator-owned scrollback.
+func normalizedHistorySnapshot(snapshot tty.ControlSnapshot) ([]byte, error) {
+	if snapshot.PaneWidth < 2 || snapshot.PaneHeight < 1 || snapshot.PaneRows != snapshot.PaneHeight || snapshot.HistoryRows < 0 {
+		return nil, fmt.Errorf("history capture geometry is incomplete")
+	}
+	if snapshot.PaneWidth > mobileproto.MaxColumns || snapshot.PaneHeight > mobileproto.MaxRows || snapshot.HistoryRows > mobileproto.MaxHistoryRows {
+		return nil, fmt.Errorf("history capture geometry exceeds protocol bounds")
+	}
+	totalRows := snapshot.HistoryRows + snapshot.PaneRows
+	grid := screenmodel.DecodeCapture(snapshot.Output, snapshot.PaneWidth, totalRows)
+	if len(grid) != totalRows {
+		return nil, fmt.Errorf("history capture grid is incomplete")
+	}
+
+	var out bytes.Buffer
+	out.WriteString("\x1bc")
+	setPrivateMode(&out, 7, false)
+	setPrivateMode(&out, 25, false)
+	var previous screenmodel.Cell
+	havePrevious := false
+	linkURL, linkParams := "", ""
+	for row, cells := range grid {
+		if row > 0 {
+			out.WriteString("\r\n")
+		}
+		for _, cell := range cells {
+			if cell.Width == 0 {
+				continue
+			}
+			if cell.LinkURL != linkURL || cell.LinkParams != linkParams {
+				if linkURL != "" {
+					out.WriteString("\x1b]8;;\x1b\\")
+				}
+				linkURL, linkParams = cell.LinkURL, cell.LinkParams
+				if linkURL != "" {
+					fmt.Fprintf(&out, "\x1b]8;%s;%s\x1b\\", linkParams, linkURL)
+				}
+			}
+			if !havePrevious || !sameRendition(previous, cell) {
+				writeRendition(&out, cell)
+				previous, havePrevious = cell, true
+			}
+			out.WriteString(cell.Grapheme)
+		}
+	}
+	if linkURL != "" {
+		out.WriteString("\x1b]8;;\x1b\\")
+	}
+	out.WriteString("\x1b[0m")
+	return out.Bytes(), nil
+}
+
 func modesFromSnapshot(snapshot tty.ControlSnapshot) mobileproto.Modes {
 	shape := "block"
 	switch snapshot.CursorShape {

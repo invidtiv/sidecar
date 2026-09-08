@@ -1,0 +1,53 @@
+{
+  "schema": "sidecar.mobile.history-snapshot.v0",
+  "provenance": "synthetic tmux capture-pane -e -N shaped data; no user session content",
+  "request": {
+    "version": 0,
+    "type": "history",
+    "request_id": "history-fixture",
+    "attachment_handle": "attachment_history",
+    "columns": 8,
+    "rows": 3,
+    "last_output_sequence": 3,
+    "last_reset_generation": 1,
+    "history_rows": 3
+  },
+  "response": {
+    "version": 0,
+    "type": "history",
+    "request_id": "history-fixture",
+    "history": {
+      "history_size": 5,
+      "history_rows": 3,
+      "start_line": 2,
+      "end_line": 5,
+      "at_oldest": false,
+      "render_vt_base64": "G2MbWz83bBtbPzI1bBtbMDszOTs0ODs1OzE7NTltcmVkICAgICANChtbMDszOTs0OTs1OW13aWRl55WMICANCmNvbWIgZcyBICANCmxpdmUtMCAgDQpsaXZlLTEgIA0KcmVhZHkgICAbWzBt"
+    },
+    "attachment_handle": "attachment_history",
+    "attachment_generation": 2,
+    "output_sequence": 3,
+    "reset_generation": 1,
+    "geometry": {
+      "columns": 8,
+      "rows": 3
+    }
+  },
+  "expected": {
+    "history_rows": [
+      "red     ",
+      "wide界  ",
+      "comb é  "
+    ],
+    "live_rows": [
+      "live-0  ",
+      "live-1  ",
+      "ready   "
+    ],
+    "colored_blank_row": 0,
+    "colored_blank_start": 3,
+    "wide_row": 1,
+    "combining_row": 2,
+    "no_final_line_advance": true
+  }
+}

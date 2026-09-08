@@ -3,9 +3,12 @@ package mobile
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -26,7 +29,8 @@ func testService(output *bytes.Buffer) *Service {
 	return &Service{
 		out: &safeEncoder{enc: json.NewEncoder(output)}, targets: map[string]targetState{target.wire.Handle: target},
 		attachments: map[string]*attachment{}, seenRequests: map[string]struct{}{},
-		resolve: func(context.Context, string) (ResolvedTarget, error) { return target.resolved, nil },
+		configGeneration: "config",
+		resolve:          func(context.Context, string) (ResolvedTarget, error) { return target.resolved, nil },
 	}
 }
 
@@ -202,13 +206,397 @@ func TestTargetGenerationIsStableAcrossAPIProcesses(t *testing.T) {
 	two := testService(&bytes.Buffer{})
 	one.instance, two.instance = "api_one", "api_two"
 	one.hubID, two.hubID = "aerie", "aerie"
-	first := one.wireTarget("handle_one", target)
-	second := two.wireTarget("handle_two", target)
+	first := one.wireTarget("handle_one", target, "config")
+	second := two.wireTarget("handle_two", target, "config")
 	if first.HubInstance == second.HubInstance || first.Handle == second.Handle {
 		t.Fatal("test did not vary process-scoped identity")
 	}
 	if first.TargetGeneration != second.TargetGeneration || first.Identity() != second.Identity() {
 		t.Fatalf("stable reconnect identity changed across API processes:\n%+v\n%+v", first, second)
+	}
+}
+
+func TestHistorySnapshotIsReadOnlyBoundedAndUsesAnAppliedCheckpoint(t *testing.T) {
+	var output bytes.Buffer
+	s := testService(&output)
+	captureCalls := 0
+	s.historyCapture = func(target string, start, end, maxBytes int) (tty.CaptureRange, error) {
+		captureCalls++
+		if target != "%7" || start != -2 || end != 1 || maxBytes != mobileproto.MaxHistoryBytes {
+			t.Fatalf("capture request = %q [%d,%d] max=%d", target, start, end, maxBytes)
+		}
+		return tty.CaptureRange{Output: "\x1b[41mh0  \nh1界 \np0é\np1  \n", HistorySize: 8, StartLine: 6, EndLine: 10,
+			PaneWidth: 4, PaneHeight: 2, ServerPID: 42, SessionID: "$3", SessionCreated: "1700000000", Session: "mobile", Pane: "%7"}, nil
+	}
+	latest := testSnapshot("p0  \np1  ", false, 4, 2)
+	latest.HistorySize = 8
+	a := &attachment{service: s, handle: "attachment", generation: 3, target: testTarget(), latest: latest,
+		resetGeneration: 2, outputSequence: 10, firstOutputForReset: 5}
+	s.attachments[a.handle] = a
+	s.history(context.Background(), mobileproto.Request{RequestID: "history", AttachmentHandle: a.handle,
+		LastResetGeneration: 2, LastOutputSequence: 7, Columns: 4, Rows: 2, HistoryRows: 2})
+	responses := decodeResponses(t, &output)
+	if captureCalls != 1 || len(responses) != 1 || responses[0].Type != mobileproto.ResponseHistory || responses[0].History == nil {
+		t.Fatalf("history responses = %+v calls=%d", responses, captureCalls)
+	}
+	response := responses[0]
+	if response.AttachmentGeneration != 3 || response.ResetGeneration != 2 || response.OutputSequence != 7 || response.OperationSequence != 0 || response.Control {
+		t.Fatalf("history authority = %+v", response)
+	}
+	if response.Geometry == nil || *response.Geometry != (mobileproto.Geometry{Columns: 4, Rows: 2}) {
+		t.Fatalf("history geometry = %+v", response.Geometry)
+	}
+	if got := response.History; got.HistorySize != 8 || got.HistoryRows != 2 || got.StartLine != 6 || got.EndLine != 8 || got.AtOldest {
+		t.Fatalf("history bounds = %+v", got)
+	}
+	vt, err := base64.StdEncoding.DecodeString(response.History.RenderVTBase64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(vt, []byte("界")) || !bytes.Contains(vt, []byte("é")) || !bytes.Contains(vt, []byte("48;5;1")) {
+		t.Fatalf("normalized history lost fidelity: %q", vt)
+	}
+	if bytes.HasSuffix(vt, []byte("\r\n")) || bytes.Count(vt, []byte("\r\n")) != 3 {
+		t.Fatalf("history row advances = %d suffix=%q", bytes.Count(vt, []byte("\r\n")), vt[len(vt)-min(len(vt), 8):])
+	}
+	if a.control || a.operationSequence != 0 || a.resetGeneration != 2 || a.outputSequence != 10 {
+		t.Fatalf("read-only history mutated attachment: %+v", a)
+	}
+}
+
+func TestFullFrameReportsAdvisoryHistorySize(t *testing.T) {
+	var output bytes.Buffer
+	s := testService(&output)
+	snapshot := testSnapshot("p0  \np1  ", false, 4, 2)
+	snapshot.HistorySize = 12
+	a := &attachment{service: s, handle: "attachment", generation: 1, target: testTarget(), resetGeneration: 1}
+	a.publish(snapshot)
+	responses := decodeResponses(t, &output)
+	if len(responses) != 1 || responses[0].Type != mobileproto.ResponseFrame || responses[0].HistorySize == nil || *responses[0].HistorySize != 12 {
+		t.Fatalf("frame history hint = %+v", responses)
+	}
+}
+
+func TestHistorySnapshotRefusesStaleGeometryAlternateAndFutureCheckpoint(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		request   mobileproto.Request
+		alternate bool
+	}{
+		{name: "stale reset", request: mobileproto.Request{LastResetGeneration: 1, LastOutputSequence: 7, Columns: 4, Rows: 2, HistoryRows: 2}},
+		{name: "future output", request: mobileproto.Request{LastResetGeneration: 2, LastOutputSequence: 11, Columns: 4, Rows: 2, HistoryRows: 2}},
+		{name: "stale geometry", request: mobileproto.Request{LastResetGeneration: 2, LastOutputSequence: 7, Columns: 5, Rows: 2, HistoryRows: 2}},
+		{name: "alternate screen", request: mobileproto.Request{LastResetGeneration: 2, LastOutputSequence: 7, Columns: 4, Rows: 2, HistoryRows: 2}, alternate: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var output bytes.Buffer
+			s := testService(&output)
+			called := false
+			s.historyCapture = func(string, int, int, int) (tty.CaptureRange, error) { called = true; return tty.CaptureRange{}, nil }
+			latest := testSnapshot("p0  \np1  ", tc.alternate, 4, 2)
+			a := &attachment{service: s, handle: "attachment", generation: 1, target: testTarget(), latest: latest,
+				resetGeneration: 2, outputSequence: 10, firstOutputForReset: 5}
+			s.attachments[a.handle] = a
+			tc.request.RequestID, tc.request.AttachmentHandle = tc.name, a.handle
+			s.history(context.Background(), tc.request)
+			responses := decodeResponses(t, &output)
+			if called || len(responses) != 1 || responses[0].Error == nil {
+				t.Fatalf("history refusal = %+v called=%t", responses, called)
+			}
+		})
+	}
+}
+
+func TestHistorySnapshotWithNoScrollbackReturnsOnlyTheFrozenLiveGrid(t *testing.T) {
+	var output bytes.Buffer
+	s := testService(&output)
+	s.historyCapture = func(string, int, int, int) (tty.CaptureRange, error) {
+		return tty.CaptureRange{Output: "p0  \np1  \n", HistorySize: 0, StartLine: 0, EndLine: 2,
+			PaneWidth: 4, PaneHeight: 2, ServerPID: 42, SessionID: "$3", SessionCreated: "1700000000", Session: "mobile", Pane: "%7"}, nil
+	}
+	latest := testSnapshot("p0  \np1  ", false, 4, 2)
+	latest.HistorySize = 0 // Advisory only; it does not suppress an explicit refresh.
+	a := &attachment{service: s, handle: "attachment", generation: 1, target: testTarget(), latest: latest,
+		resetGeneration: 1, outputSequence: 2, firstOutputForReset: 1}
+	s.attachments[a.handle] = a
+	s.history(context.Background(), mobileproto.Request{RequestID: "empty", AttachmentHandle: a.handle,
+		LastResetGeneration: 1, LastOutputSequence: 1, Columns: 4, Rows: 2, HistoryRows: mobileproto.MaxHistoryRows})
+	responses := decodeResponses(t, &output)
+	if len(responses) != 1 || responses[0].History == nil || responses[0].History.HistoryRows != 0 ||
+		responses[0].History.HistorySize != 0 || !responses[0].History.AtOldest || responses[0].History.StartLine != 0 || responses[0].History.EndLine != 0 {
+		t.Fatalf("empty history response = %+v", responses)
+	}
+	vt, err := base64.StdEncoding.DecodeString(responses[0].History.RenderVTBase64)
+	if err != nil || bytes.Count(vt, []byte("\r\n")) != 1 || bytes.HasSuffix(vt, []byte("\r\n")) {
+		t.Fatalf("empty history VT = %q err=%v", vt, err)
+	}
+}
+
+func TestHistorySnapshotRefusesResetOrIdentityChangeDuringCapture(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		changeCapture func(*attachment, *Service)
+		wantCode      string
+	}{
+		{name: "reset", changeCapture: func(a *attachment, _ *Service) { a.mu.Lock(); a.resetGeneration++; a.mu.Unlock() }, wantCode: mobileproto.ErrorOperationOrder},
+		{name: "identity", changeCapture: func(_ *attachment, s *Service) {
+			original := s.resolve
+			s.resolve = func(ctx context.Context, target string) (ResolvedTarget, error) {
+				got, err := original(ctx, target)
+				got.DurableSessionCreated = "replacement"
+				return got, err
+			}
+		}, wantCode: mobileproto.ErrorIdentityChanged},
+		{name: "geometry", changeCapture: func(_ *attachment, s *Service) {
+			original := s.resolve
+			s.resolve = func(ctx context.Context, target string) (ResolvedTarget, error) {
+				got, err := original(ctx, target)
+				got.Width++
+				return got, err
+			}
+		}, wantCode: mobileproto.ErrorOperationOrder},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var output bytes.Buffer
+			s := testService(&output)
+			latest := testSnapshot("p0  \np1  ", false, 4, 2)
+			a := &attachment{service: s, handle: "attachment", generation: 1, target: testTarget(), latest: latest,
+				resetGeneration: 2, outputSequence: 10, firstOutputForReset: 5}
+			s.attachments[a.handle] = a
+			s.historyCapture = func(string, int, int, int) (tty.CaptureRange, error) {
+				tc.changeCapture(a, s)
+				return tty.CaptureRange{Output: "p0  \np1  \n", HistorySize: 0, StartLine: 0, EndLine: 2,
+					PaneWidth: 4, PaneHeight: 2, ServerPID: 42, SessionID: "$3", SessionCreated: "1700000000", Session: "mobile", Pane: "%7"}, nil
+			}
+			s.history(context.Background(), mobileproto.Request{RequestID: tc.name, AttachmentHandle: a.handle,
+				LastResetGeneration: 2, LastOutputSequence: 7, Columns: 4, Rows: 2, HistoryRows: 2})
+			responses := decodeResponses(t, &output)
+			if len(responses) != 1 || responses[0].Error == nil || responses[0].Error.Code != tc.wantCode {
+				t.Fatalf("history change response = %+v", responses)
+			}
+		})
+	}
+}
+
+func TestHistorySnapshotRefusesCaptureMetadataMismatch(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		mutate   func(*tty.CaptureRange)
+		wantCode string
+	}{
+		{name: "pane identity", mutate: func(c *tty.CaptureRange) { c.Pane = "%9" }, wantCode: mobileproto.ErrorIdentityChanged},
+		{name: "geometry", mutate: func(c *tty.CaptureRange) { c.PaneWidth++ }, wantCode: mobileproto.ErrorOperationOrder},
+		{name: "alternate screen", mutate: func(c *tty.CaptureRange) { c.AltScreen = true }, wantCode: mobileproto.ErrorOperationOrder},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var output bytes.Buffer
+			s := testService(&output)
+			latest := testSnapshot("p0  \np1  ", false, 4, 2)
+			a := &attachment{service: s, handle: "attachment", generation: 1, target: testTarget(), latest: latest,
+				resetGeneration: 1, outputSequence: 2, firstOutputForReset: 1}
+			s.attachments[a.handle] = a
+			s.historyCapture = func(string, int, int, int) (tty.CaptureRange, error) {
+				capture := tty.CaptureRange{Output: "p0  \np1  \n", HistorySize: 0, StartLine: 0, EndLine: 2,
+					PaneWidth: 4, PaneHeight: 2, ServerPID: 42, SessionID: "$3", SessionCreated: "1700000000", Session: "mobile", Pane: "%7"}
+				tc.mutate(&capture)
+				return capture, nil
+			}
+			s.history(context.Background(), mobileproto.Request{RequestID: tc.name, AttachmentHandle: a.handle,
+				LastResetGeneration: 1, LastOutputSequence: 1, Columns: 4, Rows: 2, HistoryRows: 1})
+			responses := decodeResponses(t, &output)
+			if len(responses) != 1 || responses[0].Error == nil || responses[0].Error.Code != tc.wantCode {
+				t.Fatalf("capture metadata refusal = %+v", responses)
+			}
+		})
+	}
+}
+
+func TestHistorySnapshotRefusesOwnerConfigChangedBeforeCapture(t *testing.T) {
+	var output bytes.Buffer
+	s := testService(&output)
+	s.configGeneration = "current"
+	called := false
+	s.historyCapture = func(string, int, int, int) (tty.CaptureRange, error) { called = true; return tty.CaptureRange{}, nil }
+	target := testTarget()
+	target.wire.OwnerConfigGeneration = "listed"
+	latest := testSnapshot("p0  \np1  ", false, 4, 2)
+	a := &attachment{service: s, handle: "attachment", generation: 1, target: target, latest: latest,
+		resetGeneration: 1, outputSequence: 2, firstOutputForReset: 1}
+	s.attachments[a.handle] = a
+	s.history(context.Background(), mobileproto.Request{RequestID: "config", AttachmentHandle: a.handle,
+		LastResetGeneration: 1, LastOutputSequence: 1, Columns: 4, Rows: 2, HistoryRows: 1})
+	responses := decodeResponses(t, &output)
+	if called || len(responses) != 1 || responses[0].Error == nil || responses[0].Error.Code != mobileproto.ErrorIdentityChanged {
+		t.Fatalf("config refusal = %+v called=%t", responses, called)
+	}
+}
+
+func TestHistorySnapshotFailsClosedWhenOwnerConfigFileChangesOrDisappearsDuringCapture(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		mutate   func(string) error
+		wantCode string
+	}{
+		{name: "changed", mutate: func(path string) error { return os.WriteFile(path, []byte("replacement"), 0o600) }, wantCode: mobileproto.ErrorIdentityChanged},
+		{name: "unreadable", mutate: os.Remove, wantCode: mobileproto.ErrorBackend},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var output bytes.Buffer
+			s := testService(&output)
+			path := filepath.Join(t.TempDir(), "config.json")
+			if err := os.WriteFile(path, []byte("config"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			s.ownerConfigGeneration = func(context.Context) (string, error) {
+				data, err := os.ReadFile(path)
+				return string(data), err
+			}
+			target := testTarget()
+			target.wire.OwnerConfigGeneration = "config"
+			latest := testSnapshot("p0  \np1  ", false, 4, 2)
+			a := &attachment{service: s, handle: "attachment", generation: 1, target: target, latest: latest,
+				resetGeneration: 1, outputSequence: 2, firstOutputForReset: 1}
+			s.attachments[a.handle] = a
+			s.historyCapture = func(string, int, int, int) (tty.CaptureRange, error) {
+				if err := tc.mutate(path); err != nil {
+					t.Fatal(err)
+				}
+				return tty.CaptureRange{Output: "p0  \np1  \n", HistorySize: 0, StartLine: 0, EndLine: 2,
+					PaneWidth: 4, PaneHeight: 2, ServerPID: 42, SessionID: "$3", SessionCreated: "1700000000", Session: "mobile", Pane: "%7"}, nil
+			}
+			s.history(context.Background(), mobileproto.Request{RequestID: tc.name, AttachmentHandle: a.handle,
+				LastResetGeneration: 1, LastOutputSequence: 1, Columns: 4, Rows: 2, HistoryRows: 1})
+			responses := decodeResponses(t, &output)
+			if len(responses) != 1 || responses[0].Type != mobileproto.ResponseError || responses[0].Error == nil || responses[0].Error.Code != tc.wantCode {
+				t.Fatalf("config-file fence response = %+v", responses)
+			}
+		})
+	}
+}
+
+func TestHistorySnapshotValidatesRequestedBoundsBeforeCapture(t *testing.T) {
+	for _, rows := range []int{0, mobileproto.MaxHistoryRows + 1} {
+		var output bytes.Buffer
+		s := testService(&output)
+		called := false
+		s.historyCapture = func(string, int, int, int) (tty.CaptureRange, error) { called = true; return tty.CaptureRange{}, nil }
+		s.history(context.Background(), mobileproto.Request{RequestID: "bounds", HistoryRows: rows, Columns: 4, Rows: 2})
+		responses := decodeResponses(t, &output)
+		if called || len(responses) != 1 || responses[0].Error == nil || responses[0].Error.Code != mobileproto.ErrorInvalidRequest {
+			t.Fatalf("history_rows=%d response=%+v called=%t", rows, responses, called)
+		}
+	}
+}
+
+func TestHistorySnapshotReportsBoundedCaptureOverflow(t *testing.T) {
+	var output bytes.Buffer
+	s := testService(&output)
+	s.historyCapture = func(string, int, int, int) (tty.CaptureRange, error) {
+		return tty.CaptureRange{}, tty.ErrCaptureRangeTooLarge
+	}
+	latest := testSnapshot("p0  \np1  ", false, 4, 2)
+	a := &attachment{service: s, handle: "attachment", generation: 1, target: testTarget(), latest: latest,
+		resetGeneration: 1, outputSequence: 2, firstOutputForReset: 1}
+	s.attachments[a.handle] = a
+	s.history(context.Background(), mobileproto.Request{RequestID: "overflow", AttachmentHandle: a.handle,
+		LastResetGeneration: 1, LastOutputSequence: 1, Columns: 4, Rows: 2, HistoryRows: 1})
+	responses := decodeResponses(t, &output)
+	if len(responses) != 1 || responses[0].Error == nil || responses[0].Error.Code != mobileproto.ErrorOverflow || responses[0].Error.Retry {
+		t.Fatalf("history overflow = %+v", responses)
+	}
+}
+
+func TestHistorySnapshotAllowsNewerSameResetFramesDuringCapture(t *testing.T) {
+	var output bytes.Buffer
+	s := testService(&output)
+	latest := testSnapshot("p0  \np1  ", false, 4, 2)
+	a := &attachment{service: s, handle: "attachment", generation: 1, target: testTarget(), latest: latest,
+		resetGeneration: 1, outputSequence: 5, firstOutputForReset: 1}
+	s.attachments[a.handle] = a
+	s.historyCapture = func(string, int, int, int) (tty.CaptureRange, error) {
+		a.mu.Lock()
+		a.outputSequence = 9
+		a.latest.HistorySize = 4
+		a.mu.Unlock()
+		return tty.CaptureRange{Output: "h0  \np0  \np1  \n", HistorySize: 4, StartLine: 3, EndLine: 6,
+			PaneWidth: 4, PaneHeight: 2, ServerPID: 42, SessionID: "$3", SessionCreated: "1700000000", Session: "mobile", Pane: "%7"}, nil
+	}
+	s.history(context.Background(), mobileproto.Request{RequestID: "moving", AttachmentHandle: a.handle,
+		LastResetGeneration: 1, LastOutputSequence: 3, Columns: 4, Rows: 2, HistoryRows: 1})
+	responses := decodeResponses(t, &output)
+	if len(responses) != 1 || responses[0].Type != mobileproto.ResponseHistory || responses[0].OutputSequence != 3 || responses[0].History == nil {
+		t.Fatalf("moving history response = %+v", responses)
+	}
+	if a.outputSequence != 9 || a.resetGeneration != 1 {
+		t.Fatalf("history capture rewound live stream: output=%d reset=%d", a.outputSequence, a.resetGeneration)
+	}
+}
+
+func TestHistoryProtocolFixtureMatchesProducer(t *testing.T) {
+	var output bytes.Buffer
+	s := testService(&output)
+	target := testTarget()
+	target.resolved.Width, target.resolved.Height = 8, 3
+	target.wire = mobileproto.Target{Handle: "target_history", OwnerConfigGeneration: "config-history", Session: "mobile", Pane: "%7"}
+	s.targets = map[string]targetState{target.wire.Handle: target}
+	s.resolve = func(context.Context, string) (ResolvedTarget, error) { return target.resolved, nil }
+	s.configGeneration = "config-history"
+	s.historyCapture = func(string, int, int, int) (tty.CaptureRange, error) {
+		return tty.CaptureRange{Output: "\x1b[41mred     \n\x1b[0mwide界  \ncomb é  \nlive-0  \nlive-1  \nready   \n",
+			HistorySize: 5, StartLine: 2, EndLine: 8, PaneWidth: 8, PaneHeight: 3,
+			ServerPID: 42, SessionID: "$3", SessionCreated: "1700000000", Session: "mobile", Pane: "%7"}, nil
+	}
+	latest := testSnapshot("live-0  \nlive-1  \nready   ", false, 8, 3)
+	latest.HistorySize = 5
+	a := &attachment{service: s, handle: "attachment_history", generation: 2, target: target, latest: latest,
+		resetGeneration: 1, outputSequence: 4, firstOutputForReset: 1}
+	s.attachments[a.handle] = a
+	request := mobileproto.Request{Version: mobileproto.Version, Type: mobileproto.RequestHistory, RequestID: "history-fixture",
+		AttachmentHandle: a.handle, LastResetGeneration: 1, LastOutputSequence: 3, Columns: 8, Rows: 3, HistoryRows: 3}
+	s.history(context.Background(), request)
+	responses := decodeResponses(t, &output)
+	if len(responses) != 1 || responses[0].History == nil {
+		t.Fatalf("fixture response = %+v", responses)
+	}
+	fixture := struct {
+		Schema     string               `json:"schema"`
+		Provenance string               `json:"provenance"`
+		Request    mobileproto.Request  `json:"request"`
+		Response   mobileproto.Response `json:"response"`
+		Expected   struct {
+			HistoryRows       []string `json:"history_rows"`
+			LiveRows          []string `json:"live_rows"`
+			ColoredBlankRow   int      `json:"colored_blank_row"`
+			ColoredBlankStart int      `json:"colored_blank_start"`
+			WideRow           int      `json:"wide_row"`
+			CombiningRow      int      `json:"combining_row"`
+			NoFinalAdvance    bool     `json:"no_final_line_advance"`
+		} `json:"expected"`
+	}{Schema: "sidecar.mobile.history-snapshot.v0", Provenance: "synthetic tmux capture-pane -e -N shaped data; no user session content", Request: request, Response: responses[0]}
+	fixture.Expected.HistoryRows = []string{"red     ", "wide界  ", "comb é  "}
+	fixture.Expected.LiveRows = []string{"live-0  ", "live-1  ", "ready   "}
+	fixture.Expected.ColoredBlankRow = 0
+	fixture.Expected.ColoredBlankStart = 3
+	fixture.Expected.WideRow = 1
+	fixture.Expected.CombiningRow = 2
+	fixture.Expected.NoFinalAdvance = true
+	data, err := json.MarshalIndent(fixture, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = append(data, '\n')
+	path := filepath.Join("..", "..", "testdata", "mobile-protocol", "v0", "history-snapshot.json")
+	if os.Getenv("UPDATE_MOBILE_HISTORY_FIXTURE") == "1" {
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(data, want) {
+		t.Fatal("history protocol fixture differs; regenerate with UPDATE_MOBILE_HISTORY_FIXTURE=1 go test ./internal/mobile -run TestHistoryProtocolFixtureMatchesProducer")
 	}
 }
 

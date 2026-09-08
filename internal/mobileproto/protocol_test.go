@@ -2,7 +2,9 @@ package mobileproto
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"os"
@@ -155,5 +157,48 @@ func TestProductionCatalogCorpusCarriesSafeSelectionsAndSharedQueries(t *testing
 		if !states[state] {
 			t.Fatalf("catalog corpus does not cover attach state %q", state)
 		}
+	}
+}
+
+func TestProductionHistoryCorpusCarriesFrozenAuthoritativeSnapshot(t *testing.T) {
+	path := filepath.Join("..", "..", "testdata", "mobile-protocol", "v0", "history-snapshot.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Schema   string   `json:"schema"`
+		Request  Request  `json:"request"`
+		Response Response `json:"response"`
+		Expected struct {
+			HistoryRows    []string `json:"history_rows"`
+			LiveRows       []string `json:"live_rows"`
+			NoFinalAdvance bool     `json:"no_final_line_advance"`
+		} `json:"expected"`
+	}
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	if fixture.Schema != "sidecar.mobile.history-snapshot.v0" || fixture.Request.Type != RequestHistory || fixture.Response.Type != ResponseHistory {
+		t.Fatalf("history fixture header = %+v", fixture)
+	}
+	if fixture.Request.HistoryRows < 1 || fixture.Request.HistoryRows > MaxHistoryRows || fixture.Response.History == nil || fixture.Response.Geometry == nil {
+		t.Fatalf("history fixture bounds = %+v", fixture)
+	}
+	history := fixture.Response.History
+	if history.HistoryRows != len(fixture.Expected.HistoryRows) || fixture.Response.Geometry.Rows != len(fixture.Expected.LiveRows) ||
+		history.EndLine-history.StartLine != history.HistoryRows || !fixture.Expected.NoFinalAdvance {
+		t.Fatalf("history fixture split = response=%+v expected=%+v", fixture.Response, fixture.Expected)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(history.RenderVTBase64)
+	if err != nil || len(decoded) == 0 || len(decoded) > MaxHistoryBytes || bytes.HasSuffix(decoded, []byte("\r\n")) {
+		t.Fatalf("history fixture payload bytes=%d err=%v", len(decoded), err)
+	}
+	if fixture.Response.OutputSequence != fixture.Request.LastOutputSequence || fixture.Response.ResetGeneration != fixture.Request.LastResetGeneration {
+		t.Fatalf("history fixture checkpoint = request=%+v response=%+v", fixture.Request, fixture.Response)
+	}
+	caps := DefaultCapabilities()
+	if !caps.HistorySnapshots || caps.MaximumHistoryRows != MaxHistoryRows || caps.MaximumHistoryBytes != MaxHistoryBytes {
+		t.Fatalf("history capability = %+v", caps)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,6 +31,46 @@ func TestParseMobileCatalogArgs(t *testing.T) {
 	want := mobileproto.CatalogQuery{Sort: "recent", Search: "sidecar blocked", Hosts: []string{"local:aerie", "remote:studio"}, Providers: []string{"codex"}, States: []string{"working", "ready"}}
 	if code != 0 || stderr.Len() != 0 || !reflect.DeepEqual(query, want) {
 		t.Fatalf("parse = %+v code=%d stderr=%q, want %+v", query, code, stderr.String(), want)
+	}
+}
+
+func TestCurrentMobileConfigGenerationReadsTheConfiguredFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	config.SetTestConfigPath(path)
+	t.Cleanup(config.ResetTestConfigPath)
+	if err := os.WriteFile(path, []byte(`{"projects":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	first, err := currentMobileConfigGeneration(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"projects":[{"name":"changed"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	second, err := currentMobileConfigGeneration(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatalf("config generation did not change: %q", first)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := currentMobileConfigGeneration(context.Background()); err == nil {
+		t.Fatal("missing current config was accepted")
+	}
+}
+
+func TestRunMobileSessionsFailsClosedWithoutCurrentConfigFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing-config.json")
+	config.SetTestConfigPath(path)
+	t.Cleanup(config.ResetTestConfigPath)
+	var stdout, stderr bytes.Buffer
+	code := runMobileSessions(Env{Ctx: context.Background(), Stdout: &stdout, Stderr: &stderr, StateDir: t.TempDir()}, []string{"--json"})
+	if code != 1 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "missing-config.json") {
+		t.Fatalf("missing config result code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
 

@@ -109,6 +109,7 @@ func runMobileServe(env Env, args []string) int {
 	service, err := mobile.New(mobile.Config{
 		Input: env.Stdin, Output: env.Stdout, HubID: host, OwnerHostID: "local:" + host,
 		OwnerConfigGeneration: mobileConfigGeneration(), Resolver: mobileResolver(env), Catalog: mobileCatalogProvider(env),
+		OwnerConfigGenerationProvider: currentMobileConfigGeneration,
 	})
 	if err == nil {
 		err = service.Run(env.Ctx)
@@ -133,9 +134,23 @@ func runMobileSessions(env Env, args []string) int {
 	_ = os.Unsetenv("TMUX")
 	_ = os.Unsetenv("TMUX_PANE")
 	host, _ := os.Hostname()
-	snapshot, err := mobile.QueryCatalog(env.Ctx, mobileCatalogProvider(env), mobileResolver(env), query, mobile.CatalogIdentity{HubID: host, OwnerHostID: "local:" + host, OwnerConfigGeneration: mobileConfigGeneration()})
+	configGeneration, err := currentMobileConfigGeneration(env.Ctx)
 	if err != nil {
 		cliErrln(env.Stderr, err)
+		return 1
+	}
+	snapshot, err := mobile.QueryCatalog(env.Ctx, mobileCatalogProvider(env), mobileResolver(env), query, mobile.CatalogIdentity{HubID: host, OwnerHostID: "local:" + host, OwnerConfigGeneration: configGeneration})
+	if err != nil {
+		cliErrln(env.Stderr, err)
+		return 1
+	}
+	currentGeneration, err := currentMobileConfigGeneration(env.Ctx)
+	if err != nil {
+		cliErrln(env.Stderr, err)
+		return 1
+	}
+	if currentGeneration != configGeneration {
+		cliErrln(env.Stderr, "owner configuration changed during catalog collection")
 		return 1
 	}
 	if err := json.NewEncoder(env.Stdout).Encode(snapshot); err != nil {
@@ -301,10 +316,19 @@ func mobileResolver(env Env) mobile.Resolver {
 }
 
 func mobileConfigGeneration() string {
+	generation, err := currentMobileConfigGeneration(context.Background())
+	if err == nil {
+		return generation
+	}
+	sum := sha256.Sum256([]byte(config.ConfigPath()))
+	return hex.EncodeToString(sum[:16])
+}
+
+func currentMobileConfigGeneration(context.Context) (string, error) {
 	b, err := os.ReadFile(config.ConfigPath())
 	if err != nil {
-		b = []byte(config.ConfigPath())
+		return "", err
 	}
 	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:16])
+	return hex.EncodeToString(sum[:16]), nil
 }

@@ -39,12 +39,16 @@ type ResolveError struct{ Code, Message string }
 func (e *ResolveError) Error() string { return e.Message }
 
 type Resolver func(context.Context, string) (ResolvedTarget, error)
+type HistoryCapturer func(target string, start, end, maxBytes int) (tty.CaptureRange, error)
+type OwnerConfigGenerationProvider func(context.Context) (string, error)
 
 type Config struct {
 	Input                                     io.Reader
 	Output                                    io.Writer
 	Resolver                                  Resolver
 	Catalog                                   CatalogProvider
+	HistoryCapturer                           HistoryCapturer
+	OwnerConfigGenerationProvider             OwnerConfigGenerationProvider
 	HubID, OwnerHostID, OwnerConfigGeneration string
 	Manager                                   *tty.ControlManager
 }
@@ -54,6 +58,8 @@ type Service struct {
 	out                                            *safeEncoder
 	resolve                                        Resolver
 	catalog                                        CatalogProvider
+	historyCapture                                 HistoryCapturer
+	ownerConfigGeneration                          OwnerConfigGenerationProvider
 	manager                                        *tty.ControlManager
 	instance, hubID, ownerHostID, configGeneration string
 	mu                                             sync.Mutex
@@ -143,9 +149,15 @@ func New(config Config) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
+	historyCapture := config.HistoryCapturer
+	if historyCapture == nil {
+		historyCapture = tty.CapturePaneRangeBounded
+	}
 	s := &Service{
 		in: config.Input, out: newSafeEncoder(config.Output), resolve: config.Resolver, catalog: config.Catalog,
-		manager: config.Manager, instance: instance, hubID: config.HubID,
+		historyCapture:        historyCapture,
+		ownerConfigGeneration: config.OwnerConfigGenerationProvider,
+		manager:               config.Manager, instance: instance, hubID: config.HubID,
 		ownerHostID: config.OwnerHostID, configGeneration: config.OwnerConfigGeneration,
 		targets: make(map[string]targetState), attachments: make(map[string]*attachment),
 		seenRequests: make(map[string]struct{}),
@@ -273,6 +285,8 @@ func (s *Service) handle(ctx context.Context, request mobileproto.Request) {
 		s.emit(mobileproto.Response{Version: mobileproto.Version, Type: mobileproto.ResponseStatus, RequestID: request.RequestID, APIInstance: s.instance, Capabilities: &caps})
 	case mobileproto.RequestSessions:
 		s.sessions(ctx, request)
+	case mobileproto.RequestHistory:
+		s.history(ctx, request)
 	case mobileproto.RequestResolve:
 		s.resolveTarget(ctx, request)
 	case mobileproto.RequestOpen:
@@ -308,8 +322,17 @@ func (s *Service) sessions(ctx context.Context, request mobileproto.Request) {
 	if request.CatalogQuery != nil {
 		query = *request.CatalogQuery
 	}
-	snapshot, err := QueryCatalog(ctx, s.catalog, s.resolve, query, CatalogIdentity{HubID: s.hubID, OwnerHostID: s.ownerHostID, OwnerConfigGeneration: s.configGeneration})
+	configGeneration, err := s.currentOwnerConfigGeneration(ctx)
 	if err != nil {
+		s.resolveFailure(request.RequestID, err)
+		return
+	}
+	snapshot, err := QueryCatalog(ctx, s.catalog, s.resolve, query, CatalogIdentity{HubID: s.hubID, OwnerHostID: s.ownerHostID, OwnerConfigGeneration: configGeneration})
+	if err != nil {
+		s.resolveFailure(request.RequestID, err)
+		return
+	}
+	if err := s.requireOwnerConfigGeneration(ctx, configGeneration); err != nil {
 		s.resolveFailure(request.RequestID, err)
 		return
 	}
@@ -319,11 +342,6 @@ func (s *Service) sessions(ctx context.Context, request mobileproto.Request) {
 func (s *Service) resolveTarget(ctx context.Context, request mobileproto.Request) {
 	if request.Target == "" || len(request.Target) > mobileproto.MaxTargetBytes {
 		s.writeError(request.RequestID, mobileproto.ErrorInvalidRequest, "target is required and bounded", false)
-		return
-	}
-	resolved, err := s.resolve(ctx, request.Target)
-	if err != nil {
-		s.resolveFailure(request.RequestID, err)
 		return
 	}
 	s.mu.Lock()
@@ -338,7 +356,11 @@ func (s *Service) resolveTarget(ctx context.Context, request mobileproto.Request
 		s.writeError(request.RequestID, mobileproto.ErrorBackend, err.Error(), true)
 		return
 	}
-	wire := s.wireTarget(handle, resolved)
+	resolved, wire, err := s.resolveWireTarget(ctx, request.Target, handle)
+	if err != nil {
+		s.resolveFailure(request.RequestID, err)
+		return
+	}
 	if request.ExpectedTarget != nil && wire.Identity() != *request.ExpectedTarget {
 		s.writeError(request.RequestID, mobileproto.ErrorIdentityChanged, "managed terminal identity changed after catalog observation", false)
 		return
@@ -349,8 +371,8 @@ func (s *Service) resolveTarget(ctx context.Context, request mobileproto.Request
 	s.emit(mobileproto.Response{Version: mobileproto.Version, Type: mobileproto.ResponseResolved, RequestID: request.RequestID, Target: &wire})
 }
 
-func (s *Service) wireTarget(handle string, resolved ResolvedTarget) mobileproto.Target {
-	identity := targetIdentity(CatalogIdentity{HubID: s.hubID, OwnerHostID: s.ownerHostID, OwnerConfigGeneration: s.configGeneration}, resolved)
+func (s *Service) wireTarget(handle string, resolved ResolvedTarget, configGeneration string) mobileproto.Target {
+	identity := targetIdentity(CatalogIdentity{HubID: s.hubID, OwnerHostID: s.ownerHostID, OwnerConfigGeneration: configGeneration}, resolved)
 	return mobileproto.Target{
 		Handle: handle, HubID: identity.HubID, HubInstance: s.instance, OwnerHostID: identity.OwnerHostID,
 		OwnerConfigGeneration: identity.OwnerConfigGeneration, WorkspaceID: identity.WorkspaceID,
@@ -358,6 +380,49 @@ func (s *Service) wireTarget(handle string, resolved ResolvedTarget) mobileproto
 		ServerIncarnation: identity.ServerIncarnation, TargetGeneration: identity.TargetGeneration,
 		DisplayName: resolved.DisplayName, Geometry: mobileproto.Geometry{Columns: resolved.Width, Rows: resolved.Height},
 	}
+}
+
+func (s *Service) currentOwnerConfigGeneration(ctx context.Context) (string, error) {
+	if s.ownerConfigGeneration == nil {
+		if s.configGeneration == "" {
+			return "", fmt.Errorf("owner configuration generation is unavailable")
+		}
+		return s.configGeneration, nil
+	}
+	generation, err := s.ownerConfigGeneration(ctx)
+	if err != nil {
+		return "", fmt.Errorf("read current owner configuration generation: %w", err)
+	}
+	if generation == "" {
+		return "", fmt.Errorf("current owner configuration generation is empty")
+	}
+	return generation, nil
+}
+
+func (s *Service) requireOwnerConfigGeneration(ctx context.Context, expected string) error {
+	current, err := s.currentOwnerConfigGeneration(ctx)
+	if err != nil {
+		return err
+	}
+	if current != expected {
+		return &ResolveError{Code: mobileproto.ErrorIdentityChanged, Message: "owner configuration changed"}
+	}
+	return nil
+}
+
+func (s *Service) resolveWireTarget(ctx context.Context, selector, handle string) (ResolvedTarget, mobileproto.Target, error) {
+	configGeneration, err := s.currentOwnerConfigGeneration(ctx)
+	if err != nil {
+		return ResolvedTarget{}, mobileproto.Target{}, err
+	}
+	resolved, err := s.resolve(ctx, selector)
+	if err != nil {
+		return ResolvedTarget{}, mobileproto.Target{}, err
+	}
+	if err := s.requireOwnerConfigGeneration(ctx, configGeneration); err != nil {
+		return ResolvedTarget{}, mobileproto.Target{}, err
+	}
+	return resolved, s.wireTarget(handle, resolved, configGeneration), nil
 }
 
 func targetIdentity(identity CatalogIdentity, resolved ResolvedTarget) mobileproto.TargetIdentity {
@@ -378,19 +443,145 @@ func (s *Service) target(handle string) (targetState, bool) {
 }
 
 func (s *Service) revalidate(ctx context.Context, target targetState) error {
+	_, err := s.revalidatedTarget(ctx, target)
+	return err
+}
+
+func (s *Service) revalidatedTarget(ctx context.Context, target targetState) (ResolvedTarget, error) {
+	expectedConfig := target.wire.OwnerConfigGeneration
+	if expectedConfig == "" {
+		expectedConfig = s.configGeneration
+	}
+	if err := s.requireOwnerConfigGeneration(ctx, expectedConfig); err != nil {
+		return ResolvedTarget{}, err
+	}
 	current, err := s.resolve(ctx, target.resolved.Session)
 	if err != nil {
-		return err
+		return ResolvedTarget{}, err
 	}
 	want, got := target.resolved, current
 	if want.WorkspaceID != got.WorkspaceID || want.WorkspaceKind != got.WorkspaceKind || want.ProjectRoot != got.ProjectRoot || want.Session != got.Session ||
 		want.Pane != got.Pane || want.ServerPID != got.ServerPID || want.SessionID != got.SessionID || want.SessionCreated != got.SessionCreated {
-		return &ResolveError{Code: mobileproto.ErrorIdentityChanged, Message: "managed terminal identity changed"}
+		return ResolvedTarget{}, &ResolveError{Code: mobileproto.ErrorIdentityChanged, Message: "managed terminal identity changed"}
 	}
 	if want.DurableSessionCreated == "" || want.DurableSessionCreated != got.DurableSessionCreated {
-		return &ResolveError{Code: mobileproto.ErrorIdentityChanged, Message: "managed terminal identity changed"}
+		return ResolvedTarget{}, &ResolveError{Code: mobileproto.ErrorIdentityChanged, Message: "managed terminal identity changed"}
 	}
-	return nil
+	if err := s.requireOwnerConfigGeneration(ctx, expectedConfig); err != nil {
+		return ResolvedTarget{}, err
+	}
+	return current, nil
+}
+
+func (s *Service) history(ctx context.Context, request mobileproto.Request) {
+	if request.HistoryRows < 1 || request.HistoryRows > mobileproto.MaxHistoryRows {
+		s.writeError(request.RequestID, mobileproto.ErrorInvalidRequest, fmt.Sprintf("history_rows must be 1..%d", mobileproto.MaxHistoryRows), false)
+		return
+	}
+	if request.Columns < 2 || request.Columns > mobileproto.MaxColumns || request.Rows < 1 || request.Rows > mobileproto.MaxRows {
+		s.writeError(request.RequestID, mobileproto.ErrorInvalidRequest, "history geometry is invalid", false)
+		return
+	}
+	a, ok := s.attachment(request.AttachmentHandle)
+	if !ok {
+		s.writeError(request.RequestID, mobileproto.ErrorAttachment, "unknown attachment", false)
+		return
+	}
+	current, err := s.revalidatedTarget(ctx, a.target)
+	if err != nil {
+		s.resolveFailure(request.RequestID, err)
+		return
+	}
+	if current.Width != request.Columns || current.Height != request.Rows {
+		s.writeError(request.RequestID, mobileproto.ErrorOperationOrder, "history geometry does not match the current target", true)
+		return
+	}
+	a.mu.Lock()
+	reset, output, first := a.resetGeneration, a.outputSequence, a.firstOutputForReset
+	latest := a.latest
+	a.mu.Unlock()
+	if request.LastResetGeneration != reset || first == 0 || request.LastOutputSequence < first || request.LastOutputSequence > output {
+		s.writeError(request.RequestID, mobileproto.ErrorOperationOrder, "history checkpoint has not applied an authoritative frame for the current reset", false)
+		return
+	}
+	if latest.PaneWidth != request.Columns || latest.PaneHeight != request.Rows {
+		s.writeError(request.RequestID, mobileproto.ErrorOperationOrder, "history geometry does not match the applied frame", true)
+		return
+	}
+	if latest.AltScreen {
+		s.writeError(request.RequestID, mobileproto.ErrorUnsupported, "normal-buffer history is unavailable while the alternate screen is active", true)
+		return
+	}
+	capture, err := s.historyCapture(a.target.resolved.Pane, -request.HistoryRows, request.Rows-1, mobileproto.MaxHistoryBytes)
+	if err != nil {
+		if errors.Is(err, tty.ErrCaptureRangeTooLarge) {
+			s.writeError(request.RequestID, mobileproto.ErrorOverflow, err.Error(), false)
+			return
+		}
+		s.writeError(request.RequestID, mobileproto.ErrorBackend, err.Error(), true)
+		return
+	}
+	if s.isTerminal() {
+		return
+	}
+	if currentAttachment, attached := s.attachment(a.handle); !attached || currentAttachment != a {
+		s.writeError(request.RequestID, mobileproto.ErrorAttachment, "attachment closed during history capture", false)
+		return
+	}
+	current, err = s.revalidatedTarget(ctx, a.target)
+	if err != nil {
+		s.resolveFailure(request.RequestID, err)
+		return
+	}
+	if current.Width != request.Columns || current.Height != request.Rows {
+		s.writeError(request.RequestID, mobileproto.ErrorOperationOrder, "target geometry changed during history capture", true)
+		return
+	}
+	a.mu.Lock()
+	stable := a.resetGeneration == reset && a.latest.PaneWidth == request.Columns && a.latest.PaneHeight == request.Rows && !a.latest.AltScreen
+	a.mu.Unlock()
+	if !stable {
+		s.writeError(request.RequestID, mobileproto.ErrorOperationOrder, "terminal state changed during history capture", true)
+		return
+	}
+	want := a.target.resolved
+	if capture.Pane != want.Pane || capture.Session != want.Session || capture.ServerPID != want.ServerPID ||
+		capture.SessionID != want.SessionID || capture.SessionCreated != want.SessionCreated {
+		s.writeError(request.RequestID, mobileproto.ErrorIdentityChanged, "history capture target identity changed", false)
+		return
+	}
+	if capture.PaneWidth != request.Columns || capture.PaneHeight != request.Rows || capture.AltScreen {
+		s.writeError(request.RequestID, mobileproto.ErrorOperationOrder, "history capture geometry or screen changed", true)
+		return
+	}
+	totalRows := capture.EndLine - capture.StartLine
+	historyRows := totalRows - capture.PaneHeight
+	if historyRows < 0 || historyRows > request.HistoryRows || capture.StartLine+historyRows != capture.HistorySize {
+		s.writeError(request.RequestID, mobileproto.ErrorBackend, "history capture row bounds are inconsistent", true)
+		return
+	}
+	snapshot := tty.ControlSnapshot{Output: capture.Output, HistorySize: capture.HistorySize, CaptureBase: capture.StartLine,
+		HistoryRows: historyRows, PaneRows: capture.PaneHeight, HasHistory: true, PaneWidth: capture.PaneWidth, PaneHeight: capture.PaneHeight}
+	vt, err := normalizedHistorySnapshot(snapshot)
+	if err != nil {
+		s.writeError(request.RequestID, mobileproto.ErrorBackend, err.Error(), true)
+		return
+	}
+	if len(vt) > mobileproto.MaxHistoryBytes {
+		s.writeError(request.RequestID, mobileproto.ErrorOverflow, "normalized history snapshot exceeds the advertised byte bound", false)
+		return
+	}
+	encoded := base64.StdEncoding.EncodeToString(vt)
+	if len(encoded) > mobileproto.MaxLineBytes-(64<<10) {
+		s.writeError(request.RequestID, mobileproto.ErrorOverflow, "encoded history snapshot exceeds the JSONL line bound", false)
+		return
+	}
+	geometry := mobileproto.Geometry{Columns: capture.PaneWidth, Rows: capture.PaneHeight}
+	snapshotWire := mobileproto.HistorySnapshot{HistorySize: capture.HistorySize, HistoryRows: historyRows,
+		StartLine: capture.StartLine, EndLine: capture.HistorySize, AtOldest: capture.StartLine == 0, RenderVTBase64: encoded}
+	s.emit(mobileproto.Response{Version: mobileproto.Version, Type: mobileproto.ResponseHistory, RequestID: request.RequestID,
+		AttachmentHandle: a.handle, AttachmentGeneration: a.generation, OutputSequence: request.LastOutputSequence,
+		ResetGeneration: reset, Geometry: &geometry, History: &snapshotWire})
 }
 
 func (s *Service) open(ctx context.Context, request mobileproto.Request, reconnect bool) {
@@ -421,17 +612,16 @@ func (s *Service) open(ctx context.Context, request mobileproto.Request, reconne
 			s.writeError(request.RequestID, mobileproto.ErrorOverflow, "too many resolved target handles", true)
 			return
 		}
-		resolved, err := s.resolve(ctx, request.Target)
-		if err != nil {
-			s.resolveFailure(request.RequestID, err)
-			return
-		}
 		targetHandle, err := randomHandle("target")
 		if err != nil {
 			s.writeError(request.RequestID, mobileproto.ErrorBackend, err.Error(), true)
 			return
 		}
-		wire := s.wireTarget(targetHandle, resolved)
+		resolved, wire, err := s.resolveWireTarget(ctx, request.Target, targetHandle)
+		if err != nil {
+			s.resolveFailure(request.RequestID, err)
+			return
+		}
 		if wire.Identity() != *request.ExpectedTarget {
 			s.writeError(request.RequestID, mobileproto.ErrorIdentityChanged, "reconnect target identity changed", false)
 			return
@@ -1026,9 +1216,11 @@ func (a *attachment) publishQueued(observed queuedSnapshot) {
 	first := a.firstOutputForReset
 	a.mu.Unlock()
 	geometry := mobileproto.Geometry{Columns: snapshot.PaneWidth, Rows: snapshot.PaneHeight}
+	historySize := snapshot.HistorySize
 	if err := a.service.out.write(mobileproto.Response{Version: mobileproto.Version, Type: mobileproto.ResponseFrame,
 		AttachmentHandle: a.handle, AttachmentGeneration: a.generation, OutputSequence: sequence,
-		ResetGeneration: reset, FrameKind: "full", Geometry: &geometry, Modes: &modes, RenderVTBase64: encoded}); err == nil && first == 0 {
+		ResetGeneration: reset, FrameKind: "full", Geometry: &geometry, Modes: &modes, RenderVTBase64: encoded,
+		HistorySize: &historySize}); err == nil && first == 0 {
 		a.mu.Lock()
 		if a.resetGeneration == reset && a.firstOutputForReset == 0 {
 			a.firstOutputForReset = sequence

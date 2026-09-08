@@ -16,6 +16,8 @@ const (
 	MaxCatalogFailures   = 128
 	MaxCatalogQueryBytes = 512
 	MaxCatalogFilters    = 32
+	MaxHistoryRows       = 600
+	MaxHistoryBytes      = 4 << 20
 	OutboundQueueDepth   = 8
 	HeartbeatIntervalMS  = 5000
 	PresenceTimeoutMS    = 15000
@@ -25,6 +27,7 @@ const (
 	RequestHello     = "hello"
 	RequestStatus    = "status"
 	RequestSessions  = "sessions"
+	RequestHistory   = "history"
 	RequestResolve   = "resolve"
 	RequestOpen      = "open"
 	RequestControl   = "control"
@@ -40,6 +43,7 @@ const (
 	ResponseHello       = "hello"
 	ResponseStatus      = "status"
 	ResponseSessions    = "sessions"
+	ResponseHistory     = "history"
 	ResponseResolved    = "resolved"
 	ResponseOpened      = "opened"
 	ResponseReconnected = "reconnected"
@@ -91,6 +95,7 @@ type Request struct {
 	PreviousAttachmentGeneration uint64          `json:"previous_attachment_generation,omitempty"`
 	ExpectedTarget               *TargetIdentity `json:"expected_target,omitempty"`
 	CatalogQuery                 *CatalogQuery   `json:"catalog_query,omitempty"`
+	HistoryRows                  int             `json:"history_rows,omitempty"`
 }
 
 // CatalogQuery is a bounded, server-applied Sessions view. The server owns
@@ -197,6 +202,18 @@ type Geometry struct {
 	Rows    int `json:"rows"`
 }
 
+// HistorySnapshot is one immutable, bounded owner capture. RenderVTBase64
+// reconstructs HistoryRows of SwiftTerm scrollback followed by one momentary
+// live grid at Geometry; it is never part of the live frame stream.
+type HistorySnapshot struct {
+	HistorySize    int    `json:"history_size"`
+	HistoryRows    int    `json:"history_rows"`
+	StartLine      int    `json:"start_line"`
+	EndLine        int    `json:"end_line"`
+	AtOldest       bool   `json:"at_oldest"`
+	RenderVTBase64 string `json:"render_vt_base64"`
+}
+
 // Target identifies the exact local managed terminal that a server-side
 // opaque handle names. Clients display these fields but never reconstruct a
 // handle from them.
@@ -239,10 +256,13 @@ type Capabilities struct {
 	Resize               bool `json:"resize"`
 	Reconnect            bool `json:"reconnect"`
 	CatalogSnapshots     bool `json:"catalog_snapshots"`
+	HistorySnapshots     bool `json:"history_snapshots"`
 	MaximumColumns       int  `json:"maximum_columns"`
 	MaximumRows          int  `json:"maximum_rows"`
 	MaximumInputBytes    int  `json:"maximum_input_bytes"`
 	MaximumLineBytes     int  `json:"maximum_line_bytes"`
+	MaximumHistoryRows   int  `json:"maximum_history_rows"`
+	MaximumHistoryBytes  int  `json:"maximum_history_bytes"`
 	HeartbeatIntervalMS  int  `json:"heartbeat_interval_ms"`
 	PresenceTimeoutMS    int  `json:"presence_timeout_ms"`
 }
@@ -262,6 +282,7 @@ type Response struct {
 	APIInstance          string           `json:"api_instance,omitempty"`
 	Target               *Target          `json:"target,omitempty"`
 	Catalog              *CatalogSnapshot `json:"catalog,omitempty"`
+	History              *HistorySnapshot `json:"history,omitempty"`
 	Capabilities         *Capabilities    `json:"capabilities,omitempty"`
 	AttachmentHandle     string           `json:"attachment_handle,omitempty"`
 	AttachmentGeneration uint64           `json:"attachment_generation,omitempty"`
@@ -273,6 +294,7 @@ type Response struct {
 	Geometry             *Geometry        `json:"geometry,omitempty"`
 	Modes                *Modes           `json:"modes,omitempty"`
 	RenderVTBase64       string           `json:"render_vt_base64,omitempty"`
+	HistorySize          *int             `json:"history_size,omitempty"`
 	Reason               string           `json:"reason,omitempty"`
 	Error                *Error           `json:"error,omitempty"`
 }
@@ -285,10 +307,13 @@ func DefaultCapabilities() Capabilities {
 		Resize:               true,
 		Reconnect:            true,
 		CatalogSnapshots:     true,
+		HistorySnapshots:     true,
 		MaximumColumns:       MaxColumns,
 		MaximumRows:          MaxRows,
 		MaximumInputBytes:    MaxInputBytes,
 		MaximumLineBytes:     MaxLineBytes,
+		MaximumHistoryRows:   MaxHistoryRows,
+		MaximumHistoryBytes:  MaxHistoryBytes,
 		HeartbeatIntervalMS:  HeartbeatIntervalMS,
 		PresenceTimeoutMS:    PresenceTimeoutMS,
 	}
