@@ -1,0 +1,196 @@
+{
+  "adversarial_two_owner_journey": {
+    "driver": "scripts/mobile-router-proof.py",
+    "driver_sha256": "28795583c9a4559082b14d2c22252bb3ec50d3cd5c3e5a3b884da96c008d6327",
+    "facts": {
+      "destructive_cleanup_guard": "remote socket inode/server PID/session creation revalidated before kill",
+      "duplicate_pane": "%0",
+      "duplicate_session": "sidecar-sh-project-1",
+      "legacy_owner": "unsupported",
+      "local_fallback": "none; local terminal survived",
+      "newest_output": "ROUTER-OUT-079",
+      "operations_under_output": 30,
+      "post_resize_increasing_frames": 97,
+      "private_identity_guard": "raw owner and public catalog identities matched marked private socket/server/session/pane/durable records before mutation",
+      "public_selectors_distinct": true,
+      "remote_owner_loss": "stream closed and old identity refused",
+      "request_deadline": "one total deadline across interleaved frames",
+      "request_to_correlated_ack_latency_ms": {
+        "maximum": 177.258,
+        "median": 27.161,
+        "p95": 137.537
+      },
+      "retarget_release": "backend refusal and exact owner cleanup",
+      "same_named_local_geometry": "80x24",
+      "selected_remote_geometry": "70x20"
+    },
+    "payload_free_transcript_sha256": "89f40b5b241ebfc122f0a600582cc40785202da28116dc8b487b38add91ec5f5",
+    "result_sha256": "305e50bcdbcb93dd150569cbeaa59a935d2e1c980b49a8ddde523cb773c2f3f7"
+  },
+  "baseline": "f92968a89e59ad3e59ce2f6eecb7071345952499",
+  "component_reviews": [
+    {
+      "manifest_sha256": "c4254408cc6e98e5a080069fb31ba2c4f87f2ab88195e58a7bd884cecde0896d",
+      "name": "public identity mapper and catalog composition"
+    },
+    {
+      "manifest_sha256": "6c015f3e0e7cc61c264f0417d323f30055872a5672d90d6c44f7b8848b0338f8",
+      "name": "owner catalog lookup and retained stream"
+    },
+    {
+      "commit": "38fdef7c7c2a588a07fa680cc8734b93416d0235",
+      "manifest_sha256": "6521d87b0d97ff5c1eb313667462f02f3c702cad72c91e23c72732dd24aa5de8",
+      "name": "protocol forwarding"
+    },
+    {
+      "commit": "705b5ceb68c1d1e9f480b128cf8c2a98009716f2",
+      "manifest_sha256": "f294375f54ac3d5674479bc0946e154a24355b72177575e88562a9df6e03a34a",
+      "name": "registry directory CLI and owner capability"
+    },
+    {
+      "commit": "787260a2ac6e978e147e7968792787c1e7287b8c",
+      "manifest_sha256": "5f024ecad8cdc62ce5b4a4d74cebc9fbd6861fd523c0f46fce8dd3a5a6b82645",
+      "name": "selected cold owner readiness"
+    },
+    {
+      "commit": "45bc0fdb4bca44e4c9e0dfe33bd66c375e042a71",
+      "manifest_sha256": "7726eb088897fd6bedf4ecd027d9d25e849d977b4ebbddf78dfb3e724c5cc52d",
+      "name": "host list feature-state parity",
+      "review_sha256": "26e4daea18e3c8beb96635555841a0c103906c83ae61d4814b6f07151b385f51",
+      "task": "td-c512a1"
+    }
+  ],
+  "desktop_catalog_parity": {
+    "actual_desktop_sessions": true,
+    "all_states_row_parity_claimed": false,
+    "cli_catalog_sha256": "b58f2c894fd8b8491c512edab7c38242ceaed7e4affe90c1721e935d67db3391",
+    "cli_hosts": [
+      [
+        "local:aerie",
+        "online"
+      ],
+      [
+        "remote-desktop",
+        "online"
+      ]
+    ],
+    "cli_live_shell_rows": 2,
+    "cli_row_order": [
+      "local:aerie",
+      "remote-desktop"
+    ],
+    "cli_total": 4,
+    "comparison_scope": "live shell subset; the unfiltered CLI snapshot also contains two no-session worktree rows not displayed in this desktop screenshot",
+    "desktop_ansi_sha256": "53ddda36334a987258d39b80352577387db8906f6c280851a8e22b4108111456",
+    "desktop_live_shell_rows": 2,
+    "desktop_preview": "read-only; no output captured",
+    "desktop_remote_host_label_visible": true,
+    "desktop_row_order": [
+      "local:aerie",
+      "remote-desktop"
+    ],
+    "desktop_screen_sha256": "26bee6e230f6e0a3974d8e4d23d43a6b2059208f43fd63049b35001b37f6b9b6",
+    "geometry_unchanged": true,
+    "leases_empty_before_during_after": true,
+    "local_binary_sha256": "7d522e53f2c058eb2a4a14279aff5d5af6036942f15d31e3373a293c5181d66b",
+    "local_config_sha256": "1d2fcb6b9785a9253b556e4400678bddecd44ebb7867a5d59252fceb9151ecf2",
+    "no_terminal_input_or_control_requested": true,
+    "owned_private_servers_stopped": true,
+    "private_identity_after": [
+      "50365|1788866978|sidecar-sh-project-1|%0|80x24|",
+      "70394|1788866980|sidecar-sh-project-1|%0|80x24|"
+    ],
+    "private_identity_before": [
+      "50365|1788866978|sidecar-sh-project-1|%0|80x24|",
+      "70394|1788866980|sidecar-sh-project-1|%0|80x24|"
+    ],
+    "private_identity_during": [
+      "50365|1788866978|sidecar-sh-project-1|%0|80x24|",
+      "70394|1788866980|sidecar-sh-project-1|%0|80x24|"
+    ],
+    "remote_binary_sha256": "cdff90a0105f21f2d0ca1072d69869fc43981c49f291cecf1bacaac69b3e5867",
+    "remote_config_sha256": "7f4a4724f941cc1dfb1f9c7f4b35b9384b5d9d2c0bcab6dc4886253596c2b1c8",
+    "result_sha256": "6acd8f17c032da470f05a2dfd6a9a0324e002619f9e305951c14202769742e7c",
+    "schema": "sidecar.mobile.router-desktop-parity-proof.v0",
+    "sort": "activity",
+    "source_commit": "ba78d35cf836f87f772223f254acda5fae95da20"
+  },
+  "go_gates": {
+    "final_go_gate_manifest_sha256": "d31b0a3b0e091ca75f3aa71296d2a721016ebd11cc14feeb1b8319f00225dd7d",
+    "integrated_affected_packages_log_sha256": "f0a9a872c5d0b1b6a743ce99fa9582626abd770db86a741e0a38cb43a4d8b411",
+    "result": "full go test passed; pinned Linux lint reported zero issues; formatting check passed"
+  },
+  "integrated_commit": "ba78d35cf836f87f772223f254acda5fae95da20",
+  "native_routed_journey": {
+    "evidence_manifest": "/Users/marcus/code/sidecar-mobile/artifacts/native-routed-candidate-evidence-v1.json",
+    "evidence_manifest_sha256": "7b5d75d845e8f1d9245f779d6afa199571a31ee13f17390235fb5ba747e02680",
+    "facts": [
+      "exact MarcusBook candidate",
+      "12 input acknowledgments",
+      "5 heartbeats",
+      "frames 1 through 18 contiguous",
+      "two history requests across portrait resize",
+      "APP-OK visible",
+      "release acknowledged",
+      "fresh app catalog reuse"
+    ],
+    "native_commit": "718c53d8ebdf75f1fe99fa403759a5a75ac7e16e",
+    "native_review_note_sha256": "74ea9b8b7ff04b38e72708050d783ea746f10232c36d83e3574667e630846e99",
+    "payload_free_metadata": "native-routed-candidate-live-ui-v1-metadata.jsonl",
+    "payload_free_metadata_sha256": "c1e73d7b43e4d076f0203ac7592d44962ae5d6012245fdb64d57bec30563f144"
+  },
+  "normal_owner_deployment": {
+    "bundle_sha256": "2b5f0559f4f546076055943801ef291ac6c972b5685c16ca5917994dea7242d9",
+    "cold_catalog_behavior": "first fresh-process catalog returned 64 local rows with remote connecting; native-budget refresh returned 92 rows and two online hosts",
+    "deployment_root": "/private/tmp/sidecar-mobile-m1-deploy-ba78d35c",
+    "focused_tests_sha256": "8dd7e78e61bfd7ae70a156072a846bec905c8380c06f63caf064038cc07b3513",
+    "host_hello_sha256": "cfcb1d39a62901ced98052bfa307079d5f44594f5525decebb1c3b0e8e7a7ec0",
+    "install_receipt_sha256": "84f8e7a3a8786b0a8b2c58b12fa427e3b5e4fdd51df0caccbc807406fa8dab64",
+    "installed_artifact_sha256": "cdff90a0105f21f2d0ca1072d69869fc43981c49f291cecf1bacaac69b3e5867",
+    "normal_hub_facts": {
+      "failures": 0,
+      "hosts": 2,
+      "online_hosts": 2,
+      "ready_rows": 17,
+      "remote_ready_rows": 1,
+      "remote_rows": 28,
+      "rows": 92
+    },
+    "normal_hub_summary_sha256": "1a3a6dad9cf8c7734208fb1a7adc238135c97c6e8396beb538411f8d5e140add",
+    "normal_remote_view": {
+      "control": false,
+      "hello_seconds": 0.174,
+      "open_seconds": 0.954,
+      "payload_stored": false,
+      "requests": [
+        "hello",
+        "resolve",
+        "open"
+      ],
+      "resolve_seconds": 2.98,
+      "result_sha256": "4d657effd0e082ed0439ad12c5023f4c2d7810b3754380a2db15b6e9eaedaecd",
+      "same_process_cadence_sha256": "4a5534825fccce422fd7064923567d70c74fe849db180515fe26e2a0019107a5",
+      "source_geometry_unchanged": true
+    },
+    "owner_hello_sha256": "b61fb02d861e5613f00af09accad02e7350766fcda511bce3bcef895f3f3c7d0",
+    "previous_artifact_sha256": "b987609edce6569b5694bc171480de47e96bc64058c39f06a174afe917b6a97a",
+    "rollback_artifact_sha256": "b987609edce6569b5694bc171480de47e96bc64058c39f06a174afe917b6a97a",
+    "source_commit": "ba78d35cf836f87f772223f254acda5fae95da20",
+    "source_worktree": "/Users/marcusvorwaller/.codex/worktrees/mobile-owner-ba78/sidecar"
+  },
+  "private_two_machine_journey": {
+    "binary_sha256": "f211b839180d9db5eae88982258f10ea3a7a227eec591d3e0bd0e19f693d94ea",
+    "facts": [
+      "exact remote candidate selected",
+      "control input heartbeat and output passed",
+      "phone EOF released exact lease",
+      "fresh hub process reconnected at attachment generation 2",
+      "one input request and no replay"
+    ],
+    "payload_free_transcript_sha256": "f8fa23c8995eb42ca277f77e757ccca92f003c3a14189db107d0c9f18fb969a6",
+    "result_sha256": "743095f3eea45fce617b0037cc7e30f11d1b31abb06f219a5706ca9dec120d97"
+  },
+  "remaining_limit": "The cold first catalog may return local rows with a remote owner explicitly connecting; refresh within the native request budget promotes a healthy owner. The proof does not claim immediate cold two-host availability or use personal terminal content.",
+  "schema": "sidecar.mobile.router-a2-evidence.v0",
+  "task": "td-762c04"
+}
