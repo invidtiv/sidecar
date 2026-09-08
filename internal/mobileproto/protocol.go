@@ -16,6 +16,8 @@ const (
 	MaxCatalogFailures   = 128
 	MaxCatalogQueryBytes = 512
 	MaxCatalogFilters    = 32
+	MaxCandidatesPerRow  = 16
+	MaxCatalogCandidates = 2048
 	MaxHistoryRows       = 600
 	MaxHistoryBytes      = 4 << 20
 	OutboundQueueDepth   = 8
@@ -118,34 +120,50 @@ type CatalogHost struct {
 }
 
 type CatalogRow struct {
-	ID                  string          `json:"id"`
-	OwnerHostID         string          `json:"owner_host_id"`
-	ProjectID           string          `json:"project_id"`
-	ProjectName         string          `json:"project_name"`
-	WorkspaceID         string          `json:"workspace_id,omitempty"`
-	WorkspaceKind       string          `json:"workspace_kind"`
-	DisplayName         string          `json:"display_name"`
-	Branch              string          `json:"branch,omitempty"`
-	Task                string          `json:"task,omitempty"`
-	Provider            string          `json:"provider,omitempty"`
-	Status              string          `json:"status"`
-	Group               string          `json:"group"`
-	Session             string          `json:"session,omitempty"`
-	Pane                string          `json:"pane,omitempty"`
-	Target              string          `json:"target,omitempty"`
-	CandidateGeneration string          `json:"candidate_generation,omitempty"`
-	ExpectedTarget      *TargetIdentity `json:"expected_target,omitempty"`
-	AttachState         string          `json:"attach_state"`
-	RefusalCode         string          `json:"refusal_code,omitempty"`
-	Refusal             string          `json:"refusal,omitempty"`
-	ObservedAt          string          `json:"observed_at"`
-	ChangedAt           string          `json:"changed_at,omitempty"`
-	Live                bool            `json:"live"`
-	Ambiguous           bool            `json:"ambiguous"`
-	Stale               bool            `json:"stale"`
-	SemanticStatus      bool            `json:"semantic_status"`
-	Attention           bool            `json:"attention"`
-	AttachmentReady     bool            `json:"attachment_ready"`
+	ID                  string             `json:"id"`
+	OwnerHostID         string             `json:"owner_host_id"`
+	ProjectID           string             `json:"project_id"`
+	ProjectName         string             `json:"project_name"`
+	WorkspaceID         string             `json:"workspace_id,omitempty"`
+	WorkspaceKind       string             `json:"workspace_kind"`
+	DisplayName         string             `json:"display_name"`
+	Branch              string             `json:"branch,omitempty"`
+	Task                string             `json:"task,omitempty"`
+	Provider            string             `json:"provider,omitempty"`
+	Status              string             `json:"status"`
+	Group               string             `json:"group"`
+	Session             string             `json:"session,omitempty"`
+	Pane                string             `json:"pane,omitempty"`
+	Target              string             `json:"target,omitempty"`
+	CandidateGeneration string             `json:"candidate_generation,omitempty"`
+	Candidates          []CatalogCandidate `json:"candidates,omitempty"`
+	ExpectedTarget      *TargetIdentity    `json:"expected_target,omitempty"`
+	AttachState         string             `json:"attach_state"`
+	RefusalCode         string             `json:"refusal_code,omitempty"`
+	Refusal             string             `json:"refusal,omitempty"`
+	ObservedAt          string             `json:"observed_at"`
+	ChangedAt           string             `json:"changed_at,omitempty"`
+	Live                bool               `json:"live"`
+	Ambiguous           bool               `json:"ambiguous"`
+	Stale               bool               `json:"stale"`
+	SemanticStatus      bool               `json:"semantic_status"`
+	Attention           bool               `json:"attention"`
+	AttachmentReady     bool               `json:"attachment_ready"`
+}
+
+// CatalogCandidate is one server-owned exact terminal choice for a catalog
+// row. Selector is opaque to clients and can be echoed only with the paired
+// ExpectedTarget. It remains deterministic across API processes while the
+// complete source candidate set and selected terminal identity are unchanged.
+type CatalogCandidate struct {
+	Selector       string         `json:"selector"`
+	DisplayName    string         `json:"display_name"`
+	OwnerHostID    string         `json:"owner_host_id"`
+	WorkspaceID    string         `json:"workspace_id"`
+	WorkspaceKind  string         `json:"workspace_kind"`
+	Session        string         `json:"session"`
+	Pane           string         `json:"pane"`
+	ExpectedTarget TargetIdentity `json:"expected_target"`
 }
 
 type CatalogSection struct {

@@ -1,0 +1,440 @@
+{
+  "schema": "sidecar.mobile.terminal-candidates.v0",
+  "provenance": "synthetic server-owned candidate authority; no user terminal content",
+  "limits": {
+    "per_row": 16,
+    "per_catalog": 2048,
+    "serialized_catalog_bytes": 8388608
+  },
+  "cases": [
+    {
+      "id": "zero",
+      "selections": [],
+      "catalog": {
+        "generation": "catalog-zero",
+        "observed_at": "2026-09-08T12:00:00Z",
+        "hub_id": "aerie",
+        "owner_host_id": "local:aerie",
+        "owner_config_generation": "config-aerie-9",
+        "query": {
+          "sort": "activity"
+        },
+        "hosts": [
+          {
+            "id": "local:aerie",
+            "name": "aerie",
+            "state": "online",
+            "local": true
+          },
+          {
+            "id": "remote:book",
+            "name": "book",
+            "state": "online"
+          }
+        ],
+        "sections": [
+          {
+            "title": "Idle",
+            "group": "Idle",
+            "rows": [
+              {
+                "id": "remote-book/worktree-zero",
+                "owner_host_id": "remote:book",
+                "project_id": "project-demo",
+                "project_name": "Demo",
+                "workspace_id": "workspace-zero",
+                "workspace_kind": "worktree",
+                "display_name": "No terminal",
+                "branch": "feature/mobile",
+                "status": "idle",
+                "group": "Idle",
+                "attach_state": "unavailable",
+                "observed_at": "2026-09-08T12:00:00Z",
+                "changed_at": "2026-09-08T11:00:00Z",
+                "live": false,
+                "ambiguous": false,
+                "stale": false,
+                "semantic_status": false,
+                "attention": false,
+                "attachment_ready": false,
+                "refusal_code": "target_not_found",
+                "refusal": "workspace has no live terminal pane"
+              }
+            ]
+          }
+        ],
+        "failures": [],
+        "total": 1
+      }
+    },
+    {
+      "id": "one",
+      "selections": [
+        {
+          "version": 0,
+          "type": "resolve",
+          "request_id": "resolve-one",
+          "target": "candidate_v0_7f2cbe8a4b0d",
+          "expected_target": {
+            "hub_id": "aerie",
+            "owner_host_id": "remote:book",
+            "owner_config_generation": "config-book-7",
+            "workspace_id": "workspace-one",
+            "workspace_kind": "worktree",
+            "session": "sidecar-ws-one",
+            "pane": "%3",
+            "server_incarnation": "pid=4200",
+            "target_generation": "target-one"
+          }
+        }
+      ],
+      "catalog": {
+        "generation": "catalog-one",
+        "observed_at": "2026-09-08T12:00:00Z",
+        "hub_id": "aerie",
+        "owner_host_id": "local:aerie",
+        "owner_config_generation": "config-aerie-9",
+        "query": {
+          "sort": "activity"
+        },
+        "hosts": [
+          {
+            "id": "local:aerie",
+            "name": "aerie",
+            "state": "online",
+            "local": true
+          },
+          {
+            "id": "remote:book",
+            "name": "book",
+            "state": "online"
+          }
+        ],
+        "sections": [
+          {
+            "title": "Idle",
+            "group": "Idle",
+            "rows": [
+              {
+                "id": "remote-book/worktree-one",
+                "owner_host_id": "remote:book",
+                "project_id": "project-demo",
+                "project_name": "Demo",
+                "workspace_id": "workspace-one",
+                "workspace_kind": "worktree",
+                "display_name": "One terminal",
+                "branch": "feature/mobile",
+                "status": "idle",
+                "group": "Idle",
+                "attach_state": "ready",
+                "observed_at": "2026-09-08T12:00:00Z",
+                "changed_at": "2026-09-08T11:00:00Z",
+                "live": true,
+                "ambiguous": false,
+                "stale": false,
+                "semantic_status": false,
+                "attention": false,
+                "attachment_ready": true,
+                "session": "sidecar-ws-one",
+                "pane": "%3",
+                "target": "candidate_v0_7f2cbe8a4b0d",
+                "candidate_generation": "set-one-41",
+                "candidates": [
+                  {
+                    "selector": "candidate_v0_7f2cbe8a4b0d",
+                    "display_name": "Terminal",
+                    "owner_host_id": "remote:book",
+                    "workspace_id": "workspace-one",
+                    "workspace_kind": "worktree",
+                    "session": "sidecar-ws-one",
+                    "pane": "%3",
+                    "expected_target": {
+                      "hub_id": "aerie",
+                      "owner_host_id": "remote:book",
+                      "owner_config_generation": "config-book-7",
+                      "workspace_id": "workspace-one",
+                      "workspace_kind": "worktree",
+                      "session": "sidecar-ws-one",
+                      "pane": "%3",
+                      "server_incarnation": "pid=4200",
+                      "target_generation": "target-one"
+                    }
+                  }
+                ],
+                "expected_target": {
+                  "hub_id": "aerie",
+                  "owner_host_id": "remote:book",
+                  "owner_config_generation": "config-book-7",
+                  "workspace_id": "workspace-one",
+                  "workspace_kind": "worktree",
+                  "session": "sidecar-ws-one",
+                  "pane": "%3",
+                  "server_incarnation": "pid=4200",
+                  "target_generation": "target-one"
+                }
+              }
+            ]
+          }
+        ],
+        "failures": [],
+        "total": 1
+      }
+    },
+    {
+      "id": "many",
+      "selections": [
+        {
+          "version": 0,
+          "type": "resolve",
+          "request_id": "resolve-many-a",
+          "target": "candidate_v0_dfe360aebc11",
+          "expected_target": {
+            "hub_id": "aerie",
+            "owner_host_id": "remote:book",
+            "owner_config_generation": "config-book-7",
+            "workspace_id": "workspace-many",
+            "workspace_kind": "worktree",
+            "session": "sidecar-ws-many",
+            "pane": "%4",
+            "server_incarnation": "pid=4200",
+            "target_generation": "target-many-a"
+          }
+        },
+        {
+          "version": 0,
+          "type": "resolve",
+          "request_id": "resolve-many-b",
+          "target": "candidate_v0_f5509af91931",
+          "expected_target": {
+            "hub_id": "aerie",
+            "owner_host_id": "remote:book",
+            "owner_config_generation": "config-book-7",
+            "workspace_id": "workspace-many",
+            "workspace_kind": "worktree",
+            "session": "sidecar-ws-many",
+            "pane": "%5",
+            "server_incarnation": "pid=4200",
+            "target_generation": "target-many-b"
+          }
+        }
+      ],
+      "catalog": {
+        "generation": "catalog-many",
+        "observed_at": "2026-09-08T12:00:00Z",
+        "hub_id": "aerie",
+        "owner_host_id": "local:aerie",
+        "owner_config_generation": "config-aerie-9",
+        "query": {
+          "sort": "activity"
+        },
+        "hosts": [
+          {
+            "id": "local:aerie",
+            "name": "aerie",
+            "state": "online",
+            "local": true
+          },
+          {
+            "id": "remote:book",
+            "name": "book",
+            "state": "online"
+          }
+        ],
+        "sections": [
+          {
+            "title": "Idle",
+            "group": "Idle",
+            "rows": [
+              {
+                "id": "remote-book/worktree-many",
+                "owner_host_id": "remote:book",
+                "project_id": "project-demo",
+                "project_name": "Demo",
+                "workspace_id": "workspace-many",
+                "workspace_kind": "worktree",
+                "display_name": "Several terminals",
+                "branch": "feature/mobile",
+                "status": "idle",
+                "group": "Idle",
+                "attach_state": "ambiguous",
+                "observed_at": "2026-09-08T12:00:00Z",
+                "changed_at": "2026-09-08T11:00:00Z",
+                "live": true,
+                "ambiguous": true,
+                "stale": false,
+                "semantic_status": false,
+                "attention": false,
+                "attachment_ready": false,
+                "refusal_code": "target_ambiguous",
+                "refusal": "choose one of 2 terminal panes",
+                "session": "sidecar-ws-many",
+                "candidate_generation": "set-many-9c",
+                "candidates": [
+                  {
+                    "selector": "candidate_v0_dfe360aebc11",
+                    "display_name": "Agent pane",
+                    "owner_host_id": "remote:book",
+                    "workspace_id": "workspace-many",
+                    "workspace_kind": "worktree",
+                    "session": "sidecar-ws-many",
+                    "pane": "%4",
+                    "expected_target": {
+                      "hub_id": "aerie",
+                      "owner_host_id": "remote:book",
+                      "owner_config_generation": "config-book-7",
+                      "workspace_id": "workspace-many",
+                      "workspace_kind": "worktree",
+                      "session": "sidecar-ws-many",
+                      "pane": "%4",
+                      "server_incarnation": "pid=4200",
+                      "target_generation": "target-many-a"
+                    }
+                  },
+                  {
+                    "selector": "candidate_v0_f5509af91931",
+                    "display_name": "Shell pane",
+                    "owner_host_id": "remote:book",
+                    "workspace_id": "workspace-many",
+                    "workspace_kind": "worktree",
+                    "session": "sidecar-ws-many",
+                    "pane": "%5",
+                    "expected_target": {
+                      "hub_id": "aerie",
+                      "owner_host_id": "remote:book",
+                      "owner_config_generation": "config-book-7",
+                      "workspace_id": "workspace-many",
+                      "workspace_kind": "worktree",
+                      "session": "sidecar-ws-many",
+                      "pane": "%5",
+                      "server_incarnation": "pid=4200",
+                      "target_generation": "target-many-b"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "failures": [],
+        "total": 1
+      }
+    },
+    {
+      "id": "stale-selection",
+      "selections": [
+        {
+          "version": 0,
+          "type": "resolve",
+          "request_id": "resolve-stale",
+          "target": "candidate_v0_old63fd",
+          "expected_target": {
+            "hub_id": "aerie",
+            "owner_host_id": "remote:book",
+            "owner_config_generation": "config-book-7",
+            "workspace_id": "workspace-stale",
+            "workspace_kind": "worktree",
+            "session": "sidecar-ws-stale",
+            "pane": "%7",
+            "server_incarnation": "pid=4200",
+            "target_generation": "target-old"
+          }
+        }
+      ],
+      "error": {
+        "code": "identity_changed",
+        "message": "terminal candidate set changed"
+      },
+      "catalog": {
+        "generation": "catalog-stale-selection",
+        "observed_at": "2026-09-08T12:00:00Z",
+        "hub_id": "aerie",
+        "owner_host_id": "local:aerie",
+        "owner_config_generation": "config-aerie-9",
+        "query": {
+          "sort": "activity"
+        },
+        "hosts": [
+          {
+            "id": "local:aerie",
+            "name": "aerie",
+            "state": "online",
+            "local": true
+          },
+          {
+            "id": "remote:book",
+            "name": "book",
+            "state": "online"
+          }
+        ],
+        "sections": [
+          {
+            "title": "Idle",
+            "group": "Idle",
+            "rows": [
+              {
+                "id": "remote-book/worktree-stale",
+                "owner_host_id": "remote:book",
+                "project_id": "project-demo",
+                "project_name": "Demo",
+                "workspace_id": "workspace-stale",
+                "workspace_kind": "worktree",
+                "display_name": "Changed candidates",
+                "branch": "feature/mobile",
+                "status": "idle",
+                "group": "Idle",
+                "attach_state": "ready",
+                "observed_at": "2026-09-08T12:00:00Z",
+                "changed_at": "2026-09-08T11:00:00Z",
+                "live": true,
+                "ambiguous": false,
+                "stale": false,
+                "semantic_status": false,
+                "attention": false,
+                "attachment_ready": true,
+                "session": "sidecar-ws-stale",
+                "pane": "%8",
+                "target": "candidate_v0_current7c81",
+                "candidate_generation": "set-current",
+                "candidates": [
+                  {
+                    "selector": "candidate_v0_current7c81",
+                    "display_name": "Current pane",
+                    "owner_host_id": "remote:book",
+                    "workspace_id": "workspace-stale",
+                    "workspace_kind": "worktree",
+                    "session": "sidecar-ws-stale",
+                    "pane": "%8",
+                    "expected_target": {
+                      "hub_id": "aerie",
+                      "owner_host_id": "remote:book",
+                      "owner_config_generation": "config-book-7",
+                      "workspace_id": "workspace-stale",
+                      "workspace_kind": "worktree",
+                      "session": "sidecar-ws-stale",
+                      "pane": "%8",
+                      "server_incarnation": "pid=4200",
+                      "target_generation": "target-current"
+                    }
+                  }
+                ],
+                "expected_target": {
+                  "hub_id": "aerie",
+                  "owner_host_id": "remote:book",
+                  "owner_config_generation": "config-book-7",
+                  "workspace_id": "workspace-stale",
+                  "workspace_kind": "worktree",
+                  "session": "sidecar-ws-stale",
+                  "pane": "%8",
+                  "server_incarnation": "pid=4200",
+                  "target_generation": "target-current"
+                }
+              }
+            ]
+          }
+        ],
+        "failures": [],
+        "total": 1
+      }
+    }
+  ]
+}
