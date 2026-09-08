@@ -51,6 +51,10 @@ type OwnerDirectory interface {
 	Snapshot(context.Context) (DirectorySnapshot, error)
 }
 
+type ownerReadiness interface {
+	WaitOwner(context.Context, string, time.Duration) error
+}
+
 type CatalogRouter struct {
 	directory    OwnerDirectory
 	ownerTimeout time.Duration
@@ -161,14 +165,26 @@ func (r *CatalogRouter) Lookup(ctx context.Context, selector string, expected mo
 	if expected.HubID != directory.Identity.HubID {
 		return BoundOwner{}, nil, TargetBinding{}, fmt.Errorf("mobile hub: public target belongs to another hub")
 	}
-	var endpoint *OwnerEndpoint
-	for i := range directory.Endpoints {
-		if directory.Endpoints[i].Host.ID == expected.OwnerHostID {
-			endpoint = &directory.Endpoints[i]
-			break
+	endpoint := findOnlineOwner(directory, expected.OwnerHostID)
+	if endpoint == nil && directoryHostState(directory, expected.OwnerHostID) == "connecting" {
+		if readiness, ok := r.directory.(ownerReadiness); ok {
+			if err := readiness.WaitOwner(lookupCtx, expected.OwnerHostID, r.ownerTimeout); err != nil {
+				return BoundOwner{}, nil, TargetBinding{}, err
+			}
+			directory, err = r.directory.Snapshot(lookupCtx)
+			if err != nil {
+				return BoundOwner{}, nil, TargetBinding{}, err
+			}
+			if err := validateDirectorySnapshot(directory); err != nil {
+				return BoundOwner{}, nil, TargetBinding{}, err
+			}
+			if expected.HubID != directory.Identity.HubID {
+				return BoundOwner{}, nil, TargetBinding{}, fmt.Errorf("mobile hub: public target belongs to another hub")
+			}
+			endpoint = findOnlineOwner(directory, expected.OwnerHostID)
 		}
 	}
-	if endpoint == nil || strings.ToLower(endpoint.Host.State) != "online" {
+	if endpoint == nil {
 		return BoundOwner{}, nil, TargetBinding{}, fmt.Errorf("mobile hub: owning host is unavailable")
 	}
 	ownerCtx, cancelOwner := catalogOwnerContext(lookupCtx, r.ownerTimeout, r.finalReserve)
@@ -211,6 +227,24 @@ func (r *CatalogRouter) Lookup(ctx context.Context, selector string, expected mo
 		return directoryValidate(validateCtx)
 	}
 	return owner, stream, binding, nil
+}
+
+func findOnlineOwner(directory DirectorySnapshot, hostID string) *OwnerEndpoint {
+	for i := range directory.Endpoints {
+		if directory.Endpoints[i].Host.ID == hostID && strings.EqualFold(directory.Endpoints[i].Host.State, "online") {
+			return &directory.Endpoints[i]
+		}
+	}
+	return nil
+}
+
+func directoryHostState(directory DirectorySnapshot, hostID string) string {
+	for _, host := range directory.Hosts {
+		if host.ID == hostID {
+			return strings.ToLower(host.State)
+		}
+	}
+	return ""
 }
 
 func queryBoundOwner(operationCtx, streamCtx context.Context, hubIdentity mobile.CatalogIdentity, owner *BoundOwner, requestID string) (RemappedCatalog, LineStream, error) {

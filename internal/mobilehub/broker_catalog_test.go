@@ -20,6 +20,14 @@ type fakeOwnerDirectory struct {
 	snapshot DirectorySnapshot
 	err      error
 	delay    time.Duration
+	wait     func(context.Context, string, time.Duration) error
+}
+
+func (d *fakeOwnerDirectory) WaitOwner(ctx context.Context, hostID string, maximum time.Duration) error {
+	if d.wait == nil {
+		return nil
+	}
+	return d.wait(ctx, hostID, maximum)
 }
 
 func (d *fakeOwnerDirectory) Snapshot(ctx context.Context) (DirectorySnapshot, error) {
@@ -148,6 +156,99 @@ func TestCatalogRouterLookupReconstructsAcrossFreshHubProcesses(t *testing.T) {
 	}
 	if !owner.Capabilities.CatalogSnapshots || owner.Capabilities.HeartbeatIntervalMS == 0 || owner.Capabilities.PresenceTimeoutMS == 0 {
 		t.Fatalf("lookup discarded negotiated owner capabilities: %+v", owner.Capabilities)
+	}
+}
+
+func TestCatalogRouterLookupWaitsForOnlyTheSelectedColdOwner(t *testing.T) {
+	raw := rawOwnerCatalog("remote-owner", "repo", "owner-selector")
+	ready := newFakeRouterDirectory(newFakeCatalogLineStream(rawOwnerCatalog("local-owner", "local", "local")), newFakeCatalogLineStream(raw))
+	router, _ := NewCatalogRouter(ready)
+	full, err := router.Query(context.Background(), mobileproto.CatalogQuery{Sort: "project", Hosts: []string{"book"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := full.Sections[0].Rows[0]
+
+	remoteStream := newFakeCatalogLineStream(raw)
+	cold := newFakeRouterDirectory(newFakeCatalogLineStream(rawOwnerCatalog("local-owner", "local", "local")), remoteStream)
+	remoteEndpoint := cold.snapshot.Endpoints[1]
+	cold.snapshot.Endpoints = cold.snapshot.Endpoints[:1]
+	cold.snapshot.Hosts[1].State = "connecting"
+	waited := ""
+	cold.wait = func(_ context.Context, hostID string, maximum time.Duration) error {
+		waited = hostID
+		if maximum <= 0 {
+			t.Fatal("lookup supplied no readiness budget")
+		}
+		cold.mu.Lock()
+		cold.snapshot.Hosts[1].State = "online"
+		cold.snapshot.Endpoints = append(cold.snapshot.Endpoints, remoteEndpoint)
+		cold.mu.Unlock()
+		return nil
+	}
+	fresh, _ := NewCatalogRouter(cold)
+	owner, stream, binding, err := fresh.Lookup(context.Background(), row.Target, *row.ExpectedTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	if waited != "book" || owner.Authority.OwnerHostID != "book" || binding.PublicExpected != *row.ExpectedTarget {
+		t.Fatalf("waited=%q owner=%+v binding=%+v", waited, owner.Authority, binding)
+	}
+}
+
+func TestCatalogRouterLookupBoundsSelectedOwnerReadiness(t *testing.T) {
+	directory := &fakeOwnerDirectory{snapshot: DirectorySnapshot{
+		Identity:  mobile.CatalogIdentity{HubID: "hub", OwnerHostID: "local:hub", OwnerConfigGeneration: "hub-cfg"},
+		Hosts:     []mobileproto.CatalogHost{{ID: "local:hub", State: "online", Local: true}, {ID: "book", State: "connecting"}},
+		Endpoints: []OwnerEndpoint{fakeCatalogEndpoint("local:hub", "local-registration", newFakeCatalogLineStream(rawOwnerCatalog("local-owner", "local", "local")))},
+		Validate:  func(context.Context) error { return nil },
+	}}
+	directory.wait = func(ctx context.Context, hostID string, maximum time.Duration) error {
+		if hostID != "book" {
+			t.Fatalf("waited for %q", hostID)
+		}
+		waitCtx, cancel := context.WithTimeout(ctx, maximum)
+		defer cancel()
+		<-waitCtx.Done()
+		return waitCtx.Err()
+	}
+	router, _ := NewCatalogRouter(directory)
+	router.ownerTimeout = 30 * time.Millisecond
+	router.queryTimeout = 60 * time.Millisecond
+	started := time.Now()
+	_, stream, _, err := router.Lookup(context.Background(), "selector", mobileproto.TargetIdentity{HubID: "hub", OwnerHostID: "book"})
+	if err == nil || stream != nil {
+		t.Fatalf("connecting owner accepted stream=%v err=%v", stream, err)
+	}
+	if elapsed := time.Since(started); elapsed >= 100*time.Millisecond {
+		t.Fatalf("selected-owner readiness exceeded lookup budget: %v", elapsed)
+	}
+}
+
+func TestCatalogRouterLookupRefusesRegistrationChangeWhileSelectedOwnerConnects(t *testing.T) {
+	raw := rawOwnerCatalog("remote-owner", "repo", "owner-selector")
+	ready := newFakeRouterDirectory(newFakeCatalogLineStream(rawOwnerCatalog("local-owner", "local", "local")), newFakeCatalogLineStream(raw))
+	router, _ := NewCatalogRouter(ready)
+	full, err := router.Query(context.Background(), mobileproto.CatalogQuery{Sort: "project", Hosts: []string{"book"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := full.Sections[0].Rows[0]
+
+	cold := newFakeRouterDirectory(newFakeCatalogLineStream(rawOwnerCatalog("local-owner", "local", "local")), newFakeCatalogLineStream(raw))
+	cold.snapshot.Endpoints = cold.snapshot.Endpoints[:1]
+	cold.snapshot.Hosts[1].State = "connecting"
+	cold.wait = func(context.Context, string, time.Duration) error {
+		cold.mu.Lock()
+		cold.snapshot.Hosts[1].State = "online"
+		cold.snapshot.Endpoints = append(cold.snapshot.Endpoints, fakeCatalogEndpoint("book", "retargeted-registration", newFakeCatalogLineStream(raw)))
+		cold.mu.Unlock()
+		return nil
+	}
+	fresh, _ := NewCatalogRouter(cold)
+	if _, stream, _, err := fresh.Lookup(context.Background(), row.Target, *row.ExpectedTarget); err == nil || stream != nil {
+		t.Fatalf("registration change while connecting accepted stream=%v err=%v", stream, err)
 	}
 }
 

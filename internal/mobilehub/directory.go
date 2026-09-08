@@ -173,6 +173,19 @@ func (d *RegistryDirectory) Snapshot(ctx context.Context) (DirectorySnapshot, er
 // catalog snapshot keeps those owners visible as connecting failures while
 // still returning every available owner. Caller cancellation remains fatal.
 func (d *RegistryDirectory) WaitInitial(ctx context.Context, maximum time.Duration) error {
+	return d.waitConnecting(ctx, maximum, "")
+}
+
+// WaitOwner waits only for the selected owner. A disconnected unrelated host
+// must never delay terminal resolution on an owner that is already usable.
+func (d *RegistryDirectory) WaitOwner(ctx context.Context, hostID string, maximum time.Duration) error {
+	if strings.TrimSpace(hostID) == "" {
+		return fmt.Errorf("mobile hub: owner readiness requires a host")
+	}
+	return d.waitConnecting(ctx, maximum, hostID)
+}
+
+func (d *RegistryDirectory) waitConnecting(ctx context.Context, maximum time.Duration, onlyHost string) error {
 	if maximum <= 0 {
 		return nil
 	}
@@ -191,7 +204,7 @@ func (d *RegistryDirectory) WaitInitial(ctx context.Context, maximum time.Durati
 		}
 		pending := false
 		for _, host := range snapshot.Hosts {
-			if !host.Local && strings.EqualFold(host.State, string(hosts.StateConnecting)) {
+			if !host.Local && (onlyHost == "" || host.ID == onlyHost) && strings.EqualFold(host.State, string(hosts.StateConnecting)) {
 				pending = true
 				break
 			}

@@ -69,6 +69,32 @@ func TestRegistryDirectoryWaitInitialObservesReadyOwnersAndBoundsConnectingOnes(
 		t.Fatalf("timed-out owner not retained as partial failure: %+v", snapshot)
 	}
 }
+
+func TestRegistryDirectoryWaitOwnerDoesNotWaitForAnotherConnectingHost(t *testing.T) {
+	local := OwnerEndpoint{Host: mobileproto.CatalogHost{ID: "local:hub", State: "online", Local: true}, Bind: func(context.Context) (BoundOwner, error) {
+		return BoundOwner{Authority: CatalogAuthority{OwnerHostID: "local:hub", RegistrationFingerprint: "local-registration"}}, nil
+	}}
+	current := CurrentDirectory{Identity: mobile.CatalogIdentity{HubID: "hub", OwnerHostID: "local:hub", OwnerConfigGeneration: "cfg"}, Local: local,
+		LocalRegistrationFingerprint: "local-registration", Remotes: []RegisteredOwner{{Host: hosts.Host{ID: "book", Target: "book"}}, {Host: hosts.Host{ID: "offline", Target: "offline"}}}}
+	bookCalls := 0
+	registry := &fakeDirectoryRegistry{healthFn: func(id string) (hosts.Health, bool) {
+		if id == "offline" {
+			return hosts.Health{}, false
+		}
+		bookCalls++
+		if bookCalls == 1 {
+			return hosts.Health{}, false
+		}
+		return hosts.Health{State: hosts.StateOnline, Hello: &hostproto.Hello{Capabilities: hostproto.Capabilities{Verbs: hostproto.VerbCapabilities{MobileOwnerServeV0: true}}}}, true
+	}}
+	directory, _ := newRegistryDirectory(context.Background(), registry, func(context.Context) (CurrentDirectory, error) { return current, nil })
+	if err := directory.WaitOwner(context.Background(), "book", time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if bookCalls < 2 {
+		t.Fatalf("selected owner was not re-observed: %d", bookCalls)
+	}
+}
 func (r *fakeDirectoryRegistry) BindMobileRoute(id string) (hosts.MobileRouteAuthority, error) {
 	return hosts.MobileRouteAuthority{HostID: id, Incarnation: 1, RegistrationFingerprint: id + "-registration"}, nil
 }
