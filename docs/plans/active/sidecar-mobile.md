@@ -1,22 +1,24 @@
-# Sidecar mobile: Sessions on iPhone
+# Sidecar mobile: Sessions on iPhone and iPad
 
-**Status:** initial proposal; implementation has not started. **Created:** 2026-09-07. **Planning task:** td-c2870b.
+**Status:** readiness and screen exploration in progress; M0 and M1 are not implemented. **Created:** 2026-09-07. **Execution epic:** td-5d82c2. **Plan task:** td-09d533. **Original planning task:** td-c2870b.
+
+This is the controlling product and architecture plan. Read [M0/M1 execution](sidecar-mobile/execution.md) next for exact source seams, ownership, task dependencies, readiness gates, and the terminal-seed decision. Implementation is delegated to sub-agents; the coordinator integrates independently reviewed slices. Tooling and screen artifacts live in `../sidecar-mobile`; their existence does not prove terminal attachment.
 
 ## Outcome
 
-Open Sidecar on an iPhone, see the shells and worktrees running across the user's configured hosts, sort or filter that list, tap an agent, and continue working in its existing terminal. Receive an alert when an agent needs input or finishes, and tap it to return to that exact session.
+Open Sidecar on an iPhone or iPad, see the shells and worktrees running across the user's configured hosts, sort or filter that list, tap an agent, and continue working in its existing terminal. Receive an alert when an agent needs input or finishes, and tap it to return to that exact session.
 
 The first product is a native Sessions browser with one embedded terminal at a time. Agents and tmux keep running on their owning machines. The phone is another viewer of those sessions; it does not move a process or resume a second copy of an agent conversation.
 
-## Recommended direction
+## Settled direction and open decisions
 
-- **SwiftUI for the iOS application, reusing Jumar's SwiftTerm-based terminal and SSH foundation.** Start from its existing native terminal integration and transport seams, with a Sidecar-specific Sessions client. Pin the reused revision and dependencies after the terminal spike.
-- **One user-selected Sidecar machine as the connection hub.** The phone connects to it over authenticated SSH on LAN or Tailscale. The hub supplies its local Sessions inventory and the hosts already configured in Sidecar, using the existing Go host registry and SSH routing.
+- **One universal SwiftUI application for iPhone and iPad, using native Liquid Glass and the actual `sidecar-modern` colors.** Reuse Jumar's SwiftTerm and SSH foundation at the boundaries below. Target iOS/iPadOS 26.0 and later, using the public 26.5 simulator baseline; do not require a beta SDK. The connected personal devices run 27 beta and can provide labeled local proof without raising the deployment target. Pin dependencies before the terminal spike and change them only for a demonstrated build or fidelity need.
+- **`aerie`, this Mac, as the first connection hub.** The app connects to it over authenticated SSH on LAN or Tailscale. The hub supplies its local Sessions inventory and the hosts already configured in Sidecar, using the existing Go host registry and SSH routing.
 - **A small headless mobile API in the Sidecar binary.** Keep inventory, target resolution, terminal ownership, and notification policy in Go. Expose the API as a versioned framed stream over SSH stdio initially; do not require a new externally listening web service for the first version.
 - **Reuse notification events, add mobile delivery.** Foreground alerts are the first slice. Background alerts require an always-on observer and APNs delivery; propose an optional push relay for a distributed app, with generic alert text and no terminal traffic passing through it.
-- **Android later.** Preserve the backend contract and fixtures across platforms. Accept a future Android client implementation instead of paying for two platforms before the iPhone terminal experience is proven.
+- **Android later.** Preserve the backend contract and fixtures across platforms. Accept a future Android client implementation instead of paying for two platforms before the iPhone and iPad terminal experience is proven.
 
-These are recommendations for the initial plan, not approved implementation choices. In particular, the push relay is a product and operational decision still to confirm.
+Marcus selected `aerie`, a universal native app, iOS/iPadOS 26 support, Apple team `<APPLE_TEAM_ID>`, and native Liquid Glass with Sidecar colors. His connected iPhone and iPad run 27 beta; local device proof records that distinction. Public-supported-OS hardware proof is a distribution gate, not a reason to stop M0/M1. The optional push relay and its operator remain an M3 decision. App Store Connect tooling is useful for distribution, but its authentication and app record are not prerequisites for local M0/M1 work.
 
 ### SwiftUI versus React Native
 
@@ -39,15 +41,23 @@ Marcus has the upstream author's permission to include Jumar in the mobile app. 
 | `Packages/JumarCore/Sources/JumarModel` | Inspectable JSON persistence and Keychain references | Store phone preferences and connection metadata; do not turn phone records into the authority for host sessions |
 | `Packages/JumarCore/Sources/JumarNotify` | Optional terminal attention presentation support | Sidecar lifecycle events remain the authority; terminal escape alerts must not create duplicate lifecycle notifications or stand in for APNs |
 
-Recommend a Sidecar-branded client assembled from these reusable modules and selected terminal UI components, rather than maintaining a wholesale Jumar fork with unrelated Herdr assumptions. Prefer an upstream reusable package when the upstream author's release provides one; otherwise record a small attributed source import and its revision so upstream fixes remain traceable. Keep a `SidecarClient` and Sidecar terminal transport separate from `JumarHerdr`, and retain the upstream author's renderer/SSH adapters rather than rewriting their underlying libraries. This plan does not modify or copy Jumar yet.
+Recommend a Sidecar-branded client assembled from these reusable modules and selected terminal UI components, rather than maintaining a wholesale Jumar fork with unrelated Herdr assumptions. Prefer an upstream reusable package when the upstream author's release provides one; otherwise record a small attributed source import and its revision so upstream fixes remain traceable. Keep a `SidecarClient` and Sidecar terminal transport separate from `JumarHerdr`, and retain the upstream author's renderer/SSH adapters rather than rewriting their underlying libraries. Keep `../jumar` read-only. Any local source import belongs to `../sidecar-mobile` with its upstream paths, revision, local changes, and attribution recorded in a provenance manifest; distribution still requires concrete reuse terms.
 
-The baseline app uses password SSH authentication; the SSH layer accepts injected private keys, but app key generation/enrollment is still work for the beta. A controlled M0 proof may use the existing password path. The app project declares iOS 26.0, its README/CLAUDE guidance says 26.5, and its core package declares iOS 18; a core declaration does not establish that the full terminal UI supports older phones. Its resolved SwiftTerm version is 1.18.0 and its NIO SSH dependency is pinned to 0.15.0. Preserve a known baseline for M0 rather than combining the integration with a terminal-library major upgrade. Recheck resolved pins and choose Sidecar's deployment requirements before implementation.
+The baseline app uses password SSH authentication; the SSH layer accepts injected private keys, but app key generation/enrollment is still work for the beta. A controlled M0 proof may use the existing password path. The app project declares iOS 26.0, its README/CLAUDE guidance says 26.5, and its core package declares iOS 18; a core declaration does not establish that the full terminal UI supports older phones. Its resolved SwiftTerm version is 1.18.0 and its NIO SSH dependency is pinned to 0.15.0. Preserve a known baseline for M0 rather than combining the integration with a terminal-library major upgrade. The app already declares device families `1,2`, but that is not iPad interaction proof. Sidecar's selected iOS/iPadOS 26.0 target must compile against the actual reused UI rather than inherit these inconsistent declarations. Guard any APIs introduced after 26.0 or provide a fallback; a 26.5 simulator build alone does not prove the 26.0 availability boundary.
 
 Reuse is not proof of Sidecar behavior. Jumar currently creates an SSH connection per terminal screen, marks a backgrounded connection degraded without implementing automatic session reattachment, and sends PTY window changes without Sidecar's lease policy. Its screen model does not apply the transport's remote-resize event, and the raw event stream is unbounded. The Sidecar adapter must implement accepted-geometry feedback, foreground/reconnect identity validation, lease release/expiry, and bounded flow control with explicit reseeds. `JumarNotify` currently supplies in-app attention and haptics from terminal escape sequences, not native iOS notification delivery. These are integration tasks in M0/M2/M3, not inherited guarantees.
 
-Jumar's root currently has no license file; its README lists licenses for dependencies only. the upstream author's reported permission is sufficient to explore this reuse in the plan. Before distributing imported code, record the concrete reuse terms/license and attribution with the upstream author's release. This is a release prerequisite, not a reason to block planning. Device dictation is already present in Jumar but remains outside Sidecar mobile's required first-version scope.
+Jumar's root currently has no license file; its README lists licenses for dependencies only. the upstream author's reported permission is sufficient to explore this reuse in the plan. Before distributing imported code, record the concrete reuse terms/license and attribution with the upstream author's release. This is a distribution prerequisite, not a reason to block local exploration, M0, or M1. Do not invent an open-source license or silently apply Sidecar's license to imported Jumar code. Device dictation is already present in Jumar but remains outside Sidecar mobile's required first-version scope.
 
 ## First-version experience
+
+### Universal native layout
+
+Use one selected terminal and one shared client state model across device classes. On iPhone and compact iPad windows, use a Sessions navigation stack that pushes a terminal detail. On a regular-width iPad, use a native split view with Sessions in the sidebar and the selected terminal in the detail; the sidebar can collapse to give the terminal room. Resizing a window, hiding the sidebar, or rotating must preserve selection and invoke the same measured-viewport resize policy as the keyboard. Do not create two terminal attachments when layout changes.
+
+Use platform navigation, sheets, menus, materials, accessibility, and SF Symbols for the native chrome. Read the actual palette from [`SidecarModernTheme`](../../../internal/styles/themes.go), not a guessed approximation. Keep the terminal grid opaque and faithful to host colors; Liquid Glass belongs to the controls around it. Browser mockups are for agreeing on screens and states; SwiftUI previews and simulator/device proof settle native material, keyboard, safe-area, split-view, and reduced-transparency behavior.
+
+Mock these reviewable states first: hub connection and host-key verification; Sessions with needs-input, working, idle, plain-shell, and stale-host rows; ambiguous worktree picker; terminal in view and control modes; reconnect/target-gone states; compact iPhone and regular/narrow iPad layouts. Attention and Settings can be previewed for the full journey without implying M2/M3 implementation.
 
 ### Connect
 
@@ -81,7 +91,7 @@ Notification taps navigate only. Answering a prompt happens in the terminal; not
 
 ## Existing implementation and the gaps
 
-Source inspection baseline: canonical checkout at `116e0d4d`. Related plans retain authority over their own work: [remote hosts](sidecar-remote-hosts.md), [remote shell improvements](remote-shells-improvements.md), [notification delivery](notification-sounds-and-native-delivery.md), and [agent lifecycle hooks](notification-agent-lifecycle-hooks.md). Their presence in `active/` is not evidence that every described phase remains unimplemented. Recheck shipped source before starting a slice.
+Source inspection baseline: Sidecar `352c7eb7` and Jumar `ae72637bb88736a71f8ce4822ebe7d7d31f83b5d`, inspected 2026-09-07. Detailed evidence and identified extraction limits are in [M0/M1 execution](sidecar-mobile/execution.md). Related plans retain authority over their own work: [remote hosts](sidecar-remote-hosts.md), [remote shell improvements](remote-shells-improvements.md), [notification delivery](notification-sounds-and-native-delivery.md), and [agent lifecycle hooks](notification-agent-lifecycle-hooks.md). Their presence in `active/` is not evidence that every described phase remains unimplemented. Recheck shipped source before starting a slice.
 
 | Concern | Existing source | Mobile work |
 | --- | --- | --- |
@@ -99,7 +109,7 @@ The Go terminal code already has valuable ordering, seed/reseed, and lease machi
 ## Backend and transport shape
 
 ```text
-iPhone: SwiftUI + terminal adapter
+iPhone / iPad: SwiftUI + terminal adapter
              |
              | authenticated SSH, private network
              v
@@ -109,7 +119,7 @@ Sidecar hub: headless mobile API
    +---------------------------------> Sidecar + tmux on other hosts
 
 For optional background alerts:
-resident observer on hub -> push provider/relay -> APNs -> iPhone
+resident observer on hub -> push provider/relay -> APNs -> iPhone / iPad
 ```
 
 Use one hub to reuse the configured cross-host Sessions view and keep Go's OpenSSH-dependent host client off the phone. This adds a dependency on hub availability and an extra hop for remote terminals. Measure that hop in the first real-device slice; if it is unacceptable, revisit direct host connections at the transport seam rather than duplicating core rules.
@@ -134,7 +144,7 @@ The stdio API is itself a documented non-interactive path for terminal open/inpu
 
 Use a bounded versioned JSONL envelope over an SSH exec channel, with explicit request IDs, errors, and capabilities. Separate inventory/event traffic from the selected terminal's traffic using separate SSH channels so a noisy agent cannot block the list. Base64 terminal byte chunks are acceptable for the first proof; measure throughput before adding a binary transport.
 
-The minimum contract covers hello/capabilities, snapshot and updates, target resolution, terminal open/close, output reset/seed and chunks, ordered input, resize request/result, control state, attention events/withdrawals, and device registration. Key every terminal handle by hub identity, owning host identity/configuration generation, server incarnation, workspace/session identity, pane identity, and attachment generation. A displayed name or bare `%pane` ID is never sufficient authority. Give the hub's own machine an explicit wire identity rather than leaving “local” relative to the phone.
+The M0 contract covers hello/capabilities, one-row target resolution, terminal open/close, output reset/seed and chunks, ordered input, resize request/result, and control state. M1 adds catalog snapshots/updates and query preferences. M2 adds attention events/withdrawals; M3 adds device registration and delivery operations. Do not make future milestone messages or storage prerequisites for M0. Key every terminal handle by hub identity, owning host identity/configuration generation, server incarnation, workspace/session identity, pane identity, and attachment generation. A displayed name or bare `%pane` ID is never sufficient authority. Give the hub's own machine an explicit wire identity rather than leaving “local” relative to the phone.
 
 The host validates every input and resize against the current target and attachment. Sequence output within an attachment, acknowledge accepted operations without implying an agent processed them, and invalidate all queued input when the handle or ownership changes. On a gap, overflow, tmux pause, or reconnect, suspend the stream and issue an explicit reset/reseed. Bound buffers and scrollback requests; an invisible terminal should not keep streaming output.
 
@@ -142,7 +152,7 @@ SSH supplies encryption and user authentication on both LAN and Tailscale. Valid
 
 ### Terminal fidelity and geometry
 
-The first technical gate is a working emulator stream. Reuse the Go control-mode transaction and seed machinery, but define how a Swift emulator receives the initial screen, cursor, rendition, terminal modes, and ordered subsequent output. `capture-pane` text alone is not a complete terminal seed. Treat mode state, alternate screen, terminal replies, scrollback, and output racing the seed as part of the contract, and ensure only the intended consumer answers terminal queries. Choose the exact seed serialization in the spike based on real agent TUIs. Do not feed raw tmux control records to SwiftTerm or replay an unbounded transcript to reconstruct the screen.
+The first technical gate is a working emulator stream. Reuse the Go control-mode transaction and seed machinery, but define how a Swift emulator receives the initial screen, cursor, rendition, terminal modes, and ordered subsequent output. `capture-pane` text alone is not a complete terminal seed. Treat mode state, alternate screen, terminal replies, scrollback, and output racing the seed as part of the contract, and ensure only the intended consumer answers terminal queries. Choose the exact seed serialization in the [two-consumer spike](sidecar-mobile/execution.md#terminal-seed-decision-gate) based on real agent TUIs. The current Go seed is not a complete serializable emulator checkpoint: missing state must be proved reconstructable or the transport must use a normalized frame strategy. Do not freeze the production stream contract before that evidence. Do not feed raw tmux control records to SwiftTerm or replay an unbounded transcript to reconstruct the screen.
 
 Keep geometry policy in Go. Compute desired columns/rows from the terminal's measured font and actual viewport after safe areas, header, orientation, and keyboard layout settle. Debounce changes, then apply only with a valid lease and target generation; return the actual applied dimensions. Preserve existing minimums and explain/refit when the requested size cannot be applied. Never enforce a tiny viewport by bypassing tmux or Sidecar floors.
 
@@ -171,17 +181,17 @@ Withdrawals cancel pending delivery and clear in-app attention. A delivered iOS 
 
 ## Delivery sequence and acceptance evidence
 
-### M0: one real terminal on one real iPhone
+### M0: one real terminal in the universal app
 
-Establish a reproducible Jumar baseline with its focused offline tests and a real-device terminal run, then reuse its terminal UI/SSH modules to build the narrow path from authenticated SSH to a native Sidecar row. Resolve one existing managed shell, render its terminal, type into an agent, and return safely. Use the proposed Go terminal boundary and Jumar transport adapter, not a prerecorded view or a bare `tmux attach` that bypasses Sidecar ownership. Show initial screen correctness, input ordering, keyboard and orientation resize, background/reconnect behavior, and desktop-to-phone-to-desktop control handoff at deliberately different dimensions. Measure connect-to-usable-screen time, keystroke-to-frame latency, output throughput, and the remote-host extra hop.
+First pass the isolated Go/SwiftTerm seed gate, then establish a reproducible Jumar component baseline with focused offline tests. Build the narrow path from authenticated SSH to a native Sidecar row on `aerie`, using the universal compact/regular layouts. Resolve one existing managed shell, render its terminal, type into an agent, and return safely. Use the proposed Go terminal boundary and Jumar transport adapter, not a prerecorded view or a bare `tmux attach` that bypasses Sidecar ownership. Show initial screen correctness, input ordering, keyboard and orientation resize, background/reconnect behavior, and desktop-to-phone-to-desktop control handoff at deliberately different dimensions. Measure connect-to-usable-screen time, keystroke-to-frame latency, and output throughput. The remote-host extra hop is measured when M1 adds remote terminal attachment.
 
-**Exit:** a real agent conversation is usable on a device, survives reconnect without replayed input or a new agent process, and does not fight desktop geometry. Record the reused Jumar revision/components, pinned terminal and SSH library choices, supported terminal/mode subset, and observed limitations. If seed fidelity or phone input fails this gate, resolve it before building the full list.
+**Exit:** a real agent conversation is usable on a physical iPhone, survives reconnect without replayed input or a new agent process, and does not fight desktop geometry. Also prove the same client at regular and compact iPad widths in the simulator and on the connected physical iPad. Local physical proof may use the user's 27 beta devices with the 26.5 simulator baseline; record the missing public-supported-OS hardware evidence for M4 before distribution. Record the reused Jumar revision/components, pinned terminal and SSH library choices, supported terminal/mode subset, and observed limitations. If seed fidelity or phone input fails this gate, resolve it before building the full list.
 
 ### M1: Sessions across hosts
 
-Compose the hub's local inventory and registered remote hosts, provide native sorting/filtering/search, and implement stale hosts, ambiguous worktrees, disappeared targets, and provider capability states. Reuse shared ordering and target rules. Exercise local and remote shells, worktrees with zero/one/multiple candidate panes, and multiple supported agent providers.
+After M0 terminal evidence establishes the attachment shape, compose the hub's local inventory and registered remote hosts, provide native sorting/filtering/search, and implement stale hosts, ambiguous worktrees, disappeared targets, and provider capability states. Reuse shared ordering and target rules. Exercise local and remote shells, worktrees with zero/one/multiple candidate panes, and multiple supported agent providers.
 
-**Exit:** compare the mobile catalog with desktop Sessions over the same configuration; every row resolves to the intended host and pane. Include identically named sessions and reused pane IDs on two hosts, host retargeting, network loss, and incompatible Sidecar versions. A remote failure must never fall back to local tmux.
+**Exit:** compare the iPhone/iPad catalog with desktop Sessions over the same configuration; every row resolves to the intended host and pane. Prove iPad split-view collapse/window resizing and iPhone return navigation without creating extra attachments or losing list state. Include identically named sessions and reused pane IDs on two hosts, host retargeting, network loss, and incompatible Sidecar versions. A remote failure must never fall back to local tmux.
 
 ### M2: foreground attention and reconnect polish
 
@@ -197,7 +207,7 @@ After settling the relay decision, add the resident observer, device enrollment/
 
 ### M4: iOS beta and operational proof
 
-Package a TestFlight build and document hub prerequisites, SSH enrollment, optional observer service, Tailscale/LAN setup, and troubleshooting. Choose the minimum iOS version from the selected libraries and device proof. Test on the smallest supported iPhone and a larger device, portrait and landscape, software and hardware keyboards, and real macOS/Linux hosts supported by Sidecar. Keep protocol compatibility explicit because app and hub updates happen independently.
+Package a TestFlight build and document hub prerequisites, SSH enrollment, optional observer service, Tailscale/LAN setup, and troubleshooting. Verify the iOS/iPadOS 26.0 deployment target against all pinned libraries and public-supported-OS physical devices. Resolve the stable-device coverage gap from M0 before distributing the beta; the user's 27 beta devices provide additional forward-compatibility evidence. Test on the smallest supported iPhone and an iPad, portrait and landscape, full-screen and narrow iPad windows, software and hardware keyboards, and real macOS/Linux hosts supported by Sidecar. Keep protocol compatibility explicit because app and hub updates happen independently.
 
 **Exit:** a clean-device setup completes the browse → terminal → background alert → return journey, and service/device removal leaves the user's shells running. Capture a short demo and evidence in the plan before calling the first version complete.
 
@@ -211,4 +221,4 @@ Every tmux proof isolates both its tmux socket and Sidecar state/config tree, on
 
 Defer session/worktree creation and deletion, git/file/note panes, desktop pane layouts, conversation history UI, voice input, widgets, Android, arbitrary internet-exposed terminal hosting, and moving live agent processes between hosts. The terminal remains provider-independent and can interact with whatever supported agent is already running.
 
-Before implementation, settle the optional relay and its operator, confirm that one always-available hub is an acceptable first topology, and choose the Jumar reuse boundary through M0 evidence. Record reuse terms before distributing Jumar code. A minimum iOS version and App Store distribution details follow the device/dependency evidence. No cloud account system, database migration, or general remote-control platform is required to start the first slice.
+The hub is `aerie`; confirm reachability, SSH enrollment, and awake behavior during M0 device preparation. The deployment target is iOS/iPadOS 26.0, with a public 26.5 simulator baseline and labeled 27 beta device proof. Apple team `<APPLE_TEAM_ID>` is selected; the bundle identity and App Store Connect credential availability remain distribution/readiness details. Resolve seed serialization through M0-A/B before production extraction. Resolve the optional relay/operator only for M3, and concrete Jumar reuse terms, app identity, Apple signing, and App Store distribution requirements before their first dependent action. No cloud account system, push service, database migration, or App Store record is required to start the isolated steel-thread work.
