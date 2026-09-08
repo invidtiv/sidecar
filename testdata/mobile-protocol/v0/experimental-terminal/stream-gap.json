@@ -1,0 +1,20 @@
+{
+  "schema_version": "sidecar.experimental-terminal-seed.v0",
+  "producer_commit": "c8766af06d9362868518aad7b7da500f123a9019",
+  "source": "synthetic terminal data only",
+  "attachment_id": "attachment-a",
+  "reset_generation": 7,
+  "messages": [
+    { "output_sequence": 41, "vt_base64": "b25l" },
+    { "output_sequence": 43, "vt_base64": "dGhyZWU=" }
+  ],
+  "expected": {
+    "sequence_41": "accept",
+    "sequence_43": "suspend-and-reseed",
+    "must_not": [
+      "apply sequence 43 to the stale emulator",
+      "replay unacknowledged input after the reset",
+      "continue under reset generation 7"
+    ]
+  }
+}

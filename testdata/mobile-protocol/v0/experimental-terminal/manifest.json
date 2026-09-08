@@ -1,0 +1,16 @@
+{
+  "schema_version": "sidecar.experimental-terminal-seed.v0",
+  "status": "experimental decision evidence; not a compatibility promise",
+  "producer": {
+    "repository": "github.com/marcus/sidecar",
+    "baseline_commit": "c8766af06d9362868518aad7b7da500f123a9019",
+    "test": "internal/tty/mobile_seed_spike_test.go",
+    "source": "synthetic data only; no user session capture"
+  },
+  "files": [
+    { "path": "seed-cases.json", "sha256": "04817421e15a680c766ff6b8e7af5c91e10dae2f098e05997a66a98e14669728" },
+    { "path": "normalized-frames.json", "sha256": "c863bbe359682a11c48f3b651235c9b919fbfdaa2af7bd9dd81c217eb7b06bc9" },
+    { "path": "stream-gap.json", "sha256": "b7048da3dca46f430f64d5f88a4123b548dfb18a7f66ca8bdb52cc7dc503002b" },
+    { "path": "geometry-lease.json", "sha256": "6be70e153348a044f2007744f699a1ffbbe7a98fb1e339e0fe6894e9995e8601" }
+  ]
+}

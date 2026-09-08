@@ -1,0 +1,121 @@
+{
+  "schema_version": "sidecar.experimental-terminal-seed.v0",
+  "producer_commit": "c8766af06d9362868518aad7b7da500f123a9019",
+  "source": "synthetic terminal data only",
+  "strategy": "server-normalized ANSI presentation frames with explicit interaction state",
+  "consumer_rule": "replace the emulator before every full frame; apply a delta only when output_sequence is contiguous and reset_generation is unchanged",
+  "authority": {
+    "screen": "ordered capture-pane -p -e -N response",
+    "metadata_fields_observed_in_tmux_3_7c": [
+      "cursor_x",
+      "cursor_y",
+      "cursor_flag",
+      "cursor_shape",
+      "alternate_on",
+      "alternate_saved_x",
+      "alternate_saved_y",
+      "bracket_paste_flag",
+      "keypad_cursor_flag",
+      "keypad_flag",
+      "wrap_flag",
+      "origin_flag",
+      "insert_flag",
+      "scroll_region_upper",
+      "scroll_region_lower",
+      "mouse_standard_flag",
+      "mouse_button_flag",
+      "mouse_all_flag",
+      "mouse_sgr_flag",
+      "synchronized_output_flag"
+    ],
+    "terminal_reply_owner": "tmux's real pane terminal; normalized-frame consumers do not forward emulator replies"
+  },
+  "geometry": { "columns": 8, "rows": 3 },
+  "frames": [
+    {
+      "kind": "full",
+      "output_sequence": 1,
+      "reset_generation": 1,
+      "capture_lines": ["AGENT   ", "working ", "        "],
+      "render_vt_base64": "G1s/MTA0OWgbW0gbWzBtQUdFTlQgICANCndvcmtpbmcgDQogICAgICAgIBtbMTszchtbPzZsG1s/N2gbWz8yMDA0aBtbPzFoGz0bWzUgcRtbMjszSBtbPzI1bA==",
+      "expected": {
+        "alternate_screen": true,
+        "cursor_column": 2,
+        "cursor_row": 1,
+        "cursor_visible": false,
+        "cursor_shape": "bar",
+        "bracketed_paste": true,
+        "application_cursor_keys": true,
+        "application_keypad": true,
+        "autowrap": true,
+        "scroll_region_upper": 0,
+        "scroll_region_lower": 2
+      }
+    },
+    {
+      "kind": "changed_rows",
+      "output_sequence": 2,
+      "reset_generation": 1,
+      "capture_lines": ["AGENT   ", "DONE    ", "        "],
+      "render_vt_base64": "G1syOzFIG1swbURPTkUgICAgG1tLG1syOzVIG1s/MjVo",
+      "expected": {
+        "alternate_screen": true,
+        "cursor_column": 4,
+        "cursor_row": 1,
+        "cursor_visible": true,
+        "bracketed_paste": true
+      }
+    },
+    {
+      "kind": "full",
+      "output_sequence": 4,
+      "reset_generation": 2,
+      "reason": "sequence 3 was lost; sequence 4 is a replacement full frame, never a delta on generation 1",
+      "capture_lines": ["main>   ", "done    ", "        "],
+      "render_vt_base64": "G1tIG1swbW1haW4+ICAgDQpkb25lICAgIA0KICAgICAgICAbWzE7M3IbWz82bBtbPzdoG1s/MjAwNGwbWz8xbBs+G1sxIHEbWzI7NUgbWz8yNWg=",
+      "expected": {
+        "alternate_screen": false,
+        "cursor_column": 4,
+        "cursor_row": 1,
+        "cursor_visible": true,
+        "cursor_shape": "block",
+        "bracketed_paste": false,
+        "application_cursor_keys": false,
+        "application_keypad": false
+      }
+    }
+  ],
+  "fidelity_frame": {
+    "kind": "full",
+    "purpose": "Independent authoritative frame proving wide and combining cells plus styled trailing blanks.",
+    "output_sequence": 1,
+    "reset_generation": 1,
+    "geometry": { "columns": 8, "rows": 3 },
+    "capture_lines": [
+      "\u001b[38;5;6m界\u001b[39m é \u001b[48;5;4m   \u001b[49m",
+      "plain   ",
+      "        "
+    ],
+    "render_vt_base64": "G1tIG1swbRtbMzg7NTs2beeVjBtbMzltIGXMgSAbWzQ4OzU7NG0gICAbWzQ5bQ0KcGxhaW4gICANCiAgICAgICAgG1sxOzNyG1s/NmwbWz83aBtbMSBxG1syOzNIG1s/MjVo",
+    "expected": {
+      "cursor_column": 2,
+      "cursor_row": 1,
+      "cursor_visible": true,
+      "cells": [
+        { "row": 0, "column": 0, "grapheme": "界", "width": 2, "foreground": "i6", "background": "" },
+        { "row": 0, "column": 1, "grapheme": "", "width": 0, "foreground": "", "background": "" },
+        { "row": 0, "column": 3, "grapheme": "é", "width": 1, "foreground": "", "background": "" },
+        { "row": 0, "column": 5, "grapheme": " ", "width": 1, "foreground": "", "background": "i4" },
+        { "row": 0, "column": 6, "grapheme": " ", "width": 1, "foreground": "", "background": "i4" },
+        { "row": 0, "column": 7, "grapheme": " ", "width": 1, "foreground": "", "background": "i4" }
+      ]
+    }
+  },
+  "support_limits_to_measure": [
+    "full replacement frames reset local terminal selection and emulator-owned scrollback",
+    "changed-row generation must preserve trailing colored blank cells from capture-pane -N",
+    "input-mode format availability needs a tmux 3.4 capability probe",
+    "horizontal margins and active character set are not present in this observed format inventory",
+    "30 Hz capture cost and coalescing latency are not measured by this fixture"
+  ]
+}

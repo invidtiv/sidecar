@@ -1,0 +1,127 @@
+{
+  "schema_version": "sidecar.experimental-terminal-seed.v0",
+  "producer": {
+    "repository": "github.com/marcus/sidecar",
+    "baseline_commit": "c8766af06d9362868518aad7b7da500f123a9019",
+    "source": "synthetic terminal data only",
+    "seed_implementation": "internal/tty.buildSeedCommands and internal/tty/screenmodel.Model.Seed"
+  },
+  "known_seed_fields": [
+    "active grid",
+    "saved main grid while alternate screen is active",
+    "active cursor row and column",
+    "saved main cursor row and column",
+    "cursor visibility",
+    "geometry",
+    "history size",
+    "alternate screen",
+    "mouse modes 1000, 1002, 1003, and 1006"
+  ],
+  "known_missing_fields": [
+    "current rendition pen",
+    "autowrap mode",
+    "scroll margins and origin mode",
+    "saved cursor and rendition outside alternate_saved_x and alternate_saved_y",
+    "cursor style",
+    "bracketed paste",
+    "application cursor keys",
+    "application keypad",
+    "character sets",
+    "synchronized output",
+    "partial parser state",
+    "mouse modes 9 and 1001"
+  ],
+  "cases": [
+    {
+      "name": "preserved_main_alternate_cursor_mouse",
+      "purpose": "Positive control for state the current seed explicitly carries.",
+      "geometry": { "columns": 8, "rows": 3 },
+      "seed_inputs": {
+        "metadata_line": "2,1,0,3,8,0,1,0,0,1,1,0,%7,4,2",
+        "saved_main_capture_lines": ["main>   ", "draft   ", "        "],
+        "active_capture_lines": ["AGENT   ", "working ", "        "]
+      },
+      "candidate": {
+        "strategy": "reset plus capture-shaped VT replay",
+        "reset_and_seed_vt_base64": "bWFpbj4gICANCmRyYWZ0ICAgDQogICAgICAgIBtbMzs1SBtbPzEwNDloG1tIQUdFTlQgICANCndvcmtpbmcgDQogICAgICAgIBtbMjszSBtbPzI1bBtbPzEwMDNoG1s/MTAwNmg="
+      },
+      "expected_after_seed": {
+        "active_rows": ["AGENT   ", "working ", "        "],
+        "saved_main_rows": ["main>   ", "draft   ", "        "],
+        "cursor_column": 2,
+        "cursor_row": 1,
+        "cursor_visible": false,
+        "alternate_screen": true,
+        "mouse_any_event": true,
+        "mouse_sgr": true
+      }
+    },
+    {
+      "name": "indistinguishable_current_rendition",
+      "purpose": "Two pre-attach histories have the same blank capture and metadata but render the same next byte in different colors.",
+      "geometry": { "columns": 4, "rows": 2 },
+      "seed_inputs": {
+        "metadata_line": "0,0,1,2,4,0,0,0,0,0,0,0,%8,0,0",
+        "saved_main_capture_lines": [],
+        "active_capture_lines": ["", ""]
+      },
+      "candidate": {
+        "strategy": "reset plus capture-shaped VT replay",
+        "reset_and_seed_vt_base64": "G1sxOzFIG1s/MjVo"
+      },
+      "pre_attach_variants": [
+        { "name": "red_pen", "vt_base64": "G1szMW0=" },
+        { "name": "default_pen", "vt_base64": "" }
+      ],
+      "continuation": [
+        { "output_sequence": 1, "vt_base64": "WA==" }
+      ],
+      "expected_divergence": "red_pen renders X with palette foreground 1; default_pen and the candidate seed render X with terminal-default foreground"
+    },
+    {
+      "name": "indistinguishable_autowrap",
+      "purpose": "Two pre-attach histories have the same blank capture and cursor but place the same continuation differently at the right margin.",
+      "geometry": { "columns": 4, "rows": 2 },
+      "seed_inputs": {
+        "metadata_line": "3,0,1,2,4,0,0,0,0,0,0,0,%9,0,0",
+        "saved_main_capture_lines": [],
+        "active_capture_lines": ["", ""]
+      },
+      "candidate": {
+        "strategy": "reset plus capture-shaped VT replay",
+        "reset_and_seed_vt_base64": "G1sxOzRIG1s/MjVo"
+      },
+      "pre_attach_variants": [
+        { "name": "autowrap_off", "vt_base64": "G1s/N2wbWzE7NEg=" },
+        { "name": "autowrap_on", "vt_base64": "G1s/N2gbWzE7NEg=" }
+      ],
+      "continuation": [
+        { "output_sequence": 1, "vt_base64": "QUI=" }
+      ],
+      "expected_divergence": "autowrap_on and the candidate place B at row 1 column 0; autowrap_off keeps output on the last column"
+    },
+    {
+      "name": "missing_input_and_reply_state",
+      "purpose": "Records input/query state that cannot be inferred from a rendered capture.",
+      "geometry": { "columns": 4, "rows": 2 },
+      "seed_inputs": {
+        "metadata_line": "0,0,1,2,4,0,0,0,0,0,0,0,%10,0,0",
+        "saved_main_capture_lines": [],
+        "active_capture_lines": ["", ""]
+      },
+      "candidate": {
+        "strategy": "replace emulator plus capture-shaped VT replay",
+        "reset_and_seed_vt_base64": "G1sxOzFIG1s/MjVo"
+      },
+      "pre_attach_vt_base64": "G1s/MjAwNGgbWz8xaBs9",
+      "query_vt_base64": "G1s1bg==",
+      "expected": {
+        "bracketed_paste": true,
+        "application_cursor_keys": true,
+        "application_keypad": true,
+        "terminal_reply_owner": "tmux's real pane terminal only; a passive observer must discard its emulator reply"
+      },
+      "candidate_result": "current seed reconstructs all three input modes as defaults; screenmodel drains rather than forwards observer-generated query replies"
+    }
+  ]
+}

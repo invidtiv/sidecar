@@ -1,0 +1,98 @@
+{
+  "schema_version": "sidecar.experimental-terminal-seed.v0",
+  "producer_commit": "c8766af06d9362868518aad7b7da500f123a9019",
+  "source": "synthetic lease observations only",
+  "identity_candidate": {
+    "attachment_a": "aerie-mobile-attach-a-4242",
+    "attachment_b": "aerie-mobile-attach-b-4242",
+    "note": "Unintegrated identity-constructor proposal only. The final numeric component preserves the existing token parser; the attachment component keeps two phones in one hub process distinct and prevents hub PID liveness from proving an attachment alive. M0-C must integrate and prove lost-heartbeat staleness, release, host-side refusal, and liveness semantics."
+  },
+  "policy": {
+    "stale_ticks": 5,
+    "stale_after_milliseconds": 60000,
+    "refresh_ticks": 2,
+    "refresh_after_milliseconds": 5000,
+    "preempt_idle_milliseconds": 5000
+  },
+  "cases": [
+    {
+      "name": "distinct_attachment_respects_fresh_owner",
+      "self_id": "aerie-mobile-attach-b-4242",
+      "token": "aerie-mobile-attach-a-4242:9:0",
+      "focused": true,
+      "unchanged_ticks": 1,
+      "unchanged_for_milliseconds": 1000,
+      "expected_reason": "held",
+      "expected_resize": false,
+      "expected_write": false
+    },
+    {
+      "name": "background_disconnect_expires_owner",
+      "self_id": "aerie-mobile-attach-b-4242",
+      "token": "aerie-mobile-attach-a-4242:9:0",
+      "focused": true,
+      "unchanged_ticks": 1,
+      "unchanged_for_milliseconds": 61000,
+      "expected_reason": "stale",
+      "expected_resize": true,
+      "expected_write": true
+    }
+  ],
+  "fenced_release_cases": [
+    {
+      "name": "stale_release_after_new_owner",
+      "opened_server_incarnation": "server-1",
+      "current_server_incarnation": "server-1",
+      "opened_target_generation": 3,
+      "current_target_generation": 3,
+      "releasing_owner": "aerie-mobile-attach-a-4242",
+      "current_token": "aerie-mobile-attach-b-4242:10:0",
+      "lease_read_ok": true,
+      "expected_clear": false
+    },
+    {
+      "name": "lease_read_failure",
+      "opened_server_incarnation": "server-1",
+      "current_server_incarnation": "server-1",
+      "opened_target_generation": 3,
+      "current_target_generation": 3,
+      "releasing_owner": "aerie-mobile-attach-a-4242",
+      "current_token": "",
+      "lease_read_ok": false,
+      "expected_clear": false
+    },
+    {
+      "name": "wrong_server_incarnation",
+      "opened_server_incarnation": "server-1",
+      "current_server_incarnation": "server-2",
+      "opened_target_generation": 3,
+      "current_target_generation": 3,
+      "releasing_owner": "aerie-mobile-attach-a-4242",
+      "current_token": "aerie-mobile-attach-a-4242:11:0",
+      "lease_read_ok": true,
+      "expected_clear": false
+    },
+    {
+      "name": "changed_target_generation",
+      "opened_server_incarnation": "server-1",
+      "current_server_incarnation": "server-1",
+      "opened_target_generation": 3,
+      "current_target_generation": 4,
+      "releasing_owner": "aerie-mobile-attach-a-4242",
+      "current_token": "aerie-mobile-attach-a-4242:11:0",
+      "lease_read_ok": true,
+      "expected_clear": false
+    },
+    {
+      "name": "current_owner_may_release",
+      "opened_server_incarnation": "server-1",
+      "current_server_incarnation": "server-1",
+      "opened_target_generation": 3,
+      "current_target_generation": 3,
+      "releasing_owner": "aerie-mobile-attach-a-4242",
+      "current_token": "aerie-mobile-attach-a-4242:11:0",
+      "lease_read_ok": true,
+      "expected_clear": true
+    }
+  ]
+}
