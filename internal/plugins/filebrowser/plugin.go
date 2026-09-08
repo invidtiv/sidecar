@@ -873,6 +873,16 @@ func (p *Plugin) reresolveFileOpTarget() {
 // inline editor was open is flushed here, once the message that closed it has
 // been handled.
 func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
+	// Every message this plugin acts on is assumed to change what is drawn.
+	// The memo is only allowed to survive a message the plugin ignores, which
+	// is update()'s type switch falling through to its final `return p, nil`.
+	// The hook lives above the remote early return on purpose: a bound surface
+	// that is unavailable draws its reason from live host state (HostVerbs,
+	// HostShows) rather than from plugin fields, so the HostInventoryMsg that
+	// flips availability must reach the memo even though update() never runs.
+	if viewInvalidatingMsg(msg) {
+		p.invalidateView()
+	}
 	if p.remoteBound() && (p.tree == nil || !p.remoteAvailable()) {
 		return p, nil
 	}
@@ -886,13 +896,6 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 }
 
 func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
-	// Every message this plugin acts on is assumed to change what is drawn.
-	// The memo is only allowed to survive a message the plugin ignores, which
-	// is the type switch below falling through to its final `return p, nil`.
-	if viewInvalidatingMsg(msg) {
-		p.invalidateView()
-	}
-
 	// The watcher's listen loop is one-shot: whoever handles an event has to
 	// re-arm it. Both are handled before the early returns below, because a
 	// single event swallowed by a modal or the inline editor would kill

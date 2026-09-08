@@ -460,6 +460,11 @@ func TestThemeChangeInvalidatesTheFrame(t *testing.T) {
 // update()'s type switches with the case types of viewInvalidatingMsg. Adding a
 // message to one and not the other is the way this memo would go stale, so the
 // two lists are compared in the source rather than trusted to review.
+// TestViewInvalidationCoversEveryHandledMessage keeps update()'s type-switch
+// case list and viewInvalidatingMsg in lockstep. It only sees type switches: a
+// handler added as a bare type assertion inside update(), or anything handled
+// in the Update wrapper before update() runs, is invisible to it and needs its
+// own test (see TestUnavailableBoundSurfaceRedrawsOnHostInventory).
 func TestViewInvalidationCoversEveryHandledMessage(t *testing.T) {
 	handled := caseTypesOfFunc(t, "plugin.go", "update")
 	invalidating := caseTypesOfFunc(t, "view_memo.go", "viewInvalidatingMsg")
@@ -478,6 +483,48 @@ func TestViewInvalidationCoversEveryHandledMessage(t *testing.T) {
 			t.Errorf("viewInvalidatingMsg lists %s but update() no longer handles it: "+
 				"drop it so the memo survives that message", name)
 		}
+	}
+}
+
+// A bound surface that is unavailable never reaches update(): Update returns
+// before it. Its frame is drawn from live host state rather than plugin fields,
+// so the message that flips availability has to invalidate the memo on that
+// early-return path too, or the tab freezes on whichever reason it drew first.
+func TestUnavailableBoundSurfaceRedrawsOnHostInventory(t *testing.T) {
+	memoCounters(t)
+	p := New()
+	p.ctx = &plugin.Context{
+		WorkDir:     t.TempDir(),
+		ProjectRoot: t.TempDir(),
+		HostID:      "aerie",
+		Logger:      slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
+	}
+	p.stateRestored = true
+	if !p.remoteBound() || p.remoteAvailable() {
+		t.Fatal("fixture must be bound and unavailable")
+	}
+
+	first := memoView(p)
+	if !strings.Contains(first, "[aerie]") {
+		t.Fatalf("expected the unavailable reason to name the host, got:\n%s", first)
+	}
+	if again := memoView(p); again != first {
+		t.Fatal("an idle render of the unavailable frame should be a memo hit")
+	}
+
+	// The reason changes underneath the plugin, exactly as HostVerbs/HostShows
+	// do when a host drops or comes back. Only the inventory message announces it.
+	p.ctx.HostID = "birch"
+	updated, _ := p.Update(plugin.HostInventoryMsg{})
+	if updated != p {
+		t.Fatal("Update must return the same plugin")
+	}
+	next := memoView(p)
+	if next == first {
+		t.Fatal("HostInventoryMsg did not invalidate the memo on the unavailable path")
+	}
+	if !strings.Contains(next, "[birch]") {
+		t.Fatalf("expected the fresh frame to name the new host, got:\n%s", next)
 	}
 }
 
