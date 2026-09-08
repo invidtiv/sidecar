@@ -212,7 +212,7 @@ func TestTargetGenerationIsStableAcrossAPIProcesses(t *testing.T) {
 	}
 }
 
-func TestSnapshotOfferNeverBlocksAndMarksOverflow(t *testing.T) {
+func TestSnapshotOfferNeverBlocksAndCoalescesNewestCompleteFrame(t *testing.T) {
 	a := &attachment{snapshots: make(chan queuedSnapshot, 1), resetGeneration: 1}
 	a.snapshots <- queuedSnapshot{snapshot: tty.ControlSnapshot{Output: "old"}, resetGeneration: 1}
 	done := make(chan struct{})
@@ -222,11 +222,9 @@ func TestSnapshotOfferNeverBlocksAndMarksOverflow(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("capture callback blocked")
 	}
-	a.mu.Lock()
-	overflow := a.overflow
-	a.mu.Unlock()
-	if !overflow || (<-a.snapshots).snapshot.Output != "new" {
-		t.Fatal("overflow did not retain the newest authoritative frame")
+	queued := <-a.snapshots
+	if queued.discontinuity != "" || queued.snapshot.Output != "new" {
+		t.Fatalf("ordinary coalescing = %+v, want newest frame without discontinuity", queued)
 	}
 }
 
@@ -237,27 +235,176 @@ func TestSnapshotOfferReplacesPreResetCaptureWithoutOverflow(t *testing.T) {
 	a.resetGeneration = 2
 	a.mu.Unlock()
 	a.offerSnapshot(tty.ControlSnapshot{Output: "fresh"})
-	a.mu.Lock()
-	overflow := a.overflow
-	a.mu.Unlock()
 	queued := <-a.snapshots
-	if overflow || queued.resetGeneration != 2 || queued.snapshot.Output != "fresh" {
-		t.Fatalf("replacement = %+v, overflow=%t", queued, overflow)
+	if queued.discontinuity != "" || queued.resetGeneration != 2 || queued.snapshot.Output != "fresh" {
+		t.Fatalf("replacement = %+v", queued)
 	}
 }
 
-func TestOverflowRevokesControlAndResetsBeforeReplacementFrame(t *testing.T) {
+func TestSkippedGeometryOrAlternateScreenDiscontinuityStillResets(t *testing.T) {
+	for _, tc := range []struct {
+		name, reason string
+		dropped      tty.ControlSnapshot
+	}{
+		{name: "geometry", reason: "geometry_changed", dropped: testSnapshot("B    \n     ", false, 5, 2)},
+		{name: "alternate", reason: "alternate_screen", dropped: testSnapshot("B   \n    ", true, 4, 2)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var output bytes.Buffer
+			s := testService(&output)
+			baseline := testSnapshot("A   \n    ", false, 4, 2)
+			a := &attachment{service: s, handle: "attachment", generation: 1, target: testTarget(), resetGeneration: 1, control: true,
+				latest: baseline, snapshots: make(chan queuedSnapshot, 1)}
+			a.offerSnapshot(tc.dropped)
+			a.offerSnapshot(testSnapshot("C   \n    ", false, 4, 2))
+			queued := <-a.snapshots
+			if queued.discontinuity != tc.reason {
+				t.Fatalf("skipped discontinuity = %q, want %q", queued.discontinuity, tc.reason)
+			}
+			a.publishQueued(queued)
+			responses := decodeResponses(t, &output)
+			if len(responses) != 2 || responses[0].Type != mobileproto.ResponseReset || responses[0].Reason != tc.reason ||
+				responses[1].Type != mobileproto.ResponseFrame || responses[1].ResetGeneration != 2 {
+				t.Fatalf("responses = %#v", responses)
+			}
+			if a.control {
+				t.Fatal("skipped discontinuity retained mutation authority")
+			}
+		})
+	}
+}
+
+func TestSkippedIdentityDiscontinuityStillFailsClosed(t *testing.T) {
 	var output bytes.Buffer
 	s := testService(&output)
-	a := &attachment{service: s, handle: "attachment", generation: 1, target: testTarget(), resetGeneration: 1, control: true, overflow: true}
-	a.publish(testSnapshot("\x1b[31mA   \n    ", false, 4, 2))
+	baseline := testSnapshot("A   \n    ", false, 4, 2)
+	changed := baseline
+	changed.ServerPID++
+	a := &attachment{service: s, handle: "attachment", generation: 1, target: testTarget(), resetGeneration: 1, control: true,
+		latest: baseline, snapshots: make(chan queuedSnapshot, 1)}
+	a.offerSnapshot(testSnapshot("B    \n     ", false, 5, 2))
+	a.offerSnapshot(changed)
+	a.offerSnapshot(testSnapshot("C   \n    ", false, 4, 2))
+	queued := <-a.snapshots
+	if queued.discontinuity != "identity_changed" {
+		t.Fatalf("skipped discontinuity = %q, want identity_changed", queued.discontinuity)
+	}
+	a.publishQueued(queued)
 	responses := decodeResponses(t, &output)
-	if len(responses) != 2 || responses[0].Type != mobileproto.ResponseReset || responses[0].Reason != mobileproto.ErrorOverflow ||
-		responses[1].Type != mobileproto.ResponseFrame || responses[1].ResetGeneration != 2 {
+	if len(responses) != 2 || responses[0].Type != mobileproto.ResponseReset || responses[0].Reason != "identity_changed" ||
+		responses[1].Type != mobileproto.ResponseError || responses[1].Error == nil || responses[1].Error.Code != mobileproto.ErrorIdentityChanged {
 		t.Fatalf("responses = %#v", responses)
 	}
 	if a.control {
-		t.Fatal("overflow retained mutation authority")
+		t.Fatal("skipped identity discontinuity retained mutation authority")
+	}
+}
+
+func TestExpectedResizeCoalescesToNewestMatchingFrame(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		columns, rows int
+	}{
+		{name: "changed size", columns: 5, rows: 3},
+		{name: "same size", columns: 4, rows: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var output bytes.Buffer
+			s := testService(&output)
+			baseline := testSnapshot("A   \n    ", false, 4, 2)
+			a := &attachment{service: s, handle: "attachment", generation: 1, target: testTarget(), resetGeneration: 2,
+				latest: baseline, snapshots: make(chan queuedSnapshot, 1), expectedColumns: tc.columns, expectedRows: tc.rows}
+			a.offerSnapshot(baseline)
+			content := strings.Repeat("B", tc.columns)
+			lines := make([]string, tc.rows)
+			for index := range lines {
+				lines[index] = content
+			}
+			a.offerSnapshot(testSnapshot(strings.Join(lines, "\n"), false, tc.columns, tc.rows))
+			queued := <-a.snapshots
+			if queued.discontinuity != "" {
+				t.Fatalf("expected resize marked %q", queued.discontinuity)
+			}
+			a.publishQueued(queued)
+			responses := decodeResponses(t, &output)
+			if len(responses) != 1 || responses[0].Type != mobileproto.ResponseFrame || responses[0].ResetGeneration != 2 ||
+				responses[0].Geometry == nil || responses[0].Geometry.Columns != tc.columns || responses[0].Geometry.Rows != tc.rows {
+				t.Fatalf("responses = %#v", responses)
+			}
+			if a.expectedColumns != 0 || a.expectedRows != 0 {
+				t.Fatalf("accepted geometry remained pending: %dx%d", a.expectedColumns, a.expectedRows)
+			}
+		})
+	}
+}
+
+func TestExpectedResizeFrameSupersededByWrongGeometryStillResets(t *testing.T) {
+	var output bytes.Buffer
+	s := testService(&output)
+	baseline := testSnapshot("A   \n    ", false, 4, 2)
+	a := &attachment{service: s, handle: "attachment", generation: 1, target: testTarget(), resetGeneration: 2, control: true,
+		latest: baseline, snapshots: make(chan queuedSnapshot, 1), expectedColumns: 5, expectedRows: 3}
+	a.offerSnapshot(testSnapshot("BBBBB\nBBBBB\nBBBBB", false, 5, 3))
+	a.offerSnapshot(testSnapshot("C   \n    ", false, 4, 2))
+	queued := <-a.snapshots
+	if queued.discontinuity != "geometry_changed" {
+		t.Fatalf("superseded expected geometry marked %q", queued.discontinuity)
+	}
+	a.publishQueued(queued)
+	responses := decodeResponses(t, &output)
+	if len(responses) != 1 || responses[0].Type != mobileproto.ResponseReset || responses[0].Reason != "geometry_changed" || responses[0].ResetGeneration != 3 {
+		t.Fatalf("responses = %#v", responses)
+	}
+	if a.control || a.expectedColumns != 0 || a.expectedRows != 0 || a.outputSequence != 0 {
+		t.Fatalf("superseded geometry retained authority: control=%t expected=%dx%d output=%d", a.control, a.expectedColumns, a.expectedRows, a.outputSequence)
+	}
+}
+
+func TestFullCaptureCoalescingBehindOperationDoesNotRevokeControl(t *testing.T) {
+	var output bytes.Buffer
+	s := testService(&output)
+	a := newAttachment(s, "attachment", "client", 1, testTarget())
+	a.mu.Lock()
+	a.control = true
+	a.latest = testSnapshot("0   \n    ", false, 4, 2)
+	a.mu.Unlock()
+	a.opMu.Lock() // Heartbeat holds this gate until its tmux acknowledgment.
+	close(a.ready)
+	a.offerSnapshot(testSnapshot("A   \n    ", false, 4, 2))
+	deadline := time.Now().Add(time.Second)
+	for len(a.snapshots) != 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if len(a.snapshots) != 0 {
+		a.opMu.Unlock()
+		a.stopAttachment()
+		t.Fatal("publisher did not reach operation gate")
+	}
+	a.offerSnapshot(testSnapshot("B   \n    ", false, 4, 2))
+	a.offerSnapshot(testSnapshot("C   \n    ", false, 4, 2))
+	a.opMu.Unlock()
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		a.mu.Lock()
+		count := a.outputSequence
+		a.mu.Unlock()
+		if count >= 2 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	a.mu.Lock()
+	controlled, sequence, reset := a.control, a.outputSequence, a.resetGeneration
+	a.mu.Unlock()
+	a.stopAttachment()
+	responses := decodeResponses(t, &output)
+	if !controlled || sequence != 2 || reset != 1 {
+		t.Fatalf("ordinary full-capture coalescing changed authority: control=%t sequence=%d reset=%d responses=%+v", controlled, sequence, reset, responses)
+	}
+	for _, response := range responses {
+		if response.Type == mobileproto.ResponseReset {
+			t.Fatalf("ordinary full captures emitted reset: %+v", response)
+		}
 	}
 }
 

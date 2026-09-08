@@ -1,0 +1,27 @@
+# Mobile output coalescing proof
+
+Task `td-342c45` fixes a physical-device M0 regression in the reviewed normalized-frame service. The isolated worktree and proof binary use integrated main `4ab09264eba6bc7ecb9b4a2ff8da48e95c609030` as their source baseline. This proof uses payload-free wire metadata from the task-owned live helper and synthetic terminal output in separate private tmux servers. It does not capture or reproduce user terminal content, change the active helper, or touch the default tmux server.
+
+## Physical observation
+
+The task-owned metadata proxy recorded frame sequences 101 through 106 at the same 46×23 geometry and reset generation 3. A heartbeat using operation sequence 75 arrived at `1788844978.201617` and was acknowledged 84.537 ms later with control still true and output sequence 106. The service emitted `reset_generation: 4, reason: overflow` 0.173 ms after that acknowledgment, followed by frame sequence 107 at the same geometry. Frames 106 and 107 were contiguous on the wire. The payload-free source remains `/tmp/sidecar-mobile-m0c-live-final/protocol-metadata.jsonl`; the active helper, config, target, and tmux server were not modified.
+
+The cause was the attachment's one-slot queue. A complete capture removed from the queue waits on the same operation lock that guards heartbeat and input. While it waited, a newer complete capture replaced another unpublished capture in the slot. The service treated that internal replacement as a missing output event even though output sequence numbers are assigned only when a frame is published. It revoked control and advanced the reset generation for a state the client had never been promised.
+
+## Candidate behavior
+
+The one-slot queue remains nonblocking and retains the newest complete capture. Replacing an unpublished capture in the same reset generation now coalesces ordinary content, cursor, rendition, and mode updates without advancing reset or revoking control. Output sequence numbers remain contiguous because only published frames receive them.
+
+A queued capture also carries a sticky skipped-discontinuity reason. If replacement would hide an observed target identity change, alternate-screen transition, or unrequested geometry transition, the eventual publisher still resets and revokes control. Identity has priority over alternate-screen, which has priority over geometry. Pre-resize captures remain ineligible to establish the new reset generation; a newest capture matching the accepted geometry can replace them, including for a same-size resize. If an accepted-geometry capture is itself superseded by a different geometry, the geometry discontinuity remains sticky. Transport/capture failures and the separate bounded outbound JSONL queue retain their existing fail-closed paths.
+
+## Focused verification
+
+`go test ./internal/mobile -run 'Test(SnapshotOffer|Skipped|ExpectedResize|FullCaptureCoalescing|UnexpectedGeometry|OutboundOverflow)' -count=1` passes. The same selection passes with `-race`. The production-path regression starts the attachment goroutine, holds its operation lock as heartbeat does while waiting for tmux acknowledgment, offers complete A/B/C captures with stable identity/geometry/reset, and then releases the lock. It publishes A and the newest C as output sequences 1 and 2, retains control, stays at reset generation 1, and emits no reset. Separate regressions prove sticky geometry, alternate-screen, and chained geometry-to-identity replacements, expected resize and same-size replacement, nonblocking capture delivery, and unchanged outbound overflow termination.
+
+The final owner gate runs pass for `internal/mobile`, `internal/mobileproto`, and `internal/tty`; the full affected `mobile` and `tty` packages also pass with the race detector. `go build ./...` passes and repository lint reports zero issues. The structured output is `/tmp/sidecar-mobile-output-coalescing-owner-gates.json`, SHA-256 `81c501adcec3cc9a747156f4fdf0074914a667171735314dad6bb61daed6d4aa`.
+
+The ordinary isolated terminal journey passed through two fresh service processes with input, Unicode and colored-cell fidelity, resize/reset/replacement, release, reconnect, and no replay. `/tmp/sidecar-mobile-overflow-real/result.json` has SHA-256 `188009b8c915b8288fd6ee83d90242a4b405caa0a4b581850944b773b3d992c5`; its transcript has SHA-256 `35b4f8a311a706aa1ff1242f47742b465dcbe3eccdfb3dea5e947009212e1b02`.
+
+A second private run emitted 240 synthetic changing lines at 8 ms intervals while the client sent two input operations and 30 heartbeat operations. During 2.660 seconds of active output, the service published 128 frames at 48.122 Hz. The full run published sequences 1 through 130 contiguously, emitted no reset, kept 80×24 geometry, acknowledged every heartbeat with 22.055–25.800 ms latency, showed the newest completion marker, released control, and exited cleanly. `/tmp/sidecar-mobile-overflow-stress3/stress-result.json` has SHA-256 `7910f49cc64f4960606e528ef7a6748db67bc4d79e15ed45af6b31b102b528b4`; the tested binary has SHA-256 `e66953ed4f11aee07ade700b854b6fe85303b64e5f9437ddc1fd45e1c4878d07`. Both private tmux servers were stopped by their owned cleanup paths.
+
+This candidate is not integrated or installed. Independent review completes this focused repair task; a refreshed physical-device run against the reviewed helper remains a parent M0-E acceptance obligation.

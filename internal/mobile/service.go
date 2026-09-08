@@ -830,7 +830,6 @@ type attachment struct {
 	control                                            bool
 	operationSequence, outputSequence, resetGeneration uint64
 	firstOutputForReset                                uint64
-	overflow                                           bool
 	expectedColumns, expectedRows                      int
 }
 
@@ -844,6 +843,7 @@ func newAttachment(service *Service, handle, clientID string, generation uint64,
 type queuedSnapshot struct {
 	snapshot        tty.ControlSnapshot
 	resetGeneration uint64
+	discontinuity   string
 }
 
 func (a *attachment) offerSnapshot(snapshot tty.ControlSnapshot) {
@@ -861,14 +861,58 @@ func (a *attachment) offerSnapshot(snapshot tty.ControlSnapshot) {
 	default:
 	}
 	if dropped.resetGeneration == queued.resetGeneration {
-		a.mu.Lock()
-		a.overflow = true
-		a.mu.Unlock()
+		queued.discontinuity = a.skippedDiscontinuity(dropped, queued)
 	}
 	select {
 	case a.snapshots <- queued:
 	default:
 	}
+}
+
+func (a *attachment) skippedDiscontinuity(dropped, replacement queuedSnapshot) string {
+	reason := dropped.discontinuity
+	a.mu.Lock()
+	latest := a.latest
+	expectedColumns, expectedRows := a.expectedColumns, a.expectedRows
+	a.mu.Unlock()
+	if captureIdentityChanged(dropped.snapshot, a.target.resolved) {
+		reason = strongerDiscontinuity(reason, "identity_changed")
+	}
+	hadLatest := latest.Pane != ""
+	if hadLatest && (dropped.snapshot.AltScreen != latest.AltScreen || dropped.snapshot.AltScreen != replacement.snapshot.AltScreen) {
+		reason = strongerDiscontinuity(reason, "alternate_screen")
+	}
+	if expectedColumns > 0 && expectedRows > 0 {
+		droppedWasExpected := dropped.snapshot.PaneWidth == expectedColumns && dropped.snapshot.PaneHeight == expectedRows
+		replacementIsExpected := replacement.snapshot.PaneWidth == expectedColumns && replacement.snapshot.PaneHeight == expectedRows
+		if droppedWasExpected && !replacementIsExpected {
+			reason = strongerDiscontinuity(reason, "geometry_changed")
+		}
+		return reason
+	}
+	if hadLatest && (snapshotGeometryChanged(latest, dropped.snapshot) || snapshotGeometryChanged(dropped.snapshot, replacement.snapshot)) {
+		reason = strongerDiscontinuity(reason, "geometry_changed")
+	}
+	return reason
+}
+
+func strongerDiscontinuity(current, candidate string) string {
+	priority := func(reason string) int {
+		switch reason {
+		case "identity_changed":
+			return 3
+		case "alternate_screen":
+			return 2
+		case "geometry_changed":
+			return 1
+		default:
+			return 0
+		}
+	}
+	if priority(candidate) > priority(current) {
+		return candidate
+	}
+	return current
 }
 
 func (a *attachment) offerFailure(err error) {
@@ -894,7 +938,7 @@ func (a *attachment) run() {
 		case err := <-a.failures:
 			a.fail("capture_failed", err)
 		case snapshot := <-a.snapshots:
-			a.publishObserved(snapshot.snapshot, snapshot.resetGeneration)
+			a.publishQueued(snapshot)
 		case <-ticker.C:
 			a.expirePresence()
 		}
@@ -909,21 +953,27 @@ func (a *attachment) publish(snapshot tty.ControlSnapshot) {
 }
 
 func (a *attachment) publishObserved(snapshot tty.ControlSnapshot, observedReset uint64) {
+	a.publishQueued(queuedSnapshot{snapshot: snapshot, resetGeneration: observedReset})
+}
+
+func (a *attachment) publishQueued(observed queuedSnapshot) {
 	a.opMu.Lock()
 	defer a.opMu.Unlock()
 	a.mu.Lock()
 	currentReset := a.resetGeneration
 	a.mu.Unlock()
-	if observedReset != currentReset {
+	if observed.resetGeneration != currentReset {
 		// The capture callback ran before a deliberate reset, but delivery was
 		// waiting behind that operation. It cannot establish post-reset state.
 		a.requestSnapshot()
 		return
 	}
+	snapshot := observed.snapshot
 	want := a.target.resolved
-	if snapshot.Pane != want.Pane || snapshot.Session != want.Session || snapshot.ServerPID != want.ServerPID || snapshot.SessionID != want.SessionID || snapshot.SessionCreated != want.SessionCreated {
+	if captureIdentityChanged(snapshot, want) || observed.discontinuity == "identity_changed" {
 		a.advanceResetLocked("identity_changed", true)
 		a.service.writeError("", mobileproto.ErrorIdentityChanged, "capture target identity changed", false)
+		a.requestSnapshot()
 		return
 	}
 	vt, modes, err := normalizedFullFrame(snapshot)
@@ -937,10 +987,8 @@ func (a *attachment) publishObserved(snapshot tty.ControlSnapshot, observedReset
 		return
 	}
 	a.mu.Lock()
-	overflow := a.overflow
-	a.overflow = false
 	hadLatest := a.latest.Pane != ""
-	geometryChanged := hadLatest && (a.latest.PaneWidth != snapshot.PaneWidth || a.latest.PaneHeight != snapshot.PaneHeight)
+	geometryChanged := hadLatest && snapshotGeometryChanged(a.latest, snapshot)
 	awaitingGeometry := a.expectedColumns > 0 && a.expectedRows > 0
 	expectedGeometry := awaitingGeometry && snapshot.PaneWidth == a.expectedColumns && snapshot.PaneHeight == a.expectedRows
 	if expectedGeometry {
@@ -952,15 +1000,24 @@ func (a *attachment) publishObserved(snapshot tty.ControlSnapshot, observedReset
 		// A capture already in flight when tmux acknowledged the resize still
 		// describes the old grid. Never relabel it as the first frame of the new
 		// reset generation; ask the ordered actor for a post-resize capture.
+		if observed.discontinuity != "" {
+			a.mu.Lock()
+			a.expectedColumns, a.expectedRows = 0, 0
+			a.mu.Unlock()
+			a.advanceResetLocked(observed.discontinuity, true)
+		}
 		a.requestSnapshot()
 		return
 	}
-	if overflow {
-		a.advanceResetLocked(mobileproto.ErrorOverflow, true)
-	} else if altChanged {
-		a.advanceResetLocked("alternate_screen", true)
-	} else if geometryChanged && !expectedGeometry {
-		a.advanceResetLocked("geometry_changed", true)
+	reason := observed.discontinuity
+	if altChanged {
+		reason = strongerDiscontinuity(reason, "alternate_screen")
+	}
+	if geometryChanged && !expectedGeometry {
+		reason = strongerDiscontinuity(reason, "geometry_changed")
+	}
+	if reason != "" {
+		a.advanceResetLocked(reason, true)
 	}
 	a.mu.Lock()
 	a.latest = snapshot
@@ -981,6 +1038,14 @@ func (a *attachment) publishObserved(snapshot tty.ControlSnapshot, observedReset
 		a.service.abort(err)
 		a.advanceResetLocked("output_unavailable", true)
 	}
+}
+
+func captureIdentityChanged(snapshot tty.ControlSnapshot, want ResolvedTarget) bool {
+	return snapshot.Pane != want.Pane || snapshot.Session != want.Session || snapshot.ServerPID != want.ServerPID || snapshot.SessionID != want.SessionID || snapshot.SessionCreated != want.SessionCreated
+}
+
+func snapshotGeometryChanged(first, second tty.ControlSnapshot) bool {
+	return first.PaneWidth != second.PaneWidth || first.PaneHeight != second.PaneHeight
 }
 
 func (a *attachment) fail(reason string, err error) {
