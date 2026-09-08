@@ -1869,10 +1869,10 @@ sidecar mobile serve --stdio
 
 Query the mobile Sessions catalog
 
-Collect the same workspace inventory from this hub and each available registered owner, then apply the same Activity, Project, Recent, or Name ordering as the Sessions browser. A newly started one-shot query waits briefly for initial remote health and returns connecting or unavailable hosts as explicit partial failures. Filters are repeatable and server-applied. Worktrees expose zero, one, or several exact server-owned terminal candidates; several choices keep the parent row ambiguous until the client echoes one candidate selector with its expected identity.
+Collect the same workspace inventory from this hub and each available registered owner, then apply the same Activity, Project, Recent, or Name ordering as the Sessions browser. A newly started one-shot query waits briefly for initial remote health and returns connecting or unavailable hosts as explicit partial failures. Filters are repeatable and server-applied. --show-idle-sessions=false matches the desktop default by excluding only the shared No Session group; omitting it preserves the legacy all-row query. Worktrees expose zero, one, or several exact server-owned terminal candidates; several choices keep the parent row ambiguous until the client echoes one candidate selector with its expected identity.
 
 ```
-Usage: sidecar mobile sessions --json [--sort MODE] [--search TEXT] [--host ID] [--provider NAME] [--state STATE]
+Usage: sidecar mobile sessions --json [--sort MODE] [--search TEXT] [--host ID] [--provider NAME] [--state STATE] [--show-idle-sessions BOOL]
 ```
 
 **Options:**
@@ -1883,6 +1883,7 @@ Usage: sidecar mobile sessions --json [--sort MODE] [--search TEXT] [--host ID] 
 - `--host ID`: Include one owning host (repeatable)
 - `--provider NAME`: Include one provider (repeatable)
 - `--state STATE`: Include one status, group, or attachment state (repeatable)
+- `--show-idle-sessions BOOL`: Include no-session rows; false matches the desktop default
 - `-h, --help`: Show this help
 
 **Exit codes:**

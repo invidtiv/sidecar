@@ -104,11 +104,12 @@ type Request struct {
 // ordering and filtering semantics; clients persist preferences and send them
 // back rather than reimplementing the rules.
 type CatalogQuery struct {
-	Sort      string   `json:"sort,omitempty"`
-	Search    string   `json:"search,omitempty"`
-	Hosts     []string `json:"hosts,omitempty"`
-	Providers []string `json:"providers,omitempty"`
-	States    []string `json:"states,omitempty"`
+	Sort             string   `json:"sort,omitempty"`
+	Search           string   `json:"search,omitempty"`
+	Hosts            []string `json:"hosts,omitempty"`
+	Providers        []string `json:"providers,omitempty"`
+	States           []string `json:"states,omitempty"`
+	ShowIdleSessions *bool    `json:"show_idle_sessions,omitempty"`
 }
 
 type CatalogHost struct {

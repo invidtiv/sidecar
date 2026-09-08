@@ -1698,6 +1698,565 @@
           "total": 1
         }
       }
+    },
+    {
+      "id": "hide-idle-sessions",
+      "request": {
+        "version": 0,
+        "type": "sessions",
+        "request_id": "catalog-hide-idle-sessions",
+        "catalog_query": {
+          "sort": "activity",
+          "show_idle_sessions": false
+        }
+      },
+      "response": {
+        "version": 0,
+        "type": "sessions",
+        "request_id": "catalog-hide-idle-sessions",
+        "api_instance": "api_fixture",
+        "catalog": {
+          "generation": "17fca7e1214423935f140d32116cf4d9",
+          "observed_at": "2026-09-07T18:00:00Z",
+          "hub_id": "aerie",
+          "owner_host_id": "local:aerie",
+          "owner_config_generation": "config-7",
+          "query": {
+            "sort": "activity",
+            "show_idle_sessions": false
+          },
+          "hosts": [
+            {
+              "id": "local:aerie",
+              "name": "aerie",
+              "state": "online",
+              "local": true
+            }
+          ],
+          "sections": [
+            {
+              "title": "Needs Attention",
+              "group": "Needs Attention",
+              "rows": [
+                {
+                  "id": "two:worktree:blocked",
+                  "owner_host_id": "local:aerie",
+                  "project_id": "/two",
+                  "project_name": "Two",
+                  "workspace_kind": "worktree",
+                  "display_name": "Blocked",
+                  "provider": "claude",
+                  "status": "blocked",
+                  "group": "Needs Attention",
+                  "session": "sidecar-wt-blocked",
+                  "pane": "%5",
+                  "attach_state": "unsupported",
+                  "refusal_code": "unsupported",
+                  "refusal": "worktree terminal attachment is not available in this catalog slice",
+                  "observed_at": "2026-09-07T18:00:00Z",
+                  "changed_at": "2026-09-07T17:58:00Z",
+                  "live": true,
+                  "ambiguous": false,
+                  "stale": false,
+                  "semantic_status": true,
+                  "attention": true,
+                  "attachment_ready": false
+                }
+              ]
+            },
+            {
+              "title": "Working",
+              "group": "Working",
+              "rows": [
+                {
+                  "id": "one:worktree:working",
+                  "owner_host_id": "local:aerie",
+                  "project_id": "/one",
+                  "project_name": "One",
+                  "workspace_kind": "worktree",
+                  "display_name": "Working",
+                  "branch": "feature/mobile",
+                  "task": "td-one",
+                  "provider": "codex",
+                  "status": "working",
+                  "group": "Working",
+                  "session": "sidecar-wt-working",
+                  "pane": "%1",
+                  "attach_state": "unsupported",
+                  "refusal_code": "unsupported",
+                  "refusal": "worktree terminal attachment is not available in this catalog slice",
+                  "observed_at": "2026-09-07T18:00:00Z",
+                  "changed_at": "2026-09-07T17:59:00Z",
+                  "live": true,
+                  "ambiguous": false,
+                  "stale": false,
+                  "semantic_status": true,
+                  "attention": false,
+                  "attachment_ready": false
+                }
+              ]
+            },
+            {
+              "title": "Live Shells",
+              "group": "Live Shells",
+              "rows": [
+                {
+                  "id": "one:shell:durable",
+                  "owner_host_id": "local:aerie",
+                  "project_id": "/one",
+                  "project_name": "One",
+                  "workspace_id": "one",
+                  "workspace_kind": "shell",
+                  "display_name": "Durable Shell",
+                  "status": "live",
+                  "group": "Live Shells",
+                  "session": "sidecar-sh-durable",
+                  "pane": "%2",
+                  "target": "sidecar-sh-durable",
+                  "candidate_generation": "f8ba581eccf0f5d938b5442e83868f05",
+                  "expected_target": {
+                    "hub_id": "aerie",
+                    "owner_host_id": "local:aerie",
+                    "owner_config_generation": "config-7",
+                    "workspace_id": "one",
+                    "workspace_kind": "shell",
+                    "session": "sidecar-sh-durable",
+                    "pane": "%2",
+                    "server_incarnation": "pid=42",
+                    "target_generation": "d06296e3f61ae1b8fa454f3265f10f88"
+                  },
+                  "attach_state": "ready",
+                  "observed_at": "2026-09-07T18:00:00Z",
+                  "live": true,
+                  "ambiguous": false,
+                  "stale": false,
+                  "semantic_status": false,
+                  "attention": false,
+                  "attachment_ready": true
+                },
+                {
+                  "id": "one:shell:unknown",
+                  "owner_host_id": "local:aerie",
+                  "project_id": "/one",
+                  "project_name": "One",
+                  "workspace_kind": "shell",
+                  "display_name": "Unknown Identity",
+                  "status": "live",
+                  "group": "Live Shells",
+                  "session": "sidecar-sh-unknown",
+                  "pane": "%3",
+                  "attach_state": "unknown",
+                  "refusal_code": "identity_changed",
+                  "refusal": "managed shell durable identity is unavailable",
+                  "observed_at": "2026-09-07T18:00:00Z",
+                  "live": true,
+                  "ambiguous": false,
+                  "stale": false,
+                  "semantic_status": false,
+                  "attention": false,
+                  "attachment_ready": false
+                },
+                {
+                  "id": "one:shell:duplicate",
+                  "owner_host_id": "local:aerie",
+                  "project_id": "/one",
+                  "project_name": "One",
+                  "workspace_kind": "shell",
+                  "display_name": "Duplicate One",
+                  "status": "live",
+                  "group": "Live Shells",
+                  "session": "sidecar-sh-collision",
+                  "pane": "%4",
+                  "attach_state": "ambiguous",
+                  "refusal_code": "target_ambiguous",
+                  "refusal": "terminal target is claimed by multiple catalog rows",
+                  "observed_at": "2026-09-07T18:00:00Z",
+                  "live": true,
+                  "ambiguous": true,
+                  "stale": false,
+                  "semantic_status": false,
+                  "attention": false,
+                  "attachment_ready": false
+                },
+                {
+                  "id": "two:shell:duplicate",
+                  "owner_host_id": "local:aerie",
+                  "project_id": "/two",
+                  "project_name": "Two",
+                  "workspace_kind": "shell",
+                  "display_name": "Duplicate Two",
+                  "status": "live",
+                  "group": "Live Shells",
+                  "session": "sidecar-sh-collision",
+                  "pane": "%6",
+                  "attach_state": "ambiguous",
+                  "refusal_code": "target_ambiguous",
+                  "refusal": "terminal target is claimed by multiple catalog rows",
+                  "observed_at": "2026-09-07T18:00:00Z",
+                  "live": true,
+                  "ambiguous": true,
+                  "stale": false,
+                  "semantic_status": false,
+                  "attention": false,
+                  "attachment_ready": false
+                },
+                {
+                  "id": "two:shell:stale",
+                  "owner_host_id": "local:aerie",
+                  "project_id": "/stale",
+                  "project_name": "Stale",
+                  "workspace_kind": "shell",
+                  "display_name": "Stale Shell",
+                  "status": "live · stale",
+                  "group": "Live Shells",
+                  "session": "sidecar-sh-stale",
+                  "pane": "%7",
+                  "attach_state": "stale",
+                  "refusal_code": "identity_changed",
+                  "refusal": "catalog observation is stale",
+                  "observed_at": "2026-09-07T18:00:00Z",
+                  "live": true,
+                  "ambiguous": false,
+                  "stale": true,
+                  "semantic_status": false,
+                  "attention": false,
+                  "attachment_ready": false
+                }
+              ]
+            },
+            {
+              "title": "Paused",
+              "group": "Paused",
+              "rows": [
+                {
+                  "id": "one:shell:ambiguous",
+                  "owner_host_id": "local:aerie",
+                  "project_id": "/one",
+                  "project_name": "One",
+                  "workspace_kind": "shell",
+                  "display_name": "Ambiguous Shell",
+                  "status": "ambiguous panes",
+                  "group": "Paused",
+                  "session": "sidecar-sh-ambiguous",
+                  "attach_state": "ambiguous",
+                  "refusal_code": "target_ambiguous",
+                  "refusal": "workspace matches multiple terminal panes",
+                  "observed_at": "2026-09-07T18:00:00Z",
+                  "live": false,
+                  "ambiguous": true,
+                  "stale": false,
+                  "semantic_status": false,
+                  "attention": false,
+                  "attachment_ready": false
+                }
+              ]
+            }
+          ],
+          "failures": [
+            {
+              "scope": "project",
+              "id": "/missing",
+              "name": "Missing",
+              "state": "unavailable",
+              "detail": "file does not exist"
+            }
+          ],
+          "total": 8
+        }
+      }
+    },
+    {
+      "id": "show-idle-sessions",
+      "request": {
+        "version": 0,
+        "type": "sessions",
+        "request_id": "catalog-show-idle-sessions",
+        "catalog_query": {
+          "sort": "activity",
+          "show_idle_sessions": true
+        }
+      },
+      "response": {
+        "version": 0,
+        "type": "sessions",
+        "request_id": "catalog-show-idle-sessions",
+        "api_instance": "api_fixture",
+        "catalog": {
+          "generation": "17fca7e1214423935f140d32116cf4d9",
+          "observed_at": "2026-09-07T18:00:00Z",
+          "hub_id": "aerie",
+          "owner_host_id": "local:aerie",
+          "owner_config_generation": "config-7",
+          "query": {
+            "sort": "activity",
+            "show_idle_sessions": true
+          },
+          "hosts": [
+            {
+              "id": "local:aerie",
+              "name": "aerie",
+              "state": "online",
+              "local": true
+            }
+          ],
+          "sections": [
+            {
+              "title": "Needs Attention",
+              "group": "Needs Attention",
+              "rows": [
+                {
+                  "id": "two:worktree:blocked",
+                  "owner_host_id": "local:aerie",
+                  "project_id": "/two",
+                  "project_name": "Two",
+                  "workspace_kind": "worktree",
+                  "display_name": "Blocked",
+                  "provider": "claude",
+                  "status": "blocked",
+                  "group": "Needs Attention",
+                  "session": "sidecar-wt-blocked",
+                  "pane": "%5",
+                  "attach_state": "unsupported",
+                  "refusal_code": "unsupported",
+                  "refusal": "worktree terminal attachment is not available in this catalog slice",
+                  "observed_at": "2026-09-07T18:00:00Z",
+                  "changed_at": "2026-09-07T17:58:00Z",
+                  "live": true,
+                  "ambiguous": false,
+                  "stale": false,
+                  "semantic_status": true,
+                  "attention": true,
+                  "attachment_ready": false
+                }
+              ]
+            },
+            {
+              "title": "Working",
+              "group": "Working",
+              "rows": [
+                {
+                  "id": "one:worktree:working",
+                  "owner_host_id": "local:aerie",
+                  "project_id": "/one",
+                  "project_name": "One",
+                  "workspace_kind": "worktree",
+                  "display_name": "Working",
+                  "branch": "feature/mobile",
+                  "task": "td-one",
+                  "provider": "codex",
+                  "status": "working",
+                  "group": "Working",
+                  "session": "sidecar-wt-working",
+                  "pane": "%1",
+                  "attach_state": "unsupported",
+                  "refusal_code": "unsupported",
+                  "refusal": "worktree terminal attachment is not available in this catalog slice",
+                  "observed_at": "2026-09-07T18:00:00Z",
+                  "changed_at": "2026-09-07T17:59:00Z",
+                  "live": true,
+                  "ambiguous": false,
+                  "stale": false,
+                  "semantic_status": true,
+                  "attention": false,
+                  "attachment_ready": false
+                }
+              ]
+            },
+            {
+              "title": "Live Shells",
+              "group": "Live Shells",
+              "rows": [
+                {
+                  "id": "one:shell:durable",
+                  "owner_host_id": "local:aerie",
+                  "project_id": "/one",
+                  "project_name": "One",
+                  "workspace_id": "one",
+                  "workspace_kind": "shell",
+                  "display_name": "Durable Shell",
+                  "status": "live",
+                  "group": "Live Shells",
+                  "session": "sidecar-sh-durable",
+                  "pane": "%2",
+                  "target": "sidecar-sh-durable",
+                  "candidate_generation": "f8ba581eccf0f5d938b5442e83868f05",
+                  "expected_target": {
+                    "hub_id": "aerie",
+                    "owner_host_id": "local:aerie",
+                    "owner_config_generation": "config-7",
+                    "workspace_id": "one",
+                    "workspace_kind": "shell",
+                    "session": "sidecar-sh-durable",
+                    "pane": "%2",
+                    "server_incarnation": "pid=42",
+                    "target_generation": "d06296e3f61ae1b8fa454f3265f10f88"
+                  },
+                  "attach_state": "ready",
+                  "observed_at": "2026-09-07T18:00:00Z",
+                  "live": true,
+                  "ambiguous": false,
+                  "stale": false,
+                  "semantic_status": false,
+                  "attention": false,
+                  "attachment_ready": true
+                },
+                {
+                  "id": "one:shell:unknown",
+                  "owner_host_id": "local:aerie",
+                  "project_id": "/one",
+                  "project_name": "One",
+                  "workspace_kind": "shell",
+                  "display_name": "Unknown Identity",
+                  "status": "live",
+                  "group": "Live Shells",
+                  "session": "sidecar-sh-unknown",
+                  "pane": "%3",
+                  "attach_state": "unknown",
+                  "refusal_code": "identity_changed",
+                  "refusal": "managed shell durable identity is unavailable",
+                  "observed_at": "2026-09-07T18:00:00Z",
+                  "live": true,
+                  "ambiguous": false,
+                  "stale": false,
+                  "semantic_status": false,
+                  "attention": false,
+                  "attachment_ready": false
+                },
+                {
+                  "id": "one:shell:duplicate",
+                  "owner_host_id": "local:aerie",
+                  "project_id": "/one",
+                  "project_name": "One",
+                  "workspace_kind": "shell",
+                  "display_name": "Duplicate One",
+                  "status": "live",
+                  "group": "Live Shells",
+                  "session": "sidecar-sh-collision",
+                  "pane": "%4",
+                  "attach_state": "ambiguous",
+                  "refusal_code": "target_ambiguous",
+                  "refusal": "terminal target is claimed by multiple catalog rows",
+                  "observed_at": "2026-09-07T18:00:00Z",
+                  "live": true,
+                  "ambiguous": true,
+                  "stale": false,
+                  "semantic_status": false,
+                  "attention": false,
+                  "attachment_ready": false
+                },
+                {
+                  "id": "two:shell:duplicate",
+                  "owner_host_id": "local:aerie",
+                  "project_id": "/two",
+                  "project_name": "Two",
+                  "workspace_kind": "shell",
+                  "display_name": "Duplicate Two",
+                  "status": "live",
+                  "group": "Live Shells",
+                  "session": "sidecar-sh-collision",
+                  "pane": "%6",
+                  "attach_state": "ambiguous",
+                  "refusal_code": "target_ambiguous",
+                  "refusal": "terminal target is claimed by multiple catalog rows",
+                  "observed_at": "2026-09-07T18:00:00Z",
+                  "live": true,
+                  "ambiguous": true,
+                  "stale": false,
+                  "semantic_status": false,
+                  "attention": false,
+                  "attachment_ready": false
+                },
+                {
+                  "id": "two:shell:stale",
+                  "owner_host_id": "local:aerie",
+                  "project_id": "/stale",
+                  "project_name": "Stale",
+                  "workspace_kind": "shell",
+                  "display_name": "Stale Shell",
+                  "status": "live · stale",
+                  "group": "Live Shells",
+                  "session": "sidecar-sh-stale",
+                  "pane": "%7",
+                  "attach_state": "stale",
+                  "refusal_code": "identity_changed",
+                  "refusal": "catalog observation is stale",
+                  "observed_at": "2026-09-07T18:00:00Z",
+                  "live": true,
+                  "ambiguous": false,
+                  "stale": true,
+                  "semantic_status": false,
+                  "attention": false,
+                  "attachment_ready": false
+                }
+              ]
+            },
+            {
+              "title": "Paused",
+              "group": "Paused",
+              "rows": [
+                {
+                  "id": "one:shell:ambiguous",
+                  "owner_host_id": "local:aerie",
+                  "project_id": "/one",
+                  "project_name": "One",
+                  "workspace_kind": "shell",
+                  "display_name": "Ambiguous Shell",
+                  "status": "ambiguous panes",
+                  "group": "Paused",
+                  "session": "sidecar-sh-ambiguous",
+                  "attach_state": "ambiguous",
+                  "refusal_code": "target_ambiguous",
+                  "refusal": "workspace matches multiple terminal panes",
+                  "observed_at": "2026-09-07T18:00:00Z",
+                  "live": false,
+                  "ambiguous": true,
+                  "stale": false,
+                  "semantic_status": false,
+                  "attention": false,
+                  "attachment_ready": false
+                }
+              ]
+            },
+            {
+              "title": "No Session",
+              "group": "No Session",
+              "rows": [
+                {
+                  "id": "one:worktree:plain",
+                  "owner_host_id": "local:aerie",
+                  "project_id": "/one",
+                  "project_name": "One",
+                  "workspace_kind": "worktree",
+                  "display_name": "Plain Worktree",
+                  "branch": "main",
+                  "status": "no session",
+                  "group": "No Session",
+                  "attach_state": "unavailable",
+                  "refusal_code": "target_not_found",
+                  "refusal": "workspace has no live terminal pane",
+                  "observed_at": "2026-09-07T18:00:00Z",
+                  "live": false,
+                  "ambiguous": false,
+                  "stale": false,
+                  "semantic_status": false,
+                  "attention": false,
+                  "attachment_ready": false
+                }
+              ]
+            }
+          ],
+          "failures": [
+            {
+              "scope": "project",
+              "id": "/missing",
+              "name": "Missing",
+              "state": "unavailable",
+              "detail": "file does not exist"
+            }
+          ],
+          "total": 9
+        }
+      }
     }
   ]
 }

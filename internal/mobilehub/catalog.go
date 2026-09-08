@@ -44,7 +44,8 @@ func RemapOwnerCatalog(authority CatalogAuthority, snapshot mobileproto.CatalogS
 		snapshot.HubID == "" || snapshot.OwnerHostID == "" || snapshot.OwnerConfigGeneration == "" {
 		return RemappedCatalog{}, fmt.Errorf("mobile hub: incomplete catalog authority")
 	}
-	if strings.ToLower(snapshot.Query.Sort) != "project" || snapshot.Query.Search != "" || len(snapshot.Query.Hosts) != 0 || len(snapshot.Query.Providers) != 0 || len(snapshot.Query.States) != 0 {
+	if strings.ToLower(snapshot.Query.Sort) != "project" || snapshot.Query.Search != "" || len(snapshot.Query.Hosts) != 0 || len(snapshot.Query.Providers) != 0 || len(snapshot.Query.States) != 0 ||
+		(snapshot.Query.ShowIdleSessions != nil && !*snapshot.Query.ShowIdleSessions) {
 		return RemappedCatalog{}, fmt.Errorf("mobile hub: owner catalog must be an unfiltered project snapshot")
 	}
 	if err := validateRawOwnerCatalog(snapshot); err != nil {

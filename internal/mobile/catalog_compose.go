@@ -120,7 +120,8 @@ func validateComposedHosts(catalogHosts []mobileproto.CatalogHost, ownerHostID s
 func validateCompositionSource(hubID string, source CatalogSource) error {
 	snapshot := source.Snapshot
 	if snapshot.HubID != hubID || snapshot.OwnerHostID != source.OwnerHostID || snapshot.OwnerConfigGeneration == "" ||
-		strings.ToLower(snapshot.Query.Sort) != "project" || snapshot.Query.Search != "" || len(snapshot.Query.Hosts) != 0 || len(snapshot.Query.Providers) != 0 || len(snapshot.Query.States) != 0 {
+		strings.ToLower(snapshot.Query.Sort) != "project" || snapshot.Query.Search != "" || len(snapshot.Query.Hosts) != 0 || len(snapshot.Query.Providers) != 0 || len(snapshot.Query.States) != 0 ||
+		(snapshot.Query.ShowIdleSessions != nil && !*snapshot.Query.ShowIdleSessions) {
 		return &ResolveError{Code: mobileproto.ErrorIdentityChanged, Message: "combined mobile catalog source is not an authoritative unfiltered project snapshot"}
 	}
 	return nil

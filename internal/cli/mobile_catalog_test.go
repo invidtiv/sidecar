@@ -26,9 +26,10 @@ func TestParseMobileCatalogArgs(t *testing.T) {
 	env := Env{Stdout: &bytes.Buffer{}, Stderr: &stderr, Ctx: context.Background()}
 	query, code := parseMobileCatalogArgs(env, []string{
 		"--json", "--sort=recent", "--search", "sidecar blocked", "--host", "local:aerie", "--host=remote:studio",
-		"--provider", "codex", "--state", "working", "--state=ready",
+		"--provider", "codex", "--state", "working", "--state=ready", "--show-idle-sessions=false",
 	}, "help")
-	want := mobileproto.CatalogQuery{Sort: "recent", Search: "sidecar blocked", Hosts: []string{"local:aerie", "remote:studio"}, Providers: []string{"codex"}, States: []string{"working", "ready"}}
+	showIdle := false
+	want := mobileproto.CatalogQuery{Sort: "recent", Search: "sidecar blocked", Hosts: []string{"local:aerie", "remote:studio"}, Providers: []string{"codex"}, States: []string{"working", "ready"}, ShowIdleSessions: &showIdle}
 	if code != 0 || stderr.Len() != 0 || !reflect.DeepEqual(query, want) {
 		t.Fatalf("parse = %+v code=%d stderr=%q, want %+v", query, code, stderr.String(), want)
 	}
@@ -82,6 +83,7 @@ func TestParseMobileCatalogArgsRequiresStructuredOutputAndValues(t *testing.T) {
 	}{
 		{name: "structured output", args: []string{"--sort", "name"}, want: "--json is required"},
 		{name: "missing value", args: []string{"--json", "--host"}, want: "--host requires a value"},
+		{name: "invalid idle value", args: []string{"--json", "--show-idle-sessions=maybe"}, want: "--show-idle-sessions must be true or false"},
 		{name: "unknown", args: []string{"--json", "--wat=one"}, want: "unknown mobile sessions flag"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -99,7 +101,7 @@ func TestMobileSessionsCommandPublishesCatalogContract(t *testing.T) {
 	if command == nil || command.Agent.Invocation != "sidecar mobile sessions --json" {
 		t.Fatalf("sessions command = %+v", command)
 	}
-	for _, name := range []string{"--sort", "--search", "--host", "--provider", "--state"} {
+	for _, name := range []string{"--sort", "--search", "--host", "--provider", "--state", "--show-idle-sessions"} {
 		found := false
 		for _, flag := range command.Flags {
 			found = found || flag.Name == name
@@ -107,6 +109,76 @@ func TestMobileSessionsCommandPublishesCatalogContract(t *testing.T) {
 		if !found {
 			t.Fatalf("sessions command omits %s", name)
 		}
+	}
+}
+
+func TestMobileCatalogShellResolverScansProjectsOncePerSnapshot(t *testing.T) {
+	stateDir := t.TempDir()
+	countPath := filepath.Join(t.TempDir(), "git-count")
+	binDir := t.TempDir()
+	gitScript := `#!/bin/sh
+printf x >> "$MOBILE_GIT_COUNT"
+root=
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-C" ]; then
+    shift
+    root=$1
+  fi
+  shift
+done
+printf 'worktree %s\nHEAD 0123456789abcdef\nbranch refs/heads/main\n' "$root"
+`
+	if err := os.WriteFile(filepath.Join(binDir, "git"), []byte(gitScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("MOBILE_GIT_COUNT", countPath)
+	created := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
+	var sessions []string
+	for projectIndex := 1; projectIndex <= 2; projectIndex++ {
+		key := fmt.Sprintf("project-%d", projectIndex)
+		root := filepath.Join(t.TempDir(), key)
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		projectState := filepath.Join(stateDir, "projects", key)
+		if err := os.MkdirAll(projectState, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(projectState, "meta.json"), []byte(fmt.Sprintf(`{"path":%q}`, root)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		definitions := make([]string, 0, 3)
+		for shellIndex := 1; shellIndex <= 3; shellIndex++ {
+			session := fmt.Sprintf("sidecar-sh-%d-%d", projectIndex, shellIndex)
+			sessions = append(sessions, session)
+			definitions = append(definitions, fmt.Sprintf(`{"tmuxName":%q,"displayName":%q,"namespace":%q,"createdAt":%q,"agentType":"codex"}`,
+				session, session, tmuxenv.Namespace(), created.Format(time.RFC3339Nano)))
+		}
+		manifest := fmt.Sprintf(`{"version":3,"shells":[%s]}`, strings.Join(definitions, ","))
+		if err := os.WriteFile(filepath.Join(projectState, "shells.json"), []byte(manifest), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inspections := 0
+	resolver := newMobileCatalogShellResolver(Env{Ctx: context.Background(), StateDir: stateDir}, func(_ context.Context, session string) (tty.HeadlessTargetIdentity, error) {
+		inspections++
+		return tty.HeadlessTargetIdentity{ServerPID: 42, SessionID: "$1", SessionCreated: "1700000000", Session: session, Pane: "%1", Width: 80, Height: 24}, nil
+	})
+	for _, session := range sessions {
+		if _, err := resolver(context.Background(), session); err != nil {
+			t.Fatalf("resolve %s: %v", session, err)
+		}
+	}
+	count, err := os.ReadFile(countPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(count), 2; got != want {
+		t.Fatalf("git discovery calls = %d, want %d projects for %d shells", got, want, len(sessions))
+	}
+	if inspections != len(sessions) {
+		t.Fatalf("pane inspections = %d, want %d", inspections, len(sessions))
 	}
 }
 

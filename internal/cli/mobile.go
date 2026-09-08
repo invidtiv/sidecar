@@ -41,12 +41,13 @@ func mobileCommand() *Command {
 		Mutates:   true, Run: runMobileServe,
 	}
 	sessions := &Command{
-		Name: "sessions", Summary: "Query the mobile Sessions catalog", Usage: "sidecar mobile sessions --json [--sort MODE] [--search TEXT] [--host ID] [--provider NAME] [--state STATE]",
-		Long: "Collect the same workspace inventory from this hub and each available registered owner, then apply the same Activity, Project, Recent, or Name ordering as the Sessions browser. A newly started one-shot query waits briefly for initial remote health and returns connecting or unavailable hosts as explicit partial failures. Filters are repeatable and server-applied. Worktrees expose zero, one, or several exact server-owned terminal candidates; several choices keep the parent row ambiguous until the client echoes one candidate selector with its expected identity.",
+		Name: "sessions", Summary: "Query the mobile Sessions catalog", Usage: "sidecar mobile sessions --json [--sort MODE] [--search TEXT] [--host ID] [--provider NAME] [--state STATE] [--show-idle-sessions BOOL]",
+		Long: "Collect the same workspace inventory from this hub and each available registered owner, then apply the same Activity, Project, Recent, or Name ordering as the Sessions browser. A newly started one-shot query waits briefly for initial remote health and returns connecting or unavailable hosts as explicit partial failures. Filters are repeatable and server-applied. --show-idle-sessions=false matches the desktop default by excluding only the shared No Session group; omitting it preserves the legacy all-row query. Worktrees expose zero, one, or several exact server-owned terminal candidates; several choices keep the parent row ambiguous until the client echoes one candidate selector with its expected identity.",
 		Flags: []Flag{{Name: "--json", Summary: "Write one structured catalog snapshot to stdout", Bool: true},
 			{Name: "--sort", Arg: "MODE", Summary: "activity, project, recent, or name"}, {Name: "--search", Arg: "TEXT", Summary: "Match Sessions fields"},
 			{Name: "--host", Arg: "ID", Summary: "Include one owning host (repeatable)"}, {Name: "--provider", Arg: "NAME", Summary: "Include one provider (repeatable)"},
-			{Name: "--state", Arg: "STATE", Summary: "Include one status, group, or attachment state (repeatable)"}, {Name: "--help", Short: "-h", Summary: "Show this help", Bool: true}},
+			{Name: "--state", Arg: "STATE", Summary: "Include one status, group, or attachment state (repeatable)"},
+			{Name: "--show-idle-sessions", Arg: "BOOL", Summary: "Include no-session rows; false matches the desktop default"}, {Name: "--help", Short: "-h", Summary: "Show this help", Bool: true}},
 		ExitCodes: []ExitCode{{Code: 0, Summary: "success"}, {Code: 1, Summary: "catalog unavailable"}, {Code: 2, Summary: "usage error"}},
 		Examples:  []Example{{Command: "sidecar mobile sessions --json --sort activity"}, {Command: "sidecar mobile sessions --json --search sidecar --state working"}},
 		Agent:     AgentDoc{Invocation: "sidecar mobile sessions --json", Summary: "Query the ordered Sessions catalog and attachment readiness"}, Run: runMobileSessions,
@@ -201,6 +202,18 @@ func parseMobileCatalogArgs(env Env, args []string, help string) (mobileproto.Ca
 			query.Providers = append(query.Providers, value)
 		case "--state":
 			query.States = append(query.States, value)
+		case "--show-idle-sessions":
+			var show bool
+			switch strings.ToLower(strings.TrimSpace(value)) {
+			case "true":
+				show = true
+			case "false":
+				show = false
+			default:
+				cliErrf(env.Stderr, "--show-idle-sessions must be true or false\n\n%s", help)
+				return query, 2
+			}
+			query.ShowIdleSessions = &show
 		default:
 			cliErrf(env.Stderr, "unknown mobile sessions flag %q\n\n%s", name, help)
 			return query, 2
@@ -217,7 +230,18 @@ func mobileCatalogProvider(env Env) mobile.CatalogProvider {
 	seed := activitystore.Load(filepath.Join(env.StateDir, activitystore.FileName), time.Now())
 	collector := workspaceinventory.Collector{}.WithDefaults()
 	collector = collector.SeedTrackers(seed)
-	return newMobileCatalogProvider(env, configuredProjects, collector, seed, time.Now)
+	provider := newMobileCatalogProvider(env, configuredProjects, collector, seed, time.Now)
+	return func(ctx context.Context) (mobile.CatalogInput, error) {
+		input, err := provider(ctx)
+		if err != nil {
+			return mobile.CatalogInput{}, err
+		}
+		// One target scan is enough to authorize every managed-shell row in
+		// this snapshot. The service resolver remains fresh for resolve/open
+		// and every later target operation.
+		input.Resolver = newMobileCatalogShellResolver(env, tty.InspectHeadlessTarget)
+		return input, nil
+	}
 }
 
 func newMobileCatalogProvider(env Env, loadProjects func() ([]hostserve.Project, error), collector workspaceinventory.Collector, seed map[string]agentactivity.Tracker, now func() time.Time) mobile.CatalogProvider {
@@ -319,25 +343,45 @@ func mobileResolver(env Env) mobile.Resolver {
 			host, _ := os.Hostname()
 			return mobile.ResolveCatalogCandidate(ctx, input, "local:"+host, value, tty.InspectHeadlessPane)
 		}
-		target, code, err := findShellTarget(env, value, "", "", true, tmuxenv.Namespace())
-		if err != nil {
-			kind := mobileproto.ErrorAmbiguous
-			if code == shellTargetUnregistered {
-				kind = mobileproto.ErrorNotFound
-			}
-			return mobile.ResolvedTarget{}, &mobile.ResolveError{Code: kind, Message: err.Error()}
-		}
-		if target.Kind != shellTargetKindShell || target.CreatedAt == "" {
-			return mobile.ResolvedTarget{}, &mobile.ResolveError{Code: mobileproto.ErrorUnsupported, Message: "mobile M0 requires a managed shell with durable creation identity"}
-		}
-		identity, err := tty.InspectHeadlessTarget(ctx, target.Session)
-		if err != nil {
-			return mobile.ResolvedTarget{}, &mobile.ResolveError{Code: mobileproto.ErrorUnsupported, Message: err.Error()}
-		}
-		return mobile.ResolvedTarget{WorkspaceID: target.Project.Key, WorkspaceKind: target.Kind, ProjectRoot: target.Project.Path, Selector: value, Session: identity.Session,
-			Pane: identity.Pane, DisplayName: target.DisplayName, ServerPID: identity.ServerPID, SessionID: identity.SessionID,
-			SessionCreated: identity.SessionCreated, DurableSessionCreated: target.CreatedAt, Width: identity.Width, Height: identity.Height, PaneCount: identity.PaneCount}, nil
+		return resolveMobileCatalogShell(ctx, env, &shellTargetLookup{}, value, tty.InspectHeadlessTarget)
 	}
+}
+
+func newMobileCatalogShellResolver(env Env, inspect func(context.Context, string) (tty.HeadlessTargetIdentity, error)) mobile.Resolver {
+	lookup := &shellTargetLookup{}
+	return func(ctx context.Context, value string) (mobile.ResolvedTarget, error) {
+		return resolveMobileCatalogShell(ctx, env, lookup, value, inspect)
+	}
+}
+
+func resolveMobileCatalogShell(ctx context.Context, env Env, lookup *shellTargetLookup, value string, inspect func(context.Context, string) (tty.HeadlessTargetIdentity, error)) (mobile.ResolvedTarget, error) {
+	if lookup == nil || inspect == nil {
+		return mobile.ResolvedTarget{}, &mobile.ResolveError{Code: mobileproto.ErrorUnsupported, Message: "mobile terminal resolver is unavailable"}
+	}
+	value = strings.TrimSpace(value)
+	if mobile.IsCandidateSelector(value) {
+		return mobile.ResolvedTarget{}, &mobile.ResolveError{Code: mobileproto.ErrorIdentityChanged, Message: "worktree candidate requires the candidate resolver"}
+	}
+	scoped := env
+	scoped.Ctx = ctx
+	target, code, err := lookup.resolve(scoped, value, "", "", true, tmuxenv.Namespace())
+	if err != nil {
+		kind := mobileproto.ErrorAmbiguous
+		if code == shellTargetUnregistered {
+			kind = mobileproto.ErrorNotFound
+		}
+		return mobile.ResolvedTarget{}, &mobile.ResolveError{Code: kind, Message: err.Error()}
+	}
+	if target.Kind != shellTargetKindShell || target.CreatedAt == "" {
+		return mobile.ResolvedTarget{}, &mobile.ResolveError{Code: mobileproto.ErrorUnsupported, Message: "mobile M0 requires a managed shell with durable creation identity"}
+	}
+	identity, err := inspect(ctx, target.Session)
+	if err != nil {
+		return mobile.ResolvedTarget{}, &mobile.ResolveError{Code: mobileproto.ErrorUnsupported, Message: err.Error()}
+	}
+	return mobile.ResolvedTarget{WorkspaceID: target.Project.Key, WorkspaceKind: target.Kind, ProjectRoot: target.Project.Path, Selector: value, Session: identity.Session,
+		Pane: identity.Pane, DisplayName: target.DisplayName, ServerPID: identity.ServerPID, SessionID: identity.SessionID,
+		SessionCreated: identity.SessionCreated, DurableSessionCreated: target.CreatedAt, Width: identity.Width, Height: identity.Height, PaneCount: identity.PaneCount}, nil
 }
 
 func mobileTargetRevalidator(env Env) mobile.TargetRevalidator {

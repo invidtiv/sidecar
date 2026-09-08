@@ -11,6 +11,7 @@ import (
 	"github.com/marcus/sidecar/internal/agentstatus"
 	"github.com/marcus/sidecar/internal/mobileproto"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
+	"github.com/marcus/sidecar/internal/workspacelist"
 )
 
 func TestCatalogAttachmentVerdictsFailClosed(t *testing.T) {
@@ -113,6 +114,83 @@ func TestCatalogUsesSharedSearchSortGroupAndFilters(t *testing.T) {
 	second := mustCatalogInput(t, input, mobileproto.CatalogQuery{Sort: "project"})
 	if first.Generation != second.Generation {
 		t.Fatalf("query or observation time churned generation: %s != %s", first.Generation, second.Generation)
+	}
+}
+
+func TestCatalogShowIdleSessionsUsesSharedNoSessionGroup(t *testing.T) {
+	now := time.Date(2026, 9, 8, 18, 0, 0, 0, time.UTC)
+	noSession := workspaceinventory.Workspace{ID: "no-session", ProjectKey: "/repo", ProjectName: "Repo", Kind: workspaceinventory.KindWorktree, Name: "No Session", Plain: true, ObservedAt: now}
+	idle := catalogShell("idle", "Lifecycle Idle", "sidecar-sh-idle", "%1", now)
+	idle.Provider = "codex"
+	idle.Presentation = agentstatus.Presentation{Lane: agentstatus.LaneIdle, Label: "idle", Semantic: true}
+	unavailable := catalogShell("unavailable", "Unavailable Attach", "sidecar-sh-unavailable", "%2", now)
+	input := CatalogInput{ObservedAt: now, Hosts: []mobileproto.CatalogHost{{ID: "local:test", Name: "test", State: "online", Local: true}}, Projects: []CatalogProject{
+		{Label: "Repo", Result: workspaceinventory.ProjectResult{
+			ProjectKey: "/repo", ProjectName: "Repo", Workspaces: []workspaceinventory.Workspace{noSession, idle, unavailable},
+		}},
+	}}
+	input.Resolver = func(_ context.Context, target string) (ResolvedTarget, error) {
+		if target == unavailable.TmuxName {
+			return ResolvedTarget{}, &ResolveError{Code: mobileproto.ErrorNotFound, Message: "pane disappeared"}
+		}
+		return ResolvedTarget{WorkspaceID: "repo", WorkspaceKind: "shell", ProjectRoot: "/repo", Session: idle.TmuxName, Pane: idle.PaneID,
+			ServerPID: 42, SessionID: "$1", SessionCreated: "1700000000", DurableSessionCreated: formatCatalogTime(idle.CreatedAt), Width: 80, Height: 24}, nil
+	}
+	show, hide := true, false
+	for _, test := range []struct {
+		name string
+		show *bool
+		want []string
+	}{
+		{name: "omitted keeps legacy all rows", want: []string{"unavailable", "idle", "no-session"}},
+		{name: "true includes no-session rows", show: &show, want: []string{"unavailable", "idle", "no-session"}},
+		{name: "false hides only no-session group", show: &hide, want: []string{"unavailable", "idle"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			snapshot := mustCatalog(t, input, mobileproto.CatalogQuery{Sort: "activity", ShowIdleSessions: test.show})
+			if got := catalogRowIDs(snapshot); strings.Join(got, ",") != strings.Join(test.want, ",") {
+				t.Fatalf("rows = %v, want %v", got, test.want)
+			}
+			rows := catalogRowsByID(snapshot)
+			if row, ok := rows["idle"]; ok && row.Group == string(workspacelist.GroupNoSession) {
+				t.Fatalf("lifecycle idle was reclassified as no session: %+v", row)
+			}
+			if row, ok := rows["unavailable"]; ok && (row.AttachState != AttachUnavailable || row.Group == string(workspacelist.GroupNoSession)) {
+				t.Fatalf("attachment refusal incorrectly drove idle visibility: %+v", row)
+			}
+		})
+	}
+}
+
+func TestCatalogInputResolverAuthorizesAllOrdinaryRows(t *testing.T) {
+	now := time.Date(2026, 9, 8, 18, 0, 0, 0, time.UTC)
+	one := catalogShell("one", "One", "sidecar-sh-one", "%1", now)
+	two := catalogShell("two", "Two", "sidecar-sh-two", "%2", now)
+	input := CatalogInput{ObservedAt: now, Hosts: []mobileproto.CatalogHost{{ID: "local:test", Name: "test", State: "online", Local: true}}, Projects: []CatalogProject{
+		{Label: "Repo", Result: workspaceinventory.ProjectResult{
+			ProjectKey: "/repo", ProjectName: "Repo", Workspaces: []workspaceinventory.Workspace{one, two},
+		}},
+	}}
+	calls := 0
+	input.Resolver = func(_ context.Context, target string) (ResolvedTarget, error) {
+		calls++
+		workspace := one
+		if target == two.TmuxName {
+			workspace = two
+		}
+		return ResolvedTarget{WorkspaceID: "repo", WorkspaceKind: "shell", ProjectRoot: "/repo", Session: workspace.TmuxName, Pane: workspace.PaneID,
+			ServerPID: 42, SessionID: "$1", SessionCreated: "1700000000", DurableSessionCreated: formatCatalogTime(workspace.CreatedAt), Width: 80, Height: 24}, nil
+	}
+	fallbackCalls := 0
+	_, err := QueryCatalog(context.Background(), func(context.Context) (CatalogInput, error) { return input, nil }, func(context.Context, string) (ResolvedTarget, error) {
+		fallbackCalls++
+		return ResolvedTarget{}, errors.New("fallback resolver should not run")
+	}, mobileproto.CatalogQuery{}, CatalogIdentity{HubID: "hub", OwnerHostID: "local:test", OwnerConfigGeneration: "config"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 || fallbackCalls != 0 {
+		t.Fatalf("request resolver calls=%d fallback=%d, want 2/0", calls, fallbackCalls)
 	}
 }
 

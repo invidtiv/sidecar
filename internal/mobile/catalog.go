@@ -48,6 +48,10 @@ type CatalogInput struct {
 	// observation. It avoids rebuilding the global catalog for every candidate;
 	// target open and every later operation still perform fresh source checks.
 	CandidateResolver Resolver
+	// Resolver authorizes ordinary managed-shell rows with request-scoped
+	// discovery. Target open and every later operation still use the service's
+	// fresh resolver. When nil, QueryCatalog uses its resolver argument.
+	Resolver Resolver
 }
 
 type CatalogProvider func(context.Context) (CatalogInput, error)
@@ -133,11 +137,15 @@ func QueryCatalog(ctx context.Context, provider CatalogProvider, resolver Resolv
 		}
 	}
 	refuseDuplicateTargets(rows)
+	resolverForRows := input.Resolver
+	if resolverForRows == nil {
+		resolverForRows = resolver
+	}
 	candidateResolver := input.CandidateResolver
 	if candidateResolver == nil {
-		candidateResolver = resolver
+		candidateResolver = resolverForRows
 	}
-	if err := authorizeCatalogRows(ctx, rows, resolver, candidateResolver, identity); err != nil {
+	if err := authorizeCatalogRows(ctx, rows, resolverForRows, candidateResolver, identity); err != nil {
 		return mobileproto.CatalogSnapshot{}, err
 	}
 	return projectCatalog(query, mode, identity, input.ObservedAt, input.Hosts, items, rows, failures)
@@ -343,6 +351,9 @@ func filterCatalogItems(items []workspacelist.Item, rows map[string]mobileproto.
 	out := make([]workspacelist.Item, 0, len(items))
 	for _, item := range items {
 		row := rows[item.ID]
+		if query.ShowIdleSessions != nil && !*query.ShowIdleSessions && row.Group == string(workspacelist.GroupNoSession) {
+			continue
+		}
 		if !filterIncludes(query.Hosts, row.OwnerHostID) || !filterIncludes(query.Providers, row.Provider) || !stateIncludes(query.States, row) {
 			continue
 		}

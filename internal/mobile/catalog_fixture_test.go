@@ -28,6 +28,7 @@ type catalogFixtureCase struct {
 func TestCatalogProtocolFixtureMatchesProducer(t *testing.T) {
 	now := time.Date(2026, 9, 7, 18, 0, 0, 0, time.UTC)
 	input := catalogFixtureInput(now)
+	showIdle, hideIdle := true, false
 	queries := []struct {
 		id    string
 		query mobileproto.CatalogQuery
@@ -42,6 +43,8 @@ func TestCatalogProtocolFixtureMatchesProducer(t *testing.T) {
 		{id: "state-stale", query: mobileproto.CatalogQuery{Sort: "activity", States: []string{"stale"}}},
 		{id: "state-unsupported", query: mobileproto.CatalogQuery{Sort: "activity", States: []string{"unsupported"}}},
 		{id: "search-local-shell", query: mobileproto.CatalogQuery{Sort: "name", Search: "local:aerie durable"}},
+		{id: "hide-idle-sessions", query: mobileproto.CatalogQuery{Sort: "activity", ShowIdleSessions: &hideIdle}},
+		{id: "show-idle-sessions", query: mobileproto.CatalogQuery{Sort: "activity", ShowIdleSessions: &showIdle}},
 	}
 	fixture := catalogFixture{Schema: "sidecar.mobile.catalog.v0", Provenance: "synthetic workspace inventory projected by internal/mobile.QueryCatalog; no user terminal content"}
 	for _, test := range queries {

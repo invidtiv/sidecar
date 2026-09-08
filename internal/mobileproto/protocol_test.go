@@ -121,10 +121,10 @@ func TestProductionCatalogCorpusCarriesSafeSelectionsAndSharedQueries(t *testing
 	if err := json.Unmarshal(data, &fixture); err != nil {
 		t.Fatal(err)
 	}
-	if fixture.Schema != "sidecar.mobile.catalog.v0" || len(fixture.Cases) != 10 {
+	if fixture.Schema != "sidecar.mobile.catalog.v0" || len(fixture.Cases) != 12 {
 		t.Fatalf("catalog fixture header = %q, cases=%d", fixture.Schema, len(fixture.Cases))
 	}
-	wantCases := map[string]bool{"activity": true, "project": true, "recent": true, "name": true, "provider-codex": true, "state-ready": true, "state-ambiguous": true, "state-stale": true, "state-unsupported": true, "search-local-shell": true}
+	wantCases := map[string]bool{"activity": true, "project": true, "recent": true, "name": true, "provider-codex": true, "state-ready": true, "state-ambiguous": true, "state-stale": true, "state-unsupported": true, "search-local-shell": true, "hide-idle-sessions": true, "show-idle-sessions": true}
 	states := make(map[string]bool)
 	ready := 0
 	for _, test := range fixture.Cases {
@@ -136,8 +136,12 @@ func TestProductionCatalogCorpusCarriesSafeSelectionsAndSharedQueries(t *testing
 		if catalog.HubID == "" || catalog.OwnerHostID == "" || catalog.OwnerConfigGeneration == "" || catalog.Generation == "" || catalog.Total > MaxCatalogRows {
 			t.Fatalf("invalid %s catalog authority: %+v", test.ID, catalog)
 		}
+		noSessionRows := 0
 		for _, section := range catalog.Sections {
 			for _, row := range section.Rows {
+				if row.Group == "No Session" {
+					noSessionRows++
+				}
 				states[row.AttachState] = true
 				if row.AttachmentReady {
 					ready++
@@ -147,6 +151,16 @@ func TestProductionCatalogCorpusCarriesSafeSelectionsAndSharedQueries(t *testing
 				} else if row.ExpectedTarget != nil {
 					t.Fatalf("refused row carries target authority: %+v", row)
 				}
+			}
+		}
+		switch test.ID {
+		case "hide-idle-sessions":
+			if test.Request.CatalogQuery.ShowIdleSessions == nil || *test.Request.CatalogQuery.ShowIdleSessions || noSessionRows != 0 {
+				t.Fatalf("hide idle case = query %+v no_session_rows=%d", test.Request.CatalogQuery, noSessionRows)
+			}
+		case "show-idle-sessions":
+			if test.Request.CatalogQuery.ShowIdleSessions == nil || !*test.Request.CatalogQuery.ShowIdleSessions || noSessionRows == 0 {
+				t.Fatalf("show idle case = query %+v no_session_rows=%d", test.Request.CatalogQuery, noSessionRows)
 			}
 		}
 	}

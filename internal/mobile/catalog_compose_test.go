@@ -43,6 +43,7 @@ func TestComposeCatalogRefusesNonAuthoritativeSourcesAndRows(t *testing.T) {
 	identity := CatalogIdentity{HubID: "hub", OwnerHostID: "local:hub", OwnerConfigGeneration: "cfg"}
 	hosts := []mobileproto.CatalogHost{{ID: "local:hub", State: "online"}, {ID: "book", State: "online"}}
 	valid := composedSource("book", "hub", composedReadyRow("book\x1frow", "book", "repo", "Remote", now))
+	hideIdle := false
 	for _, tc := range []struct {
 		name    string
 		hosts   []mobileproto.CatalogHost
@@ -50,6 +51,7 @@ func TestComposeCatalogRefusesNonAuthoritativeSourcesAndRows(t *testing.T) {
 		mutate  func(*CatalogSource)
 	}{
 		{name: "filtered owner source", hosts: hosts, sources: []CatalogSource{valid}, mutate: func(source *CatalogSource) { source.Snapshot.Query.Search = "partial" }},
+		{name: "idle-filtered owner source", hosts: hosts, sources: []CatalogSource{valid}, mutate: func(source *CatalogSource) { source.Snapshot.Query.ShowIdleSessions = &hideIdle }},
 		{name: "wrong public hub", hosts: hosts, sources: []CatalogSource{valid}, mutate: func(source *CatalogSource) { source.Snapshot.Sections[0].Rows[0].ExpectedTarget.HubID = "owner" }},
 		{name: "stale ready row", hosts: hosts, sources: []CatalogSource{valid}, mutate: func(source *CatalogSource) { source.Snapshot.Sections[0].Rows[0].Stale = true }},
 		{name: "offline source", hosts: []mobileproto.CatalogHost{{ID: "local:hub", State: "online"}, {ID: "book", State: "stale"}}, sources: []CatalogSource{valid}},
@@ -66,6 +68,12 @@ func TestComposeCatalogRefusesNonAuthoritativeSourcesAndRows(t *testing.T) {
 				t.Fatalf("compose error = %v", err)
 			}
 		})
+	}
+	showIdle := true
+	full := valid
+	full.Snapshot.Query.ShowIdleSessions = &showIdle
+	if _, err := ComposeCatalog(mobileproto.CatalogQuery{}, identity, now, hosts, []CatalogSource{full}, nil); err != nil {
+		t.Fatalf("explicit full owner source was refused: %v", err)
 	}
 }
 

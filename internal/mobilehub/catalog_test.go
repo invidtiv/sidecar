@@ -88,12 +88,14 @@ func TestRemapOwnerCatalogRefusesRawExpectedIdentityMismatch(t *testing.T) {
 
 func TestRemapOwnerCatalogRefusesAuthorityFactsThatPublicRewritingWouldHide(t *testing.T) {
 	authority := CatalogAuthority{HubID: "hub", HubConfigGeneration: "cfg", OwnerHostID: "book", RegistrationFingerprint: "reg"}
+	hideIdle := false
 	for _, tc := range []struct {
 		name   string
 		mutate func(*mobileproto.CatalogSnapshot)
 	}{
 		{name: "owner offline", mutate: func(snapshot *mobileproto.CatalogSnapshot) { snapshot.Hosts[0].State = "stale" }},
 		{name: "owner absent", mutate: func(snapshot *mobileproto.CatalogSnapshot) { snapshot.Hosts = nil }},
+		{name: "owner idle-filtered", mutate: func(snapshot *mobileproto.CatalogSnapshot) { snapshot.Query.ShowIdleSessions = &hideIdle }},
 		{name: "row target hub mismatch", mutate: func(snapshot *mobileproto.CatalogSnapshot) {
 			snapshot.Sections[0].Rows[0].ExpectedTarget.HubID = "other"
 		}},
@@ -115,6 +117,12 @@ func TestRemapOwnerCatalogRefusesAuthorityFactsThatPublicRewritingWouldHide(t *t
 				t.Fatalf("invalid raw authority was remapped: %+v", remapped)
 			}
 		})
+	}
+	showIdle := true
+	full := rawOwnerCatalog("owner-local", "same", "shared")
+	full.Query.ShowIdleSessions = &showIdle
+	if _, err := RemapOwnerCatalog(authority, full); err != nil {
+		t.Fatalf("explicit full owner catalog was refused: %v", err)
 	}
 }
 
