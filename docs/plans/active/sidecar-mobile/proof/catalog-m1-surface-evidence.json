@@ -1,0 +1,285 @@
+{
+  "schema": "sidecar-mobile-desktop-api-all-states-parity-proof-v0",
+  "source_revision": "ba78d35cf836f87f772223f254acda5fae95da20",
+  "scope": "same task-owned hub config and private two-owner fixture; all configured presentation states shown; desktop preview allowed only on the synthetic local target",
+  "isolation": {
+    "local_root": "/private/tmp/sidecar-mobile-router-desktop-20260908-0415",
+    "remote_root": "/private/tmp/sidecar-mobile-router-desktop-owner-20260908-0415",
+    "private_tmux_only": true,
+    "isolated_state_and_config": true,
+    "synthetic_terminal_data_only": true,
+    "show_idle_worktrees": true,
+    "synthetic_provider_metadata": "codex marker only; no agent conversation or process"
+  },
+  "catalog": {
+    "generation": "689863fbbf7c5441d6e54a16234951f6",
+    "hub_id": "aerie",
+    "total": 4,
+    "failures": [],
+    "hosts": [
+      {
+        "id": "local:aerie",
+        "state": "online",
+        "local": true
+      },
+      {
+        "id": "remote-desktop",
+        "state": "online",
+        "local": false
+      }
+    ],
+    "api_rows_in_order": [
+      {
+        "owner_host_id": "local:aerie",
+        "workspace_kind": "shell",
+        "display_name": "Twin",
+        "status": "live",
+        "group": "Live Shells",
+        "live": true,
+        "attachment_ready": true
+      },
+      {
+        "owner_host_id": "remote-desktop",
+        "workspace_kind": "shell",
+        "display_name": "Twin",
+        "status": "live",
+        "group": "Live Shells",
+        "live": true,
+        "attachment_ready": true
+      },
+      {
+        "owner_host_id": "local:aerie",
+        "workspace_kind": "worktree",
+        "display_name": "project",
+        "status": "session ended",
+        "group": "No Session",
+        "live": false,
+        "attachment_ready": false
+      },
+      {
+        "owner_host_id": "remote-desktop",
+        "workspace_kind": "worktree",
+        "display_name": "project",
+        "status": "session ended",
+        "group": "No Session",
+        "live": false,
+        "attachment_ready": false
+      }
+    ],
+    "desktop_rows_in_order": [
+      {
+        "owner_host_id": "local:aerie",
+        "workspace_kind": "shell",
+        "display_name": "Twin",
+        "status": "live",
+        "group": "Live Shells",
+        "live": true,
+        "attachment_ready": true
+      },
+      {
+        "owner_host_id": "remote-desktop",
+        "workspace_kind": "shell",
+        "display_name": "Twin",
+        "status": "live",
+        "group": "Live Shells",
+        "live": true,
+        "attachment_ready": true
+      },
+      {
+        "owner_host_id": "local:aerie",
+        "workspace_kind": "worktree",
+        "display_name": "project",
+        "status": "session ended",
+        "group": "No Session",
+        "live": false,
+        "attachment_ready": false
+      },
+      {
+        "owner_host_id": "remote-desktop",
+        "workspace_kind": "worktree",
+        "display_name": "project",
+        "status": "session ended",
+        "group": "No Session",
+        "live": false,
+        "attachment_ready": false
+      }
+    ],
+    "exact_same_row_universe_and_order": true,
+    "desktop_section_counts": {
+      "Live Shells": 2,
+      "No Session": 2
+    }
+  },
+  "desktop_preview": {
+    "selected_owner_host_id": "local:aerie",
+    "selected_session": "sidecar-sh-project-1",
+    "selected_pane": "%0",
+    "before": {
+      "server_pid": 74656,
+      "session_created": 1788868548,
+      "session": "sidecar-sh-project-1",
+      "pane": "%0",
+      "geometry": "80x24",
+      "owner": ""
+    },
+    "during": {
+      "server_pid": 74656,
+      "session_created": 1788868548,
+      "session": "sidecar-sh-project-1",
+      "pane": "%0",
+      "geometry": "67x35",
+      "owner": "aerie-74770:1:0"
+    },
+    "after_viewer_exit": {
+      "server_pid": 74656,
+      "session_created": 1788868548,
+      "session": "sidecar-sh-project-1",
+      "pane": "%0",
+      "geometry": "67x35",
+      "owner": ""
+    },
+    "lease_cleared_after_viewer_exit": true,
+    "accepted_geometry": "67x35",
+    "remote_after": {
+      "server_pid": 77266,
+      "session_created": 1788868549,
+      "session": "sidecar-sh-project-1",
+      "pane": "%0",
+      "geometry": "80x24",
+      "owner": ""
+    },
+    "remote_was_not_previewed_or_resized": true,
+    "remote_before": {
+      "server_pid": 77266,
+      "session_created": 1788868549,
+      "session": "sidecar-sh-project-1",
+      "pane": "%0",
+      "geometry": "80x24",
+      "owner": ""
+    }
+  },
+  "supplemental_latency": {
+    "schema": "sidecar-mobile-input-frame-latency-proof-v0",
+    "scope": "input request write at hub process to the first complete authoritative frame containing the unique synthetic token that the proof inspected after receiving the correlated acknowledgment; frames interleaved before that acknowledgment were retained but not searched, so this does not prove the first matching frame overall; excludes touch, SSH into the hub, Swift decoding, rendering, and display",
+    "payload_persisted": false,
+    "source_revision": "ba78d35cf836f87f772223f254acda5fae95da20",
+    "binary_sha256": "7d522e53f2c058eb2a4a14279aff5d5af6036942f15d31e3373a293c5181d66b",
+    "owners": {
+      "local": {
+        "owner_host_id": "local:aerie",
+        "session": "sidecar-sh-project-1",
+        "pane": "%0",
+        "samples": [
+          {
+            "index": 1,
+            "input_write_to_ack_ms": 80.101,
+            "frame_output_sequence": 3,
+            "frame_reset_generation": 1,
+            "input_write_to_post_ack_matching_frame_ms": 94.46
+          },
+          {
+            "index": 2,
+            "input_write_to_ack_ms": 79.543,
+            "frame_output_sequence": 6,
+            "frame_reset_generation": 1,
+            "input_write_to_post_ack_matching_frame_ms": 94.563
+          },
+          {
+            "index": 3,
+            "input_write_to_ack_ms": 79.457,
+            "frame_output_sequence": 9,
+            "frame_reset_generation": 1,
+            "input_write_to_post_ack_matching_frame_ms": 91.855
+          },
+          {
+            "index": 4,
+            "input_write_to_ack_ms": 70.875,
+            "frame_output_sequence": 12,
+            "frame_reset_generation": 1,
+            "input_write_to_post_ack_matching_frame_ms": 95.311
+          },
+          {
+            "index": 5,
+            "input_write_to_ack_ms": 79.348,
+            "frame_output_sequence": 14,
+            "frame_reset_generation": 1,
+            "input_write_to_post_ack_matching_frame_ms": 92.115
+          }
+        ],
+        "input_write_to_post_ack_matching_frame_median_ms": 94.46,
+        "input_write_to_post_ack_matching_frame_max_ms": 95.311
+      },
+      "remote": {
+        "owner_host_id": "remote-desktop",
+        "session": "sidecar-sh-project-1",
+        "pane": "%0",
+        "samples": [
+          {
+            "index": 1,
+            "input_write_to_ack_ms": 19.817,
+            "frame_output_sequence": 4,
+            "frame_reset_generation": 1,
+            "input_write_to_post_ack_matching_frame_ms": 45.594
+          },
+          {
+            "index": 2,
+            "input_write_to_ack_ms": 29.705,
+            "frame_output_sequence": 6,
+            "frame_reset_generation": 1,
+            "input_write_to_post_ack_matching_frame_ms": 31.568
+          },
+          {
+            "index": 3,
+            "input_write_to_ack_ms": 23.829,
+            "frame_output_sequence": 8,
+            "frame_reset_generation": 1,
+            "input_write_to_post_ack_matching_frame_ms": 34.33
+          },
+          {
+            "index": 4,
+            "input_write_to_ack_ms": 20.808,
+            "frame_output_sequence": 10,
+            "frame_reset_generation": 1,
+            "input_write_to_post_ack_matching_frame_ms": 36.944
+          },
+          {
+            "index": 5,
+            "input_write_to_ack_ms": 22.795,
+            "frame_output_sequence": 12,
+            "frame_reset_generation": 1,
+            "input_write_to_post_ack_matching_frame_ms": 44.517
+          }
+        ],
+        "input_write_to_post_ack_matching_frame_median_ms": 36.944,
+        "input_write_to_post_ack_matching_frame_max_ms": 45.594
+      }
+    }
+  },
+  "hashes": {
+    "bin/sidecar": "7d522e53f2c058eb2a4a14279aff5d5af6036942f15d31e3373a293c5181d66b",
+    "config/hub.json": "1d2fcb6b9785a9253b556e4400678bddecd44ebb7867a5d59252fceb9151ecf2",
+    "config/state.json": "80fe6ac0d8f70807bfae2f7b1016c80e58e14e15574d37e69c81359d24c9e201",
+    "full-parity-cli.json": "9e59611d0ee2a998765482e3d7c30236999cb43dbdbe91a75c0edbef2775b404",
+    "full-parity-desktop.txt": "61fa080f2837c6dabb9890b3cc6b1a7451fb4bb674477635da75e6b1461f0b15",
+    "full-parity-desktop.ansi": "341d23cbc6c2565eb2f807a846afd28930abd5c32b13960f846051907f2250ef",
+    "full-parity-before.txt": "1ceacad36bf4e8c76144885090e63694de3273d881a66da843d9d48ef14fe16a",
+    "full-parity-during.txt": "424f866fd4229a8b3b8e99c6130153f53dbb4a38c6658950b4b2764262a2987f",
+    "full-parity-after-latency-local.txt": "e71ebcc229ed6dd96e2df04dfe91d813148e11fc3b5030483283ce9184710ebd",
+    "full-parity-after-latency-remote.txt": "afca063e3a85dcef4c9628e1c2bbc8226bfcb2fbd25d5e15dd457e29c2219c1d",
+    "measure-frame-latency.py": "95fbc1401503cdf79ac2380cea13a99432ffa0a5a86d7920b2817285db570a98",
+    "input-frame-latency-result.json": "24fbc51451129ce2dae83a9aab3414ffea32ea277ed8df1eecb4f04759545477"
+  },
+  "cleanup": {
+    "status": "complete",
+    "receipt": "full-parity-cleanup.json",
+    "receipt_sha256": "91e3a7cd16d2d3a5ca74c07dabac9e7ca57d528c21a2139fb459c4d135a7c473",
+    "schema": "sidecar-mobile-desktop-parity-cleanup-v0",
+    "ownership_marker": "sidecar-mobile-router-desktop-proof-v0",
+    "local_identity_before_stop": "74656|1788868548|sidecar-sh-project-1|%0",
+    "remote_identity_before_stop": "77266|1788868549|sidecar-sh-project-1|%0",
+    "local_private_server_stopped": true,
+    "remote_private_server_stopped": true,
+    "stable_native_fixture_touched": false,
+    "default_tmux_touched": false
+  }
+}
