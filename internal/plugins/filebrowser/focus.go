@@ -55,10 +55,14 @@ func (p *Plugin) FocusCycleStart(reverse bool) tea.Cmd {
 	if !ok {
 		return nil
 	}
+	before := p.activePane
 	if target == panelayout.ContentPaneTarget {
 		p.activePane = PanePreview
 	} else {
 		p.activePane = PaneTree
+	}
+	if p.activePane != before {
+		p.invalidateView()
 	}
 	return nil
 }
