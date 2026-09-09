@@ -57,6 +57,9 @@ if [ "${1:-}" = env ]; then
   if [ "${2:-}" = GOWORK ] && [ -n "${FAKE_GO_ENV_GOWORK:-}" ]; then
     printf '%s\n' "$FAKE_GO_ENV_GOWORK"
   fi
+  if [ "${2:-}" = GOPATH ] && [ -n "${FAKE_GO_ENV_GOPATH:-}" ]; then
+    printf '%s\n' "$FAKE_GO_ENV_GOPATH"
+  fi
   exit 0
 fi
 # Record the GOWORK the build ran under; tests assert per-mode contracts.
@@ -170,6 +173,7 @@ run() {
     FAKE_LOGIN_SIDECAR="${FAKE_LOGIN_SIDECAR:-}" \
     FAKE_NLOGIN_SIDECAR="${FAKE_NLOGIN_SIDECAR:-}" \
     FAKE_GO_ENV_GOWORK="${FAKE_GO_ENV_GOWORK:-}" \
+    FAKE_GO_ENV_GOPATH="${FAKE_GO_ENV_GOPATH:-}" \
     SIDECAR_INSTALL_PINNED="${SIDECAR_INSTALL_PINNED:-}" \
     SIDECAR_REPO_ROOT="$active_repo" \
     SIDECAR_DEV_STATE="$dev_state" \
@@ -190,7 +194,7 @@ first_target=$(readlink "$brew_prefix/bin/sidecar")
 [ -x "$first_target" ] || fail 'managed target is not executable'
 
 # Reinstall creates a distinct completed artifact and changes the active link.
-run install-local >/dev/null
+run install-worktree >/dev/null
 second_target=$(readlink "$brew_prefix/bin/sidecar")
 [ "$first_target" != "$second_target" ] || fail 'repeat install reused an artifact'
 [ -x "$first_target" ] || fail 'repeat install deleted the previous artifact'
@@ -446,5 +450,37 @@ unset FAKE_LOGIN_SIDECAR
 assert_contains "$output" "pointed $login_shadow/sidecar at the activated build"
 assert_contains "$output" 'verified: sidecar on PATH is this build'
 [ -L "$login_shadow/sidecar" ] || fail 'login PATH winner was not replaced with a symlink'
+
+# The GOBIN sync must point at the activated artifact, never copy onto that
+# path. The destination is a symlink after the first activation, and `cp`
+# follows it: the second install would rewrite the first artifact in place,
+# leaving it disagreeing with its own directory name and metadata, and -- once
+# that file has been executed -- unrunnable, killed by macOS with no output.
+gopath=$temporary/gopath
+mkdir -p "$gopath/bin"
+FAKE_GO_ENV_GOPATH=$gopath
+export FAKE_GO_ENV_GOPATH
+
+run install-worktree >/dev/null
+first_link=$(readlink "$gopath/bin/sidecar" 2>/dev/null || true)
+[ -n "$first_link" ] ||
+  fail "expected GOBIN sidecar to be a symlink to the activated artifact"
+[ -x "$gopath/bin/sidecar" ] || fail "expected GOBIN sidecar to be runnable"
+first_artifact=$first_link
+first_bytes=$(shasum -a 256 "$first_artifact" | cut -d' ' -f1)
+
+printf 'package main\nfunc main() { _ = 1 }\n' >"$test_repo/cmd/sidecar/main.go"
+git -C "$test_repo" add cmd/sidecar/main.go
+git -C "$test_repo" -c user.name=test -c user.email=test@example.invalid \
+  commit --quiet -m second
+run install-worktree >/dev/null
+
+second_link=$(readlink "$gopath/bin/sidecar" 2>/dev/null || true)
+[ "$second_link" != "$first_link" ] ||
+  fail "expected GOBIN sidecar to follow the newly activated artifact"
+[ "$(shasum -a 256 "$first_artifact" | cut -d' ' -f1)" = "$first_bytes" ] ||
+  fail "the previous activation's artifact was rewritten in place"
+
+unset FAKE_GO_ENV_GOPATH
 
 printf 'dev-install tests passed\n'

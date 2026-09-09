@@ -8,6 +8,10 @@ All notable changes to sidecar are documented here.
 
 - **One message to every live agent.** `sidecar agent broadcast TEXT` puts one short prompt in front of every live agent in the caller's project, or every live agent on this machine with `--all`, without starting anything. `B` on the workspace list or Sessions opens the same plan as a checklist: `space` toggles a row, `a`/`n` select all or none, the scope segments re-plan between this project and every project, and the message is a four-line text area where `enter` opens a line and `ctrl+s` sends. Each row is a receipt — `submitted`, `skipped`, or `unknown` — not an acknowledgement that the agent did anything with the text. Gated on `agent_control` (default off). Remote hosts are out of scope; `--host` is a usage error and `--all` means this machine. (td-3c3245)
 
+### Bug Fixes
+
+- **A managed install no longer breaks the `sidecar` a previous one left on your PATH.** Activation synced `~/go/bin/sidecar` with `cp`, and after the first activation that destination is a symlink into the previous dev install, so `cp` followed it and rewrote that older artifact in place. The artifact then disagreed with its own directory name and metadata, and because macOS had already executed that file, every later exec of it was killed outright — so any launcher still pointing there ran nothing and printed nothing, exit 137. The sync now points at the artifact instead of copying onto the path. Two guards come with it: every launcher ever retargeted is remembered and re-pointed on each activation, so one that no shell happens to resolve today cannot rot unnoticed, and each synced launcher must actually run before the install reports success, because resolving to the right path no longer proves a binary is runnable.
+
 ## [v1.14.0] - 2026-09-05
 
 ### Features

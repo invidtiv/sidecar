@@ -19,6 +19,7 @@ else
   repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 fi
 state_root=${SIDECAR_DEV_STATE:-"$HOME/.local/state/sidecar/dev-installs"}
+launcher_registry=$state_root/launchers
 go_command=${SIDECAR_GO:-go}
 zsh_command=${SIDECAR_ZSH:-/bin/zsh}
 
@@ -236,8 +237,22 @@ sync_launch_paths() {
     add_launcher "$(login_shell_sidecar_path -lic)"
     add_launcher "$(login_shell_sidecar_path -lc)"
   fi
+  probed=$launchers
+
+  # A launcher this run cannot see still wins PATH in some other shell. One
+  # activation from a shell without it would otherwise leave it pointing at a
+  # deleted or superseded artifact forever, so every launcher ever retargeted is
+  # remembered and re-pointed here.
+  if [ -f "$launcher_registry" ]; then
+    while IFS= read -r remembered; do
+      [ -n "$remembered" ] || continue
+      [ -e "$remembered" ] || [ -L "$remembered" ] || continue
+      add_launcher "$remembered"
+    done <"$launcher_registry"
+  fi
 
   leftover=
+  synced=
   old_ifs=$IFS
   IFS='|'
   # shellcheck disable=SC2086
@@ -247,16 +262,47 @@ sync_launch_paths() {
     [ -n "$launcher" ] || continue
     got=$(resolved_path "$launcher" || true)
     if [ -n "$got" ] && [ "$got" = "$artifact" ]; then
+      synced="$synced$launcher
+"
       continue
     fi
     if can_retarget_launcher "$launcher" && retarget_launcher "$launcher" "$artifact"; then
+      synced="$synced$launcher
+"
       continue
     fi
-    leftover=$leftover$(printf '\n  %s' "$launcher")
+    case "$probed" in
+      *"|$launcher|"*)
+        leftover=$leftover$(printf '\n  %s' "$launcher")
+        ;;
+      *)
+        printf 'forgot %s: no longer retargetable and no shell resolves it\n' "$launcher"
+        ;;
+    esac
   done
   if [ -n "$leftover" ]; then
     die "could not point PATH's sidecar at the activated build:$leftover"
   fi
+
+  # A launcher that resolves correctly can still be unrunnable: a binary
+  # rewritten in place after being executed is killed outright by macOS. Prove
+  # each one executes rather than trusting the path alone.
+  old_ifs=$IFS
+  IFS='
+'
+  # shellcheck disable=SC2086
+  set -- $synced
+  IFS=$old_ifs
+  for launcher in "$@"; do
+    [ -n "$launcher" ] || continue
+    "$launcher" --version >/dev/null 2>&1 ||
+      die "$launcher points at the activated build but does not run; remove it and reinstall"
+  done
+
+  mkdir -p "$(dirname "$launcher_registry")"
+  staged_registry=$launcher_registry.$$
+  printf '%s' "$synced" >"$staged_registry"
+  mv "$staged_registry" "$launcher_registry" 2>/dev/null || rm -f "$staged_registry"
 }
 
 verify_activated_sidecar() {
@@ -478,8 +524,19 @@ install_local() {
     gopath=$("$go_command" env GOPATH 2>/dev/null || true)
     [ -n "$gopath" ] && gobin="$gopath/bin"
   fi
-  if [ -n "$gobin" ] && [ -d "$gobin" ]; then
-    cp -f "$destination/sidecar" "$gobin/sidecar" 2>/dev/null || true
+  if [ -n "$gobin" ] && [ -d "$gobin" ] && [ -w "$gobin" ]; then
+    # Point at the artifact; never copy onto this path. `cp` follows a
+    # destination symlink, and this destination is a symlink whenever a previous
+    # activation retargeted it, so copying rewrites that older dev-install's
+    # binary in place. That leaves the artifact disagreeing with its own
+    # directory name and metadata, and because the file has already been
+    # executed, macOS kills every later exec of it with SIGKILL and no output --
+    # so any launcher still pointing there silently does nothing at all.
+    staged_gobin=$gobin/.sidecar-gobin-$$
+    rm -f "$staged_gobin"
+    if ln -s "$destination/sidecar" "$staged_gobin" 2>/dev/null; then
+      mv "$staged_gobin" "$gobin/sidecar" 2>/dev/null || rm -f "$staged_gobin"
+    fi
   fi
 
   printf 'activated local Sidecar build from %s\n' "$repo_root"
