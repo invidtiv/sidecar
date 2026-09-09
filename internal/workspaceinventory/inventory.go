@@ -469,7 +469,7 @@ func ServerPIDOf(panes []Pane) int {
 // ListPanes takes the single global tmux inventory used by an Overview refresh.
 func (c Collector) ListPanes(ctx context.Context) ([]Pane, error) {
 	c = c.defaults()
-	args := tmuxformat.ClientArgs("list-panes", "-a", "-F", "#{pane_id}\t#{session_name}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_title}\t#{pane_dead}\t#{pane_pid}\t#{pid}\t#{pane_height}")
+	args := tmuxformat.ClientArgs("list-panes", "-a", "-F", tty.PaneInventoryFormat)
 	out, err := c.Runner.Output(ctx, "tmux", args...)
 	if err != nil {
 		message := strings.ToLower(string(out))

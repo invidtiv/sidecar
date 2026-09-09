@@ -630,17 +630,24 @@ func TestProtocolBrokerOutputBackpressureClosesOwnerAndDiscardsQueuedFrames(t *t
 	_, _ = r.open(r.catalog().Sections[0].Rows[0])
 	s := owner.latest(t)
 	writer.block.Store(true)
-	for i := 0; i < 32; i++ {
+	pushFrame := func() {
 		s.mu.Lock()
 		s.output++
 		frame := s.frame("output")
 		s.mu.Unlock()
 		s.push(frame)
 	}
+	// Establish writer backpressure before overflowing the queue. Otherwise
+	// the actor can fill the queue and cancel the writer before it is ever
+	// scheduled, making this assertion depend on package-level test load.
+	pushFrame()
 	select {
 	case <-writer.entered:
 	case <-time.After(time.Second):
 		t.Fatal("writer never blocked")
+	}
+	for i := 0; i < 31; i++ {
+		pushFrame()
 	}
 	select {
 	case <-s.done:

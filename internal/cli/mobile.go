@@ -142,9 +142,10 @@ func runMobileOwnerService(env Env) error {
 
 func newMobileOwnerService(env Env, input io.Reader, output io.Writer) (*mobile.Service, error) {
 	host, _ := os.Hostname()
+	manager := tty.NewControlManager()
 	return mobile.New(mobile.Config{
 		Input: input, Output: output, HubID: host, OwnerHostID: "local:" + host,
-		OwnerConfigGeneration: mobileConfigGeneration(), Resolver: mobileResolver(env), Revalidator: mobileTargetRevalidator(env), Catalog: mobileCatalogProvider(env),
+		OwnerConfigGeneration: mobileConfigGeneration(), Resolver: mobileResolver(env), Revalidator: mobileTargetRevalidator(env, manager), Catalog: mobileCatalogProvider(env), Manager: manager,
 		OwnerConfigGenerationProvider: currentMobileConfigGeneration,
 	})
 }
@@ -384,20 +385,30 @@ func resolveMobileCatalogShell(ctx context.Context, env Env, lookup *shellTarget
 		SessionCreated: identity.SessionCreated, DurableSessionCreated: target.CreatedAt, Width: identity.Width, Height: identity.Height, PaneCount: identity.PaneCount}, nil
 }
 
-func mobileTargetRevalidator(env Env) mobile.TargetRevalidator {
-	resolve := mobileResolver(env)
-	source := newMobileCandidateWorkspaceProvider(configuredProjects, workspaceinventory.Collector{}.WithDefaults())
+func mobileTargetRevalidator(env Env, manager *tty.ControlManager) mobile.TargetRevalidator {
 	host, _ := os.Hostname()
 	ownerHostID := "local:" + host
 	return func(ctx context.Context, target mobile.ResolvedTarget) (mobile.ResolvedTarget, error) {
-		if !mobile.IsCandidateSelector(target.Selector) {
-			selector := target.Selector
-			if selector == "" {
-				selector = target.Session
-			}
-			return resolve(ctx, selector)
+		inspect := func(ctx context.Context, pane string) (tty.HeadlessTargetIdentity, error) {
+			return manager.InspectHeadlessPane(ctx, target.Session, pane)
 		}
-		return mobile.RevalidateCatalogCandidate(ctx, target, ownerHostID, source, tty.InspectHeadlessPane)
+		if !mobile.IsCandidateSelector(target.Selector) {
+			// Managed worktree session names occupy sidecar-ws-*. Legacy shell
+			// records can use that namespace too, so retain the complete shared
+			// resolver for those records to preserve shell/worktree collisions.
+			if !strings.HasPrefix(target.Session, "sidecar-sh-") {
+				selector := target.Selector
+				if selector == "" {
+					selector = target.Session
+				}
+				return mobileResolver(env)(ctx, selector)
+			}
+			return revalidateMobileShell(ctx, env.StateDir, target, inspect)
+		}
+		collector := workspaceinventory.Collector{}.WithDefaults()
+		collector.Runner = mobilePaneInventoryRunner{manager: manager, session: target.Session, fallback: collector.Runner}
+		source := newMobileCandidateWorkspaceProvider(configuredProjects, collector)
+		return mobile.RevalidateCatalogCandidate(ctx, target, ownerHostID, source, inspect)
 	}
 }
 

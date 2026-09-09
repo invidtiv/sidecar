@@ -24,6 +24,86 @@ type HeadlessTargetIdentity struct {
 	PaneCount      int
 }
 
+const headlessTargetFormat = "#{pid}\t#{session_id}\t#{session_created}\t#{session_name}\t#{pane_id}\t#{pane_width}\t#{pane_height}\t#{window_panes}"
+
+// PaneInventoryFormat is shared by subprocess and in-band inventory readers.
+const PaneInventoryFormat = "#{pane_id}\t#{session_name}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_title}\t#{pane_dead}\t#{pane_pid}\t#{pid}\t#{pane_height}"
+
+// InspectHeadlessPane reuses this owner's ordered local control connection
+// once an attachment exists. Before opening an attachment it uses the ordinary
+// local probe. A failed active connection never falls back to a subprocess.
+func (m *ControlManager) InspectHeadlessPane(ctx context.Context, session, pane string) (HeadlessTargetIdentity, error) {
+	if err := ctx.Err(); err != nil {
+		return HeadlessTargetIdentity{}, err
+	}
+	if session == "" || !controlPanePattern.MatchString(pane) {
+		return HeadlessTargetIdentity{}, fmt.Errorf("mobile target: invalid bound pane")
+	}
+	attached, err := m.headlessConnectionAttached(session)
+	if err != nil {
+		return HeadlessTargetIdentity{}, err
+	}
+	if !attached {
+		return InspectHeadlessPane(ctx, pane)
+	}
+	command := "display-message -p -t " + controlQuote(pane) + " -F " + controlQuote(headlessTargetFormat)
+	responses, err := m.requestControlBatch(session, command)
+	if err != nil {
+		return HeadlessTargetIdentity{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return HeadlessTargetIdentity{}, err
+	}
+	if len(responses) != 1 || len(responses[0].Lines) != 1 {
+		return HeadlessTargetIdentity{}, fmt.Errorf("mobile target: missing bound pane identity")
+	}
+	return parseHeadlessTargetIdentity(responses[0].Lines[0], session, pane)
+}
+
+// HeadlessPaneInventory keeps source-membership validation on the same local
+// owner's existing connection. It returns the collector's ordinary format so
+// the shared inventory parser and candidate selection rules remain unchanged.
+func (m *ControlManager) HeadlessPaneInventory(ctx context.Context, session string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	attached, err := m.headlessConnectionAttached(session)
+	if err != nil {
+		return nil, err
+	}
+	if !attached {
+		return exec.CommandContext(ctx, "tmux", tmuxformat.ClientArgs("list-panes", "-a", "-F", PaneInventoryFormat)...).CombinedOutput()
+	}
+	responses, err := m.requestControlBatch(session, "list-panes -a -F "+controlQuote(PaneInventoryFormat))
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(responses) != 1 {
+		return nil, fmt.Errorf("mobile target: missing pane inventory")
+	}
+	return []byte(strings.Join(responses[0].Lines, "\n")), nil
+}
+
+func (m *ControlManager) headlessConnectionAttached(session string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if session == "" || m.stopped {
+		return false, fmt.Errorf("mobile target: owning control connection is unavailable")
+	}
+	for _, sub := range m.subs {
+		if sub.request.Session == session {
+			if m.clients[session] == nil {
+				return false, fmt.Errorf("mobile target: owning control connection is unavailable")
+			}
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // InspectHeadlessTarget resolves exactly one pane in a managed session. M0
 // refuses multi-pane windows rather than silently selecting a pane; the M1
 // catalog/picker will make that choice explicit.
@@ -31,8 +111,7 @@ func InspectHeadlessTarget(ctx context.Context, session string) (HeadlessTargetI
 	if strings.TrimSpace(session) == "" {
 		return HeadlessTargetIdentity{}, fmt.Errorf("mobile target: empty session")
 	}
-	format := "#{pid}\t#{session_id}\t#{session_created}\t#{session_name}\t#{pane_id}\t#{pane_width}\t#{pane_height}\t#{window_panes}"
-	out, err := exec.CommandContext(ctx, "tmux", tmuxformat.ClientArgs("list-panes", "-t", session, "-F", format)...).CombinedOutput()
+	out, err := exec.CommandContext(ctx, "tmux", tmuxformat.ClientArgs("list-panes", "-t", session, "-F", headlessTargetFormat)...).CombinedOutput()
 	if err != nil {
 		return HeadlessTargetIdentity{}, fmt.Errorf("mobile target: inspect session: %w: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -50,8 +129,7 @@ func InspectHeadlessPane(ctx context.Context, pane string) (HeadlessTargetIdenti
 	if !controlPanePattern.MatchString(strings.TrimSpace(pane)) {
 		return HeadlessTargetIdentity{}, fmt.Errorf("mobile target: invalid pane %q", pane)
 	}
-	format := "#{pid}\t#{session_id}\t#{session_created}\t#{session_name}\t#{pane_id}\t#{pane_width}\t#{pane_height}\t#{window_panes}"
-	out, err := exec.CommandContext(ctx, "tmux", tmuxformat.ClientArgs("display-message", "-p", "-t", pane, "-F", format)...).CombinedOutput()
+	out, err := exec.CommandContext(ctx, "tmux", tmuxformat.ClientArgs("display-message", "-p", "-t", pane, "-F", headlessTargetFormat)...).CombinedOutput()
 	if err != nil {
 		return HeadlessTargetIdentity{}, fmt.Errorf("mobile target: inspect pane: %w: %s", err, strings.TrimSpace(string(out)))
 	}
