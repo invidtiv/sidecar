@@ -1,0 +1,267 @@
+{
+  "version": 1,
+  "journeys": [
+    {
+      "id": "coordinate-agent",
+      "title": "Coordinated Agent Delegation",
+      "description": "The exact sequence required to safely discover, launch, prompt, read, and coordinate a secondary agent without user disruption.",
+      "status": "current",
+      "provenance": "Authored 2026-09-10 from .agents/skills/coordinate-agents/SKILL.md and internal/agentcontrol/service.go. Checked against internal/cli/agent.go and internal/tty/control_manager.go.",
+      "participants": [
+        {
+          "id": "caller",
+          "title": "Invoking Agent / User",
+          "description": "The primary agent or developer orchestrating delegation.",
+          "color": "#759EB5"
+        },
+        {
+          "id": "cli_entry",
+          "element": "cli.dispatch",
+          "title": "Sidecar CLI"
+        },
+        {
+          "id": "ws_manager",
+          "element": "workspaces.surface",
+          "title": "Workspace Manager"
+        },
+        {
+          "id": "agent_ctrl",
+          "element": "agents.control",
+          "title": "Agent Controller"
+        },
+        {
+          "id": "tmux_pty",
+          "element": "terminal.control",
+          "title": "tmux PTY"
+        },
+        {
+          "id": "secondary_agent",
+          "element": "external.agents",
+          "title": "Secondary Agent"
+        }
+      ],
+      "groups": [
+        {
+          "id": "sidecar_core",
+          "title": "Sidecar Core",
+          "participants": ["cli_entry", "ws_manager", "agent_ctrl", "tmux_pty"]
+        }
+      ],
+      "steps": [
+        {
+          "type": "phase",
+          "id": "discover",
+          "title": "1. Discover Target Shells",
+          "description": "Inspect registered shells and availability before creating or starting.",
+          "steps": [
+            {
+              "type": "message",
+              "id": "list_targets",
+              "from": "caller",
+              "to": "cli_entry",
+              "title": "sidecar agent list --json",
+              "kind": "call",
+              "description": "Enumerate existing shells, agent bindings, and idle status."
+            },
+            {
+              "type": "message",
+              "id": "query_status",
+              "from": "cli_entry",
+              "to": "agent_ctrl",
+              "title": "Query session records",
+              "kind": "call"
+            },
+            {
+              "type": "message",
+              "id": "return_targets",
+              "from": "cli_entry",
+              "to": "caller",
+              "title": "Return available targets",
+              "kind": "return"
+            }
+          ]
+        },
+        {
+          "type": "phase",
+          "id": "create_pane",
+          "title": "2. Create Layout Separately",
+          "description": "Allocate the terminal split in the layout before launching the provider.",
+          "steps": [
+            {
+              "type": "message",
+              "id": "req_split",
+              "from": "caller",
+              "to": "cli_entry",
+              "title": "sidecar create shell --tab --name Reviewer --json",
+              "kind": "call",
+              "description": "Creates dedicated managed shell tab with a workspace row without stealing focus."
+            },
+            {
+              "type": "message",
+              "id": "alloc_split",
+              "from": "cli_entry",
+              "to": "ws_manager",
+              "title": "Allocate pane & tmux window",
+              "kind": "call"
+            },
+            {
+              "type": "message",
+              "id": "return_shell_id",
+              "from": "cli_entry",
+              "to": "caller",
+              "title": "Return shell target ID",
+              "kind": "return"
+            }
+          ]
+        },
+        {
+          "type": "phase",
+          "id": "start_agent",
+          "title": "3. Start Provider & Wait for Ready",
+          "description": "Launch the configured provider and block until its session hook reports ready.",
+          "steps": [
+            {
+              "type": "message",
+              "id": "req_start",
+              "from": "caller",
+              "to": "cli_entry",
+              "title": "sidecar agent start target --kind codex",
+              "kind": "call"
+            },
+            {
+              "type": "message",
+              "id": "launch_process",
+              "from": "cli_entry",
+              "to": "agent_ctrl",
+              "title": "Launch instrumented agent",
+              "kind": "call"
+            },
+            {
+              "type": "message",
+              "id": "spawn_in_pty",
+              "from": "agent_ctrl",
+              "to": "tmux_pty",
+              "title": "Spawn provider command in session",
+              "kind": "async"
+            },
+            {
+              "type": "message",
+              "id": "hook_ready",
+              "from": "secondary_agent",
+              "to": "agent_ctrl",
+              "title": "Emit session ready hook",
+              "kind": "call",
+              "description": "Injected hook notifies Sidecar that provider prompt loop is ready."
+            },
+            {
+              "type": "message",
+              "id": "confirm_ready",
+              "from": "cli_entry",
+              "to": "caller",
+              "title": "Provider ready",
+              "kind": "return"
+            }
+          ]
+        },
+        {
+          "type": "phase",
+          "id": "prompt_and_wait",
+          "title": "4. Prompt & Await Execution",
+          "description": "Dispatch task text and observe lifecycle progress.",
+          "steps": [
+            {
+              "type": "message",
+              "id": "req_prompt",
+              "from": "caller",
+              "to": "cli_entry",
+              "title": "sidecar agent prompt target TEXT --wait --timeout 5m",
+              "kind": "call"
+            },
+            {
+              "type": "message",
+              "id": "forward_prompt",
+              "from": "cli_entry",
+              "to": "agent_ctrl",
+              "title": "Inject prompt into PTY",
+              "kind": "call"
+            },
+            {
+              "type": "message",
+              "id": "send_to_pty",
+              "from": "agent_ctrl",
+              "to": "tmux_pty",
+              "title": "Write prompt bytes",
+              "kind": "async"
+            },
+            {
+              "type": "message",
+              "id": "agent_executing",
+              "from": "secondary_agent",
+              "to": "agent_ctrl",
+              "title": "Transition: running -> waiting_for_input",
+              "kind": "call",
+              "description": "Agent executes tools and completes review."
+            },
+            {
+              "type": "message",
+              "id": "prompt_done",
+              "from": "cli_entry",
+              "to": "caller",
+              "title": "Prompt finished or awaiting input",
+              "kind": "return"
+            }
+          ]
+        },
+        {
+          "type": "phase",
+          "id": "read_and_reply",
+          "title": "5. Read Before Sending Keys",
+          "description": "Never blind-type: read unwrapped terminal output to verify agent state before answering.",
+          "steps": [
+            {
+              "type": "message",
+              "id": "req_read",
+              "from": "caller",
+              "to": "cli_entry",
+              "title": "sidecar agent read target --source recent-unwrapped",
+              "kind": "call"
+            },
+            {
+              "type": "message",
+              "id": "capture_rows",
+              "from": "agent_ctrl",
+              "to": "tmux_pty",
+              "title": "capture-pane -e -N buffer",
+              "kind": "call"
+            },
+            {
+              "type": "message",
+              "id": "return_output",
+              "from": "cli_entry",
+              "to": "caller",
+              "title": "Return recent screen rows",
+              "kind": "return"
+            },
+            {
+              "type": "message",
+              "id": "send_answer",
+              "from": "caller",
+              "to": "cli_entry",
+              "title": "sidecar agent send-keys target approve",
+              "kind": "call",
+              "description": "Explicit answer sent to prompt."
+            },
+            {
+              "type": "message",
+              "id": "forward_keys",
+              "from": "cli_entry",
+              "to": "tmux_pty",
+              "title": "Forward keys to PTY",
+              "kind": "async"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

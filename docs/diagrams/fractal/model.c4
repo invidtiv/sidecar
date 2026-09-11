@@ -1,0 +1,339 @@
+// Authored architecture for Sidecar. Evidence paths are relative to the repository root.
+specification {
+  element subsystem
+  element component
+  element adapter
+  element service
+  element store
+  element actor
+  relationship calls
+  relationship sends
+  relationship reads
+  relationship writes
+  relationship streams
+  relationship manages
+  relationship renders
+  relationship supplies
+  relationship notifies
+  tag current
+  tag proposed
+}
+
+model {
+  user = actor 'Developer or Agent' {
+    description 'Operates Sidecar through interactive keybindings or non-interactive shell commands.'
+    metadata { uid 'user' fractalColor '#759EB5' evidence 'README.md' }
+  }
+
+  tui = subsystem 'Interactive TUI Client' {
+    description 'Bubble Tea application managing tabs, modals, focus, and multi-surface rendering.'
+    metadata { uid 'tui' fractalColor '#759EB5' evidence ['internal/app/model.go', 'internal/app/ui.go'] }
+
+    app = component 'App Runtime & Loop' {
+      description 'Main Bubble Tea model dispatching messages, commands, and keymap contexts.'
+      metadata { uid 'tui.app' fractalColor '#759EB5' evidence ['internal/app/model.go', 'internal/app/view.go'] }
+    }
+
+    overview = component 'Cross-Project Sessions' {
+      description 'Global workspaces browser categorizing sessions by status with live preview.'
+      metadata { uid 'tui.overview' fractalColor '#759EB5' evidence ['internal/overview/model.go', 'internal/overview/workspaces.go'] }
+    }
+
+    config = component 'In-App Configuration' {
+      description 'Interactive setup, diagnostics, theme switcher, and system repairs.'
+      metadata { uid 'tui.config' fractalColor '#759EB5' evidence ['internal/configui/model.go', 'internal/configui/page_setup.go'] }
+    }
+
+    notify = component 'Notification Center & Toasts' {
+      description 'Manages toast stacks, actionable CTA jump targets, and in-app alerts.'
+      metadata { uid 'tui.notify' fractalColor '#759EB5' evidence ['internal/app/notifications.go', 'internal/app/toast_stack.go'] }
+    }
+  }
+
+  panes = subsystem 'Pane & Layout Engine' {
+    description 'Unified pane tree, chrome compositor, and live-watching subsystem shared across surfaces.'
+    metadata { uid 'panes' fractalColor '#739886' evidence ['internal/panelayout/panelayout.go', 'internal/paneframe/paneframe.go'] }
+
+    layout = component 'Split-Tree Geometry' {
+      description 'Recursive split tree (rows/columns) computing bounds, floors, and addresses.'
+      metadata { uid 'panes.layout' fractalColor '#739886' evidence ['internal/panelayout/panelayout.go', 'internal/panelayout/grid.go'] }
+    }
+
+    frame = component 'Pane Frame & Compositor' {
+      description 'Renders border chrome, focus rings, headers, and drag handles with hit regions.'
+      metadata { uid 'panes.frame' fractalColor '#739886' evidence ['internal/paneframe/paneframe.go', 'internal/paneframe/compose.go'] }
+    }
+
+    live = component 'Live Refresh Watcher' {
+      description 'Monitors filesystem signals and refreshes only visible, on-screen pane leaves.'
+      metadata { uid 'panes.live' fractalColor '#739886' evidence ['internal/livepanes/livepanes.go', 'internal/livewatch/watch.go'] }
+    }
+
+    content = component 'Content Deck & Panes' {
+      description 'Renders syntax-highlighted files, diffs, notes, issues, and external resources.'
+      metadata { uid 'panes.content' fractalColor '#739886' evidence ['internal/contentpanes/deck.go', 'internal/contentpanes/source.go'] }
+    }
+  }
+
+  terminal = subsystem 'Terminal Fidelity Engine' {
+    description 'High-fidelity terminal row capture, tmux control mode, and native PTY routing.'
+    metadata { uid 'terminal' fractalColor '#B59669' evidence ['internal/termpreview/termpreview.go', 'internal/tty/control_manager.go'] }
+
+    preview = component 'Row Capture & Fidelity' {
+      description 'Preserves background color fidelity via capture-pane -e -N without row flickering.'
+      metadata { uid 'terminal.preview' fractalColor '#B59669' evidence ['internal/termpreview/termpreview.go', 'internal/termpreview/rows.go'] }
+    }
+
+    control = component 'tmux Control Connection' {
+      description 'Manages asynchronous control-mode connection to tmux with screen snapshot parsing.'
+      metadata { uid 'terminal.control' fractalColor '#B59669' evidence ['internal/tty/control_manager.go', 'internal/tty/control_protocol.go'] }
+    }
+
+    pty = component 'PTY & Input Routing' {
+      description 'Routes keystrokes, native mouse selection, paste, and wheel scroll events.'
+      metadata { uid 'terminal.pty' fractalColor '#B59669' evidence ['internal/tty/tty.go', 'internal/tty/session.go'] }
+    }
+  }
+
+  workspaces = subsystem 'Workspace & Shell Lifecycle' {
+    description 'Manages interactive shells, git worktree workspaces, and crash-resilient session state.'
+    metadata { uid 'workspaces' fractalColor '#89A579' evidence ['internal/plugins/workspace/plugin.go', 'internal/shellstate/shellstate.go'] }
+
+    surface = component 'Workspace Surface' {
+      description 'Hosts interactive agent terminals beside split panes and worktree switchers.'
+      metadata { uid 'workspaces.surface' fractalColor '#89A579' evidence ['internal/plugins/workspace/plugin.go', 'internal/plugins/workspace/pane_host.go'] }
+    }
+
+    state = store 'Durable Shell Records' {
+      description 'Persists shell and session metadata in shells.json across process lifetimes.'
+      metadata { uid 'workspaces.state' fractalColor '#89A579' evidence ['internal/shellstate/shellstate.go', 'internal/shellstate/session.go'] }
+    }
+
+    restore = component 'Cold Session Restore' {
+      description 'Plans and executes safe recovery of shells after unexpected tmux server death.'
+      metadata { uid 'workspaces.restore' fractalColor '#89A579' evidence ['internal/sessionrestore/plan.go', 'internal/sessionrestore/execute.go'] }
+    }
+
+    git_ops = component 'Worktree & Branch Ops' {
+      description 'Creates isolated git worktrees, manages branches, and handles merge workflows.'
+      metadata { uid 'workspaces.git_ops' fractalColor '#89A579' evidence ['internal/workspaceops/worktree.go', 'internal/workspacecreate/form.go'] }
+    }
+  }
+
+  agents = subsystem 'Agent Integration & Control' {
+    description 'Tracks coding agent lifecycles, installs integration assets, and orchestrates secondary agents.'
+    metadata { uid 'agents' fractalColor '#9A91C4' evidence ['internal/agentintegration/install.go', 'internal/agentcontrol/service.go'] }
+
+    catalog = component 'Agent Catalog' {
+      description 'Defines supported agent families, argv templates, and launch configurations.'
+      metadata { uid 'agents.catalog' fractalColor '#9A91C4' evidence ['internal/agentcatalog/agentcatalog.go', 'internal/agentcatalog/installed.go'] }
+    }
+
+    integration = component 'Asset Injection & Hooks' {
+      description 'Installs non-intrusive lifecycle hooks and extensions into agent configuration directories.'
+      metadata { uid 'agents.integration' fractalColor '#9A91C4' evidence ['internal/agentintegration/install.go', 'internal/agentintegration/hookconfig.go'] }
+    }
+
+    lifecycle = component 'Lifecycle & Status' {
+      description 'Tracks agent states (running, waiting_for_input, idle) and session identities.'
+      metadata { uid 'agents.lifecycle' fractalColor '#9A91C4' evidence ['internal/agentlifecycle/registry.go', 'internal/agentlifecycle/report.go'] }
+    }
+
+    control = component 'Agent Coordination Driver' {
+      description 'Discovers, starts, prompts, reads, and sends keys to agents behind safety gates.'
+      metadata { uid 'agents.control' fractalColor '#9A91C4' evidence ['internal/agentcontrol/service.go', 'internal/agentcontrol/interact.go'] }
+    }
+
+    adapters = adapter 'History & Session Adapters' {
+      description 'Parses chat transcripts and session logs from Claude, Codex, Cursor, Pi, and Warp.'
+      metadata { uid 'agents.adapters' fractalColor '#9A91C4' evidence ['internal/adapter/adapter.go', 'internal/adapter/claudecode/adapter.go'] }
+    }
+  }
+
+  notifications = subsystem 'Notification & Alert System' {
+    description 'Unified alerts across in-app toasts, OS desktop banners, and terminal sounds.'
+    metadata { uid 'notifications' fractalColor '#D4A373' evidence ['internal/notify/store.go', 'internal/notifydelivery/delivery.go'] }
+
+    store = store 'Durable Notification Store' {
+      description 'Persists alerts, unread counts, and jump targets in JSONL ledgers.'
+      metadata { uid 'notifications.store' fractalColor '#D4A373' evidence ['internal/notify/store.go', 'internal/notify/notify.go'] }
+    }
+
+    delivery = service 'Platform Delivery' {
+      description 'Dispatches native desktop notifications and sound assets on macOS and Linux.'
+      metadata { uid 'notifications.delivery' fractalColor '#D4A373' evidence ['internal/notifydelivery/delivery.go', 'internal/notifydelivery/platform_darwin.go'] }
+    }
+  }
+
+  cli = subsystem 'Non-Interactive CLI' {
+    description 'Command-line entry points for programmatic layout, agent control, opening panes, and scripting.'
+    metadata { uid 'cli' fractalColor '#82A6B6' evidence ['internal/cli/cli.go', 'internal/cli/registry.go'] }
+
+    dispatch = component 'Command Router & Safety Gate' {
+      description 'Fast-paths non-interactive verbs, verifies state isolation, and strips flags.'
+      metadata { uid 'cli.dispatch' fractalColor '#82A6B6' evidence ['internal/cli/cli.go', 'internal/cli/command.go'] }
+    }
+
+    layout_cmd = component 'Layout Commands' {
+      description 'sidecar layout get, apply, and move verbs for programmatic grid manipulation.'
+      metadata { uid 'cli.layout_cmd' fractalColor '#82A6B6' evidence ['internal/cli/layout.go', 'internal/cli/layout_run.go'] }
+    }
+
+    agent_cmd = component 'Agent Control Commands' {
+      description 'sidecar agent list, start, prompt, read, and send-keys orchestration CLI.'
+      metadata { uid 'cli.agent_cmd' fractalColor '#82A6B6' evidence ['internal/cli/agent.go', 'internal/cli/agent_lifecycle.go'] }
+    }
+
+    open_cmd = component 'Open Pane Commands' {
+      description 'sidecar open displays files, td issues, notes, diffs, or provider resources.'
+      metadata { uid 'cli.open_cmd' fractalColor '#82A6B6' evidence ['internal/cli/open.go', 'internal/cli/open_target.go'] }
+    }
+
+    notify_cmd = component 'Notification Commands' {
+      description 'sidecar notify post, list, and dismiss verbs with deep-link jump targets.'
+      metadata { uid 'cli.notify_cmd' fractalColor '#82A6B6' evidence ['internal/cli/notify.go', 'internal/notifydelivery/delivery.go'] }
+    }
+  }
+
+  plugins = subsystem 'Domain Plugins' {
+    description 'Dedicated domain views for Git status, file browsing, task management, and notes.'
+    metadata { uid 'plugins' fractalColor '#739886' evidence ['internal/plugin/plugin.go', 'internal/plugins/assembly/assembly.go'] }
+
+    git = component 'Git Status & Diffs' {
+      description 'Staged and unstaged file inspection, syntax-highlighted diffs, and commit logs.'
+      metadata { uid 'plugins.git' fractalColor '#739886' evidence ['internal/plugins/gitstatus/plugin.go'] }
+    }
+
+    files = component 'File Browser & Editor' {
+      description 'Hierarchical file tree navigation, file preview, and inline text editing.'
+      metadata { uid 'plugins.files' fractalColor '#739886' evidence ['internal/plugins/filebrowser/plugin.go'] }
+    }
+
+    td = component 'TD Task Monitor' {
+      description 'Durable task workflow monitoring, activity logs, and review/approval flows.'
+      metadata { uid 'plugins.td' fractalColor '#739886' evidence ['internal/plugins/tdmonitor/plugin.go'] }
+    }
+
+    scratchpad = component 'Scratchpad Notes' {
+      description 'Quick note taking and scratchpad documents persisted per project.'
+      metadata { uid 'plugins.notes' fractalColor '#739886' evidence ['internal/plugins/notes/plugin.go'] }
+    }
+  }
+
+  remoting = subsystem 'Remote Host Orchestration' {
+    description 'Orchestrates remote Sidecar instances and transparently executes commands over SSH.'
+    metadata { uid 'remoting' fractalColor '#C48282' evidence ['internal/hosts/client.go', 'internal/hostserve/serve.go'] }
+
+    client = component 'SSH Host Client' {
+      description 'Manages persistent SSH connections, host verification, and remote command proxying.'
+      metadata { uid 'remoting.client' fractalColor '#C48282' evidence ['internal/hosts/client.go', 'internal/hosts/ssh.go'] }
+    }
+
+    daemon = service 'Host Daemon (host serve)' {
+      description 'Headless daemon serving repo reads, content trees, and shell controls over stdio.'
+      metadata { uid 'remoting.daemon' fractalColor '#C48282' evidence ['internal/hostserve/serve.go', 'internal/hostserve/viewers.go'] }
+    }
+
+    stream = component 'Remote Content Stream' {
+      #proposed
+      description 'Direct streaming of remote file trees and git status without SSH filesystem mounts.'
+      metadata { uid 'remoting.stream' fractalColor '#C48282' evidence ['docs/plans/active/remote-files-plugin.md', 'docs/plans/active/remote-git-plugin.md'] }
+    }
+  }
+
+  external = subsystem 'External Systems & Runtimes' {
+    description 'Process and network boundaries outside the core Sidecar Go application.'
+    metadata { uid 'external' fractalColor '#B59669' evidence ['docs/features.md'] }
+
+    tmux = service 'tmux Server' {
+      description 'Dedicated multiplexer server holding PTY sessions, windows, and output ring buffers.'
+      metadata { uid 'external.tmux' fractalColor '#B59669' evidence ['internal/tmuxenv/tmuxenv.go'] }
+    }
+
+    agents = service 'Agent Runtimes' {
+      description 'Autonomous coding agents (Claude Code, Codex, Antigravity, OpenCode, Pi) in shells.'
+      metadata { uid 'external.agents' fractalColor '#9A91C4' evidence ['internal/agentintegration/install.go'] }
+    }
+
+    providers = adapter 'Terminal Resource Providers' {
+      description 'External JSON-over-stdio executables (sidecar-jira, sidecar-github) resolving tokens.'
+      metadata { uid 'external.providers' fractalColor '#739886' evidence ['internal/resource/wire.go', 'internal/resource/document.go'] }
+    }
+
+    mobile = service 'Mobile Companion Client' {
+      #proposed
+      description 'Native mobile app streaming active pane buffers and receiving push alerts.'
+      metadata { uid 'external.mobile' fractalColor '#C48282' evidence ['docs/plans/active/sidecar-mobile.md', 'internal/mobilehub/broker.go'] }
+    }
+  }
+
+  // Inter-component and cross-boundary relationships
+  user .calls tui.app 'Navigates and enters commands' { metadata { uid 'user-tui' } }
+  user .calls cli.dispatch 'Runs CLI verbs from shell' { metadata { uid 'user-cli' } }
+
+  tui.app .renders panes.frame 'Composes active view panes' { metadata { uid 'tui-panes' } }
+  tui.app .calls workspaces.surface 'Switches active workspace' { metadata { uid 'tui-workspaces' } }
+  tui.app .calls plugins.git 'Activates Git view' { metadata { uid 'tui-git' } }
+  tui.app .calls plugins.files 'Activates Files view' { metadata { uid 'tui-files' } }
+  tui.app .calls plugins.td 'Activates Tasks view' { metadata { uid 'tui-td' } }
+  tui.app .calls plugins.scratchpad 'Activates Notes view' { metadata { uid 'tui-notes' } }
+  tui.app .renders tui.notify 'Displays toast overlays' { metadata { uid 'tui-app-notify' } }
+
+  tui.overview .reads workspaces.state 'Surfaces all project sessions' { metadata { uid 'overview-state' } }
+  tui.overview .renders panes.frame 'Shares layout chrome & preview' { metadata { uid 'overview-panes' } }
+
+  panes.frame .calls panes.layout 'Calculates split coordinates' { metadata { uid 'frame-layout' } }
+  panes.live .reads panes.frame 'Checks on-screen pane visibility' { metadata { uid 'live-frame' } }
+  panes.live .calls panes.content 'Triggers live re-reads' { metadata { uid 'live-content' } }
+  panes.content .renders panes.frame 'Draws file, diff, and note text' { metadata { uid 'content-frame' } }
+  panes.content .calls panes.layout 'Requests leaf geometry' { metadata { uid 'content-layout' } }
+
+  workspaces.surface .calls panes.layout 'Applies pane split mutations' { metadata { uid 'ws-layout' } }
+  workspaces.surface .calls workspaces.git_ops 'Creates branch worktrees' { metadata { uid 'ws-gitops' } }
+  workspaces.surface .writes workspaces.state 'Records live shell identities' { metadata { uid 'ws-state' } }
+  workspaces.surface .renders terminal.preview 'Paints terminal pane rows' { metadata { uid 'ws-preview' } }
+
+  workspaces.restore .reads workspaces.state 'Reads shells.json for recovery' { metadata { uid 'restore-state' } }
+  workspaces.restore .calls external.tmux 'Recreates missing sessions' { metadata { uid 'restore-tmux' } }
+
+  terminal.preview .reads terminal.control 'Captures rendered screen buffer' { metadata { uid 'preview-control' } }
+  terminal.pty .sends terminal.control 'Forwards user keystrokes & clicks' { metadata { uid 'pty-control' } }
+  terminal.control .streams external.tmux 'tmux control-mode protocol' { metadata { uid 'control-tmux' } }
+
+  external.tmux .manages external.agents 'Hosts agent process in PTY' { metadata { uid 'tmux-agents' } }
+
+  agents.integration .writes external.agents 'Injects hooks & configs' { metadata { uid 'integration-agent' } }
+  external.agents .sends agents.lifecycle 'Emits session lifecycle events' { metadata { uid 'agent-lifecycle' } }
+  agents.control .calls agents.lifecycle 'Verifies agent availability' { metadata { uid 'control-lifecycle' } }
+  agents.control .supplies agents.catalog 'Reads agent argv definitions' { metadata { uid 'control-catalog' } }
+  agents.control .reads agents.adapters 'Extracts conversation turns' { metadata { uid 'control-adapters' } }
+  agents.control .sends terminal.pty 'Types prompts & commands' { metadata { uid 'control-pty' } }
+  agents.control .reads terminal.preview 'Reads unwrapped output buffer' { metadata { uid 'control-preview' } }
+
+  notifications.store .notifies tui.notify 'Streams alerts to in-app stack' { metadata { uid 'store-toast' } }
+  notifications.store .calls notifications.delivery 'Triggers system audio & banners' { metadata { uid 'store-delivery' } }
+
+  cli.dispatch .calls cli.layout_cmd 'Dispatches layout verb' { metadata { uid 'dispatch-layout' } }
+  cli.dispatch .calls cli.agent_cmd 'Dispatches agent verb' { metadata { uid 'dispatch-agent' } }
+  cli.dispatch .calls cli.open_cmd 'Dispatches open verb' { metadata { uid 'dispatch-open' } }
+  cli.dispatch .calls cli.notify_cmd 'Dispatches notify verb' { metadata { uid 'dispatch-notify' } }
+
+  cli.layout_cmd .calls panes.layout 'Queries or modifies layout tree' { metadata { uid 'cli-panes-layout' } }
+  cli.agent_cmd .calls agents.control 'Coordinates agent execution' { metadata { uid 'cli-agent-ctl' } }
+  cli.open_cmd .calls workspaces.surface 'Opens target beside terminal' { metadata { uid 'cli-ws-open' } }
+  cli.notify_cmd .writes notifications.store 'Enqueues notification event' { metadata { uid 'cli-notify-store' } }
+
+  external.providers .supplies panes.content 'Supplies Jira & GitHub documents' { metadata { uid 'providers-content' } }
+
+  remoting.client .calls remoting.daemon 'Executes verbs over SSH' { metadata { uid 'client-daemon' } }
+  remoting.daemon .calls workspaces.surface 'Manages remote shells' { metadata { uid 'daemon-ws' } }
+  remoting.stream .streams remoting.client 'Streams remote files & diffs' { metadata { uid 'stream-client' } }
+
+  external.mobile .streams tui.app 'Streams pane frames over WebSockets' { metadata { uid 'mobile-tui' } }
+}
+
+views {
+  view index {
+    include *
+  }
+}

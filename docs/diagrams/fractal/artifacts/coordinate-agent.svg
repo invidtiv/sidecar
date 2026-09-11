@@ -1,0 +1,173 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" role="img" aria-labelledby="sequence-title sequence-description" data-theme="graphite" data-theme-appearance="light">
+  <title id="sequence-title">Coordinated Agent Delegation</title><desc id="sequence-description">The exact sequence required to safely discover, launch, prompt, read, and coordinate a secondary agent without user disruption.</desc><metadata>{&quot;journeyId&quot;:&quot;coordinate-agent&quot;,&quot;provenance&quot;:&quot;Authored 2026-09-10 from .agents/skills/coordinate-agents/SKILL.md and internal/agentcontrol/service.go. Checked against internal/cli/agent.go and internal/tty/control_manager.go.&quot;,&quot;hiddenLanes&quot;:[],&quot;rows&quot;:[{&quot;id&quot;:&quot;discover&quot;,&quot;type&quot;:&quot;phase&quot;,&quot;messageIds&quot;:[&quot;list_targets&quot;,&quot;query_status&quot;,&quot;return_targets&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;caller&quot;,&quot;cli_entry&quot;,&quot;agent_ctrl&quot;]},{&quot;id&quot;:&quot;list_targets&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;list_targets&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;caller&quot;,&quot;cli_entry&quot;]},{&quot;id&quot;:&quot;query_status&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;query_status&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;cli_entry&quot;,&quot;agent_ctrl&quot;]},{&quot;id&quot;:&quot;return_targets&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;return_targets&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;cli_entry&quot;,&quot;caller&quot;]},{&quot;id&quot;:&quot;create_pane&quot;,&quot;type&quot;:&quot;phase&quot;,&quot;messageIds&quot;:[&quot;req_split&quot;,&quot;alloc_split&quot;,&quot;return_shell_id&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;caller&quot;,&quot;cli_entry&quot;,&quot;ws_manager&quot;]},{&quot;id&quot;:&quot;req_split&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;req_split&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;caller&quot;,&quot;cli_entry&quot;]},{&quot;id&quot;:&quot;alloc_split&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;alloc_split&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;cli_entry&quot;,&quot;ws_manager&quot;]},{&quot;id&quot;:&quot;return_shell_id&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;return_shell_id&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;cli_entry&quot;,&quot;caller&quot;]},{&quot;id&quot;:&quot;start_agent&quot;,&quot;type&quot;:&quot;phase&quot;,&quot;messageIds&quot;:[&quot;req_start&quot;,&quot;launch_process&quot;,&quot;spawn_in_pty&quot;,&quot;hook_ready&quot;,&quot;confirm_ready&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;caller&quot;,&quot;cli_entry&quot;,&quot;agent_ctrl&quot;,&quot;tmux_pty&quot;,&quot;secondary_agent&quot;]},{&quot;id&quot;:&quot;req_start&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;req_start&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;caller&quot;,&quot;cli_entry&quot;]},{&quot;id&quot;:&quot;launch_process&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;launch_process&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;cli_entry&quot;,&quot;agent_ctrl&quot;]},{&quot;id&quot;:&quot;spawn_in_pty&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;spawn_in_pty&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;agent_ctrl&quot;,&quot;tmux_pty&quot;]},{&quot;id&quot;:&quot;hook_ready&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;hook_ready&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;secondary_agent&quot;,&quot;agent_ctrl&quot;]},{&quot;id&quot;:&quot;confirm_ready&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;confirm_ready&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;cli_entry&quot;,&quot;caller&quot;]},{&quot;id&quot;:&quot;prompt_and_wait&quot;,&quot;type&quot;:&quot;phase&quot;,&quot;messageIds&quot;:[&quot;req_prompt&quot;,&quot;forward_prompt&quot;,&quot;send_to_pty&quot;,&quot;agent_executing&quot;,&quot;prompt_done&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;caller&quot;,&quot;cli_entry&quot;,&quot;agent_ctrl&quot;,&quot;tmux_pty&quot;,&quot;secondary_agent&quot;]},{&quot;id&quot;:&quot;req_prompt&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;req_prompt&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;caller&quot;,&quot;cli_entry&quot;]},{&quot;id&quot;:&quot;forward_prompt&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;forward_prompt&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;cli_entry&quot;,&quot;agent_ctrl&quot;]},{&quot;id&quot;:&quot;send_to_pty&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;send_to_pty&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;agent_ctrl&quot;,&quot;tmux_pty&quot;]},{&quot;id&quot;:&quot;agent_executing&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;agent_executing&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;secondary_agent&quot;,&quot;agent_ctrl&quot;]},{&quot;id&quot;:&quot;prompt_done&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;prompt_done&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;cli_entry&quot;,&quot;caller&quot;]},{&quot;id&quot;:&quot;read_and_reply&quot;,&quot;type&quot;:&quot;phase&quot;,&quot;messageIds&quot;:[&quot;req_read&quot;,&quot;capture_rows&quot;,&quot;return_output&quot;,&quot;send_answer&quot;,&quot;forward_keys&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;caller&quot;,&quot;cli_entry&quot;,&quot;agent_ctrl&quot;,&quot;tmux_pty&quot;]},{&quot;id&quot;:&quot;req_read&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;req_read&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;caller&quot;,&quot;cli_entry&quot;]},{&quot;id&quot;:&quot;capture_rows&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;capture_rows&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;agent_ctrl&quot;,&quot;tmux_pty&quot;]},{&quot;id&quot;:&quot;return_output&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;return_output&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;cli_entry&quot;,&quot;caller&quot;]},{&quot;id&quot;:&quot;send_answer&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;send_answer&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;caller&quot;,&quot;cli_entry&quot;]},{&quot;id&quot;:&quot;forward_keys&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;forward_keys&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;cli_entry&quot;,&quot;tmux_pty&quot;]}]}</metadata>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#85857f"/></marker>
+    <marker id="arrow-open" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10" fill="none" stroke="#85857f" stroke-width="1.5"/></marker>
+  </defs>
+  <rect width="1920" height="1080" fill="#f8f8f6"/>
+  <g font-family="Arial, Helvetica, sans-serif" data-export-layer="title">
+    <text x="70" y="43" font-size="11" letter-spacing="2.5" fill="#626b6f">FRACTAL / SEQUENCE JOURNEY</text>
+    <text x="70" y="88" text-anchor="start" font-size="34" fill="#292927"><tspan x="70" dy="0">Coordinated Agent Delegation</tspan></text>
+    <text x="70" y="126" text-anchor="start" font-size="15" fill="#74746f"><tspan x="70" dy="0">The exact sequence required to safely discover, launch, prompt, read, and coordinate a secondary agent without user disruption.</tspan></text>
+  </g>
+  <g font-family="Arial, Helvetica, sans-serif" transform="translate(589.4214876033058 190) scale(0.3925619834710744)"><g data-column="caller" data-members="caller" data-elements="">
+    <rect x="102" y="32" width="244" height="44" rx="12" fill="#ffffff" stroke="#759EB5" stroke-width="2"/>
+    <text x="224" y="59" text-anchor="middle" font-size="15" fill="#292927"><tspan x="224" dy="0">Invoking Agent / User</tspan></text>
+    <path d="M224 76V1866" stroke="#ddddda" stroke-width="1.2" stroke-dasharray="5 7"/>
+  </g><g data-column="cli_entry" data-members="cli_entry" data-elements="cli.dispatch">
+    <rect x="390" y="32" width="244" height="44" rx="12" fill="#ffffff" stroke="#82A6B6" stroke-width="2"/>
+    <text x="512" y="59" text-anchor="middle" font-size="15" fill="#292927"><tspan x="512" dy="0">Sidecar CLI</tspan></text>
+    <path d="M512 76V1866" stroke="#ddddda" stroke-width="1.2" stroke-dasharray="5 7"/>
+  </g><g data-column="ws_manager" data-members="ws_manager" data-elements="workspaces.surface">
+    <rect x="678" y="32" width="244" height="44" rx="12" fill="#ffffff" stroke="#89A579" stroke-width="2"/>
+    <text x="800" y="59" text-anchor="middle" font-size="15" fill="#292927"><tspan x="800" dy="0">Workspace Manager</tspan></text>
+    <path d="M800 76V1866" stroke="#ddddda" stroke-width="1.2" stroke-dasharray="5 7"/>
+  </g><g data-column="agent_ctrl" data-members="agent_ctrl" data-elements="agents.control">
+    <rect x="966" y="32" width="244" height="44" rx="12" fill="#ffffff" stroke="#9A91C4" stroke-width="2"/>
+    <text x="1088" y="59" text-anchor="middle" font-size="15" fill="#292927"><tspan x="1088" dy="0">Agent Controller</tspan></text>
+    <path d="M1088 76V1866" stroke="#ddddda" stroke-width="1.2" stroke-dasharray="5 7"/>
+  </g><g data-column="tmux_pty" data-members="tmux_pty" data-elements="terminal.control">
+    <rect x="1254" y="32" width="244" height="44" rx="12" fill="#ffffff" stroke="#B59669" stroke-width="2"/>
+    <text x="1376" y="59" text-anchor="middle" font-size="15" fill="#292927"><tspan x="1376" dy="0">tmux PTY</tspan></text>
+    <path d="M1376 76V1866" stroke="#ddddda" stroke-width="1.2" stroke-dasharray="5 7"/>
+  </g><g data-column="secondary_agent" data-members="secondary_agent" data-elements="external.agents">
+    <rect x="1542" y="32" width="244" height="44" rx="12" fill="#ffffff" stroke="#9A91C4" stroke-width="2"/>
+    <text x="1664" y="59" text-anchor="middle" font-size="15" fill="#292927"><tspan x="1664" dy="0">Secondary Agent</tspan></text>
+    <path d="M1664 76V1866" stroke="#ddddda" stroke-width="1.2" stroke-dasharray="5 7"/>
+  </g><g data-row-id="discover" data-message-ids="list_targets,query_status,return_targets" data-participant-ids="caller,cli_entry,agent_ctrl" data-row-type="phase" data-phase-depth="0" data-collapsed="false">
+        <rect x="58" y="118" width="1772" height="35" rx="10" fill="#eeeeeb" stroke="#d5d5d0"/>
+        <text x="78" y="141" text-anchor="start" font-size="15" fill="#292927"><tspan x="78" dy="0">1. Discover Target Shells</tspan></text>
+        <text x="317.05999999999995" y="141" text-anchor="start" font-size="11" fill="#7d7d77"><tspan x="317.05999999999995" dy="0">Inspect registered shells and availability before creating or starting.</tspan></text>
+        <text x="1788" y="139.5" text-anchor="end" font-size="11" fill="#7d7d77">3 interactions</text>
+      </g><g data-row-id="list_targets" data-message-ids="list_targets" data-participant-ids="caller,cli_entry" data-row-type="message" data-kind="call">
+      <rect x="188" y="167" width="360" height="66" rx="7" fill="#f8f8f6"/>
+      <text x="368" y="190" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="368" dy="0">sidecar agent list --json</tspan></text>
+      <text x="368" y="212" text-anchor="middle" font-size="11" fill="#7d7d77"><tspan x="368" dy="0">Enumerate existing shells, agent bindings, and idle</tspan><tspan x="368" dy="15">status.</tspan></text>
+      <path d="M224 238H504" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow)"/>
+    </g><g data-row-id="query_status" data-message-ids="query_status" data-participant-ids="cli_entry,agent_ctrl" data-row-type="message" data-kind="call">
+      <rect x="620" y="263" width="360" height="34" rx="7" fill="#f8f8f6"/>
+      <text x="800" y="286" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="800" dy="0">Query session records</tspan></text>
+      
+      <path d="M512 302H1080" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow)"/>
+    </g><g data-row-id="return_targets" data-message-ids="return_targets" data-participant-ids="cli_entry,caller" data-row-type="message" data-kind="return">
+      <rect x="188" y="327" width="360" height="34" rx="7" fill="#f8f8f6"/>
+      <text x="368" y="350" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="368" dy="0">Return available targets</tspan></text>
+      
+      <path d="M512 366H232" fill="none" stroke="#85857f" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#arrow)"/>
+    </g><g data-row-id="create_pane" data-message-ids="req_split,alloc_split,return_shell_id" data-participant-ids="caller,cli_entry,ws_manager" data-row-type="phase" data-phase-depth="0" data-collapsed="false">
+        <rect x="58" y="391" width="1772" height="35" rx="10" fill="#eeeeeb" stroke="#d5d5d0"/>
+        <text x="78" y="414" text-anchor="start" font-size="15" fill="#292927"><tspan x="78" dy="0">2. Create Layout Separately</tspan></text>
+        <text x="348.07999999999987" y="414" text-anchor="start" font-size="11" fill="#7d7d77"><tspan x="348.07999999999987" dy="0">Allocate the terminal split in the layout before launching the provider.</tspan></text>
+        <text x="1788" y="412.5" text-anchor="end" font-size="11" fill="#7d7d77">3 interactions</text>
+      </g><g data-row-id="req_split" data-message-ids="req_split" data-participant-ids="caller,cli_entry" data-row-type="message" data-kind="call">
+      <rect x="188" y="440" width="360" height="85" rx="7" fill="#f8f8f6"/>
+      <text x="368" y="463" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="368" dy="0">sidecar create shell --tab --name Reviewer</tspan><tspan x="368" dy="17">--json</tspan></text>
+      <text x="368" y="504" text-anchor="middle" font-size="11" fill="#7d7d77"><tspan x="368" dy="0">Creates dedicated managed shell tab with a workspace</tspan><tspan x="368" dy="15">row without stealing focus.</tspan></text>
+      <path d="M224 530H504" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow)"/>
+    </g><g data-row-id="alloc_split" data-message-ids="alloc_split" data-participant-ids="cli_entry,ws_manager" data-row-type="message" data-kind="call">
+      <rect x="476" y="555" width="360" height="34" rx="7" fill="#f8f8f6"/>
+      <text x="656" y="578" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="656" dy="0">Allocate pane &amp; tmux window</tspan></text>
+      
+      <path d="M512 594H792" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow)"/>
+    </g><g data-row-id="return_shell_id" data-message-ids="return_shell_id" data-participant-ids="cli_entry,caller" data-row-type="message" data-kind="return">
+      <rect x="188" y="619" width="360" height="34" rx="7" fill="#f8f8f6"/>
+      <text x="368" y="642" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="368" dy="0">Return shell target ID</tspan></text>
+      
+      <path d="M512 658H232" fill="none" stroke="#85857f" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#arrow)"/>
+    </g><g data-row-id="start_agent" data-message-ids="req_start,launch_process,spawn_in_pty,hook_ready,confirm_ready" data-participant-ids="caller,cli_entry,agent_ctrl,tmux_pty,secondary_agent" data-row-type="phase" data-phase-depth="0" data-collapsed="false">
+        <rect x="58" y="683" width="1772" height="35" rx="10" fill="#eeeeeb" stroke="#d5d5d0"/>
+        <text x="78" y="706" text-anchor="start" font-size="15" fill="#292927"><tspan x="78" dy="0">3. Start Provider &amp; Wait for Ready</tspan></text>
+        <text x="406.48999999999984" y="706" text-anchor="start" font-size="11" fill="#7d7d77"><tspan x="406.48999999999984" dy="0">Launch the configured provider and block until its session hook reports ready.</tspan></text>
+        <text x="1788" y="704.5" text-anchor="end" font-size="11" fill="#7d7d77">5 interactions</text>
+      </g><g data-row-id="req_start" data-message-ids="req_start" data-participant-ids="caller,cli_entry" data-row-type="message" data-kind="call">
+      <rect x="188" y="732" width="360" height="34" rx="7" fill="#f8f8f6"/>
+      <text x="368" y="755" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="368" dy="0">sidecar agent start target --kind codex</tspan></text>
+      
+      <path d="M224 771H504" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow)"/>
+    </g><g data-row-id="launch_process" data-message-ids="launch_process" data-participant-ids="cli_entry,agent_ctrl" data-row-type="message" data-kind="call">
+      <rect x="620" y="796" width="360" height="34" rx="7" fill="#f8f8f6"/>
+      <text x="800" y="819" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="800" dy="0">Launch instrumented agent</tspan></text>
+      
+      <path d="M512 835H1080" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow)"/>
+    </g><g data-row-id="spawn_in_pty" data-message-ids="spawn_in_pty" data-participant-ids="agent_ctrl,tmux_pty" data-row-type="message" data-kind="async">
+      <rect x="1052" y="860" width="360" height="34" rx="7" fill="#f8f8f6"/>
+      <text x="1232" y="883" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="1232" dy="0">Spawn provider command in session</tspan></text>
+      
+      <path d="M1088 899H1368" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow-open)"/>
+    </g><g data-row-id="hook_ready" data-message-ids="hook_ready" data-participant-ids="secondary_agent,agent_ctrl" data-row-type="message" data-kind="call">
+      <rect x="1196" y="924" width="360" height="66" rx="7" fill="#f8f8f6"/>
+      <text x="1376" y="947" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="1376" dy="0">Emit session ready hook</tspan></text>
+      <text x="1376" y="969" text-anchor="middle" font-size="11" fill="#7d7d77"><tspan x="1376" dy="0">Injected hook notifies Sidecar that provider prompt</tspan><tspan x="1376" dy="15">loop is ready.</tspan></text>
+      <path d="M1664 995H1096" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow)"/>
+    </g><g data-row-id="confirm_ready" data-message-ids="confirm_ready" data-participant-ids="cli_entry,caller" data-row-type="message" data-kind="return">
+      <rect x="188" y="1020" width="360" height="34" rx="7" fill="#f8f8f6"/>
+      <text x="368" y="1043" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="368" dy="0">Provider ready</tspan></text>
+      
+      <path d="M512 1059H232" fill="none" stroke="#85857f" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#arrow)"/>
+    </g><g data-row-id="prompt_and_wait" data-message-ids="req_prompt,forward_prompt,send_to_pty,agent_executing,prompt_done" data-participant-ids="caller,cli_entry,agent_ctrl,tmux_pty,secondary_agent" data-row-type="phase" data-phase-depth="0" data-collapsed="false">
+        <rect x="58" y="1084" width="1772" height="35" rx="10" fill="#eeeeeb" stroke="#d5d5d0"/>
+        <text x="78" y="1107" text-anchor="start" font-size="15" fill="#292927"><tspan x="78" dy="0">4. Prompt &amp; Await Execution</tspan></text>
+        <text x="338.17999999999995" y="1107" text-anchor="start" font-size="11" fill="#7d7d77"><tspan x="338.17999999999995" dy="0">Dispatch task text and observe lifecycle progress.</tspan></text>
+        <text x="1788" y="1105.5" text-anchor="end" font-size="11" fill="#7d7d77">5 interactions</text>
+      </g><g data-row-id="req_prompt" data-message-ids="req_prompt" data-participant-ids="caller,cli_entry" data-row-type="message" data-kind="call">
+      <rect x="188" y="1133" width="360" height="49" rx="7" fill="#f8f8f6"/>
+      <text x="368" y="1156" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="368" dy="0">sidecar agent prompt target TEXT --wait</tspan><tspan x="368" dy="17">--timeout 5m</tspan></text>
+      
+      <path d="M224 1187H504" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow)"/>
+    </g><g data-row-id="forward_prompt" data-message-ids="forward_prompt" data-participant-ids="cli_entry,agent_ctrl" data-row-type="message" data-kind="call">
+      <rect x="620" y="1212" width="360" height="34" rx="7" fill="#f8f8f6"/>
+      <text x="800" y="1235" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="800" dy="0">Inject prompt into PTY</tspan></text>
+      
+      <path d="M512 1251H1080" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow)"/>
+    </g><g data-row-id="send_to_pty" data-message-ids="send_to_pty" data-participant-ids="agent_ctrl,tmux_pty" data-row-type="message" data-kind="async">
+      <rect x="1052" y="1276" width="360" height="34" rx="7" fill="#f8f8f6"/>
+      <text x="1232" y="1299" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="1232" dy="0">Write prompt bytes</tspan></text>
+      
+      <path d="M1088 1315H1368" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow-open)"/>
+    </g><g data-row-id="agent_executing" data-message-ids="agent_executing" data-participant-ids="secondary_agent,agent_ctrl" data-row-type="message" data-kind="call">
+      <rect x="1196" y="1340" width="360" height="51" rx="7" fill="#f8f8f6"/>
+      <text x="1376" y="1363" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="1376" dy="0">Transition: running -&gt; waiting_for_input</tspan></text>
+      <text x="1376" y="1385" text-anchor="middle" font-size="11" fill="#7d7d77"><tspan x="1376" dy="0">Agent executes tools and completes review.</tspan></text>
+      <path d="M1664 1396H1096" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow)"/>
+    </g><g data-row-id="prompt_done" data-message-ids="prompt_done" data-participant-ids="cli_entry,caller" data-row-type="message" data-kind="return">
+      <rect x="188" y="1421" width="360" height="34" rx="7" fill="#f8f8f6"/>
+      <text x="368" y="1444" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="368" dy="0">Prompt finished or awaiting input</tspan></text>
+      
+      <path d="M512 1460H232" fill="none" stroke="#85857f" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#arrow)"/>
+    </g><g data-row-id="read_and_reply" data-message-ids="req_read,capture_rows,return_output,send_answer,forward_keys" data-participant-ids="caller,cli_entry,agent_ctrl,tmux_pty" data-row-type="phase" data-phase-depth="0" data-collapsed="false">
+        <rect x="58" y="1485" width="1772" height="35" rx="10" fill="#eeeeeb" stroke="#d5d5d0"/>
+        <text x="78" y="1508" text-anchor="start" font-size="15" fill="#292927"><tspan x="78" dy="0">5. Read Before Sending Keys</tspan></text>
+        <text x="343.2949999999999" y="1508" text-anchor="start" font-size="11" fill="#7d7d77"><tspan x="343.2949999999999" dy="0">Never blind-type: read unwrapped terminal output to verify agent state before answering.</tspan></text>
+        <text x="1788" y="1506.5" text-anchor="end" font-size="11" fill="#7d7d77">5 interactions</text>
+      </g><g data-row-id="req_read" data-message-ids="req_read" data-participant-ids="caller,cli_entry" data-row-type="message" data-kind="call">
+      <rect x="188" y="1534" width="360" height="49" rx="7" fill="#f8f8f6"/>
+      <text x="368" y="1557" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="368" dy="0">sidecar agent read target --source</tspan><tspan x="368" dy="17">recent-unwrapped</tspan></text>
+      
+      <path d="M224 1588H504" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow)"/>
+    </g><g data-row-id="capture_rows" data-message-ids="capture_rows" data-participant-ids="agent_ctrl,tmux_pty" data-row-type="message" data-kind="call">
+      <rect x="1052" y="1613" width="360" height="34" rx="7" fill="#f8f8f6"/>
+      <text x="1232" y="1636" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="1232" dy="0">capture-pane -e -N buffer</tspan></text>
+      
+      <path d="M1088 1652H1368" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow)"/>
+    </g><g data-row-id="return_output" data-message-ids="return_output" data-participant-ids="cli_entry,caller" data-row-type="message" data-kind="return">
+      <rect x="188" y="1677" width="360" height="34" rx="7" fill="#f8f8f6"/>
+      <text x="368" y="1700" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="368" dy="0">Return recent screen rows</tspan></text>
+      
+      <path d="M512 1716H232" fill="none" stroke="#85857f" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#arrow)"/>
+    </g><g data-row-id="send_answer" data-message-ids="send_answer" data-participant-ids="caller,cli_entry" data-row-type="message" data-kind="call">
+      <rect x="188" y="1741" width="360" height="51" rx="7" fill="#f8f8f6"/>
+      <text x="368" y="1764" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="368" dy="0">sidecar agent send-keys target approve</tspan></text>
+      <text x="368" y="1786" text-anchor="middle" font-size="11" fill="#7d7d77"><tspan x="368" dy="0">Explicit answer sent to prompt.</tspan></text>
+      <path d="M224 1797H504" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow)"/>
+    </g><g data-row-id="forward_keys" data-message-ids="forward_keys" data-participant-ids="cli_entry,tmux_pty" data-row-type="message" data-kind="async">
+      <rect x="764" y="1822" width="360" height="34" rx="7" fill="#f8f8f6"/>
+      <text x="944" y="1845" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="944" dy="0">Forward keys to PTY</tspan></text>
+      
+      <path d="M512 1861H1368" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow-open)"/>
+    </g></g>
+  <g font-family="Arial, Helvetica, sans-serif" data-export-layer="footer">
+    <path d="M70 992H1850" stroke="#ddddda"/>
+    <text x="70" y="1027" font-size="12" font-weight="600" letter-spacing="1" fill="#626b6f">CURRENT · 21 INTERACTIONS</text>
+    <text x="620" y="1027" font-size="11" fill="#7d7d77">SOURCE · Authored 2026-09-10 from .agents/skills/coordinate-agents/SKILL.md and internal/agentcontrol/service.go. Checked against internal/cli/agent.go and internal/tty/control_manager.go.</text>
+  </g>
+  </svg>

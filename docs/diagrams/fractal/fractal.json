@@ -1,0 +1,119 @@
+{
+  "version": 1,
+  "id": "sidecar",
+  "title": "Sidecar",
+  "description": "The terminal-centric workspace for AI coding agents.",
+  "provenance": "Authored 2026-09-10 from the Sidecar codebase and documentation. Reviewed against internal implementation files and controlling docs. This model represents verified architecture and boundaries, not an exhaustive AST scan.",
+  "boundaries": [
+    {
+      "id": "ui-boundary",
+      "title": "Interactive TUI Client",
+      "description": "Bubble Tea frontend handling user input, focus, and cross-project navigation.",
+      "kind": "interface",
+      "members": ["tui.app", "tui.overview", "tui.config", "tui.notify", "workspaces.surface", "panes.frame"],
+      "color": "#759EB5"
+    },
+    {
+      "id": "pane-engine",
+      "title": "Shared Layout Engine",
+      "description": "Split-tree geometry, border compositor, and live refresh shared across Workspaces and Sessions.",
+      "kind": "engine",
+      "members": ["panes.layout", "panes.frame", "panes.live", "panes.content"],
+      "color": "#739886"
+    },
+    {
+      "id": "tmux-boundary",
+      "title": "Multiplexer & PTY Boundary",
+      "description": "Independent tmux server process providing headless terminal emulation, session recovery, and capture.",
+      "kind": "process",
+      "members": ["terminal.preview", "terminal.control", "terminal.pty", "external.tmux"],
+      "color": "#B59669"
+    },
+    {
+      "id": "agent-coordination",
+      "title": "Agent Lifecycle & Sandbox",
+      "description": "Coding agent execution in isolated PTYs with lifecycle tracking and guarded out-of-band control.",
+      "kind": "permission",
+      "members": ["agents.catalog", "agents.integration", "agents.lifecycle", "agents.control", "agents.adapters", "external.agents"],
+      "color": "#9A91C4"
+    },
+    {
+      "id": "durable-state",
+      "title": "Durable State & Recovery",
+      "description": "Persistent filesystem storage in ~/.config and ~/.local/state for crash recovery.",
+      "kind": "storage",
+      "members": ["workspaces.state", "workspaces.restore", "notifications.store"],
+      "color": "#89A579"
+    },
+    {
+      "id": "remoting-network",
+      "title": "Host Remoting & Protocols",
+      "description": "Encrypted SSH channels for remote host orchestration and WebSocket streaming for companions.",
+      "kind": "network",
+      "members": ["remoting.client", "remoting.daemon", "remoting.stream", "external.mobile"],
+      "color": "#C48282"
+    }
+  ],
+  "scenes": [
+    {
+      "id": "overview",
+      "title": "The Unified Development Workspace",
+      "description": "One unified terminal workspace integrating split panes, coding agents, and Git workflows.",
+      "expanded": [],
+      "proposed": false,
+      "lens": "structure"
+    },
+    {
+      "id": "panes-and-terminals",
+      "title": "Pane Compositor & Terminal Fidelity",
+      "description": "Trace how split-tree geometry, live refresh, and high-fidelity tmux captures compose into seamless panes.",
+      "scope": "panes",
+      "expanded": ["panes"],
+      "proposed": false,
+      "lens": "structure"
+    },
+    {
+      "id": "agent-coordination",
+      "title": "Agent Lifecycle & Guarded Control",
+      "description": "How Sidecar injects hooks, tracks agent statuses, and safely orchestrates secondary agents.",
+      "scope": "agents",
+      "expanded": ["agents"],
+      "proposed": false,
+      "lens": "structure"
+    },
+    {
+      "id": "shell-durability",
+      "title": "Durable State & Cold Restore",
+      "description": "How shell manifests persist across tmux restarts and plan safe crash recovery.",
+      "scope": "workspaces",
+      "expanded": ["workspaces"],
+      "proposed": false,
+      "lens": "structure"
+    },
+    {
+      "id": "notifications-pipeline",
+      "title": "Notifications & Actionable Jump Targets",
+      "description": "Follow in-app toasts, native desktop banners, and deep-link navigation across plugins.",
+      "scope": "notifications",
+      "expanded": ["notifications"],
+      "proposed": false,
+      "lens": "structure"
+    },
+    {
+      "id": "trust-boundaries",
+      "title": "Process & Authority Boundaries",
+      "description": "Inspect clear boundary separations between the TUI, tmux PTY processes, untrusted agent runtimes, and remote hosts.",
+      "expanded": ["tui", "panes", "terminal", "workspaces", "agents", "notifications", "remoting"],
+      "proposed": false,
+      "lens": "trust"
+    },
+    {
+      "id": "proposed-roadmap",
+      "title": "Remote Streaming & Mobile Companion",
+      "description": "Explore planned remote content streaming and the native mobile terminal companion.",
+      "expanded": ["remoting", "external"],
+      "proposed": true,
+      "lens": "structure"
+    }
+  ]
+}
