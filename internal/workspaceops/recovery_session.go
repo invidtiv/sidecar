@@ -70,7 +70,9 @@ func recordRecoverableSession(session, workDir, displayName, agentType string, p
 	if server := tmuxserver.Combine(tmuxserver.Socket(), ServerPID()).ServerID(); server != "" {
 		def.Restore = &shellstate.RestoreState{Eligible: true, LastSeenServer: server, LastSeenAliveAt: now}
 	}
-	return shellstate.AddAtPath(path, def)
+	// This supplemental manifest spans projects, so common automatic labels
+	// such as "Terminal" must be allocated under its lock, not rejected.
+	return shellstate.EnsureWithAvailableNameAtPath(path, def)
 }
 
 // ForgetRecoverableSession removes the supplemental identity after an explicit
