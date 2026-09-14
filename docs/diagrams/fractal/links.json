@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "links": [
+    {
+      "id": "td-diagram",
+      "from": "plugins.td",
+      "target": { "model": "td", "scene": "overview" },
+      "title": "td architecture"
+    },
+    {
+      "id": "recall-diagram",
+      "from": "plugins.external",
+      "target": { "model": "recall", "scene": "overview" },
+      "title": "Recall architecture"
+    }
+  ],
+  "connections": [
+    {
+      "id": "td-integration",
+      "source": { "model": "sidecar", "element": "plugins.td" },
+      "target": { "model": "td", "element": "monitor" },
+      "title": "Embeds td monitor",
+      "kind": "embeds",
+      "status": "current",
+      "description": "Sidecar's td plugin embeds td's monitor TUI in-process via monitor.NewEmbeddedWithOptions, adopting its model, polling, and keymap inside the Sidecar plugin lifecycle.",
+      "evidence": ["internal/plugins/tdmonitor/plugin.go"]
+    },
+    {
+      "id": "recall-integration",
+      "source": { "model": "sidecar", "element": "plugins.external" },
+      "target": { "model": "recall", "element": "sidecarplugin" },
+      "title": "Spawns Recall plugin",
+      "kind": "spawns",
+      "status": "current",
+      "description": "Sidecar's generic external plugin host spawns each configured plugin (e.g. recall sidecar-plugin from plugins.external) as a short-lived child process speaking sidecar.plugin/v1 over JSON stdio; there is no Recall-specific code in Sidecar.",
+      "evidence": ["internal/pluginhost/protocol.go", "internal/pluginhost/command.go", "internal/pluginhost/runner.go"]
+    }
+  ],
+  "compositions": [
+    {
+      "id": "plugins",
+      "title": "Sidecar and its plugins",
+      "rootScene": "overview",
+      "projects": [
+        { "model": "td", "scene": "overview", "mode": "open" },
+        { "model": "recall", "scene": "overview", "mode": "open" }
+      ]
+    }
+  ]
+}

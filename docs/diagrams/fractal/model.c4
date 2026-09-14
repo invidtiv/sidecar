@@ -218,6 +218,11 @@ model {
       description 'Quick note taking and scratchpad documents persisted per project.'
       metadata { uid 'plugins.notes' fractalColor '#739886' evidence ['internal/plugins/notes/plugin.go'] }
     }
+
+    external = component 'External Plugin Host' {
+      description 'Generic host spawning configured external plugins as short-lived sidecar.plugin/v1 subprocesses. Recall is one such configured plugin (id recall); no Recall-specific code exists in Sidecar.'
+      metadata { uid 'plugins.external' fractalColor '#739886' evidence ['internal/pluginhost/protocol.go', 'internal/pluginhost/command.go', 'internal/pluginhost/runner.go'] }
+    }
   }
 
   remoting = subsystem 'Remote Host Orchestration' {
