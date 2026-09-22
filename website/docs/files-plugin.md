@@ -75,7 +75,7 @@ The Files plugin provides a two-pane interface:
 The plugin includes four distinct search modes for different tasks:
 
 #### 1. Fuzzy File Finder (`ctrl+p`)
-Find files by partial name match across your entire repository. Type any part of the path (e.g. `plugnote` matches `internal/plugins/notes/plugin.go`).
+Find files by partial name match across your entire repository. Type any part of the path (e.g. `plugnote` matches `internal/plugins/notes/plugin.go`). Matching is case-insensitive, and `-`, `_` and space are interchangeable, so `use cases` and `use_cases` both find `USE-CASES.md`. Separate words with spaces to require all of them in any order: `md jev` matches every Markdown file with `jev` somewhere in its path. Whole words at the start of a filename rank above the same letters scattered through a path, and a shallower path wins a tie. Before you type, the list leads with the files you have open. The file list keeps itself current: a file another tool or agent writes anywhere in the project is findable the next time you open the finder, without restarting Sidecar.
 
 #### 2. Project Search (`f`)
 Search file contents across your entire codebase using ripgrep. Supports regex queries, case sensitivity toggles, and live result previews.

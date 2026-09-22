@@ -157,7 +157,11 @@ func TestPreviewDocFinderResultFollowsOriginatingWorkspace(t *testing.T) {
 	if finder.Cache.Scanning {
 		t.Fatal("originating finder stayed in its scanning state")
 	}
-	if got := finder.Matches(); len(got) != 2 || got[0].Path != "main.go" || got[1].Path != "README.md" {
+	// The pane's own open document leads the empty list as its recent file;
+	// what matters here is that both rows are from the originating root.
+	if got := finder.Matches(); len(got) != 2 || got[0].Path == got[1].Path ||
+		(got[0].Path != "main.go" && got[0].Path != "README.md") ||
+		(got[1].Path != "main.go" && got[1].Path != "README.md") {
 		t.Fatalf("originating finder matches = %#v, want files from its own root", got)
 	}
 	if m.preview.doc.mode != nil {

@@ -47,6 +47,25 @@ func (t Tabs) ActiveView() *Model {
 	return nil
 }
 
+// Paths lists the open documents' root-relative paths, the active one first,
+// which is the order a file finder wants them in as recents.
+func (t Tabs) Paths() []string {
+	if len(t.Items) == 0 {
+		return nil
+	}
+	paths := make([]string, 0, len(t.Items))
+	if t.Active >= 0 && t.Active < len(t.Items) && t.Items[t.Active].View != nil {
+		paths = append(paths, NormalizeTabPath(t.Items[t.Active].View.Title()))
+	}
+	for i, item := range t.Items {
+		if i == t.Active || item.View == nil {
+			continue
+		}
+		paths = append(paths, NormalizeTabPath(item.View.Title()))
+	}
+	return paths
+}
+
 // IndexOf returns the tab whose display path matches path, or -1.
 // The key is the root-relative path, slash-normalized.
 func (t Tabs) IndexOf(path string) int {

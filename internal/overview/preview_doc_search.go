@@ -32,6 +32,7 @@ func (m *Model) openPreviewDocFinder() tea.Cmd {
 		return nil
 	}
 	mode, scan := panesearch.NewFinder(&m.docFinderCaches, doc.root, doc.epoch)
+	mode.SetRecent(doc.tabs.Paths())
 	doc.mode = mode
 	return previewDocSearchCmd(scan, doc.surface)
 }

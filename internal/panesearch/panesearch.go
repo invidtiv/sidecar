@@ -54,7 +54,6 @@ type Outcome struct {
 func NewFinder(caches *Caches, root string, epoch uint64) (*Mode, tea.Cmd) {
 	finder := filefind.NewFinder(caches.For(root), root, epoch)
 	scan := finder.Open()
-	caches.NoteScan(root, scan != nil)
 	return &Mode{kind: KindFinder, finder: finder}, scan
 }
 
@@ -108,16 +107,34 @@ func (m *Mode) HeaderLabel() string {
 	return label
 }
 
-// Close releases whatever the surface still owns. The finder owns nothing (its
-// file list belongs to the caller's per-root cache); the project search owns a
+// Close releases whatever the surface still owns. The project search owns a
 // running ripgrep process, which would otherwise keep going to its timeout.
+// The finder's file list belongs to the caller's per-root cache, but the scan
+// it may have in flight is its own: hosts route a landed scan to the mode that
+// issued it and drop one whose mode is gone, and a dropped scan would leave
+// the shared cache marked Scanning for the rest of the session.
 func (m *Mode) Close() {
 	if m == nil {
 		return
 	}
-	if m.kind == KindProject {
+	switch m.kind {
+	case KindProject:
 		m.search.Close()
+	case KindFinder:
+		if m.finder != nil {
+			m.finder.Close()
+		}
 	}
+}
+
+// SetRecent tells a finder which paths, relative to its root, the pane has
+// open, most recent first. It is a no-op on a project search.
+func (m *Mode) SetRecent(paths []string) {
+	if m == nil || m.kind != KindFinder || m.finder == nil {
+		return
+	}
+	m.finder.SetRecent(paths)
+	m.finder.Refilter()
 }
 
 func (m *Mode) SetSize(width, height int) {
@@ -242,17 +259,10 @@ func projectSearchOutcome(res projectsearch.Result) Outcome {
 
 // CacheTTL is how long a root's file list is trusted without a rescan.
 //
-// The Files plugin has a filesystem watcher and marks its cache dirty the moment
-// the tree moves; the pane surfaces have no such signal, so there is nothing
-// here to invalidate the list precisely. A short lifetime is the honest
-// substitute: the second ctrl+p in a working session costs nothing, and a
-// finder opened minutes later still sees files created since.
-const CacheTTL = 30 * time.Second
-
-type cacheEntry struct {
-	cache   *filefind.Cache
-	scanned time.Time
-}
+// The pane surfaces have no filesystem signal, so there is nothing here to
+// invalidate a list precisely; the cache ages itself out instead, on the same
+// clock every finder uses (see filefind.DefaultMaxAge).
+const CacheTTL = filefind.DefaultMaxAge
 
 // Caches holds one file list per root, shared by every pane rooted there. Panes
 // on one root are looking at one directory tree, so they walk it once between
@@ -262,36 +272,21 @@ type cacheEntry struct {
 //
 // The zero value is ready to use.
 type Caches struct {
-	entries map[string]*cacheEntry
+	entries map[string]*filefind.Cache
 }
 
-// For returns the file list for root, rescanning it if the last walk has aged
-// out.
+// For returns the file list for root. The cache rescans itself on its next
+// Ensure once its last walk has aged out.
 func (c *Caches) For(root string) *filefind.Cache {
 	if c.entries == nil {
-		c.entries = make(map[string]*cacheEntry)
+		c.entries = make(map[string]*filefind.Cache)
 	}
 	entry := c.entries[root]
 	if entry == nil {
-		entry = &cacheEntry{cache: &filefind.Cache{}}
+		entry = &filefind.Cache{}
 		c.entries[root] = entry
 	}
-	if !entry.scanned.IsZero() && time.Since(entry.scanned) > CacheTTL {
-		entry.cache.MarkDirty()
-	}
-	return entry.cache
-}
-
-// NoteScan records that a scan of root has just been issued. Only a scan that
-// actually started moves the clock, so a cache that answered from memory keeps
-// the age of the walk it is still showing.
-func (c *Caches) NoteScan(root string, started bool) {
-	if !started {
-		return
-	}
-	if entry := c.entries[root]; entry != nil {
-		entry.scanned = time.Now()
-	}
+	return entry
 }
 
 // Finder is the live file finder, or nil when this is a project search. Hosts
@@ -319,16 +314,17 @@ func (c *Caches) Len() int { return len(c.entries) }
 // been walked.
 func (c *Caches) Scanned(root string) time.Time {
 	if entry := c.entries[root]; entry != nil {
-		return entry.scanned
+		return entry.Scanned
 	}
 	return time.Time{}
 }
 
-// SetScanned backdates (or forwards) root's last walk. It exists so a caller
-// can age a list out deliberately — the only lever there is, given that nothing
-// watches these trees.
+// SetScanned backdates (or forwards) root's last walk and forgets its
+// directory stamps, so the next finder open walks the tree rather than probing
+// it. It exists so a caller can age a list out deliberately.
 func (c *Caches) SetScanned(root string, at time.Time) {
 	if entry := c.entries[root]; entry != nil {
-		entry.scanned = at
+		entry.Scanned = at
+		entry.Stamps = nil
 	}
 }

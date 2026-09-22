@@ -126,6 +126,7 @@ func (p *Plugin) openDocFinder(doc *docPane) tea.Cmd {
 		return nil
 	}
 	mode, scan := panesearch.NewFinder(&p.docFinderCaches, doc.root, p.ctx.Epoch)
+	mode.SetRecent(doc.tabs.Paths())
 	doc.mode = mode
 	return docSearchCmd(doc.leafID, scan)
 }

@@ -1,6 +1,8 @@
 package filebrowser
 
 import (
+	"time"
+
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/filefind"
 	"github.com/marcus/sidecar/internal/modal"
@@ -21,10 +23,32 @@ func (p *Plugin) fileFinder() *filefind.Finder {
 	root, epoch := p.finderRoot()
 	if p.finder == nil {
 		p.finder = filefind.NewFinder(&p.quickOpen, root, epoch)
-		return p.finder
+	} else {
+		p.finder.SetRoot(root, epoch)
 	}
-	p.finder.SetRoot(root, epoch)
+	p.finder.SetRecent(p.recentPaths())
 	return p.finder
+}
+
+// recentPaths is what the user has in front of them, most recent first: the
+// active tab, then the other open tabs. The finder leads an empty list with
+// them and lets them break near-ties, so the file the user was just reading is
+// one keystroke away rather than somewhere in a list of fifty.
+func (p *Plugin) recentPaths() []string {
+	if len(p.tabs) == 0 {
+		return nil
+	}
+	recent := make([]string, 0, len(p.tabs))
+	if p.activeTab >= 0 && p.activeTab < len(p.tabs) {
+		recent = append(recent, p.tabs[p.activeTab].Path)
+	}
+	for i, tab := range p.tabs {
+		if i == p.activeTab || tab.Path == "" {
+			continue
+		}
+		recent = append(recent, tab.Path)
+	}
+	return recent
 }
 
 // projectSearchSurface returns the live project search, or nil when none is
@@ -49,11 +73,19 @@ func (p *Plugin) projectSearchSurface() *projectsearch.Search {
 func (p *Plugin) finderRoot() (string, uint64) {
 	if !p.remoteBound() {
 		p.quickOpen.Scan = nil
+		p.quickOpen.MaxAge = 0
 		return p.contextRoot()
 	}
+	// A remote catalog cannot be probed with a stat per directory, so an
+	// aged one is fetched in full; that round trip earns a longer life.
 	p.quickOpen.Scan = p.scanRemoteCandidates
+	p.quickOpen.MaxAge = remoteCatalogMaxAge
 	return p.remoteRoot(), p.ctx.Epoch
 }
+
+// remoteCatalogMaxAge is how long a bound surface trusts the host's file
+// catalog before the next finder open fetches it again.
+const remoteCatalogMaxAge = 30 * time.Second
 
 func (p *Plugin) contextRoot() (string, uint64) {
 	if p.ctx == nil {

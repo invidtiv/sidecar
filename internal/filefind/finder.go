@@ -71,6 +71,9 @@ type Finder struct {
 	query   string
 	matches []Match
 	cursor  int
+	// recent is what the host has open or was just looking at, most recent
+	// first; it leads an empty list and breaks near-ties (see FilterOptions).
+	recent []string
 	// truncated is set when the query matched more files than the cap keeps.
 	truncated bool
 	// seenRows is the most rows the list has wanted since this finder was
@@ -151,6 +154,22 @@ func (f *Finder) SetQuery(query string) {
 	f.Refilter()
 }
 
+// SetRecent tells the finder which paths (relative to its root) the user has
+// been working with, most recent first. With nothing typed they lead the list;
+// with a query they break near-ties. The host calls it before Open, or
+// whenever its own notion of recency changes.
+func (f *Finder) SetRecent(paths []string) {
+	f.recent = paths
+}
+
+// selectedPath is the path under the cursor, or "" when there is none.
+func (f *Finder) selectedPath() string {
+	if f.cursor >= 0 && f.cursor < len(f.matches) {
+		return f.matches[f.cursor].Path
+	}
+	return ""
+}
+
 // SetCursor moves the highlighted row, clamped to the matches.
 func (f *Finder) SetCursor(idx int) {
 	if idx < 0 {
@@ -163,6 +182,19 @@ func (f *Finder) SetCursor(idx int) {
 		idx = 0
 	}
 	f.cursor = idx
+}
+
+// Close is Reset plus releasing the scan the finder may have in flight. A host
+// that routes a landed scan to the finder that issued it has nowhere to
+// deliver one that lands after the finder is gone, and a dropped result would
+// leave the shared cache marked Scanning forever, with every later Ensure
+// declining to walk. After Close the cache is free to scan again; whatever the
+// abandoned scan returns is routed by the host or dropped, and either is fine.
+func (f *Finder) Close() {
+	f.Reset()
+	if f.Cache != nil {
+		f.Cache.Scanning = false
+	}
 }
 
 // Reset drops the query, matches, and cursor. The file list survives, since it
@@ -182,7 +214,7 @@ func (f *Finder) Refilter() {
 	// One over the cap, so the list can say it is a list of the best fifty
 	// rather than of everything that matched. A capped set presented as the
 	// whole answer is the same wrong answer the project search used to give.
-	matches := FuzzyFilter(f.Cache.Files, f.query, MaxMatches+1)
+	matches := Filter(f.Cache.Files, f.query, MaxMatches+1, FilterOptions{Recent: f.recent})
 	f.truncated = len(matches) > MaxMatches
 	if f.truncated {
 		matches = matches[:MaxMatches]
@@ -210,8 +242,24 @@ func (f *Finder) Update(msg tea.Msg) tea.Cmd {
 	if !ok || scanned.Dirs || scanned.Epoch != f.epoch {
 		return nil
 	}
+	if scanned.Unchanged {
+		// A probe found nothing moved: the list on screen is still right.
+		f.Cache.Apply(scanned)
+		return nil
+	}
+	// A rescan lands while the user may be looking at the old list. Keep the
+	// cursor on the file they had, not on whatever now sits at its index.
+	selected := f.selectedPath()
 	f.Cache.Apply(scanned)
 	f.Refilter()
+	if selected != "" {
+		for i, match := range f.matches {
+			if match.Path == selected {
+				f.cursor = i
+				break
+			}
+		}
+	}
 	return nil
 }
 

@@ -1,8 +1,30 @@
 package filefind
 
 import (
+	"time"
+
 	tea "charm.land/bubbletea/v2"
 )
+
+// DefaultMaxAge is how long a file list is trusted without a rescan when its
+// owner has not said otherwise.
+//
+// A cache is told about changes by whoever owns it, and no owner sees every
+// change: the Files plugin watches only the directories the tree has expanded,
+// so a file an agent writes into a collapsed directory never marks the cache
+// dirty, and a finder opened an hour later still answers from the list it
+// walked before the file existed. That is how "use-cases" once found six
+// near-misses and not USE-CASES.md. An age limit is the honest fallback, and
+// it is cheap: an aged list is re-checked with one stat per directory the walk
+// recorded (see DirStamp), and only a tree that actually moved pays the walk
+// again. The old list stays on screen either way until the answer lands.
+//
+// A cache whose scanner cannot stamp directories — a remote catalog — walks in
+// full when it ages out, so an owner of one may want a longer MaxAge.
+const DefaultMaxAge = 10 * time.Second
+
+// timeNow is the clock the cache ages itself by; tests replace it.
+var timeNow = time.Now
 
 // ScannedMsg carries the result of a background cache scan. Dirs distinguishes
 // a directory scan (path auto-complete) from a file scan.
@@ -11,6 +33,16 @@ type ScannedMsg struct {
 	Files   []string // Paths relative to the scanned root, sorted
 	ErrText string   // Non-empty when the scan failed or hit a limit
 	Epoch   uint64
+
+	// Stamps are the directories the walk descended into, with their
+	// modification times, so the next Ensure can ask whether anything moved
+	// without walking again. Nil when the scanner cannot provide them.
+	Stamps []DirStamp
+
+	// Unchanged is set when an aged cache was probed rather than walked and
+	// nothing had moved: Files and Stamps are empty and the list already held
+	// is still the answer. Only the clock moves.
+	Unchanged bool
 }
 
 // GetEpoch implements plugin.EpochMessage, so a scan issued for a project the
@@ -37,6 +69,21 @@ type Cache struct {
 	// cannot pass itself off as current.
 	Dirty bool
 
+	// Scanned is when the list now held was last confirmed current, by a walk
+	// landing or by a probe finding nothing moved. It is the zero time until a
+	// scan has completed.
+	Scanned time.Time
+
+	// Stamps are the directories the last walk recorded (see DirStamp). Empty
+	// when the scanner did not provide them, in which case an aged cache
+	// walks in full.
+	Stamps []DirStamp
+
+	// MaxAge is how long the list is trusted after Scanned before Ensure walks
+	// again. Zero means DefaultMaxAge; a negative value means the list never
+	// ages out, for an owner that is told about every change.
+	MaxAge time.Duration
+
 	// Scan produces the path list. Nil walks this machine's filesystem, which
 	// is every local caller. A surface bound to another machine binds its own
 	// so the candidate list is that machine's files and this process never
@@ -62,9 +109,14 @@ func (c *Cache) ensure(root string, epoch uint64, dirs bool) tea.Cmd {
 	if root == "" || c.Scanning {
 		return nil
 	}
-	if c.OK && !c.Dirty {
+	if c.OK && !c.Dirty && !c.Expired() {
 		return nil
 	}
+	// An aged list that nothing has reported a change to is probed before it
+	// is walked. A list that was told the disk moved, or that has never been
+	// walked, or that came from a scanner with no stamps to check, walks.
+	probe := c.OK && !c.Dirty && c.Scan == nil && len(c.Stamps) > 0
+	stamps := c.Stamps
 	// Cleared at the start of the scan: a change arriving while it runs re-sets
 	// the flag, so the result it is about to deliver is not mistaken for fresh.
 	c.Dirty = false
@@ -73,12 +125,16 @@ func (c *Cache) ensure(root string, epoch uint64, dirs bool) tea.Cmd {
 	// rather than sharing a live tree's, whose match cache is not safe for
 	// concurrent use.
 	scan := c.Scan
-	if scan == nil {
-		scan = ScanPaths
-	}
 	return func() tea.Msg {
-		paths, errText := scan(root, dirs)
-		return ScannedMsg{Dirs: dirs, Files: paths, ErrText: errText, Epoch: epoch}
+		if probe && treeUnchanged(root, stamps) {
+			return ScannedMsg{Dirs: dirs, Epoch: epoch, Unchanged: true}
+		}
+		if scan != nil {
+			paths, errText := scan(root, dirs)
+			return ScannedMsg{Dirs: dirs, Files: paths, ErrText: errText, Epoch: epoch}
+		}
+		paths, stamps, errText := scanTree(root, dirs)
+		return ScannedMsg{Dirs: dirs, Files: paths, Stamps: stamps, ErrText: errText, Epoch: epoch}
 	}
 }
 
@@ -86,13 +142,36 @@ func (c *Cache) ensure(root string, epoch uint64, dirs bool) tea.Cmd {
 // results (see ScannedMsg.GetEpoch) before calling this.
 func (c *Cache) Apply(msg ScannedMsg) {
 	c.Scanning = false
+	c.Scanned = timeNow()
+	if msg.Unchanged {
+		return
+	}
 	c.OK = true
 	c.Files = msg.Files
 	c.ErrText = msg.ErrText
+	c.Stamps = msg.Stamps
 }
 
 // MarkDirty records that the disk changed, so the next Ensure rescans.
 func (c *Cache) MarkDirty() { c.Dirty = true }
+
+// Expired reports whether the list has outlived MaxAge. A cache that has never
+// scanned is not expired, merely empty; Ensure handles that on its own. Nor is
+// a list nobody dated — one an owner filled in by hand rather than through
+// Apply — because it has no age to compare.
+func (c *Cache) Expired() bool {
+	if !c.OK || c.Scanned.IsZero() {
+		return false
+	}
+	maxAge := c.MaxAge
+	if maxAge == 0 {
+		maxAge = DefaultMaxAge
+	}
+	if maxAge < 0 {
+		return false
+	}
+	return timeNow().Sub(c.Scanned) > maxAge
+}
 
 // Reset drops the cache contents and all bookkeeping. Use it when the root
 // changes, e.g. on a project switch. The scanner goes with it: a cache that

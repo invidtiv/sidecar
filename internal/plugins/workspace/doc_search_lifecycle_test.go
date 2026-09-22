@@ -380,3 +380,19 @@ func TestListFooterPrioritiesAreUnique(t *testing.T) {
 		seen[command.Priority] = command.ID
 	}
 }
+
+// A finder closed before its scan lands has nowhere to deliver the result: the
+// host drops it. The cache it was scanning into must not stay marked as
+// scanning, or no finder on that root would ever walk again.
+func TestDocPaneFinderClosedMidScanDoesNotWedgeTheCache(t *testing.T) {
+	p, _ := docSearchPlugin(t, true)
+	doc := p.focusedDocPane()
+	if p.openDocFinder(doc) == nil {
+		t.Fatal("the first open issued no scan")
+	}
+	p.closeDocSearch(doc) // the scan's result is never applied
+
+	if p.openDocFinder(doc) == nil {
+		t.Fatal("after a dropped scan, the finder on this root never scans again")
+	}
+}

@@ -400,13 +400,17 @@ func (f *Finder) countsText(width int) string {
 		position = fmt.Sprintf("%d/%s  ", f.cursor+1, total)
 	}
 
+	// A rescan behind a list that is still on screen does not replace the
+	// count with "scanning...": the list is what the user is reading, and a
+	// counts row that flickers on every open past the cache's age would tell
+	// them nothing they can act on.
 	stats := ""
 	switch {
 	case f.Cache == nil:
-	case f.Cache.Scanning:
-		stats = "scanning..."
 	case len(f.Cache.Files) > 0:
 		stats = fmt.Sprintf("%d files", len(f.Cache.Files))
+	case f.Cache.Scanning:
+		stats = "scanning..."
 	}
 
 	for _, candidate := range []string{position + stats, position, stats} {
