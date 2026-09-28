@@ -155,18 +155,17 @@ func ForgetShellsInWorktree(projectRoot, worktreePath string) error {
 	// equivalent-path lookup still finds the project when the caller holds
 	// git's spelling of a symlinked checkout. An unregistered project has no
 	// manifest, so there is nothing to forget.
-	projectDir, registered, ok := projectdir.LookupEquivalent(projectRoot)
-	if !ok {
-		return nil
-	}
-	defs, err := shellstate.ListAtPath(filepath.Join(projectDir, "shells.json"))
-	if err != nil {
-		return err
-	}
 	var errs []error
-	for _, def := range ShellsRootedIn(defs, worktreePath) {
-		if err := deleteManagedShellForForget(registered, def.TmuxName, def.Namespace); err != nil {
+	for _, project := range projectdir.LookupEquivalent(projectRoot) {
+		defs, err := shellstate.ListAtPath(filepath.Join(project.Dir, "shells.json"))
+		if err != nil {
 			errs = append(errs, err)
+			continue
+		}
+		for _, def := range ShellsRootedIn(defs, worktreePath) {
+			if err := deleteManagedShellForForget(project.Registered, def.TmuxName, def.Namespace); err != nil {
+				errs = append(errs, err)
+			}
 		}
 	}
 	return errors.Join(errs...)

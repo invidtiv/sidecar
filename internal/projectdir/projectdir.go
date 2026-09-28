@@ -437,25 +437,34 @@ func sanitizeSlug(s string) string {
 	return s
 }
 
-// LookupEquivalent is Lookup that also accepts another spelling of the same
-// directory: a symlinked checkout, or macOS's /var for /private/var. It never
-// creates anything. An exact match wins; otherwise the first project whose
-// resolved path equals the resolved root is returned, with registered being
-// the path as the registry spells it. Callers that go on to Resolve must pass
-// registered, not their own spelling, or Resolve creates a second project.
-func LookupEquivalent(projectRoot string) (dir, registered string, ok bool) {
-	if dir, ok := Lookup(projectRoot); ok {
-		return dir, projectRoot, true
-	}
+// EquivalentProject is one registry entry for a directory.
+type EquivalentProject struct {
+	// Dir is the project's state directory.
+	Dir string
+	// Registered is the project path as the registry spells it. Callers that go
+	// on to Resolve must pass it, not their own spelling, or Resolve creates a
+	// second project.
+	Registered string
+}
+
+// LookupEquivalent finds every registry entry for projectRoot, including ones
+// registered under another spelling of the same directory: a symlinked
+// checkout, or macOS's /var for /private/var. It never creates anything.
+//
+// All of them, not the first: one checkout registered under two spellings has
+// two manifests, and a caller that picked one by directory order could miss
+// the records it was looking for.
+func LookupEquivalent(projectRoot string) []EquivalentProject {
 	want := resolvedPath(projectRoot)
 	if want == "" {
-		return "", "", false
+		return nil
 	}
 	projectsDir := filepath.Join(config.StateDir(), "projects")
 	entries, err := os.ReadDir(projectsDir)
 	if err != nil {
-		return "", "", false
+		return nil
 	}
+	var matches []EquivalentProject
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -465,11 +474,11 @@ func LookupEquivalent(projectRoot string) (dir, registered string, ok bool) {
 		if err != nil || meta.Path == "" {
 			continue
 		}
-		if resolvedPath(meta.Path) == want {
-			return dir, meta.Path, true
+		if meta.Path == projectRoot || resolvedPath(meta.Path) == want {
+			matches = append(matches, EquivalentProject{Dir: dir, Registered: meta.Path})
 		}
 	}
-	return "", "", false
+	return matches
 }
 
 func resolvedPath(path string) string {

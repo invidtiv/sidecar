@@ -127,3 +127,27 @@ func TestObserveWorktreeOrphansBlankSessionPathProvesNothing(t *testing.T) {
 		}
 	}
 }
+
+// A project the deadline skipped must still appear, unanswered, or the
+// decision's "every listing answered" rule reads its absence as an answer.
+func TestObserveWorktreeOrphansRecordsProjectsTheDeadlineSkipped(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stubOrphanEvidence(t, "sidecar-ws-gone\t"+filepath.Join(base, "gone")+"\n", nil, nil)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	obs := ObserveWorktreeOrphans(ctx, []Project{{Key: "a", Path: filepath.Join(base, "a")}, {Key: "b", Path: filepath.Join(base, "b")}}, ObserveOptions{})
+	if len(obs.Inventories) != 2 {
+		t.Fatalf("inventories = %+v, want both projects recorded", obs.Inventories)
+	}
+	for _, inv := range obs.Inventories {
+		if inv.Answered {
+			t.Fatalf("a skipped project was recorded as answered: %+v", inv)
+		}
+	}
+	if plan := WorktreeOrphans(ctx, []Project{{Key: "a", Path: filepath.Join(base, "a")}}, ObserveOptions{}); len(plan.Orphans) != 0 {
+		t.Fatalf("orphans = %+v after a cut-short pass", plan.Orphans)
+	}
+}

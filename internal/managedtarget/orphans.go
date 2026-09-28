@@ -120,10 +120,17 @@ func ObserveWorktreeOrphans(ctx context.Context, projects []Project, opts Observ
 		return obs
 	}
 	for _, proj := range projects {
-		if strings.TrimSpace(proj.Path) == "" || ctx.Err() != nil {
+		if strings.TrimSpace(proj.Path) == "" {
 			continue
 		}
+		// A project the deadline skipped is still recorded, unanswered. The
+		// decision's "every listing answered" rule can only see inventories
+		// that are present, so leaving it out would read as an answer.
 		inv := shellliveness.WorktreeInventory{ProjectRoot: workspaceops.CanonicalWorkPath(proj.Path)}
+		if ctx.Err() != nil {
+			obs.Inventories = append(obs.Inventories, inv)
+			continue
+		}
 		if states, err := listWorktreeStates(ctx, proj.Path); err == nil {
 			inv.Answered = true
 			for _, state := range states {

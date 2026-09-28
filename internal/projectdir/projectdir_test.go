@@ -473,15 +473,41 @@ func TestLookupEquivalentFindsAnotherSpellingWithoutCreating(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, registered, ok := LookupEquivalent(real)
-	if !ok || got != dir || registered != link {
-		t.Fatalf("LookupEquivalent(real) = %q, %q, %v; want %q, %q", got, registered, ok, dir, link)
+	got := LookupEquivalent(real)
+	if len(got) != 1 || got[0].Dir != dir || got[0].Registered != link {
+		t.Fatalf("LookupEquivalent(real) = %+v; want %q registered as %q", got, dir, link)
 	}
-	if _, _, ok := LookupEquivalent(filepath.Join(t.TempDir(), "unregistered")); ok {
-		t.Fatal("an unregistered path was found")
+	if got := LookupEquivalent(filepath.Join(t.TempDir(), "unregistered")); len(got) != 0 {
+		t.Fatalf("an unregistered path was found: %+v", got)
 	}
 	entries, err := os.ReadDir(filepath.Join(os.Getenv("XDG_STATE_HOME"), "sidecar", "projects"))
 	if err != nil || len(entries) != 1 {
 		t.Fatalf("projects = %d entries, %v; lookups must not register", len(entries), err)
+	}
+}
+
+// One checkout registered under two spellings has two manifests, and both are
+// returned so no caller picks one by directory order.
+func TestLookupEquivalentReturnsEverySpelling(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	real := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	resolvedReal, err := filepath.EvalSymlinks(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, spelling := range []string{link, resolvedReal} {
+		if _, err := Resolve(spelling); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := LookupEquivalent(link); len(got) != 2 {
+		t.Fatalf("LookupEquivalent = %+v, want both registry entries", got)
 	}
 }
