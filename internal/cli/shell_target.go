@@ -361,11 +361,7 @@ func projectManifestPath(proj registeredProject) string {
 // The scan itself lives in managedtarget.Candidates so the TUI broadcast
 // modal and this CLI share one universe.
 func managedTargetCandidates(env Env, projects []registeredProject) ([]managedtarget.Target, error) {
-	converted := make([]managedtarget.Project, len(projects))
-	for i, p := range projects {
-		converted[i] = managedtarget.Project{Key: p.Key, Path: p.Path, Dir: p.Dir, Worktrees: p.Worktrees}
-	}
-	return managedtarget.Candidates(env.Ctx, env.StateDir, converted)
+	return managedtarget.Candidates(env.Ctx, env.StateDir, toManagedProjects(projects))
 }
 
 // sameTmuxServer reports whether a recorded namespace names the tmux server

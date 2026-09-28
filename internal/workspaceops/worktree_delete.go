@@ -660,3 +660,81 @@ func cacheDefaultBranch(workDir, branch string) {
 	defaultBranchCache[workDir] = branch
 	defaultBranchCacheMu.Unlock()
 }
+
+// OrphanedSessionPrune is one rootless worktree session to close: a session
+// still running after its worktree was removed outside Sidecar (td-0b90da).
+type OrphanedSessionPrune struct {
+	// ProjectRoot owns the manifest whose shells rooted in Root are closed with
+	// the session, exactly as DeleteWorktree closes them. Empty for a session no
+	// registered project accounts for; only its own session is closed then.
+	ProjectRoot string
+	// Root is the removed worktree.
+	Root string
+	// Session is the tmux session to close.
+	Session string
+	// SessionPath is the start directory observed when the orphan was planned.
+	// The session is re-read immediately before the kill and left alone if it
+	// no longer starts there: the name is derived from a base name, so the same
+	// name can belong to a worktree created since the plan.
+	SessionPath string
+}
+
+// ErrOrphanChanged refuses a prune whose session no longer matches the plan.
+var ErrOrphanChanged = errors.New("session changed since it was planned")
+
+// sessionStartPath reads a session's start directory, matched exactly.
+var sessionStartPath = func(ctx context.Context, session string) (string, bool) {
+	out, err := exec.CommandContext(ctx, "tmux", "display-message", "-p", "-t", "="+session+":", "#{session_path}").Output()
+	if err != nil {
+		return "", false
+	}
+	return strings.TrimSpace(string(out)), true
+}
+
+// killSessionExact closes a session by exact name. `=` stops tmux resolving
+// the target as a prefix, which matters here more than anywhere: a missing
+// sidecar-ws-foo must never become sidecar-ws-foo-bar.
+var killSessionExact = func(ctx context.Context, session string) error {
+	output, err := exec.CommandContext(ctx, "tmux", "kill-session", "-t", "="+session).CombinedOutput()
+	if err != nil {
+		if _, alive := sessionStartPath(ctx, session); alive {
+			return fmt.Errorf("close worktree session %s: %s: %w", session, strings.TrimSpace(string(output)), err)
+		}
+	}
+	return nil
+}
+
+// PruneOrphanedWorktreeSession closes one rootless worktree session and
+// forgets what Sidecar recorded about it, touching nothing git owns: the
+// worktree is already gone, and whether to prune git's metadata or delete the
+// branch is git's question, not this one.
+//
+// gone reports that the session had already closed, which is success.
+func PruneOrphanedWorktreeSession(ctx context.Context, req OrphanedSessionPrune) (gone bool, err error) {
+	if strings.TrimSpace(req.Session) == "" || !strings.HasPrefix(req.Session, WorktreeSessionPrefix) {
+		return false, fmt.Errorf("%q is not a worktree session", req.Session)
+	}
+	if strings.TrimSpace(req.Root) == "" {
+		return false, fmt.Errorf("orphaned session %s has no root", req.Session)
+	}
+	current, alive := sessionStartPath(ctx, req.Session)
+	if !alive {
+		return true, ForgetRecoverableSession(req.Session)
+	}
+	if req.SessionPath == "" || CanonicalWorkPath(current) != CanonicalWorkPath(req.SessionPath) || !PathRootedIn(current, req.Root) {
+		return false, fmt.Errorf("%w: %s now starts in %q", ErrOrphanChanged, req.Session, current)
+	}
+	// Shells go first, as in DeleteWorktree. One that will not close does not
+	// stop the session closing: the error is reported alongside.
+	var shellErr error
+	if strings.TrimSpace(req.ProjectRoot) != "" {
+		shellErr = forgetShellsInWorktree(req.ProjectRoot, req.Root)
+	}
+	if err := killSessionExact(ctx, req.Session); err != nil {
+		return false, errors.Join(err, shellErr)
+	}
+	if err := ForgetRecoverableSession(req.Session); err != nil {
+		return false, errors.Join(err, shellErr)
+	}
+	return false, shellErr
+}

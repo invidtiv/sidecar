@@ -93,6 +93,21 @@ type SessionCandidate struct {
 type Agent struct {
 	Target Target     `json:"target"`
 	Agent  AgentState `json:"agent"`
+	// Orphan is set on a worktree session that is still running after its
+	// worktree was removed outside Sidecar (td-0b90da). The session is live, so
+	// nothing else about it looks wrong; this is the only field that says the
+	// directory it was started in is gone. `sidecar worktree prune-sessions`
+	// closes it.
+	Orphan *Orphan `json:"orphan,omitempty"`
+}
+
+// Orphan explains why a live worktree session has no worktree behind it.
+type Orphan struct {
+	// Reason is one of the shellliveness.Orphan* values:
+	// worktree_not_in_git, worktree_prunable, or worktree_directory_missing.
+	Reason string `json:"reason"`
+	// Root is the removed worktree the session was started in.
+	Root string `json:"root"`
 }
 
 // SubmissionStatus is the certainty Sidecar has about a prompt crossing the

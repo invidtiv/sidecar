@@ -16,6 +16,7 @@ import (
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/managedtarget"
+	"github.com/marcus/sidecar/internal/shellliveness"
 	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/workspaceops"
 )
@@ -677,6 +678,7 @@ func runAgentList(env Env, args []string) int {
 			agents = append(agents, a)
 		}
 	}
+	markOrphanedAgents(env, agents)
 	return emitAgentList(env, f.json, agents)
 }
 
@@ -691,10 +693,43 @@ func emitAgentList(env Env, jsonOutput bool, agents []agentcontrol.Agent) int {
 		_, _ = fmt.Fprintln(env.Stdout, "No live managed agents.")
 		return 0
 	}
+	orphans := 0
 	for _, a := range agents {
+		if a.Orphan != nil {
+			orphans++
+			_, _ = fmt.Fprintf(env.Stdout, "%-20s %-10s %s  orphaned: worktree removed (%s)\n", a.Target.Name, a.Agent.Kind, a.Agent.Status, a.Orphan.Root)
+			continue
+		}
 		_, _ = fmt.Fprintf(env.Stdout, "%-20s %-10s %s\n", a.Target.Name, a.Agent.Kind, a.Agent.Status)
 	}
+	if orphans > 0 {
+		_, _ = fmt.Fprintf(env.Stdout, "\n%d orphaned worktree session(s). Review with: sidecar worktree prune-sessions --plan\n", orphans)
+	}
 	return 0
+}
+
+// markOrphanedAgents flags the worktree sessions in agents whose worktree is
+// gone. Every registered project is observed whatever the list's scope, because
+// a root one repository forgot may still be listed by another, and a narrower
+// view would call it an orphan. An observation that cannot be made marks
+// nothing.
+func markOrphanedAgents(env Env, agents []agentcontrol.Agent) {
+	if len(agents) == 0 {
+		return
+	}
+	plan, err := worktreeOrphanPlan(env)
+	if err != nil || len(plan.Orphans) == 0 {
+		return
+	}
+	bySession := make(map[string]shellliveness.OrphanSession, len(plan.Orphans))
+	for _, orphan := range plan.Orphans {
+		bySession[orphan.Session] = orphan
+	}
+	for i := range agents {
+		if orphan, ok := bySession[agents[i].Target.Session]; ok {
+			agents[i].Orphan = &agentcontrol.Orphan{Reason: string(orphan.Reason), Root: orphan.Root}
+		}
+	}
 }
 
 // emitReadResult renders a passive read or an exact-transcript read.

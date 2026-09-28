@@ -40,6 +40,11 @@ type shellListItem struct {
 	WorkDir   string     `json:"workDir,omitempty"`
 	Status    string     `json:"status"`
 	DeletedAt *time.Time `json:"deletedAt,omitempty"`
+	// OrphanedRoot is the removed worktree a live record's WorkDir lies in,
+	// when that worktree was removed outside Sidecar (td-0b90da). `sidecar
+	// worktree prune-sessions` closes such a shell along with the worktree's
+	// own session.
+	OrphanedRoot string `json:"orphanedRoot,omitempty"`
 }
 
 type shellRecordResult struct {
@@ -72,10 +77,19 @@ func runShellList(env Env, args []string) int {
 		return 1
 	}
 
+	orphaned := map[string]string{}
+	if len(live) > 0 {
+		if plan, err := worktreeOrphanPlan(env); err == nil {
+			orphaned = orphanedShellRoots(live, plan.Roots)
+		}
+	}
+
 	if flags.jsonOutput {
 		items := make([]shellListItem, 0, len(live)+len(tombs))
 		for _, def := range live {
-			items = append(items, listItemFromDefinition(def, shellStatusLive, nil))
+			item := listItemFromDefinition(def, shellStatusLive, nil)
+			item.OrphanedRoot = orphaned[def.TmuxName]
+			items = append(items, item)
 		}
 		for _, stone := range tombs {
 			deleted := stone.DeletedAt
@@ -91,7 +105,11 @@ func runShellList(env Env, args []string) int {
 		return 0
 	}
 	for _, def := range live {
-		if _, err := fmt.Fprintf(env.Stdout, "%s  %s\n", def.TmuxName, def.DisplayName); err != nil {
+		suffix := ""
+		if root := orphaned[def.TmuxName]; root != "" {
+			suffix = "  orphaned: worktree removed (" + root + ")"
+		}
+		if _, err := fmt.Fprintf(env.Stdout, "%s  %s%s\n", def.TmuxName, def.DisplayName, suffix); err != nil {
 			return 1
 		}
 	}

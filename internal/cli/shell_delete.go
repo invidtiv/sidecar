@@ -152,7 +152,9 @@ func runShellDelete(env Env, args []string) int {
 	if tgt.Kind != shellTargetKindShell {
 		cliErrf(env.Stderr,
 			"%q is a worktree session, and shell delete only removes managed shells; "+
-				"delete the worktree from the project that owns it\n", tgt.Session)
+				"delete the worktree from the project that owns it, or, if the worktree was "+
+				"already removed outside Sidecar, close its session with "+
+				"`sidecar worktree prune-sessions --plan`\n", tgt.Session)
 		return exitInputRejected
 	}
 	// The ownership proof and the kill must land on the same tmux server, for

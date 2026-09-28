@@ -68,6 +68,13 @@ func PathRootedIn(path, root string) bool {
 // components are re-attached unresolved, which gives both sides of a
 // comparison the same prefix whether or not they still exist.
 func canonicalWorkPath(path string) string {
+	return CanonicalWorkPath(path)
+}
+
+// CanonicalWorkPath is canonicalWorkPath for callers outside this package that
+// compare a path which may no longer exist (a removed worktree) against one git
+// reports canonically.
+func CanonicalWorkPath(path string) string {
 	if abs, err := filepath.Abs(path); err == nil {
 		path = abs
 	}

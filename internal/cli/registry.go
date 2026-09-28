@@ -694,12 +694,66 @@ func worktreeCommand() *Command {
 		Mutates: true,
 		Run:     runWorktreeDelete,
 	}
+	pruneSessionsCmd := &Command{
+		Name:    "prune-sessions",
+		Summary: "Close worktree sessions whose worktree was removed outside Sidecar",
+		Usage:   "sidecar worktree prune-sessions [--project NAME] [--plan|--dry-run | --yes] [--json]",
+		Long: "Find and close orphaned worktree sessions: sidecar-ws-… tmux sessions that are\n" +
+			"still running after their worktree was removed with plain `git worktree remove`\n" +
+			"(or `rm -rf`) instead of `sidecar worktree delete`. Git owns worktrees, so that\n" +
+			"is a reasonable thing to do; this is the reconciliation Sidecar owes afterwards.\n" +
+			"`sidecar agent list` marks the same sessions with an `orphan` field.\n\n" +
+			"A session is orphaned when every one of these holds: the owning project's\n" +
+			"`git worktree list` answered; no answering repository lists the worktree (or git\n" +
+			"lists it only as prunable); no worktree git still lists would produce the same\n" +
+			"session name; and the session's tmux start directory is inside the removed\n" +
+			"worktree. A worktree session no registered project accounts for qualifies when\n" +
+			"its own start directory is gone, its parent is not, and its name is the one\n" +
+			"Sidecar derives from that directory. Anything Sidecar cannot verify is left alone.\n\n" +
+			"--plan and --dry-run are aliases and change nothing. A prune requires --yes; it\n" +
+			"re-observes git and tmux, re-reads each session's start directory immediately\n" +
+			"before closing it, and refuses a session that no longer matches. Closing one\n" +
+			"also closes the managed shells rooted in its worktree and moves their records to\n" +
+			"tombstones, exactly as `worktree delete` does, so `sidecar shell restore` can\n" +
+			"put a record back. Only sessions are closed, on this process's tmux server; git\n" +
+			"metadata and branches are not touched (use `git worktree prune` and\n" +
+			"`git branch -D` for those).\n\n" +
+			"Every registered project is observed whatever --project says, so a worktree\n" +
+			"another repository still lists is never mistaken for a removed one. --project\n" +
+			"only narrows which orphans are reported and closed, and excludes sessions no\n" +
+			"project accounts for.",
+		Flags: []Flag{
+			{Name: "--project", Arg: "NAME", Summary: "Only this project's orphans (slug, basename, or path)"},
+			{Name: "--plan", Summary: "List orphaned sessions without changing anything", Bool: true},
+			{Name: "--dry-run", Summary: "Alias for --plan", Bool: true},
+			{Name: "--yes", Summary: "Close the orphaned sessions (required unless planning)", Bool: true},
+			{Name: "--json", Summary: "Write one structured plan or result object to stdout", Bool: true},
+			{Name: "--help", Short: "-h", Summary: "Show this help", Bool: true},
+		},
+		Args: ArgSpec{Min: 0, Max: 0},
+		ExitCodes: []ExitCode{
+			{Code: 0, Summary: "plan resolved, or every orphaned session closed (or already gone)"},
+			{Code: 1, Summary: "tmux, git, Sidecar state, or close failure"},
+			{Code: 2, Summary: "usage error, including a prune without --yes"},
+			{Code: 5, Summary: "project refused, or a session changed since it was planned and was left alone"},
+		},
+		Examples: []Example{
+			{Command: "sidecar worktree prune-sessions --plan --json", Description: "list orphaned worktree sessions across every project"},
+			{Command: "sidecar worktree prune-sessions --project riversandroads --yes", Description: "close one project's orphaned sessions"},
+		},
+		Agent: AgentDoc{
+			Invocation: "sidecar worktree prune-sessions --plan --json; then sidecar worktree prune-sessions --yes --json",
+			Summary:    "Close worktree sessions left running after their worktree was removed outside Sidecar",
+		},
+		Mutates: true,
+		Run:     runWorktreePruneSessions,
+	}
 	return &Command{
 		Name:    "worktree",
 		Summary: "Manage Sidecar-visible git worktrees",
 		Usage:   "sidecar worktree <command>",
 		Long:    "Plan and perform worktree lifecycle operations through Sidecar's shared core.",
-		Sub:     []*Command{deleteCmd},
+		Sub:     []*Command{deleteCmd, pruneSessionsCmd},
 		Run:     runWorktreeRoot,
 	}
 }

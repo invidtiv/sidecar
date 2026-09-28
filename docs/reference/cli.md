@@ -3840,3 +3840,64 @@ sidecar worktree delete /path/to/repo-fix-auth --project sidecar --expect-branch
 sidecar worktree delete /path/to/repo-fix-auth --delete-local-branch --yes
 ```
 
+### `sidecar worktree prune-sessions`
+
+Close worktree sessions whose worktree was removed outside Sidecar
+
+Find and close orphaned worktree sessions: sidecar-ws-… tmux sessions that are
+still running after their worktree was removed with plain `git worktree remove`
+(or `rm -rf`) instead of `sidecar worktree delete`. Git owns worktrees, so that
+is a reasonable thing to do; this is the reconciliation Sidecar owes afterwards.
+`sidecar agent list` marks the same sessions with an `orphan` field.
+
+A session is orphaned when every one of these holds: the owning project's
+`git worktree list` answered; no answering repository lists the worktree (or git
+lists it only as prunable); no worktree git still lists would produce the same
+session name; and the session's tmux start directory is inside the removed
+worktree. A worktree session no registered project accounts for qualifies when
+its own start directory is gone, its parent is not, and its name is the one
+Sidecar derives from that directory. Anything Sidecar cannot verify is left alone.
+
+--plan and --dry-run are aliases and change nothing. A prune requires --yes; it
+re-observes git and tmux, re-reads each session's start directory immediately
+before closing it, and refuses a session that no longer matches. Closing one
+also closes the managed shells rooted in its worktree and moves their records to
+tombstones, exactly as `worktree delete` does, so `sidecar shell restore` can
+put a record back. Only sessions are closed, on this process's tmux server; git
+metadata and branches are not touched (use `git worktree prune` and
+`git branch -D` for those).
+
+Every registered project is observed whatever --project says, so a worktree
+another repository still lists is never mistaken for a removed one. --project
+only narrows which orphans are reported and closed, and excludes sessions no
+project accounts for.
+
+```
+Usage: sidecar worktree prune-sessions [--project NAME] [--plan|--dry-run | --yes] [--json]
+```
+
+**Options:**
+
+- `--project NAME`: Only this project's orphans (slug, basename, or path)
+- `--plan`: List orphaned sessions without changing anything
+- `--dry-run`: Alias for --plan
+- `--yes`: Close the orphaned sessions (required unless planning)
+- `--json`: Write one structured plan or result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: plan resolved, or every orphaned session closed (or already gone)
+- `1`: tmux, git, Sidecar state, or close failure
+- `2`: usage error, including a prune without --yes
+- `5`: project refused, or a session changed since it was planned and was left alone
+
+**Examples:**
+
+```bash
+# list orphaned worktree sessions across every project
+sidecar worktree prune-sessions --plan --json
+# close one project's orphaned sessions
+sidecar worktree prune-sessions --project riversandroads --yes
+```
+
