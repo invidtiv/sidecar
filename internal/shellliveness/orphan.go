@@ -46,6 +46,11 @@ import (
 //     parent is not has been removed; a missing parent is an unmounted volume.
 //   - An owner's listing only counts when it includes the owner's own root. A
 //     listing that does not is some other repository answering.
+//   - A session with any pane working in a directory that exists is not an
+//     orphan. That is a moved worktree, not a removed one.
+//   - A session no registered project accounts for is judged only when every
+//     inventory answered. A listing that failed or timed out cannot say which
+//     names its live worktrees still claim.
 //   - A failed tmux listing produces nothing, for the same reason as the reap.
 
 // OrphanReason says why a worktree root no longer backs its sessions. Empty
@@ -114,6 +119,12 @@ type TmuxSession struct {
 	// Path, which is how a session that no registered project accounts for
 	// proves it is a worktree session for that directory.
 	NameFromPath bool
+	// PaneInExistingDir reports that at least one of the session's panes is
+	// working in a directory that exists. An agent follows `git worktree move`
+	// or a plain `mv`; the session's start directory does not. A session with
+	// live work somewhere real is never an orphan, whatever its start
+	// directory says.
+	PaneInExistingDir bool
 }
 
 // OrphanObservation is everything one pass knows.
@@ -238,7 +249,7 @@ func PlanWorktreeOrphans(obs OrphanObservation) OrphanPlan {
 			// when it is not an orphan, so the unattributed pass below cannot
 			// reach a different answer about it.
 			decided[name] = true
-			if reason == "" || session.Path == "" || !PathWithin(session.Path, root.Root) {
+			if reason == "" || session.Path == "" || session.PaneInExistingDir || !PathWithin(session.Path, root.Root) {
 				continue
 			}
 			plan.Orphans = append(plan.Orphans, OrphanSession{
@@ -247,13 +258,17 @@ func PlanWorktreeOrphans(obs OrphanObservation) OrphanPlan {
 			})
 		}
 	}
+	allAnswered := true
+	for _, inv := range obs.Inventories {
+		allAnswered = allAnswered && inv.Answered
+	}
 	for _, session := range obs.Sessions {
 		name := session.Name
-		if !strings.HasPrefix(name, obs.SessionPrefix) || decided[name] || claimed[name] {
+		if !allAnswered || !strings.HasPrefix(name, obs.SessionPrefix) || decided[name] || claimed[name] {
 			continue
 		}
 		decided[name] = true
-		if session.Path == "" || !session.PathMissing || !session.NameFromPath {
+		if session.Path == "" || !session.PathMissing || !session.NameFromPath || session.PaneInExistingDir {
 			continue
 		}
 		// A missing directory inside a registered root is that root's

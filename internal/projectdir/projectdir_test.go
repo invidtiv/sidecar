@@ -454,3 +454,34 @@ func TestLookupAllMatchesASymlinkedProjectRoot(t *testing.T) {
 		t.Fatalf("a project registered at its resolved path was not found via its symlinked path: got %v, want %s -> %s", got, link, dir)
 	}
 }
+
+// A caller holding git's spelling of a symlinked checkout finds the project
+// registered under the other spelling, learns the registered spelling, and
+// creates nothing.
+func TestLookupEquivalentFindsAnotherSpellingWithoutCreating(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	real := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := Resolve(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, registered, ok := LookupEquivalent(real)
+	if !ok || got != dir || registered != link {
+		t.Fatalf("LookupEquivalent(real) = %q, %q, %v; want %q, %q", got, registered, ok, dir, link)
+	}
+	if _, _, ok := LookupEquivalent(filepath.Join(t.TempDir(), "unregistered")); ok {
+		t.Fatal("an unregistered path was found")
+	}
+	entries, err := os.ReadDir(filepath.Join(os.Getenv("XDG_STATE_HOME"), "sidecar", "projects"))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("projects = %d entries, %v; lookups must not register", len(entries), err)
+	}
+}

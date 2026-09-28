@@ -437,6 +437,54 @@ func sanitizeSlug(s string) string {
 	return s
 }
 
+// LookupEquivalent is Lookup that also accepts another spelling of the same
+// directory: a symlinked checkout, or macOS's /var for /private/var. It never
+// creates anything. An exact match wins; otherwise the first project whose
+// resolved path equals the resolved root is returned, with registered being
+// the path as the registry spells it. Callers that go on to Resolve must pass
+// registered, not their own spelling, or Resolve creates a second project.
+func LookupEquivalent(projectRoot string) (dir, registered string, ok bool) {
+	if dir, ok := Lookup(projectRoot); ok {
+		return dir, projectRoot, true
+	}
+	want := resolvedPath(projectRoot)
+	if want == "" {
+		return "", "", false
+	}
+	projectsDir := filepath.Join(config.StateDir(), "projects")
+	entries, err := os.ReadDir(projectsDir)
+	if err != nil {
+		return "", "", false
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		dir := filepath.Join(projectsDir, e.Name())
+		meta, err := readMeta(dir)
+		if err != nil || meta.Path == "" {
+			continue
+		}
+		if resolvedPath(meta.Path) == want {
+			return dir, meta.Path, true
+		}
+	}
+	return "", "", false
+}
+
+func resolvedPath(path string) string {
+	if path == "" {
+		return ""
+	}
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return filepath.Clean(resolved)
+	}
+	return filepath.Clean(path)
+}
+
 // findByMeta scans all subdirectories in projectsDir looking for one
 // whose meta.json path matches projectRoot. Returns the directory path
 // and true if found.

@@ -741,7 +741,7 @@ func worktreeCommand() *Command {
 			{Code: 0, Summary: "plan resolved, or every orphaned session closed (or already gone)"},
 			{Code: 1, Summary: "tmux, git, Sidecar state, or close failure"},
 			{Code: 2, Summary: "usage error, including a prune without --yes"},
-			{Code: 5, Summary: "project refused, or a session changed since it was planned and was left alone"},
+			{Code: 5, Summary: "project refused, a --session name is not an orphan, or a session changed since it was planned and was left alone"},
 		},
 		Examples: []Example{
 			{Command: "sidecar worktree prune-sessions --plan --json", Description: "list orphaned worktree sessions across every project"},

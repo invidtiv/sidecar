@@ -134,6 +134,23 @@ func runWorktreePruneSessions(env Env, args []string) int {
 			Shells: shellsRootedIn(projects, orphan.ProjectKey, orphan.Root),
 		})
 	}
+	// A --session name that matched nothing is refused before anything is
+	// closed. "No orphaned sessions" after a typo would read as a clean state.
+	var unmatched []string
+	for _, name := range sessionFilter {
+		found := false
+		for _, item := range doc.Orphans {
+			found = found || item.Session == name
+		}
+		if !found && !slices.Contains(unmatched, name) {
+			unmatched = append(unmatched, name)
+		}
+	}
+	if len(unmatched) > 0 {
+		return emitWorktreeDeleteError(env, jsonOutput, "not_orphaned",
+			fmt.Sprintf("not an orphaned worktree session in scope: %s; run `sidecar worktree prune-sessions --plan` to see which are", strings.Join(unmatched, ", ")),
+			exitInputRejected)
+	}
 	if plan.Skipped != "" && len(doc.Orphans) == 0 {
 		return emitWorktreeDeleteError(env, jsonOutput, "inventory", "could not observe worktree sessions: "+plan.Skipped, 1)
 	}
@@ -214,9 +231,10 @@ func writePruneSessionsPlan(env Env, doc pruneSessionsDocument) int {
 // result; they never narrow the observation.
 //
 // It is bounded because it runs inside discovery verbs (`agent list`, `shell
-// list`) that must not hang on one slow repository. A pass cut short marks
-// fewer rows; it never marks more, because an unanswered inventory yields no
-// verdicts.
+// list`) that must not hang on one slow repository. A pass cut short loses
+// verdicts rather than inventing them: a registered root needs its owner's
+// listing, an unattributed session needs every listing, and every verdict still
+// needs a directory that is gone and no pane working in one that exists.
 func worktreeOrphanPlan(env Env, opts managedtarget.ObserveOptions) (shellliveness.OrphanPlan, error) {
 	projects, err := loadRegisteredProjects(env.StateDir)
 	if err != nil {

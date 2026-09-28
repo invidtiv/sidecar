@@ -283,6 +283,9 @@ func TestWorktreePruneSessionsSafetyCases(t *testing.T) {
 	if out, err := exec.Command("tmux", "send-keys", "-t", "="+movedSession+":", "cd "+shellQuote(movedTo), "Enter").CombinedOutput(); err != nil {
 		t.Fatalf("send-keys: %v: %s", err, out)
 	}
+	// The agent must be observed in its new directory before the plan, or the
+	// case proves nothing.
+	waitForPanePath(t, movedSession, canonicalTestPath(t, movedTo))
 
 	runGit(t, root, "worktree", "remove", "--force", removed)
 
@@ -297,16 +300,23 @@ func TestWorktreePruneSessionsSafetyCases(t *testing.T) {
 	if planned[recSession] {
 		t.Fatal("a re-cloned directory at the removed path was judged an orphan")
 	}
-	// The moved session is planned (its start directory is gone and git no
-	// longer lists that path); only the pre-kill pane check can spare it, which
-	// is the point of this case.
-	if !planned[removedSession] || !planned[movedSession] {
-		t.Fatalf("plan = %+v, want the removed and moved worktrees' sessions", plan.Orphans)
+	if !planned[removedSession] {
+		t.Fatalf("plan = %+v, want the removed worktree's session", plan.Orphans)
+	}
+	// The moved session's start directory is gone and git no longer lists that
+	// path, but its agent is working in the new one. It is not an orphan, and
+	// saying it was would make every prune exit 5 on it forever.
+	if planned[movedSession] {
+		t.Fatal("a moved worktree whose agent followed it was judged an orphan")
 	}
 
-	// The moved agent's pane must be observed in its new directory before the
-	// prune runs, or the check has nothing to see.
-	waitForPanePath(t, movedSession, canonicalTestPath(t, movedTo))
+	// A --session name that is not an orphan is refused, not reported clean.
+	if _, code := runPrune(t, "--plan", "--session", "sidecar-ws-typo"); code != exitInputRejected {
+		t.Fatalf("unmatched --session exit %d, want %d", code, exitInputRejected)
+	}
+	if _, code := runPrune(t, "--yes", "--session", movedSession); code != exitInputRejected || !workspaceops.SessionExists(movedSession) {
+		t.Fatalf("--session naming a live worktree's session: exit %d, alive %v", code, workspaceops.SessionExists(movedSession))
+	}
 
 	pruned, code := runPrune(t, "--yes")
 	results := map[string]string{}
@@ -316,11 +326,8 @@ func TestWorktreePruneSessionsSafetyCases(t *testing.T) {
 	if results[removedSession] != pruneResultClosed {
 		t.Fatalf("removed session result = %q (all: %+v)", results[removedSession], pruned.Orphans)
 	}
-	if got := results[movedSession]; got != pruneResultChanged {
-		t.Fatalf("moved session result = %q, want it left alone as changed", got)
-	}
-	if code != exitInputRejected {
-		t.Fatalf("exit %d, want %d when a session was left alone", code, exitInputRejected)
+	if code != 0 {
+		t.Fatalf("prune exit %d, want 0", code)
 	}
 	for session, wantAlive := range map[string]bool{
 		recSession: true, movedSession: true, "sidecar-sh-repo-10": true, removedSession: false,

@@ -149,10 +149,13 @@ func ForgetShellsInWorktree(projectRoot, worktreePath string) error {
 	if strings.TrimSpace(projectRoot) == "" || strings.TrimSpace(worktreePath) == "" {
 		return nil
 	}
-	// Lookup, not Resolve: forgetting must never register a project. A root
+	// A lookup, not Resolve: forgetting must never register a project. A root
 	// spelled differently from the registered one would otherwise create a
-	// second, empty project directory and report its shells closed.
-	projectDir, ok := projectdir.Lookup(projectRoot)
+	// second, empty project directory and report its shells closed. The
+	// equivalent-path lookup still finds the project when the caller holds
+	// git's spelling of a symlinked checkout. An unregistered project has no
+	// manifest, so there is nothing to forget.
+	projectDir, registered, ok := projectdir.LookupEquivalent(projectRoot)
 	if !ok {
 		return nil
 	}
@@ -162,7 +165,7 @@ func ForgetShellsInWorktree(projectRoot, worktreePath string) error {
 	}
 	var errs []error
 	for _, def := range ShellsRootedIn(defs, worktreePath) {
-		if err := deleteManagedShellForForget(projectRoot, def.TmuxName, def.Namespace); err != nil {
+		if err := deleteManagedShellForForget(registered, def.TmuxName, def.Namespace); err != nil {
 			errs = append(errs, err)
 		}
 	}

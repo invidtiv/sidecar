@@ -3,6 +3,7 @@ package workspaceops
 import (
 	"context"
 	"errors"
+	"os/exec"
 	"testing"
 )
 
@@ -10,13 +11,22 @@ type orphanStub struct {
 	state       orphanSessionState
 	alive       bool
 	rootMissing bool
+	readErr     error
 	killed      []string
 }
 
 func stubOrphanTmux(t *testing.T, stub *orphanStub) {
 	t.Helper()
 	oldRead, oldKill, oldForget, oldMissing := readOrphanSession, killSessionByID, forgetShellsInWorktree, rootStillMissing
-	readOrphanSession = func(context.Context, string) (orphanSessionState, bool) { return stub.state, stub.alive }
+	readOrphanSession = func(context.Context, string) (orphanSessionState, error) {
+		if stub.readErr != nil {
+			return orphanSessionState{}, stub.readErr
+		}
+		if !stub.alive {
+			return orphanSessionState{}, errOrphanSessionGone
+		}
+		return stub.state, nil
+	}
 	killSessionByID = func(_ context.Context, id string) error {
 		stub.killed = append(stub.killed, id)
 		return nil
@@ -90,5 +100,44 @@ func TestPruneOrphanedSessionRefusesNonWorktreeSessions(t *testing.T) {
 	}
 	if len(stub.killed) != 0 {
 		t.Fatalf("killed %v", stub.killed)
+	}
+}
+
+// A read that failed for any other reason is not evidence the session is gone,
+// and must not drop its restore record.
+func TestPruneOrphanedSessionUnreadableIsAFailureNotGone(t *testing.T) {
+	stub := &orphanStub{rootMissing: true, readErr: errors.New("tmux: context deadline exceeded")}
+	stubOrphanTmux(t, stub)
+	gone, err := PruneOrphanedWorktreeSession(t.Context(), planned())
+	if gone || err == nil || errors.Is(err, ErrOrphanChanged) {
+		t.Fatalf("gone %v err %v, want a plain failure", gone, err)
+	}
+	if len(stub.killed) != 0 {
+		t.Fatalf("killed %v", stub.killed)
+	}
+}
+
+// Against this package's private tmux server: a missing name is "gone", and a
+// name that is a prefix of a live session is not that session. tmux resolves
+// `list-panes -s -t =pro` to `probe`; only `=pro:` is exact.
+func TestReadOrphanSessionIsExactAndRecognisesGone(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux is not installed")
+	}
+	const live = "sidecar-ws-orphanprobe-live"
+	dir := t.TempDir()
+	if out, err := exec.Command("tmux", "new-session", "-d", "-s", live, "-c", dir).CombinedOutput(); err != nil {
+		t.Skipf("cannot start a private tmux session: %v: %s", err, out)
+	}
+	t.Cleanup(func() { _ = exec.Command("tmux", "kill-session", "-t", "="+live).Run() })
+
+	state, err := readOrphanSession(t.Context(), live)
+	if err != nil || state.ID == "" || CanonicalWorkPath(state.Path) != CanonicalWorkPath(dir) || len(state.PanePaths) == 0 {
+		t.Fatalf("live read = %+v, %v", state, err)
+	}
+	for _, name := range []string{"sidecar-ws-orphanprobe", "sidecar-ws-orphanprobe-missing"} {
+		if _, err := readOrphanSession(t.Context(), name); !errors.Is(err, errOrphanSessionGone) {
+			t.Errorf("read %q = %v, want errOrphanSessionGone", name, err)
+		}
 	}
 }

@@ -254,3 +254,34 @@ func TestEitherSessionSpellingIsJudged(t *testing.T) {
 		t.Fatalf("orphans = %+v", plan.Orphans)
 	}
 }
+
+// A moved worktree: the start directory is gone, but the agent followed the
+// checkout and is working somewhere real.
+func TestSessionWithAPaneInAnExistingDirectoryIsNotAnOrphan(t *testing.T) {
+	plan := PlanWorktreeOrphans(OrphanObservation{
+		SessionPrefix: wsPrefix,
+		Inventories:   []WorktreeInventory{repoInventory()},
+		Registered:    []RegisteredRoot{registered("/code/repo-foo", "sidecar-ws-repo-foo")},
+		Sessions: []TmuxSession{
+			{Name: "sidecar-ws-repo-foo", Path: "/code/repo-foo", PathMissing: true, NameFromPath: true, PaneInExistingDir: true},
+			{Name: "sidecar-ws-loose", Path: "/code/loose", PathMissing: true, NameFromPath: true, PaneInExistingDir: true},
+		},
+	})
+	if len(plan.Orphans) != 0 {
+		t.Fatalf("orphans = %+v", plan.Orphans)
+	}
+}
+
+// With one listing missing, nobody can say which names that repository's live
+// worktrees claim, so an unattributed session is not judged.
+func TestUnattributedSessionNeedsEveryInventoryToAnswer(t *testing.T) {
+	failed := WorktreeInventory{ProjectRoot: "/code/other"}
+	plan := PlanWorktreeOrphans(OrphanObservation{
+		SessionPrefix: wsPrefix,
+		Inventories:   []WorktreeInventory{repoInventory(), failed},
+		Sessions:      []TmuxSession{{Name: "sidecar-ws-gone", Path: "/code/gone", PathMissing: true, NameFromPath: true}},
+	})
+	if len(plan.Orphans) != 0 {
+		t.Fatalf("orphans = %+v", plan.Orphans)
+	}
+}

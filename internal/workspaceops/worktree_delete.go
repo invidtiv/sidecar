@@ -702,13 +702,29 @@ type orphanSessionState struct {
 	PanePaths []string
 }
 
-// readOrphanSession reads a session by exact name. ok is false when tmux has
-// no such session.
-var readOrphanSession = func(ctx context.Context, session string) (orphanSessionState, bool) {
-	out, err := exec.CommandContext(ctx, "tmux", "list-panes", "-s", "-t", "="+session,
-		"-F", "#{session_id}\t#{session_path}\t#{pane_current_path}").Output()
+// errOrphanSessionGone is readOrphanSession's answer when tmux positively says
+// the session (or its whole server) is not there.
+var errOrphanSessionGone = errors.New("session is gone")
+
+// readOrphanSession reads a session by exact name. Only tmux saying the session
+// or server does not exist is errOrphanSessionGone; a timeout or any other
+// failure is an error, because "could not read" is not "gone" and treating it
+// so would drop the restore record of a session that may still be running.
+var readOrphanSession = func(ctx context.Context, session string) (orphanSessionState, error) {
+	// `=name:` and not `=name`: list-panes takes a window target, and there a
+	// bare `=pro` still resolves the session `probe`. The trailing colon makes
+	// tmux parse the name as an exact session.
+	cmd := exec.CommandContext(ctx, "tmux", "list-panes", "-s", "-t", "="+session+":",
+		"-F", "#{session_id}\t#{session_path}\t#{pane_current_path}")
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
 	if err != nil {
-		return orphanSessionState{}, false
+		message := stderr.String()
+		if sessionGoneMessage(message) {
+			return orphanSessionState{}, errOrphanSessionGone
+		}
+		return orphanSessionState{}, fmt.Errorf("read session %s: %s: %w", session, strings.TrimSpace(message), err)
 	}
 	var state orphanSessionState
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
@@ -719,7 +735,10 @@ var readOrphanSession = func(ctx context.Context, session string) (orphanSession
 		state.ID, state.Path = fields[0], fields[1]
 		state.PanePaths = append(state.PanePaths, fields[2])
 	}
-	return state, state.ID != ""
+	if state.ID == "" {
+		return state, fmt.Errorf("read session %s: tmux listed no panes", session)
+	}
+	return state, nil
 }
 
 // killSessionByID closes one session by its tmux id.
@@ -731,10 +750,15 @@ var killSessionByID = func(ctx context.Context, id string) error {
 	return nil
 }
 
-// rootStillMissing is indirected for tests.
+// rootStillMissing applies the plan's rule again: the root is gone while its
+// parent is not. A missing parent is an unmounted volume, which says nothing
+// about whether anyone removed the worktree. Indirected for tests.
 var rootStillMissing = func(root string) bool {
-	_, err := os.Stat(root)
-	return os.IsNotExist(err)
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		return false
+	}
+	info, err := os.Stat(filepath.Dir(root))
+	return err == nil && info.IsDir()
 }
 
 // PruneOrphanedWorktreeSession closes one rootless worktree session and
@@ -759,9 +783,12 @@ func PruneOrphanedWorktreeSession(ctx context.Context, req OrphanedSessionPrune)
 	if strings.TrimSpace(req.Root) == "" {
 		return false, fmt.Errorf("orphaned session %s has no root", req.Session)
 	}
-	state, alive := readOrphanSession(ctx, req.Session)
-	if !alive {
+	state, err := readOrphanSession(ctx, req.Session)
+	if errors.Is(err, errOrphanSessionGone) {
 		return true, ForgetRecoverableSession(req.Session)
+	}
+	if err != nil {
+		return false, err
 	}
 	if !rootStillMissing(req.Root) {
 		return false, fmt.Errorf("%w: %s exists again", ErrOrphanChanged, req.Root)
@@ -790,4 +817,16 @@ func PruneOrphanedWorktreeSession(ctx context.Context, req OrphanedSessionPrune)
 		return false, errors.Join(err, shellErr)
 	}
 	return false, shellErr
+}
+
+// sessionGoneMessage recognises tmux's own statements that a session, or the
+// server holding it, does not exist. These strings were read from tmux 3.4+
+// rather than guessed: a missing session under a window target reports
+// "can't find window", and a server that is not running reports either "no
+// server running" or a failed connect to a socket that is not there.
+func sessionGoneMessage(message string) bool {
+	return strings.Contains(message, "can't find session") ||
+		strings.Contains(message, "can't find window") ||
+		strings.Contains(message, "no server running") ||
+		(strings.Contains(message, "error connecting to") && strings.Contains(message, "No such file or directory"))
 }

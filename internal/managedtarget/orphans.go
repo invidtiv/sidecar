@@ -18,14 +18,16 @@ import (
 // tmux what they know, once each: one `git worktree list` per project and one
 // `tmux list-sessions` for the whole pass.
 
-// sessionListingFormat carries each session's start directory, which is the
-// proof a worktree session lives in the root it is named after.
-const sessionListingFormat = "#{session_name}\t#{session_path}"
+// paneListingFormat carries, per pane, the session's start directory (the
+// proof a worktree session lives in the root it is named after) and the pane's
+// current directory (the proof no one is working somewhere that still exists).
+// One `list-panes -a` answers both for every session at once.
+const paneListingFormat = "#{session_name}\t#{session_path}\t#{pane_current_path}"
 
 // listTmuxSessions is indirected so tests can supply a listing without a tmux
 // server.
 var listTmuxSessions = func(ctx context.Context) (string, error) {
-	out, err := exec.CommandContext(ctx, "tmux", "list-sessions", "-F", sessionListingFormat).Output()
+	out, err := exec.CommandContext(ctx, "tmux", "list-panes", "-a", "-F", paneListingFormat).Output()
 	return string(out), err
 }
 
@@ -79,22 +81,37 @@ func ObserveWorktreeOrphans(ctx context.Context, projects []Project, opts Observ
 			obs.ListingFailed = true
 		}
 	} else {
+		index := map[string]int{}
 		for _, line := range strings.Split(out, "\n") {
-			name, path, _ := strings.Cut(strings.TrimRight(line, "\r"), "\t")
-			name = strings.TrimSpace(name)
+			fields := strings.SplitN(strings.TrimRight(line, "\r"), "\t", 3)
+			name := strings.TrimSpace(fields[0])
 			if name == "" {
 				continue
 			}
-			session := shellliveness.TmuxSession{Name: name}
-			if path = strings.TrimSpace(path); path != "" && filepath.IsAbs(path) {
-				session.Path = workspaceops.CanonicalWorkPath(path)
-				session.PathMissing = pathMissingWithParent(path)
-				session.NameFromPath = slices.Contains(workspaceops.WorktreeSessionNames(path, ""), name)
+			i, seen := index[name]
+			if !seen {
+				session := shellliveness.TmuxSession{Name: name}
+				if len(fields) > 1 {
+					if path := strings.TrimSpace(fields[1]); path != "" && filepath.IsAbs(path) {
+						session.Path = workspaceops.CanonicalWorkPath(path)
+						session.PathMissing = pathMissingWithParent(path)
+						session.NameFromPath = slices.Contains(workspaceops.WorktreeSessionNames(path, ""), name)
+					}
+				}
+				i = len(obs.Sessions)
+				index[name] = i
+				obs.Sessions = append(obs.Sessions, session)
 			}
-			if session.PathMissing && strings.HasPrefix(name, workspaceops.WorktreeSessionPrefix) {
+			if len(fields) > 2 {
+				if pane := strings.TrimSpace(fields[2]); pane != "" && directoryExists(pane) {
+					obs.Sessions[i].PaneInExistingDir = true
+				}
+			}
+		}
+		for _, session := range obs.Sessions {
+			if session.PathMissing && !session.PaneInExistingDir && strings.HasPrefix(session.Name, workspaceops.WorktreeSessionPrefix) {
 				suspect = true
 			}
-			obs.Sessions = append(obs.Sessions, session)
 		}
 	}
 
@@ -137,6 +154,11 @@ func pathMissingWithParent(path string) bool {
 		return false
 	}
 	info, err := os.Stat(filepath.Dir(path))
+	return err == nil && info.IsDir()
+}
+
+func directoryExists(path string) bool {
+	info, err := os.Stat(path)
 	return err == nil && info.IsDir()
 }
 

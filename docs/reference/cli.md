@@ -3896,7 +3896,7 @@ Usage: sidecar worktree prune-sessions [--project NAME] [--session NAME]... [--p
 - `0`: plan resolved, or every orphaned session closed (or already gone)
 - `1`: tmux, git, Sidecar state, or close failure
 - `2`: usage error, including a prune without --yes
-- `5`: project refused, or a session changed since it was planned and was left alone
+- `5`: project refused, a --session name is not an orphan, or a session changed since it was planned and was left alone
 
 **Examples:**
 
