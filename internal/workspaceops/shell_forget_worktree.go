@@ -149,9 +149,12 @@ func ForgetShellsInWorktree(projectRoot, worktreePath string) error {
 	if strings.TrimSpace(projectRoot) == "" || strings.TrimSpace(worktreePath) == "" {
 		return nil
 	}
-	projectDir, err := projectdir.Resolve(projectRoot)
-	if err != nil {
-		return err
+	// Lookup, not Resolve: forgetting must never register a project. A root
+	// spelled differently from the registered one would otherwise create a
+	// second, empty project directory and report its shells closed.
+	projectDir, ok := projectdir.Lookup(projectRoot)
+	if !ok {
+		return nil
 	}
 	defs, err := shellstate.ListAtPath(filepath.Join(projectDir, "shells.json"))
 	if err != nil {

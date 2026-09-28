@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
+	"time"
 
 	"github.com/marcus/sidecar/internal/managedtarget"
 	"github.com/marcus/sidecar/internal/shellliveness"
@@ -59,6 +61,7 @@ func runWorktreePruneSessions(env Env, args []string) int {
 
 	jsonOutput, planOnly, yes := false, false, false
 	projectFlag := ""
+	var sessionFilter []string
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch {
@@ -71,6 +74,13 @@ func runWorktreePruneSessions(env Env, args []string) int {
 			planOnly = true
 		case arg == "--yes":
 			yes = true
+		case arg == "--session" || strings.HasPrefix(arg, "--session="):
+			value, next, ok := takeFlagArg(arg, args, i, "--session")
+			if !ok || strings.TrimSpace(value) == "" {
+				return usage("--session requires a session name")
+			}
+			sessionFilter = append(sessionFilter, strings.TrimSpace(value))
+			i = next
 		case arg == "--project" || strings.HasPrefix(arg, "--project="):
 			value, next, ok := takeFlagArg(arg, args, i, "--project")
 			if !ok || strings.TrimSpace(value) == "" {
@@ -109,14 +119,17 @@ func runWorktreePruneSessions(env Env, args []string) int {
 		scope = project.Key
 	}
 
-	plan := managedtarget.WorktreeOrphans(ctx, toManagedProjects(projects))
+	plan := managedtarget.WorktreeOrphans(ctx, toManagedProjects(projects), managedtarget.ObserveOptions{})
 	doc := pruneSessionsDocument{Status: pruneStatusPlanned, Orphans: []pruneSessionsItem{}, Skipped: plan.Skipped}
 	for _, orphan := range plan.Orphans {
 		if scope != "" && orphan.ProjectKey != scope {
 			continue
 		}
+		if len(sessionFilter) > 0 && !slices.Contains(sessionFilter, orphan.Session) {
+			continue
+		}
 		doc.Orphans = append(doc.Orphans, pruneSessionsItem{
-			Project: orphan.ProjectKey, ProjectRoot: orphan.ProjectRoot, Root: orphan.Root,
+			Project: orphan.ProjectKey, ProjectRoot: orphan.ProjectPath, Root: orphan.Root,
 			Session: orphan.Session, SessionPath: orphan.SessionPath, Reason: string(orphan.Reason),
 			Shells: shellsRootedIn(projects, orphan.ProjectKey, orphan.Root),
 		})
@@ -199,7 +212,12 @@ func writePruneSessionsPlan(env Env, doc pruneSessionsDocument) int {
 
 // worktreeOrphanPlan observes every registered project. Callers narrow the
 // result; they never narrow the observation.
-func worktreeOrphanPlan(env Env) (shellliveness.OrphanPlan, error) {
+//
+// It is bounded because it runs inside discovery verbs (`agent list`, `shell
+// list`) that must not hang on one slow repository. A pass cut short marks
+// fewer rows; it never marks more, because an unanswered inventory yields no
+// verdicts.
+func worktreeOrphanPlan(env Env, opts managedtarget.ObserveOptions) (shellliveness.OrphanPlan, error) {
 	projects, err := loadRegisteredProjects(env.StateDir)
 	if err != nil {
 		return shellliveness.OrphanPlan{}, err
@@ -208,8 +226,13 @@ func worktreeOrphanPlan(env Env) (shellliveness.OrphanPlan, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return managedtarget.WorktreeOrphans(ctx, toManagedProjects(projects)), nil
+	ctx, cancel := context.WithTimeout(ctx, orphanObserveTimeout)
+	defer cancel()
+	return managedtarget.WorktreeOrphans(ctx, toManagedProjects(projects), opts), nil
 }
+
+// orphanObserveTimeout bounds orphan marking inside the list verbs.
+const orphanObserveTimeout = 10 * time.Second
 
 func toManagedProjects(projects []registeredProject) []managedtarget.Project {
 	converted := make([]managedtarget.Project, len(projects))

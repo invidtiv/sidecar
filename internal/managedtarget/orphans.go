@@ -32,20 +32,81 @@ var listTmuxSessions = func(ctx context.Context) (string, error) {
 // listWorktreeStates is indirected for the same reason.
 var listWorktreeStates = workspaceops.ListWorktreeStates
 
+// ObserveOptions says how much evidence a caller needs.
+type ObserveOptions struct {
+	// WantRoots asks for root verdicts even when no session is suspect, for a
+	// caller (`shell list`) that marks shells rather than sessions.
+	WantRoots bool
+}
+
 // ObserveWorktreeOrphans gathers the evidence for projects. A tmux server with
 // no sessions is an empty listing, not a failure: `no server running` means
 // there is nothing live to be orphaned.
-func ObserveWorktreeOrphans(ctx context.Context, projects []Project) shellliveness.OrphanObservation {
+//
+// Git is asked only when there is something to judge. Every verdict needs a
+// directory that is gone, so a pass with no live worktree session in a missing
+// directory (and no caller asking for root verdicts) never spawns git at all.
+// That keeps the common `agent list` free of a git process per project.
+func ObserveWorktreeOrphans(ctx context.Context, projects []Project, opts ObserveOptions) shellliveness.OrphanObservation {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	obs := shellliveness.OrphanObservation{SessionPrefix: workspaceops.WorktreeSessionPrefix}
+	anyRootMissing := false
 	for _, proj := range projects {
 		if strings.TrimSpace(proj.Path) == "" {
 			continue
 		}
 		projectRoot := workspaceops.CanonicalWorkPath(proj.Path)
-		inv := shellliveness.WorktreeInventory{ProjectRoot: projectRoot}
+		for _, root := range proj.Worktrees {
+			if strings.TrimSpace(root) == "" {
+				continue
+			}
+			missing := pathMissingWithParent(root)
+			anyRootMissing = anyRootMissing || missing
+			obs.Registered = append(obs.Registered, shellliveness.RegisteredRoot{
+				ProjectKey: proj.Key, ProjectRoot: projectRoot, ProjectPath: proj.Path,
+				Root: workspaceops.CanonicalWorkPath(root), Sessions: workspaceops.WorktreeSessionNames(root, ""),
+				Missing: missing,
+			})
+		}
+	}
+
+	suspect := false
+	out, err := listTmuxSessions(ctx)
+	if err != nil {
+		if !noTmuxServer(err) {
+			obs.ListingFailed = true
+		}
+	} else {
+		for _, line := range strings.Split(out, "\n") {
+			name, path, _ := strings.Cut(strings.TrimRight(line, "\r"), "\t")
+			name = strings.TrimSpace(name)
+			if name == "" {
+				continue
+			}
+			session := shellliveness.TmuxSession{Name: name}
+			if path = strings.TrimSpace(path); path != "" && filepath.IsAbs(path) {
+				session.Path = workspaceops.CanonicalWorkPath(path)
+				session.PathMissing = pathMissingWithParent(path)
+				session.NameFromPath = slices.Contains(workspaceops.WorktreeSessionNames(path, ""), name)
+			}
+			if session.PathMissing && strings.HasPrefix(name, workspaceops.WorktreeSessionPrefix) {
+				suspect = true
+			}
+			obs.Sessions = append(obs.Sessions, session)
+		}
+	}
+
+	needRoots := opts.WantRoots && anyRootMissing
+	if !suspect && !needRoots {
+		return obs
+	}
+	for _, proj := range projects {
+		if strings.TrimSpace(proj.Path) == "" || ctx.Err() != nil {
+			continue
+		}
+		inv := shellliveness.WorktreeInventory{ProjectRoot: workspaceops.CanonicalWorkPath(proj.Path)}
 		if states, err := listWorktreeStates(ctx, proj.Path); err == nil {
 			inv.Answered = true
 			for _, state := range states {
@@ -59,44 +120,13 @@ func ObserveWorktreeOrphans(ctx context.Context, projects []Project) shelllivene
 			}
 		}
 		obs.Inventories = append(obs.Inventories, inv)
-		for _, root := range proj.Worktrees {
-			if strings.TrimSpace(root) == "" {
-				continue
-			}
-			obs.Registered = append(obs.Registered, shellliveness.RegisteredRoot{
-				ProjectKey: proj.Key, ProjectRoot: projectRoot,
-				Root: workspaceops.CanonicalWorkPath(root), Sessions: workspaceops.WorktreeSessionNames(root, ""),
-			})
-		}
-	}
-
-	out, err := listTmuxSessions(ctx)
-	if err != nil {
-		if !noTmuxServer(err) {
-			obs.ListingFailed = true
-		}
-		return obs
-	}
-	for _, line := range strings.Split(out, "\n") {
-		name, path, _ := strings.Cut(strings.TrimRight(line, "\r"), "\t")
-		name = strings.TrimSpace(name)
-		if name == "" {
-			continue
-		}
-		session := shellliveness.TmuxSession{Name: name}
-		if path = strings.TrimSpace(path); path != "" && filepath.IsAbs(path) {
-			session.Path = workspaceops.CanonicalWorkPath(path)
-			session.PathMissing = pathMissingWithParent(path)
-			session.NameFromPath = slices.Contains(workspaceops.WorktreeSessionNames(path, ""), name)
-		}
-		obs.Sessions = append(obs.Sessions, session)
 	}
 	return obs
 }
 
 // WorktreeOrphans is ObserveWorktreeOrphans followed by the decision.
-func WorktreeOrphans(ctx context.Context, projects []Project) shellliveness.OrphanPlan {
-	return shellliveness.PlanWorktreeOrphans(ObserveWorktreeOrphans(ctx, projects))
+func WorktreeOrphans(ctx context.Context, projects []Project, opts ObserveOptions) shellliveness.OrphanPlan {
+	return shellliveness.PlanWorktreeOrphans(ObserveWorktreeOrphans(ctx, projects, opts))
 }
 
 // pathMissingWithParent reports that path is gone while the directory that

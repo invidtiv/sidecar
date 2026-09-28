@@ -13,7 +13,7 @@ func repoInventory(worktrees ...ListedWorktree) WorktreeInventory {
 }
 
 func registered(root, session string) RegisteredRoot {
-	return RegisteredRoot{ProjectKey: "repo", ProjectRoot: "/code/repo", Root: root, Sessions: []string{session}}
+	return RegisteredRoot{ProjectKey: "repo", ProjectRoot: "/code/repo", Root: root, Sessions: []string{session}, Missing: true}
 }
 
 func TestRemovedWorktreeWithLiveSessionIsAnOrphan(t *testing.T) {
@@ -211,5 +211,46 @@ func TestPathWithinComparesComponents(t *testing.T) {
 		if got := PathWithin(c.path, c.root); got != c.want {
 			t.Errorf("PathWithin(%q, %q) = %v, want %v", c.path, c.root, got, c.want)
 		}
+	}
+}
+
+// A directory re-cloned over a removed worktree is not in git's worktree list
+// and is very much alive.
+func TestRootThatStillExistsIsNeverAnOrphan(t *testing.T) {
+	root := registered("/code/repo-foo", "sidecar-ws-repo-foo")
+	root.Missing = false
+	plan := PlanWorktreeOrphans(OrphanObservation{
+		SessionPrefix: wsPrefix,
+		Inventories:   []WorktreeInventory{repoInventory()},
+		Registered:    []RegisteredRoot{root},
+		Sessions:      []TmuxSession{{Name: "sidecar-ws-repo-foo", Path: "/code/repo-foo"}},
+	})
+	if len(plan.Orphans) != 0 || len(plan.Roots) != 0 {
+		t.Fatalf("plan = %+v, want nothing for an existing root", plan)
+	}
+}
+
+// A project that lost its .git inside a parent repository answers with the
+// parent's listing, which does not include the project itself.
+func TestOwnerListingWithoutItsOwnRootIsNotAnAnswer(t *testing.T) {
+	parent := WorktreeInventory{ProjectRoot: "/code/repo", Answered: true, Worktrees: []ListedWorktree{{Path: "/home"}}}
+	if reason := RootOrphanReason(registered("/code/repo-foo", "sidecar-ws-repo-foo"), []WorktreeInventory{parent}); reason != "" {
+		t.Fatalf("reason = %q, want none", reason)
+	}
+}
+
+// WorktreeSessionNames yields two spellings for a name like My_Feature; either
+// one live in the removed root is an orphan.
+func TestEitherSessionSpellingIsJudged(t *testing.T) {
+	root := registered("/code/My_Feature", "sidecar-ws-my-feature")
+	root.Sessions = append(root.Sessions, "sidecar-ws-My_Feature")
+	plan := PlanWorktreeOrphans(OrphanObservation{
+		SessionPrefix: wsPrefix,
+		Inventories:   []WorktreeInventory{repoInventory()},
+		Registered:    []RegisteredRoot{root},
+		Sessions:      []TmuxSession{{Name: "sidecar-ws-My_Feature", Path: "/code/My_Feature"}},
+	})
+	if len(plan.Orphans) != 1 || plan.Orphans[0].Session != "sidecar-ws-My_Feature" {
+		t.Fatalf("orphans = %+v", plan.Orphans)
 	}
 }

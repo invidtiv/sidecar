@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/marcus/sidecar/internal/managedtarget"
 	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/workspaceops"
 )
@@ -78,8 +80,10 @@ func runShellList(env Env, args []string) int {
 	}
 
 	orphaned := map[string]string{}
-	if len(live) > 0 {
-		if plan, err := worktreeOrphanPlan(env); err == nil {
+	// Only a shell whose working directory is gone can be rooted in a removed
+	// worktree, so the common case costs one stat per shell and no git.
+	if anyWorkDirMissing(live) {
+		if plan, err := worktreeOrphanPlan(env, managedtarget.ObserveOptions{WantRoots: true}); err == nil {
 			orphaned = orphanedShellRoots(live, plan.Roots)
 		}
 	}
@@ -386,4 +390,16 @@ func writeShellJSON(env Env, v any) int {
 		return 1
 	}
 	return 0
+}
+
+func anyWorkDirMissing(defs []shellstate.Definition) bool {
+	for _, def := range defs {
+		if strings.TrimSpace(def.WorkDir) == "" {
+			continue
+		}
+		if _, err := os.Stat(def.WorkDir); os.IsNotExist(err) {
+			return true
+		}
+	}
+	return false
 }

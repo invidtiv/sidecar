@@ -717,7 +717,7 @@ func markOrphanedAgents(env Env, agents []agentcontrol.Agent) {
 	if len(agents) == 0 {
 		return
 	}
-	plan, err := worktreeOrphanPlan(env)
+	plan, err := worktreeOrphanPlan(env, managedtarget.ObserveOptions{})
 	if err != nil || len(plan.Orphans) == 0 {
 		return
 	}

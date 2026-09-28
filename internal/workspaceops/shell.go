@@ -117,7 +117,9 @@ func DeleteManagedShell(projectRoot, sessionName, namespace string) error {
 	if err := shellstate.RemoveAtPath(filepath.Join(projectDir, "shells.json"), shellstate.Identity{TmuxName: sessionName, Namespace: namespace}); err != nil {
 		return err
 	}
-	cmd := exec.Command("tmux", "kill-session", "-t", sessionName)
+	// `=` matches the name exactly. Without it tmux resolves a missing
+	// sidecar-sh-repo-1 as a prefix and kills sidecar-sh-repo-10.
+	cmd := exec.Command("tmux", "kill-session", "-t", "="+sessionName)
 	if output, err := cmd.CombinedOutput(); err != nil && SessionExists(sessionName) {
 		return fmt.Errorf("close tmux session: %s: %w", strings.TrimSpace(string(output)), err)
 	}
@@ -327,7 +329,7 @@ func SessionExists(name string) bool {
 	if name == "" {
 		return false
 	}
-	return exec.Command("tmux", "has-session", "-t", name).Run() == nil
+	return exec.Command("tmux", "has-session", "-t", "="+name).Run() == nil
 }
 
 // PaneID returns a session's first pane identifier, or "" if tmux cannot say.

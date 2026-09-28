@@ -6,69 +6,89 @@ import (
 	"testing"
 )
 
-func stubOrphanTmux(t *testing.T, path string, alive bool) *[]string {
+type orphanStub struct {
+	state       orphanSessionState
+	alive       bool
+	rootMissing bool
+	killed      []string
+}
+
+func stubOrphanTmux(t *testing.T, stub *orphanStub) {
 	t.Helper()
-	var killed []string
-	oldPath, oldKill, oldForget := sessionStartPath, killSessionExact, forgetShellsInWorktree
-	sessionStartPath = func(context.Context, string) (string, bool) { return path, alive }
-	killSessionExact = func(_ context.Context, session string) error {
-		killed = append(killed, session)
+	oldRead, oldKill, oldForget, oldMissing := readOrphanSession, killSessionByID, forgetShellsInWorktree, rootStillMissing
+	readOrphanSession = func(context.Context, string) (orphanSessionState, bool) { return stub.state, stub.alive }
+	killSessionByID = func(_ context.Context, id string) error {
+		stub.killed = append(stub.killed, id)
 		return nil
 	}
 	forgetShellsInWorktree = func(string, string) error { return nil }
-	t.Cleanup(func() { sessionStartPath, killSessionExact, forgetShellsInWorktree = oldPath, oldKill, oldForget })
-	return &killed
+	rootStillMissing = func(string) bool { return stub.rootMissing }
+	t.Cleanup(func() {
+		readOrphanSession, killSessionByID, forgetShellsInWorktree, rootStillMissing = oldRead, oldKill, oldForget, oldMissing
+	})
 }
 
-// The plan and the kill are separate moments, and a worktree created in
-// between can take the same session name. The session is re-read and left
-// alone when it no longer starts where it was planned.
-func TestPruneOrphanedSessionRefusesASessionThatMoved(t *testing.T) {
-	root := t.TempDir() + "/repo-foo"
-	killed := stubOrphanTmux(t, "/elsewhere/repo-foo", true)
-	_, err := PruneOrphanedWorktreeSession(t.Context(), OrphanedSessionPrune{
-		Root: root, Session: "sidecar-ws-repo-foo", SessionPath: root,
-	})
-	if !errors.Is(err, ErrOrphanChanged) {
-		t.Fatalf("err = %v, want ErrOrphanChanged", err)
-	}
-	if len(*killed) != 0 {
-		t.Fatalf("killed %v after the session moved", *killed)
-	}
+const orphanRoot = "/nonexistent-sidecar-test/repo-foo"
+
+func planned() OrphanedSessionPrune {
+	return OrphanedSessionPrune{Root: orphanRoot, Session: "sidecar-ws-repo-foo", SessionPath: orphanRoot}
 }
 
-func TestPruneOrphanedSessionClosesTheSessionItPlanned(t *testing.T) {
-	root := t.TempDir() + "/repo-foo"
-	killed := stubOrphanTmux(t, root, true)
-	gone, err := PruneOrphanedWorktreeSession(t.Context(), OrphanedSessionPrune{
-		Root: root, Session: "sidecar-ws-repo-foo", SessionPath: root,
-	})
+func TestPruneOrphanedSessionClosesTheSessionItPlannedByID(t *testing.T) {
+	stub := &orphanStub{alive: true, rootMissing: true, state: orphanSessionState{ID: "$7", Path: orphanRoot, PanePaths: []string{orphanRoot}}}
+	stubOrphanTmux(t, stub)
+	gone, err := PruneOrphanedWorktreeSession(t.Context(), planned())
 	if err != nil || gone {
 		t.Fatalf("gone %v err %v", gone, err)
 	}
-	if len(*killed) != 1 || (*killed)[0] != "sidecar-ws-repo-foo" {
-		t.Fatalf("killed = %v", *killed)
+	if len(stub.killed) != 1 || stub.killed[0] != "$7" {
+		t.Fatalf("killed = %v, want the session id", stub.killed)
+	}
+}
+
+// The plan and the kill are separate moments. Each of these is something that
+// can change in between, and each must leave the session alone.
+func TestPruneOrphanedSessionRevalidatesBeforeTheKill(t *testing.T) {
+	existing := t.TempDir()
+	cases := map[string]*orphanStub{
+		"root re-created":       {alive: true, rootMissing: false, state: orphanSessionState{ID: "$7", Path: orphanRoot}},
+		"name reused elsewhere": {alive: true, rootMissing: true, state: orphanSessionState{ID: "$7", Path: "/elsewhere/repo-foo"}},
+		"pane followed a move":  {alive: true, rootMissing: true, state: orphanSessionState{ID: "$7", Path: orphanRoot, PanePaths: []string{orphanRoot, existing}}},
+	}
+	for name, stub := range cases {
+		t.Run(name, func(t *testing.T) {
+			stubOrphanTmux(t, stub)
+			_, err := PruneOrphanedWorktreeSession(t.Context(), planned())
+			if !errors.Is(err, ErrOrphanChanged) {
+				t.Fatalf("err = %v, want ErrOrphanChanged", err)
+			}
+			if len(stub.killed) != 0 {
+				t.Fatalf("killed %v", stub.killed)
+			}
+		})
 	}
 }
 
 func TestPruneOrphanedSessionAlreadyGoneIsSuccess(t *testing.T) {
-	killed := stubOrphanTmux(t, "", false)
-	gone, err := PruneOrphanedWorktreeSession(t.Context(), OrphanedSessionPrune{
-		Root: "/code/repo-foo", Session: "sidecar-ws-repo-foo", SessionPath: "/code/repo-foo",
-	})
-	if err != nil || !gone || len(*killed) != 0 {
-		t.Fatalf("gone %v err %v killed %v", gone, err, *killed)
+	stub := &orphanStub{alive: false, rootMissing: true}
+	stubOrphanTmux(t, stub)
+	gone, err := PruneOrphanedWorktreeSession(t.Context(), planned())
+	if err != nil || !gone || len(stub.killed) != 0 {
+		t.Fatalf("gone %v err %v killed %v", gone, err, stub.killed)
 	}
 }
 
 func TestPruneOrphanedSessionRefusesNonWorktreeSessions(t *testing.T) {
-	killed := stubOrphanTmux(t, "/code/repo-foo", true)
+	stub := &orphanStub{alive: true, rootMissing: true, state: orphanSessionState{ID: "$7", Path: orphanRoot}}
+	stubOrphanTmux(t, stub)
 	for _, session := range []string{"", "sidecar-sh-repo-1", "probe"} {
-		if _, err := PruneOrphanedWorktreeSession(t.Context(), OrphanedSessionPrune{Root: "/code/repo-foo", Session: session, SessionPath: "/code/repo-foo"}); err == nil {
+		req := planned()
+		req.Session = session
+		if _, err := PruneOrphanedWorktreeSession(t.Context(), req); err == nil {
 			t.Errorf("session %q was accepted", session)
 		}
 	}
-	if len(*killed) != 0 {
-		t.Fatalf("killed %v", *killed)
+	if len(stub.killed) != 0 {
+		t.Fatalf("killed %v", stub.killed)
 	}
 }

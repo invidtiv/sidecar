@@ -39,6 +39,13 @@ import (
 //   - A session must prove it lives in the root. Its tmux start directory has
 //     to be at or beneath the removed root, so a name that happens to match is
 //     not enough.
+//   - A root that still exists is never an orphan, whatever git says. A
+//     directory re-cloned over a removed worktree, or a project that lost its
+//     .git inside a parent repository, answers git with a listing that omits a
+//     perfectly live checkout. Only a root whose directory is gone while its
+//     parent is not has been removed; a missing parent is an unmounted volume.
+//   - An owner's listing only counts when it includes the owner's own root. A
+//     listing that does not is some other repository answering.
 //   - A failed tmux listing produces nothing, for the same reason as the reap.
 
 // OrphanReason says why a worktree root no longer backs its sessions. Empty
@@ -80,11 +87,17 @@ type WorktreeInventory struct {
 // RegisteredRoot is a worktree Sidecar created and recorded for a project.
 type RegisteredRoot struct {
 	ProjectKey, ProjectRoot string
+	// ProjectPath is the project path exactly as registered. ProjectRoot is
+	// canonical for comparison; ProjectPath is what state lookups match on.
+	ProjectPath string
 	// Root is canonical, resolved as far as the filesystem still allows.
 	Root string
 	// Sessions are the tmux names Sidecar may have started this worktree's
 	// session under, most canonical first.
 	Sessions []string
+	// Missing reports that Root is gone while its parent is not. A root that
+	// exists, or whose parent is also gone, gets no verdict.
+	Missing bool
 }
 
 // TmuxSession is one entry of the session listing.
@@ -117,9 +130,9 @@ type OrphanObservation struct {
 
 // OrphanSession is one live worktree session with no worktree behind it.
 type OrphanSession struct {
-	// ProjectKey and ProjectRoot are empty for an OrphanDirectoryMissing
-	// session no registered project accounts for.
-	ProjectKey, ProjectRoot string
+	// ProjectKey, ProjectRoot and ProjectPath are empty for an
+	// OrphanDirectoryMissing session no registered project accounts for.
+	ProjectKey, ProjectRoot, ProjectPath string
 	// Root is the removed worktree the session was started in.
 	Root        string
 	Session     string
@@ -141,7 +154,7 @@ type OrphanPlan struct {
 // RootOrphanReason judges one registered root against every inventory. It is
 // the git half of the decision, usable without a tmux listing.
 func RootOrphanReason(root RegisteredRoot, inventories []WorktreeInventory) OrphanReason {
-	if strings.TrimSpace(root.Root) == "" {
+	if strings.TrimSpace(root.Root) == "" || !root.Missing {
 		return ""
 	}
 	ownerAnswered := false
@@ -150,7 +163,7 @@ func RootOrphanReason(root RegisteredRoot, inventories []WorktreeInventory) Orph
 		if !inv.Answered {
 			continue
 		}
-		if SamePath(inv.ProjectRoot, root.ProjectRoot) {
+		if SamePath(inv.ProjectRoot, root.ProjectRoot) && listsPath(inv, inv.ProjectRoot) {
 			ownerAnswered = true
 		}
 		for _, wt := range inv.Worktrees {
@@ -229,7 +242,7 @@ func PlanWorktreeOrphans(obs OrphanObservation) OrphanPlan {
 				continue
 			}
 			plan.Orphans = append(plan.Orphans, OrphanSession{
-				ProjectKey: root.ProjectKey, ProjectRoot: root.ProjectRoot, Root: root.Root,
+				ProjectKey: root.ProjectKey, ProjectRoot: root.ProjectRoot, ProjectPath: root.ProjectPath, Root: root.Root,
 				Session: name, SessionPath: session.Path, Reason: reason,
 			})
 		}
@@ -262,6 +275,15 @@ func PlanWorktreeOrphans(obs OrphanObservation) OrphanPlan {
 		return a.Session < b.Session
 	})
 	return plan
+}
+
+func listsPath(inv WorktreeInventory, path string) bool {
+	for _, wt := range inv.Worktrees {
+		if SamePath(wt.Path, path) {
+			return true
+		}
+	}
+	return false
 }
 
 func withinRegistered(path string, roots []RegisteredRoot) bool {

@@ -276,7 +276,7 @@ func TestWorktreeDeletePlanAndExecuteRealLifecycle(t *testing.T) {
 	}
 	logText := string(logData)
 	for _, session := range []string{"sidecar-sh-topic", workspaceops.WorktreeSessionName(worktree, "")} {
-		if !strings.Contains(logText, "kill-session -t "+session) {
+		if !strings.Contains(logText, "kill-session -t ="+session) {
 			t.Errorf("tmux teardown did not name %q; log:\n%s", session, logText)
 		}
 	}
@@ -518,7 +518,7 @@ func installStubbornTmux(t *testing.T, liveSession string) {
 	t.Helper()
 	binDir := t.TempDir()
 	script := "#!/bin/sh\n" +
-		"if [ \"$1\" = has-session ] && [ \"$3\" = " + shellQuote(liveSession) + " ]; then exit 0; fi\n" +
+		"if [ \"$1\" = has-session ] && [ \"$3\" = " + shellQuote("="+liveSession) + " ]; then exit 0; fi\n" +
 		"exit 1\n"
 	if err := os.WriteFile(filepath.Join(binDir, "tmux"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)

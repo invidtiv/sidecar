@@ -3,10 +3,12 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/marcus/sidecar/internal/agentcontrol"
 	"github.com/marcus/sidecar/internal/shellstate"
@@ -206,4 +208,156 @@ func TestWorktreePruneSessionsLeavesAReusedNameAlone(t *testing.T) {
 	if len(doc.Orphans) != 0 || !workspaceops.SessionExists(session) {
 		t.Fatalf("prune = %+v; the recreated worktree's session must survive", doc)
 	}
+}
+
+func startTestSession(t *testing.T, name, dir string) {
+	t.Helper()
+	if out, err := exec.Command("tmux", "new-session", "-d", "-s", name, "-c", dir).CombinedOutput(); err != nil {
+		t.Skipf("cannot start a private tmux session: %v: %s", err, out)
+	}
+	t.Cleanup(func() { _ = exec.Command("tmux", "kill-session", "-t", "="+name).Run() })
+}
+
+func runPrune(t *testing.T, args ...string) (pruneSessionsDocument, int) {
+	t.Helper()
+	var out, errOut bytes.Buffer
+	_, code := Run(append([]string{"worktree", "prune-sessions", "--json"}, args...), &out, &errOut)
+	var doc pruneSessionsDocument
+	if out.Len() > 0 {
+		if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+			t.Fatalf("prune JSON: %v (%q, stderr %q)", err, out.String(), errOut.String())
+		}
+	}
+	return doc, code
+}
+
+// Review findings for td-0b90da, each a way a false orphan or a wrong kill
+// could happen. The project is registered under its macOS temp spelling
+// (/var/…, a symlink to /private/var/…) on purpose: the prune must find the
+// registered project rather than create a second one.
+func TestWorktreePruneSessionsSafetyCases(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux is not installed")
+	}
+	_, stateDir := setupIsolatedCLI(t)
+	rawBase := t.TempDir()
+	root := filepath.Join(rawBase, "repo")
+	initGitRepoOnMain(t, root)
+	writeProjectMeta(t, stateDir, "demo", root) // deliberately not canonicalized
+
+	add := func(name string) string {
+		path := filepath.Join(rawBase, name)
+		runGit(t, root, "worktree", "add", "-q", "-b", name, path)
+		writeRegisteredWorktree(t, stateDir, root, path)
+		return path
+	}
+	recloned := add("repo-recloned")
+	moved := add("repo-moved")
+	removed := add("repo-removed")
+
+	// A shell in the removed worktree whose session already died, next to a
+	// live shell whose name it prefixes. Closing the first must not reach the
+	// second.
+	writeProjectShells(t, stateDir, "demo",
+		shellstate.Definition{TmuxName: "sidecar-sh-repo-1", DisplayName: "dead", WorkDir: removed},
+		shellstate.Definition{TmuxName: "sidecar-sh-repo-10", DisplayName: "sibling", WorkDir: root},
+	)
+	startTestSession(t, "sidecar-sh-repo-10", root)
+
+	recSession := workspaceops.WorktreeSessionName(recloned, "")
+	movedSession := workspaceops.WorktreeSessionName(moved, "")
+	removedSession := workspaceops.WorktreeSessionName(removed, "")
+	startTestSession(t, recSession, recloned)
+	startTestSession(t, movedSession, moved)
+	startTestSession(t, removedSession, removed)
+
+	// Removed and then re-created as a plain clone at the same path: git no
+	// longer lists it, and it is a live checkout.
+	runGit(t, root, "worktree", "remove", "--force", recloned)
+	runGit(t, rawBase, "clone", "-q", root, recloned)
+
+	// Moved: the session's start directory is gone, but the agent in it
+	// followed the checkout to its new home.
+	movedTo := moved + "-new"
+	runGit(t, root, "worktree", "move", moved, movedTo)
+	if out, err := exec.Command("tmux", "send-keys", "-t", "="+movedSession+":", "cd "+shellQuote(movedTo), "Enter").CombinedOutput(); err != nil {
+		t.Fatalf("send-keys: %v: %s", err, out)
+	}
+
+	runGit(t, root, "worktree", "remove", "--force", removed)
+
+	plan, code := runPrune(t, "--plan")
+	if code != 0 {
+		t.Fatalf("plan exit %d", code)
+	}
+	planned := map[string]bool{}
+	for _, orphan := range plan.Orphans {
+		planned[orphan.Session] = true
+	}
+	if planned[recSession] {
+		t.Fatal("a re-cloned directory at the removed path was judged an orphan")
+	}
+	// The moved session is planned (its start directory is gone and git no
+	// longer lists that path); only the pre-kill pane check can spare it, which
+	// is the point of this case.
+	if !planned[removedSession] || !planned[movedSession] {
+		t.Fatalf("plan = %+v, want the removed and moved worktrees' sessions", plan.Orphans)
+	}
+
+	// The moved agent's pane must be observed in its new directory before the
+	// prune runs, or the check has nothing to see.
+	waitForPanePath(t, movedSession, canonicalTestPath(t, movedTo))
+
+	pruned, code := runPrune(t, "--yes")
+	results := map[string]string{}
+	for _, orphan := range pruned.Orphans {
+		results[orphan.Session] = orphan.Result
+	}
+	if results[removedSession] != pruneResultClosed {
+		t.Fatalf("removed session result = %q (all: %+v)", results[removedSession], pruned.Orphans)
+	}
+	if got := results[movedSession]; got != pruneResultChanged {
+		t.Fatalf("moved session result = %q, want it left alone as changed", got)
+	}
+	if code != exitInputRejected {
+		t.Fatalf("exit %d, want %d when a session was left alone", code, exitInputRejected)
+	}
+	for session, wantAlive := range map[string]bool{
+		recSession: true, movedSession: true, "sidecar-sh-repo-10": true, removedSession: false,
+	} {
+		if got := workspaceops.SessionExists(session); got != wantAlive {
+			t.Errorf("%s alive = %v, want %v", session, got, wantAlive)
+		}
+	}
+
+	// The registered project was found, not re-registered under the
+	// canonical spelling, and the dead shell's record was tombstoned there.
+	entries, err := os.ReadDir(filepath.Join(stateDir, "projects"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		names := []string{}
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Fatalf("projects = %v, want only demo", names)
+	}
+	tombs, err := shellstate.ListTombstonesAtPath(filepath.Join(stateDir, "projects", "demo", "shells.json"))
+	if err != nil || len(tombs) != 1 || tombs[0].TmuxName != "sidecar-sh-repo-1" {
+		t.Fatalf("tombstones = %+v, %v", tombs, err)
+	}
+}
+
+func waitForPanePath(t *testing.T, session, want string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		out, _ := exec.Command("tmux", "display-message", "-p", "-t", "="+session+":", "#{pane_current_path}").Output()
+		if got := strings.TrimSpace(string(out)); got != "" && workspaceops.CanonicalWorkPath(got) == want {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("pane of %s never reached %s", session, want)
 }

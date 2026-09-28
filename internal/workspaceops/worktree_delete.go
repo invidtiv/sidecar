@@ -72,7 +72,10 @@ func KillWorktreeSession(ctx context.Context, sessionName string) error {
 	if sessionName == "" {
 		return nil
 	}
-	cmd := exec.CommandContext(ctx, "tmux", "kill-session", "-t", sessionName)
+	// Exact match: DeleteWorktree tries both name spellings, and the one that
+	// is not running must not prefix-match a sibling such as
+	// sidecar-ws-my-feature-2.
+	cmd := exec.CommandContext(ctx, "tmux", "kill-session", "-t", "="+sessionName)
 	output, err := cmd.CombinedOutput()
 	if err == nil || !SessionExists(sessionName) {
 		return ForgetRecoverableSession(sessionName)
@@ -664,7 +667,9 @@ func cacheDefaultBranch(workDir, branch string) {
 // OrphanedSessionPrune is one rootless worktree session to close: a session
 // still running after its worktree was removed outside Sidecar (td-0b90da).
 type OrphanedSessionPrune struct {
-	// ProjectRoot owns the manifest whose shells rooted in Root are closed with
+	// ProjectRoot is the owning project's path exactly as registered (it is
+	// matched against the registry, so a canonicalized spelling can miss). It
+	// owns the manifest whose shells rooted in Root are closed with
 	// the session, exactly as DeleteWorktree closes them. Empty for a session no
 	// registered project accounts for; only its own session is closed then.
 	ProjectRoot string
@@ -679,35 +684,72 @@ type OrphanedSessionPrune struct {
 	SessionPath string
 }
 
-// ErrOrphanChanged refuses a prune whose session no longer matches the plan.
+// ErrOrphanChanged refuses a prune whose session or root no longer matches the
+// plan.
 var ErrOrphanChanged = errors.New("session changed since it was planned")
 
-// sessionStartPath reads a session's start directory, matched exactly.
-var sessionStartPath = func(ctx context.Context, session string) (string, bool) {
-	out, err := exec.CommandContext(ctx, "tmux", "display-message", "-p", "-t", "="+session+":", "#{session_path}").Output()
-	if err != nil {
-		return "", false
-	}
-	return strings.TrimSpace(string(out)), true
+// orphanSessionState is what the prune re-reads immediately before a kill.
+type orphanSessionState struct {
+	// ID is tmux's session id ($N). The kill targets it, not the name, so a
+	// session recreated under the same name between this read and the kill is
+	// not the one closed.
+	ID string
+	// Path is the session's start directory.
+	Path string
+	// PanePaths are every pane's current directory. An agent follows a
+	// `git worktree move` or a plain `mv`; the session's start directory does
+	// not.
+	PanePaths []string
 }
 
-// killSessionExact closes a session by exact name. `=` stops tmux resolving
-// the target as a prefix, which matters here more than anywhere: a missing
-// sidecar-ws-foo must never become sidecar-ws-foo-bar.
-var killSessionExact = func(ctx context.Context, session string) error {
-	output, err := exec.CommandContext(ctx, "tmux", "kill-session", "-t", "="+session).CombinedOutput()
+// readOrphanSession reads a session by exact name. ok is false when tmux has
+// no such session.
+var readOrphanSession = func(ctx context.Context, session string) (orphanSessionState, bool) {
+	out, err := exec.CommandContext(ctx, "tmux", "list-panes", "-s", "-t", "="+session,
+		"-F", "#{session_id}\t#{session_path}\t#{pane_current_path}").Output()
 	if err != nil {
-		if _, alive := sessionStartPath(ctx, session); alive {
-			return fmt.Errorf("close worktree session %s: %s: %w", session, strings.TrimSpace(string(output)), err)
+		return orphanSessionState{}, false
+	}
+	var state orphanSessionState
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		fields := strings.SplitN(line, "\t", 3)
+		if len(fields) != 3 {
+			continue
 		}
+		state.ID, state.Path = fields[0], fields[1]
+		state.PanePaths = append(state.PanePaths, fields[2])
+	}
+	return state, state.ID != ""
+}
+
+// killSessionByID closes one session by its tmux id.
+var killSessionByID = func(ctx context.Context, id string) error {
+	output, err := exec.CommandContext(ctx, "tmux", "kill-session", "-t", id).CombinedOutput()
+	if err != nil && exec.CommandContext(ctx, "tmux", "has-session", "-t", id).Run() == nil {
+		return fmt.Errorf("close worktree session %s: %s: %w", id, strings.TrimSpace(string(output)), err)
 	}
 	return nil
+}
+
+// rootStillMissing is indirected for tests.
+var rootStillMissing = func(root string) bool {
+	_, err := os.Stat(root)
+	return os.IsNotExist(err)
 }
 
 // PruneOrphanedWorktreeSession closes one rootless worktree session and
 // forgets what Sidecar recorded about it, touching nothing git owns: the
 // worktree is already gone, and whether to prune git's metadata or delete the
 // branch is git's question, not this one.
+//
+// Everything the plan concluded is checked again at the moment of the kill,
+// because a plan is a statement about the moment it was taken:
+//
+//   - the root must still be gone (a checkout can have been re-created there);
+//   - the session must still start in the planned directory, inside the root
+//     (its name is derived from a base name, so a new worktree can reuse it);
+//   - no pane may be working in a directory that exists (an agent follows a
+//     moved worktree; the session's start directory does not).
 //
 // gone reports that the session had already closed, which is success.
 func PruneOrphanedWorktreeSession(ctx context.Context, req OrphanedSessionPrune) (gone bool, err error) {
@@ -717,12 +759,23 @@ func PruneOrphanedWorktreeSession(ctx context.Context, req OrphanedSessionPrune)
 	if strings.TrimSpace(req.Root) == "" {
 		return false, fmt.Errorf("orphaned session %s has no root", req.Session)
 	}
-	current, alive := sessionStartPath(ctx, req.Session)
+	state, alive := readOrphanSession(ctx, req.Session)
 	if !alive {
 		return true, ForgetRecoverableSession(req.Session)
 	}
-	if req.SessionPath == "" || CanonicalWorkPath(current) != CanonicalWorkPath(req.SessionPath) || !PathRootedIn(current, req.Root) {
-		return false, fmt.Errorf("%w: %s now starts in %q", ErrOrphanChanged, req.Session, current)
+	if !rootStillMissing(req.Root) {
+		return false, fmt.Errorf("%w: %s exists again", ErrOrphanChanged, req.Root)
+	}
+	if req.SessionPath == "" || CanonicalWorkPath(state.Path) != CanonicalWorkPath(req.SessionPath) || !PathRootedIn(state.Path, req.Root) {
+		return false, fmt.Errorf("%w: %s now starts in %q", ErrOrphanChanged, req.Session, state.Path)
+	}
+	for _, pane := range state.PanePaths {
+		if strings.TrimSpace(pane) == "" {
+			continue
+		}
+		if _, err := os.Stat(pane); err == nil {
+			return false, fmt.Errorf("%w: %s has a pane working in %q, which exists", ErrOrphanChanged, req.Session, pane)
+		}
 	}
 	// Shells go first, as in DeleteWorktree. One that will not close does not
 	// stop the session closing: the error is reported alongside.
@@ -730,7 +783,7 @@ func PruneOrphanedWorktreeSession(ctx context.Context, req OrphanedSessionPrune)
 	if strings.TrimSpace(req.ProjectRoot) != "" {
 		shellErr = forgetShellsInWorktree(req.ProjectRoot, req.Root)
 	}
-	if err := killSessionExact(ctx, req.Session); err != nil {
+	if err := killSessionByID(ctx, state.ID); err != nil {
 		return false, errors.Join(err, shellErr)
 	}
 	if err := ForgetRecoverableSession(req.Session); err != nil {

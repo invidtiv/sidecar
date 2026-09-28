@@ -3850,17 +3850,22 @@ still running after their worktree was removed with plain `git worktree remove`
 is a reasonable thing to do; this is the reconciliation Sidecar owes afterwards.
 `sidecar agent list` marks the same sessions with an `orphan` field.
 
-A session is orphaned when every one of these holds: the owning project's
-`git worktree list` answered; no answering repository lists the worktree (or git
-lists it only as prunable); no worktree git still lists would produce the same
-session name; and the session's tmux start directory is inside the removed
+A session is orphaned when every one of these holds: the worktree directory is
+gone while its parent is not; the owning project's `git worktree list` answered
+and includes the project itself; no answering repository lists the worktree (or
+git lists it only as prunable); no worktree git still lists would produce the
+same session name; and the session's tmux start directory is inside the removed
 worktree. A worktree session no registered project accounts for qualifies when
 its own start directory is gone, its parent is not, and its name is the one
 Sidecar derives from that directory. Anything Sidecar cannot verify is left alone.
 
 --plan and --dry-run are aliases and change nothing. A prune requires --yes; it
-re-observes git and tmux, re-reads each session's start directory immediately
-before closing it, and refuses a session that no longer matches. Closing one
+re-observes git and tmux, then immediately before each close re-checks that the
+worktree is still gone, that the session still starts where it was planned, and
+that none of its panes is working in a directory that exists (an agent follows a
+moved worktree), and closes the session by its tmux id. A session that fails a
+check is left alone and reported as changed. --session narrows the prune to named
+sessions after reviewing a plan. Closing one
 also closes the managed shells rooted in its worktree and moves their records to
 tombstones, exactly as `worktree delete` does, so `sidecar shell restore` can
 put a record back. Only sessions are closed, on this process's tmux server; git
@@ -3873,12 +3878,13 @@ only narrows which orphans are reported and closed, and excludes sessions no
 project accounts for.
 
 ```
-Usage: sidecar worktree prune-sessions [--project NAME] [--plan|--dry-run | --yes] [--json]
+Usage: sidecar worktree prune-sessions [--project NAME] [--session NAME]... [--plan|--dry-run | --yes] [--json]
 ```
 
 **Options:**
 
 - `--project NAME`: Only this project's orphans (slug, basename, or path)
+- `--session NAME`: Only this orphaned session (repeatable)
 - `--plan`: List orphaned sessions without changing anything
 - `--dry-run`: Alias for --plan
 - `--yes`: Close the orphaned sessions (required unless planning)
