@@ -1,76 +1,13 @@
 # Sidecar overlay for grok.
 #
-# Five rules. Four of them are about the same thing: Grok's OSC title and its
-# footer can disagree, and upstream settles that disagreement in favour of the
-# title. A fifth rule, `sidecar.allow_prompt_blocked`, is deleted rather than
-# carried: a live Grok Build 1.0.13 capture showed it was written for a screen no
-# Grok release paints, and that upstream's own blockers reach both of the real
-# permission prompts. `permission_hints_blocked` (1190) is the one upstream
-# blocker that misses 1.0.13 — it wants `ctrl+o:yolo` where the footer writes
-# `Ctrl+o:always-approve` — and the three that hit make that harmless. See the
-# reference document's "What the Grok capture measured".
-#
-# Upstream's grok.toml says so in its own header comment — the title is the
-# primary signal and the screen rules exist for older Grok Build releases — and
-# it states it as priorities: `osc_title_idle` is 1100 and `osc_title_working` is
-# 1000, where `spinner_status_working` is 200 and `prompt_hints_idle` is 100. On
-# Herdr's input that is right, because Herdr reads a decoded OSC 0 payload the
-# moment the program writes it.
-#
-# Sidecar reads tmux's `#{pane_title}`, which is the same string one repaint
-# later, and Sidecar observed both directions of the lag on live Grok 1.0:
-# a braille frame left in the title after the turn ended (false working), and
-# the pane's own footer is what said so. The two footer rules below put the
-# footer above the title in both directions, which is the rule the deleted Go
-# probe encoded by evaluating footer chrome before any title decision.
-#
-# The other two carry screens upstream has no rule for at all: a parked main
-# turn whose subagents are still running, and the startup/resume overlay.
-#
-# The priority ladder, upstream's numbers included:
-#
-#   1300  osc_title_blocked                     (upstream)
-#   1200  option_dialog_blocked                 (upstream)
-#   1190  permission_hints_blocked              (upstream)
-#   1185  question_dialog_hints_blocked         (upstream)
-#   1180  permission_scope_selector             (upstream)
-#   1170  background_work_chip_working          (upstream)
-#   1160  sidecar.background_subagent_working   parked turn, live subagents
-#   1150  osc_progress_working                  (upstream; always empty here)
-#   1140  sidecar.overlay_retain                startup/resume overlay
-#   1120  sidecar.working_footer                Esc:cancel beats a cleared title
-#   1100  osc_title_idle                        (upstream)
-#   1050  sidecar.idle_footer                   idle footer beats a stale title
-#   1000  osc_title_working                     (upstream)
-#    ...  upstream's screen rules, unchanged
-#
-# Every upstream blocker still outranks all five, which is the invariant that
-# matters: nothing here can hide a permission prompt upstream can describe.
+# Three rules cover the startup/resume overlay and disagreements between the
+# visible footer and tmux's pane title. Herdr now recognizes the parked turn's
+# background-subagent status directly through background_status_working, which
+# outranks an idle title. Local working and idle footer rules still protect the
+# captured cases where the title has cleared early or retained a stale spinner.
+# Every upstream permission blocker outranks these local rules.
 
 id = "grok"
-
-# A main turn parked on background subagents restores an idle-*looking* title
-# and an idle-looking footer while a status row above the prompt still says the
-# work is live:
-#
-#   ○ 1 subagent still running · send a message to interrupt
-#
-# Upstream has `background_work_chip_working` for Grok's animated chip on the
-# pinned top row, and nothing for this row. Without it the pane reads idle from
-# its title and the tracker announces a completed turn while subagents are still
-# working — which is the exact false "done" this whole plan opened with.
-# testdata/grok/background_subagent.txt is the fixture and
-# TestGrokBackgroundSubagentBeatsIdleTitleAndFooter pins it.
-#
-# Priority 1160 puts it one step below upstream's own chip rule, in the same
-# tier and for the same reason: background work outranks an idle title.
-[[rules]]
-id = "sidecar.background_subagent_working"
-state = "working"
-priority = 1160
-region = "bottom_non_empty_lines(14)"
-visible_working = true
-regex = ['(?i)[1-9][0-9]*\s+subagents?\s+still\s+running|send a message to interrupt']
 
 # Grok's startup / resume overlay, which upstream has no rule for. It replaces
 # the whole pane while the title still reads "grok", so upstream alone reads it

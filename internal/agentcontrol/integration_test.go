@@ -23,17 +23,10 @@ func TestIsolatedTmuxFakeProviderSteelThread(t *testing.T) {
 	t.Cleanup(func() { _ = exec.Command("tmux", "kill-session", "-t", session).Run() })
 	terminal := NewLocalTerminal()
 	target := Target{Host: "local", Project: "fixture", Session: session, Namespace: tmuxenv.Namespace()}
-	detect := func(s Snapshot, _ *agentactivity.Tracker) AgentState {
-		status := StatusUnknown
-		latest := -1
-		for marker, candidate := range map[string]Status{"FAKE_IDLE": StatusIdle, "FAKE_WORKING": StatusWorking, "FAKE_DONE": StatusDone, "FAKE_BLOCKED": StatusBlocked} {
-			if at := strings.LastIndex(s.Screen, marker); at > latest {
-				latest = at
-				status = candidate
-			}
-		}
-		return AgentState{Kind: "fake", Status: status, Freshness: "current", Evidence: "fake.screen", CapturedAt: s.CapturedAt}
-	}
+	// Do not identify the provider until its first marker appears. Claiming
+	// Kind=fake while the launch line is only echoed makes Start interpret the
+	// next shell snapshot as a provider that exited, bypassing StartGrace.
+	detect := fakeProviderDetect
 	// This fake provider runs as `sh`, so its pane keeps reporting an
 	// interactive shell for the agent's whole life — the one shape shellReady
 	// cannot distinguish from a pane where nothing started. With the default

@@ -84,7 +84,7 @@ func TestStartPinsTargetAndReturnsOnlyAtPositiveReady(t *testing.T) {
 	}
 }
 
-func TestGetReportsKnownLiveFallbackAsInferredIdle(t *testing.T) {
+func TestGetReportsUnclassifiedCodexAsUnknown(t *testing.T) {
 	snapshot := pinnedSnapshot("stable composer without an explicit prompt marker")
 	snapshot.CurrentCommand = "node"
 	snapshot.ProcessIdentity = "codex"
@@ -94,8 +94,8 @@ func TestGetReportsKnownLiveFallbackAsInferredIdle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Agent.Kind != "codex" || got.Agent.Status != StatusIdle || !got.Agent.InteractiveReady || got.Agent.Evidence != "codex.known-live-fallback" {
-		t.Fatalf("Get() = %+v, want positively identified inferred idle Codex", got)
+	if got.Agent.Kind != "codex" || got.Agent.Status != StatusUnknown || got.Agent.InteractiveReady || got.Agent.Evidence != "codex_state_ambiguous" {
+		t.Fatalf("Get() = %+v, want identified but unclassified Codex without interactive readiness", got)
 	}
 }
 

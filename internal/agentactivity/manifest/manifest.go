@@ -33,9 +33,13 @@ import (
 const EngineVersion = 3
 
 // DefaultKnownAgentIdleFallback is the reason Herdr records when a known agent
-// matches no rule. Kept here so the evaluator and the explain record agree on
-// the exact string Herdr emits.
+// other than Codex matches no rule. Kept here so the evaluator and explain
+// record agree on the exact string Herdr emits.
 const DefaultKnownAgentIdleFallback = "default_known_agent_idle_fallback"
+
+// CodexStateAmbiguous is Herdr's no-match reason for Codex: a static title or
+// absence of a working marker does not establish that a Codex turn is idle.
+const CodexStateAmbiguous = "codex_state_ambiguous"
 
 // DefaultRegion is the region a rule uses when it declares none.
 const DefaultRegion = "whole_recent"

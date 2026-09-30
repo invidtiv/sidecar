@@ -143,12 +143,9 @@ func TestExplainFileTextOutputFollowsHerdrsLayout(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d (stderr: %s)", code, errOut)
 	}
-	// The rule is "none" and the state idle from the fallback: the Sidecar
-	// overlay disables upstream's `osc_title_idle`, whose whole matcher is `\S`
-	// on the title, because tmux seeds `#{pane_title}` and would make every
-	// unmatched Codex screen an explicit idle. `quiet` carries no composer, so
-	// nothing matches. See manifests/sidecar/codex.toml.
-	for _, want := range []string{"agent: codex", "state: idle", "manifest: bundled codex ", "rule: none", "fallback_reason: default_known_agent_idle_fallback", "evaluated_rules:"} {
+	// A plain tmux title and unmatched screen do not prove Codex is idle.
+	// The public explanation must preserve the engine's ambiguous fallback.
+	for _, want := range []string{"agent: codex", "state: unknown", "manifest: bundled codex ", "rule: none", "fallback_reason: codex_state_ambiguous", "evaluated_rules:"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("output is missing %q:\n%s", want, out)
 		}

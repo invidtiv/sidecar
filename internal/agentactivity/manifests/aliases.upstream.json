@@ -17,6 +17,7 @@
       "claude-code"
     ],
     "cline": [
+      ".cline",
       "cline"
     ],
     "codex": [
@@ -63,6 +64,11 @@
     "kiro": [
       "kiro",
       "kiro-cli"
+    ],
+    "letta": [
+      "letta",
+      "letta code",
+      "letta-code"
     ],
     "maki": [
       "maki"

@@ -322,7 +322,7 @@ func TestTheSidecarOverlayMergesOntoAFetchedManifest(t *testing.T) {
 }
 
 // codexWithRenamedRule is a served codex manifest that the Sidecar overlay
-// cannot merge onto: codex's overlay disables upstream's `osc_title_idle`, and a
+// cannot merge onto: codex's overlay replaces upstream's `weak_blocker`, and a
 // served file with no such rule is exactly what a rename upstream looks like.
 const codexWithRenamedRule = `
 id = "codex"
@@ -330,8 +330,8 @@ version = "9999.01.01.1"
 min_engine_version = 1
 
 [[rules]]
-id = "renamed_idle"
-state = "idle"
+id = "renamed_weak_blocker"
+state = "blocked"
 priority = 100
 region = "whole_recent"
 contains = ["fetched codex marker"]
@@ -341,15 +341,9 @@ contains = ["fetched codex marker"]
 // maintainer has to be told about: upstream renamed a rule the overlay replaces,
 // so the merge refuses.
 //
-// This test used to pin the opposite answer -- cache the file, drop the overlay,
-// run the fetched file alone -- and that was wrong. codex's overlay carries six
-// rules, cursor's four, claude's five, including the `osc_title_idle` disable,
-// the `weak_blocker` replacement and the `\p{Alphabetic}` RE2 rewrites. Running
-// a newer upstream file with all of that stripped out is a detection regression
-// bought with a version bump, and it would have arrived silently on the day
-// upstream renamed one rule id. Known-good detection wins: the file is not
-// cached, the status file names the agent and the merge error, and re-cutting
-// the overlay is what makes the next check take it.
+// Sidecar overlays carry local rules and RE2 rewrites. Running a newer file
+// without them would silently lose detection. Keep the known-good manifest,
+// report the merge error, and require the overlay to be reconciled first.
 func TestAFetchedManifestTheOverlayCannotMergeOntoIsNotCached(t *testing.T) {
 	remoteState(t)
 	server := newCatalogServer(t, map[string]string{
@@ -367,6 +361,9 @@ func TestAFetchedManifestTheOverlayCannotMergeOntoIsNotCached(t *testing.T) {
 	}
 	if !strings.Contains(status.LastError, "overlay no longer fits") {
 		t.Fatalf("codex error does not say the overlay stopped fitting: %q", status.LastError)
+	}
+	if !strings.Contains(status.LastError, "weak_blocker") {
+		t.Fatalf("codex error does not identify the missing replacement target: %q", status.LastError)
 	}
 	if _, err := os.Stat(RemoteCachePath("codex")); err == nil {
 		t.Fatal("a manifest the overlay cannot merge onto was written to the cache")
@@ -411,6 +408,9 @@ func TestACachedManifestTheOverlayCannotMergeOntoFallsBackToVendored(t *testing.
 	if !strings.Contains(source.Diagnostic, "overlay no longer fits") ||
 		!strings.Contains(source.Diagnostic, RemoteCachePath("codex")) {
 		t.Fatalf("diagnostic does not name the cached file and the reason: %q", source.Diagnostic)
+	}
+	if !strings.Contains(source.Diagnostic, "weak_blocker") {
+		t.Fatalf("fallback does not identify the missing replacement target: %q", source.Diagnostic)
 	}
 	if compiled.Evaluate(manifest.Input{Screen: "fetched codex marker\n"}).MatchedRule != nil {
 		t.Fatal("the abandoned cached manifest still classified a screen")

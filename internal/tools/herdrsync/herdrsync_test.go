@@ -171,11 +171,29 @@ func TestSyncPinsTheAttributionFiles(t *testing.T) {
 // TestSyncReproducesTheCommittedSourceChoices is the plan's "published-versus-
 // bundled choice recorded in the lock matches what the tool decides" check.
 func TestSyncReproducesTheCommittedSourceChoices(t *testing.T) {
-	_, fresh, _ := syncIntoTemp(t)
 	committed, err := manifests.LoadLock()
 	if err != nil {
 		t.Fatalf("LoadLock: %v", err)
 	}
+	if committed.Herdr.Commit == "" {
+		t.Fatal("the committed lock has no source commit to replay")
+	}
+	source := herdrSource(t)
+	if _, err := newDirSource(source, committed.Herdr.Commit); err != nil {
+		t.Skipf("local Herdr checkout cannot replay committed pin %s: %v", committed.Herdr.Commit, err)
+	}
+	// Historical fixture tests remain pinned to their original source. This
+	// round trip instead follows the moving committed lock, reading all source
+	// and distribution bytes at that exact commit without fetching upstream.
+	report, err := sync(options{
+		ref: committed.Herdr.Commit, releaseTag: committed.Herdr.PinnedReleaseTag,
+		catalogURL: defaultCatalogURL, sourceDir: source, offline: true,
+		out: t.TempDir(), integrationOut: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("replay committed source pin: %v", err)
+	}
+	fresh := report.Lock
 	if len(fresh.Agents) != len(committed.Agents) {
 		t.Fatalf("fresh sync produced %d agents, the committed lock has %d",
 			len(fresh.Agents), len(committed.Agents))
@@ -197,14 +215,7 @@ func TestSyncReproducesTheCommittedSourceChoices(t *testing.T) {
 			t.Errorf("%s: fresh sync version %s, committed %s", agent.ID, agent.Version, want.Version)
 		}
 	}
-	// The two documented exceptions, asserted by name so a change upstream is
-	// a review conversation rather than a silent flip.
-	if grok, ok := fresh.Agent("grok"); !ok || grok.Source != manifests.SourceBundled {
-		t.Errorf("grok source = %+v, want bundled (published 2026.07.16.1 is older than bundled 2026.07.16.2)", grok)
-	}
-	if muse, ok := fresh.Agent("muse"); !ok || muse.Source != manifests.SourceBundled || muse.PublishedVersion != "" {
-		t.Errorf("muse source = %+v, want bundled only (it is not in the published catalog)", muse)
-	}
+
 }
 
 // TestDirSourceReadsBytesFromTheRequestedRef is the guard for the bug where the

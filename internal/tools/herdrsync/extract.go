@@ -182,6 +182,7 @@ var authorityDisplayNames = map[string]string{
 	"Hermes Agent":       "hermes",
 	"Qoder CLI":          "qodercli",
 	"Qwen Code":          "qwen",
+	"Letta Code":         "letta",
 	"Droid":              "droid",
 	"OpenCode":           "opencode",
 	"Kilo Code CLI":      "kilo",
@@ -204,7 +205,7 @@ var authorityDisplayNames = map[string]string{
 var assetDirAgent = map[string]string{"antigravity_cli": "agy"}
 
 var (
-	authorityRowRE = regexp.MustCompile(`(?m)^\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*$`)
+	authorityRowRE = regexp.MustCompile(`^\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|\s*$`)
 	// "Detected but less thoroughly tested: Gemini CLI and Cline."
 	lessTestedRE       = regexp.MustCompile(`Detected but less thoroughly tested:\s*([^.]+)\.`)
 	integrationVersion = regexp.MustCompile(`HERDR_INTEGRATION_VERSION=(\d+)`)
@@ -252,32 +253,79 @@ func extractAuthority(src source, ref string, assets []integrationAssetDir) (*ma
 	}, nil
 }
 
+// parseAuthorityTable supports the original authority table and its replacement
+// integration table. Recognize the header first: treating an integration name as
+// authority prose would silently downgrade every provider to "none".
 func parseAuthorityTable(content string) (map[string]manifests.AuthorityAgent, error) {
 	agents := map[string]manifests.AuthorityAgent{}
-	for _, row := range authorityRowRE.FindAllStringSubmatch(content, -1) {
-		name := strings.TrimSpace(row[1])
-		stateAuthority := strings.TrimSpace(row[2])
-		role := strings.TrimSpace(row[3])
-		if name == "Agent" || strings.HasPrefix(name, "---") {
+	format := ""
+	inTable := false
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "|") {
+			inTable = false
+			continue
+		}
+		row := authorityRowRE.FindStringSubmatch(line)
+		if row == nil {
+			return nil, fmt.Errorf("malformed agents.mdx table row %q; expected three columns", line)
+		}
+		name, second, third := strings.TrimSpace(row[1]), strings.TrimSpace(row[2]), strings.TrimSpace(row[3])
+		if name == "Agent" {
+			if format != "" {
+				return nil, fmt.Errorf("multiple agents.mdx agent tables; the doc shape changed")
+			}
+			switch {
+			case second == "State authority" && third == "Integration role":
+				format = "authority"
+			case second == "Integration" && third == "Notes":
+				format = "integration"
+			default:
+				return nil, fmt.Errorf("unknown agents.mdx table columns %q and %q", second, third)
+			}
+			inTable = true
+			continue
+		}
+		if !inTable {
+			return nil, fmt.Errorf("agents.mdx table row %q has no recognized header", name)
+		}
+		if name == "---" && second == "---" && third == "---" {
 			continue
 		}
 		id, ok := authorityDisplayNames[name]
 		if !ok {
 			return nil, fmt.Errorf("agents.mdx lists %q, which has no agent id mapping; add it to authorityDisplayNames", name)
 		}
+		if _, exists := agents[id]; exists {
+			return nil, fmt.Errorf("agents.mdx lists %q more than once", name)
+		}
+		stateAuthority, role := second, third
+		if format == "integration" {
+			var err error
+			stateAuthority, role, err = integrationAuthority(id, second, third)
+			if err != nil {
+				return nil, fmt.Errorf("agents.mdx %s: %w", name, err)
+			}
+		} else if !knownLegacyAuthority(stateAuthority, role) {
+			return nil, fmt.Errorf("agents.mdx %s has unknown authority %q or integration role %q", name, stateAuthority, role)
+		}
 		agents[id] = manifests.AuthorityAgent{
-			DisplayName:        name,
-			LifecycleAuthority: lifecycleAuthority(stateAuthority, role),
-			StateAuthority:     stateAuthority,
-			IntegrationRole:    role,
+			DisplayName: name, LifecycleAuthority: lifecycleAuthority(stateAuthority, role),
+			StateAuthority: stateAuthority, IntegrationRole: role,
 		}
 	}
 	if len(agents) == 0 {
 		return nil, fmt.Errorf("no rows found in the agents.mdx authority table; the table shape changed")
 	}
+	if format == "integration" {
+		if err := addNativeAuthority(content, agents); err != nil {
+			return nil, err
+		}
+		return agents, nil
+	}
 
-	// The prose line after the table names the agents Herdr detects but does
-	// not list as a table row. They have a screen manifest and no integration.
+	// The legacy table keeps its less-tested agents in prose. In the new
+	// format they are ordinary table rows, so this line is no longer required.
 	match := lessTestedRE.FindStringSubmatch(content)
 	if match == nil {
 		return nil, fmt.Errorf("could not find the \"Detected but less thoroughly tested\" line; the doc shape changed")
@@ -287,17 +335,103 @@ func parseAuthorityTable(content string) (map[string]manifests.AuthorityAgent, e
 		if !ok {
 			return nil, fmt.Errorf("agents.mdx names %q as less thoroughly tested, which has no agent id mapping", name)
 		}
-		if _, exists := agents[id]; exists {
-			continue
-		}
-		agents[id] = manifests.AuthorityAgent{
-			DisplayName:        name,
-			LifecycleAuthority: manifests.AuthorityNone,
-			StateAuthority:     "screen manifest",
-			IntegrationRole:    "none",
+		if _, exists := agents[id]; !exists {
+			agents[id] = manifests.AuthorityAgent{
+				DisplayName: name, LifecycleAuthority: manifests.AuthorityNone,
+				StateAuthority: "screen manifest", IntegrationRole: "none",
+			}
 		}
 	}
 	return agents, nil
+}
+
+func knownLegacyAuthority(state, role string) bool {
+	switch state {
+	case "screen manifest":
+		return role == "session" || role == "none"
+	case "lifecycle hooks when installed; otherwise screen manifest", "lifecycle plugin when installed; otherwise screen manifest", "lifecycle hooks when installed":
+		return role == "state and session"
+	default:
+		return false
+	}
+}
+
+// Current Herdr docs say every installed integration supplies session identity;
+// only these exact notes also promise lifecycle reporting. Unknown combinations
+// fail for review rather than accidentally granting authority from loose prose.
+func integrationAuthority(id, integration, notes string) (string, string, error) {
+	if integration == "none" {
+		if notes == "state only" || notes == "state only, less tested" {
+			return "screen manifest", "none", nil
+		}
+		return "", "", fmt.Errorf("unknown notes %q for no integration", notes)
+	}
+	command := id
+	if id == "agy" {
+		command = "antigravity-cli"
+	}
+	if integration != "`"+command+"`" {
+		return "", "", fmt.Errorf("unknown integration %q for %q", integration, id)
+	}
+	switch notes {
+	case "", "CLI install only":
+		return "screen manifest", "session", nil
+	case "also reports state":
+		if id == "opencode" || id == "kilo" {
+			return "lifecycle plugin when installed; otherwise screen manifest", "state and session", nil
+		}
+		return "lifecycle hooks when installed; otherwise screen manifest", "state and session", nil
+	case "state requires the integration":
+		return "lifecycle hooks when installed", "state and session", nil
+	default:
+		return "", "", fmt.Errorf("unknown integration notes %q", notes)
+	}
+}
+
+// The native-support list is distinct from Herdr's installable integrations.
+// Retain known detector identities such as Muse, but do not invent detector IDs
+// for native-only agents. "none" means no Herdr integration, not no native state.
+func addNativeAuthority(content string, agents map[string]manifests.AuthorityAgent) error {
+	_, section, ok := strings.Cut(content, "### Supported by the agent\n")
+	if !ok {
+		return fmt.Errorf("could not find the agents.mdx native-support section; the doc shape changed")
+	}
+	section, _, _ = strings.Cut(section, "\n## ")
+	count := 0
+	for _, line := range strings.Split(section, "\n") {
+		if !strings.HasPrefix(line, "- ") {
+			continue
+		}
+		name := strings.TrimSpace(strings.TrimPrefix(line, "- "))
+		if strings.HasPrefix(name, "[") {
+			label, _, found := strings.Cut(strings.TrimPrefix(name, "["), "](")
+			if !found || !strings.HasSuffix(name, ")") {
+				return fmt.Errorf("malformed native agent entry %q", name)
+			}
+			name = label
+		}
+		count++
+		id, known := authorityDisplayNames[name]
+		if !known {
+			switch name {
+			case "Crush", "Command Code", "Prime Agent":
+				continue // Native-only providers have no upstream detector ID.
+			default:
+				return fmt.Errorf("unknown native agent %q in agents.mdx", name)
+			}
+		}
+		if _, exists := agents[id]; exists {
+			return fmt.Errorf("agents.mdx lists %q as both Herdr-supported and native", name)
+		}
+		agents[id] = manifests.AuthorityAgent{
+			DisplayName: name, LifecycleAuthority: manifests.AuthorityNone,
+			StateAuthority: "agent self-report", IntegrationRole: "native state reporting",
+		}
+	}
+	if count == 0 {
+		return fmt.Errorf("no entries in the agents.mdx native-support list; the doc shape changed")
+	}
+	return nil
 }
 
 // lifecycleAuthority derives the three-valued authority from the two prose

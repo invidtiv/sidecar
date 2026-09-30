@@ -26,9 +26,10 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      statuses: write
     outputs:
       changed: ${{ steps.diff.outputs.changed }}
-      ref: ${{ steps.diff.outputs.ref }}
+      ref: ${{ steps.push.outputs.ref || steps.diff.outputs.ref }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       SYNC_BRANCH: bot/herdr-sync
@@ -95,7 +96,7 @@ jobs:
 
           if [ -n "$files" ] || [ "$locks_moved" = true ]; then
             changed=true
-            ref="$SYNC_BRANCH"
+            ref=""
           else
             changed=false
             ref="$GITHUB_SHA"
@@ -152,6 +153,7 @@ jobs:
       # current sync output. Re-running updates the existing review in place
       # rather than opening a second one.
       - name: Push the sync branch
+        id: push
         if: steps.diff.outputs.changed == 'true'
         run: |
           set -euo pipefail
@@ -172,6 +174,26 @@ jobs:
           git commit -m "chore(herdr): sync detection manifests to $tag" \
             -m "Vendored from herdr $ref by go run ./internal/tools/herdrsync."
           git push --force origin "$SYNC_BRANCH"
+          echo "ref=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish checks on the proposed commit
+        if: steps.push.outputs.ref != ''
+        env:
+          SYNC_SHA: ${{ steps.push.outputs.ref }}
+          CHECKS_OUTCOME: ${{ steps.checks.outcome }}
+          LINT_OUTCOME: ${{ steps.lint.outcome }}
+        run: |
+          set -euo pipefail
+          state=failure
+          if [ "$CHECKS_OUTCOME" = success ] && [ "$LINT_OUTCOME" = success ]; then state=success; fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$SYNC_SHA" \
+            -f state="$state" -f context="Herdr sync / Go checks" \
+            -f description="Build, tests, and lint for the proposed sync" \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$SYNC_SHA" \
+            -f state=pending -f context="Herdr sync / differential" \
+            -f description="Waiting for both differential modes" \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
 
       - name: Open or update the review
         if: steps.diff.outputs.changed == 'true'
@@ -194,6 +216,8 @@ jobs:
               echo "> [!NOTE]"
               echo "> \`go build ./...\`, \`go test ./...\` and golangci-lint passed on this tree in the [run]($run_url) that produced it. A pull request opened with \`GITHUB_TOKEN\` does not trigger \`pull_request\` workflows, so Go CI posts no separate check here."
             fi
+            echo
+            echo "The commit statuses on this pull request report Go checks and both differential modes. Wait for both to pass before merging."
             echo
             cat internal/agentactivity/manifests/report.md
             echo
@@ -219,13 +243,15 @@ jobs:
 
   differential:
     name: Differential harness against the pinned Herdr release
-    # Runs on the sync branch when there is one, so the harness judges the
-    # manifests the review actually proposes; on the workflow's own commit
-    # otherwise. !cancelled() rather than success() because a sync that failed
-    # its Go suite still pushed a branch worth judging.
+    # Judge only the exact successfully published commit, or the workflow
+    # commit when nothing changed. An import/push failure publishes no ref;
+    # never fall back to a stale bot branch and report that as fresh evidence.
     needs: sync
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && needs.sync.outputs.ref != '' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      statuses: write
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       HERDR_REPO: herdrdev/herdr
@@ -233,7 +259,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          ref: ${{ needs.sync.outputs.ref || github.sha }}
+          ref: ${{ needs.sync.outputs.ref }}
 
       - name: Set up Go
         uses: actions/setup-go@v7
@@ -294,6 +320,20 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           done
 
+      - name: Publish differential status on the proposed commit
+        if: always() && needs.sync.outputs.changed == 'true'
+        env:
+          SYNC_SHA: ${{ needs.sync.outputs.ref }}
+          RESULT: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          state=failure
+          if [ "$RESULT" = success ]; then state=success; fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$SYNC_SHA" \
+            -f state="$state" -f context="Herdr sync / differential" \
+            -f description="Both differential modes: $RESULT" \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+
   staleness:
     name: Staleness of the committed lock
     # Deliberately after sync and deliberately not conditional on it passing.
@@ -330,18 +370,13 @@ jobs:
         run: |
           set -euo pipefail
           out=$(mktemp -d)
-          args=(-out "$out")
-          # The integration-asset half of the sync writes to a second root.
-          # Redirect that to a throwaway directory too when the tool has the
-          # flag, so this run cannot write into the checkout at all; asking the
-          # tool's own usage keeps this correct either side of that landing.
-          if go run ./internal/tools/herdrsync -h 2>&1 | grep -q -- '-integration-out'; then
-            args+=(-integration-out "$(mktemp -d)")
-          fi
+          args=(-out "$out" -integration-out "$(mktemp -d)")
           echo "HERDR_FRESH_LOCK=$out/upstream.lock.json" >> "$GITHUB_ENV"
           go run ./internal/tools/herdrsync "${args[@]}" > /dev/null
 
       - name: Compare against the committed lock
+        env:
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
           stale=$(./scripts/herdr-staleness.sh \
@@ -355,7 +390,7 @@ jobs:
             exit 0
           fi
 
-          open=$(gh pr list --head "$SYNC_BRANCH" --state open --json number --jq '.[0].number // empty')
+          review=$(gh pr list --head "$SYNC_BRANCH" --base "$BASE_BRANCH" --state open --json number,headRefOid --jq '.[0] // empty')
           {
             echo "### Stale vendored manifests"
             echo
@@ -364,13 +399,22 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-          if [ -n "$open" ]; then
-            echo "$stale"
-            echo "sync pull request #$open is open and carries these bumps; not stale"
-            exit 0
+          if [ -n "$review" ]; then
+            number=$(jq -r .number <<< "$review")
+            sha=$(jq -r .headRefOid <<< "$review")
+            proposed="$RUNNER_TEMP/proposed-herdr-lock.json"
+            gh api "repos/$GITHUB_REPOSITORY/contents/internal/agentactivity/manifests/upstream.lock.json?ref=$sha" \
+              --jq .content | base64 --decode > "$proposed"
+            missing=$(./scripts/herdr-staleness.sh "$HERDR_FRESH_LOCK" "$proposed" "$MAX_AGE_DAYS")
+            if [ -z "$missing" ]; then
+              echo "sync pull request #$number actually carries the stale bumps; awaiting review"
+              exit 0
+            fi
+            echo "Open sync pull request #$number does not carry these stale bumps:" >&2
+            echo "$missing" >&2
           fi
 
           echo "$stale" >&2
           echo >&2
-          echo "upstream has been ahead of the committed lock for more than $MAX_AGE_DAYS days with no open $SYNC_BRANCH pull request, so the sync is not landing; run scripts/sync-herdr.sh and read the report" >&2
+          echo "upstream has been ahead of the committed lock for more than $MAX_AGE_DAYS days without a $SYNC_BRANCH pull request carrying the bumps, so the sync is not landing; run scripts/sync-herdr.sh and read the report" >&2
           exit 1

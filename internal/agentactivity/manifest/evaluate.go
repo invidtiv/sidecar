@@ -23,7 +23,7 @@ type Verdict struct {
 	// SkippedUpdateReason is Herdr's "matched_rule:<id>" when the matched rule
 	// carries skip_state_update, and empty otherwise.
 	SkippedUpdateReason string
-	// FallbackReason is DefaultKnownAgentIdleFallback when no rule matched.
+	// FallbackReason identifies the agent-specific outcome when no rule matched.
 	FallbackReason string
 }
 
@@ -190,6 +190,17 @@ func (c *Compiled) evaluate(in Input, explain bool) (Verdict, *Explain) {
 
 	if winner == nil {
 		verdict := Verdict{State: StateIdle, FallbackReason: DefaultKnownAgentIdleFallback}
+		// Herdr's fallback_explain at 331775c3 does not assume Codex is idle
+		// without a matching rule. Use the requested agent even when a local
+		// override declares another id; direct manifest callers can omit it.
+		agent := in.Agent
+		if agent == "" {
+			agent = c.Manifest.ID
+		}
+		if agent == "codex" {
+			verdict.State = StateUnknown
+			verdict.FallbackReason = CodexStateAmbiguous
+		}
 		return verdict, c.explainRecord(in.Agent, verdict, evaluated, explain)
 	}
 
