@@ -1,21 +1,21 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-09-02T14:03:03Z",
+  "generated_at": "2026-09-30T14:15:06Z",
   "engine_version": 3,
   "herdr": {
     "repository": "https://github.com/herdrdev/herdr",
     "ref": "master",
-    "commit": "d08e44686d8b19bd9555cc99ec9068d9fde05f16",
-    "pinned_release_tag": "preview-2026-08-31-b1ff4582e968"
+    "commit": "331775c3e51e8cca4d122468180738101bd9e6b0",
+    "pinned_release_tag": "v0.9.3"
   },
   "catalog": {
     "url": "https://herdr.dev/agent-detection/index.toml",
-    "etag": "W/\"d78b183cb570f3f343ba80777bbf579d\"",
+    "etag": "W/\"e73307bc29c98eec95cac5cf610317c7\"",
     "fetched": true,
     "source": "https://herdr.dev/agent-detection/index.toml",
     "schema_version": 1,
     "path": "upstream/index.toml",
-    "sha256": "22daa84a074bee7caf0c8316ecd8d237df7abae910351c02eb1577e68c9fc77f"
+    "sha256": "c6b1e5f23b8db083710f83d91389a852aad1d420d651c833b59361d57a65fbc1"
   },
   "agents": [
     {
@@ -64,16 +64,16 @@
     {
       "id": "claude",
       "path": "upstream/claude.toml",
-      "sha256": "4863ad6d3486749189e53ddd1bf1f77a9b080c4a45f42c3417f0dd23222ac124",
-      "bytes": 6325,
-      "version": "2026.08.29.1",
+      "sha256": "038d0aa23fee3f9b39cb3c9ca117d0f95b0b3a5873cf0f38284ccbac279c9664",
+      "bytes": 6726,
+      "version": "2026.09.11.1",
       "min_engine_version": 2,
-      "updated_at": "2026-08-29T00:00:00Z",
-      "rule_count": 17,
+      "updated_at": "2026-09-11T00:00:00Z",
+      "rule_count": 16,
       "source": "published",
-      "source_reason": "published and bundled are both 2026.08.29.1; a Herdr client prefers the remote copy",
-      "bundled_version": "2026.08.29.1",
-      "published_version": "2026.08.29.1",
+      "source_reason": "published and bundled are both 2026.09.11.1; a Herdr client prefers the remote copy",
+      "bundled_version": "2026.09.11.1",
+      "published_version": "2026.09.11.1",
       "aliases": [
         "claude-code"
       ]
@@ -81,31 +81,31 @@
     {
       "id": "cline",
       "path": "upstream/cline.toml",
-      "sha256": "577e2f1bd115a6ed3b5c38c661af175386fcdba269f7cd7447bf16d7c72521f0",
-      "bytes": 644,
-      "version": "2026.06.10.1",
+      "sha256": "75fe33ec735c59638da8d62e16bddd257d9959e692edb83b1f11b7f28057866a",
+      "bytes": 1527,
+      "version": "2026.09.11.1",
       "min_engine_version": 1,
-      "updated_at": "2026-06-10T00:00:00Z",
-      "rule_count": 2,
+      "updated_at": "2026-09-11T00:00:00Z",
+      "rule_count": 6,
       "source": "published",
-      "source_reason": "published and bundled are both 2026.06.10.1; a Herdr client prefers the remote copy",
-      "bundled_version": "2026.06.10.1",
-      "published_version": "2026.06.10.1",
+      "source_reason": "published and bundled are both 2026.09.11.1; a Herdr client prefers the remote copy",
+      "bundled_version": "2026.09.11.1",
+      "published_version": "2026.09.11.1",
       "aliases": []
     },
     {
       "id": "codex",
       "path": "upstream/codex.toml",
-      "sha256": "1098233b6440bcfcfbf1b5ef93cb0356e96ad3f89ef8b25a217c0d47c0a8d373",
-      "bytes": 2192,
-      "version": "2026.08.28.1",
+      "sha256": "aba3d44a0f7177d5dd9fd60002a8efd11ef6e1a589bb3992c02563ed3e0de5e0",
+      "bytes": 3309,
+      "version": "2026.09.23.1",
       "min_engine_version": 3,
-      "updated_at": "2026-08-28T00:00:00Z",
+      "updated_at": "2026-09-23T22:12:00Z",
       "rule_count": 8,
       "source": "published",
-      "source_reason": "published and bundled are both 2026.08.28.1; a Herdr client prefers the remote copy",
-      "bundled_version": "2026.08.28.1",
-      "published_version": "2026.08.28.1",
+      "source_reason": "published and bundled are both 2026.09.23.1; a Herdr client prefers the remote copy",
+      "bundled_version": "2026.09.23.1",
+      "published_version": "2026.09.23.1",
       "aliases": []
     },
     {
@@ -202,16 +202,16 @@
     {
       "id": "grok",
       "path": "upstream/grok.toml",
-      "sha256": "618afc3d09d784343fc6c4bcee5801906df2c0fd62a65b447cf5f4b1bd215bb2",
-      "bytes": 4729,
-      "version": "2026.07.16.2",
+      "sha256": "4298dd2ea7d124f3ba5d72b649bbb4fb6edc533d7e6e546d523a8214fa31456d",
+      "bytes": 5401,
+      "version": "2026.09.18.2",
       "min_engine_version": 3,
-      "updated_at": "2026-07-16T00:00:00Z",
-      "rule_count": 14,
+      "updated_at": "2026-09-18T00:00:00Z",
+      "rule_count": 15,
       "source": "bundled",
-      "source_reason": "bundled 2026.07.16.2 is newer than published 2026.07.16.1; a Herdr client ignores the older remote copy",
-      "bundled_version": "2026.07.16.2",
-      "published_version": "2026.07.16.1",
+      "source_reason": "bundled 2026.09.18.2 is newer than published 2026.09.18.1; a Herdr client ignores the older remote copy",
+      "bundled_version": "2026.09.18.2",
+      "published_version": "2026.09.18.1",
       "aliases": [
         "grok-build"
       ]
@@ -273,26 +273,36 @@
     {
       "id": "kiro",
       "path": "upstream/kiro.toml",
-      "sha256": "2b56fc18c478e2730acd9f8cbfecb69a2496258f8f20ef157813b09fa74c6e37",
-      "bytes": 1447,
-      "version": "2026.08.01.1",
-      "min_engine_version": 1,
-      "updated_at": "2026-08-01T00:00:00Z",
-      "rule_count": 5,
+      "sha256": "c8990f3c9d4810995be97e8df29836411e37d90f6ac9d9303f505787b504806b",
+      "bytes": 2861,
+      "version": "2026.09.19.1",
+      "min_engine_version": 2,
+      "updated_at": "2026-09-19T00:00:00Z",
+      "rule_count": 8,
       "source": "published",
-      "source_reason": "published and bundled are both 2026.08.01.1; a Herdr client prefers the remote copy",
-      "bundled_version": "2026.08.01.1",
-      "published_version": "2026.08.01.1",
+      "source_reason": "published and bundled are both 2026.09.19.1; a Herdr client prefers the remote copy",
+      "bundled_version": "2026.09.19.1",
+      "published_version": "2026.09.19.1",
       "aliases": [
         "kiro-cli"
-      ],
-      "regex_incompatibilities": [
-        {
-          "rule_id": "tool_spinner_working",
-          "field": "line_regex",
-          "pattern": "^\\s*(◔|◑|◕|●)\\s+\\p{Alphabetic}",
-          "error": "error parsing regexp: invalid character class range: `\\p{Alphabetic}`"
-        }
+      ]
+    },
+    {
+      "id": "letta",
+      "path": "upstream/letta.toml",
+      "sha256": "205b8c135584c86f9f529aa2d061109b5129085cc5c3124c6dbfe0e78fcdba43",
+      "bytes": 2328,
+      "version": "2026.08.24.1",
+      "min_engine_version": 3,
+      "updated_at": "2026-08-24T00:00:00Z",
+      "rule_count": 10,
+      "source": "published",
+      "source_reason": "published and bundled are both 2026.08.24.1; a Herdr client prefers the remote copy",
+      "bundled_version": "2026.08.24.1",
+      "published_version": "2026.08.24.1",
+      "aliases": [
+        "letta-code",
+        "letta code"
       ]
     },
     {
@@ -319,9 +329,10 @@
       "min_engine_version": 2,
       "updated_at": "2026-08-26T00:00:00Z",
       "rule_count": 7,
-      "source": "bundled",
-      "source_reason": "bundled only; the published catalog does not list this agent",
+      "source": "published",
+      "source_reason": "published and bundled are both 2026.08.26.1; a Herdr client prefers the remote copy",
       "bundled_version": "2026.08.26.1",
+      "published_version": "2026.08.26.1",
       "aliases": [
         "muse-code",
         "muse-cli"
@@ -348,16 +359,16 @@
     {
       "id": "pi",
       "path": "upstream/pi.toml",
-      "sha256": "d852f52d637040fad207a395928dc190d99d24b6c72d6e1b7fbbf4487a416e40",
-      "bytes": 257,
-      "version": "2026.06.10.1",
+      "sha256": "57469b82e4239bf93559ed5d400c9d9f86a9e64d5def728b7d4bb398be7659ca",
+      "bytes": 456,
+      "version": "2026.09.14.1",
       "min_engine_version": 1,
-      "updated_at": "2026-06-10T00:00:00Z",
-      "rule_count": 1,
+      "updated_at": "2026-09-14T00:00:00Z",
+      "rule_count": 2,
       "source": "published",
-      "source_reason": "published and bundled are both 2026.06.10.1; a Herdr client prefers the remote copy",
-      "bundled_version": "2026.06.10.1",
-      "published_version": "2026.06.10.1",
+      "source_reason": "published and bundled are both 2026.09.14.1; a Herdr client prefers the remote copy",
+      "bundled_version": "2026.09.14.1",
+      "published_version": "2026.09.14.1",
       "aliases": [
         "herdr:pi"
       ]
@@ -417,7 +428,7 @@
     },
     {
       "path": "upstream/NOTICE",
-      "sha256": "af54c28395c85bbf94f976360c3bcf92cec9aaf665572bfd82d8a6bc4a132e1e",
+      "sha256": "e4e30c2d5cc1cc37af083c17e837437d889de84bff42f7c2747c2c178a0694f1",
       "bytes": 1192,
       "origin": "generated by internal/tools/herdrsync"
     }

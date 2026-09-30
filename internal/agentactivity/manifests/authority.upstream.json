@@ -25,7 +25,7 @@
       "lifecycle_authority": "session_identity",
       "state_authority": "screen manifest",
       "integration_role": "session",
-      "integration_version": 9,
+      "integration_version": 10,
       "integration_asset_dir": "claude"
     },
     "cline": {
@@ -39,7 +39,7 @@
       "lifecycle_authority": "session_identity",
       "state_authority": "screen manifest",
       "integration_role": "session",
-      "integration_version": 8,
+      "integration_version": 9,
       "integration_asset_dir": "codex"
     },
     "copilot": {
@@ -85,7 +85,7 @@
       "lifecycle_authority": "session_identity",
       "state_authority": "screen manifest",
       "integration_role": "session",
-      "integration_version": 1,
+      "integration_version": 2,
       "integration_asset_dir": "grok"
     },
     "hermes": {
@@ -118,6 +118,14 @@
       "state_authority": "screen manifest",
       "integration_role": "none"
     },
+    "letta": {
+      "display_name": "Letta Code",
+      "lifecycle_authority": "session_identity",
+      "state_authority": "screen manifest",
+      "integration_role": "session",
+      "integration_version": 1,
+      "integration_asset_dir": "letta"
+    },
     "maki": {
       "display_name": "Maki",
       "lifecycle_authority": "none",
@@ -135,15 +143,15 @@
     "muse": {
       "display_name": "Muse",
       "lifecycle_authority": "none",
-      "state_authority": "screen manifest",
-      "integration_role": "none"
+      "state_authority": "agent self-report",
+      "integration_role": "native state reporting"
     },
     "omp": {
       "display_name": "OMP",
       "lifecycle_authority": "hooks",
       "state_authority": "lifecycle hooks when installed",
       "integration_role": "state and session",
-      "integration_version": 9,
+      "integration_version": 10,
       "integration_asset_dir": "omp"
     },
     "opencode": {
@@ -151,7 +159,7 @@
       "lifecycle_authority": "hooks",
       "state_authority": "lifecycle plugin when installed; otherwise screen manifest",
       "integration_role": "state and session",
-      "integration_version": 10,
+      "integration_version": 13,
       "integration_asset_dir": "opencode"
     },
     "pi": {
@@ -159,7 +167,7 @@
       "lifecycle_authority": "hooks",
       "state_authority": "lifecycle hooks when installed; otherwise screen manifest",
       "integration_role": "state and session",
-      "integration_version": 8,
+      "integration_version": 9,
       "integration_asset_dir": "pi"
     },
     "qodercli": {

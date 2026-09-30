@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-09-02T14:03:03Z",
+  "generated_at": "2026-09-30T14:15:06Z",
   "herdr": {
     "repository": "https://github.com/herdrdev/herdr",
     "ref": "master",
-    "commit": "d08e44686d8b19bd9555cc99ec9068d9fde05f16",
+    "commit": "331775c3e51e8cca4d122468180738101bd9e6b0",
     "assets_dir": "src/integration/assets"
   },
   "providers": [
@@ -32,42 +32,42 @@
     {
       "id": "claude",
       "directory": "claude",
-      "version": 9,
+      "version": 10,
       "files": [
         {
           "path": "upstream/claude/herdr-agent-state.ps1",
           "origin": "src/integration/assets/claude/herdr-agent-state.ps1",
-          "sha256": "6db8bf92db45a3c5aa67994c1fb665231339e1dc3b08c28239c246c0874ebaaa",
-          "bytes": 1937,
-          "version": 9
+          "sha256": "37faa01a19a1aec4a5dbed4110f9aea4beddd15a195a2b36f8b9d9d5cb27f26e",
+          "bytes": 1938,
+          "version": 10
         },
         {
           "path": "upstream/claude/herdr-agent-state.sh",
           "origin": "src/integration/assets/claude/herdr-agent-state.sh",
-          "sha256": "a61bbe2619a316669406316de260c13b6c1ae525dafd6f4f4956e26646268105",
-          "bytes": 3069,
-          "version": 9
+          "sha256": "7f117c303ffc1a66975b76dda8189d70b718fc04af4cf7cb11449e4ee5b4ae86",
+          "bytes": 3070,
+          "version": 10
         }
       ]
     },
     {
       "id": "codex",
       "directory": "codex",
-      "version": 8,
+      "version": 9,
       "files": [
         {
           "path": "upstream/codex/herdr-agent-state.ps1",
           "origin": "src/integration/assets/codex/herdr-agent-state.ps1",
-          "sha256": "8fee2867ba1346e472157966dde74d7c5c6976a2a6e394583f03a5b9df690f4a",
-          "bytes": 1636,
-          "version": 8
+          "sha256": "b7c0ed2a75ede8bc61c2cf25317e0b24ad565771bb1330bf7368364f317e2ac4",
+          "bytes": 1921,
+          "version": 9
         },
         {
           "path": "upstream/codex/herdr-agent-state.sh",
           "origin": "src/integration/assets/codex/herdr-agent-state.sh",
-          "sha256": "38a90a2a99872d06dcbc978e7613406cdd852dbb07503abd7a113f518d5951f3",
-          "bytes": 2965,
-          "version": 8
+          "sha256": "65da7b36af8e62b0e15f56efe23958ff5ce995fda9cefb1359224a9b283aa249",
+          "bytes": 3267,
+          "version": 9
         }
       ]
     },
@@ -158,21 +158,21 @@
     {
       "id": "grok",
       "directory": "grok",
-      "version": 1,
+      "version": 2,
       "files": [
         {
           "path": "upstream/grok/herdr-agent-state.ps1",
           "origin": "src/integration/assets/grok/herdr-agent-state.ps1",
-          "sha256": "f5868cb925780899a912f06e38c5000cca913627556816d4d9b2f8f73e8bda3b",
-          "bytes": 1547,
-          "version": 1
+          "sha256": "ef97720e9001d0d257c241a51693df3ffb4b59f051e51c480957478d1a14328f",
+          "bytes": 1883,
+          "version": 2
         },
         {
           "path": "upstream/grok/herdr-agent-state.sh",
           "origin": "src/integration/assets/grok/herdr-agent-state.sh",
-          "sha256": "a5c66f3117037341df12e59fbefc5ff9869e092f8766dedf0500629e24006def",
-          "bytes": 2851,
-          "version": 1
+          "sha256": "2894f173ca798e448a70467fdf8513e6f4c40355f41d411bbe7d32b234d43857",
+          "bytes": 2970,
+          "version": 2
         }
       ]
     },
@@ -232,6 +232,27 @@
       ]
     },
     {
+      "id": "letta",
+      "directory": "letta",
+      "version": 1,
+      "files": [
+        {
+          "path": "upstream/letta/herdr-agent-session.ps1",
+          "origin": "src/integration/assets/letta/herdr-agent-session.ps1",
+          "sha256": "493c743eeb869bfd94c30ba9c216074a30fd4ae30a04aa2808f5d5201d3dda75",
+          "bytes": 1791,
+          "version": 1
+        },
+        {
+          "path": "upstream/letta/herdr-agent-session.sh",
+          "origin": "src/integration/assets/letta/herdr-agent-session.sh",
+          "sha256": "f30086feedb6b771bf4fa4afc162f988f151cc1760f87b122010e7558d36acff",
+          "bytes": 1736,
+          "version": 1
+        }
+      ]
+    },
+    {
       "id": "mastracode",
       "directory": "mastracode",
       "version": 2,
@@ -255,61 +276,68 @@
     {
       "id": "omp",
       "directory": "omp",
-      "version": 9,
+      "version": 10,
       "files": [
         {
           "path": "upstream/omp/herdr-agent-state.ts",
           "origin": "src/integration/assets/omp/herdr-agent-state.ts",
-          "sha256": "4cfd1e32da1f15efba0521c52fee3ba4b23c36dc236a77aea922220fdefa024e",
-          "bytes": 12438,
-          "version": 9
+          "sha256": "e3c650752bb9c2eb8bc1eecc9ce845c27434f6b7331af161353dd06ca6de48b7",
+          "bytes": 12746,
+          "version": 10
         }
       ]
     },
     {
       "id": "opencode",
       "directory": "opencode",
-      "version": 10,
+      "version": 13,
       "files": [
         {
           "path": "upstream/opencode/herdr-agent-state.js",
           "origin": "src/integration/assets/opencode/herdr-agent-state.js",
-          "sha256": "5cb15e059a5f812a20fcfd64b43303efbaa63c1b4874b124e25df64dc023a15e",
-          "bytes": 5363,
-          "version": 10
+          "sha256": "f70a7d2193f4a9409838b078acee5a35f72f0925af08f63c142ec9cbf0ba5fcd",
+          "bytes": 6520,
+          "version": 13
         },
         {
           "path": "upstream/opencode/herdr-agent-state.test.ts",
           "origin": "src/integration/assets/opencode/herdr-agent-state.test.ts",
-          "sha256": "8c19e191ef4235e8631f381c8a4f85aae67622a77faadbd594d59f4dbb287f7e",
-          "bytes": 6418
+          "sha256": "5a5bb383119eb53d752d3d3b6c83acd59b6f70d262129e6ce9eb9064ce7bfe72",
+          "bytes": 9061
         },
         {
           "path": "upstream/opencode/herdr-tui-session.js",
           "origin": "src/integration/assets/opencode/herdr-tui-session.js",
-          "sha256": "dc79b96c1cd123ff2254efd1830b21cfb4c0557ab01f8b9972fdff6df8a85400",
-          "bytes": 3253,
-          "version": 10
+          "sha256": "50659d47db3cf4e7de3028e56f2666a656efaaddc24711b72f5b6baa9f99c5d3",
+          "bytes": 21240,
+          "version": 13
         },
         {
           "path": "upstream/opencode/herdr-tui-session.test.ts",
           "origin": "src/integration/assets/opencode/herdr-tui-session.test.ts",
-          "sha256": "dfdd7551fafc47e0989ff8305c7378c9b709a6f7e3f274d3ff46d2a0d3a50b3a",
-          "bytes": 5091
+          "sha256": "d076bfadcf1e8c9009099ae509a68060e4ba0366b1666a67d44dc0e0d7190ae7",
+          "bytes": 26644
+        },
+        {
+          "path": "upstream/opencode/tui.js",
+          "origin": "src/integration/assets/opencode/tui.js",
+          "sha256": "a70a9d9de68d24e92e68ceb658e535b59ac55eddbef711888e02c2773c0f9cce",
+          "bytes": 219,
+          "version": 13
         }
       ]
     },
     {
       "id": "pi",
       "directory": "pi",
-      "version": 8,
+      "version": 9,
       "files": [
         {
           "path": "upstream/pi/herdr-agent-state.ts",
           "origin": "src/integration/assets/pi/herdr-agent-state.ts",
-          "sha256": "9b1c41cd72520fc2abe5f2a2aec995c12a926cce844df472c7fd5fcae4f4dbfa",
-          "bytes": 6602,
-          "version": 8
+          "sha256": "2c5272d732b475bbf91a027203b1f98d25fe43d2c1402530a442b288aeaca1e4",
+          "bytes": 6694,
+          "version": 9
         }
       ]
     },
@@ -366,14 +394,14 @@
     {
       "path": "upstream/NOTICE",
       "origin": "generated by internal/tools/herdrsync",
-      "sha256": "63b9fc97df1f0672e63bfe4ad45159b2683150b053d91d874dd01a921acbf662",
+      "sha256": "00e18992c5118250863f4ecd6704b399e7fdbf6ba3ec08759cbc3dfce7385380",
       "bytes": 1428
     },
     {
       "path": "upstream/herdr-agent-state.test.ts",
       "origin": "src/integration/assets/herdr-agent-state.test.ts",
-      "sha256": "4ddc306851d6a6504fbb9f178610099c9988a86cdb3354c78b89a60235935f99",
-      "bytes": 20246
+      "sha256": "1ec17623179aed3c521140f59fa3f9ce714412c45b8c69d2d340aa64b46a8cbd",
+      "bytes": 22476
     }
   ]
 }
