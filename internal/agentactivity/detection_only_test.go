@@ -24,6 +24,7 @@ var familiesWithNoScreenManifest = map[string]string{
 }
 
 var unregisteredManifests = map[string]string{
+	"letta": "Vendored for review; process identification and integration support have not been ported to Sidecar.",
 	"gemini": "Decision 4: Antigravity replaced it and `agy` is already a full family. " +
 		"The manifest stays vendored because the sync mirrors the whole catalog, so registering it later is one alias line.",
 }

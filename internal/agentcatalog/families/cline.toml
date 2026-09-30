@@ -14,6 +14,7 @@
 # Resume is `--id`, not `--resume`. Herdr's agent_resume.rs has no Cline entry at
 # all, so this is from Cline's own reference rather than from upstream.
 id = "cline"
+aliases = [".cline"]
 order = 110
 name = "Cline"
 short = "Cline"

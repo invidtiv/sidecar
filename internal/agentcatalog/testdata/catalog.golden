@@ -124,7 +124,7 @@
     short       Cline
     command     cline
     skipPerms   
-    aliases     
+    aliases     .cline
     adapter     cline
     resumeKinds id
     launch      cline

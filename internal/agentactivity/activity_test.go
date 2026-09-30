@@ -377,37 +377,15 @@ func TestRealPhase2ProviderFixtures(t *testing.T) {
 		// upstream's; TestWeakBlockersKeepTheAttentionFlag is what proves the
 		// one thing that changed.
 		{"claude", "legacy_permission_wait.txt", "legacy_no_prompt_blocker", StateBlocked, false},
-		// Grok's six fixtures. Every verdict is unchanged. Per fixture,
-		// old → new and why:
-		//
-		//   idle.txt          grok.title.idle   → osc_title_idle
-		//   interrupted.txt   grok.title.idle   → osc_title_idle
-		//     Upstream rule better: the same "grok" / "<session> - grok" form
-		//     with the same braille exclusion, stated as a rule with a `not`
-		//     gate rather than as a hand-written resolver step.
-		//   working.txt       grok.screen.working → sidecar.working_footer
-		//     Sidecar behaviour preserved via overlay, and the one row where the
-		//     overlay reports a verdict upstream would have reached anyway
-		//     (`osc_title_working`, from the braille frame in the title). The
-		//     footer rule has to outrank `osc_title_idle` at 1100 to do its job,
-		//     which puts it above `osc_title_working` at 1000 as a side effect;
-		//     the alternative is a rule that cannot fire when the title lags.
-		//   overlay.txt       grok.overlay.retain → sidecar.overlay_retain
-		//     Sidecar-only behaviour preserved via overlay, narrower gate.
-		//   stale_working_scrollback.txt
-		//                     grok.footer.idle  → sidecar.idle_footer
-		//     Sidecar-only behaviour preserved via overlay. Upstream trusts the
-		//     title, which still carries a braille frame here.
-		//   background_subagent.txt
-		//                     grok.screen.background-running
-		//                                       → sidecar.background_subagent_working
-		//     Sidecar-only behaviour preserved via overlay.
+		// Upstream handles Grok's title, spinner and background status. The
+		// overlay still handles a retained overlay and an idle footer beneath
+		// a stale working title; evidence identifies the rule that actually won.
 		{"grok", "idle.txt", "osc_title_idle", StateIdle, false},
-		{"grok", "working.txt", "sidecar.working_footer", StateWorking, false},
+		{"grok", "working.txt", "spinner_status_working", StateWorking, false},
 		{"grok", "interrupted.txt", "osc_title_idle", StateIdle, false},
 		{"grok", "overlay.txt", "sidecar.overlay_retain", StateUnknown, true},
 		{"grok", "stale_working_scrollback.txt", "sidecar.idle_footer", StateIdle, false},
-		{"grok", "background_subagent.txt", "sidecar.background_subagent_working", StateWorking, false},
+		{"grok", "background_subagent.txt", "background_status_working", StateWorking, false},
 		// The permission prompt, captured live from Grok Build 1.0.13. Upstream
 		// does describe it — three of its blockers match, the title rule wins —
 		// which is what the capture settled and what retired the overlay rule
@@ -787,6 +765,18 @@ func TestKnownLiveFallbackIdleNeverCreatesUnseenDone(t *testing.T) {
 		for _, prior := range []State{StateWorking, StateBlocked} {
 			t.Run(ob.Agent+"/"+string(prior), func(t *testing.T) {
 				result := Detect(ob)
+				if ob.Agent == "codex" {
+					if result.State != StateUnknown || result.Evidence != "codex_state_ambiguous" || result.FallbackIdle {
+						t.Fatalf("ambiguous Codex result = %+v", result)
+					}
+					tracker := Tracker{State: prior, Evidence: "codex.prior"}
+					tracker.Apply(result, time.Unix(400, 0))
+					tracker.Apply(result, time.Unix(400, 0).Add(IdleDebounce))
+					if tracker.DisplayState() == "done" {
+						t.Fatalf("ambiguous Codex announced done: %+v", tracker)
+					}
+					return
+				}
 				if result.State != StateIdle || !result.FallbackIdle {
 					t.Fatalf("fallback result = %+v", result)
 				}
@@ -855,7 +845,7 @@ func TestGrokBackgroundSubagentBeatsIdleTitleAndFooter(t *testing.T) {
 			"│ ❯ │\n" +
 			"Shift+Tab:mode  │  Ctrl+x:shortcuts\n",
 	})
-	if got.State != StateWorking || got.Evidence != "sidecar.background_subagent_working" {
+	if got.State != StateWorking || got.Evidence != "background_status_working" {
 		t.Fatalf("background subagent got %+v", got)
 	}
 }
@@ -1152,18 +1142,14 @@ func TestMuseIsClassifiedByItsBundledOnlyManifest(t *testing.T) {
 	}
 }
 
-// A Codex turn is live for as long as the interrupt hint is on screen, and the
-// composer is drawn the whole time. Before the Phase 2 review these two facts
-// met in the wrong place: `sidecar.composer_idle` saw the `›` at priority 100,
-// upstream's `screen_working_fallback` reads only the bottom three non-empty
-// lines and so could not see the status line one tool-output row higher, and a
-// pane in the middle of an apply_patch reported an explicit visible idle — which
-// Tracker turns into a completed turn.
+// A live Codex timer must outrank the composer that remains on screen during
+// tool calls. Upstream recognizes the status above the current prompt; an idle
+// composer must never make that active turn look completed to Tracker.
 func TestCodexRunningTurnBeatsTheComposerIdleRule(t *testing.T) {
 	live := readObservationFixture(t, "codex", "tool_running_composer.txt")
 	got := DetectCodex(live)
-	if got.State != StateWorking || got.Evidence != "sidecar.working_chrome" || !got.VisibleWorking {
-		t.Fatalf("running turn got %+v, want working/sidecar.working_chrome", got)
+	if got.State != StateWorking || got.Evidence != "screen_working_fallback" || !got.VisibleWorking {
+		t.Fatalf("running turn got %+v, want working/screen_working_fallback", got)
 	}
 
 	// The tracker consequence, stated rather than implied: this screen arriving
@@ -1184,28 +1170,23 @@ func TestCodexRunningTurnBeatsTheComposerIdleRule(t *testing.T) {
 		t.Fatalf("finished turn got %+v, want idle/sidecar.composer_idle", got)
 	}
 
-	// The new working rule must not displace the background-terminal rule one
-	// priority step above it, whose fixture also carries an interrupt hint.
-	if got := DetectCodex(readObservationFixture(t, "codex", "background_terminal.txt")); got.Evidence != "sidecar.background_terminal_working" {
-		t.Fatalf("background terminal got %+v, want sidecar.background_terminal_working", got)
+	// Upstream now recognizes the background-terminal fixture too, with the
+	// same working state and its own evidence.
+	if got := DetectCodex(readObservationFixture(t, "codex", "background_terminal.txt")); got.Evidence != "screen_working_fallback" {
+		t.Fatalf("background terminal got %+v, want screen_working_fallback", got)
 	}
-	// Nor upstream's own rule, on a screen upstream can see. An overlay rule
-	// that reports a verdict Herdr reaches without it is a rule to delete, and
-	// scripts/herdr-diff.sh fails the run when one does.
+	// A local rule must not displace upstream's evidence on its working fixture.
+	// The differential harness checks retained overlays for redundant behavior.
 	if got := DetectCodex(readObservationFixture(t, "codex", "working.txt")); got.Evidence == "sidecar.working_chrome" {
 		t.Fatalf("overlay displaced upstream's rule on a screen upstream can see: %+v", got)
 	}
 }
 
-// The two negatives the spot-check of `sidecar.working_chrome` asked for. The
-// rule reads four times as far up the pane as upstream's `screen_working_fallback`,
-// so both of the things upstream's narrow window protects it from — an
-// interrupted turn's stale status line, and a copy of the status line quoted in
-// prose — are inside this rule's region and have to be refused by the gate
-// instead.
+// Interrupted or quoted status lines must not count as live work, whether the
+// evaluator reaches them through an upstream rule or a local working rule.
 func TestCodexWorkingChromeRefusesInterruptedAndQuotedStatusLines(t *testing.T) {
-	// Upstream's own `not` gate, carried onto this rule. The status line is
-	// still on screen with the banner beneath it and the composer beneath that.
+	// The stale status line remains above the interruption banner and composer;
+	// no working or explicit-idle rule should claim a live turn from it.
 	interrupted := DetectCodex(Observation{
 		Agent: "codex", CurrentCommand: "codex", PaneTitle: "tasks", PaneHeight: 24,
 		Screen: "• Working (45s • esc to interrupt) · editing files\n" +
@@ -1217,13 +1198,10 @@ func TestCodexWorkingChromeRefusesInterruptedAndQuotedStatusLines(t *testing.T) 
 	if interrupted.Evidence == "sidecar.working_chrome" || interrupted.State == StateWorking {
 		t.Fatalf("an interrupted turn read as working: %+v", interrupted)
 	}
-	// It lands on the low-evidence fallback rather than on the composer idle,
-	// because the stale status line still carries the interrupt hint that is
-	// `sidecar.composer_idle`'s own `not` gate. That is the recorded choice —
-	// see manifests/sidecar/codex.toml — and what makes it acceptable is that a
-	// fallback idle establishes the lane without announcing anything.
-	if interrupted.State != StateIdle || interrupted.Evidence != "codex.known-live-fallback" || !interrupted.FallbackIdle {
-		t.Fatalf("interrupted turn got %+v, want idle/codex.known-live-fallback", interrupted)
+	// A stale interrupt hint refuses composer idle; absent a live rule, Codex
+	// stays unknown and cannot announce a completion.
+	if interrupted.State != StateUnknown || interrupted.Evidence != "codex_state_ambiguous" || interrupted.FallbackIdle {
+		t.Fatalf("interrupted turn got %+v, want unknown/codex_state_ambiguous", interrupted)
 	}
 	if interrupted.VisibleIdle {
 		t.Fatalf("interrupted turn announced a visible idle: %+v", interrupted)
@@ -1247,10 +1225,9 @@ func TestCodexWorkingChromeRefusesInterruptedAndQuotedStatusLines(t *testing.T) 
 		t.Fatalf("an indented quotation read as working: %+v", quoted)
 	}
 
-	// The positive is unchanged, and it is the reason the anchor allows a glyph
-	// and a run of spaces rather than nothing at all.
-	if got := DetectCodex(readObservationFixture(t, "codex", "tool_running_composer.txt")); got.Evidence != "sidecar.working_chrome" {
-		t.Fatalf("live tool call got %+v, want sidecar.working_chrome", got)
+	// A real running tool still supplies positive working evidence upstream.
+	if got := DetectCodex(readObservationFixture(t, "codex", "tool_running_composer.txt")); got.Evidence != "screen_working_fallback" {
+		t.Fatalf("live tool call got %+v, want screen_working_fallback", got)
 	}
 }
 
@@ -1430,7 +1407,6 @@ func TestRewrittenAlphabeticRulesMatchTheScreensTheyTarget(t *testing.T) {
 	// scripts/herdr-diff.sh use for an id with no provider, and a rewrite that
 	// only worked through one of the two would be half dead.
 	for _, tt := range []struct{ agent, fixture, rule string }{
-		{"kiro", "tool_spinner_working.txt", "tool_spinner_working"},
 		{"qodercli", "spinner_working.txt", "spinner_working"},
 	} {
 		ob := readObservationFixture(t, tt.agent, tt.fixture)

@@ -274,7 +274,7 @@ func identifyProcessName(command string) string {
 	//
 	// None of them needs the versioned-binary prefix rule: `muse` is the only
 	// entry in the extracted versioned_binary_prefixes table.
-	case name == "cline":
+	case oneOf(name, "cline", ".cline"):
 		return "cline"
 	case oneOf(name, "devin", "devin cli", "devin-cli"):
 		return "devin"

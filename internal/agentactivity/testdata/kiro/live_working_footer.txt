@@ -1,0 +1,8 @@
+source: synthetic, from Herdr kiro.toml 2026.09.19.1 live_working_footer literals.
+why: current Kiro working footer remains classified by the upstream rule.
+pane_current_command: kiro
+pane_title: unavailable
+state: working
+screen:
+Kiro is working
+Type to steer · ctrl+s to queue

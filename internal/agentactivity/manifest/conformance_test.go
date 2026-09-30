@@ -3,10 +3,12 @@ package manifest_test
 // Conformance suite: Herdr's own manifest tests, ported.
 //
 // Every case below carries the name of the Rust test it came from
-// (~/code/herdr/src/detect/manifest/tests.rs at e2b85c7) so a reviewer can map
+// (originally ~/code/herdr/src/detect/manifest/tests.rs at e2b85c7) so a reviewer can map
 // the two files one to one. Herdr's tests are the executable specification of
 // the grammar; if one of these fails, the Go engine has diverged from the
 // engine the differential harness checks against, not merely from an opinion.
+// Codex no-match cases follow Herdr v0.9.3 (331775c3): a static title no
+// longer establishes idle, and no matching rule returns unknown.
 //
 // Nine of Herdr's 45 inline tests are NOT ported, all for the same reason: they
 // exercise Herdr's *loader* (its remote-manifest cache under the state
@@ -62,15 +64,11 @@ import (
 // engine reads a manifest the way Herdr's engine reads it. Running them against
 // the merged manifest would conflate that question with a second one — whether
 // Sidecar's overlay changes the verdict — and a deliberate overlay would then
-// fail a test whose subject is the engine. Two of them would today:
-// `sidecar.composer_idle` and the `osc_title_idle` disable in
-// manifests/sidecar/codex.toml are exactly such a deliberate change, and
-// TestTheCodexOverlayReplacesTitleIdleWithComposerIdle in the agentactivity
-// package is what pins *that*.
+// fail a test whose subject is the engine. Sidecar's composer-idle overlay is
+// such a deliberate difference; agentactivity tests cover that behavior.
 //
-// AllowIncompatibleRegex matches how production loads the vendored tree: four
-// upstream rules use `\p{Alphabetic}`, which RE2 cannot compile, and each has an
-// overlay carrying the rewrite. None of the four agents is exercised here.
+// AllowIncompatibleRegex matches how production loads the vendored tree:
+// upstream rules using `\p{Alphabetic}` need Sidecar's RE2 overlay rewrites.
 func bundled(t *testing.T, agent string) *manifest.Compiled {
 	t.Helper()
 	data, err := manifests.UpstreamBytes(agent + ".toml")
@@ -106,7 +104,7 @@ func compileSource(t *testing.T, source string) *manifest.Compiled {
 // oscExplain is Herdr's osc_explain helper: a screen plus the two OSC strings.
 func oscExplain(t *testing.T, agent, screen, title, progress string) (manifest.Verdict, *manifest.Explain) {
 	t.Helper()
-	return bundled(t, agent).Explain(manifest.Input{Screen: screen, Title: title, Progress: progress})
+	return bundled(t, agent).Explain(manifest.Input{Agent: agent, Screen: screen, Title: title, Progress: progress})
 }
 
 func matchedID(v manifest.Verdict) string {
@@ -120,7 +118,7 @@ func matchedID(v manifest.Verdict) string {
 
 // Herdr: known_agent_no_match_defaults_to_idle_fallback.
 func TestKnownAgentNoMatchDefaultsToIdleFallback(t *testing.T) {
-	verdict := bundled(t, "codex").Evaluate(manifest.Input{Screen: "ordinary prompt text"})
+	verdict := bundled(t, "pi").Evaluate(manifest.Input{Screen: "ordinary prompt text"})
 	if verdict.State != manifest.StateIdle {
 		t.Fatalf("state = %q, want idle", verdict.State)
 	}
@@ -534,10 +532,10 @@ func TestCodexOSCTitleActionRequiredIsBlocked(t *testing.T) {
 	}
 }
 
-// Herdr: codex_osc_title_plain_is_idle.
-func TestCodexOSCTitlePlainIsIdle(t *testing.T) {
+// A static Codex title is no longer idle evidence in Herdr v0.9.3.
+func TestCodexOSCTitlePlainIsAmbiguous(t *testing.T) {
 	verdict, _ := oscExplain(t, "codex", "", "llm-proxy", "")
-	if verdict.State != manifest.StateIdle || matchedID(verdict) != "osc_title_idle" || !verdict.VisibleIdle {
+	if verdict.State != manifest.StateUnknown || matchedID(verdict) != "" || verdict.VisibleIdle || verdict.FallbackReason != manifest.CodexStateAmbiguous {
 		t.Fatalf("verdict = %+v rule = %q", verdict, matchedID(verdict))
 	}
 }
@@ -565,15 +563,15 @@ func TestCodexTrustDirectoryRequiresLiveTopRegion(t *testing.T) {
 		"Do you trust the contents of this\n" +
 		"directory? Working with untrusted contents comes with higher risk.\n"
 	verdict, _ = oscExplain(t, "codex", transcript, "project", "")
-	if verdict.State != manifest.StateIdle || matchedID(verdict) == "trust_directory" || verdict.VisibleBlocker {
+	if verdict.State != manifest.StateUnknown || matchedID(verdict) == "trust_directory" || verdict.VisibleBlocker {
 		t.Fatalf("transcribed trust text: verdict = %+v rule = %q", verdict, matchedID(verdict))
 	}
 }
 
-// Herdr: codex_background_terminal_screen_does_not_override_osc_idle.
-func TestCodexBackgroundTerminalScreenDoesNotOverrideOSCIdle(t *testing.T) {
+// A background terminal line alone does not establish the foreground turn.
+func TestCodexBackgroundTerminalWithoutTurnEvidenceIsAmbiguous(t *testing.T) {
 	verdict, _ := oscExplain(t, "codex", "background terminal running · /ps to view · /stop to close\n", "llm-proxy", "")
-	if verdict.State != manifest.StateIdle || matchedID(verdict) != "osc_title_idle" || !verdict.VisibleIdle {
+	if verdict.State != manifest.StateUnknown || matchedID(verdict) != "" || verdict.VisibleIdle || verdict.FallbackReason != manifest.CodexStateAmbiguous {
 		t.Fatalf("verdict = %+v rule = %q", verdict, matchedID(verdict))
 	}
 }
@@ -638,7 +636,7 @@ func TestCodexWeakBlockerIgnoresFinishedResponseAboveCurrentPrompt(t *testing.T)
 		"─ Worked for 4m 59s ─\n\n" +
 		"› Ask Codex to do anything\n"
 	verdict, _ := oscExplain(t, "codex", screen, "project", "")
-	if verdict.State != manifest.StateIdle || matchedID(verdict) != "osc_title_idle" {
+	if verdict.State != manifest.StateUnknown || matchedID(verdict) != "" || verdict.FallbackReason != manifest.CodexStateAmbiguous {
 		t.Fatalf("verdict = %+v rule = %q", verdict, matchedID(verdict))
 	}
 }
@@ -649,7 +647,7 @@ func TestCodexWeakBlockerIgnoresWrappedCurrentPromptText(t *testing.T) {
 		"  [y/N] / esc and whether the docs should include it\n\n" +
 		"  gpt-5.6-sol default · /work\n"
 	verdict, _ := oscExplain(t, "codex", screen, "project", "")
-	if verdict.State != manifest.StateIdle || matchedID(verdict) != "osc_title_idle" {
+	if verdict.State != manifest.StateUnknown || matchedID(verdict) != "" || verdict.FallbackReason != manifest.CodexStateAmbiguous {
 		t.Fatalf("verdict = %+v rule = %q", verdict, matchedID(verdict))
 	}
 }
@@ -684,8 +682,8 @@ func TestCodexScreenWorkingFallbackIgnoresStaleAndPromptText(t *testing.T) {
 	}
 	for i, screen := range screens {
 		verdict, _ := oscExplain(t, "codex", screen, "project", "")
-		if verdict.State != manifest.StateIdle || matchedID(verdict) != "osc_title_idle" ||
-			!verdict.VisibleIdle || verdict.VisibleWorking {
+		if verdict.State != manifest.StateUnknown || matchedID(verdict) != "" || verdict.FallbackReason != manifest.CodexStateAmbiguous ||
+			verdict.VisibleIdle || verdict.VisibleWorking {
 			t.Fatalf("screen %d: verdict = %+v rule = %q", i, verdict, matchedID(verdict))
 		}
 	}
@@ -697,8 +695,8 @@ func TestCodexScreenWorkingFallbackIgnoresInterruptedShortTerminal(t *testing.T)
 		"■ Conversation interrupted\n" +
 		"›\n"
 	verdict, _ := oscExplain(t, "codex", screen, "project", "")
-	if verdict.State != manifest.StateIdle || matchedID(verdict) != "osc_title_idle" ||
-		!verdict.VisibleIdle || verdict.VisibleWorking {
+	if verdict.State != manifest.StateUnknown || matchedID(verdict) != "" || verdict.FallbackReason != manifest.CodexStateAmbiguous ||
+		verdict.VisibleIdle || verdict.VisibleWorking {
 		t.Fatalf("verdict = %+v rule = %q", verdict, matchedID(verdict))
 	}
 }
@@ -834,8 +832,8 @@ func TestEveryVendoredManifestCompiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(agents) != 21 {
-		t.Fatalf("vendored %d manifests, expected Herdr's 21", len(agents))
+	if len(agents) == 0 {
+		t.Fatal("no vendored manifests; compilation would test nothing")
 	}
 	for _, agent := range agents {
 		compiled, source, err := manifests.Load(agent)

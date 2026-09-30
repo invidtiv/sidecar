@@ -116,7 +116,6 @@ func TestVendoredManifestsMatchLock(t *testing.T) {
 var knownRegexIncompatibilities = map[string]string{
 	"antigravity.toml spinner_working line_regex": `\p{Alphabetic}`,
 	"cursor.toml spinner_working line_regex":      `\p{Alphabetic}`,
-	"kiro.toml tool_spinner_working line_regex":   `\p{Alphabetic}`,
 	"qodercli.toml spinner_working line_regex":    `\p{Alphabetic}`,
 }
 

@@ -251,6 +251,9 @@ func manifestInput(ob Observation) (*manifest.Compiled, manifest.Input, Result, 
 // itself carries is upstream's.
 func manifestVerdict(agent string, verdict manifest.Verdict) Result {
 	if verdict.MatchedRule == nil {
+		if verdict.State != manifest.StateIdle {
+			return Result{State: State(verdict.State), Evidence: verdict.FallbackReason}
+		}
 		return Result{
 			State:        StateIdle,
 			Evidence:     agent + ".known-live-fallback",

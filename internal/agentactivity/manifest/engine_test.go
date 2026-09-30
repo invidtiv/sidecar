@@ -513,7 +513,7 @@ contains = ["token"]
 
 func TestExplainOnNoMatchRecordsTheFallbackReason(t *testing.T) {
 	compiled := compileSource(t, `
-id = "codex"
+id = "pi"
 
 [[rules]]
 id = "never"
@@ -529,6 +529,48 @@ contains = ["absent"]
 	}
 	if len(explain.EvaluatedRules) != 1 || explain.EvaluatedRules[0].Matched {
 		t.Fatalf("evaluated rules = %+v; a fallback still reports what it looked at", explain.EvaluatedRules)
+	}
+}
+
+// Herdr v0.9.3's Codex fallback preserves uncertainty without changing other
+// agents, and follows the requested family when a local override has another id.
+func TestNoMatchUsesTheRequestedAgentFallback(t *testing.T) {
+	for _, tt := range []struct {
+		name, manifestID, agent string
+		state                   manifest.State
+		reason                  string
+	}{
+		{"codex manifest", "codex", "", manifest.StateUnknown, manifest.CodexStateAmbiguous},
+		{"codex requested", "pi", "codex", manifest.StateUnknown, manifest.CodexStateAmbiguous},
+		{"pi manifest", "pi", "", manifest.StateIdle, manifest.DefaultKnownAgentIdleFallback},
+		{"pi requested", "codex", "pi", manifest.StateIdle, manifest.DefaultKnownAgentIdleFallback},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			compiled := compileSource(t, `id = "`+tt.manifestID+`"
+version = "2026.09.23.1"
+[[rules]]
+id = "active"
+state = "working"
+visible_working = true
+contains = ["active-marker"]
+`)
+			input := manifest.Input{Agent: tt.agent, Screen: "unmatched-marker"}
+			verdict, explain := compiled.Explain(input)
+			if verdict.State != tt.state || verdict.FallbackReason != tt.reason || verdict.MatchedRule != nil || verdict.VisibleIdle || verdict.VisibleWorking || verdict.VisibleBlocker || verdict.SkipStateUpdate {
+				t.Fatalf("no-match verdict = %+v", verdict)
+			}
+			if plain := compiled.Evaluate(input); plain != verdict {
+				t.Fatalf("Evaluate = %+v, Explain = %+v", plain, verdict)
+			}
+			if explain.State != tt.state || explain.FallbackReason != tt.reason || explain.ManifestVersion != "2026.09.23.1" || len(explain.EvaluatedRules) != 1 {
+				t.Fatalf("fallback lost context: %+v", explain)
+			}
+			input.Screen = "active-marker"
+			matched := compiled.Evaluate(input)
+			if matched.State != manifest.StateWorking || matched.MatchedRule == nil || !matched.VisibleWorking || matched.FallbackReason != "" {
+				t.Fatalf("a matched rule must retain its verdict: %+v", matched)
+			}
+		})
 	}
 }
 

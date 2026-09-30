@@ -28,8 +28,8 @@ type Input struct {
 	// for every vendored file and can differ under a local override, which may
 	// declare one agent's id while carrying another's alias. Reporting the id
 	// there would answer a question nobody asked, about a file rather than
-	// about the pane. Empty on a path with no requested agent; nothing about
-	// evaluation depends on it.
+	// about the pane. The no-match fallback uses the requested agent; when it
+	// is empty, direct manifest evaluation uses the loaded manifest's id.
 	Agent string
 	// Screen is the raw capture. It may carry SGR escapes and scrollback; the
 	// engine strips and bounds it itself, so callers pass what tmux gave them.
