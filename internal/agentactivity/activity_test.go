@@ -1175,16 +1175,14 @@ func TestCodexRunningTurnBeatsTheComposerIdleRule(t *testing.T) {
 	if got := DetectCodex(readObservationFixture(t, "codex", "background_terminal.txt")); got.Evidence != "screen_working_fallback" {
 		t.Fatalf("background terminal got %+v, want screen_working_fallback", got)
 	}
-	// A local rule must not displace upstream's evidence on its working fixture.
-	// The differential harness checks retained overlays for redundant behavior.
-	if got := DetectCodex(readObservationFixture(t, "codex", "working.txt")); got.Evidence == "sidecar.working_chrome" {
-		t.Fatalf("overlay displaced upstream's rule on a screen upstream can see: %+v", got)
+	// Working title evidence remains valid alongside screen-based activity.
+	if got := DetectCodex(readObservationFixture(t, "codex", "working.txt")); got.State != StateWorking || !got.VisibleWorking {
+		t.Fatalf("captured working screen lost visible working evidence: %+v", got)
 	}
 }
 
-// Interrupted or quoted status lines must not count as live work, whether the
-// evaluator reaches them through an upstream rule or a local working rule.
-func TestCodexWorkingChromeRefusesInterruptedAndQuotedStatusLines(t *testing.T) {
+// Interrupted or quoted status lines must not count as live work.
+func TestCodexWorkingStatusRefusesInterruptedAndQuotedStatusLines(t *testing.T) {
 	// The stale status line remains above the interruption banner and composer;
 	// no working or explicit-idle rule should claim a live turn from it.
 	interrupted := DetectCodex(Observation{
@@ -1195,7 +1193,7 @@ func TestCodexWorkingChromeRefusesInterruptedAndQuotedStatusLines(t *testing.T) 
 			"› ⏎ send   ⌃J newline\n" +
 			"  gpt-5.6-sol low · ~/code/tasks\n",
 	})
-	if interrupted.Evidence == "sidecar.working_chrome" || interrupted.State == StateWorking {
+	if interrupted.State == StateWorking || interrupted.VisibleWorking {
 		t.Fatalf("an interrupted turn read as working: %+v", interrupted)
 	}
 	// A stale interrupt hint refuses composer idle; absent a live rule, Codex
@@ -1206,9 +1204,9 @@ func TestCodexWorkingChromeRefusesInterruptedAndQuotedStatusLines(t *testing.T) 
 	if interrupted.VisibleIdle {
 		t.Fatalf("interrupted turn announced a visible idle: %+v", interrupted)
 	}
-	tracker := Tracker{State: StateWorking, Evidence: "sidecar.working_chrome"}
+	tracker := Tracker{State: StateWorking, Evidence: "screen_working_fallback"}
 	if tracker.Apply(interrupted, time.Unix(300, 0)) && tracker.DisplayState() == "done" {
-		t.Fatalf("a fallback idle announced done: %+v", tracker)
+		t.Fatalf("ambiguous interrupted evidence announced done: %+v", tracker)
 	}
 
 	// The anchor. Codex paints the status glyph in column 0; an indented copy of
@@ -1221,7 +1219,7 @@ func TestCodexWorkingChromeRefusesInterruptedAndQuotedStatusLines(t *testing.T) 
 			"› \n" +
 			"  gpt-5.6-sol low · ~/code/tasks\n",
 	})
-	if quoted.Evidence == "sidecar.working_chrome" || quoted.State == StateWorking {
+	if quoted.State == StateWorking || quoted.VisibleWorking {
 		t.Fatalf("an indented quotation read as working: %+v", quoted)
 	}
 

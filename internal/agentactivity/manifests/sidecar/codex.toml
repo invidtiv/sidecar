@@ -3,19 +3,6 @@
 
 id = "codex"
 
-# A turn waiting on a running background terminal is working. Require the
-# waiting line, a positive running count, and both terminal-control hints;
-# a finished wait or a helper running on its own must not match. Upstream's
-# screen_working_fallback also recognizes the captured background-terminal
-# fixture. At equal priority, the upstream rule remains the reported evidence.
-[[rules]]
-id = "sidecar.background_terminal_working"
-state = "working"
-priority = 500
-region = "bottom_non_empty_lines(12)"
-visible_working = true
-regex = ['(?ims)^\s*[•◦]?\s*Waiting for background terminal\b.*[1-9][0-9]* background terminals? running\b.*(?:/ps to view.*?/stop to close|/stop to close.*?/ps to view)']
-
 # Explicit idle requires the composer with no interrupt hint in this region.
 # Codex draws its composer during active tool calls too, so the negative gate
 # prevents a visible idle while the turn is still running. Herdr no longer has
@@ -28,21 +15,6 @@ region = "bottom_non_empty_lines(8)"
 visible_idle = true
 line_regex = ['^\s*›(?:\s|$)']
 not = [{ regex = ['(?i)esc to interrupt'] }]
-
-# This narrow Working/timer match reads the last twelve non-empty lines and
-# refuses quoted or interrupted status. Upstream's broader working rule now
-# reads before_current_prompt_marker and wins on the captured running-tool
-# screen. Keep upstream's priority higher so its evidence remains visible.
-# When an interrupted screen matches neither a working rule nor composer idle,
-# the result is codex_state_ambiguous, never a completion.
-[[rules]]
-id = "sidecar.working_chrome"
-state = "working"
-priority = 490
-region = "bottom_non_empty_lines(12)"
-visible_working = true
-line_regex = ['^[•◦]\s+Working \(.*esc to interrupt\)']
-not = [{ contains = ["■ Conversation interrupted"] }]
 
 # Codex uses its composer glyph on an approval option. That can empty both
 # prompt-relative blocker regions, so this rule reads the recent question
