@@ -2,6 +2,12 @@
 
 All notable changes to sidecar are documented here.
 
+## [Unreleased]
+
+### Bug Fixes
+
+- **The git status fixtures no longer race their own cleanup.** A test repository's `commit` and `merge` can leave a detached `git maintenance` writing under `.git/objects` as the temp directory is removed, which failed `TestLoadFileTreeRealGitConflict` on CI and stopped the v1.15.0 release workflow before anything was published. Fixture repositories now disable auto-maintenance at `init`. v1.15.0 was tagged but never released; its changes ship here as v1.15.1.
+
 ## [v1.15.0] - 2026-09-30
 
 ### Features

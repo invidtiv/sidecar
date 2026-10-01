@@ -393,6 +393,12 @@ func runGitTest(t *testing.T, dir string, args ...string) string {
 	if err != nil {
 		t.Fatalf("git %v: %v: %s", args, err, out)
 	}
+	if len(args) > 0 && args[0] == "init" {
+		// commit and merge may detach `maintenance`/`gc --auto`, which keeps
+		// writing under .git/objects while TempDir cleanup removes it.
+		runGitTest(t, dir, "config", "maintenance.auto", "false")
+		runGitTest(t, dir, "config", "gc.auto", "0")
+	}
 	return string(out)
 }
 
