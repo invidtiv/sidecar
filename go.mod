@@ -16,8 +16,8 @@ require (
 	github.com/charmbracelet/x/cellbuf v0.0.15
 	github.com/charmbracelet/x/vt v0.0.0-20260803091719-3755ebad01b1
 	github.com/fsnotify/fsnotify v1.9.0
-	github.com/marcus/tasks v1.17.0
-	github.com/marcus/td v0.65.0
+	github.com/marcus/tasks v1.18.0
+	github.com/marcus/td v0.66.0
 	github.com/mattn/go-runewidth v0.0.23
 	github.com/mattn/go-sqlite3 v1.14.33
 	github.com/pelletier/go-toml/v2 v2.4.3

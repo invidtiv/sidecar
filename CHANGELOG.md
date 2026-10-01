@@ -14,6 +14,10 @@ All notable changes to sidecar are documented here.
 
 - **A managed install no longer breaks the `sidecar` a previous one left on your PATH.** Activation synced `~/go/bin/sidecar` with `cp`, and after the first activation that destination is a symlink into the previous dev install, so `cp` followed it and rewrote that older artifact in place. The artifact then disagreed with its own directory name and metadata, and because macOS had already executed that file, every later exec of it was killed outright — so any launcher still pointing there ran nothing and printed nothing, exit 137. The sync now points at the artifact instead of copying onto the path. Two guards come with it: every launcher ever retargeted is remembered and re-pointed on each activation, so one that no shell happens to resolve today cannot rot unnoticed, and each synced launcher must actually run before the install reports success, because resolving to the right path no longer proves a binary is runnable.
 
+### Dependencies
+
+- **td v0.66.0 and tasks v1.18.0.** td adds revision-checked edits (`If-Match`), board move, a project description endpoint and `td info --json` `base_dir`; tasks adds lifecycle dates, quadrant and agent readiness on the Task resource, activate/tag/note-delta endpoints, outline and view reads, and fixes concurrent `formal_links` edits overwriting each other.
+
 ## [v1.14.0] - 2026-09-05
 
 ### Features
