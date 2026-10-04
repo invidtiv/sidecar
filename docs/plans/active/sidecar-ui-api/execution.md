@@ -68,7 +68,7 @@ The status values are `queued`, `running`, `review`, `fixing`, `merged` and `blo
 | U3-a content and layouts API | td-f8784a | sidecar | Codex | U1-a | merged (05dd383b). Claude review fixed a HIGH arbitrary file write through the diff parent parameter (git --output), a watch fd-exhaustion cap, and an existence oracle through symlinks |
 | U3-b pane tree UI | td-cf59cd | sidecar-ui | Codex | U3-a, U1-f | merged (sidecar-ui 13bd63a); 70 e2e tests pass on merged main |
 | U3-c pane and content polish | td-c53032 | both | Codex | U3-b | merged (sidecar-ui 1edaf25, Sidecar c67cc04f). Review fixed two key-stealing bugs |
-| U4 viewers agents can target | td-799dd6 | both | Codex | U3 | U4-a merged (53c2d9b2). U4-b in Codex review (sidecar-ui u4b-viewer @78f8f4b) |
+| U4 viewers agents can target | td-799dd6 | both | Codex | U3 | U4-a merged (53c2d9b2); U4-b merged (sidecar-ui, review fixed reconnect starvation and workspace-match adoption). U4-c (td-32cbbb, worktree-aware) follows td-418046 |
 
 U2-b onward are briefed below.
 
