@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -204,6 +205,9 @@ func Start(opts Options) (*Server, error) {
 }
 
 func (s *Server) listenTailnet(opts TailnetOptions) error {
+	// Host comparison lowercases the request's Host; DNS names are
+	// case-insensitive, so the allowlist is kept in the same form.
+	opts.Host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(opts.Host), "."))
 	if opts.Host == "" {
 		return errors.New("ui api: the tailnet listener needs the node's MagicDNS name")
 	}
