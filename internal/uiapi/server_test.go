@@ -85,11 +85,11 @@ func (b *fakeBackend) ServeTerminal(ctx context.Context, input io.Reader, output
 	for {
 		select {
 		case <-ctx.Done():
-			b.ctxEnded <- struct{}{}
+			notify(b.ctxEnded)
 			return ctx.Err()
 		case line, ok := <-lines:
 			if !ok {
-				b.eof <- struct{}{}
+				notify(b.eof)
 				return nil
 			}
 			switch line {
@@ -105,6 +105,15 @@ func (b *fakeBackend) ServeTerminal(ctx context.Context, input io.Reader, output
 				return err
 			}
 		}
+	}
+}
+
+// notify records an event without blocking a backend whose test stopped
+// counting.
+func notify(events chan struct{}) {
+	select {
+	case events <- struct{}{}:
+	default:
 	}
 }
 
@@ -236,19 +245,38 @@ func expect(t *testing.T, response *http.Response, data []byte, status int, code
 	}
 }
 
-// pairBrowser exchanges a pairing code for the session cookie.
-func (h *harness) pairBrowser() *http.Cookie {
+// pairBrowser does what the pairing page's script does and returns the
+// browser session token.
+func (h *harness) pairBrowser() string {
 	h.t.Helper()
 	code := h.pairingCode("/")
-	response, data := h.browserDo(req{path: strings.TrimPrefix(code.URL, h.s.BrowserURL())})
-	expect(h.t, response, data, http.StatusSeeOther, "")
-	for _, cookie := range response.Cookies() {
-		if cookie.Name == h.s.cookieName() {
-			return cookie
-		}
+	response, data := h.exchange(h.ownOrigin(), fragmentValue(h.t, code.URL, "code"), "/")
+	expect(h.t, response, data, http.StatusOK, "")
+	var exchanged PairingExchange
+	if err := json.Unmarshal(data, &exchanged); err != nil || exchanged.Token == "" {
+		h.t.Fatalf("exchange = %s (%v)", data, err)
 	}
-	h.t.Fatalf("pair set no session cookie: %v", response.Header)
-	return nil
+	return exchanged.Token
+}
+
+// exchange posts a pairing code as the pairing page would from origin.
+func (h *harness) exchange(origin, code, next string) (*http.Response, []byte) {
+	h.t.Helper()
+	body, _ := json.Marshal(map[string]string{"code": code, "next": next})
+	return h.browserDo(req{method: http.MethodPost, path: "/api/v0/pairing/exchange", body: string(body), header: mutationHeaders(origin, nil)})
+}
+
+func fragmentValue(t *testing.T, link, key string) string {
+	t.Helper()
+	parsed, err := url.Parse(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values, err := url.ParseQuery(parsed.Fragment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return values.Get(key)
 }
 
 func (h *harness) pairingCode(next string) PairingCode {
@@ -274,8 +302,6 @@ func (h *harness) pairOrigin(origin string) string {
 	return registration.Token
 }
 
-func cookieHeader(c *http.Cookie) string { return c.Name + "=" + c.Value }
-
 func mutationHeaders(origin string, extra map[string]string) map[string]string {
 	headers := map[string]string{"Origin": origin, "Content-Type": "application/json", "X-Sidecar-Request": "1"}
 	for key, value := range extra {
@@ -288,10 +314,10 @@ func TestHostGuardRefusesForeignHosts(t *testing.T) {
 	h := newHarness(t)
 	response, data := h.browserDo(req{path: "/api/v0/hello", host: "evil.example:80"})
 	expect(t, response, data, http.StatusMisdirectedRequest, CodeHostRefused)
-	cookie := h.pairBrowser()
+	session := h.pairBrowser()
 	port := strings.TrimPrefix(h.s.BrowserURL(), "http://127.0.0.1")
 	for _, host := range []string{"127.0.0.1" + port, "localhost" + port} {
-		response, data = h.browserDo(req{path: "/api/v0/hello", host: host, header: map[string]string{"Cookie": cookieHeader(cookie)}})
+		response, data = h.browserDo(req{path: "/api/v0/hello", host: host, header: map[string]string{"Authorization": "Bearer " + session}})
 		expect(t, response, data, http.StatusOK, "")
 	}
 	response, data = h.tailnetDo(req{path: "/api/v0/hello", host: "127.0.0.1", header: map[string]string{tailscaleLoginHead: testTailnetLogin}})
@@ -307,9 +333,9 @@ func TestHostGuardRefusesForeignHosts(t *testing.T) {
 
 func TestOriginGuard(t *testing.T) {
 	h := newHarness(t)
-	cookie := h.pairBrowser()
-	auth := map[string]string{"Cookie": cookieHeader(cookie)}
-	response, data := h.browserDo(req{path: "/api/v0/hello", header: map[string]string{"Cookie": cookieHeader(cookie), "Origin": "http://evil.example"}})
+	session := h.pairBrowser()
+	auth := map[string]string{"Authorization": "Bearer " + session}
+	response, data := h.browserDo(req{path: "/api/v0/hello", header: map[string]string{"Authorization": "Bearer " + session, "Origin": "http://evil.example"}})
 	expect(t, response, data, http.StatusForbidden, CodeOriginRefused)
 	if response.Header.Get("Access-Control-Allow-Origin") != "" {
 		t.Fatal("refused origin received CORS headers")
@@ -325,12 +351,12 @@ func TestOriginGuard(t *testing.T) {
 
 func TestMutationGuardRequiresJSONAndHeader(t *testing.T) {
 	h := newHarness(t)
-	auth := map[string]string{"Cookie": cookieHeader(h.pairBrowser())}
+	auth := map[string]string{"Authorization": "Bearer " + h.pairBrowser()}
 	for name, headers := range map[string]map[string]string{
-		"missing header": {"Origin": h.ownOrigin(), "Content-Type": "application/json", "Cookie": auth["Cookie"]},
-		"form post":      {"Origin": h.ownOrigin(), "Content-Type": "application/x-www-form-urlencoded", "X-Sidecar-Request": "1", "Cookie": auth["Cookie"]},
-		"text plain":     {"Origin": h.ownOrigin(), "Content-Type": "text/plain", "X-Sidecar-Request": "1", "Cookie": auth["Cookie"]},
-		"wrong value":    {"Origin": h.ownOrigin(), "Content-Type": "application/json", "X-Sidecar-Request": "yes", "Cookie": auth["Cookie"]},
+		"missing header": {"Origin": h.ownOrigin(), "Content-Type": "application/json", "Authorization": auth["Authorization"]},
+		"form post":      {"Origin": h.ownOrigin(), "Content-Type": "application/x-www-form-urlencoded", "X-Sidecar-Request": "1", "Authorization": auth["Authorization"]},
+		"text plain":     {"Origin": h.ownOrigin(), "Content-Type": "text/plain", "X-Sidecar-Request": "1", "Authorization": auth["Authorization"]},
+		"wrong value":    {"Origin": h.ownOrigin(), "Content-Type": "application/json", "X-Sidecar-Request": "yes", "Authorization": auth["Authorization"]},
 	} {
 		response, data := h.browserDo(req{method: http.MethodPost, path: "/api/v0/ws-tickets", body: "{}", header: headers})
 		if response.StatusCode != http.StatusForbidden || errorCode(t, data) != CodeMutationRefused {
@@ -338,7 +364,7 @@ func TestMutationGuardRequiresJSONAndHeader(t *testing.T) {
 		}
 	}
 	response, data := h.browserDo(req{method: http.MethodPost, path: "/api/v0/ws-tickets", body: "{}",
-		header: mutationHeaders(h.ownOrigin(), map[string]string{"Cookie": auth["Cookie"], "Content-Type": "application/json; charset=utf-8"})})
+		header: mutationHeaders(h.ownOrigin(), map[string]string{"Authorization": auth["Authorization"], "Content-Type": "application/json; charset=utf-8"})})
 	expect(t, response, data, http.StatusOK, "")
 }
 
@@ -369,23 +395,23 @@ func TestCORSOnlyForPairedOrigins(t *testing.T) {
 		t.Fatal("unpaired preflight received CORS headers")
 	}
 	// The same-origin UI never gets CORS headers.
-	cookie := h.pairBrowser()
-	response, _ = h.browserDo(req{path: "/api/v0/hello", header: map[string]string{"Origin": h.ownOrigin(), "Cookie": cookieHeader(cookie)}})
+	session := h.pairBrowser()
+	response, _ = h.browserDo(req{path: "/api/v0/hello", header: map[string]string{"Origin": h.ownOrigin(), "Authorization": "Bearer " + session}})
 	if response.Header.Get("Access-Control-Allow-Origin") != "" {
 		t.Fatal("own origin received CORS headers")
 	}
-	// A token is bound to its origin, and a paired origin cannot ride the cookie.
+	// A token is bound to its origin; a paired origin cannot use the session token.
 	other := "http://second.example"
 	h.pairOrigin(other)
 	response, data = h.browserDo(req{path: "/api/v0/hello", header: map[string]string{"Origin": other, "Authorization": "Bearer " + token}})
 	expect(t, response, data, http.StatusForbidden, CodeOriginRefused)
-	response, data = h.browserDo(req{path: "/api/v0/hello", header: map[string]string{"Origin": app, "Cookie": cookieHeader(cookie)}})
-	expect(t, response, data, http.StatusUnauthorized, CodeUnauthenticated)
+	response, data = h.browserDo(req{path: "/api/v0/hello", header: map[string]string{"Origin": app, "Authorization": "Bearer " + session}})
+	expect(t, response, data, http.StatusForbidden, CodeOriginRefused)
 }
 
 func TestLocalOnlyRoutesRefusedOnTCPAndTailnet(t *testing.T) {
 	h := newHarness(t)
-	auth := map[string]string{"Cookie": cookieHeader(h.pairBrowser())}
+	auth := map[string]string{"Authorization": "Bearer " + h.pairBrowser()}
 	for _, r := range []req{
 		{method: http.MethodPost, path: "/api/v0/pairing/codes", body: "{}", header: mutationHeaders(h.ownOrigin(), auth)},
 		{method: http.MethodPost, path: "/api/v0/origins", body: `{"origin":"http://x.example"}`, header: mutationHeaders(h.ownOrigin(), auth)},
@@ -409,43 +435,120 @@ func TestLocalOnlyRoutesRefusedOnTCPAndTailnet(t *testing.T) {
 func TestPairingCodeIsSingleUseAndExpires(t *testing.T) {
 	h := newHarness(t)
 	code := h.pairingCode("/s/aerie/1")
-	if !strings.HasPrefix(code.URL, h.s.BrowserURL()+"/pair?") {
-		t.Fatalf("url = %q", code.URL)
+	if !strings.HasPrefix(code.URL, h.s.BrowserURL()+"/pair#") || strings.Contains(code.URL, "?") {
+		t.Fatalf("url = %q; the code must ride in the fragment", code.URL)
 	}
 	if !code.ExpiresAt.Equal(h.clock.Now().Add(60 * time.Second)) {
 		t.Fatalf("expires_at = %v", code.ExpiresAt)
 	}
-	path := strings.TrimPrefix(code.URL, h.s.BrowserURL())
-	response, data := h.browserDo(req{path: path})
-	expect(t, response, data, http.StatusSeeOther, "")
-	if response.Header.Get("Location") != "/s/aerie/1" {
-		t.Fatalf("Location = %q", response.Header.Get("Location"))
+	secret := fragmentValue(t, code.URL, "code")
+	if secret != code.Code || fragmentValue(t, code.URL, "next") != "/s/aerie/1" {
+		t.Fatalf("fragment of %q", code.URL)
 	}
-	var session *http.Cookie
-	for _, c := range response.Cookies() {
-		if c.Name == h.s.cookieName() {
-			session = c
+	// Loading the page (GET or HEAD) reads and consumes nothing, and sets no
+	// cookie: the page's script does the exchange.
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		response, _ := h.browserDo(req{method: method, path: "/pair"})
+		if response.StatusCode != http.StatusOK || len(response.Cookies()) != 0 || response.Header.Get("Set-Cookie") != "" {
+			t.Fatalf("%s /pair: %d %v", method, response.StatusCode, response.Header)
 		}
 	}
-	if session == nil || !session.HttpOnly || session.SameSite != http.SameSiteStrictMode || session.Path != "/" || session.MaxAge <= 0 {
-		t.Fatalf("cookie = %+v", session)
+	response, data := h.exchange(h.ownOrigin(), secret, "/s/aerie/1")
+	expect(t, response, data, http.StatusOK, "")
+	var exchanged PairingExchange
+	if err := json.Unmarshal(data, &exchanged); err != nil || exchanged.Token == "" || exchanged.Next != "/s/aerie/1" {
+		t.Fatalf("exchange = %s", data)
 	}
-	response, data = h.browserDo(req{path: path})
+	if len(response.Cookies()) != 0 {
+		t.Fatal("the exchange set a cookie")
+	}
+	response, data = h.exchange(h.ownOrigin(), secret, "/")
 	expect(t, response, data, http.StatusUnauthorized, CodePairingInvalid)
 
 	expired := h.pairingCode("/")
 	h.clock.Advance(61 * time.Second)
-	response, data = h.browserDo(req{path: strings.TrimPrefix(expired.URL, h.s.BrowserURL())})
+	response, data = h.exchange(h.ownOrigin(), expired.Code, "/")
 	expect(t, response, data, http.StatusUnauthorized, CodePairingInvalid)
 
-	// The cookie authenticates API reads; a bogus one does not.
-	response, data = h.browserDo(req{path: "/api/v0/hello", header: map[string]string{"Cookie": cookieHeader(session)}})
+	// The token authenticates API reads; a forged one does not, and a cookie
+	// carrying it means nothing.
+	response, data = h.browserDo(req{path: "/api/v0/hello", header: map[string]string{"Authorization": "Bearer " + exchanged.Token}})
 	expect(t, response, data, http.StatusOK, "")
-	response, data = h.browserDo(req{path: "/api/v0/hello", header: map[string]string{"Cookie": h.s.cookieName() + "=forged"}})
+	response, data = h.browserDo(req{path: "/api/v0/hello", header: map[string]string{"Authorization": "Bearer forged"}})
 	expect(t, response, data, http.StatusUnauthorized, CodeUnauthenticated)
-	// /pair is a Browser route only.
-	response, data = h.localDo(req{path: path})
+	response, data = h.browserDo(req{path: "/api/v0/hello", header: map[string]string{"Cookie": "sidecar_session_" + h.browserPort() + "=" + exchanged.Token}})
+	expect(t, response, data, http.StatusUnauthorized, CodeUnauthenticated)
+	// The pairing page and exchange are Browser routes only.
+	response, data = h.localDo(req{path: "/pair"})
 	expect(t, response, data, http.StatusForbidden, CodeNotServedHere)
+	response, data = h.localDo(req{method: http.MethodPost, path: "/api/v0/pairing/exchange", body: "{}"})
+	expect(t, response, data, http.StatusForbidden, CodeNotServedHere)
+}
+
+func TestPairingPageIsLockedDown(t *testing.T) {
+	h := newHarness(t)
+	response, data := h.browserDo(req{path: "/pair"})
+	if response.StatusCode != http.StatusOK || !bytes.Contains(data, []byte("/api/v0/pairing/exchange")) || !bytes.Contains(data, []byte(SessionStorageKey)) {
+		t.Fatalf("pair page: %d %q", response.StatusCode, data)
+	}
+	csp := response.Header.Get("Content-Security-Policy")
+	for _, want := range []string{"default-src 'none'", "script-src 'sha256-" + pairScriptHash + "'", "connect-src 'self'", "frame-ancestors 'none'"} {
+		if !strings.Contains(csp, want) {
+			t.Fatalf("CSP %q lacks %q", csp, want)
+		}
+	}
+	if response.Header.Get("Cache-Control") != "no-store" || response.Header.Get("Referrer-Policy") != "no-referrer" {
+		t.Fatalf("headers = %v", response.Header)
+	}
+	if !bytes.Contains(data, []byte("<script>"+pairScript+"</script>")) {
+		t.Fatal("the served script is not the hashed one")
+	}
+}
+
+func TestPairingExchangeIsAnOwnOriginMutation(t *testing.T) {
+	h := newHarness(t)
+	const app = "http://app.example:5173"
+	h.pairOrigin(app)
+	code := h.pairingCode("/")
+	// A paired origin has its own token and may not mint a browser session.
+	response, data := h.exchange(app, code.Code, "/")
+	expect(t, response, data, http.StatusForbidden, CodeOriginRefused)
+	// Foreign and missing origins, and a preflight-free form post, never reach it.
+	response, data = h.exchange("http://evil.example", code.Code, "/")
+	expect(t, response, data, http.StatusForbidden, CodeOriginRefused)
+	body := `{"code":"` + code.Code + `"}`
+	response, data = h.browserDo(req{method: http.MethodPost, path: "/api/v0/pairing/exchange", body: body, header: map[string]string{"Content-Type": "application/json", "X-Sidecar-Request": "1"}})
+	expect(t, response, data, http.StatusForbidden, CodeOriginRefused)
+	response, data = h.browserDo(req{method: http.MethodPost, path: "/api/v0/pairing/exchange", body: body, header: map[string]string{"Origin": h.ownOrigin(), "Content-Type": "text/plain"}})
+	expect(t, response, data, http.StatusForbidden, CodeMutationRefused)
+	// None of the refusals consumed the code.
+	response, data = h.exchange(h.ownOrigin(), code.Code, "/")
+	expect(t, response, data, http.StatusOK, "")
+}
+
+func TestSessionTokenIsBoundToItsOrigin(t *testing.T) {
+	h := newHarness(t)
+	const app = "http://app.example:5173"
+	h.pairOrigin(app)
+	token := h.pairBrowser()
+	bearer := "Bearer " + token
+	// No Origin (a same-origin GET) and the exact exchanging origin are accepted.
+	response, data := h.browserDo(req{path: "/api/v0/hello", header: map[string]string{"Authorization": bearer}})
+	expect(t, response, data, http.StatusOK, "")
+	response, data = h.browserDo(req{path: "/api/v0/hello", header: map[string]string{"Authorization": bearer, "Origin": h.ownOrigin()}})
+	expect(t, response, data, http.StatusOK, "")
+	// The listener's other own origin, and a paired origin, are not that origin.
+	port := h.browserPort()
+	response, data = h.browserDo(req{path: "/api/v0/hello", host: "localhost:" + port, header: map[string]string{"Authorization": bearer, "Origin": "http://localhost:" + port}})
+	expect(t, response, data, http.StatusForbidden, CodeOriginRefused)
+	response, data = h.browserDo(req{path: "/api/v0/hello", header: map[string]string{"Authorization": bearer, "Origin": app}})
+	expect(t, response, data, http.StatusForbidden, CodeOriginRefused)
+	// The same-origin UI opens terminals through a ticket, like any client.
+	response, data = h.browserDo(req{method: http.MethodPost, path: "/api/v0/ws-tickets", body: "{}", header: mutationHeaders(h.ownOrigin(), map[string]string{"Authorization": bearer})})
+	expect(t, response, data, http.StatusOK, "")
+	var issued TicketResponse
+	_ = json.Unmarshal(data, &issued)
+	h.expectBrowserClose(t, "session ticket from a paired origin", "?ticket="+issued.Ticket, http.Header{"Origin": {app}}, CloseOriginRefused)
 }
 
 func TestPairNextRefusesOpenRedirects(t *testing.T) {
@@ -455,18 +558,15 @@ func TestPairNextRefusesOpenRedirects(t *testing.T) {
 		response, data := h.localDo(req{method: http.MethodPost, path: "/api/v0/pairing/codes", body: string(body)})
 		expect(t, response, data, http.StatusBadRequest, CodeInvalidRequest)
 
+		// A tampered fragment is refused at the exchange without spending the code.
 		code := h.pairingCode("/")
-		link, _ := url.Parse(code.URL)
-		query := link.Query()
-		query.Set("next", next)
-		response, data = h.browserDo(req{path: "/pair?" + query.Encode()})
+		response, data = h.exchange(h.ownOrigin(), code.Code, next)
 		expect(t, response, data, http.StatusBadRequest, CodeInvalidRequest)
-		if response.Header.Get("Location") != "" || len(response.Cookies()) != 0 {
-			t.Fatalf("refused next %q still redirected or paired", next)
-		}
+		response, data = h.exchange(h.ownOrigin(), code.Code, "/")
+		expect(t, response, data, http.StatusOK, "")
 	}
 	code := h.pairingCode("")
-	if !strings.Contains(code.URL, "next=%2F") {
+	if fragmentValue(t, code.URL, "next") != "/" {
 		t.Fatalf("default next missing: %s", code.URL)
 	}
 }
@@ -530,9 +630,9 @@ func TestTailnetIdentityHeaderHonoredOnlyOnTailnet(t *testing.T) {
 	// Static files on the tailnet need the login too.
 	response, data = h.tailnetDo(req{path: "/"})
 	expect(t, response, data, http.StatusUnauthorized, CodeUnauthenticated)
-	// A session cookie does not stand in for a tailnet login.
-	cookie := h.pairBrowser()
-	response, data = h.tailnetDo(req{path: "/api/v0/hello", header: map[string]string{"Cookie": cookieHeader(cookie)}})
+	// A browser session token does not stand in for a tailnet login.
+	session := h.pairBrowser()
+	response, data = h.tailnetDo(req{path: "/api/v0/hello", header: map[string]string{"Authorization": "Bearer " + session}})
 	expect(t, response, data, http.StatusUnauthorized, CodeUnauthenticated)
 }
 
@@ -868,14 +968,20 @@ func TestTerminalBrowserAuthAndTickets(t *testing.T) {
 	if code, _ := closeStatus(t, conn); code != CloseOriginRefused {
 		t.Fatalf("cross-origin ticket close = %d", code)
 	}
-	// The same-origin UI may use its cookie.
-	cookie := h.pairBrowser()
-	conn, err = h.dialBrowser(t, "", http.Header{"Origin": {h.ownOrigin()}, "Cookie": {cookieHeader(cookie)}})
+	// The same-origin UI takes the same path: its session token buys a ticket,
+	// and a cookie carrying the token opens nothing.
+	session := h.pairBrowser()
+	h.expectBrowserClose(t, "session token as a cookie", "", http.Header{"Origin": {h.ownOrigin()}, "Cookie": {"sidecar_session_" + h.browserPort() + "=" + session}}, CloseUnauthenticated)
+	response, data := h.browserDo(req{method: http.MethodPost, path: "/api/v0/ws-tickets", body: "{}", header: mutationHeaders(h.ownOrigin(), map[string]string{"Authorization": "Bearer " + session})})
+	expect(t, response, data, http.StatusOK, "")
+	var own TicketResponse
+	_ = json.Unmarshal(data, &own)
+	conn, err = h.dialBrowser(t, "?ticket="+own.Ticket, http.Header{"Origin": {h.ownOrigin()}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeText(t, conn, `{"cookie":true}`)
-	if got := readText(t, conn); got != `{"cookie":true}` {
+	writeText(t, conn, `{"session":true}`)
+	if got := readText(t, conn); got != `{"session":true}` {
 		t.Fatalf("echo = %q", got)
 	}
 	_ = conn.Close(websocket.StatusNormalClosure, "")

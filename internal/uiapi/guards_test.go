@@ -27,7 +27,7 @@ func (h *harness) browserPort() string {
 
 func TestHostGuardRefusesNearMisses(t *testing.T) {
 	h := newHarness(t)
-	cookie := map[string]string{"Cookie": cookieHeader(h.pairBrowser())}
+	auth := map[string]string{"Authorization": "Bearer " + h.pairBrowser()}
 	port := h.browserPort()
 	for _, host := range []string{
 		"localhost." + ":" + port, // trailing dot
@@ -38,7 +38,7 @@ func TestHostGuardRefusesNearMisses(t *testing.T) {
 		"evil.example:" + port, // rebinding keeps the port
 		"127.0.0.1:" + port + "@evil.example",
 	} {
-		response, data := h.browserDo(req{path: "/api/v0/hello", host: host, header: cookie})
+		response, data := h.browserDo(req{path: "/api/v0/hello", host: host, header: auth})
 		expect(t, response, data, http.StatusMisdirectedRequest, CodeHostRefused)
 		// Static files and /pair sit behind the same guard.
 		response, data = h.browserDo(req{path: "/", host: host})
@@ -99,25 +99,25 @@ func (h *harness) expectBrowserClose(t *testing.T, name, query string, header ht
 
 func TestTerminalCrossSiteHijackingIsRefused(t *testing.T) {
 	h := newHarness(t)
-	session := cookieHeader(h.pairBrowser())
+	session := "Bearer " + h.pairBrowser()
 	const app = "http://app.example:5173"
 	h.pairOrigin(app)
 	for name, tc := range map[string]struct {
 		header http.Header
 		code   websocket.StatusCode
 	}{
-		// A non-browser client that omits Origin is refused, cookie or not.
-		"no origin": {http.Header{"Cookie": {session}}, CloseOriginRefused},
+		// A non-browser client that omits Origin is refused, token or not.
+		"no origin": {http.Header{"Authorization": {session}}, CloseOriginRefused},
 		// Sandboxed iframes and file: pages send Origin: null.
-		"null origin": {http.Header{"Cookie": {session}, "Origin": {"null"}}, CloseOriginRefused},
-		// Another port on the same host is same-site, so the browser attaches
-		// the cookie; the Origin still differs.
-		"same-site page": {http.Header{"Cookie": {session}, "Origin": {"http://localhost:3000"}}, CloseOriginRefused},
-		"rebound origin": {http.Header{"Cookie": {session}, "Origin": {"http://evil.example:" + h.browserPort()}}, CloseOriginRefused},
-		// A paired origin on the same site also carries the cookie; it must use
-		// its token, through a ticket.
-		"paired origin riding the cookie": {http.Header{"Cookie": {session}, "Origin": {app}}, CloseUnauthenticated},
-		"forged cookie":                   {http.Header{"Cookie": {h.s.cookieName() + "=forged"}, "Origin": {h.ownOrigin()}}, CloseUnauthenticated},
+		"null origin": {http.Header{"Authorization": {session}, "Origin": {"null"}}, CloseOriginRefused},
+		// Another port on the same host is same-site; with no cookie there is
+		// nothing ambient for it to carry, and its Origin differs anyway.
+		"same-site page": {http.Header{"Authorization": {session}, "Origin": {"http://localhost:3000"}}, CloseOriginRefused},
+		"rebound origin": {http.Header{"Authorization": {session}, "Origin": {"http://evil.example:" + h.browserPort()}}, CloseOriginRefused},
+		// The browser session token is bound to the origin that exchanged it.
+		"paired origin with the session token": {http.Header{"Authorization": {session}, "Origin": {app}}, CloseOriginRefused},
+		"forged token":                         {http.Header{"Authorization": {"Bearer forged"}, "Origin": {h.ownOrigin()}}, CloseUnauthenticated},
+		"no credential":                        {http.Header{"Origin": {h.ownOrigin()}}, CloseUnauthenticated},
 	} {
 		h.expectBrowserClose(t, name, "", tc.header, tc.code)
 	}
@@ -227,7 +227,7 @@ func TestTicketIsBoundToItsListener(t *testing.T) {
 func TestPairingCodeRedeemsOnceUnderConcurrency(t *testing.T) {
 	h := newHarness(t)
 	code := h.pairingCode("/")
-	path := strings.TrimPrefix(code.URL, h.s.BrowserURL())
+	body := `{"code":"` + code.Code + `"}`
 	const attempts = 24
 	var wg sync.WaitGroup
 	statuses := make(chan int, attempts)
@@ -235,7 +235,10 @@ func TestPairingCodeRedeemsOnceUnderConcurrency(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			request, _ := http.NewRequest(http.MethodGet, h.s.BrowserURL()+path, nil)
+			request, _ := http.NewRequest(http.MethodPost, h.s.BrowserURL()+"/api/v0/pairing/exchange", strings.NewReader(body))
+			for key, value := range mutationHeaders(h.ownOrigin(), nil) {
+				request.Header.Set(key, value)
+			}
 			response, err := h.browser.Do(request)
 			if err != nil {
 				statuses <- 0
@@ -250,7 +253,7 @@ func TestPairingCodeRedeemsOnceUnderConcurrency(t *testing.T) {
 	paired := 0
 	for status := range statuses {
 		switch status {
-		case http.StatusSeeOther:
+		case http.StatusOK:
 			paired++
 		case http.StatusUnauthorized:
 		default:
@@ -264,7 +267,7 @@ func TestPairingCodeRedeemsOnceUnderConcurrency(t *testing.T) {
 
 func TestTicketRedeemsOnceUnderConcurrency(t *testing.T) {
 	store := newAuthStore(time.Now)
-	ticket, _, err := store.issueTicket(grant{listener: ListenerBrowser, auth: "cookie", origin: "http://127.0.0.1:1"})
+	ticket, _, err := store.issueTicket(grant{listener: ListenerBrowser, auth: "session", origin: "http://127.0.0.1:1", client: "session:x"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,21 +297,23 @@ func TestPairNextEncodedVariantsStayOnThisOrigin(t *testing.T) {
 	base, _ := url.Parse(h.s.BrowserURL())
 	for _, next := range []string{"/%2F%2Fevil.example/", "/%5Cevil.example", "/.//evil.example", "/..//evil.example", "/%09/evil.example", "/?next=//evil.example", "/#//evil.example"} {
 		code := h.pairingCode("/")
-		link, _ := url.Parse(code.URL)
-		query := link.Query()
-		query.Set("next", next)
-		response, data := h.browserDo(req{path: "/pair?" + query.Encode()})
+		response, data := h.exchange(h.ownOrigin(), code.Code, next)
 		if response.StatusCode == http.StatusBadRequest {
 			continue
 		}
-		expect(t, response, data, http.StatusSeeOther, "")
-		location := response.Header.Get("Location")
-		if strings.HasPrefix(location, "//") || strings.ContainsRune(location, '\\') {
-			t.Fatalf("next %q redirected to %q", next, location)
+		expect(t, response, data, http.StatusOK, "")
+		var exchanged PairingExchange
+		if err := json.Unmarshal(data, &exchanged); err != nil {
+			t.Fatal(err)
 		}
-		target, err := base.Parse(location)
+		// The page navigates to new URL(next, location.origin) and checks the
+		// origin again; the server's answer must already resolve on-origin.
+		if strings.HasPrefix(exchanged.Next, "//") || strings.ContainsRune(exchanged.Next, '\\') {
+			t.Fatalf("next %q came back as %q", next, exchanged.Next)
+		}
+		target, err := base.Parse(exchanged.Next)
 		if err != nil || target.Host != base.Host || target.Scheme != base.Scheme {
-			t.Fatalf("next %q redirected off origin to %q (%v)", next, location, err)
+			t.Fatalf("next %q resolves off origin to %q (%v)", next, exchanged.Next, err)
 		}
 	}
 }

@@ -885,7 +885,7 @@ Usage: sidecar api <command>
 
 Pair this machine's browser and open the UI
 
-Ask the running server for a single-use pairing link (valid for 60 seconds) and open it in the default browser. The link sets a session cookie for the server's own origin and redirects to --path. --print writes the link instead of opening it.
+Ask the running server for a single-use pairing link (valid for 60 seconds) and open it in the default browser. The code rides in the link's fragment, so it never appears in a request line; the pairing page exchanges it for a session token, keeps the token in that origin's localStorage (sidecar.session), and goes to --path. --print writes the link instead of opening it.
 
 ```
 Usage: sidecar api open [--print] [--path P]

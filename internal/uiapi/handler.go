@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -20,7 +19,6 @@ import (
 const (
 	terminalPath        = "/api/v0/terminal"
 	maxBodyBytes        = 64 << 10
-	cookieMaxAge        = 400 * 24 * 60 * 60
 	tailscaleLoginHead  = "Tailscale-User-Login"
 	mutationHeader      = "X-Sidecar-Request"
 	corsAllowedHeaders  = "Authorization, Content-Type, X-Sidecar-Request"
@@ -63,7 +61,8 @@ func (s *Server) routeTable() map[string]*route {
 		"/api/v0/pairing/codes": {methods: map[string]routeFunc{http.MethodPost: s.handlePairingCode}, listeners: local},
 		"/api/v0/origins": {methods: map[string]routeFunc{http.MethodGet: s.handleListOrigins, http.MethodPost: s.handlePairOrigin,
 			http.MethodDelete: s.handleRevokeOrigin}, listeners: local},
-		"/pair": {methods: map[string]routeFunc{http.MethodGet: s.handlePair}, listeners: []Listener{ListenerBrowser}, public: true},
+		"/api/v0/pairing/exchange": {methods: map[string]routeFunc{http.MethodPost: s.handlePairingExchange}, listeners: []Listener{ListenerBrowser}, public: true},
+		"/pair":                    {methods: map[string]routeFunc{http.MethodGet: s.handlePair}, listeners: []Listener{ListenerBrowser}, public: true},
 	}
 }
 
@@ -187,7 +186,7 @@ func (h *listenerHandler) dispatch(w http.ResponseWriter, r *http.Request, c cal
 func (h *listenerHandler) authenticate(w http.ResponseWriter, r *http.Request, c caller) (caller, bool) {
 	switch h.kind {
 	case ListenerLocal:
-		c.auth = "local"
+		c.auth, c.client = "local", "local"
 		return c, true
 	case ListenerTailnet:
 		login, code, message := h.tailnetLogin(r)
@@ -199,32 +198,52 @@ func (h *listenerHandler) authenticate(w http.ResponseWriter, r *http.Request, c
 			writeError(w, status, code, message)
 			return c, false
 		}
-		c.auth, c.login = "tailnet", login
+		c.auth, c.login, c.client = "tailnet", login, "tailnet:"+login
 		return c, true
 	}
-	if token, present := bearerToken(r); present {
-		record, ok := h.s.origins.lookupToken(token)
-		if !ok {
-			writeError(w, http.StatusUnauthorized, CodeUnauthenticated, "This bearer token is not paired; pair the origin again with `sidecar api pair --origin URL`.")
-			return c, false
-		}
-		if c.origin != "" && c.origin != record.Origin {
-			writeError(w, http.StatusForbidden, CodeOriginRefused, "This bearer token was issued to another origin.")
-			return c, false
-		}
-		c.auth, c.origin = "bearer", record.Origin
-		return c, true
+	token, present := bearerToken(r)
+	if !present {
+		writeError(w, http.StatusUnauthorized, CodeUnauthenticated, "Send Authorization: Bearer with this browser's session token (pair it with `sidecar api open`) or a paired origin's token.")
+		return c, false
 	}
-	// Cookies are for the same-origin UI only. A paired origin on the same
-	// site would also carry it, so it authenticates with its token instead.
-	if c.origin == "" || h.ownOrigin(c.origin) {
-		if cookie, err := r.Cookie(h.cookieName()); err == nil && h.s.auth.validSession(cookie.Value) {
-			c.auth = "cookie"
-			return c, true
-		}
+	resolved, result := h.s.resolveBearer(token, c.origin)
+	switch result {
+	case bearerWrongOrigin:
+		writeError(w, http.StatusForbidden, CodeOriginRefused, "This bearer token was issued to another origin.")
+		return c, false
+	case bearerUnknown:
+		writeError(w, http.StatusUnauthorized, CodeUnauthenticated, "This bearer token is not valid; pair again with `sidecar api open` or `sidecar api pair --origin URL`.")
+		return c, false
 	}
-	writeError(w, http.StatusUnauthorized, CodeUnauthenticated, "Pair this browser with `sidecar api open`, or send a paired origin's bearer token.")
-	return c, false
+	resolved.listener = c.listener
+	return resolved, true
+}
+
+type bearerResult int
+
+const (
+	bearerOK bearerResult = iota
+	bearerUnknown
+	bearerWrongOrigin
+)
+
+// resolveBearer accepts a paired origin's token or a browser session token.
+// Both are bound to one origin: a request that names any other Origin is
+// refused, so a token copied to another page is useless there.
+func (s *Server) resolveBearer(token, origin string) (caller, bearerResult) {
+	if record, ok := s.origins.lookupToken(token); ok {
+		if origin != "" && origin != record.Origin {
+			return caller{}, bearerWrongOrigin
+		}
+		return caller{auth: "bearer", origin: record.Origin, client: "origin:" + record.Origin}, bearerOK
+	}
+	if bound, client, ok := s.auth.lookupSession(token); ok {
+		if origin != "" && origin != bound {
+			return caller{}, bearerWrongOrigin
+		}
+		return caller{auth: "session", origin: bound, client: client}, bearerOK
+	}
+	return caller{}, bearerUnknown
 }
 
 func (h *listenerHandler) tailnetLogin(r *http.Request) (login, code, message string) {
@@ -268,10 +287,6 @@ func (h *listenerHandler) canonicalBase() string {
 	}
 	return h.s.BrowserURL()
 }
-
-func (h *listenerHandler) cookieName() string { return h.s.cookieName() }
-
-func (s *Server) cookieName() string { return "sidecar_session_" + strconv.Itoa(s.browserPort) }
 
 func bearerToken(r *http.Request) (string, bool) {
 	header := r.Header.Get("Authorization")
@@ -379,9 +394,9 @@ func (s *Server) handleTicket(w http.ResponseWriter, r *http.Request, c caller) 
 	if !decodeBody(w, r, &body) {
 		return
 	}
-	ticket, expires, err := s.auth.issueTicket(grant{listener: c.listener, auth: c.auth, origin: c.origin, login: c.login})
+	ticket, expires, err := s.auth.issueTicket(grant{listener: c.listener, auth: c.auth, origin: c.origin, login: c.login, client: c.client})
 	if err != nil {
-		writeError(w, http.StatusTooManyRequests, CodeTooMany, "Too many unredeemed tickets; open the WebSocket with one you already have, or wait 30 seconds.")
+		writeError(w, http.StatusTooManyRequests, CodeTooMany, fmt.Sprintf("Too many unredeemed tickets (at most %d per client); open the WebSocket with one you already have, or wait 30 seconds.", maxTicketsPerClient))
 		return
 	}
 	writeJSON(w, http.StatusOK, TicketResponse{Ticket: ticket, ExpiresAt: expires.UTC()})
@@ -406,34 +421,61 @@ func (s *Server) handlePairingCode(w http.ResponseWriter, r *http.Request, _ cal
 		writeError(w, http.StatusBadRequest, CodeInvalidRequest, err.Error())
 		return
 	}
-	code, expires, err := s.auth.issueCode(next)
+	code, expires, err := s.auth.issueCode()
 	if err != nil {
 		writeError(w, http.StatusTooManyRequests, CodeTooMany, "Too many unused pairing codes; use one or wait a minute.")
 		return
 	}
-	link := s.BrowserURL() + "/pair?" + url.Values{"code": {code}, "next": {next}}.Encode()
+	// The code rides in the fragment, which a browser never sends: it reaches
+	// the server only in the pairing page's POST body, never a request line.
+	link := s.BrowserURL() + "/pair#" + url.Values{"code": {code}, "next": {next}}.Encode()
 	writeJSON(w, http.StatusOK, PairingCode{Code: code, URL: link, ExpiresAt: expires.UTC()})
 }
 
-func (s *Server) handlePair(w http.ResponseWriter, r *http.Request, _ caller) {
-	query := r.URL.Query()
-	next, err := sameOriginPath(query.Get("next"))
+// PairingExchange is POST /api/v0/pairing/exchange: a browser session token
+// for the same-origin UI, and the validated path to land on.
+type PairingExchange struct {
+	Token string `json:"token"`
+	Next  string `json:"next"`
+}
+
+// handlePairingExchange trades a pairing code for a session token. It needs no
+// credential (the code is one), but it is a mutation like any other, and only
+// the listener's own origin may make it: a paired origin has its own token.
+func (s *Server) handlePairingExchange(w http.ResponseWriter, r *http.Request, c caller) {
+	if !s.browserOrigins[c.origin] {
+		writeError(w, http.StatusForbidden, CodeOriginRefused, "Only this server's own pairing page may exchange a pairing code; open the link from `sidecar api open`.")
+		return
+	}
+	var body struct {
+		Code string `json:"code"`
+		Next string `json:"next"`
+	}
+	if !decodeBody(w, r, &body) {
+		return
+	}
+	next, err := sameOriginPath(body.Next)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, CodeInvalidRequest, err.Error())
 		return
 	}
-	if !s.auth.redeemCode(query.Get("code")) {
+	if !s.auth.redeemCode(body.Code) {
 		writeError(w, http.StatusUnauthorized, CodePairingInvalid, "This pairing link expired or was already used; run `sidecar api open` again.")
 		return
 	}
-	token, err := s.auth.newSession()
+	token, err := s.auth.newSession(c.origin)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, CodeBackend, "Could not create a session; try `sidecar api open` again.")
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: s.cookieName(), Value: token, Path: "/", MaxAge: cookieMaxAge, HttpOnly: true, SameSite: http.SameSiteStrictMode})
-	w.Header().Set("Cache-Control", "no-store")
-	http.Redirect(w, r, next, http.StatusSeeOther)
+	writeJSON(w, http.StatusOK, PairingExchange{Token: token, Next: next})
+}
+
+// handlePair serves the pairing page. It reads nothing from the request and
+// consumes nothing: the page's own script exchanges the code from the
+// fragment.
+func (s *Server) handlePair(w http.ResponseWriter, r *http.Request, _ caller) {
+	servePairPage(w, r)
 }
 
 // sameOriginPath accepts only an absolute path on this origin, so a pairing

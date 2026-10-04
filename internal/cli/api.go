@@ -59,7 +59,7 @@ func apiCommand() *Command {
 	}
 	open := &Command{
 		Name: "open", Summary: "Pair this machine's browser and open the UI", Usage: "sidecar api open [--print] [--path P]",
-		Long:      "Ask the running server for a single-use pairing link (valid for 60 seconds) and open it in the default browser. The link sets a session cookie for the server's own origin and redirects to --path. --print writes the link instead of opening it.",
+		Long:      "Ask the running server for a single-use pairing link (valid for 60 seconds) and open it in the default browser. The code rides in the link's fragment, so it never appears in a request line; the pairing page exchanges it for a session token, keeps the token in that origin's localStorage (sidecar.session), and goes to --path. --print writes the link instead of opening it.",
 		Flags:     []Flag{{Name: "--print", Summary: "Print the pairing URL instead of opening a browser", Bool: true}, {Name: "--path", Arg: "P", Summary: "Path to land on after pairing (default /)"}, help},
 		ExitCodes: []ExitCode{{Code: 0, Summary: "success"}, {Code: 1, Summary: "no server running or the server refused"}, {Code: 2, Summary: "usage error"}},
 		Examples:  []Example{{Command: "sidecar api open"}, {Command: "sidecar api open --print"}},
@@ -320,7 +320,7 @@ func runAPIOpen(env Env, args []string) int {
 		cliErrf(env.Stderr, "could not open a browser (%v); open this link within 60 seconds:\n%s\n", err, pairing.URL)
 		return 1
 	}
-	_, _ = fmt.Fprintf(env.Stdout, "Opened %s in your browser. The link works once, for 60 seconds.\n", strings.SplitN(pairing.URL, "/pair?", 2)[0])
+	_, _ = fmt.Fprintf(env.Stdout, "Opened %s in your browser. The link works once, for 60 seconds.\n", strings.SplitN(pairing.URL, "/pair#", 2)[0])
 	return 0
 }
 

@@ -112,14 +112,14 @@ func TestAPICommandsAgainstARunningServer(t *testing.T) {
 	}
 
 	code, stdout, _ = runAPICLI(t, "api", "open", "--print", "--path", "/s/x")
-	if code != 0 || !strings.HasPrefix(stdout, server.BrowserURL()+"/pair?code=") || !strings.Contains(stdout, "next=%2Fs%2Fx") {
+	if code != 0 || !strings.HasPrefix(stdout, server.BrowserURL()+"/pair#code=") || !strings.Contains(stdout, "next=%2Fs%2Fx") {
 		t.Fatalf("open --print: %d %q", code, stdout)
 	}
 	opened := ""
 	previous := apiOpenBrowser
 	apiOpenBrowser = func(url string) error { opened = url; return nil }
 	t.Cleanup(func() { apiOpenBrowser = previous })
-	if code, _, _ = runAPICLI(t, "api", "open"); code != 0 || !strings.HasPrefix(opened, server.BrowserURL()+"/pair?code=") {
+	if code, _, _ = runAPICLI(t, "api", "open"); code != 0 || !strings.HasPrefix(opened, server.BrowserURL()+"/pair#code=") {
 		t.Fatalf("open: %d opened %q", code, opened)
 	}
 }

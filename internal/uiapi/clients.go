@@ -14,10 +14,18 @@ import (
 // caller is who a request was trusted as.
 type caller struct {
 	listener Listener
-	auth     string // local, cookie, bearer, ticket, tailnet
+	auth     string // local, session, bearer, ticket, tailnet
 	origin   string
 	login    string
+	// client identifies one credential holder for per-client limits: a
+	// browser session, a paired origin, a tailnet login, or local.
+	client string
 }
+
+// maxTerminalsPerClient bounds the terminal WebSockets one client may hold
+// open at once. Local callers are trusted like the tmux socket and are not
+// limited.
+const maxTerminalsPerClient = 16
 
 // ClientInfo is one connected client in status.
 type ClientInfo struct {
@@ -51,6 +59,7 @@ type clientRegistry struct {
 
 type trackedClient struct {
 	info ClientInfo
+	key  string
 	mu   sync.Mutex
 	term TerminalInfo
 	open bool
@@ -63,15 +72,28 @@ func newClientRegistry(now func() time.Time) *clientRegistry {
 	return &clientRegistry{now: now, clients: map[string]*trackedClient{}}
 }
 
-func (r *clientRegistry) add(kind string, c caller) *trackedClient {
+// add registers a client, refusing one more terminal than its limit.
+func (r *clientRegistry) add(kind string, c caller) (*trackedClient, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if c.listener != ListenerLocal {
+		held := 0
+		for _, existing := range r.clients {
+			if existing.key == c.client {
+				held++
+			}
+		}
+		if held >= maxTerminalsPerClient {
+			return nil, false
+		}
+	}
 	r.next++
 	id := "c" + strconv.FormatUint(r.next, 10)
 	client := &trackedClient{info: ClientInfo{ID: id, Kind: kind, Listener: c.listener, Auth: c.auth, Origin: c.origin, Login: c.login, Since: r.now().UTC()}}
 	client.term.ClientID = id
+	client.key = c.client
 	r.clients[id] = client
-	return client
+	return client, true
 }
 
 func (r *clientRegistry) remove(client *trackedClient) {

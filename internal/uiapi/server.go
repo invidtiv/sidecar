@@ -70,6 +70,10 @@ type Options struct {
 	Version string
 	Now     func() time.Time
 	Logf    func(format string, args ...any)
+	// KeepaliveInterval and KeepaliveTimeout govern terminal WebSocket pings;
+	// zero means 30s and 15s.
+	KeepaliveInterval time.Duration
+	KeepaliveTimeout  time.Duration
 }
 
 // Server is one running API process.

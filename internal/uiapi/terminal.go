@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -22,7 +23,48 @@ const (
 	CloseUnauthenticated   websocket.StatusCode = 4401
 	CloseOriginRefused     websocket.StatusCode = 4403
 	CloseShuttingDown      websocket.StatusCode = 4409
+	// CloseTooManyTerminals is the WebSocket form of too_many_outstanding.
+	CloseTooManyTerminals = websocket.StatusTryAgainLater
 )
+
+const (
+	defaultKeepaliveInterval = 30 * time.Second
+	defaultKeepaliveTimeout  = 15 * time.Second
+)
+
+// keepalive pings the peer on an interval and drops a connection whose pong
+// misses the deadline. A half-open socket (a laptop that slept, a proxy that
+// lost the peer) then ends as EOF and releases its lease, instead of holding
+// a terminal until the next write happens to fail.
+func (s *Server) keepalive(ctx context.Context, conn *websocket.Conn) {
+	interval, timeout := s.opts.KeepaliveInterval, s.opts.KeepaliveTimeout
+	if interval <= 0 {
+		interval = defaultKeepaliveInterval
+	}
+	if timeout <= 0 {
+		timeout = defaultKeepaliveTimeout
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			// Not derived from ctx: canceling a write context closes the socket,
+			// which would pre-empt the 4409 close on shutdown.
+			pingCtx, cancel := context.WithTimeout(context.Background(), timeout)
+			err := conn.Ping(pingCtx)
+			cancel()
+			if err != nil {
+				if ctx.Err() == nil {
+					_ = conn.CloseNow()
+				}
+				return
+			}
+		}
+	}
+}
 
 const (
 	terminalWriteTimeout = 15 * time.Second
@@ -53,13 +95,19 @@ func (h *listenerHandler) serveTerminal(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	defer h.s.streams.Done()
-	h.s.runTerminal(conn, c)
+	client, ok := h.s.clients.add("terminal", c)
+	if !ok {
+		_ = conn.Close(CloseTooManyTerminals, closeReason(fmt.Sprintf("This client already has %d open terminals; close one first.", maxTerminalsPerClient)))
+		return
+	}
+	defer h.s.clients.remove(client)
+	h.s.runTerminal(conn, client)
 }
 
 func (h *listenerHandler) authorizeTerminal(r *http.Request) (caller, websocket.StatusCode, string) {
 	c := caller{listener: h.kind}
 	if h.kind == ListenerLocal {
-		c.auth = "local"
+		c.auth, c.client = "local", "local"
 		return c, 0, ""
 	}
 	origin := r.Header.Get("Origin")
@@ -72,7 +120,7 @@ func (h *listenerHandler) authorizeTerminal(r *http.Request) (caller, websocket.
 		if code != "" {
 			return c, CloseUnauthenticated, message
 		}
-		c.auth, c.login = "tailnet", login
+		c.auth, c.login, c.client = "tailnet", login, "tailnet:"+login
 		return c, 0, ""
 	}
 	if ticket := r.URL.Query().Get("ticket"); ticket != "" {
@@ -83,27 +131,23 @@ func (h *listenerHandler) authorizeTerminal(r *http.Request) (caller, websocket.
 		if g.origin != origin {
 			return c, CloseOriginRefused, "This ticket was issued to another origin."
 		}
-		c.auth = "ticket"
+		c.auth, c.client = "ticket", g.client
 		return c, 0, ""
 	}
+	// Non-browser clients may send their bearer token on the upgrade. The
+	// Origin they send must be the one the token is bound to.
 	if token, present := bearerToken(r); present {
-		record, ok := h.s.origins.lookupToken(token)
-		if !ok {
-			return c, CloseUnauthenticated, "This bearer token is not paired; pair the origin again."
-		}
-		if record.Origin != origin {
+		resolved, result := h.s.resolveBearer(token, origin)
+		switch result {
+		case bearerWrongOrigin:
 			return c, CloseOriginRefused, "This bearer token was issued to another origin."
+		case bearerUnknown:
+			return c, CloseUnauthenticated, "This bearer token is not valid; pair again."
 		}
-		c.auth = "bearer"
-		return c, 0, ""
+		resolved.listener = h.kind
+		return resolved, 0, ""
 	}
-	if h.ownOrigin(origin) {
-		if cookie, err := r.Cookie(h.cookieName()); err == nil && h.s.auth.validSession(cookie.Value) {
-			c.auth = "cookie"
-			return c, 0, ""
-		}
-	}
-	return c, CloseUnauthenticated, "Pair this browser with sidecar api open, or connect with a ticket from POST /api/v0/ws-tickets."
+	return c, CloseUnauthenticated, "Connect with a ticket from POST /api/v0/ws-tickets; pair this browser first with sidecar api open."
 }
 
 type inboundResult struct {
@@ -115,13 +159,12 @@ type inboundResult struct {
 // is one JSONL request line and each response line is one text message. The
 // socket closing is the stream's EOF, so the backend releases its lease
 // exactly as `sidecar mobile serve --stdio` does on stdin EOF.
-func (s *Server) runTerminal(conn *websocket.Conn, c caller) {
+func (s *Server) runTerminal(conn *websocket.Conn, client *trackedClient) {
 	conn.SetReadLimit(mobileproto.MaxLineBytes)
-	client := s.clients.add("terminal", c)
-	defer s.clients.remove(client)
 
 	ctx, cancel := context.WithCancel(s.ctx)
 	defer cancel()
+	go s.keepalive(ctx, conn)
 	requests, requestWriter := io.Pipe()
 	responseReader, responses := io.Pipe()
 

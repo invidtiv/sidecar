@@ -8,11 +8,14 @@ import (
 )
 
 const (
-	pairingCodeTTL       = 60 * time.Second
-	ticketTTL            = 30 * time.Second
-	maxOutstandingCodes  = 64
-	maxOutstandingTicket = 256
-	maxSessions          = 1024
+	pairingCodeTTL      = 60 * time.Second
+	ticketTTL           = 30 * time.Second
+	maxOutstandingCodes = 64
+	// maxOutstandingTickets bounds every unredeemed ticket; the per-client
+	// bound keeps one paired origin or session from taking all of them.
+	maxOutstandingTickets = 256
+	maxTicketsPerClient   = 16
+	maxSessions           = 1024
 )
 
 // grant is what a ticket carries from its issuing request to the WebSocket
@@ -22,29 +25,32 @@ type grant struct {
 	auth     string
 	origin   string
 	login    string
+	client   string
 	expires  time.Time
 }
 
-type pairingCode struct {
-	next    string
-	expires time.Time
+// session is a browser session minted by a pairing exchange. Its token is a
+// bearer credential bound to the origin that exchanged the code.
+type session struct {
+	origin  string
+	created time.Time
 }
 
-// authStore holds the in-memory credentials: single-use pairing codes, cookie
+// authStore holds the in-memory credentials: single-use pairing codes, browser
 // sessions and WebSocket tickets. Nothing here survives a restart (v0).
 type authStore struct {
 	mu       sync.Mutex
 	now      func() time.Time
-	codes    map[string]pairingCode
-	sessions map[string]time.Time // token hash -> created
+	codes    map[string]time.Time // code hash -> expiry
+	sessions map[string]session   // token hash -> session
 	tickets  map[string]grant     // ticket hash -> grant
 }
 
 func newAuthStore(now func() time.Time) *authStore {
-	return &authStore{now: now, codes: map[string]pairingCode{}, sessions: map[string]time.Time{}, tickets: map[string]grant{}}
+	return &authStore{now: now, codes: map[string]time.Time{}, sessions: map[string]session{}, tickets: map[string]grant{}}
 }
 
-func (a *authStore) issueCode(next string) (string, time.Time, error) {
+func (a *authStore) issueCode() (string, time.Time, error) {
 	code, err := randomToken(16)
 	if err != nil {
 		return "", time.Time{}, err
@@ -57,7 +63,7 @@ func (a *authStore) issueCode(next string) (string, time.Time, error) {
 		return "", time.Time{}, errTooManyOutstanding
 	}
 	expires := now.Add(pairingCodeTTL)
-	a.codes[hashToken(code)] = pairingCode{next: next, expires: expires}
+	a.codes[hashToken(code)] = expires
 	return code, expires, nil
 }
 
@@ -69,12 +75,13 @@ func (a *authStore) redeemCode(code string) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	key := hashToken(code)
-	entry, ok := a.codes[key]
+	expires, ok := a.codes[key]
 	delete(a.codes, key)
-	return ok && a.now().Before(entry.expires)
+	return ok && a.now().Before(expires)
 }
 
-func (a *authStore) newSession() (string, error) {
+// newSession mints a session token bound to origin.
+func (a *authStore) newSession(origin string) (string, error) {
 	token, err := randomToken(32)
 	if err != nil {
 		return "", err
@@ -86,25 +93,31 @@ func (a *authStore) newSession() (string, error) {
 		// re-pairs with `sidecar api open`.
 		var oldestKey string
 		var oldest time.Time
-		for key, created := range a.sessions {
-			if oldestKey == "" || created.Before(oldest) {
-				oldestKey, oldest = key, created
+		for key, s := range a.sessions {
+			if oldestKey == "" || s.created.Before(oldest) {
+				oldestKey, oldest = key, s.created
 			}
 		}
 		delete(a.sessions, oldestKey)
 	}
-	a.sessions[hashToken(token)] = a.now()
+	a.sessions[hashToken(token)] = session{origin: origin, created: a.now()}
 	return token, nil
 }
 
-func (a *authStore) validSession(token string) bool {
+// lookupSession returns the origin a session token is bound to, and the key
+// that identifies this session as one client.
+func (a *authStore) lookupSession(token string) (origin, client string, ok bool) {
 	if token == "" {
-		return false
+		return "", "", false
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	_, ok := a.sessions[hashToken(token)]
-	return ok
+	key := hashToken(token)
+	s, ok := a.sessions[key]
+	if !ok {
+		return "", "", false
+	}
+	return s.origin, "session:" + key[:16], true
 }
 
 func (a *authStore) issueTicket(g grant) (string, time.Time, error) {
@@ -116,7 +129,16 @@ func (a *authStore) issueTicket(g grant) (string, time.Time, error) {
 	defer a.mu.Unlock()
 	now := a.now()
 	a.pruneLocked(now)
-	if len(a.tickets) >= maxOutstandingTicket {
+	if len(a.tickets) >= maxOutstandingTickets {
+		return "", time.Time{}, errTooManyOutstanding
+	}
+	held := 0
+	for _, existing := range a.tickets {
+		if existing.client == g.client {
+			held++
+		}
+	}
+	if held >= maxTicketsPerClient {
 		return "", time.Time{}, errTooManyOutstanding
 	}
 	g.expires = now.Add(ticketTTL)
@@ -142,8 +164,8 @@ func (a *authStore) redeemTicket(ticket string) (grant, bool) {
 }
 
 func (a *authStore) pruneLocked(now time.Time) {
-	for key, code := range a.codes {
-		if !now.Before(code.expires) {
+	for key, expires := range a.codes {
+		if !now.Before(expires) {
 			delete(a.codes, key)
 		}
 	}
