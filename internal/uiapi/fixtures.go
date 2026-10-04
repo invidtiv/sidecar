@@ -31,7 +31,8 @@ func LoadFixtures(dir string) (*FixtureBackend, error) {
 		if err != nil {
 			return nil, fmt.Errorf("load UI API fixture %s: %w", name, err)
 		}
-		decoder := json.NewDecoder(io.LimitReader(file, mobileproto.MaxLineBytes+1))
+		reader := &io.LimitedReader{R: file, N: mobileproto.MaxLineBytes + 1}
+		decoder := json.NewDecoder(reader)
 		decoder.DisallowUnknownFields()
 		err = decoder.Decode(into)
 		if err == nil {
@@ -39,6 +40,9 @@ func LoadFixtures(dir string) (*FixtureBackend, error) {
 			if e := decoder.Decode(&extra); e != io.EOF {
 				err = fmt.Errorf("expected exactly one JSON document")
 			}
+		}
+		if err == nil && reader.N == 0 {
+			err = fmt.Errorf("fixture exceeds %d-byte limit", mobileproto.MaxLineBytes)
 		}
 		_ = file.Close()
 		if err != nil {

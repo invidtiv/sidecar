@@ -317,3 +317,25 @@ func TestFixtureCatalogUsesSharedQueryAndRejectsMalformedAuthority(t *testing.T)
 		t.Fatal("non-fixture identity accepted")
 	}
 }
+
+func TestFixtureLoaderRejectsDocumentBeyondByteBound(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"sessions.json", "status.json"} {
+		data, err := os.ReadFile(filepath.Join(fixtureDir(), name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if name == "status.json" {
+			// The decoder sees a valid first document and whitespace until
+			// the limit, hiding the second document beyond its artificial EOF.
+			data = append(data, []byte(strings.Repeat(" ", mobileproto.MaxLineBytes))...)
+			data = append(data, []byte(`{"pid":999}`)...)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := LoadFixtures(dir); err == nil {
+		t.Fatal("oversized fixture with hidden second JSON document accepted")
+	}
+}
