@@ -131,6 +131,7 @@ Today the headless (mobile) path uses explicit compare-and-set `control`/`releas
 - **Clients report presence, not control.** A `presence` operation carries whether the window or app is focused and visible, the time since the user's last input, and the fitted columns and rows of each displayed terminal. The owning service runs `DecideGeometryLease` for each attachment on every presence change and heartbeat. Each attachment has its own lease identity, so two tabs or two devices compete correctly.
 - **User actions count as input.** Selecting a shell, clicking into a terminal and typing all count. Typing claims outright, as an interactive keypress does in the TUI. Input from a client that does not hold the lease claims first and then delivers, so a keystroke is never refused for lease reasons.
 - **Losing focus releases.** Switching from the browser to the TUI on the same Mac hands the size over immediately. Switching between machines resolves within the 5-second idle preemption, or instantly on the first keystroke.
+- **Viewers learn who holds the size.** Frames, or the events stream, carry the current holder's kind and host label (for example "TUI on aerie" or "iPhone"). The fading hint can then name the other screen. In v0 a client cannot tell, so the hint says "Sized for another screen".
 - **The explicit `control`/`release` operations remain** in the protocol for compatibility and for tools, but neither the SDK nor the native app exposes them.
 
 ### Making shell-cycling smooth
