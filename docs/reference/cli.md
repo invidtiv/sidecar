@@ -161,9 +161,9 @@ sidecar agent explain --file internal/agentactivity/testdata/claude/blocked.txt 
 
 Get one managed agent
 
-TARGET is a managed tmux session name or unique display name. Inside a managed shell it may be omitted.
+TARGET is an exact managed tmux session name. Use name:DISPLAY for an explicitly named display-name lookup, which must be unique; session:NAME escapes a literal session name beginning with name: or session:. Plain session targets never fall back to display names. Inside a managed shell it may be omitted.
 
-An explicit TARGET is searched across every registered project. When that finds the same name in several projects, the caller's own project — the one SIDECAR_SHELL belongs to — breaks the tie; outside a managed shell the refusal lists the projects, and --project NAME (a slug, path, or a worktree Sidecar created, by path or basename) or --shell NAME picks one. This rule is shared by get, start, prompt, wait, read, and send-keys.
+An explicit TARGET is searched across every registered project. When an exact session identity exists in several projects, the caller's own project — the one SIDECAR_SHELL belongs to — breaks the tie; outside a managed shell the refusal lists the projects, and --project NAME (a slug, path, or a worktree Sidecar created, by path or basename) or --shell NAME picks one. Display-name ambiguity always refuses until --project explicitly narrows the search. These rules are shared by get, start, prompt, wait, read, and send-keys.
 
 sessionRef reports whether the shell is bound to an exact provider conversation. Its value is shown for your own shell, or with --include-session-ref; otherwise only the kind and whether an official integration reported it are returned, so ordinary output does not carry conversation identifiers into logs.
 
@@ -173,6 +173,7 @@ Usage: sidecar agent get [TARGET] [--project NAME] [--include-session-ref] [--js
 
 **Options:**
 
+- `--exact-target`: Treat TARGET as a literal session identity; older owners refuse this flag
 - `--project NAME`: Target project (slug, basename, or path; or a worktree it created, by path or basename)
 - `--shell NAME`: Resolve the project from a registered shell
 - `--host ID`: Run the verb on a registered remote host (requires an explicit TARGET)
@@ -191,7 +192,7 @@ Usage: sidecar agent get [TARGET] [--project NAME] [--include-session-ref] [--js
 **Examples:**
 
 ```bash
-sidecar agent get reviewer --json
+sidecar agent get name:reviewer --json
 ```
 
 ### `sidecar agent integration`
@@ -438,6 +439,7 @@ Usage: sidecar agent list [--project NAME] [--include-session-ref] [--json]
 
 **Options:**
 
+- `--exact-target`: Treat TARGET as a literal session identity; older owners refuse this flag
 - `--project NAME`: Target project (slug, basename, or path; or a worktree it created, by path or basename)
 - `--shell NAME`: Resolve the project from a registered shell
 - `--host ID`: Run the verb on a registered remote host (requires an explicit TARGET)
@@ -535,6 +537,7 @@ Usage: sidecar agent prompt [TARGET] TEXT [--wait] [--until STATUS]... [--timeou
 
 **Options:**
 
+- `--exact-target`: Treat TARGET as a literal session identity; older owners refuse this flag
 - `--project NAME`: Target project (slug, basename, or path; or a worktree it created, by path or basename)
 - `--shell NAME`: Resolve the project from a registered shell
 - `--host ID`: Run the verb on a registered remote host (requires an explicit TARGET)
@@ -555,7 +558,7 @@ Usage: sidecar agent prompt [TARGET] TEXT [--wait] [--until STATUS]... [--timeou
 **Examples:**
 
 ```bash
-sidecar agent prompt reviewer "Review the current diff and report only actionable findings." --wait --timeout 2m
+sidecar agent prompt name:reviewer "Review the current diff and report only actionable findings." --wait --timeout 2m
 # the shell you are running in
 sidecar agent prompt "Summarise what changed." --json
 ```
@@ -581,6 +584,7 @@ Usage: sidecar agent read [TARGET] [--source SOURCE] [--lines N] [--ansi] [--jso
 
 **Options:**
 
+- `--exact-target`: Treat TARGET as a literal session identity; older owners refuse this flag
 - `--project NAME`: Target project (slug, basename, or path; or a worktree it created, by path or basename)
 - `--shell NAME`: Resolve the project from a registered shell
 - `--host ID`: Run the verb on a registered remote host (requires an explicit TARGET)
@@ -601,9 +605,9 @@ Usage: sidecar agent read [TARGET] [--source SOURCE] [--lines N] [--ansi] [--jso
 **Examples:**
 
 ```bash
-sidecar agent read reviewer --source recent-unwrapped --lines 120
+sidecar agent read name:reviewer --source recent-unwrapped --lines 120
 # the evidence behind the status
-sidecar agent read reviewer --source detection --json
+sidecar agent read name:reviewer --source detection --json
 ```
 
 ### `sidecar agent release`
@@ -756,6 +760,7 @@ Usage: sidecar agent send-keys [TARGET] KEY [KEY ...] [--json]
 
 **Options:**
 
+- `--exact-target`: Treat TARGET as a literal session identity; older owners refuse this flag
 - `--project NAME`: Target project (slug, basename, or path; or a worktree it created, by path or basename)
 - `--shell NAME`: Resolve the project from a registered shell
 - `--host ID`: Run the verb on a registered remote host (requires an explicit TARGET)
@@ -773,16 +778,16 @@ Usage: sidecar agent send-keys [TARGET] KEY [KEY ...] [--json]
 **Examples:**
 
 ```bash
-sidecar agent send-keys reviewer down enter
+sidecar agent send-keys name:reviewer down enter
 # dismiss a picker
-sidecar agent send-keys reviewer esc
+sidecar agent send-keys name:reviewer esc
 ```
 
 ### `sidecar agent start`
 
 Start a provider in an idle managed shell and wait for readiness
 
-Refuses commands, editors, copy mode, agents, ambiguous panes, and replacement processes. Provider arguments remain structured until the final shell boundary.
+Refuses commands, editors, copy mode, agents, ambiguous panes, and replacement processes. Provider arguments remain structured until the final shell boundary. Use --target SESSION for a literal session target, including one beginning with a dash. Values after -- are always provider arguments, including when targeting the current shell.
 
 ```
 Usage: sidecar agent start [TARGET] --kind KIND [--timeout DURATION] [-- AGENT_ARG ...]
@@ -790,6 +795,7 @@ Usage: sidecar agent start [TARGET] --kind KIND [--timeout DURATION] [-- AGENT_A
 
 **Options:**
 
+- `--exact-target`: Treat TARGET as a literal session identity; older owners refuse this flag
 - `--project NAME`: Target project (slug, basename, or path; or a worktree it created, by path or basename)
 - `--shell NAME`: Resolve the project from a registered shell
 - `--host ID`: Run the verb on a registered remote host (requires an explicit TARGET)
@@ -797,6 +803,7 @@ Usage: sidecar agent start [TARGET] --kind KIND [--timeout DURATION] [-- AGENT_A
 - `-h, --help`: Show this help
 - `--kind KIND`: Catalog provider kind (required)
 - `--timeout DURATION`: Bound the readiness wait (default 30s)
+- `--target SESSION`: Exact session target (also accepts a leading dash)
 
 **Exit codes:**
 
@@ -809,7 +816,7 @@ Usage: sidecar agent start [TARGET] --kind KIND [--timeout DURATION] [-- AGENT_A
 **Examples:**
 
 ```bash
-sidecar agent start reviewer --kind codex --timeout 30s
+sidecar agent start name:reviewer --kind codex --timeout 30s
 ```
 
 ### `sidecar agent wait`
@@ -826,6 +833,7 @@ Usage: sidecar agent wait [TARGET] [--until STATUS]... --timeout DURATION [--jso
 
 **Options:**
 
+- `--exact-target`: Treat TARGET as a literal session identity; older owners refuse this flag
 - `--project NAME`: Target project (slug, basename, or path; or a worktree it created, by path or basename)
 - `--shell NAME`: Resolve the project from a registered shell
 - `--host ID`: Run the verb on a registered remote host (requires an explicit TARGET)
@@ -845,9 +853,9 @@ Usage: sidecar agent wait [TARGET] [--until STATUS]... --timeout DURATION [--jso
 **Examples:**
 
 ```bash
-sidecar agent wait reviewer --timeout 5m --json
+sidecar agent wait name:reviewer --timeout 5m --json
 # blocked no longer settles the wait
-sidecar agent wait reviewer --until done --timeout 5m
+sidecar agent wait name:reviewer --until done --timeout 5m
 ```
 
 ## `sidecar agents`
@@ -3541,9 +3549,9 @@ Usage: sidecar session policy [TARGET] [--shell|--resume|--never|--inherit] [--j
 # Read this shell's policy
 sidecar session policy
 # Never resume this agent automatically
-sidecar session policy reviewer --shell
+sidecar session policy name:reviewer --shell
 # Always resume this one
-sidecar session policy reviewer --resume
+sidecar session policy name:reviewer --resume
 ```
 
 ### `sidecar session restore`
@@ -3567,7 +3575,8 @@ Usage: sidecar session restore [--dry-run] [--shell TARGET] [--prefill | --agent
 **Options:**
 
 - `--dry-run`: Print the plan and exit without creating or starting anything
-- `--shell TARGET`: Restore only this shell, by tmux session name or display name
+- `--exact-shell`: Require owner support for exact shell selection
+- `--shell TARGET`: Restore only this exact tmux session name
 - `--agents`: Also resume eligible exact agent conversations
 - `--prefill`: Type eligible resume commands without pressing Enter
 - `--yes`: Confirm agent resumes non-interactively when the policy is ask
@@ -3592,7 +3601,7 @@ sidecar session restore --prefill
 # See exactly what would happen first
 sidecar session restore --agents --dry-run
 # Recreate one shell and resume its conversation
-sidecar session restore --shell reviewer --agents --yes
+sidecar session restore --shell sidecar-sh-project-1 --agents --yes
 ```
 
 ### `sidecar session status`
@@ -3710,7 +3719,8 @@ Usage: sidecar shell delete --target SESSION [--project NAME] [--json]
 
 **Options:**
 
-- `--target SESSION`: The tmux session to delete (required)
+- `--exact-target`: Interpret --target as a literal session identity (required by API callers)
+- `--target SESSION`: Exact session; use name:DISPLAY for explicit display-name lookup
 - `--shell NAME`: Resolve the project from a registered shell
 - `--project NAME`: Target project (slug, basename, or path)
 - `--json`: Write one structured result object to stdout
@@ -3863,7 +3873,8 @@ Usage: sidecar shell rename [--target SESSION [--project NAME]] [--json] <displa
 
 **Options:**
 
-- `--target SESSION`: Rename this tmux session instead of the current shell
+- `--exact-target`: Interpret --target as a literal session identity (required by API callers)
+- `--target SESSION`: Exact session; use name:DISPLAY for explicit display-name lookup
 - `--shell NAME`: Resolve the project from a registered shell (with --target)
 - `--project NAME`: Target project (slug, basename, or path; with --target)
 - `--json`: Write one structured result object to stdout
@@ -3947,7 +3958,8 @@ Usage: sidecar shell send --target SESSION (--run COMMAND | --type COMMAND) [--p
 
 **Options:**
 
-- `--target SESSION`: The tmux session to send to (required)
+- `--exact-target`: Interpret --target as a literal session identity (required by remote viewers)
+- `--target SESSION`: Exact session; use name:DISPLAY for explicit display-name lookup
 - `--run COMMAND`: Execute COMMAND in the session
 - `--type COMMAND`: Type COMMAND without pressing Enter
 - `--shell NAME`: Resolve the project from a registered shell

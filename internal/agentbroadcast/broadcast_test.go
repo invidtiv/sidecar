@@ -175,7 +175,7 @@ func TestPlanToPrefersExactSessionAndRefusesAmbiguity(t *testing.T) {
 	}
 
 	displayOnly := []managedtarget.Target{cands[0], cands[2]}
-	_, err = testService(term, displayOnly).Plan(context.Background(), PlanRequest{To: []string{"reviewer"}})
+	_, err = testService(term, displayOnly).Plan(context.Background(), PlanRequest{To: []string{"name:reviewer"}})
 	var me *managedtarget.Error
 	if !errors.As(err, &me) || me.Kind != managedtarget.Ambiguous {
 		t.Fatalf("ambiguous --to err = %T %v", err, err)

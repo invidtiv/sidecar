@@ -188,7 +188,7 @@
     "path": "/api/v0/projects/fixture-project/agents/prompt",
     "request": {
       "target": "fixture-new",
-      "text": "--help is literal"
+      "text": "-"
     },
     "response": {
       "target": {

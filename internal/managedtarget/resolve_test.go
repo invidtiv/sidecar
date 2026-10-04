@@ -5,17 +5,25 @@ import (
 	"testing"
 )
 
+func TestResolveMissingSessionNeverFallsBackToDisplayName(t *testing.T) {
+	candidates := []Target{{Host: "local", Project: "p", Session: "live", Name: "deleted"}}
+	_, err := Resolve(candidates, Query{Host: "local", Value: "deleted"})
+	if e, ok := err.(*Error); !ok || e.Kind != NotFound {
+		t.Fatalf("stale session resolved to collision: %v", err)
+	}
+}
+
 func TestResolvePrefersSessionAndRefusesAmbiguousDisplayName(t *testing.T) {
 	candidates := []Target{{Host: "local", Project: "a", Session: "s1", Name: "reviewer"}, {Host: "local", Project: "b", Session: "reviewer", Name: "other"}, {Host: "local", Project: "b", Session: "s2", Name: "reviewer"}}
 	got, err := Resolve(candidates, Query{Host: "local", Value: "reviewer"})
 	if err != nil || got.Session != "reviewer" {
 		t.Fatalf("exact = %+v, %v", got, err)
 	}
-	_, err = Resolve(candidates, Query{Host: "local", Value: "reviewer", Project: "a"})
+	_, err = Resolve(candidates, Query{Host: "local", Value: "name:reviewer", Project: "a"})
 	if err != nil {
 		t.Fatalf("scoped display: %v", err)
 	}
-	_, err = Resolve([]Target{candidates[0], candidates[2]}, Query{Host: "local", Value: "reviewer"})
+	_, err = Resolve([]Target{candidates[0], candidates[2]}, Query{Host: "local", Value: "name:reviewer"})
 	if e, ok := err.(*Error); !ok || e.Kind != Ambiguous {
 		t.Fatalf("err = %T %v", err, err)
 	}
@@ -46,11 +54,11 @@ func TestResolveRefusesEqualTierWorktreeSessionCollision(t *testing.T) {
 
 func TestResolveGlobalExplicitRequiresUniqueTarget(t *testing.T) {
 	candidates := []Target{{Host: "local", Project: "a", Session: "s1", Name: "reviewer"}, {Host: "local", Project: "b", Session: "s2", Name: "reviewer"}}
-	_, err := Resolve(candidates, Query{Host: "local", Value: "reviewer"})
+	_, err := Resolve(candidates, Query{Host: "local", Value: "name:reviewer"})
 	if e, ok := err.(*Error); !ok || e.Kind != Ambiguous {
 		t.Fatalf("global ambiguity = %T %v", err, err)
 	}
-	got, err := Resolve(candidates, Query{Host: "local", Project: "b", Value: "reviewer"})
+	got, err := Resolve(candidates, Query{Host: "local", Project: "b", Value: "name:reviewer"})
 	if err != nil || got.Session != "s2" {
 		t.Fatalf("project scope = %+v, %v", got, err)
 	}
@@ -73,7 +81,7 @@ func TestResolvePriorityNeverHidesCrossTargetAmbiguity(t *testing.T) {
 	}
 	for name, candidates := range tests {
 		t.Run(name, func(t *testing.T) {
-			value := "reviewer"
+			value := "name:reviewer"
 			if name == "exact session collision across kinds" {
 				value = "same"
 			}
@@ -114,5 +122,21 @@ func TestAmbiguityNamesTheProjectsAndTheSelector(t *testing.T) {
 	_, err = Resolve(same, Query{Host: "local", Value: "sidecar-ws-feature"})
 	if e, ok := err.(*Error); !ok || strings.Contains(e.Message, "--project") || !strings.Contains(e.Message, `project "p"`) {
 		t.Fatalf("same-project message = %v", err)
+	}
+}
+
+func TestResolveExplicitNamesAndLiteralSessionEscapes(t *testing.T) {
+	candidates := []Target{{Session: "name:deleted", Name: "Other"}, {Session: "live", Name: "deleted"}}
+	got, err := Resolve(candidates, Query{Value: "session:name:deleted"})
+	if err != nil || got.Session != "name:deleted" {
+		t.Fatalf("literal session: %+v %v", got, err)
+	}
+	got, err = Resolve(candidates, Query{Value: "name:deleted"})
+	if err != nil || got.Session != "live" {
+		t.Fatalf("human name: %+v %v", got, err)
+	}
+	_, err = Resolve(append(candidates, Target{Session: "another", Name: "deleted"}), Query{Value: "name:deleted"})
+	if e, ok := err.(*Error); !ok || e.Kind != Ambiguous {
+		t.Fatalf("named collision did not refuse: %v", err)
 	}
 }

@@ -30,26 +30,33 @@ type Error struct {
 
 func (e *Error) Error() string { return e.Message }
 
-// Resolve prefers exact durable session identity over display name. Every
-// filter is exact; an empty field means the caller has not scoped that axis.
+// SessionSelector protects a literal session name, including one that starts
+// with the human display-name selector prefix.
+func SessionSelector(session string) string { return "session:" + session }
+
+// Resolve treats plain values as exact durable session identities. Only an
+// explicit name: selector resolves a display name, and it must be unique.
+// Every filter is exact; an empty field leaves that axis unscoped.
 func Resolve(candidates []Target, q Query) (Target, error) {
+	value := q.Value
+	named := false
+	if strings.HasPrefix(value, "session:") {
+		value = strings.TrimPrefix(value, "session:")
+	} else if strings.HasPrefix(value, "name:") {
+		value = strings.TrimPrefix(value, "name:")
+		named = true
+	}
 	filter := func(t Target) bool {
 		return (q.Host == "" || t.Host == q.Host) && (q.Project == "" || t.Project == q.Project) && (q.Namespace == "" || t.Namespace == "" || t.Namespace == q.Namespace)
 	}
-	var exact, named []Target
+	var matches []Target
 	for _, t := range candidates {
 		if !filter(t) {
 			continue
 		}
-		if t.Session == q.Value {
-			exact = append(exact, t)
-		} else if t.Name == q.Value {
-			named = append(named, t)
+		if (!named && t.Session == value) || (named && t.Name == value) {
+			matches = append(matches, t)
 		}
-	}
-	matches := exact
-	if len(matches) == 0 {
-		matches = named
 	}
 	matches = dedupeEquivalent(matches)
 	if len(matches) == 1 {

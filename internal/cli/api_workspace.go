@@ -165,7 +165,7 @@ func (b *mobileBackend) WorkspaceOperation(ctx context.Context, project string, 
 	}
 	if c.Host != "" && c.Host != "local" {
 		if c.Operation == "agents/prompt" {
-			client := agentremote.Client{HostID: c.Host, Project: project, Run: func(ctx context.Context, host string, args []string, out any) error {
+			client := agentremote.Client{HostID: c.Host, Project: project, ExactTargets: true, Run: func(ctx context.Context, host string, args []string, out any) error {
 				wire := workspaceRemoteResult{Operation: "agents/prompt"}
 				if err := b.workspaceRemote(ctx, host, args, &wire); err != nil {
 					return err
@@ -228,10 +228,10 @@ func workspaceCommandArgs(project string, c uiapi.WorkspaceCommand) ([]string, f
 		args = []string{"create", "shell", "--tab", "--wait", "0"}
 		run = runCreateShell
 	case "shells/rename", "worktrees/rename":
-		args = []string{"shell", "rename", "--target", c.Target}
+		args = []string{"shell", "rename", "--exact-target", "--target", c.Target}
 		run = runShellRename
 	case "shells/delete":
-		args = []string{"shell", "delete", "--target", c.Target}
+		args = []string{"shell", "delete", "--exact-target", "--target", c.Target}
 		run = runShellDelete
 	case "shells/restore":
 		args = []string{"shell", "restore"}
@@ -243,10 +243,10 @@ func workspaceCommandArgs(project string, c uiapi.WorkspaceCommand) ([]string, f
 		args = []string{"worktree", "delete"}
 		run = runWorktreeDelete
 	case "agents/start":
-		args = []string{"agent", "start", "--kind", c.Kind}
+		args = []string{"agent", "start", "--kind", c.Kind, "--target", c.Target}
 		run = runAgentStart
 	case "agents/prompt":
-		args = []string{"agent", "prompt"}
+		args = []string{"agent", "prompt", "--exact-target"}
 		run = runAgentPrompt
 	default:
 		return nil, nil, fmt.Errorf("unknown workspace operation %q", c.Operation)
@@ -260,7 +260,7 @@ func workspaceCommandArgs(project string, c uiapi.WorkspaceCommand) ([]string, f
 	case "shells/rename", "worktrees/rename":
 		args = append(args, "--", c.Name)
 	case "shells/restore":
-		args = append(args, c.Target)
+		args = append(args, "--", c.Target)
 	case "worktrees/plan", "worktrees/create":
 		if c.Base != "" {
 			args = append(args, "--base", c.Base)
@@ -285,8 +285,6 @@ func workspaceCommandArgs(project string, c uiapi.WorkspaceCommand) ([]string, f
 		}
 		args = append(args, "--", c.Target)
 	case "agents/start":
-
-		args = append(args, c.Target)
 		if len(c.Args) > 0 {
 			args = append(args, "--")
 			args = append(args, c.Args...)

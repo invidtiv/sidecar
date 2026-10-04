@@ -135,8 +135,15 @@ func run() error {
 		return err
 	}
 	found := false
+	mainCheckout := false
 	for _, section := range workspace.Catalog.Sections {
 		for _, row := range section.Rows {
+			if row.MainCheckout != nil && *row.MainCheckout {
+				if row.WorkspaceKind != "worktree" || row.Path != workspace.Project.Path {
+					return fmt.Errorf("main checkout paths disagree: row=%+v project=%+v", row, workspace.Project)
+				}
+				mainCheckout = true
+			}
 			if row.Session == target && row.DisplayName == "API renamed shell" {
 				found = true
 			}
@@ -144,6 +151,9 @@ func run() error {
 	}
 	if !found {
 		return errors.New("renamed shell absent from workspace")
+	}
+	if !mainCheckout {
+		return errors.New("workspace has no explicit main checkout")
 	}
 	cli, err := exec.CommandContext(ctx, *binary, "-config", *cfg, "workspace", "list", "--project", *project, "--sort", "name", "--json").Output()
 	if err != nil {
@@ -167,7 +177,7 @@ func run() error {
 	if !bytes.Equal(clean(workspace), clean(fromCLI)) {
 		return errors.New("CLI and HTTP workspace differ")
 	}
-	if err := request("agents/prompt", map[string]any{"target": target, "text": "continue"}, 409, nil); err != nil {
+	if err := request("agents/prompt", map[string]any{"target": target, "text": "-"}, 409, nil); err != nil {
 		return err
 	}
 	if err := request("agents/start", map[string]any{"target": target, "kind": "codex"}, 409, nil); err != nil {
@@ -183,6 +193,54 @@ func run() error {
 	// still re-tombstones that record, with no server restart.
 	if err := request("shells/delete", map[string]any{"target": target}, 200, nil); err != nil {
 		return err
+	}
+	// The deleted session's name is now another live shell's display name.
+	// Neither HTTP nor the actual CLI may reinterpret that stale identity.
+	var collision workspacewire.ShellCreated
+	if err := request("shells/create", map[string]any{"name": target}, 200, &collision); err != nil {
+		return err
+	}
+	for _, op := range []string{"shells/rename", "shells/delete"} {
+		body := map[string]any{"target": target}
+		if op == "shells/rename" {
+			body["name"] = "wrong shell"
+		}
+		if err := request(op, body, 404, nil); err != nil {
+			return err
+		}
+	}
+	for _, verb := range []string{"rename", "delete"} {
+		args := []string{"-config", *cfg, "shell", verb, "--target", target, "--project", *project, "--json"}
+		if verb == "rename" {
+			args = append(args, "--", "wrong shell")
+		}
+		output, err := exec.CommandContext(ctx, *binary, args...).CombinedOutput()
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) || exit.ExitCode() != 3 {
+			return fmt.Errorf("CLI stale target %s: %v %s", verb, err, output)
+		}
+	}
+	var restored workspacewire.ShellRestored
+	if err := request("shells/restore", map[string]any{"target": target}, 200, &restored); err != nil {
+		return err
+	}
+	if restored.Shell != target || restored.Name != "API renamed shell" {
+		return fmt.Errorf("restore selected display-name collision: %+v", restored)
+	}
+	if err := client.Do(ctx, "GET", "/api/v0/projects/"+*project+"/workspace", nil, &workspace); err != nil {
+		return err
+	}
+	preserved := false
+	for _, shell := range workspace.Shells {
+		preserved = preserved || (shell.Shell == collision.Shell.Session && shell.Name == target && shell.Status == "live")
+	}
+	if !preserved {
+		return errors.New("stale target operations changed the live display-name collision")
+	}
+	for _, session := range []string{target, collision.Shell.Session} {
+		if err := request("shells/delete", map[string]any{"target": session}, 200, nil); err != nil {
+			return err
+		}
 	}
 	var plan workspaceops.WorktreePlan
 	if err := request("worktrees/plan", map[string]any{"name": "API feature"}, 200, &plan); err != nil {
@@ -229,7 +287,7 @@ func run() error {
 	if _, err := os.Stat(wt.Path); !os.IsNotExist(err) {
 		return errors.New("confirmed delete retained worktree")
 	}
-	return json.NewEncoder(os.Stdout).Encode(map[string]bool{"workspace_cli_parity": true, "shell_lifecycle": true, "workspace_push": true, "worktree_source_guard": true, "dirty_delete_confirmation": true, "delete_identity_guard": true, "agent_feature_refusals": true})
+	return json.NewEncoder(os.Stdout).Encode(map[string]bool{"workspace_cli_parity": true, "shell_lifecycle": true, "workspace_push": true, "worktree_source_guard": true, "dirty_delete_confirmation": true, "delete_identity_guard": true, "agent_feature_refusals": true, "stale_session_collision_refused": true, "main_checkout_metadata": true, "literal_dash_prompt_validated": true})
 }
 func main() {
 	if err := run(); err != nil {

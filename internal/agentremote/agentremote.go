@@ -47,8 +47,12 @@ type Runner func(ctx context.Context, hostID string, args []string, out any) err
 
 // Client addresses one registered host.
 type Client struct {
-	HostID string
-	Run    Runner
+	// ExactTargets fences API identity requests, including against older owners.
+	ExactTargets bool
+	// NameTarget marks an explicit human name: selector; older owners refuse.
+	NameTarget bool
+	HostID     string
+	Run        Runner
 	// Project scopes every verb to one project on the host. It is the host's
 	// own project reference, not a scoped key: the host resolves it against
 	// its own registry, and a viewer-side key would be meaningless there.
@@ -84,6 +88,11 @@ func (c Client) run(ctx context.Context, args []string, out any) error {
 
 // scoped appends --project when the client is scoped to one.
 func (c Client) scoped(args []string) []string {
+	if c.ExactTargets {
+		args = append(args, "--exact-target")
+	} else if c.NameTarget {
+		args = append(args, "--exact-target=false")
+	}
 	if strings.TrimSpace(c.Project) == "" {
 		return args
 	}
@@ -120,7 +129,16 @@ func (c Client) StartArgs(session, kind string, timeout time.Duration, providerA
 	if timeout > 0 {
 		args = append(args, "--timeout", timeout.String())
 	}
-	args = appendTarget(args, session)
+	if session != "" {
+		if !c.ExactTargets && strings.HasPrefix(session, "name:") {
+			args = append(args, session)
+		} else {
+			if !c.ExactTargets {
+				session = strings.TrimPrefix(session, "session:")
+			}
+			args = append(args, "--target", session)
+		}
+	}
 	if len(providerArgs) > 0 {
 		args = append(args, "--")
 		args = append(args, providerArgs...)
@@ -203,7 +221,7 @@ func (c Client) SessionRestoreArgsWithPrefill(dryRun, agents, yes, prefill bool,
 		args = append(args, "--prefill")
 	}
 	if strings.TrimSpace(shell) != "" {
-		args = append(args, "--shell", shell)
+		args = append(args, "--exact-shell", "--shell", shell)
 	}
 	return args
 }
@@ -216,6 +234,9 @@ func (c Client) SessionRestoreArgsWithPrefill(dryRun, agents, yes, prefill bool,
 func appendTarget(args []string, session string) []string {
 	if strings.TrimSpace(session) == "" {
 		return args
+	}
+	if len(args) == 0 || args[len(args)-1] != "--" {
+		args = append(args, "--")
 	}
 	return append(args, session)
 }

@@ -524,7 +524,7 @@ func TestProjectSet_Success(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &res); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if res.Name != "renamed-1" || res.Path != path2 || res.Theme != "NewTheme" || res.OpenIn != "goland" {
+	if res.Name != "renamed-1" || res.Path != canonicalOpenPath(path2) || res.Theme != "NewTheme" || res.OpenIn != "goland" {
 		t.Errorf("unexpected set JSON: %+v", res)
 	}
 

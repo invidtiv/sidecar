@@ -12,6 +12,7 @@ import (
 	"github.com/marcus/sidecar/internal/agentlifecycle/lifecycleenv"
 	"github.com/marcus/sidecar/internal/agentsession"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/managedtarget"
 	"github.com/marcus/sidecar/internal/shellstate"
 )
 
@@ -424,7 +425,7 @@ func runAgentReportSession(env Env, args []string) int {
 	// Resolve the manifest that owns this shell through the same resolver the
 	// other agent commands use, so there is one answer to "which project is
 	// this shell in".
-	tgt, code, err := findShellTarget(env, ctx.Session, "", "", false, ctx.Namespace)
+	tgt, code, err := findShellTarget(env, managedtarget.SessionSelector(ctx.Session), "", "", false, ctx.Namespace)
 	if err != nil || code > 0 {
 		if err == nil {
 			err = fmt.Errorf("this shell is not a registered Sidecar managed shell")

@@ -121,7 +121,7 @@ func remoteClient(env Env, f agentFlags) (agentremote.Client, error) {
 	if err != nil {
 		return agentremote.Client{}, err
 	}
-	return agentremote.Client{HostID: f.host, Run: runner, Project: f.project}, nil
+	return agentremote.Client{HostID: f.host, Run: runner, Project: f.project, ExactTargets: f.exact, NameTarget: f.nameTarget}, nil
 }
 
 // remoteTarget applies the one target rule that differs from the local path: a
@@ -168,7 +168,23 @@ func runRemoteAgentList(env Env, f agentFlags) int {
 	return emitAgentList(env, f.json, agents)
 }
 
+// remoteSelector translates human CLI selectors once, before crossing hosts.
+// Exactness is also a parser guard: an older owner must refuse rather than
+// apply its display-name fallback to a new exact request.
+func remoteSelector(target string, f agentFlags) (string, agentFlags) {
+	if !f.exact && strings.HasPrefix(target, "name:") {
+		f.nameTarget = true
+		return target, f
+	}
+	if !f.exact {
+		target = strings.TrimPrefix(target, "session:")
+	}
+	f.exact = true
+	return target, f
+}
+
 func runRemoteAgentGet(env Env, f agentFlags, target string, explicit bool) int {
+	target, f = remoteSelector(target, f)
 	client, err := remoteClient(env, f)
 	if err != nil {
 		return emitAgentError(env, true, err)
@@ -185,6 +201,7 @@ func runRemoteAgentGet(env Env, f agentFlags, target string, explicit bool) int 
 }
 
 func runRemoteAgentStart(env Env, f agentFlags, target, kind string, explicit bool, providerArgs []string) int {
+	target, f = remoteSelector(target, f)
 	client, err := remoteClient(env, f)
 	if err != nil {
 		return emitAgentError(env, true, err)
@@ -201,6 +218,7 @@ func runRemoteAgentStart(env Env, f agentFlags, target, kind string, explicit bo
 }
 
 func runRemoteAgentPrompt(env Env, f agentFlags, target, text string, explicit bool) int {
+	target, f = remoteSelector(target, f)
 	requested := agentcontrol.Target{Host: f.host, Project: f.project}
 	if explicit {
 		requested.Session = target
@@ -221,6 +239,7 @@ func runRemoteAgentPrompt(env Env, f agentFlags, target, text string, explicit b
 }
 
 func runRemoteAgentWait(env Env, f agentFlags, target string, explicit bool) int {
+	target, f = remoteSelector(target, f)
 	client, err := remoteClient(env, f)
 	if err != nil {
 		return emitAgentError(env, true, err)
@@ -237,6 +256,7 @@ func runRemoteAgentWait(env Env, f agentFlags, target string, explicit bool) int
 }
 
 func runRemoteAgentRead(env Env, f agentFlags, target string, explicit bool) int {
+	target, f = remoteSelector(target, f)
 	client, err := remoteClient(env, f)
 	if err != nil {
 		return emitAgentError(env, true, err)
@@ -253,6 +273,7 @@ func runRemoteAgentRead(env Env, f agentFlags, target string, explicit bool) int
 }
 
 func runRemoteAgentSendKeys(env Env, f agentFlags, target string, explicit bool, keys []string) int {
+	target, f = remoteSelector(target, f)
 	client, err := remoteClient(env, f)
 	if err != nil {
 		return emitAgentError(env, true, err)

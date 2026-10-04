@@ -507,7 +507,7 @@ func planShell(in Input, sh Shell, dirExists func(string) bool, providerAvailabl
 		return step
 	}
 
-	if target := strings.TrimSpace(in.Request.OnlyShell); target != "" && target != def.TmuxName && target != def.DisplayName {
+	if target := in.Request.OnlyShell; target != "" && target != def.TmuxName {
 		step.Action = ActionSkip
 		step.Reason = ReasonNotSelected
 		step.Detail = "not the requested shell"

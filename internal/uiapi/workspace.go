@@ -247,21 +247,12 @@ func validateWorkspaceCommand(c WorkspaceCommand) error {
 	if c.Operation == "worktrees/delete" && (!c.Confirm || c.ExpectHeadOID == "" || c.ExpectBranch == "" || c.ExpectDeleteState == "") {
 		return fmt.Errorf("confirm, expect_head_oid, expect_branch and expect_delete_state from delete-plan are required")
 	}
-	if c.Operation == "shells/restore" && strings.HasPrefix(c.Target, "-") {
-		return fmt.Errorf("restore target must be a managed tmux session name")
-	}
 	if c.Operation == "agents/start" {
-		if strings.HasPrefix(c.Target, "-") {
-			return fmt.Errorf("agent start target must be a managed session name or path")
-		}
 		return required(c.Kind, "kind")
 	}
 	if c.Operation == "agents/prompt" {
 		if err := required(c.Text, "text"); err != nil {
 			return err
-		}
-		if c.Text == "-" {
-			return fmt.Errorf("text must be literal prompt text, not the CLI stdin sentinel")
 		}
 		if !c.Wait && c.Timeout != "" {
 			return fmt.Errorf("timeout requires wait")

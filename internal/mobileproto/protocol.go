@@ -178,6 +178,7 @@ type CatalogRow struct {
 	DisplayName   string `json:"display_name"`
 	// Path is presentation metadata on the owning host, never a scoped selector.
 	Path                string             `json:"path,omitempty"`
+	MainCheckout        *bool              `json:"main_checkout,omitempty"`
 	Branch              string             `json:"branch,omitempty"`
 	Task                string             `json:"task,omitempty"`
 	Provider            string             `json:"provider,omitempty"`

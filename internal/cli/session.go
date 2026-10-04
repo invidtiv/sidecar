@@ -79,7 +79,8 @@ func sessionCommand() *Command {
 			"If tmux is shutting down behind orphaned Sidecar control clients, restore terminates only those verified clients and waits for the server to exit on its own. A client with a live parent prevents recovery. The server itself is never signalled by restore. Nothing here deletes a shell record.",
 		Flags: []Flag{
 			{Name: "--dry-run", Summary: "Print the plan and exit without creating or starting anything", Bool: true},
-			{Name: "--shell", Arg: "TARGET", Summary: "Restore only this shell, by tmux session name or display name"},
+			{Name: "--exact-shell", Summary: "Require owner support for exact shell selection", Bool: true},
+			{Name: "--shell", Arg: "TARGET", Summary: "Restore only this exact tmux session name"},
 			{Name: "--agents", Summary: "Also resume eligible exact agent conversations", Bool: true},
 			{Name: "--prefill", Summary: "Type eligible resume commands without pressing Enter", Bool: true},
 			{Name: "--yes", Summary: "Confirm agent resumes non-interactively when the policy is ask", Bool: true},
@@ -94,7 +95,7 @@ func sessionCommand() *Command {
 			{Description: "Recreate eligible shells, no agents", Command: "sidecar session restore"},
 			{Description: "Type resume commands for review", Command: "sidecar session restore --prefill"},
 			{Description: "See exactly what would happen first", Command: "sidecar session restore --agents --dry-run"},
-			{Description: "Recreate one shell and resume its conversation", Command: "sidecar session restore --shell reviewer --agents --yes"},
+			{Description: "Recreate one shell and resume its conversation", Command: "sidecar session restore --shell sidecar-sh-project-1 --agents --yes"},
 		},
 		Agent: AgentDoc{
 			Invocation: "sidecar session restore --dry-run --json",
@@ -128,8 +129,8 @@ func sessionCommand() *Command {
 		Mutates:   true,
 		Examples: []Example{
 			{Description: "Read this shell's policy", Command: "sidecar session policy"},
-			{Description: "Never resume this agent automatically", Command: "sidecar session policy reviewer --shell"},
-			{Description: "Always resume this one", Command: "sidecar session policy reviewer --resume"},
+			{Description: "Never resume this agent automatically", Command: "sidecar session policy name:reviewer --shell"},
+			{Description: "Always resume this one", Command: "sidecar session policy name:reviewer --resume"},
 		},
 		Agent: AgentDoc{
 			Invocation: "sidecar session policy TARGET --shell",
@@ -314,6 +315,8 @@ func runSessionRestore(env Env, args []string) int {
 		case isHelp(arg):
 			_, _ = fmt.Fprint(env.Stdout, help)
 			return 0
+		case arg == "--exact-shell":
+			// Compatibility guard: older owners refuse before restore.
 		case arg == "--json":
 			jsonOutput = true
 		case arg == "--dry-run":

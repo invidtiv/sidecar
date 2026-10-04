@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/marcus/sidecar/internal/managedtarget"
 	"github.com/marcus/sidecar/internal/termpanes"
 	"github.com/marcus/sidecar/internal/tmuxenv"
 	"github.com/marcus/sidecar/internal/workspaceops"
@@ -49,6 +50,7 @@ func runShellDelete(env Env, args []string) int {
 	help := RenderHelp(deleteCmd)
 
 	jsonOutput := false
+	exactTarget := false
 	target, shellFlag, projectFlag := "", "", ""
 	var positional []string
 	for i := 0; i < len(args); i++ {
@@ -59,6 +61,8 @@ func runShellDelete(env Env, args []string) int {
 				return 1
 			}
 			return 0
+		case arg == "--exact-target":
+			exactTarget = true
 		case arg == "--json":
 			jsonOutput = true
 		case arg == "--target" || strings.HasPrefix(arg, "--target="):
@@ -124,14 +128,21 @@ func runShellDelete(env Env, args []string) int {
 	// anything else, and nothing but this feature is expected to create a
 	// session with it), so it is proof enough of ownership on its own, the same
 	// trust boundary termpanes.KillSession and ProbeClose already use.
-	if strings.HasPrefix(target, termpanes.SessionPrefix) {
+	splitTarget := target
+	if !exactTarget {
+		splitTarget = strings.TrimPrefix(target, "session:")
+	}
+	if strings.HasPrefix(splitTarget, termpanes.SessionPrefix) {
 		if shellFlag != "" || projectFlag != "" {
 			cliErrf(env.Stderr, "--shell and --project name a registered shell's project; a %s… terminal split has neither, so name it with --target alone\n", termpanes.SessionPrefix)
 			return 2
 		}
-		return runShellDeleteSplit(env, target, jsonOutput)
+		return runShellDeleteSplit(env, splitTarget, jsonOutput)
 	}
 
+	if exactTarget {
+		target = managedtarget.SessionSelector(target)
+	}
 	tgt, code := resolveShellTarget(env, target, shellFlag, projectFlag, help)
 	if code != 0 {
 		return code

@@ -29,6 +29,7 @@
           "workspace_kind": "shell",
           "display_name": "Echo terminal",
           "path": "/workspace/fixture",
+          "main_checkout": false,
           "provider": "codex",
           "status": "working",
           "group": "Working",

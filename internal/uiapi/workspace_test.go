@@ -51,7 +51,9 @@ func TestWorkspaceRoutesScopeGuardsAndValidation(t *testing.T) {
 		{"agents/start", `{"target":"managed","kind":"codex","args":["--model","test"]}`, 200},
 		{"agents/prompt", `{"target":"managed","text":"continue","wait":true}`, 400},
 		{"agents/prompt", `{"target":"managed","text":"continue","wait":true,"timeout":"10s"}`, 200},
-		{"agents/prompt", `{"target":"managed","text":"-"}`, 400},
+		{"agents/prompt", `{"target":"managed","text":"-"}`, 200},
+		{"shells/restore", `{"target":"-session"}`, 200},
+		{"agents/start", `{"target":"-session","kind":"codex"}`, 200},
 		{"shells/delete", `{"target":"managed","args":["--project","elsewhere"]}`, 400},
 	}
 	for _, tc := range cases {

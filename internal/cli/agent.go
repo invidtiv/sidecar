@@ -25,15 +25,16 @@ import (
 var newAgentTerminal = func() agentcontrol.Terminal { return agentcontrol.NewLocalTerminal() }
 
 func agentCommand() *Command {
-	common := []Flag{{Name: "--project", Arg: "NAME", Summary: "Target project (slug, basename, or path; or a worktree it created, by path or basename)"}, {Name: "--shell", Arg: "NAME", Summary: "Resolve the project from a registered shell"}, {Name: "--host", Arg: "ID", Summary: "Run the verb on a registered remote host (requires an explicit TARGET)"}, {Name: "--json", Summary: "Write stable structured JSON", Bool: true}, {Name: "--help", Short: "-h", Summary: "Show this help", Bool: true}}
+	common := []Flag{{Name: "--exact-target", Summary: "Treat TARGET as a literal session identity; older owners refuse this flag", Bool: true}, {Name: "--project", Arg: "NAME", Summary: "Target project (slug, basename, or path; or a worktree it created, by path or basename)"}, {Name: "--shell", Arg: "NAME", Summary: "Resolve the project from a registered shell"}, {Name: "--host", Arg: "ID", Summary: "Run the verb on a registered remote host (requires an explicit TARGET)"}, {Name: "--json", Summary: "Write stable structured JSON", Bool: true}, {Name: "--help", Short: "-h", Summary: "Show this help", Bool: true}}
 	sessionRefFlag := Flag{Name: "--include-session-ref", Summary: "Include the bound conversation's value, not only its presence", Bool: true}
 	listFlags := append(append([]Flag{}, common...), sessionRefFlag)
 	list := &Command{Name: "list", Summary: "List live managed agents", Usage: "sidecar agent list [--project NAME] [--include-session-ref] [--json]", Flags: listFlags, ExitCodes: agentExitCodes(), Examples: []Example{{Command: "sidecar agent list --json"}}, Agent: AgentDoc{Invocation: "sidecar agent list --json", Summary: "List live managed agents and their current status"}, Run: runAgentList}
 	getFlags := append(append([]Flag{}, common...), sessionRefFlag)
-	get := &Command{Name: "get", Summary: "Get one managed agent", Usage: "sidecar agent get [TARGET] [--project NAME] [--include-session-ref] [--json]", Long: "TARGET is a managed tmux session name or unique display name. Inside a managed shell it may be omitted.\n\nAn explicit TARGET is searched across every registered project. When that finds the same name in several projects, the caller's own project — the one SIDECAR_SHELL belongs to — breaks the tie; outside a managed shell the refusal lists the projects, and --project NAME (a slug, path, or a worktree Sidecar created, by path or basename) or --shell NAME picks one. This rule is shared by get, start, prompt, wait, read, and send-keys.\n\nsessionRef reports whether the shell is bound to an exact provider conversation. Its value is shown for your own shell, or with --include-session-ref; otherwise only the kind and whether an official integration reported it are returned, so ordinary output does not carry conversation identifiers into logs.", Flags: getFlags, Args: ArgSpec{Min: 0, Max: 1}, ExitCodes: agentExitCodes(), Examples: []Example{{Command: "sidecar agent get reviewer --json"}}, Agent: AgentDoc{Invocation: "sidecar agent get [TARGET] --json", Summary: "Read one managed agent's provider and lifecycle state"}, Run: runAgentGet}
+	get := &Command{Name: "get", Summary: "Get one managed agent", Usage: "sidecar agent get [TARGET] [--project NAME] [--include-session-ref] [--json]", Long: "TARGET is an exact managed tmux session name. Use name:DISPLAY for an explicitly named display-name lookup, which must be unique; session:NAME escapes a literal session name beginning with name: or session:. Plain session targets never fall back to display names. Inside a managed shell it may be omitted.\n\nAn explicit TARGET is searched across every registered project. When an exact session identity exists in several projects, the caller's own project — the one SIDECAR_SHELL belongs to — breaks the tie; outside a managed shell the refusal lists the projects, and --project NAME (a slug, path, or a worktree Sidecar created, by path or basename) or --shell NAME picks one. Display-name ambiguity always refuses until --project explicitly narrows the search. These rules are shared by get, start, prompt, wait, read, and send-keys.\n\nsessionRef reports whether the shell is bound to an exact provider conversation. Its value is shown for your own shell, or with --include-session-ref; otherwise only the kind and whether an official integration reported it are returned, so ordinary output does not carry conversation identifiers into logs.", Flags: getFlags, Args: ArgSpec{Min: 0, Max: 1}, ExitCodes: agentExitCodes(), Examples: []Example{{Command: "sidecar agent get name:reviewer --json"}}, Agent: AgentDoc{Invocation: "sidecar agent get [TARGET] --json", Summary: "Read one managed agent's provider and lifecycle state"}, Run: runAgentGet}
 	startFlags := append([]Flag{}, common...)
 	startFlags = append(startFlags, Flag{Name: "--kind", Arg: "KIND", Summary: "Catalog provider kind (required)"}, Flag{Name: "--timeout", Arg: "DURATION", Summary: "Bound the readiness wait (default 30s)"})
-	start := &Command{Name: "start", Summary: "Start a provider in an idle managed shell and wait for readiness", Usage: "sidecar agent start [TARGET] --kind KIND [--timeout DURATION] [-- AGENT_ARG ...]", Long: "Refuses commands, editors, copy mode, agents, ambiguous panes, and replacement processes. Provider arguments remain structured until the final shell boundary.", Flags: startFlags, Args: ArgSpec{Min: 0, Max: -1}, ExitCodes: agentExitCodes(), Examples: []Example{{Command: "sidecar agent start reviewer --kind codex --timeout 30s"}}, Agent: AgentDoc{Invocation: "sidecar agent start [TARGET] --kind KIND", Summary: "Start a known provider in a shell and return only when it is ready"}, Mutates: true, Run: runAgentStart}
+	startFlags = append(startFlags, Flag{Name: "--target", Arg: "SESSION", Summary: "Exact session target (also accepts a leading dash)"})
+	start := &Command{Name: "start", Summary: "Start a provider in an idle managed shell and wait for readiness", Usage: "sidecar agent start [TARGET] --kind KIND [--timeout DURATION] [-- AGENT_ARG ...]", Long: "Refuses commands, editors, copy mode, agents, ambiguous panes, and replacement processes. Provider arguments remain structured until the final shell boundary. Use --target SESSION for a literal session target, including one beginning with a dash. Values after -- are always provider arguments, including when targeting the current shell.", Flags: startFlags, Args: ArgSpec{Min: 0, Max: -1}, ExitCodes: agentExitCodes(), Examples: []Example{{Command: "sidecar agent start name:reviewer --kind codex --timeout 30s"}}, Agent: AgentDoc{Invocation: "sidecar agent start [TARGET] --kind KIND", Summary: "Start a known provider in a shell and return only when it is ready"}, Mutates: true, Run: runAgentStart}
 	promptFlags := append([]Flag{}, common...)
 	promptFlags = append(promptFlags,
 		Flag{Name: "--wait", Summary: "Submit and wait for the agent to settle under one pinned target", Bool: true},
@@ -68,7 +69,7 @@ func agentCommand() *Command {
 		Args:      ArgSpec{Min: 1, Max: 2},
 		ExitCodes: agentExitCodes(),
 		Examples: []Example{
-			{Command: `sidecar agent prompt reviewer "Review the current diff and report only actionable findings." --wait --timeout 2m`},
+			{Command: `sidecar agent prompt name:reviewer "Review the current diff and report only actionable findings." --wait --timeout 2m`},
 			{Command: `sidecar agent prompt "Summarise what changed." --json`, Description: "the shell you are running in"},
 		},
 		Agent:   AgentDoc{Invocation: "sidecar agent prompt [TARGET] TEXT [--wait --timeout DURATION]", Summary: "Send a prompt to a managed agent and optionally wait for it to settle"},
@@ -91,8 +92,8 @@ func agentCommand() *Command {
 		Args:      ArgSpec{Min: 0, Max: 1},
 		ExitCodes: agentExitCodes(),
 		Examples: []Example{
-			{Command: "sidecar agent wait reviewer --timeout 5m --json"},
-			{Command: "sidecar agent wait reviewer --until done --timeout 5m", Description: "blocked no longer settles the wait"},
+			{Command: "sidecar agent wait name:reviewer --timeout 5m --json"},
+			{Command: "sidecar agent wait name:reviewer --until done --timeout 5m", Description: "blocked no longer settles the wait"},
 		},
 		Agent: AgentDoc{Invocation: "sidecar agent wait [TARGET] --timeout DURATION", Summary: "Wait for a managed agent to reach idle, done, or blocked"},
 		Run:   runAgentWait,
@@ -120,8 +121,8 @@ func agentCommand() *Command {
 		Args:      ArgSpec{Min: 0, Max: 1},
 		ExitCodes: agentExitCodes(),
 		Examples: []Example{
-			{Command: "sidecar agent read reviewer --source recent-unwrapped --lines 120"},
-			{Command: "sidecar agent read reviewer --source detection --json", Description: "the evidence behind the status"},
+			{Command: "sidecar agent read name:reviewer --source recent-unwrapped --lines 120"},
+			{Command: "sidecar agent read name:reviewer --source detection --json", Description: "the evidence behind the status"},
 		},
 		Agent: AgentDoc{Invocation: "sidecar agent read [TARGET] [--source SOURCE] [--lines N]", Summary: "Read a managed agent's terminal output passively"},
 		Run:   runAgentRead,
@@ -145,8 +146,8 @@ func agentCommand() *Command {
 		Args:      ArgSpec{Min: 1, Max: -1},
 		ExitCodes: agentExitCodes(),
 		Examples: []Example{
-			{Command: "sidecar agent send-keys reviewer down enter"},
-			{Command: "sidecar agent send-keys reviewer esc", Description: "dismiss a picker"},
+			{Command: "sidecar agent send-keys name:reviewer down enter"},
+			{Command: "sidecar agent send-keys name:reviewer esc", Description: "dismiss a picker"},
 		},
 		Agent:   AgentDoc{Invocation: "sidecar agent send-keys [TARGET] KEY [KEY ...]", Summary: "Answer a blocked agent's UI with validated logical keys"},
 		Mutates: true,
@@ -184,6 +185,8 @@ func runAgentRoot(env Env, args []string) int {
 }
 
 type agentFlags struct {
+	nameTarget     bool
+	exact          bool
 	json           bool
 	project, shell string
 	// host names a registered remote host. It is accepted by every control
@@ -240,6 +243,16 @@ func parseAgentArgs(env Env, args []string, help string, allowed agentOpt) (agen
 		case isHelp(arg):
 			_, _ = fmt.Fprint(env.Stdout, help)
 			return f, 0
+		case arg == "--exact-target" || strings.HasPrefix(arg, "--exact-target="):
+			f.exact = true
+			if _, v, ok := strings.Cut(arg, "="); ok {
+				parsed, err := strconv.ParseBool(v)
+				if err != nil {
+					cliErrf(env.Stderr, "invalid --exact-target value\n\n%s", help)
+					return f, 2
+				}
+				f.exact = parsed
+			}
 		case arg == "--json":
 			f.json = true
 		case name == "--project":
@@ -324,7 +337,13 @@ func parseAgentArgs(env Env, args []string, help string, allowed agentOpt) (agen
 // command addresses that shell. Outside one there is nothing to fall back to —
 // deliberately not the user's focused TUI row, which would make the same
 // command mean different things depending on where somebody's cursor is.
-func currentShellTarget() string { return os.Getenv(shellstate.SessionEnv) }
+func currentShellTarget() string {
+	session := os.Getenv(shellstate.SessionEnv)
+	if session == "" {
+		return ""
+	}
+	return managedtarget.SessionSelector(session)
+}
 
 // splitAgentTarget applies the positional rule the agent commands share: the
 // leading positional is the target only when the caller supplied more than the
@@ -350,6 +369,9 @@ func resolveAgentTarget(env Env, lookup *shellTargetLookup, target string, f age
 }
 
 func resolveAgentTargetError(env Env, lookup *shellTargetLookup, target string, f agentFlags, explicit bool) (agentcontrol.Target, error) {
+	if f.exact && explicit {
+		target = managedtarget.SessionSelector(target)
+	}
 	if !explicit {
 		if err := validateImplicitCaller(env.Ctx, env.StateDir); err != nil {
 			return agentcontrol.Target{}, &agentcontrol.Error{Code: agentcontrol.ErrNotReady, Message: err.Error(), Err: err}
@@ -402,7 +424,7 @@ func transcriptReader(env Env) agentcontrol.TranscriptReader {
 	return agenttranscript.Reader{
 		Lookup: func(target agentcontrol.Target) (agenttranscript.Binding, bool, error) {
 			var lookup shellTargetLookup
-			tgt, code, err := lookup.resolve(env, target.Session, "", "", false, target.Namespace)
+			tgt, code, err := lookup.resolve(env, managedtarget.SessionSelector(target.Session), "", "", false, target.Namespace)
 			if err != nil {
 				return agenttranscript.Binding{}, false, err
 			}
@@ -789,10 +811,13 @@ func runAgentGet(env Env, args []string) int {
 		if err := validateImplicitCaller(env.Ctx, env.StateDir); err != nil {
 			return emitAgentError(env, f.json, &agentcontrol.Error{Code: agentcontrol.ErrNotReady, Message: err.Error(), Err: err})
 		}
-		target = os.Getenv(shellstate.SessionEnv)
+		target = currentShellTarget()
 	}
 	if target == "" {
 		return emitAgentError(env, f.json, &agentcontrol.Error{Code: agentcontrol.ErrNotFound, Message: "target is required outside a managed shell"})
+	}
+	if f.exact && len(f.positional) == 1 {
+		target = managedtarget.SessionSelector(target)
 	}
 	tgt, code := resolveAgentShellTarget(env, nil, target, f.shell, f.project, len(f.positional) == 1 && f.shell == "" && f.project == "", f.json)
 	if code != 0 {
@@ -818,6 +843,7 @@ func runAgentStart(env Env, args []string) int {
 	help := RenderHelp(cmd)
 	f := agentFlags{}
 	kind := ""
+	exactTarget := ""
 	timeout := 30 * time.Second
 	var extra []string
 	for i := 0; i < len(args); i++ {
@@ -830,8 +856,25 @@ func runAgentStart(env Env, args []string) int {
 		case isHelp(arg):
 			_, _ = fmt.Fprint(env.Stdout, help)
 			return 0
+		case arg == "--exact-target" || strings.HasPrefix(arg, "--exact-target="):
+			f.exact = true
+			if _, v, ok := strings.Cut(arg, "="); ok {
+				parsed, err := strconv.ParseBool(v)
+				if err != nil {
+					cliErrf(env.Stderr, "invalid --exact-target value\n\n%s", help)
+					return 2
+				}
+				f.exact = parsed
+			}
 		case arg == "--json":
 			f.json = true
+		case arg == "--target" || strings.HasPrefix(arg, "--target="):
+			v, n, ok := takeFlagArg(arg, args, i, "--target")
+			if !ok || v == "" {
+				cliErrf(env.Stderr, "--target requires a session name\n\n%s", help)
+				return 2
+			}
+			exactTarget, i = v, n
 		case arg == "--kind" || strings.HasPrefix(arg, "--kind="):
 			v, n, ok := takeFlagArg(arg, args, i, "--kind")
 			if !ok || v == "" {
@@ -882,6 +925,14 @@ func runAgentStart(env Env, args []string) int {
 			f.positional = append(f.positional, arg)
 		}
 	}
+	if exactTarget != "" {
+		if len(f.positional) != 0 {
+			cliErrf(env.Stderr, "--target and positional TARGET are mutually exclusive\n\n%s", help)
+			return 2
+		}
+		f.positional = []string{exactTarget}
+		f.exact = true
+	}
 	if len(f.positional) > 1 || kind == "" {
 		cliErrf(env.Stderr, "agent start requires --kind and at most one target\n\n%s", help)
 		return 2
@@ -911,10 +962,13 @@ func runAgentStart(env Env, args []string) int {
 		if err := validateImplicitCaller(env.Ctx, env.StateDir); err != nil {
 			return emitAgentError(env, f.json, &agentcontrol.Error{Code: agentcontrol.ErrNotReady, Message: err.Error(), Err: err})
 		}
-		target = os.Getenv(shellstate.SessionEnv)
+		target = currentShellTarget()
 	}
 	if target == "" {
 		return emitAgentError(env, f.json, &agentcontrol.Error{Code: agentcontrol.ErrNotFound, Message: "target is required outside a managed shell"})
+	}
+	if f.exact && len(f.positional) == 1 {
+		target = managedtarget.SessionSelector(target)
 	}
 	tgt, code := resolveAgentShellTarget(env, nil, target, f.shell, f.project, len(f.positional) == 1 && f.shell == "" && f.project == "", f.json)
 	if code != 0 {

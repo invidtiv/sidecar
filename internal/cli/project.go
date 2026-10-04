@@ -1143,7 +1143,7 @@ func makeProjectJSONItem(stateDir string, p config.ProjectConfig) *projectJSONIt
 	}
 	return &projectJSONItem{
 		Name:    p.Name,
-		Path:    expanded,
+		Path:    canonicalOpenPath(expanded),
 		Key:     projKey(stateDir, expanded),
 		Theme:   themeName,
 		OpenIn:  p.OpenIn,

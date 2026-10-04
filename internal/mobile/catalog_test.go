@@ -361,3 +361,23 @@ func TestCatalogRowsExposeOwnerPathWithProjectFallback(t *testing.T) {
 		})
 	}
 }
+
+func TestCatalogRowsExposeMainCheckout(t *testing.T) {
+	now := time.Now()
+	for _, main := range []bool{true, false} {
+		workspace := catalogShell("row", "Checkout", "session", "%1", now)
+		workspace.Kind, workspace.IsMain = workspaceinventory.KindWorktree, main
+		snapshot := mustCatalog(t, CatalogInput{ObservedAt: now, Projects: []CatalogProject{{Result: workspaceinventory.ProjectResult{ProjectKey: "/repo", Workspaces: []workspaceinventory.Workspace{workspace}}}}}, mobileproto.CatalogQuery{})
+		data, err := json.Marshal(catalogRowsByID(snapshot)["row"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		var wire map[string]any
+		if err := json.Unmarshal(data, &wire); err != nil {
+			t.Fatal(err)
+		}
+		if got, ok := wire["main_checkout"]; !ok || got != main {
+			t.Fatalf("main=%v row=%s", main, data)
+		}
+	}
+}

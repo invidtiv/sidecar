@@ -662,6 +662,9 @@
           "live": {
             "type": "boolean"
           },
+          "main_checkout": {
+            "type": "boolean"
+          },
           "observed_at": {
             "type": "string"
           },

@@ -90,7 +90,8 @@ func RootCommand() *Command {
 			"not own is refused rather than renamed. --shell and --project only scope a\n" +
 			"--target; without one, the current shell is the only subject.",
 		Flags: []Flag{
-			{Name: "--target", Arg: "SESSION", Summary: "Rename this tmux session instead of the current shell"},
+			{Name: "--exact-target", Summary: "Interpret --target as a literal session identity (required by API callers)", Bool: true},
+			{Name: "--target", Arg: "SESSION", Summary: "Exact session; use name:DISPLAY for explicit display-name lookup"},
 			{Name: "--shell", Arg: "NAME", Summary: "Resolve the project from a registered shell (with --target)"},
 			{Name: "--project", Arg: "NAME", Summary: "Target project (slug, basename, or path; with --target)"},
 			{Name: "--json", Summary: "Write one structured result object to stdout", Bool: true},
@@ -132,7 +133,8 @@ func RootCommand() *Command {
 			"running: a record for a session that is not up is a tmux failure (exit 1), not\n" +
 			"a silent success.",
 		Flags: []Flag{
-			{Name: "--target", Arg: "SESSION", Summary: "The tmux session to send to (required)"},
+			{Name: "--exact-target", Summary: "Interpret --target as a literal session identity (required by remote viewers)", Bool: true},
+			{Name: "--target", Arg: "SESSION", Summary: "Exact session; use name:DISPLAY for explicit display-name lookup"},
 			{Name: "--run", Arg: "COMMAND", Summary: "Execute COMMAND in the session"},
 			{Name: "--type", Arg: "COMMAND", Summary: "Type COMMAND without pressing Enter"},
 			{Name: "--shell", Arg: "NAME", Summary: "Resolve the project from a registered shell"},
@@ -252,7 +254,8 @@ func RootCommand() *Command {
 			"There is no current-shell form. Deleting the shell you are sitting in would\n" +
 			"kill the session running the command, so the subject is always named.",
 		Flags: []Flag{
-			{Name: "--target", Arg: "SESSION", Summary: "The tmux session to delete (required)"},
+			{Name: "--exact-target", Summary: "Interpret --target as a literal session identity (required by API callers)", Bool: true},
+			{Name: "--target", Arg: "SESSION", Summary: "Exact session; use name:DISPLAY for explicit display-name lookup"},
 			{Name: "--shell", Arg: "NAME", Summary: "Resolve the project from a registered shell"},
 			{Name: "--project", Arg: "NAME", Summary: "Target project (slug, basename, or path)"},
 			{Name: "--json", Summary: "Write one structured result object to stdout", Bool: true},

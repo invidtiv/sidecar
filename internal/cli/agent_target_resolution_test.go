@@ -155,13 +155,10 @@ func TestAgentListReportsOnePaneOncePerProjectKey(t *testing.T) {
 	}
 }
 
-// TestExplicitTargetNarrowsToTheCallerProject is td-c906c1's first
-// refusal. Two projects each have a shell called "reviewer"; from a managed
-// shell in one of them the bare name means that project's shell, because
-// SIDECAR_SHELL already says which Sidecar the caller is in. Outside any
-// managed shell the same name is ambiguous, and the refusal names the
-// projects and the flag that picks one.
-func TestExplicitTargetNarrowsToTheCallerProject(t *testing.T) {
+// Explicit human display-name lookup refuses ambiguity even inside a
+// managed shell. --project provides deliberate narrowing; exact sessions
+// can still address other projects.
+func TestNamedTargetRequiresExplicitProjectForAmbiguity(t *testing.T) {
 	_, stateDir := setupIsolatedCLI(t)
 	alpha := t.TempDir()
 	beta := t.TempDir()
@@ -176,7 +173,7 @@ func TestExplicitTargetNarrowsToTheCallerProject(t *testing.T) {
 	env := Env{StateDir: stateDir}
 
 	t.Setenv(shellstate.SessionEnv, "")
-	_, code, err := findShellTarget(env, "reviewer", "", "", true, ns)
+	_, code, err := findShellTarget(env, "name:reviewer", "", "", true, ns)
 	if err == nil || code != 1 {
 		t.Fatalf("outside a shell = code=%d err=%v, want ambiguity", code, err)
 	}
@@ -187,9 +184,9 @@ func TestExplicitTargetNarrowsToTheCallerProject(t *testing.T) {
 	}
 
 	t.Setenv(shellstate.SessionEnv, "sidecar-sh-alpha-1")
-	tgt, code, err := findShellTarget(env, "reviewer", "", "", true, ns)
-	if err != nil || code != 0 || tgt.Session != "sidecar-sh-alpha-2" {
-		t.Fatalf("from alpha = %+v code=%d err=%v", tgt, code, err)
+	tgt, code, err := findShellTarget(env, "name:reviewer", "", "", true, ns)
+	if err == nil || code != 1 {
+		t.Fatalf("from alpha must refuse named ambiguity: %+v code=%d err=%v", tgt, code, err)
 	}
 	// Narrowing only breaks ties. A name unique elsewhere still resolves
 	// there, so a shell keeps addressing other projects by name.
@@ -198,7 +195,7 @@ func TestExplicitTargetNarrowsToTheCallerProject(t *testing.T) {
 		t.Fatalf("cross-project by session = %+v err=%v", tgt, err)
 	}
 	// And an explicit --project still wins over the caller's own.
-	tgt, _, err = findShellTarget(env, "reviewer", "", "beta", true, ns)
+	tgt, _, err = findShellTarget(env, "name:reviewer", "", "beta", true, ns)
 	if err != nil || tgt.Session != "sidecar-sh-beta-1" {
 		t.Fatalf("--project beta = %+v err=%v", tgt, err)
 	}
@@ -207,7 +204,7 @@ func TestExplicitTargetNarrowsToTheCallerProject(t *testing.T) {
 	var out, errOut bytes.Buffer
 	terminal := &cliAgentTerminal{launched: true, screen: codexIdleFixture(t)}
 	useCLIAgentTerminal(t, terminal)
-	handled, exit := Run([]string{"--enable-feature=agent_control", "agent", "get", "reviewer", "--json"}, &out, &errOut)
+	handled, exit := Run([]string{"--enable-feature=agent_control", "agent", "get", "name:reviewer", "--project", "alpha", "--json"}, &out, &errOut)
 	if !handled || exit != 0 || errOut.Len() != 0 {
 		t.Fatalf("get = handled=%v code=%d stdout=%q stderr=%q", handled, exit, out.String(), errOut.String())
 	}
@@ -363,11 +360,11 @@ func TestCwdProjectFollowsTheOwnershipOrder(t *testing.T) {
 	}
 }
 
-// TestExplicitTargetNarrowsFromAWorktreeSession: a worktree session
+// TestNamedTargetRefusesAmbiguityFromAWorktreeSession: a worktree session
 // (sidecar-ws-…) exports no SIDECAR_SHELL, and it is exactly where
 // `create worktree --agent` puts an agent. There the session tmux reports is
-// resolved to the project owning the worktree, and the same tie-break applies.
-func TestExplicitTargetNarrowsFromAWorktreeSession(t *testing.T) {
+// resolved to the project owning the worktree, and this context must not hide a display-name collision.
+func TestNamedTargetRefusesAmbiguityFromAWorktreeSession(t *testing.T) {
 	_, stateDir := setupIsolatedCLI(t)
 	root := t.TempDir()
 	if resolved, err := filepath.EvalSymlinks(root); err == nil {
@@ -399,8 +396,8 @@ func TestExplicitTargetNarrowsFromAWorktreeSession(t *testing.T) {
 	writeProjectShells(t, stateDir, "alpha", shellstate.Definition{TmuxName: "sidecar-sh-alpha-1", DisplayName: "reviewer", Namespace: ns, WorkDir: repo})
 	writeProjectShells(t, stateDir, "beta", shellstate.Definition{TmuxName: "sidecar-sh-beta-1", DisplayName: "reviewer", Namespace: ns, WorkDir: beta})
 
-	tgt, code, err := findShellTarget(Env{StateDir: stateDir}, "reviewer", "", "", true, ns)
-	if err != nil || code != 0 || tgt.Session != "sidecar-sh-alpha-1" {
-		t.Fatalf("from the worktree session = %+v code=%d err=%v, want alpha's reviewer", tgt, code, err)
+	tgt, code, err := findShellTarget(Env{StateDir: stateDir}, "name:reviewer", "", "", true, ns)
+	if err == nil || code != 1 {
+		t.Fatalf("from the worktree session = %+v code=%d err=%v, want ambiguity refusal", tgt, code, err)
 	}
 }
