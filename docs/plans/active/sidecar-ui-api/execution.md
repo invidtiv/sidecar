@@ -40,6 +40,13 @@ These are not negotiable. Every lane prompt points here.
 - If you find a Sidecar bug, or friction in the `sidecar agent`, `create` or `comms` commands while working, file a td issue (label `ui-api-friction` or `bug`) with the exact command and output, and mention it in your report. Do not work around it silently.
 - Product direction for every user-facing surface: each platform should feel native. Use the terminal look only where the user is actually in a terminal. Show no internal machinery (lease tokens, generations, protocol states, ids). Useful detail belongs in context, such as hover, inspector or detail views, not in chrome.
 
+## Where things stand
+
+U0 to U4 are merged in every repo. What is still open:
+- **Marcus:** a physical-device run of the native app (`./scripts/deploy.sh` in sidecar-mobile); a tailnet proof through `tailscale serve`; `make install-local` and a TUI restart, because older TUIs ignore the viewer pin.
+- **Friction and bug tickets:** see the table at the end (label `ui-api-friction`). The notable ones are td-17b5e2 (worktree delete orphans cross-project shells), td-00b64e (shell list/rename resolve the project from env), td-f9306b (no rename history), and td-35d3c5 (fixture worktree identity).
+- **Not pushed:** Sidecar main is not pushed (AGENTS.md: push only when asked), and neither is sidecar-mobile main. sidecar-ui main is pushed (private).
+
 ## Lanes
 
 The status values are `queued`, `running`, `review`, `fixing`, `merged` and `blocked`.
@@ -281,7 +288,7 @@ Each one is a td issue with the exact command and output. Fixes run as their own
 | td-17b5e2 | Worktree delete leaves other projects' shells rooted in the removed worktree live, with a vanished cwd | open |
 | td-00b64e | shell list/rename resolve the current project from env, not cwd; shell list has no --project | open |
 | td-f9306b | Shell renames keep no history; the td-ac892f collateral rename of sidecar-sh-clara-home-23 could only be guessed back to 'Shell 23' | open |
-| td-480c9b | P1: exact session-name targets fall back to display-name matching, so a destructive operation could hit another same-named shell. Also: unguarded positional targets, a literal '-' prompt refused, and no main-checkout flag. Approved (818dee26; display-name compatibility restored); integrating main before merge | integrating |
+| td-480c9b | P1: exact session-name targets fall back to display-name matching, so a destructive operation could hit another same-named shell. Also: unguarded positional targets, a literal '-' prompt refused, and no main-checkout flag. merged (61c76695); display-name compatibility restored, exact-identity safety kept | merged |
 | td-418046 | P1: layout routes resolve only the project root while the viewer relay reads the worktree root, so agent-driven layouts in worktrees cannot work. merged (30a92e4d); review fixed 2 P1 worktree-scope holes | merged |
 | td-4db5c6 | P2: a terminal renders very small even while this browser holds the size. Cause: an xterm WebGL viewport and backing mismatch on Retina; the terminal falls back to the DOM renderer. Merged (docs 0b79ce7f). Review made 'sized here' wait for an actual paint. DOM fallback benchmarked at ~60 Hz for normal panes | merged |
 | td-225c83 | `shell rename --target sidecar-ws-…` can't find worktree sessions that `agent list` reports | open |
