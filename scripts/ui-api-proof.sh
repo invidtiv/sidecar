@@ -13,6 +13,9 @@
 set -eu
 
 unset TMUX TMUX_PANE
+# Proofs may run from a managed shell or a shared harness daemon. None of its
+# caller identity belongs to this temporary state tree.
+unset SIDECAR_SHELL SIDECAR_SHELL_NAME SIDECAR_MANAGED_SHELL SIDECAR_TMUX_SERVER SIDECAR_HOST
 tmux_bin=${1:-$(command -v tmux)}
 uid=$(id -u)
 repo=$(pwd -P)
@@ -65,7 +68,7 @@ go build -o "$root/uieventsproof" ./internal/tools/uieventsproof
 sc() { "$root/sidecar" -config "$config" "$@"; }
 
 step "create a managed shell on the private tmux server"
-created=$(cd "$root/project" && sc create shell --project proof --name "UI API proof" --json --wait 0)
+created=$(cd "$root/project" && sc create shell --project "$root/project" --name "UI API proof" --json --wait 0)
 session=$(printf '%s' "$created" | python3 -c 'import json,sys; print(json.load(sys.stdin)["shell"]["session"])')
 env -u TMUX -u TMUX_PANE "$tmux_bin" -S "$socket" has-session -t "$session" || fail "shell $session is not on the private server"
 echo "session=$session socket=$socket"

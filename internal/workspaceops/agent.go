@@ -98,6 +98,18 @@ func ResolveAgentCommand(worktreePath, agentType string, configured map[string]s
 	if command := readAgentStart(worktreePath); command != "" {
 		return finishAgentCommand(command, agentType, skipPerms)
 	}
+	for _, key := range []string{agentType, "*", "default"} {
+		if command := sanitizeAgentCommand(configured[key]); command != "" {
+			return finishAgentCommand(command, agentType, skipPerms)
+		}
+	}
+	if family, ok := agentcatalog.FindLaunch(agentType); ok {
+		argv, err := family.LaunchArgvInDir(worktreePath, nil, skipPerms)
+		if err == nil {
+			return agentcatalog.DisplayCommand(argv)
+		}
+		return ""
+	}
 	return ResolveAgentCommandFromConfig(agentType, configured, skipPerms)
 }
 
@@ -130,7 +142,7 @@ func ResolveAgentLaunchArgv(worktreePath, agentType string, configured map[strin
 		}
 	}
 	if command == "" {
-		argv, err := family.LaunchArgv(extra, skipPerms)
+		argv, err := family.LaunchArgvInDir(worktreePath, extra, skipPerms)
 		return argv, false, err
 	}
 	command = finishAgentCommand(command, agentType, skipPerms)
@@ -299,7 +311,9 @@ func launchWorktreeSession(ctx context.Context, spec AgentLaunchSpec, runner Tmu
 		}
 		return result, nil
 	}
-	if err := newSession("new-session", "-d", "-s", spec.SessionName, "-c", spec.WorkDir); err != nil {
+	args := []string{"new-session", "-d", "-s", spec.SessionName, "-c", spec.WorkDir}
+	args = append(args, ShellEnvArgs(spec.SessionName, spec.DisplayName)...)
+	if err := newSession(args...); err != nil {
 		return result, fmt.Errorf("create session: %w", err)
 	}
 	failCreatedSession := func(err error) (AgentLaunchResult, error) {

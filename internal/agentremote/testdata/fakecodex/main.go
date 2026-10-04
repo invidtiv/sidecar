@@ -44,6 +44,14 @@ func paint(lines ...string) {
 }
 
 func main() {
+	for _, arg := range os.Args[1:] {
+		if arg == "--help" {
+			// Model a legacy provider whose own TUI owns its tool execution.
+			// The launch capability probe must not start this interactive fixture.
+			fmt.Println("Codex CLI (legacy fixture)\nUsage: codex [OPTIONS]")
+			return
+		}
+	}
 	// The startup header is what codexScreenIdentity matches when a pane's
 	// command name is a shared runtime. It costs nothing to be identifiable by
 	// both routes.

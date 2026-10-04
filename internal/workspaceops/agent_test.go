@@ -3,6 +3,7 @@ package workspaceops
 import (
 	"context"
 	"errors"
+	"github.com/marcus/sidecar/internal/testenv"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -99,6 +100,35 @@ func TestLaunchWorktreeSessionRunsEnvironmentTaskAndAgent(t *testing.T) {
 	}
 }
 
+func TestLaunchWorktreeSessionPublishesIdentityBeforeShellStarts(t *testing.T) {
+	runner := &fakeTmuxRunner{}
+	spec := AgentLaunchSpec{SessionName: "sidecar-ws-identity", DisplayName: "Identity worktree", WorkDir: "/tmp/identity"}
+	if _, err := LaunchWorktreeSessionWithRunner(context.Background(), spec, runner); err != nil {
+		t.Fatal(err)
+	}
+	var created []string
+	for _, call := range runner.calls {
+		if call[0] == "new-session" {
+			created = call
+			break
+		}
+	}
+	expected := ShellEnvArgs(spec.SessionName, spec.DisplayName)
+	for i := 0; i < len(expected); i += 2 {
+		want := expected[i+1]
+		found := false
+		for j := 0; j+1 < len(created); j++ {
+			if created[j] == "-e" && created[j+1] == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("first shell starts without %q: %v", want, created)
+		}
+	}
+}
+
 func TestTypeInShellOmitsEnter(t *testing.T) {
 	runner := &fakeTmuxRunner{}
 	if err := TypeInShellWithRunner(context.Background(), "sidecar-sh-demo-1", "go test ./...", runner); err != nil {
@@ -132,7 +162,36 @@ func TestResolveAgentCommandUsesConfiguredOverrideAndSkipFlag(t *testing.T) {
 	}
 }
 
+func TestLocalCodexIsolationPreservesOpaqueAndRemoteCommands(t *testing.T) {
+	testenv.ProviderHelp(t, "codex", "usage: codex\n  --no-daemon  Use this shell's environment\n")
+	dir := t.TempDir()
+	if got := ResolveAgentCommand(dir, "codex", nil, false); got != "codex --no-daemon" {
+		t.Fatalf("local command still shares the daemon: %q", got)
+	}
+	if got := ResolveAgentCommandFromConfig("codex", nil, false); got != "codex" {
+		t.Fatalf("remote command used this machine's capability: %q", got)
+	}
+	for _, key := range []string{"codex", "*", "default"} {
+		configured := map[string]string{key: "codex --profile custom | tee log"}
+		if got := ResolveAgentCommand(dir, "codex", configured, false); got != configured[key] {
+			t.Fatalf("opaque %s command rewritten: %q", key, got)
+		}
+		argv, opaque, err := ResolveAgentLaunchArgv(dir, "codex", configured, false, nil)
+		want := []string{"sh", "-lc", configured[key]}
+		if err != nil || !opaque || !reflect.DeepEqual(argv, want) {
+			t.Fatalf("opaque %s argv rewritten: %v, opaque=%v, err=%v", key, argv, opaque, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".sidecar-agent-start"), []byte("codex --profile checkout\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := ResolveAgentCommand(dir, "codex", nil, false); got != "codex --profile checkout" {
+		t.Fatalf("checkout override rewritten: %q", got)
+	}
+}
+
 func TestResolveAgentLaunchArgvKeepsCatalogStructuredAndOverridesOpaque(t *testing.T) {
+	testenv.ProviderHelp(t, "codex", "usage: codex (older standalone CLI)")
 	argv, opaque, err := ResolveAgentLaunchArgv(t.TempDir(), "codex", nil, true, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -160,6 +219,7 @@ func TestResolveAgentLaunchArgvKeepsCatalogStructuredAndOverridesOpaque(t *testi
 // appended one quoted shell word each to an opaque override, so a configured
 // command still runs and a value with a space stays one argument.
 func TestResolveAgentLaunchArgvAppendsProviderArguments(t *testing.T) {
+	testenv.ProviderHelp(t, "codex", "usage: codex (older standalone CLI)")
 	argv, opaque, err := ResolveAgentLaunchArgv(t.TempDir(), "codex", nil, false, []string{"--model", "space value"})
 	if err != nil {
 		t.Fatal(err)

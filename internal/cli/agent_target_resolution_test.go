@@ -393,7 +393,7 @@ func TestExplicitTargetNarrowsFromAWorktreeSession(t *testing.T) {
 	t.Setenv("TMUX", socket+",1,0")
 	t.Setenv("TMUX_PANE", "%1")
 	t.Setenv(shellstate.SessionEnv, "")
-	t.Chdir(t.TempDir())
+	t.Chdir(topic)
 
 	ns := tmuxenv.Namespace()
 	writeProjectShells(t, stateDir, "alpha", shellstate.Definition{TmuxName: "sidecar-sh-alpha-1", DisplayName: "reviewer", Namespace: ns, WorkDir: repo})

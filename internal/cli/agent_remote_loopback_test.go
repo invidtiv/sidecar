@@ -33,6 +33,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -161,14 +162,14 @@ func newLoopbackHost(t *testing.T) *loopbackHost {
 		"TMUX_PANE=",
 	}
 
-	h.startHostSession(h.agentSession)
-	h.startHostSession(h.plainSession)
 	t.Cleanup(func() {
-		// Only the server this fixture created, addressed by the socket it
-		// created. Never a bare kill-server.
+		// Register before startup: a readiness failure must clean this server
+		// too. Never a bare kill-server.
 		_ = exec.Command("tmux", "-S", h.hostSocket, "kill-server").Run()
 		_ = os.RemoveAll(tmuxDir)
 	})
+	h.startHostSession(h.agentSession)
+	h.startHostSession(h.plainSession)
 
 	// --- the viewer -----------------------------------------------------------
 	h.viewerState = mkdir(t, filepath.Join(root, "viewer", "state"))
@@ -210,16 +211,72 @@ func (h *loopbackHost) viewerConfigJSON() string {
 // it — which is how the fixture `codex` ends up on the pane's PATH.
 func (h *loopbackHost) startHostSession(name string, extraEnv ...string) {
 	h.t.Helper()
-	args := []string{"-S", h.hostSocket, "new-session", "-d", "-s", name, "-c", h.hostWork}
+	args := []string{"-S", h.hostSocket, "-f", "/dev/null", "new-session", "-d", "-s", name, "-c", h.hostWork,
+		"-e", `PS1=\[\e[H\e[2J\]` + loopbackShellPrompt, "-e", "TERM=xterm-256color",
+		"-e", "PROMPT_COMMAND=", "-e", "INPUTRC=/dev/null", "-e", "EDITOR=emacs", "-e", "VISUAL=emacs"}
 	for _, entry := range extraEnv {
 		args = append(args, "-e", entry)
 	}
+	// The fixture owns the shell: skip ambient startup files and make a fresh
+	// prompt clear the prior provider frame after every respawn. Its rendered
+	// prompt, rather than exec plus elapsed time, is the readiness barrier.
+	args = append(args, "/bin/bash", "--noprofile", "--norc", "-i")
 	cmd := exec.Command("tmux", args...)
 	cmd.Env = h.processEnv()
 	out, err := cmd.CombinedOutput()
 	if err != nil || strings.Contains(string(out), "error") {
 		h.t.Fatalf("create host session %s: %v: %s", name, err, out)
 	}
+	h.waitForShell(name)
+}
+
+const loopbackShellPrompt = "loopback-shell> "
+
+func TestLoopbackShellReadinessRequiresCleanRenderedPrompt(t *testing.T) {
+	dir := t.TempDir()
+	observed := filepath.Join(dir, "old-frame-observed")
+	script := fmt.Sprintf(`#!/bin/sh
+case "$*" in
+  *list-panes*)
+    case "$*" in
+      *cursor_x*) if [ -f %q ]; then printf 'bash\t%d\t0\t0\n'; else printf 'bash\t0\t0\t0\n'; fi ;;
+      *) printf 'bash\n' ;;
+    esac ;;
+  *capture-pane*)
+    if [ -f %q ]; then printf '%%s\n' %q; else printf 'OpenAI Codex (old frame)\n'; touch %q; fi ;;
+  *) exit 1 ;;
+esac
+`, observed, len(loopbackShellPrompt), observed, strings.TrimRight(loopbackShellPrompt, " "), observed)
+	writeFile(t, filepath.Join(dir, "tmux"), script)
+	if err := os.Chmod(filepath.Join(dir, "tmux"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	h := &loopbackHost{t: t, hostSocket: filepath.Join(dir, "fake.sock")}
+	h.waitForShell("resetting-shell")
+	out, err := exec.Command("tmux", "-S", h.hostSocket, "capture-pane", "-p", "-t", "resetting-shell").Output()
+	if err != nil || strings.TrimSpace(string(out)) != strings.TrimSpace(loopbackShellPrompt) {
+		t.Fatalf("shell readiness returned before its fresh prompt replaced the old provider frame: %q, %v", out, err)
+	}
+}
+
+func TestLoopbackHostShellIgnoresTmuxDefaultCommand(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds two binaries and drives a tmux server")
+	}
+	h := newLoopbackHost(t)
+	// Own the pane command even when the server defaults would start a
+	// different program. Both initial startup and respawn must reach the same
+	// clean editor prompt before the fixture hands them to agent start.
+	for option, value := range map[string]string{"default-shell": "/bin/sh", "default-command": "exit 99"} {
+		cmd := exec.Command("tmux", "-S", h.hostSocket, "set-option", "-g", option, value)
+		cmd.Env = h.processEnv()
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("set private server %s: %v: %s", option, err, out)
+		}
+	}
+	h.startHostSession("sidecar-sh-explicit-shell")
+	h.resetAgentPane()
 }
 
 // managedShellEnv is the whole managed-shell environment contract, which the
@@ -359,22 +416,29 @@ func (h *loopbackHost) resetAgentPane() {
 
 func (h *loopbackHost) waitForShell(session string) {
 	h.t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		cmd := exec.Command("tmux", "-S", h.hostSocket, "list-panes", "-t", session, "-F", "#{pane_current_command}")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+	var metadata, screen []byte
+	for {
+		cmd := exec.CommandContext(ctx, "tmux", "-S", h.hostSocket, "list-panes", "-t", session, "-F",
+			"#{pane_current_command}\t#{cursor_x}\t#{cursor_y}\t#{pane_dead}")
 		cmd.Env = h.processEnv()
-		out, err := cmd.Output()
-		if err == nil {
-			switch strings.TrimSpace(string(out)) {
-			case "sh", "bash", "zsh", "dash", "fish":
-				// Give the shell a moment past exec so ShellStableFor is met.
-				time.Sleep(300 * time.Millisecond)
-				return
-			}
+		metadata, _ = cmd.Output()
+		capture := exec.CommandContext(ctx, "tmux", "-S", h.hostSocket, "capture-pane", "-p", "-t", session, "-S", "0")
+		capture.Env = h.processEnv()
+		screen, _ = capture.Output()
+		wantMetadata := fmt.Sprintf("bash\t%d\t0\t0", len(loopbackShellPrompt))
+		if strings.TrimSpace(string(metadata)) == wantMetadata && strings.TrimSpace(string(screen)) == strings.TrimSpace(loopbackShellPrompt) {
+			return
 		}
-		time.Sleep(50 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			h.t.Fatalf("host session %s never reached its fresh shell prompt: metadata=%q screen=%q", session, metadata, screen)
+		case <-tick.C:
+		}
 	}
-	h.t.Fatalf("host session %s never returned to its interactive shell", session)
 }
 
 func (h *loopbackHost) tmuxSend(session, keys string) {

@@ -39,7 +39,7 @@ func TestWorktreePruneSessionsRealLifecycle(t *testing.T) {
 	writeRegisteredWorktree(t, stateDir, root, gone)
 	writeRegisteredWorktree(t, stateDir, root, kept)
 	writeProjectShells(t, stateDir, "demo",
-		shellstate.Definition{TmuxName: "sidecar-sh-gone", DisplayName: "Gone shell", WorkDir: gone},
+		shellstate.Definition{TmuxName: "sidecar-sh-gone", DisplayName: "Gone shell", WorkDir: gone, CreatedAt: time.Now()},
 		shellstate.Definition{TmuxName: "sidecar-sh-main", DisplayName: "Main shell", WorkDir: root},
 	)
 
@@ -49,10 +49,7 @@ func TestWorktreePruneSessionsRealLifecycle(t *testing.T) {
 		goneSession: gone, keptSession: kept, "sidecar-sh-gone": gone, "sidecar-sh-main": root,
 	}
 	for name, dir := range sessions {
-		if out, err := exec.Command("tmux", "new-session", "-d", "-s", name, "-c", dir).CombinedOutput(); err != nil {
-			t.Skipf("cannot start a private tmux session: %v: %s", err, out)
-		}
-		t.Cleanup(func() { _ = exec.Command("tmux", "kill-session", "-t", "="+name).Run() })
+		startTestSession(t, name, dir)
 	}
 
 	// The integrator's cleanup: git only, Sidecar never told.
@@ -212,7 +209,7 @@ func TestWorktreePruneSessionsLeavesAReusedNameAlone(t *testing.T) {
 
 func startTestSession(t *testing.T, name, dir string) {
 	t.Helper()
-	if out, err := exec.Command("tmux", "new-session", "-d", "-s", name, "-c", dir).CombinedOutput(); err != nil {
+	if out, err := exec.Command("tmux", "new-session", "-d", "-s", name, "-c", dir, "/bin/bash", "--noprofile", "--norc", "-i").CombinedOutput(); err != nil {
 		t.Skipf("cannot start a private tmux session: %v: %s", err, out)
 	}
 	t.Cleanup(func() { _ = exec.Command("tmux", "kill-session", "-t", "="+name).Run() })
@@ -259,7 +256,7 @@ func TestWorktreePruneSessionsSafetyCases(t *testing.T) {
 	// live shell whose name it prefixes. Closing the first must not reach the
 	// second.
 	writeProjectShells(t, stateDir, "demo",
-		shellstate.Definition{TmuxName: "sidecar-sh-repo-1", DisplayName: "dead", WorkDir: removed},
+		shellstate.Definition{TmuxName: "sidecar-sh-repo-1", DisplayName: "dead", WorkDir: removed, CreatedAt: time.Now()},
 		shellstate.Definition{TmuxName: "sidecar-sh-repo-10", DisplayName: "sibling", WorkDir: root},
 	)
 	startTestSession(t, "sidecar-sh-repo-10", root)

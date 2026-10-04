@@ -5,6 +5,12 @@ order = 20
 name = "Codex CLI"
 short = "Codex"
 command = "codex"
+# codex-cli 0.160.0 --help and `resume --help`: bypass the shared background
+# server, whose startup environment cannot name a later Sidecar-managed shell.
+# Probe the installed CLI rather than assuming older versions accept this flag.
+help_supported_args = ["--no-daemon"]
+# --no-daemon is incompatible with a caller's explicit --remote endpoint.
+help_arg_conflicts = { "--no-daemon" = ["--remote"] }
 skip_permissions_arg = "--dangerously-bypass-approvals-and-sandbox"
 resume_args = ["resume"]
 resume_kinds = ["id"]

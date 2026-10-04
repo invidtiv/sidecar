@@ -76,6 +76,9 @@ func resolveCreateDestination(ctx context.Context, stateDir, shellFlag, projectF
 	if shellFlag != "" || projectFlag != "" {
 		return resolveExplicitDestination(stateDir, shellFlag, projectFlag, register)
 	}
+	if err := validateImplicitCaller(ctx, stateDir); err != nil {
+		return openDestination{}, err
+	}
 
 	if identity, err := currentShellIdentity(ctx); err == nil {
 		origin, err := shellstate.LookupOrigin(stateDir, shellstate.Identity{
@@ -251,6 +254,9 @@ func registeredProjectForCreate(stateDir string, dest openDestination) (register
 func resolveOpenDestination(ctx context.Context, stateDir, shellFlag, projectFlag string, register projectRegistration) (openDestination, error) {
 	if shellFlag != "" || projectFlag != "" {
 		return resolveExplicitDestination(stateDir, shellFlag, projectFlag, register)
+	}
+	if err := validateImplicitCaller(ctx, stateDir); err != nil {
+		return openDestination{}, err
 	}
 
 	if identity, err := currentShellIdentity(ctx); err == nil {

@@ -2,7 +2,9 @@ package workspace
 
 import (
 	"context"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -203,5 +205,63 @@ func TestCreateShellWithResumeRendersPrefill(t *testing.T) {
 	p.pendingPrefillCmd = ""
 	if cmd := p.createShellWithResume(nil); cmd != nil || p.pendingPrefillCmd != "" {
 		t.Errorf("createShellWithResume(nil) armed a prefill: %q", p.pendingPrefillCmd)
+	}
+}
+
+func TestConversationShellResumeResolvesCapabilitiesAsynchronouslyInTargetDirectory(t *testing.T) {
+	target, caller, bin := t.TempDir(), t.TempDir(), t.TempDir()
+	probes := filepath.Join(bin, "probes")
+	script := "#!/bin/sh\npwd >> " + shellQuote(probes) + "\nif [ \"$PWD\" = " + shellQuote(target) + " ]; then printf '%s' '--no-daemon'; else printf '%s' 'legacy usage'; fi\n"
+	if err := os.WriteFile(filepath.Join(bin, "codex"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Chdir(caller)
+	p := &Plugin{ctx: &plugin.Context{Epoch: 1, ProjectRoot: target, WorkDir: target, Config: config.Default()}, operationCtx: context.Background()}
+	_, cmd := p.handleResumeConversation(ResumeConversationMsg{AdapterID: "codex", SessionID: "session", ResumeArgv: []string{"codex", "resume", "session"}, Type: "shell"})
+	if data, err := os.ReadFile(probes); !os.IsNotExist(err) || p.pendingPrefillCmd != "" {
+		t.Fatalf("resume constructor probed or armed a premature prefill: %q, %v, %q", data, err, p.pendingPrefillCmd)
+	}
+	resolved, ok := cmd().(shellResumeResolvedMsg)
+	if !ok || resolved.Err != nil || strings.Join(resolved.ResumeArgv, " ") != "codex --no-daemon resume session" {
+		t.Fatalf("target resume=%+v, resolved=%v", resolved, ok)
+	}
+	if data, err := os.ReadFile(probes); err != nil || strings.TrimSpace(string(data)) != target {
+		t.Fatalf("capabilities selected outside target: %q, %v", data, err)
+	}
+	_, create := p.update(resolved)
+	if create == nil || p.pendingPrefillCmd != "codex --no-daemon resume session" {
+		t.Fatalf("resolved resume did not arm the correct prefill: %q", p.pendingPrefillCmd)
+	}
+	// A completed probe from an old project may never arm a later project.
+	p.pendingPrefillCmd = ""
+	p.ctx.Epoch++
+	if _, stale := p.update(resolved); stale != nil || p.pendingPrefillCmd != "" {
+		t.Fatal("stale resume resolution crossed the project generation")
+	}
+}
+
+func TestWorktreeResumeRefusesTargetCapabilityFailureBeforeCreatingSession(t *testing.T) {
+	caller, bin := t.TempDir(), t.TempDir()
+	target := filepath.Join(t.TempDir(), "resume-capability-failed")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\nif [ \"$PWD\" = " + shellQuote(target) + " ]; then exit 8; else printf '%s' '--no-daemon'; fi\n"
+	if err := os.WriteFile(filepath.Join(bin, "codex"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Chdir(caller)
+	p := &Plugin{ctx: &plugin.Context{Epoch: 1, ProjectRoot: caller, WorkDir: caller, Config: config.Default()}}
+	wt := &Worktree{Name: "resume-failed-capability", Path: target}
+	t.Cleanup(func() { _ = exec.Command("tmux", "kill-session", "-t", "="+worktreeTmuxSession(wt)).Run() })
+	cmd := p.startAgentWithResumeCmd(wt, AgentCodex, false, []string{"codex", "resume", "session"}, "codex", "session")
+	msg := cmd().(AgentStartedMsg)
+	if msg.Err == nil || !strings.Contains(msg.Err.Error(), "probe provider") {
+		t.Fatalf("resume guessed around target capability failure: %+v", msg)
+	}
+	if sessionExists(worktreeTmuxSession(wt)) {
+		t.Fatal("failed capability selection created a tmux session")
 	}
 }

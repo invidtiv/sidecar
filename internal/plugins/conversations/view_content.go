@@ -353,27 +353,33 @@ func adapterFilterOptions(adapters map[string]adapter.Adapter) []adapterFilterOp
 // adapter the catalog does not know, and a known provider with no native resume
 // (copilot). The UI's three call sites read "" as that signal.
 func resumeArgv(session *adapter.Session) ([]string, bool) {
+	return resumeArgvInDir(session, "")
+}
+
+func resumeArgvInDir(session *adapter.Session, workDir string) ([]string, bool) {
 	if session == nil || session.ID == "" {
 		return nil, false
 	}
-	argv, err := agentcatalog.BuildResume(session.AdapterID, "id", session.ID, nil)
+	argv, err := agentcatalog.BuildResumeInDir(workDir, session.AdapterID, "id", session.ID, nil)
 	if err != nil {
 		return nil, false
 	}
 	return argv, true
 }
 
-// resumeCommand is the string projection of resumeArgv: the line shown in the
-// session header and copied by the yank key.
+// resumeCommand is the pure preview shown in the session header. The yank key
+// resolves installed-provider options separately, outside the update loop.
 //
 // It is rendered by agentcatalog.DisplayCommand, the same conservative quoter that
-// renders the line typed at a new shell's prompt, so what a user reads here and
-// what a shell receives are the same text. Bare words survive only when no
+// renders the line typed at a new shell's prompt. Bare words survive only when no
 // character in them means anything to a shell; anything else is quoted by
 // agentcatalog.ShellCommand.
 func resumeCommand(session *adapter.Session) string {
-	argv, ok := resumeArgv(session)
-	if !ok {
+	if session == nil || session.ID == "" {
+		return ""
+	}
+	argv, err := agentcatalog.BuildResumePreview(session.AdapterID, "id", session.ID, nil)
+	if err != nil {
 		return ""
 	}
 	return agentcatalog.DisplayCommand(argv)

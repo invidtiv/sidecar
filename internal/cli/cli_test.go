@@ -425,6 +425,7 @@ func setupWorktreeCLI(t *testing.T, displayName string) (stateHome, stateDir, pr
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Chdir(worktreeRoot)
 	return stateHome, stateDir, projectRoot, worktreeRoot, session, socket
 }
 

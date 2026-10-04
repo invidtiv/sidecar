@@ -211,6 +211,9 @@ func (l *shellTargetLookup) resolve(env Env, target, shellFlag, projectFlag stri
 			// friction td-c906c1 records. Only ambiguity is narrowed: a value
 			// that resolved uniquely elsewhere still resolves there, so a
 			// shell can keep addressing another project by name.
+			if callerErr := validateImplicitCaller(env.Ctx, env.StateDir); callerErr != nil {
+				return shellTarget{}, 1, callerErr
+			}
 			if project := l.callerProject(env); project != "" {
 				if narrowed, narrowErr := managedtarget.Resolve(scan.candidates, managedtarget.Query{Host: "local", Project: project, Namespace: namespace, Value: target}); narrowErr == nil {
 					resolved, err = narrowed, nil
@@ -315,6 +318,8 @@ func scanProjects(env Env, shellFlag, projectFlag string, globalExplicit bool) (
 			if proj, projectErr := registeredProjectForCreate(env.StateDir, dest); projectErr == nil {
 				return []registeredProject{proj}, 0, nil
 			}
+		} else if isCallerConflict(err) {
+			return nil, 1, err
 		}
 	}
 	projects, err := loadRegisteredProjects(env.StateDir)

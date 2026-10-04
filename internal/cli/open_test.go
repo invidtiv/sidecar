@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -696,5 +697,103 @@ func TestOpenAtWritesCellIntoRequestOptions(t *testing.T) {
 	}
 	if got.target.Kind != uirequest.TargetKindFile {
 		t.Fatalf("target kind = %s", got.target.Kind)
+	}
+}
+
+func TestOpenRelativeFileUsesCallerDirectoryDespiteInheritedShell(t *testing.T) {
+	_, stateDir := setupIsolatedCLI(t)
+	shellRoot := t.TempDir()
+	callerRoot := t.TempDir()
+	writeProjectMeta(t, stateDir, "clara-home", shellRoot)
+	t.Setenv("SIDECAR_SHELL", "sidecar-sh-clara-home-23")
+	// Model an inherited shell cue on the isolated namespace without tmux calls.
+	t.Setenv("TMUX_TMPDIR", filepath.Join(t.TempDir(), "tmux"))
+	ns := filepath.Join(os.Getenv("TMUX_TMPDIR"), "tmux-"+strconv.Itoa(os.Getuid()), "default")
+	writeProjectShell(t, stateDir, "clara-home", shellstate.Definition{
+		TmuxName: "sidecar-sh-clara-home-23", Namespace: ns, WorkDir: shellRoot,
+	})
+	for _, root := range []string{shellRoot, callerRoot} {
+		if err := os.MkdirAll(filepath.Join(root, "docs"), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "docs", "lane.md"), []byte(root), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Chdir(callerRoot)
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"open", "--wait", "0", "docs/lane.md:12"}, &out, &errOut)
+	if !handled || code != 0 {
+		t.Fatalf("open = %v %d: %s", handled, code, errOut.String())
+	}
+	req := readWrittenRequest(t, stateDir)
+	want, err := filepath.EvalSymlinks(filepath.Join(callerRoot, "docs", "lane.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.Target.Value != want || req.Target.Line != 12 {
+		t.Fatalf("target = %+v, want caller file %s:12", req.Target, want)
+	}
+	if req.Origin.ProjectKey != "clara-home" || req.Origin.TmuxSession != "sidecar-sh-clara-home-23" {
+		t.Fatalf("opening a caller file changed destination ownership: %+v", req.Origin)
+	}
+}
+
+func TestCallerFilePreservesIssueAndRejectsInvalidTwins(t *testing.T) {
+	for _, kind := range []string{"issue", "directory", "escaping symlink"} {
+		t.Run(kind, func(t *testing.T) {
+			_, stateDir := setupIsolatedCLI(t)
+			root, caller := t.TempDir(), t.TempDir()
+			writeProjectMeta(t, stateDir, "demo", root)
+			if err := uirequest.Announce(stateDir, uirequest.Instance{PID: os.Getpid(), ProjectKey: "demo", WorkDir: root}); err != nil {
+				t.Fatal(err)
+			}
+			name := "twin.md"
+			if kind == "issue" {
+				name = "td-abcdef"
+			}
+			if err := os.WriteFile(filepath.Join(root, name), []byte("wrong twin"), 0644); err != nil {
+				t.Fatal(err)
+			}
+			switch kind {
+			case "issue":
+				if err := os.WriteFile(filepath.Join(caller, name), []byte("caller"), 0644); err != nil {
+					t.Fatal(err)
+				}
+			case "directory":
+				if err := os.Mkdir(filepath.Join(caller, name), 0755); err != nil {
+					t.Fatal(err)
+				}
+			case "escaping symlink":
+				if err := os.Symlink(filepath.Join(root, name), filepath.Join(caller, name)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Chdir(caller)
+			var out, errOut bytes.Buffer
+			_, code := Run([]string{"open", "--wait", "0", name}, &out, &errOut)
+			if kind == "issue" {
+				if code != 0 {
+					t.Fatalf("issue code=%d: %s", code, errOut.String())
+				}
+				if req := readWrittenRequest(t, stateDir); req.Target.Kind != uirequest.TargetKindIssue {
+					t.Fatalf("issue became %+v", req.Target)
+				}
+			} else if code != 2 {
+				t.Fatalf("invalid caller path opened destination twin: code=%d %s", code, out.String())
+			}
+		})
+	}
+}
+
+func TestCallerFileWithoutDestinationRootKeepsAbsoluteIdentity(t *testing.T) {
+	caller := t.TempDir()
+	if err := os.WriteFile(filepath.Join(caller, "lane.md"), []byte("caller"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(caller)
+	target, handled, err := resolveCallerFile("", "lane.md", 0)
+	if err != nil || !handled || !filepath.IsAbs(target.Value) {
+		t.Fatalf("unrooted destination file = %+v, %v, %v", target, handled, err)
 	}
 }
