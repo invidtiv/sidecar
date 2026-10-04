@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -25,6 +26,7 @@ import (
 type proof struct {
 	ctx                                                             context.Context
 	base, socket, binary, config, project, session, root, token, id string
+	workspace, projectRoot                                          string
 	conn                                                            *websocket.Conn
 	http                                                            *http.Client
 }
@@ -38,7 +40,12 @@ func main() {
 	flag.StringVar(&p.project, "project", "proof", "Explicit configured project")
 	flag.StringVar(&p.session, "session", "", "Private managed session")
 	flag.StringVar(&p.root, "root", "", "Private project root")
+	flag.StringVar(&p.projectRoot, "project-root", "", "Owning configured project root (defaults to root)")
+	flag.StringVar(&p.workspace, "workspace", "", "Explicit durable worktree workspace ID")
 	flag.Parse()
+	if p.projectRoot == "" {
+		p.projectRoot = p.root
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	p.ctx = ctx
@@ -47,7 +54,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "viewer proof:", err)
 		os.Exit(1)
 	}
-	fmt.Println(`{"viewer_relay":true,"cli_open":true,"layout_get_apply_move":true,"focused_refusal":true,"late_ack_refusal":true,"path_boundary":true,"ui_control_scope":true}`)
+	_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"viewer_relay": true, "cli_open": true, "layout_get_apply_move": true, "focused_refusal": true, "late_ack_refusal": true, "path_boundary": true, "ui_control_scope": true, "workspace": p.workspace})
 }
 func (p *proof) call(path string, body any, local bool) ([]byte, int, error) {
 	data, _ := json.Marshal(body)
@@ -67,7 +74,7 @@ func (p *proof) call(path string, body any, local bool) ([]byte, int, error) {
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("X-Sidecar-Request", "1")
-	if strings.HasSuffix(path, "/layout") {
+	if path == p.layoutPath() {
 		request.Method = "PUT"
 		_, etag, err := p.layout()
 		if err != nil {
@@ -84,7 +91,17 @@ func (p *proof) call(path string, body any, local bool) ([]byte, int, error) {
 	return out, response.StatusCode, err
 }
 func (p *proof) layout() (uiapi.LayoutDocument, string, error) {
-	request, _ := http.NewRequestWithContext(p.ctx, "GET", p.base+"/api/v0/projects/"+p.project+"/layout", nil)
+	return p.readLayout(p.layoutPath())
+}
+func (p *proof) layoutPath() string {
+	path := "/api/v0/projects/" + url.PathEscape(p.project) + "/layout"
+	if p.workspace != "" {
+		path += "?workspace=" + url.QueryEscape(p.workspace)
+	}
+	return path
+}
+func (p *proof) readLayout(path string) (uiapi.LayoutDocument, string, error) {
+	request, _ := http.NewRequestWithContext(p.ctx, "GET", p.base+path, nil)
 	request.Header.Set("Authorization", "Bearer "+p.token)
 	response, err := p.http.Do(request)
 	if err != nil {
@@ -99,7 +116,7 @@ func (p *proof) layout() (uiapi.LayoutDocument, string, error) {
 	return doc, response.Header.Get("ETag"), err
 }
 func (p *proof) presence(focused bool) error {
-	_, code, err := p.call("/api/v0/viewers/presence", uiapi.ViewerPresenceRequest{ViewerID: p.id, Focused: focused, Visible: true, Project: p.project, Session: p.session, Viewport: uiapi.Viewport{Width: 1200, Height: 800}, FocusedPane: 1}, false)
+	_, code, err := p.call("/api/v0/viewers/presence", uiapi.ViewerPresenceRequest{ViewerID: p.id, Focused: focused, Visible: true, Project: p.project, Workspace: p.workspace, Session: p.session, Viewport: uiapi.Viewport{Width: 1200, Height: 800}, FocusedPane: 1}, false)
 	if err != nil {
 		return err
 	}
@@ -135,6 +152,7 @@ func (p *proof) cli(args ...string) <-chan commandResult {
 	go func() {
 		args = append([]string{"-config", p.config}, args...)
 		cmd := exec.CommandContext(p.ctx, p.binary, args...)
+		cmd.Dir = p.root
 		out, err := cmd.CombinedOutput()
 		code := 0
 		if err != nil {
@@ -161,6 +179,9 @@ func (p *proof) command(args ...string) ([]byte, error) {
 	if event.UIRequest == nil {
 		return nil, fmt.Errorf("missing typed request")
 	}
+	if event.UIRequest.Project != p.project || event.UIRequest.Workspace != p.workspace || event.UIRequest.Request.Origin.WorkDir != p.root {
+		return nil, fmt.Errorf("proposal did not address the selected project/workspace: %+v", event.UIRequest)
+	}
 	_, code, err := p.call("/api/v0/viewers/ack", uiapi.ViewerAckRequest{ViewerID: p.id, ID: event.UIRequest.ID, Status: uirequest.StatusOpened}, false)
 	if err != nil {
 		return nil, err
@@ -175,7 +196,7 @@ func (p *proof) command(args ...string) ([]byte, error) {
 	return result.data, nil
 }
 func (p *proof) flags() []string {
-	return []string{"--project", p.root, "--shell", p.session, "--wait", "4s", "--json"}
+	return []string{"--project", p.projectRoot, "--shell", p.session, "--wait", "4s", "--json"}
 }
 func (p *proof) run() error {
 	data, code, err := p.call("/api/v0/origins", uiapi.OriginRequest{Origin: "https://viewer-proof.example", Scopes: []string{uiapi.ScopeUIControl, uiapi.ScopeContentRead}}, true)
@@ -190,6 +211,13 @@ func (p *proof) run() error {
 		return err
 	}
 	p.token = registration.Token
+	var mainETag string
+	if p.workspace != "" {
+		_, mainETag, err = p.readLayout("/api/v0/projects/" + url.PathEscape(p.project) + "/layout")
+		if err != nil {
+			return err
+		}
+	}
 	conn, _, err := websocket.Dial(p.ctx, strings.Replace(p.base, "http:", "ws:", 1)+"/api/v0/events?viewer=uiRequestRelayV1", &websocket.DialOptions{HTTPHeader: http.Header{"Authorization": {"Bearer " + p.token}}})
 	if err != nil {
 		return err
@@ -205,7 +233,7 @@ func (p *proof) run() error {
 	}
 	p.id = event.Viewer.ID
 	doc := uiapi.LayoutDocument{Layout: &state.PaneLayoutJSON{Kind: "terminal", Session: p.session}}
-	_, code, err = p.call("/api/v0/projects/"+p.project+"/layout", doc, false)
+	_, code, err = p.call(p.layoutPath(), doc, false)
 	if err != nil {
 		return err
 	}
@@ -292,6 +320,15 @@ func (p *proof) run() error {
 	result = <-p.cli(append([]string{"open", outside}, p.flags()...)...)
 	if result.code != 2 {
 		return fmt.Errorf("outside-root CLI exit %d: %s", result.code, result.data)
+	}
+	if p.workspace != "" {
+		_, after, err := p.readLayout("/api/v0/projects/" + url.PathEscape(p.project) + "/layout")
+		if err != nil {
+			return err
+		}
+		if after != mainETag {
+			return fmt.Errorf("worktree relay changed the main checkout's layout")
+		}
 	}
 	return nil
 }

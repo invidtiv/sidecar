@@ -1,0 +1,62 @@
+[
+  {
+    "etag": "\"synthetic-empty-layout\"",
+    "method": "GET",
+    "path": "/api/v0/projects/fixture-project/layout",
+    "query": {
+      "workspace": "/workspace/fixture:worktree:/workspace/feature"
+    },
+    "response": {
+      "layout": null
+    }
+  },
+  {
+    "etag": "\"synthetic-worktree-layout\"",
+    "if_match": "\"synthetic-empty-layout\"",
+    "method": "PUT",
+    "path": "/api/v0/projects/fixture-project/layout",
+    "query": {
+      "workspace": "/workspace/fixture:worktree:/workspace/feature"
+    },
+    "request": {
+      "layout": {
+        "split": {
+          "axis": "cols",
+          "ratio": 50,
+          "a": {
+            "kind": "terminal",
+            "session": "fixture-echo"
+          },
+          "b": {
+            "kind": "doc",
+            "tabs": [
+              {
+                "path": "README.md"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "response": {
+      "layout": {
+        "split": {
+          "axis": "cols",
+          "ratio": 50,
+          "a": {
+            "kind": "terminal",
+            "session": "fixture-echo"
+          },
+          "b": {
+            "kind": "doc",
+            "tabs": [
+              {
+                "path": "README.md"
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+]

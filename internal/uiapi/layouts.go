@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"path/filepath"
 
+	"github.com/marcus/sidecar/internal/contentservice"
 	"github.com/marcus/sidecar/internal/viewerlayout"
 )
 
@@ -20,11 +21,14 @@ func (s *Server) handleLayout(w http.ResponseWriter, r *http.Request, c caller) 
 		return
 	}
 	_, project := projectContentRoute(r.URL.Path)
-	if len(r.URL.Query()) != 0 {
-		writeError(w, 400, CodeInvalidRequest, "Layout takes no query parameters; the credential identifies its viewer.")
-		return
+	q := r.URL.Query()
+	for key, values := range q {
+		if key != "workspace" || len(values) != 1 || len(values[0]) > contentservice.MaxLocatorBytes {
+			writeError(w, 400, CodeInvalidRequest, "Layout accepts one workspace parameter; the credential identifies its viewer.")
+			return
+		}
 	}
-	ws, err := s.contentBackend().LookupProject(r.Context(), project, "")
+	ws, err := s.contentBackend().LookupProject(r.Context(), project, q.Get("workspace"))
 	if err != nil {
 		writeContentError(w, err)
 		return
