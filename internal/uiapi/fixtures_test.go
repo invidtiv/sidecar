@@ -166,7 +166,8 @@ func TestFixtureServerTerminalUsesRealOrderingAndGuards(t *testing.T) {
 	if r := read(); r.Type != "sessions" || r.Catalog == nil || r.Catalog.Total != 1 {
 		t.Fatal(r)
 	}
-	send(mobileproto.Request{Type: "resolve", RequestID: "resolve", Target: "fixture-echo"})
+	expected := backend.targets["fixture-echo"]
+	send(mobileproto.Request{Type: "resolve", RequestID: "resolve", Target: "fixture-echo", ExpectedTarget: &expected})
 	resolved := read()
 	if resolved.Target == nil {
 		t.Fatal(resolved)
@@ -220,6 +221,31 @@ func TestFixtureServerTerminalUsesRealOrderingAndGuards(t *testing.T) {
 		t.Fatal(r)
 	}
 	send(mobileproto.Request{Type: "close", RequestID: "close", AttachmentHandle: opened.AttachmentHandle})
+	if r := read(); r.Type != "closed" {
+		t.Fatal(r)
+	}
+	// A fresh connection reconstructs the catalog identity and never replays input.
+	if err := conn.Close(websocket.StatusNormalClosure, "reconnect proof"); err != nil {
+		t.Fatal(err)
+	}
+	conn, _, err = websocket.Dial(ctx, strings.Replace(client.URL(terminalPath), "http://", "ws://", 1), &websocket.DialOptions{HTTPClient: client.HTTPClient()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	send(mobileproto.Request{Type: "hello", RequestID: "hello"})
+	if r := read(); r.Type != "hello" {
+		t.Fatal(r)
+	}
+	send(mobileproto.Request{Type: "reconnect", RequestID: "reconnect", Target: "fixture-echo", ExpectedTarget: &expected, PreviousAttachmentGeneration: 1, AttachmentID: "fixture-client"})
+	reconnected := read()
+	if reconnected.Type != "reconnected" || reconnected.AttachmentGeneration != 2 {
+		t.Fatal(reconnected)
+	}
+	frame = read()
+	if frame.Type != "frame" || frame.OutputSequence != 1 || frame.ResetGeneration != 1 || frame.Control {
+		t.Fatal(frame)
+	}
+	send(mobileproto.Request{Type: "close", RequestID: "close", AttachmentHandle: reconnected.AttachmentHandle})
 	if r := read(); r.Type != "closed" {
 		t.Fatal(r)
 	}
