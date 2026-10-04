@@ -130,6 +130,8 @@ func remapCatalogRow(authority CatalogAuthority, rawOwnerHostID string, raw mobi
 	if raw.ID == "" || raw.OwnerHostID != rawOwnerHostID || raw.ProjectID == "" || raw.WorkspaceKind == "" {
 		return mobileproto.CatalogRow{}, nil, fmt.Errorf("mobile hub: incomplete raw catalog row identity")
 	}
+	// Preserve presentation metadata (including the owner filesystem path)
+	// verbatim; only identities and terminal authority are scoped by the hub.
 	row := raw
 	row.ID = hosts.ScopedKey(authority.OwnerHostID, raw.ID)
 	row.OwnerHostID = authority.OwnerHostID

@@ -379,6 +379,13 @@ func TestEventsFixtureTranscript(t *testing.T) {
 				t.Fatal("catalog missing")
 			}
 			catalog = m.Catalog
+			for _, section := range catalog.Sections {
+				for _, row := range section.Rows {
+					if row.Path != "/workspace/demo" {
+						t.Fatal("event catalog lost owner path")
+					}
+				}
+			}
 		case "attention":
 			if m.Attention == nil || (m.Attention.Kind != "needs_input" && m.Attention.Kind != "finished") || m.Attention.CatalogID == "" || m.Attention.Time.IsZero() {
 				t.Fatal("attention missing")

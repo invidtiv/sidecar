@@ -149,6 +149,8 @@ All JSON, encoded exactly as the CLI's `--json` output: one object and a trailin
 | `GET /pair` | Browser | The pairing page (see Pairing). Sets nothing and consumes nothing. |
 | `GET /*` | Browser, Tailnet | The static UI directory from `--ui DIR`, which must contain `index.html`, with the SPA fallback to `index.html` for any path that is not a file. Paths under `/api/` never fall back. Files are served only from inside `DIR`: a symlink that leads outside it is not followed. Every static response carries `Content-Security-Policy: frame-ancestors 'self'` and `X-Frame-Options: SAMEORIGIN`, so another site cannot frame the UI. Without `--ui`, a small plain page explains how to pair and where the UI lives. |
 
+Catalog rows optionally include `path`: the owning workspace path, falling back to its project root. This is presentation metadata on the row's `owner_host_id`; remote hub remapping preserves the owner's real path verbatim, never replacing it with a scoped key. It grants no attachment authority. Older producers may omit it, and clients accept rows with or without it. The same field appears in HTTP Sessions, event catalogs, CLI catalogs and mobile protocol catalogs.
+
 ## Terminal stream
 
 `GET /api/v0/terminal` upgrades to a WebSocket. Each connection is one terminal protocol stream: the [mobile terminal protocol v0](mobile-protocol.md), unchanged. Every rule in that document applies, including `hello` first, `operation_sequence`, heartbeats, the geometry lease, `history`, `reconnect`, and the refusal of `sessions` while an attachment is open (use `GET /api/v0/sessions` instead).
@@ -196,7 +198,7 @@ Each connection has bounded pending state: latest catalog, latest terminal snaps
 
 `sidecar api events --stdio` bridges this exact Local event stream to JSONL for agents and native SSH clients. The API service must already be running on the SSH target. Run it without a PTY; ending the SSH exec or closing stdout ends only this event connection. Terminal SSH streams remain separate.
 
-The typed transcript is `testdata/ui-api/v0/events-stream.jsonl`; the U1 schema/fixture lane includes it in the full fixture manifest.
+The typed transcript is `testdata/ui-api/v0/events-stream.jsonl`; it is checked for event ordering and included in the SHA-256 fixture manifest.
 
 ## CLI
 
@@ -214,13 +216,13 @@ The typed transcript is `testdata/ui-api/v0/events-stream.jsonl`; the U1 schema/
 
 ## Schemas and fixture development
 
-[ui-api.openapi.json](ui-api.openapi.json) is generated from the Go HTTP wire types and `mobileproto.Request`/`Response`. Components use JSON Schema 2020-12; the terminal WebSocket is described under `x-streams`. The generator uses `invopop/jsonschema` v0.13.0 because it reflects the same JSON tags used by `encoding/json` and supports the OpenAPI 3.1 schema dialect. Schema objects describe serialization; operation-specific field requirements, bounds, and ordering remain in this reference and [mobile-protocol.md](mobile-protocol.md). The route/method inventory and all schema references are checked, and a test fails if the committed document is stale. Regenerate the spec, fixture examples, checksums and CLI reference together with `./scripts/update-ui-api-contract.sh`. Staleness failures point to this same command.
+[ui-api.openapi.json](ui-api.openapi.json) is generated from the Go HTTP wire types, `uiapi.EventMessage` and `mobileproto.Request`/`Response`. Components use JSON Schema 2020-12; the terminal and events WebSockets are described under `x-streams`. The events upgrade reuses the Sessions query parameters and stream authentication parameters; it is GET-only. The generator uses `invopop/jsonschema` v0.13.0 because it reflects the same JSON tags used by `encoding/json` and supports the OpenAPI 3.1 schema dialect. Schema objects describe serialization; operation-specific field requirements, bounds, and ordering remain in this reference and [mobile-protocol.md](mobile-protocol.md). The route/method inventory and all schema references are checked, and a test fails if the committed document is stale. Regenerate the spec, fixture examples, checksums and CLI reference together with `./scripts/update-ui-api-contract.sh`. Staleness failures point to this same command.
 
 Security alternatives describe only the listeners that serve an operation. Remote-only ticket issuance always requires credentials. The combined document uses `x-listeners` and `x-local-auth` to distinguish the Local socket's credential-free access from authenticated Browser and Tailnet requests on shared resources; clients must honor those listener annotations.
 
-The CLI and HTTP catalog remain `mobileproto.CatalogSnapshot`. Status remains `uiapi.Status`; origin registration/list/revocation use the same named types on the CLI and HTTP. This change introduces no JSON shape changes. HTTP hello and pairing request bodies now also have named Go wire types instead of anonymous maps/structs.
+The CLI and HTTP catalog remain `mobileproto.CatalogSnapshot`. Status remains `uiapi.Status`; origin registration/list/revocation use the same named types on the CLI and HTTP. `CatalogRow.path` is optional in the generated schema. HTTP hello and pairing request bodies now also have named Go wire types instead of anonymous maps/structs.
 
-`testdata/ui-api/v0/` contains synthetic HTTP hello, sessions, status, error, pairing and terminal examples with `SHA256SUMS`. Tokens, handles, paths and terminal text are synthetic. The terminal transcript is generated through the real mobile service with handles normalized. SDK tests can read the corpus directly. The same `./scripts/update-ui-api-contract.sh` command regenerates the real-Service transcript before the resources and checksums, then verifies them. Every JSON/JSONL corpus file is included in the manifest, including stream transcripts added by later lanes.
+`testdata/ui-api/v0/` contains synthetic HTTP hello, sessions, status, error, pairing, terminal and event examples with `SHA256SUMS`. Tokens, handles, paths and terminal text are synthetic. The terminal transcript is generated through the real mobile service with handles normalized. SDK tests can read the corpus directly. The same `./scripts/update-ui-api-contract.sh` command regenerates the real-Service transcript before the resources and checksums, then verifies them. Every JSON/JSONL corpus file is included in the manifest, including stream transcripts added by later lanes.
 
 Fixture development requires `SIDECAR_ISOLATED_STATE=1` and temporary state/config paths. Startup refuses paths inside the real Sidecar state/config trees, including symlink aliases and API authority files linked into those trees, before it reads config or writes discovery. For an automatically cleaned proof run `./scripts/ui-api-fixture-proof.sh`. To develop a UI against a foreground fixture server:
 

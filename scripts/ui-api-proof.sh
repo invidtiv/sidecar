@@ -65,7 +65,7 @@ go build -o "$root/uieventsproof" ./internal/tools/uieventsproof
 sc() { "$root/sidecar" -config "$config" "$@"; }
 
 step "create a managed shell on the private tmux server"
-created=$(cd "$root/project" && sc create shell --name "UI API proof" --json --wait 0)
+created=$(cd "$root/project" && sc create shell --project proof --name "UI API proof" --json --wait 0)
 session=$(printf '%s' "$created" | python3 -c 'import json,sys; print(json.load(sys.stdin)["shell"]["session"])')
 env -u TMUX -u TMUX_PANE "$tmux_bin" -S "$socket" has-session -t "$session" || fail "shell $session is not on the private server"
 echo "session=$session socket=$socket"
@@ -112,6 +112,8 @@ http, cli = (strip(json.load(open(p))) for p in sys.argv[1:3])
 for d in (http, cli): d.pop("generation", None)
 assert http == cli, "HTTP and CLI catalogs differ"
 assert sys.argv[3] in json.dumps(http), "session missing from catalog"
+rows = [row for section in http["sections"] for row in section["rows"]]
+assert all(row.get("path") for row in rows), "catalog rows missing owner paths"
 print("sessions ok: HTTP document matches `mobile sessions --json`")
 PY
 local_get /api/v0/status | python3 -c 'import json,sys; d=json.load(sys.stdin); assert [l["name"] for l in d["listeners"]]==["local","browser"], d; print("status ok")'

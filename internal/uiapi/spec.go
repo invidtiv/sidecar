@@ -21,7 +21,7 @@ func Spec() ([]byte, error) {
 		"OriginRequest": OriginRequest{}, "OriginRegistration": OriginRegistration{},
 		"OriginList": OriginList{}, "OriginRevocation": OriginRevocation{}, "SessionRevocation": SessionRevocation{},
 		"CatalogSnapshot": mobileproto.CatalogSnapshot{}, "TerminalRequest": mobileproto.Request{},
-		"TerminalResponse": mobileproto.Response{},
+		"TerminalResponse": mobileproto.Response{}, "EventMessage": EventMessage{},
 	}
 	for name, value := range values {
 		reflected := (&jsonschema.Reflector{Anonymous: true}).Reflect(value)
@@ -128,12 +128,15 @@ func Spec() ([]byte, error) {
 	revocation := paths["/api/v0/origins"].(map[string]any)["delete"].(map[string]any)
 	revocation["parameters"] = append(revocation["parameters"].([]any), map[string]any{"name": "origin", "in": "query", "required": true, "schema": map[string]any{"type": "string"}})
 	paths[terminalPath] = streamOperation("terminal", all)
+	paths[eventsPath] = streamOperation("events", all)
+	events := paths[eventsPath].(map[string]any)["get"].(map[string]any)
+	events["parameters"] = append(events["parameters"].([]any), params...)
 	paths["/pair"] = map[string]any{"get": map[string]any{"operationId": "pair_page", "security": []any{}, "x-listeners": []string{"browser"}, "responses": map[string]any{"200": map[string]any{"description": "Pairing page, consumes no code", "content": map[string]any{"text/html": map[string]any{"schema": map[string]any{"type": "string"}}}}}}}
 	paths["/{path}"] = map[string]any{"get": map[string]any{"operationId": "ui_files", "x-listeners": remote, "description": "Static UI files with SPA fallback. Browser listener public; Tailnet requires allowed login. API paths never fall back.", "parameters": []any{map[string]any{"name": "path", "in": "path", "required": true, "schema": map[string]any{"type": "string"}}}, "responses": map[string]any{"200": map[string]any{"description": "UI file or index.html"}}}}
 	// dispatch maps HEAD to GET, and static files also support HEAD. A
 	// WebSocket handshake remains GET-only. HEAD responses have no body.
 	for path, value := range paths {
-		if path == terminalPath {
+		if path == terminalPath || path == eventsPath {
 			continue
 		}
 		methods := value.(map[string]any)
@@ -165,7 +168,7 @@ func Spec() ([]byte, error) {
 		"paths": paths, "components": map[string]any{"schemas": schemas, "securitySchemes": map[string]any{
 			"bearerAuth":   map[string]any{"type": "http", "scheme": "bearer"},
 			"tailnetLogin": map[string]any{"type": "apiKey", "in": "header", "name": tailscaleLoginHead, "description": "Trusted only on the dedicated Tailnet listener."}}},
-		"x-streams": map[string]any{terminalPath: map[string]any{"transport": "websocket", "messageType": "text", "request": schemaRef("TerminalRequest"), "response": schemaRef("TerminalResponse"), "protocol": "mobile", "version": mobileproto.Version, "maxMessageBytes": mobileproto.MaxLineBytes, "description": "One JSON envelope per text message. hello first; open before frame; operation_sequence and applied reset/output checkpoints govern mutations. See mobile-protocol.md."}}}
+		"x-streams": map[string]any{eventsPath: map[string]any{"transport": "websocket", "messageType": "text", "response": schemaRef("EventMessage"), "protocol": "ui_api", "version": APIVersion, "description": "Server-to-client JSON envelopes only; hello, catalog and terminals baseline first. Contiguous seq starts at 1 on each connection. Catalog changes precede attention. Reconnect replaces the baseline without replay. Client data closes with 4400. See ui-api.md."}, terminalPath: map[string]any{"transport": "websocket", "messageType": "text", "request": schemaRef("TerminalRequest"), "response": schemaRef("TerminalResponse"), "protocol": "mobile", "version": mobileproto.Version, "maxMessageBytes": mobileproto.MaxLineBytes, "description": "One JSON envelope per text message. hello first; open before frame; operation_sequence and applied reset/output checkpoints govern mutations. See mobile-protocol.md."}}}
 	data, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("generate UI API spec: %w", err)

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -53,7 +54,7 @@ func TestSpecMatchesCommittedDocumentAndRoutes(t *testing.T) {
 		}
 	}
 	for path := range paths {
-		if (&Server{}).routeTable()[path] == nil && path != terminalPath && path != "/{path}" {
+		if (&Server{}).routeTable()[path] == nil && path != terminalPath && path != eventsPath && path != "/{path}" {
 			t.Fatalf("spec lists unsupported route %s", path)
 		}
 	}
@@ -143,4 +144,90 @@ func walkSpecRefs(t *testing.T, value any, schemas map[string]any) {
 			walkSpecRefs(t, child, schemas)
 		}
 	}
+}
+
+func TestSpecDocumentsEventsStreamAndSharedCatalogQuery(t *testing.T) {
+	data, err := Spec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	paths := doc["paths"].(map[string]any)
+	methods, ok := paths[eventsPath].(map[string]any)
+	if !ok {
+		t.Fatal("events upgrade absent from spec")
+	}
+	if len(methods) != 1 {
+		t.Fatal("events is a GET-only upgrade")
+	}
+	get := methods["get"].(map[string]any)
+	params := get["parameters"].([]any)
+	if len(params) < 2 {
+		t.Fatal("missing upgrade authentication parameters")
+	}
+	sessionsParams := paths["/api/v0/sessions"].(map[string]any)["get"].(map[string]any)["parameters"]
+	if !reflect.DeepEqual(params[2:], sessionsParams) {
+		t.Fatal("event query differs from Sessions query")
+	}
+	if get["responses"].(map[string]any)["101"] == nil {
+		t.Fatal("missing upgrade response")
+	}
+	stream, ok := doc["x-streams"].(map[string]any)[eventsPath].(map[string]any)
+	if !ok || !reflect.DeepEqual(stream["response"], schemaRef("EventMessage")) {
+		t.Fatal("missing event message stream schema")
+	}
+	if stream["request"] != nil {
+		t.Fatal("events must remain server-to-client")
+	}
+	schemas := doc["components"].(map[string]any)["schemas"].(map[string]any)
+	event, ok := schemas["EventMessage"].(map[string]any)
+	if !ok {
+		t.Fatal("missing EventMessage schema")
+	}
+	props := event["properties"].(map[string]any)
+	if props["attention"] == nil || props["terminals"] == nil || props["catalog"] == nil {
+		t.Fatal("event schema omits payloads")
+	}
+	walkSpecRefs(t, doc, schemas)
+}
+
+func TestSpecCatalogPathIsOptional(t *testing.T) {
+	data, err := Spec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	row := doc["components"].(map[string]any)["schemas"].(map[string]any)["CatalogRow"].(map[string]any)
+	if row["properties"].(map[string]any)["path"] == nil {
+		t.Fatal("catalog path missing from schema")
+	}
+	for _, name := range row["required"].([]any) {
+		if name == "path" {
+			t.Fatal("legacy rows without path must remain valid")
+		}
+	}
+}
+
+func TestTypedHelloAdvertisesEvents(t *testing.T) {
+	h := newHarness(t)
+	response, data := h.localDo(req{method: http.MethodGet, path: "/api/v0/hello"})
+	if response.StatusCode != http.StatusOK {
+		t.Fatal(response.StatusCode)
+	}
+	var hello Hello
+	if err := json.Unmarshal(data, &hello); err != nil {
+		t.Fatal(err)
+	}
+	for _, capability := range hello.Capabilities {
+		if capability == "events" {
+			return
+		}
+	}
+	t.Fatal("typed hello dropped events capability")
 }
