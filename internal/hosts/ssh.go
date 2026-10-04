@@ -75,6 +75,9 @@ type Transport struct {
 	host    Host
 	dir     string
 	options []string
+	// runExit is the process-execution seam for deterministic shutdown proofs.
+	// Production uses exec.Cmd.Run; command construction and bounds stay here.
+	runExit func(*exec.Cmd) error
 }
 
 // ControlPersistIdle is how long an idle master lingers. Long enough that
@@ -248,7 +251,11 @@ func (t *Transport) Close() error {
 	cmd.WaitDelay = 250 * time.Millisecond
 	// A master that was never started makes this fail; that is not an error
 	// worth reporting to anyone.
-	_ = cmd.Run()
+	if t.runExit != nil {
+		_ = t.runExit(cmd)
+	} else {
+		_ = cmd.Run()
+	}
 	return nil
 }
 

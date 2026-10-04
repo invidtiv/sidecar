@@ -72,11 +72,11 @@ func CapturePaneRangeBounded(target string, start, end, maxBytes int) (CaptureRa
 	if err := cmd.Start(); err != nil {
 		return CaptureRange{}, fmt.Errorf("capture pane range: %w", err)
 	}
-	output, readErr := io.ReadAll(io.LimitReader(stdout, int64(maxBytes)+1))
-	if len(output) > maxBytes {
+	output, readErr := readCaptureRangeOutput(stdout, maxBytes)
+	if errors.Is(readErr, ErrCaptureRangeTooLarge) {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
-		return CaptureRange{}, fmt.Errorf("%w: exceeds %d bytes", ErrCaptureRangeTooLarge, maxBytes)
+		return CaptureRange{}, readErr
 	}
 	if readErr != nil {
 		_ = cmd.Process.Kill()
@@ -94,6 +94,16 @@ func CapturePaneRangeBounded(target string, start, end, maxBytes int) (CaptureRa
 		return CaptureRange{}, fmt.Errorf("capture pane range: %w", err)
 	}
 	return parseCapturePaneRange(string(output), start)
+}
+
+// readCaptureRangeOutput keeps the byte bound independent of process startup.
+// One extra byte distinguishes exactly-at-limit output from a truncated read.
+func readCaptureRangeOutput(reader io.Reader, maxBytes int) ([]byte, error) {
+	output, err := io.ReadAll(io.LimitReader(reader, int64(maxBytes)+1))
+	if len(output) > maxBytes {
+		return nil, fmt.Errorf("%w: exceeds %d bytes", ErrCaptureRangeTooLarge, maxBytes)
+	}
+	return output, err
 }
 
 func capturePaneRangeArgs(target string, start, end int) []string {
