@@ -1040,8 +1040,8 @@ func TestNewerCreateReplacesPendingTmux(t *testing.T) {
 	m.pendingCreatedPath = "/tmp/stale"
 	m.OpenCreateShell("sidecar")
 	_ = m.submitCreateShell()
-	if m.pendingCreatedTmux == "" || m.pendingCreatedTmux == "old-session" {
-		t.Fatalf("pending tmux = %q, want the newer session", m.pendingCreatedTmux)
+	if m.pendingCreatedTmux != "" {
+		t.Fatalf("pending tmux = %q before allocation returned", m.pendingCreatedTmux)
 	}
 	if m.pendingCreatedPath != "" {
 		t.Fatalf("newer shell create left stale path %q", m.pendingCreatedPath)
@@ -1317,5 +1317,26 @@ func TestProjectChangeReloadsBranches(t *testing.T) {
 	}
 	if len(dirs) != 2 || dirs[1] != "/tmp/braid" {
 		t.Fatalf("reload dirs = %v, want sidecar then braid", dirs)
+	}
+}
+
+func TestAllocatedShellIdentityControlsPendingSelection(t *testing.T) {
+	_ = state.SetLastCreateAgent("")
+	m := catalogModel(t)
+	m.config = &config.Config{}
+	original := createManagedShell
+	t.Cleanup(func() { createManagedShell = original })
+	createManagedShell = func(spec workspaceops.ManagedShellSpec) (workspaceops.ShellResult, error) {
+		return workspaceops.ShellResult{SessionName: "allocated-shell-42", DisplayName: "Allocated 42"}, nil
+	}
+	m.OpenCreateShell("sidecar")
+	command := m.submitCreateShell()
+	if m.pendingCreatedTmux != "" || m.honorPendingCreated() {
+		t.Fatal("stale preview can select another writer's shell before allocation")
+	}
+	message := command().(globalShellCreatedMsg)
+	m.Update(message)
+	if m.pendingCreatedTmux != "allocated-shell-42" {
+		t.Fatalf("selection follows preview instead of returned identity: %q", m.pendingCreatedTmux)
 	}
 }

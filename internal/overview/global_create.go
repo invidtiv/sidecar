@@ -964,12 +964,9 @@ func (m *Model) submitCreateShell() tea.Cmd {
 	m.createTargetHost = target.HostID
 	m.pendingCreatedHost = target.HostID
 	m.pendingCreatedPath = ""
-	m.pendingCreatedTmux = session
-	if target.Remote() {
-		// The host names the session from its own manifest, so there is nothing
-		// to pend on until it answers.
-		m.pendingCreatedTmux = ""
-	}
+	// Allocation decides the identity on the owning host, including locally.
+	// A preview may be claimed by another writer before this operation completes.
+	m.pendingCreatedTmux = ""
 	_ = saveLastGlobalCreateProject(lastCreateProjectValue(target))
 	if m.createForm != nil {
 		m.createForm.PersistLastAgent()
