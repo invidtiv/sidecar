@@ -12,6 +12,7 @@ import (
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspaceops"
+	"github.com/marcus/sidecar/internal/workspacewire"
 )
 
 func runCreateWorktree(env Env, args []string) int {
@@ -362,27 +363,9 @@ func loadCreateConfig() *config.Config {
 	return cfg
 }
 
-type createSetupOutcome struct {
-	Kind     string `json:"kind"`
-	Action   string `json:"action"`
-	Required bool   `json:"required"`
-	Error    string `json:"error,omitempty"`
-}
+type createSetupOutcome = workspacewire.SetupOutcome
 
-type createWorktreeResult struct {
-	Shell createShellInfo `json:"shell"`
-	// Project is the registered project slug the worktree was created under.
-	// It is the selector the agent verbs' --project accepts, put in the result
-	// because none of path, branch, or displayName was one before --project
-	// learned to resolve a worktree to its project (td-c906c1).
-	Project   string               `json:"project,omitempty"`
-	Path      string               `json:"path"`
-	Branch    string               `json:"branch"`
-	Setup     []createSetupOutcome `json:"setup"`
-	Acked     bool                 `json:"acked"`
-	Surface   string               `json:"surface,omitempty"`
-	Placement string               `json:"placement"`
-}
+type createWorktreeResult = workspacewire.WorktreeCreated
 
 func encodeSetupOutcomes(outcomes []workspaceops.SetupOutcome) []createSetupOutcome {
 	out := make([]createSetupOutcome, 0, len(outcomes))

@@ -11,6 +11,7 @@ import (
 
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/workspaceops"
+	"github.com/marcus/sidecar/internal/workspacewire"
 	"github.com/marcus/sidecar/internal/worktreedelete"
 )
 
@@ -19,28 +20,9 @@ const (
 	worktreeDeleteStatusDeleted = "deleted"
 )
 
-type worktreeDeletePlan struct {
-	Project              string `json:"project"`
-	Name                 string `json:"name"`
-	Path                 string `json:"path"`
-	Branch               string `json:"branch"`
-	HeadOID              string `json:"headOid"`
-	BranchOID            string `json:"branchOid"`
-	Dirtiness            string `json:"dirtiness"`
-	HasRemoteBranch      bool   `json:"hasRemoteBranch"`
-	DeleteLocalBranch    bool   `json:"deleteLocalBranch"`
-	DeleteRemoteBranch   bool   `json:"deleteRemoteBranch"`
-	PendingCreation      bool   `json:"pendingCreation"`
-	pendingCreationPlan  *workspaceops.WorktreePlan
-	resolvedWorktreePath string
-}
+type worktreeDeletePlan = workspacewire.WorktreeDeletePlan
 
-type worktreeDeleteDocument struct {
-	Status   string             `json:"status"`
-	Deleted  bool               `json:"deleted"`
-	Plan     worktreeDeletePlan `json:"plan"`
-	Warnings []string           `json:"warnings,omitempty"`
-}
+type worktreeDeleteDocument = workspacewire.WorktreeDeleted
 
 type worktreeDeleteErrorDocument struct {
 	Error struct {
@@ -267,7 +249,7 @@ func resolveWorktreeDeletePlan(ctx context.Context, env Env, project registeredP
 		HeadOID: state.HEAD, BranchOID: workspaceops.BranchOID(ctx, project.Path, state.Branch),
 		Dirtiness:       dirtinessName(worktreedelete.ProbeDirtiness(ctx, state.Path, false)),
 		HasRemoteBranch: hasRemote, DeleteLocalBranch: confirmation.DeleteLocal, DeleteRemoteBranch: confirmation.DeleteRemoteBranch(),
-		resolvedWorktreePath: state.Path,
+		ResolvedWorktreePath: state.Path,
 	}
 	if _, ok := projectdir.LookupWorktreeWithBase(env.StateDir, project.Path, state.Path); ok {
 		repoKey, keyErr := workspaceops.RepoKeyForPath(ctx, project.Path)
@@ -283,7 +265,7 @@ func resolveWorktreeDeletePlan(ctx context.Context, env Env, project registeredP
 			}
 			if journal != nil {
 				plan.PendingCreation = true
-				plan.pendingCreationPlan = &journal.Plan
+				plan.PendingCreationPlan = &journal.Plan
 			}
 		}
 	}
@@ -356,7 +338,7 @@ type worktreeDeleteWarnings struct {
 func executeWorktreeDeletePlan(ctx context.Context, project registeredProject, plan worktreeDeletePlan) worktreeDeleteWarnings {
 	var warnings []string
 	if err := (workspaceops.Service{}).DeleteWorktree(ctx, workspaceops.WorktreeRemoval{
-		RepoPath: project.Path, ProjectRoot: project.Path, Path: plan.resolvedWorktreePath,
+		RepoPath: project.Path, ProjectRoot: project.Path, Path: plan.ResolvedWorktreePath,
 		Branch: plan.Branch, ExpectedOID: plan.HeadOID, Force: true,
 	}); err != nil {
 		var removedWarning *workspaceops.WorktreeRemovedWarning
@@ -379,8 +361,8 @@ func executeWorktreeDeletePlan(ctx context.Context, project registeredProject, p
 			warnings = append(warnings, "remote branch: "+err.Error())
 		}
 	}
-	if plan.pendingCreationPlan != nil {
-		if err := (workspaceops.Service{}).FinalizeWorktree(plan.pendingCreationPlan); err != nil {
+	if plan.PendingCreationPlan != nil {
+		if err := (workspaceops.Service{}).FinalizeWorktree(plan.PendingCreationPlan); err != nil {
 			warnings = append(warnings, "pending creation journal: "+err.Error())
 		}
 	}
