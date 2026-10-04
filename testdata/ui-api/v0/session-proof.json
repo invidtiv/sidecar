@@ -1,0 +1,32 @@
+[
+  {
+    "listener": "browser",
+    "method": "POST",
+    "origin": "http://127.0.0.1:7861",
+    "path": "/api/v0/pairing/session-proof",
+    "request": {
+      "registration_id": "c59eadaea5376814c153f3d250aeb70c93cab6d5f04eab732d1d35cf19929f85"
+    },
+    "response": {
+      "nonce": "synthetic-nonce",
+      "timestamp": 1790985600000,
+      "expires_at": "2026-10-03T00:01:00Z"
+    }
+  },
+  {
+    "listener": "browser",
+    "method": "POST",
+    "origin": "http://127.0.0.1:7861",
+    "path": "/api/v0/pairing/session-proof/verify",
+    "request": {
+      "registration_id": "c59eadaea5376814c153f3d250aeb70c93cab6d5f04eab732d1d35cf19929f85",
+      "nonce": "synthetic-nonce",
+      "timestamp": 1790985600000,
+      "signature": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpYaO0QJAFWXamzPiK7epCFH5TubNJwuXLt-rtW_T7JfBw"
+    },
+    "response": {
+      "token": "synthetic-memory-token",
+      "expires_at": "2026-10-03T00:15:00Z"
+    }
+  }
+]

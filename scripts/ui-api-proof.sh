@@ -11,6 +11,7 @@
 #
 # usage: scripts/ui-api-proof.sh [TMUX_BIN]
 set -eu
+command -v node >/dev/null || { echo "ui-api-proof requires Node with WebCrypto (Node 20 or later)" >&2; exit 2; }
 
 unset TMUX TMUX_PANE
 # Proofs may run from a managed shell or a shared harness daemon. None of its
@@ -154,10 +155,11 @@ printf '%s' "$headers" | grep -qi '^HTTP/1.1 200' || fail "pair page: $headers"
 if printf '%s' "$headers" | grep -qi '^set-cookie'; then fail "pair page set a cookie"; fi
 printf '%s' "$headers" | grep -i '^content-security-policy' | grep -q "default-src 'none'" || fail "pair page CSP missing"
 grep -q '/api/v0/pairing/exchange' "$root/pair.html" || fail "pair page does not exchange the code"
-grep -q 'sidecar.session' "$root/pair.html" || fail "pair page does not store sidecar.session"
+grep -q 'sidecar.session' "$root/pair.html" || fail "pair page does not clear legacy sidecar.session"
+node -e 'const {webcrypto}=require("node:crypto");(async()=>{const k=await webcrypto.subtle.generateKey({name:"ECDSA",namedCurve:"P-256"},false,["sign","verify"]);console.log(JSON.stringify(await webcrypto.subtle.exportKey("jwk",k.publicKey)));})()' > "$root/public-key.json"
 exchange() {
 	curl -s -o "$root/exchange.json" -w '%{http_code}' -X POST -H "Origin: $1" -H 'Content-Type: application/json' -H 'X-Sidecar-Request: 1' \
-		-d "{\"code\":\"$pair_code\",\"next\":\"$pair_next\"}" "$base/api/v0/pairing/exchange"
+		-d "{\"code\":\"$pair_code\",\"next\":\"$pair_next\",\"public_key\":$(cat "$root/public-key.json")}" "$base/api/v0/pairing/exchange"
 }
 code=$(exchange http://proof-other.example)
 [ "$code" = 403 ] || fail "exchange from a foreign origin answered $code"
@@ -176,10 +178,10 @@ echo "browser pairing ok: fragment link, no cookie, single-use exchange, origin-
 if command -v node > /dev/null 2>&1; then
 	link2=$(sc api open --print --path /s/proof)
 	paged=$(node "$repo/scripts/ui-api-pair-page.mjs" "$root/pair.html" "$link2") || fail "the pairing page script did not pair"
-	page_token=$(printf '%s' "$paged" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["stored"] and d["navigated"].endswith("/s/proof"), d; print(d["stored"])')
+	page_token=$(printf '%s' "$paged" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["non_extractable"] and d["legacy_cleared"] and d["navigated"].endswith("/s/proof"), d; print(d["token"])')
 	code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $page_token" "$base/api/v0/hello")
-	[ "$code" = 200 ] || fail "token stored by the pairing page answered $code"
-	echo "pairing page script ok under node: stored sidecar.session and went to /s/proof"
+	[ "$code" = 200 ] || fail "memory-only token renewed by the pairing page proof answered $code"
+	echo "pairing page script ok under node: stored non-extractable IndexedDB key, cleared legacy token, signed fresh nonce and went to /s/proof"
 else
 	echo "node not installed; skipped running the pairing page script"
 fi

@@ -37,28 +37,35 @@ func newStaticHandler(dir string) (http.Handler, error) {
 	if err != nil {
 		return nil, fmt.Errorf("--ui %s: %w", dir, err)
 	}
-	return &spaHandler{root: root, fsys: root.FS()}, nil
+	_ = root.Close()
+	return &spaHandler{dir: abs}, nil
 }
 
 type spaHandler struct {
-	root *os.Root
-	fsys fs.FS
+	dir string
 }
 
-// Close releases the UI directory.
-func (h *spaHandler) Close() error { return h.root.Close() }
-
 func (h *spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Builds can remove and recreate DIR. Resolve a fresh root for each
+	// request, then keep that descriptor for the whole response so every
+	// lookup still has os.Root's symlink-escape protection.
+	root, err := os.OpenRoot(h.dir)
+	if err != nil {
+		http.Error(w, "The UI is being rebuilt; try again shortly.", http.StatusServiceUnavailable)
+		return
+	}
+	defer func() { _ = root.Close() }()
+	fsys := root.FS()
 	name := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/")
 	if name != "" {
-		if info, err := fs.Stat(h.fsys, name); err == nil && !info.IsDir() {
-			http.ServeFileFS(w, r, h.fsys, name)
+		if info, err := fs.Stat(fsys, name); err == nil && !info.IsDir() {
+			http.ServeFileFS(w, r, fsys, name)
 			return
 		}
 	}
 	// Every other path is a client-side route of the app.
 	w.Header().Set("Cache-Control", "no-cache")
-	http.ServeFileFS(w, r, h.fsys, "index.html")
+	http.ServeFileFS(w, r, fsys, "index.html")
 }
 
 const noUIPage = `<!doctype html>

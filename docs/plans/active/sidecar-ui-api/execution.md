@@ -57,12 +57,12 @@ The status values are `queued`, `running`, `review`, `fixing`, `merged` and `blo
 | U1-e web app shell and Sessions | td-57a73e | sidecar-ui | Codex | U0-b | merged (sidecar-ui 8d183fc); Claude review fixed 6 UX defects |
 | U1-f SDK adopts v1 | td-820df7 | sidecar-ui | Codex | U1-a, U1-d | merged (sidecar-ui fdad866); Claude review fixed the paste-marker strip |
 | U1-g iOS adopts presence and events | td-fde8cf | sidecar-mobile | Codex | U1-a, U1-d | running (Codex, ~/code/sidecar-mobile-u1g-presence, branch u1g-presence); presence first against the u1d branch, events after U1-a |
-| U1-i persist browser sessions | td-165353 | sidecar | Codex | U1-a, U1-b merged (both touch internal/uiapi) | review MERGE-READY (Claude); integrating main (conflicts with U3-a and friction-2), then merge. SDK adoption lane follows. The preview stays on its current build until then |
+| U1-i persist browser sessions | td-165353 | sidecar | Codex | U1-a, U1-b merged (both touch internal/uiapi) | merged (7f2ce809). SDK adoption running (td-3ac23b, ~/code/sidecar-ui-u1i-sdk) |
 | U1-e2 web app polish | td-71e0e5 | sidecar-ui | Codex | U1-e | merged (sidecar-ui 5e0ecb2) |
 | U1-c2 socket activation | td-11f799 | sidecar | Codex | U1-c | running (Codex, ~/code/sidecar-u1c2-socket-activation): launchd Sockets / systemd .socket so the port is never free during restarts |
 | U1-h security review and three-viewer proof | td-295605 | all | Claude, then Codex | U1-a, U1-d, U1-f | security merged (6176110f); three-viewer proof running (Codex, ~/code/sidecar-u1h-three-viewer) |
 | U2-a core extraction | td-c709a9 | sidecar | Codex | U0-a | merged (d95b66f5) |
-| U2-b workspace resources and operations API | td-eb3d80 | sidecar | Codex | U2-a | review (Codex reviewer, shell "rev U2-b"); branch u2b-workspace-api @3423e767, which also carries the agent `--` terminator fix td-66d7e3 |
+| U2-b workspace resources and operations API | td-eb3d80 | sidecar | Codex | U2-a | review MERGE-READY (Codex; fixed 5 P1 delete and remote data-loss bugs); integrating main, then merge. U2-c must send expect_delete_state |
 | U2-c workspace UI | td-37a00e | sidecar-ui | Codex | U2-b | queued |
 | U3-a content and layouts API | td-f8784a | sidecar | Codex | U1-a | merged (05dd383b). Claude review fixed a HIGH arbitrary file write through the diff parent parameter (git --output), a watch fd-exhaustion cap, and an existence oracle through symlinks |
 | U3-b pane tree UI | td-cf59cd | sidecar-ui | Codex | U3-a, U1-f | running (Codex, ~/code/sidecar-ui-u3b-panes, branch u3b-panes) |

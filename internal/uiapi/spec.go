@@ -21,6 +21,8 @@ func Spec() ([]byte, error) {
 		"TicketRequest": TicketRequest{}, "TicketResponse": TicketResponse{},
 		"PairingCodeRequest": PairingCodeRequest{}, "PairingCode": PairingCode{},
 		"PairingExchangeRequest": PairingExchangeRequest{}, "PairingExchange": PairingExchange{},
+		"SessionProofChallengeRequest": SessionProofChallengeRequest{}, "SessionProofChallenge": SessionProofChallenge{},
+		"SessionProofRequest": SessionProofRequest{}, "SessionToken": SessionToken{},
 		"OriginRequest": OriginRequest{}, "OriginRegistration": OriginRegistration{},
 		"OriginList": OriginList{}, "OriginRevocation": OriginRevocation{}, "SessionRevocation": SessionRevocation{},
 		"CatalogSnapshot": mobileproto.CatalogSnapshot{}, "TerminalRequest": mobileproto.Request{},
@@ -115,8 +117,14 @@ func Spec() ([]byte, error) {
 	add("/api/v0/pairing/codes", "post", "PairingCodeRequest", "PairingCode", local, false)
 	add("/api/v0/pairing/sessions", "delete", "", "SessionRevocation", local, false)
 	sessionRevoke := paths["/api/v0/pairing/sessions"].(map[string]any)["delete"].(map[string]any)
+	sessionRevoke["description"] = "Durably purges browser sessions before success; invalidates unused tickets and closes their streams. Revoked credentials remain invalid after restart."
 	sessionRevoke["parameters"] = append(sessionRevoke["parameters"].([]any), map[string]any{"name": "origin", "in": "query", "schema": map[string]any{"type": "string"}, "description": "Omit to revoke every browser session; supply an origin to revoke only its sessions."})
 	add("/api/v0/pairing/exchange", "post", "PairingExchangeRequest", "PairingExchange", []string{"browser"}, true)
+	paths["/api/v0/pairing/exchange"].(map[string]any)["post"].(map[string]any)["description"] = "Registers an exact-origin ECDSA P-256 public key and returns a 15-minute memory-only bearer. Public registrations persist with 30-day sliding expiry and a 180-day absolute cap. The client stores a non-extractable private CryptoKey in IndexedDB; never persist a bearer."
+	add("/api/v0/pairing/session-proof", "post", "SessionProofChallengeRequest", "SessionProofChallenge", []string{"browser"}, true)
+	paths["/api/v0/pairing/session-proof"].(map[string]any)["post"].(map[string]any)["description"] = "Issues an exact-origin, registration-bound single-use nonce and server timestamp, valid for 60 seconds. Requires the Browser listener's own Origin and mutation guards."
+	add("/api/v0/pairing/session-proof/verify", "post", "SessionProofRequest", "SessionToken", []string{"browser"}, true)
+	paths["/api/v0/pairing/session-proof/verify"].(map[string]any)["post"].(map[string]any)["description"] = "Consumes the nonce attempt and verifies ECDSA P-256/SHA-256 over the domain-separated origin/registration/nonce/timestamp message. Signature is base64url raw 64-byte r||s. Returns a 15-minute bearer kept only in client memory. See ui-api.md for exact bytes."
 	add("/api/v0/origins", "get", "", "OriginList", local, false)
 	add("/api/v0/origins", "post", "OriginRequest", "OriginRegistration", local, false)
 	add("/api/v0/origins", "delete", "", "OriginRevocation", local, false)
@@ -136,6 +144,7 @@ func Spec() ([]byte, error) {
 	}
 	paths["/api/v0/sessions"].(map[string]any)["get"].(map[string]any)["parameters"] = params
 	revocation := paths["/api/v0/origins"].(map[string]any)["delete"].(map[string]any)
+	revocation["description"] = "Revokes the paired origin and browser sessions bound to that exact origin, including unused tickets and open streams. Revocations survive restart."
 	revocation["parameters"] = append(revocation["parameters"].([]any), map[string]any{"name": "origin", "in": "query", "required": true, "schema": map[string]any{"type": "string"}})
 	paths[terminalPath] = streamOperation("terminal", all)
 	paths[eventsPath] = streamOperation("events", all)
@@ -143,7 +152,7 @@ func Spec() ([]byte, error) {
 	events["parameters"] = append(events["parameters"].([]any), params...)
 	events["parameters"] = append(events["parameters"].([]any), map[string]any{"name": "content", "in": "query", "schema": map[string]any{"type": "array", "items": map[string]any{"type": "string", "contentMediaType": "application/json", "contentSchema": schemaRef("ContentRef")}, "maxItems": 32}, "style": "form", "explode": true, "description": "JSON reference for each open content pane; reconnect to change the set. Requires content:read."})
 	paths["/pair"] = map[string]any{"get": map[string]any{"operationId": "pair_page", "security": []any{}, "x-listeners": []string{"browser"}, "responses": map[string]any{"200": map[string]any{"description": "Pairing page, consumes no code", "content": map[string]any{"text/html": map[string]any{"schema": map[string]any{"type": "string"}}}}}}}
-	paths["/{path}"] = map[string]any{"get": map[string]any{"operationId": "ui_files", "x-listeners": remote, "description": "Static UI files with SPA fallback. Browser listener public; Tailnet requires allowed login. API paths never fall back.", "parameters": []any{map[string]any{"name": "path", "in": "path", "required": true, "schema": map[string]any{"type": "string"}}}, "responses": map[string]any{"200": map[string]any{"description": "UI file or index.html"}}}}
+	paths["/{path}"] = map[string]any{"get": map[string]any{"operationId": "ui_files", "x-listeners": remote, "description": "Static UI files with SPA fallback. Browser listener public; Tailnet requires allowed login. API paths never fall back. Each request resolves a fresh confined root, so rebuilt directories are served without restart and symlink escapes remain refused.", "parameters": []any{map[string]any{"name": "path", "in": "path", "required": true, "schema": map[string]any{"type": "string"}}}, "responses": map[string]any{"200": map[string]any{"description": "UI file or index.html"}, "503": map[string]any{"description": "UI directory temporarily unavailable during rebuild; retry shortly."}}}}
 	workspaceSpec(schemas, paths, add)
 	// dispatch maps HEAD to GET, and static files also support HEAD. A
 	// WebSocket handshake remains GET-only. HEAD responses have no body.
