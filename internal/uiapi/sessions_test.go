@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"math/big"
 	"net/http"
 	"net/url"
@@ -495,5 +496,62 @@ func TestBrowserProofFixtureSignature(t *testing.T) {
 	digest := sha256.Sum256([]byte(BrowserProofMessage("http://127.0.0.1:7861", browserRegistrationID("http://127.0.0.1:7861", fixtureBrowserPublicKey()), "synthetic-nonce", 1790985600000)))
 	if !ecdsa.Verify(key, digest[:], new(big.Int).SetBytes(sig[:32]), new(big.Int).SetBytes(sig[32:])) {
 		t.Fatal("fixture signature does not match the documented signing message")
+	}
+}
+
+func TestBrowserRevocationCannotReviveEvictedBearer(t *testing.T) {
+	for _, scoped := range []bool{false, true} {
+		t.Run(fmt.Sprint(scoped), func(t *testing.T) {
+			h := newHarness(t)
+			key, paired := h.pairBrowserKey()
+			// Model a registration already absent from the bounded durable store;
+			// a previously admitted bearer may still be held by an open tab.
+			h.s.auth.mu.Lock()
+			err := h.s.auth.withSessionsLocked(func(records map[string]session) bool { delete(records, paired.RegistrationID); return true })
+			h.s.auth.mu.Unlock()
+			if err != nil {
+				t.Fatal(err)
+			}
+			query := ""
+			if scoped {
+				query = "?origin=" + url.QueryEscape(h.ownOrigin())
+			}
+			h.revokeSessions(query)
+			code := h.pairingCode("/")
+			body, _ := json.Marshal(PairingExchangeRequest{Code: code.Code, PublicKey: publicTestKey(key)})
+			r, b := h.browserDo(req{method: http.MethodPost, path: "/api/v0/pairing/exchange", body: string(body), header: mutationHeaders(h.ownOrigin(), nil)})
+			expect(t, r, b, 200, "")
+			h.expectBearer(paired.Token, 401)
+			h.expectBearer(h.renewBrowser(key, paired.RegistrationID).Token, 200)
+		})
+	}
+}
+
+func TestBrowserEvictionPurgesInMemoryBearer(t *testing.T) {
+	clock := &fakeClock{now: time.Now().UTC()}
+	auth := newAuthStore(clock.Now)
+	_, key := browserTestKey(t)
+	id, token, _, err := auth.registerBrowser("http://localhost:7861", key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock.Advance(time.Second)
+	for i := 0; i < maxSessions; i++ {
+		_, pub := browserTestKey(t)
+		if _, _, _, err := auth.registerBrowser("http://localhost:7861", pub); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, ok := auth.bearers[hashToken(token)]; ok {
+		t.Fatal("evicted registration retained a bearer")
+	}
+	if _, _, _, err := auth.registerBrowser("http://localhost:7861", key); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok := auth.lookupSession(token); ok {
+		t.Fatal("re-registering the same public key revived the old bearer")
+	}
+	if !auth.sessionClientLive(sessionClient(id)) {
+		t.Fatal("new registration failed")
 	}
 }

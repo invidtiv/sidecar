@@ -52,6 +52,7 @@ func BrowserProofMessage(origin, id, nonce string, timestamp int64) string {
 
 type browserBearer struct {
 	registration string
+	origin       string
 	expires      time.Time
 }
 type browserProof struct {
@@ -105,7 +106,8 @@ func (a *authStore) registerBrowser(origin string, key BrowserPublicKey) (string
 func (a *authStore) issueBrowserBearerLocked(id string) (string, time.Time, error) {
 	now := a.now()
 	for hash, b := range a.bearers {
-		if !now.Before(b.expires) {
+		s, live := a.sessions[b.registration]
+		if !live || !now.Before(s.ExpiresAt) || !now.Before(b.expires) {
 			delete(a.bearers, hash)
 		}
 	}
@@ -120,7 +122,7 @@ func (a *authStore) issueBrowserBearerLocked(id string) (string, time.Time, erro
 	if cap := a.sessions[id].ExpiresAt; cap.Before(expires) {
 		expires = cap
 	}
-	a.bearers[hashToken(token)] = browserBearer{id, expires}
+	a.bearers[hashToken(token)] = browserBearer{registration: id, origin: a.sessions[id].Origin, expires: expires}
 	return token, expires, nil
 }
 

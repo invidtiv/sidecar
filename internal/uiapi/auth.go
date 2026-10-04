@@ -105,7 +105,7 @@ func (a *authStore) revokeSessions(origin string) (map[string]bool, error) {
 		return nil, err
 	}
 	for hash, bearer := range a.bearers {
-		if revoked[sessionClient(bearer.registration)] {
+		if origin == "" || bearer.origin == origin {
 			delete(a.bearers, hash)
 		}
 	}
