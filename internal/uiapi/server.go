@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/marcus/sidecar/internal/apiservice"
 	"github.com/marcus/sidecar/internal/mobileproto"
 )
 
@@ -62,6 +63,9 @@ type TailnetOptions struct {
 // Options configures Start.
 type Options struct {
 	StateDir string
+	// Inherited supplies already-acquired manager listeners. Start owns them on
+	// success; the caller closes them on failure. Nil discovers manager sockets.
+	Inherited []apiservice.ActivatedListener
 	// Port is the Browser listener's loopback port; 0 picks a free one.
 	Port          int
 	UIDir         string
@@ -194,14 +198,34 @@ func Start(opts Options) (*Server, error) {
 		return nil, err
 	}
 
+	activated := opts.Inherited
+	if activated == nil {
+		activated, err = apiservice.Activate()
+		if err != nil {
+			return nil, err
+		}
+	}
+	inherited, err := validateActivated(opts, activated)
+	if err != nil {
+		apiservice.CloseActivated(activated)
+		return nil, err
+	}
+	defer func() {
+		if !ok {
+			apiservice.CloseActivated(activated)
+		}
+	}()
+	if os.Getenv(apiservice.ActivationRequired) == "1" && inherited[ListenerBrowser] == nil {
+		return nil, errors.New("ui api: service requires a manager-held Browser listener; run `sidecar api service install` (Linux Homebrew services do not support socket activation)")
+	}
 	localPath := filepath.Join(dir, localSocketName)
-	local, err := listenPrivateUnix(localPath)
+	local, err := acquireListener(inherited[ListenerLocal], "unix", localPath)
 	if err != nil {
 		return nil, err
 	}
 	s.addListener(ListenerLocal, local, ListenerInfo{Name: ListenerLocal, Network: "unix", Address: localPath})
 
-	browser, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(opts.Port)))
+	browser, err := acquireListener(inherited[ListenerBrowser], "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(opts.Port)))
 	if err != nil {
 		return nil, fmt.Errorf("listen on 127.0.0.1:%d: %w; choose another with --port", opts.Port, err)
 	}
@@ -215,7 +239,7 @@ func Start(opts Options) (*Server, error) {
 		StartedAt: s.startedAt, UnixSocket: localPath, TCP: browser.Addr().String()}
 
 	if opts.Tailnet != nil {
-		if err := s.listenTailnet(*opts.Tailnet); err != nil {
+		if err := s.listenTailnet(*opts.Tailnet, inherited[ListenerTailnet]); err != nil {
 			return nil, err
 		}
 	}
@@ -229,7 +253,7 @@ func Start(opts Options) (*Server, error) {
 	return s, nil
 }
 
-func (s *Server) listenTailnet(opts TailnetOptions) error {
+func (s *Server) listenTailnet(opts TailnetOptions, inherited net.Listener) error {
 	// Host comparison lowercases the request's Host; DNS names are
 	// case-insensitive, so the allowlist is kept in the same form.
 	opts.Host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(opts.Host), "."))
@@ -249,7 +273,7 @@ func (s *Server) listenTailnet(opts TailnetOptions) error {
 		s.tailnetLogins[login] = true
 	}
 	if opts.Port > 0 {
-		listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(opts.Port)))
+		listener, err := acquireListener(inherited, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(opts.Port)))
 		if err != nil {
 			return fmt.Errorf("listen on tailnet fallback port 127.0.0.1:%d: %w", opts.Port, err)
 		}
@@ -258,7 +282,7 @@ func (s *Server) listenTailnet(opts TailnetOptions) error {
 		return nil
 	}
 	path := filepath.Join(s.dir, tailnetSockName)
-	listener, err := listenPrivateUnix(path)
+	listener, err := acquireListener(inherited, "unix", path)
 	if err != nil {
 		return err
 	}
@@ -381,7 +405,7 @@ func (s *Server) beginStream() bool {
 
 func (s *Server) hello() Hello {
 	return Hello{APIVersion: APIVersion, APIInstance: s.instance, ServerVersion: s.opts.Version,
-		Capabilities: []string{"sessions", "status", "terminal", "ws_tickets", "events", "content", "layouts"},
+		Capabilities: []string{"sessions", "status", "terminal", "ws_tickets", "events", "projects", "workspace", "workspace_operations", "content", "layouts"},
 		Terminal:     TerminalProtocol{Protocol: "mobile", Version: mobileproto.Version}}
 }
 

@@ -20,6 +20,22 @@ func (n *Native) Status(ctx context.Context) (Status, error) {
 		return status, fmt.Errorf("read service definition: %w; check permissions on %s", err, n.file)
 	}
 	status.Installed = err == nil
+	status.Socket.File = n.file
+	if n.options.OS == "darwin" && status.Installed {
+		data, readErr := os.ReadFile(n.file)
+		if readErr != nil {
+			return status, readErr
+		}
+		status.Socket.Installed = strings.Contains(string(data), "<key>Sockets</key>") && strings.Contains(string(data), "<key>browser</key>")
+	}
+	if n.options.OS == "linux" {
+		status.Socket.File = n.socketFile
+		_, socketErr := os.Stat(n.socketFile)
+		if socketErr != nil && !errors.Is(socketErr, os.ErrNotExist) {
+			return status, socketErr
+		}
+		status.Socket.Installed = socketErr == nil
+	}
 	if n.options.OS == "darwin" {
 		output, err := n.command(ctx, "print", n.target())
 		if err != nil {
@@ -29,6 +45,8 @@ func (n *Native) Status(ctx context.Context) (Status, error) {
 		} else {
 			status.Loaded = true
 			parseLaunchd(string(output), &status)
+			status.Socket.Loaded = strings.Contains(string(output), "sockets = {") && strings.Contains(string(output), "browser = {")
+			status.Socket.Listening = status.Socket.Loaded
 		}
 	} else {
 		output, err := n.command(ctx, "--user", "show", Unit, "--property=LoadState,ActiveState,MainPID,ExecMainCode,ExecMainStatus")
@@ -50,11 +68,23 @@ func (n *Native) Status(ctx context.Context) (Status, error) {
 				status.LastExit = &Exit{Signal: strconv.Itoa(exit)}
 			}
 		}
+		output, err = n.command(ctx, "--user", "show", SocketUnit, "--property=LoadState,ActiveState,SubState")
+		values = parseProperties(string(output))
+		if err != nil && values["LoadState"] != "not-found" {
+			return status, err
+		}
+		if values["LoadState"] == "" {
+			return status, errors.New("systemd returned no socket LoadState; inspect `systemctl --user status sidecar-api.socket`")
+		}
+		status.Socket.Loaded = values["LoadState"] == "loaded"
+		status.Socket.Listening = status.Socket.Loaded && values["ActiveState"] == "active" && (values["SubState"] == "listening" || values["SubState"] == "running")
 	}
 	if !status.Running {
 		status.PID = 0
 	}
 	switch {
+	case status.Running && !status.Socket.Listening:
+		status.Message = "API service is running without a manager-held browser socket; run `sidecar api service install` to protect restart windows."
 	case status.Running:
 		status.Message = "API service is running; open it with `sidecar api open`."
 	case !status.Installed && !status.Loaded:

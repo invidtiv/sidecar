@@ -179,6 +179,8 @@ type WorktreeRemoval struct {
 	// identity fence: Force authorizes dirty content removal, not a different
 	// checkout that appeared after confirmation.
 	ExpectedOID string
+	// ExpectedDeleteState pins the exact checkout incarnation and contents.
+	ExpectedDeleteState string
 	// Missing means the directory is already gone, so git's record of it is
 	// pruned instead of removed.
 	Missing bool
@@ -216,9 +218,9 @@ type WorktreeRemoval struct {
 // A removal that has not been forced validates identity and dirtiness first.
 // A forced removal with ExpectedOID still validates its pinned identity: Force
 // authorizes deleting dirty content, not deleting a different checkout. Every
-// validation runs before shell/session teardown, so a refusal costs nobody
-// their session; the kill still precedes the destructive command, which is the
-// guarantee that matters.
+// initial validation runs before shell/session teardown. State-fenced requests
+// also revalidate after teardown and before each Git removal attempt; a refusal
+// there can leave sessions closed but always leaves the checkout intact.
 //
 // Interaction with internal/shellliveness: none, deliberately. That subsystem
 // reaps *shells* — sidecar-sh-* sessions recorded in shells.json — and both of
@@ -246,6 +248,10 @@ func DeleteWorktree(ctx context.Context, req WorktreeRemoval) error {
 		}
 	}
 
+	if err := requireDeleteState(ctx, req); err != nil {
+		return err
+	}
+
 	// The shells rooted in the worktree go first, for the same reason the
 	// worktree's own session does: removing the directory first strands
 	// whatever is running in them. A shell that will not close does not abort
@@ -265,6 +271,9 @@ func DeleteWorktree(ctx context.Context, req WorktreeRemoval) error {
 		return removalResult(shellErr)
 	}
 
+	if err := requireDeleteState(ctx, req); err != nil {
+		return &WorktreeIdentityError{Cause: fmt.Errorf("checkout revalidation failed after session teardown; sessions may already be closed: %w", err)}
+	}
 	cmd := exec.CommandContext(ctx, "git", "worktree", "remove", req.Path)
 	cmd.Dir = req.RepoPath
 	output, err := cmd.CombinedOutput()
@@ -278,6 +287,9 @@ func DeleteWorktree(ctx context.Context, req WorktreeRemoval) error {
 		return fmt.Errorf("git worktree remove: %s: %w", strings.TrimSpace(string(output)), err)
 	}
 
+	if err := requireDeleteState(ctx, req); err != nil {
+		return &WorktreeIdentityError{Cause: fmt.Errorf("checkout revalidation failed after session teardown; sessions may already be closed: %w", err)}
+	}
 	cmd = exec.CommandContext(ctx, "git", "worktree", "remove", "--force", req.Path)
 	cmd.Dir = req.RepoPath
 	if output, err := cmd.CombinedOutput(); err != nil {

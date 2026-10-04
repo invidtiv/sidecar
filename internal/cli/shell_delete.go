@@ -9,6 +9,7 @@ import (
 	"github.com/marcus/sidecar/internal/termpanes"
 	"github.com/marcus/sidecar/internal/tmuxenv"
 	"github.com/marcus/sidecar/internal/workspaceops"
+	"github.com/marcus/sidecar/internal/workspacewire"
 )
 
 // shellDeleteResult is `sidecar shell delete --json`.
@@ -17,12 +18,7 @@ import (
 // result crosses a host boundary: internal/hosts decides whether a decoded
 // object IS this verb's answer, and a type with one field is a type almost any
 // JSON object satisfies. See ValidRemoteResult below.
-type shellDeleteResult struct {
-	Shell   string `json:"shell"`
-	Name    string `json:"name,omitempty"`
-	Status  string `json:"status"`
-	Deleted bool   `json:"deleted"`
-}
+type shellDeleteResult = workspacewire.ShellDeleted
 
 // ValidRemoteResult states which fields make a decoded object this verb's
 // answer (internal/hosts.ResultValidator).
@@ -33,9 +29,6 @@ type shellDeleteResult struct {
 // with a nil error and an all-zero value, and the surface rendered a blank
 // confirmation over a mutation that really ran. The session and the status are
 // what `shell delete` always writes and what a log line never carries together.
-func (r shellDeleteResult) ValidRemoteResult() bool {
-	return strings.TrimSpace(r.Shell) != "" && strings.TrimSpace(r.Status) != ""
-}
 
 const shellStatusDeleted = "deleted"
 

@@ -8,6 +8,8 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 
@@ -16,6 +18,7 @@ import (
 	"github.com/marcus/sidecar/internal/hosts"
 	"github.com/marcus/sidecar/internal/hostserve"
 	"github.com/marcus/sidecar/internal/livewatch"
+	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/tmuxformat"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/uiapi"
@@ -36,11 +39,14 @@ func (b *mobileBackend) WatchCatalog(ctx context.Context) (<-chan struct{}, erro
 		default:
 		}
 	}
-	watch, err := livewatch.NewPathWatcher(livewatch.Config{Quiet: 200 * time.Millisecond, MaxLatency: time.Second})
+	watch, err := livewatch.NewPathWatcher(livewatch.Config{Quiet: 200 * time.Millisecond, MaxLatency: time.Second, Ignore: func(path string) bool {
+		// Ignore unrelated per-project caches and atomic-write scratch files.
+		return path != config.ConfigPath() && filepath.Base(path) != "shells.json" && filepath.Dir(path) != filepath.Join(b.env.StateDir, "projects")
+	}})
 	if err != nil {
 		return nil, fmt.Errorf("watch API configuration: %w", err)
 	}
-	watch.Watch(livewatch.File(config.ConfigPath()))
+	watch.Watch(b.workspaceWatchTargets(projects)...)
 	b.watchMu.Lock()
 	if b.watchCancel != nil {
 		b.watchMu.Unlock()
@@ -115,8 +121,12 @@ func (b *mobileBackend) WatchCatalog(ctx context.Context) (<-chan struct{}, erro
 				if err != nil {
 					continue
 				}
-				stopLocal()
-				stopLocal = start(updated)
+				watch.Watch(b.workspaceWatchTargets(updated)...)
+				if !reflect.DeepEqual(projects, updated) {
+					stopLocal()
+					stopLocal = start(updated)
+					projects = updated
+				}
 			}
 		}
 	}()
@@ -186,4 +196,18 @@ func (b *mobileBackend) GeometryHolder(ctx context.Context, term uiapi.TerminalI
 		return &uiapi.GeometryHolder{Kind: "mobile", Label: "Mobile app"}
 	}
 	return &uiapi.GeometryHolder{Kind: "tui", Label: "TUI on " + host}
+}
+
+// Workspace reads include forgotten records which are absent from catalog rows.
+// Watch the durable manifests themselves so tombstone-only edits still push.
+func (b *mobileBackend) workspaceWatchTargets(projects []hostserve.Project) []livewatch.Target {
+	targets := []livewatch.Target{livewatch.File(config.ConfigPath()), livewatch.Dir(filepath.Join(b.env.StateDir, "projects"))}
+	roots := make([]string, 0, len(projects))
+	for _, p := range projects {
+		roots = append(roots, p.Path)
+	}
+	for _, dir := range projectdir.LookupAllWithBase(b.env.StateDir, roots) {
+		targets = append(targets, livewatch.File(filepath.Join(dir, "shells.json")))
+	}
+	return targets
 }

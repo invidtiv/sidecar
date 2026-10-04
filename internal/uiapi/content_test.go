@@ -190,7 +190,7 @@ func TestContentScopeIsEnforcedAndCORSExposesETag(t *testing.T) {
 	headers := map[string]string{"Authorization": "Bearer " + registration.Token, "Origin": app}
 	response, data = h.browserDo(req{method: "GET", path: "/api/v0/projects/content/layout", header: headers})
 	expect(t, response, data, 200, "")
-	if response.Header.Get("Access-Control-Expose-Headers") != "ETag" {
+	if response.Header.Get("Access-Control-Expose-Headers") != "ETag, X-Sidecar-Exit-Code" {
 		t.Fatal("ETag not exposed")
 	}
 	response, data = h.browserDo(req{method: "GET", path: "/api/v0/sessions", header: headers})

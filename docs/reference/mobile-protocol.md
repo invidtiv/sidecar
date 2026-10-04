@@ -51,7 +51,7 @@ The canonical synthetic terminal transcript and catalog query/response corpus, w
 
 ## Catalog and attention events over SSH
 
-Native clients can open a separate SSH exec without a PTY running `sidecar api events --stdio`. It bridges the running API service's Local events socket and writes the same `api_version`, `type` and `seq` envelopes as [the UI API events stream](ui-api.md#events-stream), one per JSONL line. It requires the always-on API service on that host and reports how to start it when unavailable. It does not change the terminal v0 handshake, envelopes, operation sequences or attachment lifecycle. Each reconnect starts a new event sequence and catalog baseline; no old attention is replayed. Catalog filters match `sidecar mobile sessions --json`.
+Native clients can open a separate SSH exec without a PTY running `sidecar api events --stdio`. It bridges the running API service's Local events socket and writes the same `api_version`, `type` and `seq` envelopes as [the UI API events stream](ui-api.md#events-stream), one per JSONL line. It requires the always-on API service on that host and reports how to start it when unavailable. It does not change the terminal v0 handshake, envelopes, operation sequences or attachment lifecycle. Each reconnect starts a new event sequence and catalog baseline; no old attention is replayed. Catalog filters match `sidecar mobile sessions --json`. Additive `workspace` messages invalidate project/workspace resources using the same envelope and sequence; clients that only consume catalog/attention can ignore them. The workspace resources and operations are documented in [UI API v0](ui-api.md#project-workspaces-and-operations).
 
 ## Reset reasons
 

@@ -1,0 +1,85 @@
+{
+  "project": {
+    "name": "Fixture project",
+    "path": "/workspace/fixture",
+    "key": "fixture-project"
+  },
+  "catalog": {
+    "generation": "fixture-generation",
+    "observed_at": "2026-10-03T00:00:00Z",
+    "hub_id": "fixture",
+    "owner_host_id": "local:fixture",
+    "owner_config_generation": "fixture-config",
+    "query": {
+      "sort": "project"
+    },
+    "hosts": [
+      {
+        "id": "local:fixture",
+        "name": "Fixture host",
+        "state": "online",
+        "local": true
+      }
+    ],
+    "sections": [
+      {
+        "title": "Fixture project",
+        "key": "fixture-project",
+        "rows": [
+          {
+            "id": "fixture-shell",
+            "owner_host_id": "local:fixture",
+            "project_id": "fixture-project",
+            "project_name": "Fixture project",
+            "workspace_id": "fixture-project",
+            "workspace_kind": "shell",
+            "display_name": "Echo terminal",
+            "path": "/workspace/fixture",
+            "provider": "codex",
+            "status": "working",
+            "group": "Working",
+            "session": "fixture-echo",
+            "pane": "%1",
+            "target": "fixture-echo",
+            "expected_target": {
+              "hub_id": "fixture",
+              "owner_host_id": "local:fixture",
+              "owner_config_generation": "fixture-config",
+              "workspace_id": "fixture-project",
+              "workspace_kind": "shell",
+              "session": "fixture-echo",
+              "pane": "%1",
+              "server_incarnation": "pid=42",
+              "target_generation": "7ec58660b39f129cfa46756f156eab44"
+            },
+            "attach_state": "ready",
+            "observed_at": "2026-10-03T00:00:00Z",
+            "changed_at": "2026-10-03T00:00:00Z",
+            "live": true,
+            "ambiguous": false,
+            "stale": false,
+            "semantic_status": true,
+            "attention": false,
+            "attachment_ready": true
+          }
+        ]
+      }
+    ],
+    "failures": [],
+    "total": 1
+  },
+  "shells": [
+    {
+      "shell": "fixture-echo",
+      "name": "Echo terminal",
+      "workDir": "/workspace/fixture",
+      "status": "live"
+    },
+    {
+      "shell": "fixture-forgotten",
+      "name": "Recoverable shell",
+      "status": "forgotten",
+      "deletedAt": "2026-10-03T00:00:00Z"
+    }
+  ]
+}

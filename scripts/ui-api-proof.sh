@@ -69,6 +69,7 @@ step "build"
 go build -o "$root/sidecar" ./cmd/sidecar
 go build -o "$root/uiapiproof" ./internal/tools/uiapiproof
 go build -o "$root/uieventsproof" ./internal/tools/uieventsproof
+go build -o "$root/uiworkspaceproof" ./internal/tools/uiworkspaceproof
 go build -o "$root/uicontentproof" ./internal/tools/uicontentproof
 sc() { "$root/sidecar" -config "$config" "$@"; }
 
@@ -127,6 +128,8 @@ PY
 local_get /api/v0/status | python3 -c 'import json,sys; d=json.load(sys.stdin); assert [l["name"] for l in d["listeners"]]==["local","browser"], d; print("status ok")'
 sc api status > /dev/null || fail "sidecar api status failed"
 
+step "Workspace resources, writes, confirmations and event push"
+timeout 100 "$root/uiworkspaceproof" -state "$root/state/sidecar" -project proof -sidecar "$root/sidecar" -config "$config"
 step "Content, layouts and open-pane invalidation"
 timeout 40 "$root/uicontentproof" -socket "$api_sock" -root "$root/project"
 

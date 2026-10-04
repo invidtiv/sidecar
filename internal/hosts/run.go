@@ -311,6 +311,11 @@ func (c *Client) RunSidecar(ctx context.Context, args []string, out any) error {
 	stderr := boundedText(output.Stderr, MaxRunStderrBytes)
 
 	if failure, detail := classifyRun(ctx, output, runErr, stderr); failure != "" {
+		// A failed create may still have created a checkout. Preserve its validated
+		// stdout receipt while retaining the failure and exit code.
+		if out != nil {
+			_ = decodeRemoteResult(output.Stdout, out)
+		}
 		return fail(failure, output.ExitCode, stderr, detail, runErr)
 	}
 	if out == nil {

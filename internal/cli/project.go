@@ -13,20 +13,10 @@ import (
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/uirequest"
+	"github.com/marcus/sidecar/internal/workspacewire"
 )
 
-type projectJSONItem struct {
-	Name   string `json:"name"`
-	Path   string `json:"path"`
-	Key    string `json:"key"`
-	Theme  string `json:"theme,omitempty"`
-	OpenIn string `json:"openIn,omitempty"`
-	// AddedAt is when the project was registered with Sidecar, absent for a
-	// project registered before Sidecar recorded it. It is a registration date,
-	// not a creation date, and it is reported rather than computed: an agent
-	// reading this gets the same fact the switcher's "Date added" column shows.
-	AddedAt string `json:"addedAt,omitempty"`
-}
+type projectJSONItem = workspacewire.Project
 
 type projectCurrentJSON struct {
 	Shell   *projectJSONItem `json:"shell,omitempty"`
@@ -34,12 +24,7 @@ type projectCurrentJSON struct {
 	Aligned bool             `json:"aligned"`
 }
 
-type projectListJSON struct {
-	Projects []projectJSONItem `json:"projects"`
-	Shell    *projectJSONItem  `json:"shell,omitempty"`
-	Visible  *projectJSONItem  `json:"visible,omitempty"`
-	Aligned  bool              `json:"aligned"`
-}
+type projectListJSON = workspacewire.Projects
 
 type projectAddJSON struct {
 	Name     string `json:"name"`

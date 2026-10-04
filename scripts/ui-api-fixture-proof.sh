@@ -39,6 +39,14 @@ curl -fsS --unix-socket "$socket" http://sidecar/api/v0/sessions > "$root/sessio
 python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));assert d["total"]==1 and d["sections"][0]["rows"][0]["target"]=="fixture-echo" and d["sections"][0]["rows"][0]["path"]=="/workspace/fixture"' "$root/sessions.json"
 sc api status --json > "$root/status.json"
 python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));assert d["server_version"]=="fixture" and d["terminals"]==[]' "$root/status.json"
+# Workspace fixtures retain recoverable records and never fall through to
+# machine mutations, even for Local callers with full authority.
+curl -fsS --unix-socket "$socket" http://sidecar/api/v0/projects > "$root/projects.json"
+curl -fsS --unix-socket "$socket" 'http://sidecar/api/v0/projects/fixture-project/workspace?search=absent' > "$root/workspace.json"
+python3 -c 'import json,sys;p=json.load(open(sys.argv[1]));w=json.load(open(sys.argv[2]));assert p["projects"][0]["key"]=="fixture-project";assert w["catalog"]["total"]==0;assert len(w["shells"])==2 and w["shells"][1]["status"]=="forgotten"' "$root/projects.json" "$root/workspace.json"
+code=$(curl -sS --unix-socket "$socket" -o "$root/write-refused.json" -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{}' http://sidecar/api/v0/projects/fixture-project/shells/create)
+[ "$code" = 409 ]
+python3 -c 'import json,sys;assert json.load(open(sys.argv[1]))["error"]["code"]=="unsupported"' "$root/write-refused.json"
 # Exercise real pairing and ticket guards rather than bypassing browser auth.
 origin=http://fixture.example
 token=$(sc api pair --origin "$origin" --json | python3 -c 'import json,sys;print(json.load(sys.stdin)["token"])')
