@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"strings"
 
 	"github.com/marcus/sidecar/internal/uiapi"
 )
@@ -56,7 +57,7 @@ func runWorkspaceList(env Env, args []string) int {
 	}
 	for key, v := range flags.values {
 		if key != "--project" && key != "--host" {
-			values.Set(key[2:], v)
+			values.Set(strings.ReplaceAll(key[2:], "-", "_"), v)
 		}
 	}
 	q, err := uiapi.ParseCatalogQuery(values)

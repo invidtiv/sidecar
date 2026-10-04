@@ -117,12 +117,14 @@ type WorktreeDeletePlan struct {
 	Branch               string                     `json:"branch"`
 	HeadOID              string                     `json:"headOid"`
 	BranchOID            string                     `json:"branchOid"`
+	DeleteState          string                     `json:"deleteState"`
 	Dirtiness            string                     `json:"dirtiness"`
 	HasRemoteBranch      bool                       `json:"hasRemoteBranch"`
 	DeleteLocalBranch    bool                       `json:"deleteLocalBranch"`
 	DeleteRemoteBranch   bool                       `json:"deleteRemoteBranch"`
 	PendingCreation      bool                       `json:"pendingCreation"`
 	PendingCreationPlan  *workspaceops.WorktreePlan `json:"-"`
+	ExpectedDeleteState  string                     `json:"-"`
 	ResolvedWorktreePath string                     `json:"-"`
 }
 type WorktreeDeleted struct {

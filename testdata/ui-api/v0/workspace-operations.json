@@ -124,6 +124,7 @@
         "branch": "feature",
         "headOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "branchOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "deleteState": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "dirtiness": "dirty",
         "hasRemoteBranch": false,
         "deleteLocalBranch": false,
@@ -138,6 +139,7 @@
       "target": "/workspace/feature",
       "confirm": true,
       "expect_head_oid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expect_delete_state": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       "expect_branch": "feature"
     },
     "response": {
@@ -150,6 +152,7 @@
         "branch": "feature",
         "headOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "branchOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "deleteState": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "dirtiness": "dirty",
         "hasRemoteBranch": false,
         "deleteLocalBranch": false,

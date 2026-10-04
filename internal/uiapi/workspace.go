@@ -33,6 +33,7 @@ type WorkspaceCommand struct {
 	Confirm            bool     `json:"confirm,omitempty"`
 	ExpectSourceOID    string   `json:"expect_source_oid,omitempty"`
 	ExpectHeadOID      string   `json:"expect_head_oid,omitempty"`
+	ExpectDeleteState  string   `json:"expect_delete_state,omitempty"`
 	ExpectBranch       string   `json:"expect_branch,omitempty"`
 	DeleteLocalBranch  bool     `json:"delete_local_branch,omitempty"`
 	DeleteRemoteBranch bool     `json:"delete_remote_branch,omitempty"`
@@ -60,7 +61,7 @@ var workspaceOperationFields = map[string][]string{
 	"worktrees/create":      {"name", "base", "confirm", "expect_source_oid"},
 	"worktrees/rename":      {"target", "name"},
 	"worktrees/delete-plan": {"target", "delete_local_branch", "delete_remote_branch"},
-	"worktrees/delete":      {"target", "confirm", "expect_head_oid", "expect_branch", "delete_local_branch", "delete_remote_branch"},
+	"worktrees/delete":      {"target", "confirm", "expect_head_oid", "expect_branch", "expect_delete_state", "delete_local_branch", "delete_remote_branch"},
 	"agents/start":          {"target", "kind", "args"},
 	"agents/prompt":         {"target", "text", "wait", "timeout"},
 }
@@ -208,7 +209,10 @@ func (s *Server) handleWorkspaceOperation(w http.ResponseWriter, r *http.Request
 	// Partial failures can have created a shell or worktree too.
 	s.catalogEvents.signal()
 	w.Header().Set("X-Sidecar-Exit-Code", fmt.Sprint(exit))
-	if err != nil {
+	if err != nil || exit != 0 {
+		if err == nil {
+			err = &OperationError{Code: "backend", Message: "The owning command failed; inspect the exit code before retrying.", ExitCode: exit}
+		}
 		// CLI writes creation and prompt receipts even on failure; preserve them.
 		if len(result) > 0 {
 			writeJSON(w, workspaceStatus(exit), result)
@@ -240,8 +244,8 @@ func validateWorkspaceCommand(c WorkspaceCommand) error {
 	if c.Operation == "worktrees/create" && (!c.Confirm || c.ExpectSourceOID == "") {
 		return fmt.Errorf("confirm and expect_source_oid from the plan are required")
 	}
-	if c.Operation == "worktrees/delete" && (!c.Confirm || c.ExpectHeadOID == "" || c.ExpectBranch == "") {
-		return fmt.Errorf("confirm, expect_head_oid and expect_branch from delete-plan are required")
+	if c.Operation == "worktrees/delete" && (!c.Confirm || c.ExpectHeadOID == "" || c.ExpectBranch == "" || c.ExpectDeleteState == "") {
+		return fmt.Errorf("confirm, expect_head_oid, expect_branch and expect_delete_state from delete-plan are required")
 	}
 	if c.Operation == "shells/restore" && strings.HasPrefix(c.Target, "-") {
 		return fmt.Errorf("restore target must be a managed tmux session name")
@@ -282,8 +286,6 @@ func workspaceStatus(exit int) int {
 		return 404
 	case 4, 5:
 		return 409
-	case 0:
-		return 200
 	default:
 		return 503
 	}

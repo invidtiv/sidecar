@@ -9,8 +9,10 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/marcus/sidecar/internal/agentcontrol"
+	"github.com/marcus/sidecar/internal/agentremote"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/hosts"
 	"github.com/marcus/sidecar/internal/hostserve"
@@ -67,6 +69,9 @@ func (b *mobileBackend) Workspace(ctx context.Context, project, host string, q m
 			item = p
 			break
 		}
+	}
+	if item.Key == "" {
+		return workspacewire.Workspace{}, &uiapi.OperationError{Code: "not_found", Message: "This project is no longer configured; refresh the projects list.", ExitCode: 3}
 	}
 	provider := mobileCatalogProviderForProjects(b.env, func() ([]hostserve.Project, error) {
 		return []hostserve.Project{{Name: item.Name, Path: proj.Path}}, nil
@@ -159,15 +164,47 @@ func (b *mobileBackend) WorkspaceOperation(ctx context.Context, project string, 
 		return nil, 2, &uiapi.OperationError{Code: "invalid_request", Message: err.Error(), ExitCode: 2}
 	}
 	if c.Host != "" && c.Host != "local" {
+		if c.Operation == "agents/prompt" {
+			client := agentremote.Client{HostID: c.Host, Project: project, Run: func(ctx context.Context, host string, args []string, out any) error {
+				wire := workspaceRemoteResult{Operation: "agents/prompt"}
+				if err := b.workspaceRemote(ctx, host, args, &wire); err != nil {
+					return err
+				}
+				if !wire.ValidRemoteResult() {
+					return fmt.Errorf("owner returned no valid prompt receipt")
+				}
+				return json.Unmarshal(wire.Data, out)
+			}}
+			timeout, _ := time.ParseDuration(c.Timeout)
+			result, err := client.Prompt(ctx, c.Target, c.Text, c.Wait, nil, timeout)
+			if err != nil {
+				var ae *agentcontrol.Error
+				if agentcontrol.AsError(err, &ae) {
+					exit := agentErrorExitCode(ae.Code)
+					return agentcontrol.MarshalError(err), exit, &uiapi.OperationError{Code: string(ae.Code), Message: ae.Message, ExitCode: exit}
+				}
+				return nil, 1, workspaceInvocationError(1, err)
+			}
+			data, err := json.Marshal(result)
+			return data, 0, err
+		}
 		result := workspaceRemoteResult{Operation: c.Operation}
 		if err := b.workspaceRemote(ctx, c.Host, args, &result); err != nil {
 			var remote *hosts.RunError
 			if errors.As(err, &remote) {
+				exit := remote.ExitCode
 				var receipt json.RawMessage
-				if json.Valid([]byte(remote.Stderr)) {
+				if result.ValidRemoteResult() {
+					receipt = result.Data
+				}
+				if len(receipt) == 0 && json.Valid([]byte(remote.Stderr)) {
 					receipt = []byte(remote.Stderr)
 				}
-				return receipt, remote.ExitCode, workspaceInvocationError(remote.ExitCode, errors.New(remote.Stderr))
+				invocationErr := error(remote)
+				if strings.TrimSpace(remote.Stderr) != "" {
+					invocationErr = errors.New(remote.Stderr)
+				}
+				return receipt, exit, workspaceInvocationError(exit, invocationErr)
 			}
 			var ae *agentcontrol.Error
 			if agentcontrol.AsError(err, &ae) {
@@ -244,7 +281,7 @@ func workspaceCommandArgs(project string, c uiapi.WorkspaceCommand) ([]string, f
 		if c.Operation == "worktrees/delete-plan" {
 			args = append(args, "--plan")
 		} else {
-			args = append(args, "--yes", "--expect-head-oid", c.ExpectHeadOID, "--expect-branch", c.ExpectBranch)
+			args = append(args, "--yes", "--expect-head-oid", c.ExpectHeadOID, "--expect-branch", c.ExpectBranch, "--expect-delete-state", c.ExpectDeleteState)
 		}
 		args = append(args, "--", c.Target)
 	case "agents/start":

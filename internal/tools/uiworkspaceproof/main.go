@@ -204,10 +204,10 @@ func run() error {
 	if _, err := os.Stat(wt.Path); err != nil {
 		return errors.New("unconfirmed delete removed worktree")
 	}
-	if err := request("worktrees/delete", map[string]any{"target": wt.Path, "confirm": true, "expect_branch": deletion.Plan.Branch, "expect_head_oid": strings.Repeat("0", 40)}, 409, nil); err != nil {
+	if err := request("worktrees/delete", map[string]any{"target": wt.Path, "confirm": true, "expect_delete_state": deletion.Plan.DeleteState, "expect_branch": deletion.Plan.Branch, "expect_head_oid": strings.Repeat("0", 40)}, 409, nil); err != nil {
 		return err
 	}
-	if err := request("worktrees/delete", map[string]any{"target": wt.Path, "confirm": true, "expect_branch": deletion.Plan.Branch, "expect_head_oid": deletion.Plan.HeadOID}, 200, nil); err != nil {
+	if err := request("worktrees/delete", map[string]any{"target": wt.Path, "confirm": true, "expect_delete_state": deletion.Plan.DeleteState, "expect_branch": deletion.Plan.Branch, "expect_head_oid": deletion.Plan.HeadOID}, 200, nil); err != nil {
 		return err
 	}
 	if _, err := os.Stat(wt.Path); !os.IsNotExist(err) {

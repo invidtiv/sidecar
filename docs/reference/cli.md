@@ -4126,6 +4126,9 @@ A real deletion always requires --yes. For a plan-first deletion, use the return
 absolute path as TARGET and pass its branch and headOid back with --expect-branch
 and --expect-head-oid. Both expectations are required together, so a branch rename
 at the same commit is refused rather than mistaken for the confirmed checkout.
+Pass deleteState back with --expect-delete-state to also fence the checkout incarnation
+and every file being removed, including ignored work. Unverifiable plans have an empty
+deleteState and cannot be used for state-fenced deletion.
 
 Deleting closes the Sidecar worktree session and any managed shells rooted in the
 worktree before removing its directory, then forgets those shell records. A dirty
@@ -4151,6 +4154,7 @@ Usage: sidecar worktree delete <name|branch|path> [--project NAME] [--plan|--dry
 - `--delete-remote-branch`: Also delete the branch from origin when it exists
 - `--expect-branch BRANCH`: Refuse if the absolute target no longer checks out this planned branch
 - `--expect-head-oid OID`: Refuse if HEAD differs from a previously returned plan
+- `--expect-delete-state HASH`: Refuse if checkout incarnation or contents differ from the deleteState in a plan
 - `--json`: Write one structured plan or result object to stdout
 - `-h, --help`: Show this help
 

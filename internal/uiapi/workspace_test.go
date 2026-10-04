@@ -47,7 +47,7 @@ func TestWorkspaceRoutesScopeGuardsAndValidation(t *testing.T) {
 		{"worktrees/create", `{"name":"feature"}`, 400},
 		{"worktrees/create", `{"name":"feature","confirm":true,"expect_source_oid":"abc"}`, 200},
 		{"worktrees/delete", `{"target":"/checkout","confirm":true}`, 400},
-		{"worktrees/delete", `{"target":"/checkout","confirm":true,"expect_head_oid":"abc","expect_branch":"topic"}`, 200},
+		{"worktrees/delete", `{"target":"/checkout","confirm":true,"expect_head_oid":"abc","expect_branch":"topic","expect_delete_state":"abc"}`, 200},
 		{"agents/start", `{"target":"managed","kind":"codex","args":["--model","test"]}`, 200},
 		{"agents/prompt", `{"target":"managed","text":"continue","wait":true}`, 400},
 		{"agents/prompt", `{"target":"managed","text":"continue","wait":true,"timeout":"10s"}`, 200},
@@ -174,5 +174,107 @@ func TestFixtureWorkspaceRetainsRecoverableRecords(t *testing.T) {
 	w, err := b.Workspace(context.Background(), "fixture-project", "", mobileproto.CatalogQuery{Search: "absent"})
 	if err != nil || w.Catalog.Total != 0 || len(w.Shells) != 2 || w.Shells[1].Status != "forgotten" {
 		t.Fatalf("%+v %v", w, err)
+	}
+}
+
+func TestEveryWorkspacePostEnforcesOriginMutationAndScopes(t *testing.T) {
+	h := newHarness(t)
+	body := func(op string) string {
+		fields := map[string]any{"host": "owner"}
+		values := map[string]any{"target": "managed", "name": "Review", "base": "main", "confirm": true, "expect_source_oid": "abc", "expect_head_oid": "abc", "expect_branch": "topic", "expect_delete_state": "abc", "kind": "codex", "args": []string{"--model", "test"}, "text": "--host=elsewhere; $(touch /tmp/forbidden)", "wait": false, "timeout": "", "delete_local_branch": false, "delete_remote_branch": false}
+		for _, field := range workspaceOperationFields[op] {
+			fields[field] = values[field]
+		}
+		data, _ := json.Marshal(fields)
+		return string(data)
+	}
+	for _, scope := range []string{ScopeFull, ScopeWorkspaceWrite, "content:read", "sessions:read"} {
+		token, _, err := h.s.origins.pair("http://widget.example", []string{scope}, h.clock.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for op := range workspaceOperationFields {
+			for _, listener := range []string{"browser", "tailnet"} {
+				t.Run(scope+"/"+listener+"/"+op, func(t *testing.T) {
+					do := h.browserDo
+					origin := h.s.BrowserURL()
+					if listener == "tailnet" {
+						do = h.tailnetDo
+						origin = "https://" + testTailnetHost
+					}
+					_ = origin
+					headers := mutationHeaders("http://widget.example", map[string]string{"Authorization": "Bearer " + token, tailscaleLoginHead: testTailnetLogin})
+					want := 200
+					if scope != ScopeFull && scope != ScopeWorkspaceWrite {
+						want = 403
+					}
+					r, b := do(req{method: "POST", path: "/api/v0/projects/proof/" + op, body: body(op), header: headers})
+					expectWorkspaceStatus(t, r, b, want)
+					for _, attack := range []string{"foreign origin", "null origin", "simple form", "missing header", "wrong bearer origin", "no origin"} {
+						bad := map[string]string{}
+						for k, v := range headers {
+							bad[k] = v
+						}
+						switch attack {
+						case "foreign origin":
+							bad["Origin"] = "https://evil.example"
+						case "null origin":
+							bad["Origin"] = "null"
+						case "simple form":
+							bad["Content-Type"] = "application/x-www-form-urlencoded"
+						case "missing header":
+							delete(bad, mutationHeader)
+						case "wrong bearer origin":
+							if listener == "browser" {
+								bad["Origin"] = h.s.BrowserURL()
+							} else {
+								bad["Origin"] = "http://localhost:5173"
+							}
+						case "no origin":
+							delete(bad, "Origin")
+						}
+						expected := 403
+						if attack == "no origin" && listener == "browser" {
+							expected = want
+						}
+						r, b := do(req{method: "POST", path: "/api/v0/projects/%2Fowner%2Frepo/" + op, body: body(op), header: bad})
+						expectWorkspaceStatus(t, r, b, expected)
+					}
+				})
+			}
+		}
+	}
+}
+
+type failingWorkspaceBackend struct {
+	*fakeBackend
+	exit         int
+	operationErr error
+	result       json.RawMessage
+}
+
+func (b *failingWorkspaceBackend) WorkspaceOperation(context.Context, string, WorkspaceCommand) (json.RawMessage, int, error) {
+	return b.result, b.exit, b.operationErr
+}
+func TestWorkspaceFailureNeverReportsHTTPSuccess(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		exit   int
+		err    error
+		result string
+	}{
+		{"decoder failure", 0, &OperationError{Code: "backend", Message: "invalid owner result", ExitCode: 0}, ""},
+		{"partial failure", 1, &OperationError{Code: "backend", Message: "setup failed", ExitCode: 1}, `{"path":"/owner/created"}`},
+		{"nonzero without error", 1, nil, `{"path":"/owner/created"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := &failingWorkspaceBackend{fakeBackend: newFakeBackend(), exit: tc.exit, operationErr: tc.err, result: json.RawMessage(tc.result)}
+			h := newHarness(t, func(o *Options) { o.Backend = b })
+			r, data := h.localDo(req{method: "POST", path: "/api/v0/projects/proof/shells/create", body: `{}`})
+			expectWorkspaceStatus(t, r, data, 503)
+			if tc.result != "" && !strings.Contains(string(data), "/owner/created") {
+				t.Fatalf("lost partial receipt: %s", data)
+			}
+		})
 	}
 }
