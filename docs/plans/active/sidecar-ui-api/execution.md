@@ -64,10 +64,10 @@ The status values are `queued`, `running`, `review`, `fixing`, `merged` and `blo
 | U1-h security review and three-viewer proof | td-295605 | all | Claude, then Codex | U1-a, U1-d, U1-f | done. Security 6176110f; proof 23b5302d; integrated re-run against sidecar-ui 0f9cb5f passes with 0 browser page errors and a fully rendered terminal (u1h-evidence/integrated-*) |
 | U2-a core extraction | td-c709a9 | sidecar | Codex | U0-a | merged (d95b66f5) |
 | U2-b workspace resources and operations API | td-eb3d80 | sidecar | Codex | U2-a | merged (da497063) |
-| U2-c workspace UI | td-37a00e | sidecar-ui | Codex | U2-b | queued; U2-b is on main, so it can start |
+| U2-c workspace UI | td-37a00e | sidecar-ui | Codex | U2-b | running (Codex, ~/code/sidecar-ui-u2c-workspace-ui) |
 | U3-a content and layouts API | td-f8784a | sidecar | Codex | U1-a | merged (05dd383b). Claude review fixed a HIGH arbitrary file write through the diff parent parameter (git --output), a watch fd-exhaustion cap, and an existence oracle through symlinks |
-| U3-b pane tree UI | td-cf59cd | sidecar-ui | Codex | U3-a, U1-f | review MERGE-READY (Claude: no security findings, 7 fixes); integrating sidecar-ui main (U1-i SDK) |
-| U3-c pane and content polish | td-c53032 | both | Codex | U3-b | queued |
+| U3-b pane tree UI | td-cf59cd | sidecar-ui | Codex | U3-a, U1-f | merged (sidecar-ui 13bd63a); 70 e2e tests pass on merged main |
+| U3-c pane and content polish | td-c53032 | both | Codex | U3-b | running (Codex, ~/code/sidecar-ui-u3c-polish), plus Sidecar fix td-331945 |
 | U4 viewers agents can target | td-799dd6 | both | Codex | U3 | U4-a (server) running (Codex, ~/code/sidecar-u4a-viewer); U4-b (client) after its contract lands |
 
 U2-b onward are briefed below.
