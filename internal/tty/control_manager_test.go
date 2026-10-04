@@ -915,3 +915,36 @@ func TestClientCloseAlwaysReportsTerminalModelInvalidation(t *testing.T) {
 	case <-time.After(500 * time.Millisecond):
 	}
 }
+
+// A headless consumer (the mobile service) is told through OnFallback that its
+// session's control client died, then asks for a snapshot to reseed. That
+// request must start a replacement client and capture the pane again, or an
+// idle pane never produces the replacement frame the consumer is waiting for.
+func TestControlManagerRequestSnapshotRestartsADeadClient(t *testing.T) {
+	factory := newFakeControlFactory()
+	manager := newControlManager(factory.create, 0)
+	defer manager.Stop()
+	fallbacks := make(chan error, 4)
+	sub, err := manager.Subscribe(ControlRequest{Session: "idle", Pane: "%3", Visible: true, Focused: true, OnFallback: func(err error) { fallbacks <- err }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Close()
+	waitFor(t, sub.UsingControl)
+	first := factory.channel("idle")
+	first.done <- errors.New("reader EOF")
+	select {
+	case <-fallbacks:
+	case <-time.After(time.Second):
+		t.Fatal("no fallback after the client died")
+	}
+	waitFor(t, func() bool { return !sub.UsingControl() })
+
+	sub.RequestSnapshot()
+	waitFor(t, func() bool { return factory.callCount("idle") == 2 })
+	waitFor(t, sub.UsingControl)
+	waitFor(t, func() bool {
+		replacement := factory.channel("idle")
+		return replacement != first && replacement.commandCountContaining("capture-pane") >= 1
+	})
+}

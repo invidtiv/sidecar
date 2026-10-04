@@ -864,12 +864,16 @@ func (s *Service) release(ctx context.Context, request mobileproto.Request) {
 	geometry := a.geometry
 	a.geometry = nil
 	a.control = false
-	a.operationSequence = request.OperationSequence
 	a.mu.Unlock()
+	// Control is revoked either way. Like every other refused mutation, a
+	// failed release leaves operation_sequence where it was.
 	if err := geometry.Release(); err != nil {
 		s.writeError(request.RequestID, mobileproto.ErrorBackend, err.Error(), true)
 		return
 	}
+	a.mu.Lock()
+	a.operationSequence = request.OperationSequence
+	a.mu.Unlock()
 	s.emit(mobileproto.Response{Version: mobileproto.Version, Type: mobileproto.ResponseReleased, RequestID: request.RequestID,
 		AttachmentHandle: a.handle, AttachmentGeneration: a.generation, OperationSequence: request.OperationSequence,
 		OutputSequence: a.outputSequence, ResetGeneration: a.resetGeneration})
@@ -1042,7 +1046,7 @@ type attachment struct {
 	handle, clientID                                   string
 	generation                                         uint64
 	target                                             targetState
-	subscription                                       *tty.ControlSubscription
+	subscription                                       captureSubscription
 	ready                                              chan struct{}
 	snapshots                                          chan queuedSnapshot
 	failures                                           chan error
@@ -1052,12 +1056,36 @@ type attachment struct {
 	mu                                                 sync.Mutex
 	opMu                                               sync.Mutex
 	latest                                             tty.ControlSnapshot
-	geometry                                           *tty.HeadlessGeometry
+	geometry                                           leaseGeometry
 	control                                            bool
 	operationSequence, outputSequence, resetGeneration uint64
 	firstOutputForReset                                uint64
 	expectedColumns, expectedRows                      int
+	// reseedDelay is the backoff before the next replacement capture after a
+	// capture failure; zero means the initial delay.
+	reseedDelay time.Duration
 }
+
+// captureSubscription is the slice of tty.ControlSubscription an attachment
+// drives.
+type captureSubscription interface {
+	RequestSnapshot()
+	Close()
+}
+
+// leaseGeometry is the slice of tty.HeadlessGeometry an attachment drives.
+type leaseGeometry interface {
+	Resize(width, height int) error
+	Heartbeat() error
+	SendLiteral(data []byte) error
+	ExpirePresence() (bool, error)
+	Release() error
+}
+
+const (
+	reseedInitialDelay = 250 * time.Millisecond
+	reseedMaxDelay     = 5 * time.Second
+)
 
 func newAttachment(service *Service, handle, clientID string, generation uint64, target targetState) *attachment {
 	a := &attachment{service: service, handle: handle, clientID: clientID, generation: generation, target: target,
@@ -1162,7 +1190,7 @@ func (a *attachment) run() {
 		case <-a.stop:
 			return
 		case err := <-a.failures:
-			a.fail("capture_failed", err)
+			a.captureFailed(err)
 		case snapshot := <-a.snapshots:
 			a.publishQueued(snapshot)
 		case <-ticker.C:
@@ -1256,9 +1284,10 @@ func (a *attachment) publishQueued(observed queuedSnapshot) {
 	if err := a.service.out.write(mobileproto.Response{Version: mobileproto.Version, Type: mobileproto.ResponseFrame,
 		AttachmentHandle: a.handle, AttachmentGeneration: a.generation, OutputSequence: sequence,
 		ResetGeneration: reset, FrameKind: "full", Geometry: &geometry, Modes: &modes, RenderVTBase64: encoded,
-		HistorySize: &historySize}); err == nil && first == 0 {
+		HistorySize: &historySize}); err == nil {
 		a.mu.Lock()
-		if a.resetGeneration == reset && a.firstOutputForReset == 0 {
+		a.reseedDelay = 0
+		if first == 0 && a.resetGeneration == reset && a.firstOutputForReset == 0 {
 			a.firstOutputForReset = sequence
 		}
 		a.mu.Unlock()
@@ -1276,10 +1305,22 @@ func snapshotGeometryChanged(first, second tty.ControlSnapshot) bool {
 	return first.PaneWidth != second.PaneWidth || first.PaneHeight != second.PaneHeight
 }
 
-func (a *attachment) fail(reason string, err error) {
+// captureFailed resets the attachment after its capture source died, then
+// asks for a replacement capture, so a full frame always follows the reset even
+// on an idle pane. The request is delayed with a capped backoff: a source that
+// keeps failing produces one reset per attempt, never a tight loop of them.
+func (a *attachment) captureFailed(err error) {
 	a.opMu.Lock()
-	defer a.opMu.Unlock()
-	a.failLocked(reason, err)
+	a.failLocked("capture_failed", err)
+	a.opMu.Unlock()
+	a.mu.Lock()
+	delay := a.reseedDelay
+	if delay <= 0 {
+		delay = reseedInitialDelay
+	}
+	a.reseedDelay = min(delay*2, reseedMaxDelay)
+	a.mu.Unlock()
+	time.AfterFunc(delay, a.requestSnapshot)
 }
 
 func (a *attachment) failLocked(reason string, err error) {

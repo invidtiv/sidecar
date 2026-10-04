@@ -138,8 +138,9 @@ func (s *ControlSubscription) Resize(width, height int) {
 }
 
 // RequestSnapshot asks the existing ordered capture actor for a fresh screen.
-// It is non-blocking and has no effect after the subscription is hidden or
-// closed.
+// If the session's control client has died, it starts a replacement, whose
+// attach delivers the fresh screen. It is non-blocking and has no effect after
+// the subscription is hidden or closed.
 func (s *ControlSubscription) RequestSnapshot() {
 	if s != nil && s.manager != nil {
 		s.manager.requestSnapshot(s.id)
@@ -388,7 +389,12 @@ func (m *ControlManager) requestSnapshot(id uint64) {
 	m.mu.Unlock()
 	if client != nil {
 		client.markDirty(pane)
+		return
 	}
+	// The session's control client died, and the consumer was told through
+	// OnFallback. Asking for a snapshot starts a replacement; attaching to it
+	// delivers a fresh capture. activate dedupes against a start in flight.
+	m.activate(id)
 }
 
 func (m *ControlManager) usingControl(id uint64) bool {
