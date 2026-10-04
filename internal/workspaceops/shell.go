@@ -1,6 +1,7 @@
 package workspaceops
 
 import (
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -55,9 +56,10 @@ type ShellSpec struct {
 // session but did not report a pane, which is survivable: the session exists
 // and the pane can be resolved again later.
 type ShellResult struct {
-	SessionName string
-	PaneID      string
-	DisplayName string
+	SessionName     string
+	PaneID          string
+	DisplayName     string
+	allocationToken string // private ownership proof for an interrupted fresh create
 }
 
 // ManagedShellSpec adds the durable project identity that turns a tmux
@@ -492,6 +494,10 @@ func SetShellEnv(sessionName, displayName string) {
 // `-e` flags and for set-environment, but means callers must not depend on
 // argument order.
 func managedShellEnv(sessionName string) map[string]string {
+	return managedShellEnvContext(context.Background(), sessionName)
+}
+
+func managedShellEnvContext(ctx context.Context, sessionName string) map[string]string {
 	env := map[string]string{
 		shellstate.ManagedEnv: "1",
 	}
@@ -509,7 +515,7 @@ func managedShellEnv(sessionName string) map[string]string {
 	if sessionName != "" {
 		env["COMMS_SESSION"] = CommsSessionID(sessionName)
 	}
-	if pid := ServerPID(); pid > 0 {
+	if pid := serverPIDContext(ctx); pid > 0 {
 		env[shellstate.ServerEnv] = strconv.Itoa(pid)
 	}
 	// os.Executable resolves the running binary rather than searching PATH, so
@@ -538,8 +544,10 @@ func CommsSessionID(sessionName string) string {
 
 // ServerPID returns the PID of the tmux server on the current socket, or 0 when
 // there is none or it cannot be read.
-func ServerPID() int {
-	out, err := exec.Command("tmux", "display-message", "-p", "#{pid}").Output()
+func ServerPID() int { return serverPIDContext(context.Background()) }
+
+func serverPIDContext(ctx context.Context) int {
+	out, err := allocationCommand(ctx, "display-message", "-p", "#{pid}").Output()
 	if err != nil {
 		return 0
 	}

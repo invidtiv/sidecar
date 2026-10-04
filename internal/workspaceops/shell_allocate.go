@@ -1,10 +1,14 @@
 package workspaceops
 
 import (
+	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
+	"github.com/marcus/sidecar/internal/tty"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -50,6 +54,10 @@ func (s Service) createAllocatedShell(spec ManagedShellSpec) (ShellResult, error
 	}
 	created := false
 	err = edit(func(snapshot *shellstate.Snapshot) (bool, error) {
+		// Keep tmux work below shellstate's five-second contention timeout.
+		// The budget starts after acquiring the file lock, not while waiting for it.
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
 		inventory := append([]shellstate.Definition(nil), snapshot.Shells...)
 		for _, tomb := range snapshot.Tombstones {
 			inventory = append(inventory, tomb.Definition)
@@ -89,18 +97,20 @@ func (s Service) createAllocatedShell(spec ManagedShellSpec) (ShellResult, error
 			fresh := spec.ShellSpec
 			fresh.SessionName, fresh.DisplayName, fresh.RequireNew = session, display, true
 			var createErr error
-			result, createErr = CreateShell(fresh)
+			result, created, createErr = createFreshShell(ctx, fresh)
 			if errors.Is(createErr, errShellSessionCollision) {
 				continue
 			}
 			if createErr != nil {
 				return false, shellCreateFailure("shell_create_failed", "Check tmux and the working directory, then retry: "+createErr.Error(), createErr)
 			}
-			created = true
 			now := time.Now().UTC()
 			def := shellstate.Definition{TmuxName: session, DisplayName: display, Namespace: tmuxenv.Namespace(), CreatedAt: now, WorkDir: spec.WorkDir, AgentType: spec.AgentType, SkipPerms: spec.SkipPerms}
-			if server := tmuxserver.Combine(tmuxserver.Socket(), ServerPID()).ServerID(); server != "" {
+			if server := tmuxserver.Combine(tmuxserver.Socket(), serverPIDContext(ctx)).ServerID(); server != "" {
 				def.Restore = &shellstate.RestoreState{Eligible: true, LastSeenServer: server, LastSeenAliveAt: now}
+			}
+			if err := ctx.Err(); err != nil {
+				return false, shellCreateFailure("shell_create_failed", "Shell creation deadline exceeded; check tmux and retry", err)
 			}
 			snapshot.Shells = append(snapshot.Shells, def)
 			result.DisplayName = display
@@ -108,8 +118,14 @@ func (s Service) createAllocatedShell(spec ManagedShellSpec) (ShellResult, error
 		}
 	})
 	if err != nil {
-		if created {
-			_ = exec.Command("tmux", "kill-session", "-t", "="+result.SessionName).Run()
+		if created || result.allocationToken != "" {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			output, err := allocationCommand(cleanupCtx, "show-environment", "-t", "="+result.SessionName, allocationTokenEnv).Output()
+			owned := err == nil && strings.TrimSpace(string(output)) == allocationTokenEnv+"="+result.allocationToken
+			if owned {
+				_ = allocationCommand(cleanupCtx, "kill-session", "-t", "="+result.SessionName).Run()
+			}
 		}
 		var named *ShellCreateError
 		if errors.As(err, &named) {
@@ -124,4 +140,67 @@ func shellCreateFailure(code, message string, err error) error {
 	return &ShellCreateError{Code: code, Message: message, Err: err}
 }
 
+const allocationTokenEnv = "SIDECAR_CREATE_TOKEN"
+
 var errShellSessionCollision = errors.New("shell session name is occupied")
+
+// allocationCommand bounds pipe draining too: a tmux wrapper or child must not
+// hold the cross-process file lock merely by retaining an output descriptor.
+func allocationCommand(ctx context.Context, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "tmux", args...)
+	if _, bounded := ctx.Deadline(); bounded {
+		cmd.WaitDelay = 100 * time.Millisecond
+	}
+	return cmd
+}
+
+// createFreshShell is the bounded fresh-create path. Explicit reconnect and
+// cold restore continue to use CreateShell, including their recovery policy.
+// The bool records confirmed creation even if a later PID/pane probe times out.
+func createFreshShell(ctx context.Context, spec ShellSpec) (ShellResult, bool, error) {
+	result := ShellResult{SessionName: spec.SessionName}
+	if err := allocationCommand(ctx, "has-session", "-t", "="+spec.SessionName).Run(); err == nil {
+		return result, false, errShellSessionCollision
+	}
+	if err := ctx.Err(); err != nil {
+		return result, false, err
+	}
+	env := managedShellEnvContext(ctx, spec.SessionName)
+	args := []string{"new-session", "-d", "-s", spec.SessionName, "-c", spec.WorkDir}
+	if spec.Cols > 0 && spec.Rows > 0 {
+		args = append(args, "-x", strconv.Itoa(spec.Cols), "-y", strconv.Itoa(spec.Rows))
+	}
+	withEnv := append(append([]string(nil), args...), "-e", shellstate.SessionEnv+"="+spec.SessionName, "-e", shellstate.NameEnv+"="+spec.DisplayName)
+	for k, v := range env {
+		withEnv = append(withEnv, "-e", k+"="+v)
+	}
+	result.allocationToken = rand.Text()
+	withEnv = append(withEnv, "-e", allocationTokenEnv+"="+result.allocationToken)
+	err := tty.NewSessionContext(ctx, withEnv...)
+	if err != nil && strings.Contains(err.Error(), "duplicate session") {
+		return result, false, errShellSessionCollision
+	}
+	if err != nil && ctx.Err() == nil {
+		// Retry with only the ownership cue if the full identity environment
+		// was rejected. Supported tmux versions (3.4+) accept -e.
+		err = tty.NewSessionContext(ctx, append(args, "-e", allocationTokenEnv+"="+result.allocationToken)...)
+		if err == nil {
+			env[shellstate.SessionEnv], env[shellstate.NameEnv] = spec.SessionName, spec.DisplayName
+			for k, v := range env {
+				_ = allocationCommand(ctx, "set-environment", "-t", spec.SessionName, k, v).Run()
+			}
+		}
+	}
+	if err != nil {
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		}
+		if strings.Contains(err.Error(), "duplicate session") {
+			err = errShellSessionCollision
+		}
+		return result, false, err
+	}
+	out, _ := allocationCommand(ctx, "list-panes", "-t", "="+spec.SessionName, "-F", "#{pane_id}").Output()
+	result.PaneID = strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0])
+	return result, true, ctx.Err()
+}

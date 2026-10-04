@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -286,5 +287,73 @@ func TestShellAllocationWriteFailureRollsBackOnlyNewSession(t *testing.T) {
 	}
 	if SessionExists(result.SessionName) || !SessionExists(occupied) {
 		t.Fatalf("rollback affected wrong identity: %+v", result)
+	}
+}
+
+func TestShellAllocationHungTmuxReleasesWriterLock(t *testing.T) {
+	testenv.RequireTmux(t)
+	realTmux, err := exec.LookPath("tmux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	startThrowawaySession(t, "hung-allocation-anchor", t.TempDir())
+	for _, phase := range []string{"has-session", "display-message", "start-server", "show-options", "new-session", "new-session-after-create", "list-panes"} {
+		t.Run(phase, func(t *testing.T) {
+			root := t.TempDir()
+			dir, err := projectdir.Resolve(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			marker := filepath.Join(t.TempDir(), "hung")
+			shim := t.TempDir()
+			script := "#!/bin/sh\nif [ \"$HUNG_PHASE\" = new-session-after-create ] && [ \"$1\" = new-session ]; then \"$REAL_TMUX\" \"$@\" || exit $?; touch \"$HUNG_MARKER\"; sleep 3; exit 1; fi\nif [ \"$1\" = \"$HUNG_PHASE\" ]; then touch \"$HUNG_MARKER\"; sleep 3; exit 1; fi\nexec \"$REAL_TMUX\" \"$@\"\n"
+			if err := os.WriteFile(filepath.Join(shim, "tmux"), []byte(script), 0755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("REAL_TMUX", realTmux)
+			t.Setenv("HUNG_PHASE", phase)
+			t.Setenv("HUNG_MARKER", marker)
+			t.Setenv("PATH", shim+string(os.PathListSeparator)+os.Getenv("PATH"))
+			started := time.Now()
+			done := make(chan error, 1)
+			go func() {
+				_, err := (Service{}).CreateShell(ManagedShellSpec{Allocate: true, ProjectRoot: root, ShellSpec: ShellSpec{WorkDir: root}})
+				done <- err
+			}()
+			deadline := time.Now().Add(4 * time.Second)
+			for {
+				if _, err := os.Stat(marker); err == nil {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("shim was not reached")
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+			writerStart := time.Now()
+			writerErr := shellstate.AddAtPath(filepath.Join(dir, "shells.json"), shellstate.Definition{TmuxName: "other-writer", DisplayName: "Other writer"})
+			createErr := <-done
+			t.Logf("hung %s: writer wait %v, create returned in %v", phase, time.Since(writerStart), time.Since(started))
+			var named *ShellCreateError
+			if !errors.As(createErr, &named) || named.Code != "shell_create_failed" || !strings.Contains(named.Message, "deadline") {
+				t.Errorf("hung %s was not a named timeout: %v", phase, createErr)
+			}
+			if elapsed := time.Since(started); elapsed > 3*time.Second {
+				t.Errorf("lock held across hung %s for %v", phase, elapsed)
+			}
+			if writerErr != nil || time.Since(writerStart) > 3*time.Second {
+				t.Errorf("other writer blocked: %v (%v)", writerErr, time.Since(writerStart))
+			}
+			t.Setenv("HUNG_PHASE", "")
+			defs, err := shellstate.ListAtPath(filepath.Join(dir, "shells.json"))
+			if err != nil || len(defs) != 1 || defs[0].TmuxName != "other-writer" {
+				t.Errorf("timeout published a shell: %+v %v", defs, err)
+			}
+			_, session := ShellNames(root, nil)
+			if SessionExists(session) {
+				_, _ = tmuxTest(t, "kill-session", "-t", "="+session)
+				t.Error("post-create timeout leaked its new session")
+			}
+		})
 	}
 }
