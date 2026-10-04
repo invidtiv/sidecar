@@ -53,6 +53,9 @@ func restartSessionHarness(t *testing.T, h *harness) {
 	if err := h.s.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	// POST is not transparently retried by net/http on a pooled connection
+	// closed by the old process. Restart with a fresh connection pool.
+	h.browser.CloseIdleConnections()
 	next, err := Start(opts)
 	if err != nil {
 		t.Fatal(err)
