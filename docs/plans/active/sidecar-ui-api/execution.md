@@ -256,3 +256,4 @@ Each one is a td issue with the exact command and output. Fixes run as their own
 | td-090b9d | Not a comms bug. The orchestrator's watcher script crashed on an untitled message and skipped reports. Fixed in the watcher | invalid |
 | td-eeb7e8 lane | Codex bug lane (~/code/sidecar-bug-eeb7e8) with a completion fence for stale async messages across workspace and overview | running |
 | td-ae18e4, td-87dd09 | `comms publish` refused with "author does not follow topic" and no recovery hint (comms) | open |
+| td-6153d0 | `create worktree --agent codex` sometimes leaves the shell without Codex and reports success; under load. Recovered with `agent start --kind codex` | open |
