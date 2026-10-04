@@ -73,6 +73,15 @@ type workspaceTerminalTarget = termpanes.Target
 // routed explicitly by interactive mode so a visible preview never captures
 // input intended for workspace navigation.
 func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
+	if epochMsg, ok := msg.(plugin.EpochMessage); ok && plugin.IsStale(p.ctx, epochMsg) {
+		return p, nil
+	}
+	if scoped, ok := msg.(interface{ GetOperationScope() OperationScope }); ok {
+		scope := scoped.GetOperationScope()
+		if scope.OperationID != "" && !p.scopeMatches(scope) {
+			return p.update(msg)
+		}
+	}
 	if _, sidebarOnly := msg.(activityAnimationTickMsg); !sidebarOnly {
 		p.bumpProjectPreviewRevision()
 	}

@@ -21,6 +21,7 @@ type docContentLinkHit struct {
 }
 
 type docLinkResolvedMsg struct {
+	OperationScope
 	Result contentlink.ResolutionResult
 }
 
@@ -56,7 +57,7 @@ func (p *Plugin) prepareDocFrame(doc *docPane) {
 		source = p.contentDeck.ContentSource()
 	}
 	docview.BeginResolutions(index, doc.root, frame, func(request contentlink.ResolutionRequest) {
-		p.paneSizeCmds = append(p.paneSizeCmds, resolveDocContentLink(source, src, request))
+		p.paneSizeCmds = append(p.paneSizeCmds, p.resolveDocContentLink(source, src, request))
 	})
 }
 
@@ -78,7 +79,9 @@ func (p *Plugin) preparedDocBody(doc *docPane, originX, originY int) string {
 	return frame.Output()
 }
 
-func resolveDocContentLink(source contentpanes.Source, src contentpanes.SourceContext, request contentlink.ResolutionRequest) tea.Cmd {
+func (p *Plugin) resolveDocContentLink(source contentpanes.Source, src contentpanes.SourceContext, request contentlink.ResolutionRequest) tea.Cmd {
+	completionScope := p.completionScope()
+
 	return func() tea.Msg {
 		result := contentlink.ResolutionResult{Request: request}
 		switch request.Candidate.Kind {
@@ -91,12 +94,12 @@ func resolveDocContentLink(source contentpanes.Source, src contentpanes.SourceCo
 		case contentlink.KindDiff:
 			target, ok := workspacediff.ParseSpec(request.Candidate.Raw)
 			if !ok {
-				return docLinkResolvedMsg{Result: result}
+				return docLinkResolvedMsg{OperationScope: completionScope, Result: result}
 			}
 			resolved, err := workspacediff.ResolveSpec(context.Background(), request.Root, target)
 			result.Ref, result.Found = contentlink.Ref{Kind: contentlink.KindDiff, Value: resolved.Identity()}, err == nil
 		}
-		return docLinkResolvedMsg{Result: result}
+		return docLinkResolvedMsg{OperationScope: completionScope, Result: result}
 	}
 }
 

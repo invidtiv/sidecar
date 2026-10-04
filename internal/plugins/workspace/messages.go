@@ -70,6 +70,7 @@ type AgentOutputMsg struct {
 
 // AgentStoppedMsg signals an agent has stopped.
 type AgentStoppedMsg struct {
+	OperationScope
 	WorkspaceName string
 	Generation    int
 	Err           error
@@ -77,6 +78,7 @@ type AgentStoppedMsg struct {
 
 // TmuxAttachFinishedMsg signals return from tmux attach.
 type TmuxAttachFinishedMsg struct {
+	OperationScope
 	WorkspaceName string
 	Err           error
 }
@@ -204,6 +206,7 @@ type RemoteCheckDoneMsg struct {
 // confirmation opens, so the warning can tell the truth without putting a
 // `git status` on every refresh cycle (td-d37612).
 type WorktreeDirtyCheckedMsg struct {
+	OperationScope
 	Path  string
 	Dirty worktreedelete.Dirtiness
 }
@@ -255,11 +258,13 @@ type Task struct {
 
 // restartAgentMsg signals that an agent should be restarted after stopping.
 type restartAgentMsg struct {
+	OperationScope
 	worktree *Worktree
 }
 
 // restartAgentWithOptionsMsg signals that an agent should be restarted with specific options.
 type restartAgentWithOptionsMsg struct {
+	OperationScope
 	worktree  *Worktree
 	agentType AgentType
 	skipPerms bool
