@@ -12,6 +12,10 @@ import (
 )
 
 func normalizedFullFrame(snapshot tty.ControlSnapshot) ([]byte, mobileproto.Modes, error) {
+	return normalizedFrame(snapshot, false)
+}
+
+func normalizedFrame(snapshot tty.ControlSnapshot, resetFree bool) ([]byte, mobileproto.Modes, error) {
 	if snapshot.PaneWidth < 2 || snapshot.PaneHeight < 1 || snapshot.PaneRows != snapshot.PaneHeight {
 		return nil, mobileproto.Modes{}, fmt.Errorf("capture geometry is incomplete")
 	}
@@ -27,9 +31,19 @@ func normalizedFullFrame(snapshot tty.ControlSnapshot) ([]byte, mobileproto.Mode
 
 	modes := modesFromSnapshot(snapshot)
 	var out bytes.Buffer
-	out.WriteString("\x1bc")
-	setPrivateMode(&out, 1049, snapshot.AltScreen)
-	setPrivateMode(&out, 7, snapshot.Autowrap)
+	if resetFree {
+		// Cancel carried rendition, hyperlink, origin, insert, wrap and margins
+		// before absolute painting. No RIS: selection survives ordinary frames.
+		out.WriteString("\x1b]8;;\x1b\\\x1b[0m\x1b[?6l\x1b[4l\x1b[r\x1b[?7l\x1b[H")
+	} else {
+		out.WriteString("\x1bc")
+	}
+	if !resetFree {
+		setPrivateMode(&out, 1049, snapshot.AltScreen)
+	}
+	if !resetFree {
+		setPrivateMode(&out, 7, snapshot.Autowrap)
+	}
 	setPrivateMode(&out, 1, snapshot.ApplicationCursor)
 	setPrivateMode(&out, 2004, snapshot.BracketedPaste)
 	if snapshot.ApplicationKeypad {
@@ -67,6 +81,9 @@ func normalizedFullFrame(snapshot tty.ControlSnapshot) ([]byte, mobileproto.Mode
 		out.WriteString("\x1b]8;;\x1b\\")
 	}
 	out.WriteString("\x1b[0m")
+	if resetFree {
+		setPrivateMode(&out, 7, snapshot.Autowrap)
+	}
 	setPrivateMode(&out, 6, snapshot.OriginMode)
 	setMode(&out, 4, snapshot.InsertMode)
 	fmt.Fprintf(&out, "\x1b[%d;%dH", snapshot.CursorRow+1, snapshot.CursorCol+1)

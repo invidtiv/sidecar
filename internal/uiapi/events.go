@@ -456,7 +456,14 @@ func (s *Server) eventTerminals(ctx context.Context, c caller) []EventTerminal {
 	source, _ := s.opts.Backend.(GeometryHolderSource)
 	for _, term := range terms {
 		var holder *GeometryHolder
-		if source != nil {
+		if term.Holder != nil {
+			// A negotiated holder observation includes explicit unowned state.
+			// Do not replace it with a legacy inferred label or a live tmux read
+			// in fixture mode.
+			if term.Holder.Kind != "" || term.Holder.Label != "" {
+				holder = &GeometryHolder{Kind: term.Holder.Kind, Label: term.Holder.Label}
+			}
+		} else if source != nil {
 			holder = source.GeometryHolder(ctx, term)
 		}
 		out = append(out, EventTerminal{ClientID: term.ClientID, OwnerHostID: term.OwnerHostID, Session: term.Session, Pane: term.Pane, DisplayName: term.DisplayName, Holder: holder})

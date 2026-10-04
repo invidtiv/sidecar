@@ -197,8 +197,8 @@ func TestOwnerStreamRevalidatesQueuedWriteAtMutationBoundary(t *testing.T) {
 
 func TestOwnerStreamDiscardsQueuedResponseAfterRouteFailure(t *testing.T) {
 	writer := &blockingWriteCloser{entered: make(chan struct{}), release: make(chan struct{})}
-	stream := &OwnerStream{stdin: writer, lines: make(chan []byte, 1), cancel: func() {}}
-	stream.lines <- []byte(`{"version":0,"type":"accepted","request_id":"stale"}`)
+	stream := &OwnerStream{stdin: writer, lines: newOwnerLineQueue(context.Background()), cancel: func() {}}
+	stream.lines.push([]byte(`{"version":0,"type":"accepted","request_id":"stale"}`))
 	stream.fail(hosts.ErrMobileRouteChanged)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -266,6 +266,21 @@ func TestMobileOwnerHelperProcess(t *testing.T) {
 		os.Exit(4)
 	}
 	mode := os.Getenv("SIDECAR_MOBILE_OWNER_MODE")
+	if mode == "strict-v0" {
+		var legacy struct {
+			Version   int    `json:"version"`
+			Type      string `json:"type"`
+			RequestID string `json:"request_id"`
+		}
+		decoder := json.NewDecoder(strings.NewReader(line))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&legacy); err != nil {
+			_ = json.NewEncoder(os.Stdout).Encode(mobileproto.Response{Version: 0, Type: mobileproto.ResponseError,
+				Error: &mobileproto.Error{Code: mobileproto.ErrorInvalidRequest, Message: err.Error()}})
+			os.Exit(0)
+		}
+		mode = "echo"
+	}
 	if mode == "malformed" {
 		fmt.Println("not-json")
 		os.Exit(0)

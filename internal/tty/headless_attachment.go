@@ -36,6 +36,7 @@ type HeadlessGeometry struct {
 	lastInput    time.Time
 	lastPresence time.Time
 	now          func() time.Time
+	presence     headlessPresenceState
 }
 
 func NewHeadlessGeometry(manager *ControlManager, expected HeadlessTargetIdentity, ownerID string) (*HeadlessGeometry, error) {
@@ -43,7 +44,9 @@ func NewHeadlessGeometry(manager *ControlManager, expected HeadlessTargetIdentit
 		expected.ServerPID <= 0 || !ValidInstanceID(ownerID) {
 		return nil, fmt.Errorf("tmux control: invalid headless geometry identity")
 	}
-	return &HeadlessGeometry{manager: manager, expected: expected, ownerID: ownerID, now: time.Now}, nil
+	host, _ := hostAndPID()
+	return &HeadlessGeometry{manager: manager, expected: expected, ownerID: ownerID, now: time.Now,
+		presence: headlessPresenceState{selfHost: host, alive: processAlive}}, nil
 }
 
 // ClaimResize is a deliberate takeover. It first obtains a successful current
@@ -68,7 +71,12 @@ func (g *HeadlessGeometry) ClaimResize(width, height int) error {
 	if err != nil {
 		return err
 	}
-	if err := g.compareAndRunGuarded(observed, next, layoutGuard, operations...); err != nil {
+	if g.presence.kind != "" {
+		err = g.presenceTransaction(observed, next, layoutGuard, false, operations...)
+	} else {
+		err = g.compareAndRunGuarded(observed, next, layoutGuard, operations...)
+	}
+	if err != nil {
 		return g.cleanupAttempted(next, err)
 	}
 	if verify {

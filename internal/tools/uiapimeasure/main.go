@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand/v2"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -70,8 +71,31 @@ type countingWriter struct{ n int64 }
 
 func (c *countingWriter) Write(p []byte) (int, error) { c.n += int64(len(p)); return len(p), nil }
 
+var compressionMode = websocket.CompressionDisabled
+
+type wireConn struct {
+	net.Conn
+	stream *stream
+}
+
+func (c *wireConn) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	if c.stream.counting.Load() {
+		c.stream.wireBytes.Add(int64(n))
+	}
+	return n, err
+}
+
 func dial(ctx context.Context, name, url, bearer, origin string) (*stream, error) {
-	options := &websocket.DialOptions{HTTPHeader: http.Header{}}
+	s := &stream{name: name, waiters: map[string]chan mobileproto.Response{}, done: make(chan struct{})}
+	options := &websocket.DialOptions{HTTPHeader: http.Header{}, CompressionMode: compressionMode,
+		HTTPClient: &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			c, err := (&net.Dialer{}).DialContext(ctx, network, address)
+			if err != nil {
+				return nil, err
+			}
+			return &wireConn{Conn: c, stream: s}, nil
+		}}}}
 	if bearer != "" {
 		options.HTTPHeader.Set("Authorization", "Bearer "+bearer)
 	}
@@ -83,7 +107,7 @@ func dial(ctx context.Context, name, url, bearer, origin string) (*stream, error
 		return nil, fmt.Errorf("%s: dial: %w", name, err)
 	}
 	conn.SetReadLimit(mobileproto.MaxLineBytes)
-	s := &stream{name: name, conn: conn, waiters: map[string]chan mobileproto.Response{}, done: make(chan struct{})}
+	s.conn = conn
 	s.flateW, _ = flate.NewWriter(&s.flateBuf, flate.DefaultCompression)
 	go s.readLoop()
 	return s, nil
@@ -113,7 +137,7 @@ func (s *stream) readLoop() {
 		}
 		if s.counting.Load() {
 			s.messages.Add(1)
-			s.wireBytes.Add(int64(len(data)))
+			// Actual socket bytes are counted by wireConn before decompression.
 			gz.Reset()
 			w, _ := gzip.NewWriterLevel(&gz, gzip.DefaultCompression)
 			_, _ = w.Write(data)
@@ -437,6 +461,7 @@ func splitList(v string) []string {
 }
 
 func run() error {
+	compression := flag.Bool("compression", false, "negotiate permessage-deflate with context takeover")
 	label := flag.String("label", "", "scenario label for the summary")
 	wsURL := flag.String("url", "", "WebSocket URL of /api/v0/terminal")
 	bearer := flag.String("bearer", "", "bearer token for the upgrade (sent with no Origin, as Node does)")
@@ -452,6 +477,9 @@ func run() error {
 	tmuxPID := flag.Int("tmux-pid", 0, "private tmux server PID")
 	timeout := flag.Duration("timeout", 90*time.Second, "overall deadline")
 	flag.Parse()
+	if *compression {
+		compressionMode = websocket.CompressionContextTakeover
+	}
 	if *wsURL == "" {
 		return errors.New("-url is required")
 	}
@@ -481,7 +509,7 @@ func run() error {
 			return err
 		}
 	}
-	summary := map[string]any{"label": *label, "busy_terminals": len(busy), "echo_terminal": echo != nil}
+	summary := map[string]any{"compression": *compression, "wire_measurement": "socket bytes before decompression", "label": *label, "busy_terminals": len(busy), "echo_terminal": echo != nil}
 	if len(busy) > 0 {
 		_, _, g, _, _ := busy[0].frames.snapshot()
 		summary["geometry"] = fmt.Sprintf("%dx%d", g.Columns, g.Rows)

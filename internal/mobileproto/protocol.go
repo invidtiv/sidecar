@@ -39,6 +39,8 @@ const (
 	RequestRelease   = "release"
 	RequestReconnect = "reconnect"
 	RequestClose     = "close"
+	RequestPresence  = "presence"
+	RequestPaste     = "paste"
 )
 
 const (
@@ -58,6 +60,8 @@ const (
 	ResponseFrame       = "frame"
 	ResponseReset       = "reset"
 	ResponseError       = "error"
+	ResponsePresence    = "presence"
+	ResponseHolder      = "holder"
 )
 
 const (
@@ -122,23 +126,26 @@ func IsResetReason(reason string) bool {
 // be omitted. RequestID correlates exactly one response; asynchronous frame and
 // reset events omit it.
 type Request struct {
-	Version                      int             `json:"version"`
-	Type                         string          `json:"type"`
-	RequestID                    string          `json:"request_id"`
-	Target                       string          `json:"target,omitempty"`
-	TargetHandle                 string          `json:"target_handle,omitempty"`
-	AttachmentHandle             string          `json:"attachment_handle,omitempty"`
-	AttachmentID                 string          `json:"attachment_id,omitempty"`
-	OperationSequence            uint64          `json:"operation_sequence,omitempty"`
-	DataBase64                   string          `json:"data_base64,omitempty"`
-	Columns                      int             `json:"columns,omitempty"`
-	Rows                         int             `json:"rows,omitempty"`
-	LastOutputSequence           uint64          `json:"last_output_sequence,omitempty"`
-	LastResetGeneration          uint64          `json:"last_reset_generation,omitempty"`
-	PreviousAttachmentGeneration uint64          `json:"previous_attachment_generation,omitempty"`
-	ExpectedTarget               *TargetIdentity `json:"expected_target,omitempty"`
-	CatalogQuery                 *CatalogQuery   `json:"catalog_query,omitempty"`
-	HistoryRows                  int             `json:"history_rows,omitempty"`
+	Version                      int                 `json:"version"`
+	Type                         string              `json:"type"`
+	RequestID                    string              `json:"request_id"`
+	Target                       string              `json:"target,omitempty"`
+	TargetHandle                 string              `json:"target_handle,omitempty"`
+	AttachmentHandle             string              `json:"attachment_handle,omitempty"`
+	AttachmentID                 string              `json:"attachment_id,omitempty"`
+	OperationSequence            uint64              `json:"operation_sequence,omitempty"`
+	DataBase64                   string              `json:"data_base64,omitempty"`
+	Columns                      int                 `json:"columns,omitempty"`
+	Rows                         int                 `json:"rows,omitempty"`
+	LastOutputSequence           uint64              `json:"last_output_sequence,omitempty"`
+	LastResetGeneration          uint64              `json:"last_reset_generation,omitempty"`
+	PreviousAttachmentGeneration uint64              `json:"previous_attachment_generation,omitempty"`
+	ExpectedTarget               *TargetIdentity     `json:"expected_target,omitempty"`
+	CatalogQuery                 *CatalogQuery       `json:"catalog_query,omitempty"`
+	HistoryRows                  int                 `json:"history_rows,omitempty"`
+	Capabilities                 *ClientCapabilities `json:"capabilities,omitempty"`
+	Viewer                       *Viewer             `json:"viewer,omitempty"`
+	Presence                     *Presence           `json:"presence,omitempty"`
 }
 
 // CatalogQuery is a bounded, server-applied Sessions view. The server owns
@@ -312,6 +319,11 @@ type Modes struct {
 }
 
 type Capabilities struct {
+	Presence             bool `json:"presence,omitempty"`
+	ResetFreeFrames      bool `json:"reset_free_frames,omitempty"`
+	CoalescedFrames      bool `json:"coalesced_frames,omitempty"`
+	ServerPaste          bool `json:"server_paste,omitempty"`
+	HolderLabels         bool `json:"holder_labels,omitempty"`
 	NormalizedFullFrames bool `json:"normalized_full_frames"`
 	ChangedRowFrames     bool `json:"changed_row_frames"`
 	Input                bool `json:"input"`
@@ -357,6 +369,9 @@ type Response struct {
 	Modes                *Modes           `json:"modes,omitempty"`
 	RenderVTBase64       string           `json:"render_vt_base64,omitempty"`
 	HistorySize          *int             `json:"history_size,omitempty"`
+	ResetFree            bool             `json:"reset_free,omitempty"`
+	Coalesced            bool             `json:"coalesced,omitempty"`
+	Holder               *Holder          `json:"holder,omitempty"`
 	Reason               string           `json:"reason,omitempty"`
 	Error                *Error           `json:"error,omitempty"`
 }

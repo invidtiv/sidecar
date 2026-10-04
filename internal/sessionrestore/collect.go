@@ -447,7 +447,7 @@ func ResumePlanFor(step Step, namespace string) (agentsession.ResumePlan, error)
 	if !bound {
 		return agentsession.ResumePlan{}, ErrNoBinding
 	}
-	return agentsession.PlanResume(kind, ref)
+	return agentsession.PlanResumeInDir(step.WorkDir, kind, ref)
 }
 
 // PrefillPlanFor re-reads either the official binding or the discovered
@@ -469,7 +469,7 @@ func PrefillPlanFor(step Step, namespace string) (agentsession.ResumePlan, error
 			return agentsession.ResumePlan{}, fmt.Errorf("shell record names both %s and %s", kind, conflict)
 		}
 		if def.Agent != nil && def.Agent.Session != nil && !def.Agent.Session.Empty() {
-			return agentsession.PlanResume(kind, *def.Agent.Session)
+			return agentsession.PlanResumeInDir(step.WorkDir, kind, *def.Agent.Session)
 		}
 		if def.Agent != nil && def.Agent.Candidate != nil {
 			if kind == "" {
@@ -478,7 +478,7 @@ func PrefillPlanFor(step Step, namespace string) (agentsession.ResumePlan, error
 			if kind == "" {
 				return agentsession.ResumePlan{}, ErrNoBinding
 			}
-			return agentsession.PlanCandidatePrefill(kind, *def.Agent.Candidate)
+			return agentsession.PlanCandidatePrefillInDir(step.WorkDir, kind, *def.Agent.Candidate)
 		}
 		return agentsession.ResumePlan{}, ErrNoBinding
 	}

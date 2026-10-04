@@ -43,13 +43,14 @@ type ClientInfo struct {
 // TerminalInfo is one open terminal attachment and whether its client holds
 // control. It is observed from the stream, never decided here.
 type TerminalInfo struct {
-	ClientID    string `json:"client_id"`
-	OwnerHostID string `json:"owner_host_id,omitempty"`
-	WorkspaceID string `json:"workspace_id,omitempty"`
-	Session     string `json:"session,omitempty"`
-	Pane        string `json:"pane,omitempty"`
-	DisplayName string `json:"display_name,omitempty"`
-	Control     bool   `json:"control"`
+	ClientID    string              `json:"client_id"`
+	OwnerHostID string              `json:"owner_host_id,omitempty"`
+	WorkspaceID string              `json:"workspace_id,omitempty"`
+	Session     string              `json:"session,omitempty"`
+	Pane        string              `json:"pane,omitempty"`
+	DisplayName string              `json:"display_name,omitempty"`
+	Control     bool                `json:"control"`
+	Holder      *mobileproto.Holder `json:"holder,omitempty"`
 }
 
 type clientRegistry struct {
@@ -190,9 +191,10 @@ func (c *trackedClient) observe(line []byte) {
 			Pane        string `json:"pane"`
 			DisplayName string `json:"display_name"`
 		} `json:"target"`
-		Control bool               `json:"control"`
-		Reason  string             `json:"reason"`
-		Error   *mobileproto.Error `json:"error"`
+		Control bool                `json:"control"`
+		Holder  *mobileproto.Holder `json:"holder"`
+		Reason  string              `json:"reason"`
+		Error   *mobileproto.Error  `json:"error"`
 	}
 	if json.Unmarshal(line, &response) != nil {
 		return
@@ -211,15 +213,21 @@ func (c *trackedClient) observe(line []byte) {
 		c.term.OwnerHostID, c.term.WorkspaceID = response.Target.OwnerHostID, response.Target.WorkspaceID
 		c.term.Session, c.term.Pane, c.term.DisplayName = response.Target.Session, response.Target.Pane, response.Target.DisplayName
 	}
+	if response.Holder != nil {
+		copy := *response.Holder
+		c.term.Holder = &copy
+	}
 	switch response.Type {
 	case mobileproto.ResponseOpened, mobileproto.ResponseReconnected:
 		c.open, c.term.Control = true, false
-	case mobileproto.ResponseControl, mobileproto.ResponseResized, mobileproto.ResponseAccepted, mobileproto.ResponseHeartbeat:
+		c.term.Holder = nil
+	case mobileproto.ResponseControl, mobileproto.ResponseResized, mobileproto.ResponseAccepted, mobileproto.ResponseHeartbeat, mobileproto.ResponsePresence:
 		c.term.Control = response.Control
 	case mobileproto.ResponseReleased:
 		c.term.Control = false
 	case mobileproto.ResponseClosed:
 		c.open, c.term.Control = false, false
+		c.term.Holder = nil
 	case mobileproto.ResponseReset:
 		// A deliberate resize keeps control; every other reset revokes it.
 		if response.Reason != mobileproto.ResetResize {

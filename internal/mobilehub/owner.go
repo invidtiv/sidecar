@@ -38,24 +38,25 @@ type RouteRegistry interface {
 }
 
 // OwnerStream is one validated remote `mobile serve` process. It forwards raw
-// v0 lines after consuming the owner's private hello; it never parses terminal
-// payloads or creates requests of its own.
+// protocol lines after consuming the owner's private hello. Negotiated repaint
+// frames coalesce by fence metadata; terminal payloads remain opaque.
 type OwnerStream struct {
-	registry  RouteRegistry
-	authority hosts.MobileRouteAuthority
-	cmd       *exec.Cmd
-	stdin     io.WriteCloser
-	lines     chan []byte
-	cancel    context.CancelFunc
-	done      chan struct{}
-	stderr    *boundedBuffer
-	writeMu   sync.Mutex
-	closeOnce sync.Once
-	inputOnce sync.Once
-	stateMu   sync.Mutex
-	terminal  error
-	waitErr   error
-	closing   bool
+	registry     RouteRegistry
+	authority    hosts.MobileRouteAuthority
+	cmd          *exec.Cmd
+	stdin        io.WriteCloser
+	lines        *ownerLineQueue
+	helloRequest mobileproto.Request
+	cancel       context.CancelFunc
+	done         chan struct{}
+	stderr       *boundedBuffer
+	writeMu      sync.Mutex
+	closeOnce    sync.Once
+	inputOnce    sync.Once
+	stateMu      sync.Mutex
+	terminal     error
+	waitErr      error
+	closing      bool
 }
 
 // StartOwner starts the owning Sidecar through the exact bound registry
@@ -93,7 +94,7 @@ func StartOwner(ctx context.Context, registry RouteRegistry, authority hosts.Mob
 		return nil, mobileproto.Response{}, fmt.Errorf("mobile hub: owner stderr: %w", err)
 	}
 	stream := &OwnerStream{registry: registry, authority: authority, cmd: cmd, stdin: stdin,
-		lines: make(chan []byte, mobileproto.OutboundQueueDepth), cancel: cancel, done: make(chan struct{}),
+		lines: newOwnerLineQueue(ctx), helloRequest: ownerHelloRequest(ctx), cancel: cancel, done: make(chan struct{}),
 		stderr: &boundedBuffer{limit: OwnerStderrBytes}}
 	if err := cmd.Start(); err != nil {
 		_ = stdin.Close()
@@ -104,7 +105,7 @@ func StartOwner(ctx context.Context, registry RouteRegistry, authority hosts.Mob
 	}
 	go func() { _, _ = io.Copy(stream.stderr, stderrPipe) }()
 	go stream.run(stdout)
-	request := mobileproto.Request{Version: mobileproto.Version, Type: mobileproto.RequestHello, RequestID: "hub-owner-hello"}
+	request := stream.helloRequest
 	data, _ := json.Marshal(request)
 	if err := stream.writeLine(data, false); err != nil {
 		stream.Close()
@@ -156,15 +157,21 @@ func validateOwnerHello(hello mobileproto.Response) error {
 func (s *OwnerStream) run(stdout io.Reader) {
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 64<<10), mobileproto.MaxLineBytes+1)
+	first := true
 	for scanner.Scan() {
 		line := append([]byte(nil), scanner.Bytes()...)
+		if first {
+			first = false
+			if err := ownerNegotiationError(s.helloRequest, line); err != nil {
+				s.fail(err)
+				break
+			}
+		}
 		if len(line) > mobileproto.MaxLineBytes {
 			s.fail(fmt.Errorf("mobile hub: owner response exceeds %d bytes", mobileproto.MaxLineBytes))
 			break
 		}
-		select {
-		case s.lines <- line:
-		default:
+		if !s.lines.push(line) {
 			s.fail(ErrOwnerOutputOverflow)
 		}
 		if s.terminalError() != nil {
@@ -183,7 +190,7 @@ func (s *OwnerStream) run(stdout io.Reader) {
 		s.terminal = fmt.Errorf("mobile hub: owner process: %w", waitErr)
 	}
 	s.stateMu.Unlock()
-	close(s.lines)
+	s.lines.close()
 	close(s.done)
 }
 
@@ -191,21 +198,11 @@ func (s *OwnerStream) readLine(ctx context.Context) ([]byte, error) {
 	if err := s.terminalError(); err != nil {
 		return nil, err
 	}
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case line, ok := <-s.lines:
-		if err := s.terminalError(); err != nil {
-			return nil, err
-		}
-		if ok {
-			return line, nil
-		}
-		if err := s.terminalError(); err != nil {
-			return nil, err
-		}
-		return nil, io.EOF
+	line, err := s.lines.read(ctx)
+	if terminal := s.terminalError(); terminal != nil {
+		return nil, terminal
 	}
+	return line, err
 }
 
 // ReadLine reads one raw owner response or event with the caller's deadline.

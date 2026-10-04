@@ -18,7 +18,7 @@
 # Every generator is bounded by timeout(1). The script removes only what it
 # created and never touches the default tmux server or the real state tree.
 #
-# usage: scripts/ui-api-measure.sh [--no-count] [--window SECONDS] [--keystrokes N] [TMUX_BIN]
+# usage: scripts/ui-api-measure.sh [--no-count] [--compression] [--window SECONDS] [--keystrokes N] [TMUX_BIN]
 set -eu
 
 # Nothing from the caller's Sidecar shell may leak into the run: $TMUX would
@@ -29,9 +29,11 @@ unset TMUX TMUX_PANE SIDECAR_SHELL SIDECAR_SHELL_NAME SIDECAR_MANAGED_SHELL SIDE
 count=1
 window=15
 keystrokes=200
+compression_flag=""
 while [ $# -gt 0 ]; do
 	case "$1" in
 	--no-count) count=0; shift ;;
+	--compression) compression_flag="-compression"; shift ;;
 	--window) window=$2; shift 2 ;;
 	--keystrokes) keystrokes=$2; shift 2 ;;
 	-*) echo "unknown flag $1" >&2; exit 2 ;;
@@ -183,7 +185,7 @@ measure() {
 	shift
 	# shellcheck disable=SC2086
 	"$root/uiapimeasure" -url "ws://$tcp/api/v0/terminal" -bearer "$token" -pid "$server_pid" -tmux-pid "$tmux_pid" \
-		-window "${window}s" -keystrokes "$keystrokes" $count_flags -label "$label" "$@" | tee -a "$root/results.jsonl"
+		-window "${window}s" -keystrokes "$keystrokes" $count_flags $compression_flag -label "$label" "$@" | tee -a "$root/results.jsonl"
 }
 
 step "scenario: four generators, nothing attached (tmux baseline)"

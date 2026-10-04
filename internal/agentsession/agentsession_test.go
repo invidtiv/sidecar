@@ -2,6 +2,7 @@ package agentsession
 
 import (
 	"errors"
+	"github.com/marcus/sidecar/internal/testenv"
 	"os"
 	"path/filepath"
 	"strings"
@@ -384,6 +385,7 @@ func TestDedupIsStableWhenTwoClaimsAreEquallyRecent(t *testing.T) {
 // TestResumeIsAlwaysStructuredArgv is the rule that a session identifier never
 // becomes part of a command string anywhere in the resume path.
 func TestResumeIsAlwaysStructuredArgv(t *testing.T) {
+	testenv.ProviderHelp(t, "codex", "usage: codex (older standalone CLI)")
 	hostile := Ref{
 		Kind:     RefID,
 		Value:    "abc-def",
@@ -405,6 +407,23 @@ func TestResumeIsAlwaysStructuredArgv(t *testing.T) {
 	}
 	if plan.Argv[len(plan.Argv)-1] != hostile.Value {
 		t.Fatal("the session value must be exactly one trailing argv entry")
+	}
+}
+
+func TestCodexResumeKeepsCurrentShellEnvironment(t *testing.T) {
+	testenv.ProviderHelp(t, "codex", "usage: codex\n  --no-daemon  Run in process\n")
+	ref := Ref{Kind: RefID, Value: "abc-def", Source: OfficialSourceFor("codex"), Reported: true}
+	for _, candidate := range []bool{false, true} {
+		var plan ResumePlan
+		var err error
+		if candidate {
+			plan, err = PlanCandidatePrefill("codex", Candidate{Ref: ref})
+		} else {
+			plan, err = PlanResume("codex", ref)
+		}
+		if err != nil || strings.Join(plan.Argv, " ") != "codex --no-daemon resume abc-def" {
+			t.Fatalf("candidate=%v plan=%v err=%v", candidate, plan.Argv, err)
+		}
 	}
 }
 

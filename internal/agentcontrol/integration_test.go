@@ -17,11 +17,14 @@ func TestIsolatedTmuxFakeProviderSteelThread(t *testing.T) {
 		t.Skip("tmux unavailable")
 	}
 	session := fmt.Sprintf("sidecar-agentcontrol-m0-%d", time.Now().UnixNano())
-	if out, err := exec.Command("tmux", "new-session", "-d", "-s", session).CombinedOutput(); err != nil {
+	// Explicit argv bypasses the user's login-shell startup and tmux default
+	// command, so readiness and Launch's recheck observe the fixture's shell.
+	if out, err := exec.Command("tmux", "new-session", "-d", "-s", session, "/bin/bash", "--noprofile", "--norc", "-i").CombinedOutput(); err != nil {
 		t.Fatalf("new isolated session: %v: %s", err, out)
 	}
 	t.Cleanup(func() { _ = exec.Command("tmux", "kill-session", "-t", session).Run() })
 	terminal := NewLocalTerminal()
+	t.Cleanup(terminal.Close)
 	target := Target{Host: "local", Project: "fixture", Session: session, Namespace: tmuxenv.Namespace()}
 	// Do not identify the provider until its first marker appears. Claiming
 	// Kind=fake while the launch line is only echoed makes Start interpret the
@@ -103,6 +106,26 @@ func TestIsolatedTmuxFakeProviderSteelThread(t *testing.T) {
 	t.Fatal("fake provider never reached blocked/read state")
 }
 
+// The package TestMain owns a private server, and none of these fixtures runs
+// in parallel. An inherited default command must not determine their occupant.
+func TestIsolatedIntegrationFixturesIgnoreDefaultShellCommand(t *testing.T) {
+	requireTmux(t)
+	previous, err := exec.Command("tmux", "show-options", "-gqv", "default-command").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if out, err := exec.Command("tmux", "set-option", "-g", "default-command", strings.TrimSpace(string(previous))).CombinedOutput(); err != nil {
+			t.Errorf("restore private server default command: %v: %s", err, out)
+		}
+	})
+	if out, err := exec.Command("tmux", "set-option", "-g", "default-command", "exec sleep 30").CombinedOutput(); err != nil {
+		t.Fatalf("set private server default command: %v: %s", err, out)
+	}
+	t.Run("steel thread", TestIsolatedTmuxFakeProviderSteelThread)
+	t.Run("refusals", TestIsolatedTmuxRefusesBusyForegroundAndCopyMode)
+}
+
 func TestIsolatedTmuxRefusesBusyForegroundAndCopyMode(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux unavailable")
@@ -110,12 +133,13 @@ func TestIsolatedTmuxRefusesBusyForegroundAndCopyMode(t *testing.T) {
 	for _, mode := range []string{"busy foreground", "copy mode"} {
 		t.Run(mode, func(t *testing.T) {
 			session := fmt.Sprintf("sidecar-agentcontrol-refusal-%d", time.Now().UnixNano())
-			if out, err := exec.Command("tmux", "new-session", "-d", "-s", session).CombinedOutput(); err != nil {
+			if out, err := exec.Command("tmux", "new-session", "-d", "-s", session, "/bin/bash", "--noprofile", "--norc", "-i").CombinedOutput(); err != nil {
 				t.Fatalf("new isolated session: %v: %s", err, out)
 			}
 			t.Cleanup(func() { _ = exec.Command("tmux", "kill-session", "-t", session).Run() })
 
 			terminal := NewLocalTerminal()
+			t.Cleanup(terminal.Close)
 			target := Target{Host: "local", Project: "fixture", Session: session, Namespace: tmuxenv.Namespace()}
 			svc := Service{Terminal: terminal, Poll: 20 * time.Millisecond, ShellStableFor: 100 * time.Millisecond}
 			ready, err := svc.WaitShellReady(context.Background(), target, 3*time.Second)

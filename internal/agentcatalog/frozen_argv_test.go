@@ -34,6 +34,9 @@ func TestPreTOMLFamiliesLaunchByteIdentically(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s is no longer launchable; the migration dropped a family", id)
 		}
+		// This historical data-migration proof describes the catalog without
+		// optional capabilities of a machine's currently installed provider.
+		family.HelpSupportedArgs = nil
 		fmt.Fprintf(&b, "%s\n", id)
 		fmt.Fprintf(&b, "  launch      %s\n", argvLine(family.LaunchArgv(nil, false)))
 		fmt.Fprintf(&b, "  launch+args %s\n", argvLine(family.LaunchArgv([]string{"--model", "space value"}, false)))

@@ -175,6 +175,15 @@ func runAgentBroadcast(env Env, args []string) int {
 		return code
 	}
 
+	// An explicit scope with raw text and self included needs no caller
+	// identity. Every other form infers its scope, sender, or self exclusion.
+	usesCaller := !f.raw || !f.includeSelf || (!f.all && f.project == "" && len(f.to) == 0)
+	if usesCaller {
+		if err := validateImplicitCaller(env.Ctx, env.StateDir); err != nil {
+			return emitAgentError(env, f.json, &agentcontrol.Error{Code: agentcontrol.ErrNotReady, Message: err.Error(), Err: err})
+		}
+	}
+
 	req := agentbroadcast.PlanRequest{
 		To:          f.to,
 		Exclude:     f.exclude,
@@ -196,8 +205,10 @@ func runAgentBroadcast(env Env, args []string) int {
 		req.Project = projects[0].Key
 	}
 
-	req.SenderSession = strings.TrimSpace(os.Getenv(shellstate.SessionEnv))
-	if origin, ok := callerShellOrigin(env.StateDir); ok {
+	if usesCaller {
+		req.SenderSession = strings.TrimSpace(os.Getenv(shellstate.SessionEnv))
+	}
+	if origin, ok := callerShellOrigin(env.StateDir); usesCaller && ok {
 		req.SenderName = origin.DisplayName
 		if req.SenderName == "" {
 			req.SenderName = origin.TmuxName

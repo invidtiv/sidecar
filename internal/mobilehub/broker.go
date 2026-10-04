@@ -27,7 +27,7 @@ const (
 	brokerOperationTimeout = 15 * time.Second
 )
 
-// ProtocolBroker projects v0 over the service that owns a terminal. It never
+// ProtocolBroker projects the v0 envelope and negotiated extensions over the service that owns a terminal. It never
 // owns terminal state, sequence advancement, geometry, presence or input retry.
 type ProtocolBroker struct{ router *CatalogRouter }
 
@@ -79,6 +79,8 @@ type brokerOutput struct {
 	data  []byte
 	owner *brokerOwner
 	done  chan struct{}
+	frame bool
+	reset uint64
 }
 
 type brokerRun struct {
@@ -89,12 +91,16 @@ type brokerRun struct {
 	owner         *brokerOwner
 	pending       *brokerPending
 	events        chan brokerEvent
-	out           chan brokerOutput
+	out           []brokerOutput
+	outMu         sync.Mutex
+	outReady      chan struct{}
 	outputBytes   atomic.Int64
 	requestNumber uint64
 	seen          map[string]bool
 	order         []string
 	handshake     bool
+	capabilities  *mobileproto.ClientCapabilities
+	viewer        *mobileproto.Viewer
 }
 
 // Run owns input/output for this protocol lifetime, closing them on shutdown
@@ -113,7 +119,7 @@ func (b *ProtocolBroker) Run(ctx context.Context, input io.Reader, output io.Wri
 	}
 	runCtx, cancel := context.WithCancelCause(ctx)
 	r := &brokerRun{ctx: runCtx, cancel: cancel, router: b.router, instance: instance,
-		events: make(chan brokerEvent, 1), out: make(chan brokerOutput, mobileproto.OutboundQueueDepth), seen: make(map[string]bool)}
+		events: make(chan brokerEvent, 1), outReady: make(chan struct{}, 1), seen: make(map[string]bool)}
 	defer cancel(context.Canceled)
 	defer func() { r.owner.close() }()
 	defer func() {
@@ -223,6 +229,12 @@ func (r *brokerRun) rememberID(id string) error {
 }
 
 func (r *brokerRun) request(request mobileproto.Request) error {
+	if (request.Type == mobileproto.RequestPresence || request.Type == mobileproto.RequestHeartbeat && request.Presence != nil) && (r.capabilities == nil || !r.capabilities.Presence) {
+		return r.refuse(request.RequestID, mobileproto.ErrorUnsupported, "presence was not negotiated in hello", false)
+	}
+	if request.Type == mobileproto.RequestPaste && (r.capabilities == nil || !r.capabilities.ServerPaste) {
+		return r.refuse(request.RequestID, mobileproto.ErrorUnsupported, "server paste was not negotiated in hello", false)
+	}
 	switch request.Type {
 	case mobileproto.RequestHello, mobileproto.RequestStatus:
 		if request.Type == mobileproto.RequestHello {
@@ -230,8 +242,12 @@ func (r *brokerRun) request(request mobileproto.Request) error {
 				return errors.New("hello was already accepted")
 			}
 			r.handshake = true
+			r.capabilities, r.viewer = request.Capabilities, request.Viewer
 		}
 		caps := mobileproto.DefaultCapabilities()
+		if r.capabilities != nil {
+			caps = mobileproto.SupportedCapabilities()
+		}
 		return r.emit(mobileproto.Response{Version: mobileproto.Version, Type: request.Type, RequestID: request.RequestID, APIInstance: r.instance, Capabilities: &caps}, nil, nil)
 	case mobileproto.RequestSessions:
 		if r.owner != nil && r.owner.rawAttachment != "" {
@@ -263,15 +279,19 @@ func (r *brokerRun) request(request mobileproto.Request) error {
 		r.owner.close()
 		r.owner = nil
 		ownerCtx, ownerCancel := context.WithCancel(r.ctx)
-		bound, stream, binding, err := r.router.Lookup(ownerCtx, request.Target, *request.ExpectedTarget)
+		bound, stream, binding, err := r.router.LookupWithHello(ownerCtx, request.Target, *request.ExpectedTarget, r.capabilities, r.viewer)
 		if err != nil {
 			ownerCancel()
-			return r.refuse(request.RequestID, mobileproto.ErrorIdentityChanged, err.Error(), false)
+			code := mobileproto.ErrorIdentityChanged
+			if errors.Is(err, ErrOwnerNegotiationUnsupported) {
+				code = mobileproto.ErrorUnsupported
+			}
+			return r.refuse(request.RequestID, code, err.Error(), false)
 		}
 		o := &brokerOwner{bound: bound, stream: stream, binding: binding, ctx: ownerCtx, cancel: ownerCancel}
 		r.owner = o
 		go func() { <-o.ctx.Done(); o.close() }()
-		if !brokerCompatibleCapabilities(bound.Capabilities) {
+		if !brokerCompatibleCapabilities(bound.Capabilities) || !brokerRequestedCapabilities(r.capabilities, bound.Capabilities) {
 			o.close()
 			r.owner = nil
 			return r.refuse(request.RequestID, mobileproto.ErrorUnsupported, "owning service capabilities do not match the public mobile v0 contract", false)
@@ -323,6 +343,7 @@ func (r *brokerRun) request(request mobileproto.Request) error {
 }
 
 func brokerCompatibleCapabilities(c mobileproto.Capabilities) bool {
+	c.Presence, c.ResetFreeFrames, c.CoalescedFrames, c.ServerPaste, c.HolderLabels = false, false, false, false, false
 	return c == mobileproto.DefaultCapabilities()
 }
 
@@ -365,7 +386,7 @@ func (r *brokerRun) receive(event brokerEvent) error {
 	async := response.RequestID == ""
 	var request mobileproto.Request
 	if async {
-		if response.Type != mobileproto.ResponseFrame && response.Type != mobileproto.ResponseReset && response.Type != mobileproto.ResponseError {
+		if response.Type != mobileproto.ResponseFrame && response.Type != mobileproto.ResponseReset && response.Type != mobileproto.ResponseError && response.Type != mobileproto.ResponseHolder {
 			return errors.New("unexpected asynchronous owner response")
 		}
 	} else {
@@ -391,6 +412,19 @@ func (r *brokerRun) receive(event brokerEvent) error {
 	}
 	if response.Error != nil {
 		return errors.New("owner response combines success and error")
+	}
+	if response.Holder != nil {
+		empty := response.Holder.Kind == "" && response.Holder.Label == ""
+		if r.capabilities == nil || !r.capabilities.HolderLabels || !empty && mobileproto.ValidateClientHello(nil, &mobileproto.Viewer{Kind: response.Holder.Kind, Label: response.Holder.Label}) != nil {
+			return errors.New("invalid or unnegotiated owner holder label")
+		}
+	}
+	if response.Type == mobileproto.ResponseHolder && (response.Holder == nil || !async) {
+		return errors.New("invalid owner holder event")
+	}
+	if response.ResetFree && (r.capabilities == nil || !r.capabilities.ResetFreeFrames || response.Type != mobileproto.ResponseFrame) ||
+		response.Coalesced && (r.capabilities == nil || !r.capabilities.CoalescedFrames || response.Type != mobileproto.ResponseFrame) {
+		return errors.New("invalid or unnegotiated owner frame flags")
 	}
 	if response.Type == mobileproto.ResponseResolved && (response.AttachmentHandle != "" || response.AttachmentGeneration != 0 || response.Control || response.OperationSequence != 0 || response.OutputSequence != 0 || response.ResetGeneration != 0 || response.Geometry != nil) {
 		return errors.New("resolved owner target unexpectedly carries attachment state")
@@ -516,51 +550,83 @@ func (r *brokerRun) emit(response mobileproto.Response, owner *brokerOwner, done
 		return errors.New("mobile hub: response exceeds line bound")
 	}
 	data = append(data, '\n')
-	if r.outputBytes.Add(int64(len(data))) > brokerOutputBytes {
-		r.outputBytes.Add(-int64(len(data)))
+	r.outMu.Lock()
+	defer r.outMu.Unlock()
+	item := brokerOutput{data: data, owner: owner, done: done, frame: response.Type == mobileproto.ResponseFrame && response.Coalesced,
+		reset: response.ResetGeneration}
+	// Only adjacent repaint frames in the same reset epoch can replace each
+	// other. Acknowledgements, resets and holder events remain FIFO barriers.
+	if item.frame && r.capabilities != nil && r.capabilities.CoalescedFrames && len(r.out) > 0 {
+		last := &r.out[len(r.out)-1]
+		if last.frame && last.owner == owner && last.reset == item.reset {
+			if r.outputBytes.Load()+int64(len(data)-len(last.data)) > brokerOutputBytes {
+				return ErrOwnerOutputOverflow
+			}
+			r.outputBytes.Add(int64(len(data) - len(last.data)))
+			*last = item
+			return nil
+		}
+	}
+	if len(r.out) >= mobileproto.OutboundQueueDepth || r.outputBytes.Load()+int64(len(data)) > brokerOutputBytes {
 		return ErrOwnerOutputOverflow
 	}
+	r.outputBytes.Add(int64(len(data)))
+	r.out = append(r.out, item)
 	select {
-	case r.out <- brokerOutput{data: data, owner: owner, done: done}:
-		return nil
+	case r.outReady <- struct{}{}:
 	default:
-		r.outputBytes.Add(-int64(len(data)))
-		return ErrOwnerOutputOverflow
 	}
+	return nil
+}
+
+func (r *brokerRun) nextOutput() (brokerOutput, bool) {
+	r.outMu.Lock()
+	defer r.outMu.Unlock()
+	if len(r.out) == 0 {
+		return brokerOutput{}, false
+	}
+	item := r.out[0]
+	r.out[0] = brokerOutput{}
+	r.out = r.out[1:]
+	return item, true
 }
 
 func (r *brokerRun) write(output io.Writer) {
 	for {
-		select {
-		case <-r.ctx.Done():
-			return
-		case item := <-r.out:
-			if r.ctx.Err() != nil {
+		item, ok := r.nextOutput()
+		if !ok {
+			select {
+			case <-r.ctx.Done():
 				return
+			case <-r.outReady:
 			}
-			if item.owner != nil {
-				if item.owner.closed.Load() {
-					r.outputBytes.Add(-int64(len(item.data)))
-					continue
-				}
-				if err := item.owner.validate(r.ctx); err != nil {
-					item.owner.close()
-					r.cancel(err)
-					return
-				}
+			continue
+		}
+		if r.ctx.Err() != nil {
+			return
+		}
+		if item.owner != nil {
+			if item.owner.closed.Load() {
+				r.outputBytes.Add(-int64(len(item.data)))
+				continue
 			}
-			n, err := output.Write(item.data)
-			r.outputBytes.Add(-int64(len(item.data)))
-			if err == nil && n != len(item.data) {
-				err = io.ErrShortWrite
-			}
-			if err != nil {
+			if err := item.owner.validate(r.ctx); err != nil {
+				item.owner.close()
 				r.cancel(err)
 				return
 			}
-			if item.done != nil {
-				close(item.done)
-			}
+		}
+		n, err := output.Write(item.data)
+		r.outputBytes.Add(-int64(len(item.data)))
+		if err == nil && n != len(item.data) {
+			err = io.ErrShortWrite
+		}
+		if err != nil {
+			r.cancel(err)
+			return
+		}
+		if item.done != nil {
+			close(item.done)
 		}
 	}
 }
@@ -583,7 +649,8 @@ func brokerGeometry(g mobileproto.Geometry) bool {
 func brokerResponseType(request string) string {
 	return map[string]string{mobileproto.RequestResolve: mobileproto.ResponseResolved, mobileproto.RequestOpen: mobileproto.ResponseOpened,
 		mobileproto.RequestReconnect: mobileproto.ResponseReconnected, mobileproto.RequestControl: mobileproto.ResponseControl,
-		mobileproto.RequestInput: mobileproto.ResponseAccepted, mobileproto.RequestResize: mobileproto.ResponseResized,
+		mobileproto.RequestInput: mobileproto.ResponseAccepted, mobileproto.RequestPaste: mobileproto.ResponseAccepted,
+		mobileproto.RequestPresence: mobileproto.ResponsePresence, mobileproto.RequestResize: mobileproto.ResponseResized,
 		mobileproto.RequestHeartbeat: mobileproto.ResponseHeartbeat, mobileproto.RequestRelease: mobileproto.ResponseReleased,
 		mobileproto.RequestClose: mobileproto.ResponseClosed, mobileproto.RequestHistory: mobileproto.ResponseHistory}[request]
 }
@@ -617,7 +684,9 @@ func decodeBrokerRequest(line []byte) (mobileproto.Request, error) {
 	}
 	allowed := ""
 	switch request.Type {
-	case mobileproto.RequestHello, mobileproto.RequestStatus:
+	case mobileproto.RequestHello:
+		allowed = "capabilities viewer"
+	case mobileproto.RequestStatus:
 	case mobileproto.RequestSessions:
 		allowed = "catalog_query"
 	case mobileproto.RequestResolve:
@@ -628,9 +697,13 @@ func decodeBrokerRequest(line []byte) (mobileproto.Request, error) {
 		allowed = "target expected_target attachment_id previous_attachment_generation last_output_sequence last_reset_generation"
 	case mobileproto.RequestControl, mobileproto.RequestResize:
 		allowed = "attachment_handle operation_sequence columns rows last_output_sequence last_reset_generation"
-	case mobileproto.RequestInput:
+	case mobileproto.RequestPresence:
+		allowed = "attachment_handle operation_sequence presence last_output_sequence last_reset_generation"
+	case mobileproto.RequestInput, mobileproto.RequestPaste:
 		allowed = "attachment_handle operation_sequence data_base64 last_output_sequence last_reset_generation"
-	case mobileproto.RequestHeartbeat, mobileproto.RequestRelease:
+	case mobileproto.RequestHeartbeat:
+		allowed = "attachment_handle operation_sequence presence last_output_sequence last_reset_generation"
+	case mobileproto.RequestRelease:
 		allowed = "attachment_handle operation_sequence last_output_sequence last_reset_generation"
 	case mobileproto.RequestClose:
 		allowed = "attachment_handle"
@@ -648,6 +721,16 @@ func decodeBrokerRequest(line []byte) (mobileproto.Request, error) {
 	}
 	if len(request.Target) > mobileproto.MaxTargetBytes || len(request.TargetHandle) > mobileproto.MaxTargetBytes || len(request.AttachmentHandle) > mobileproto.MaxTargetBytes || len(request.AttachmentID) > mobileproto.MaxAttachmentIDBytes {
 		return request, errors.New("target or attachment exceeds protocol bound")
+	}
+	if request.Type == mobileproto.RequestHello {
+		if err := mobileproto.ValidateClientHello(request.Capabilities, request.Viewer); err != nil {
+			return request, err
+		}
+	}
+	if request.Type == mobileproto.RequestPresence || request.Type == mobileproto.RequestHeartbeat && request.Presence != nil {
+		if err := mobileproto.ValidatePresence(request.Presence); err != nil {
+			return request, err
+		}
 	}
 	if query := request.CatalogQuery; query != nil {
 		if len(query.Search) > mobileproto.MaxCatalogQueryBytes || len(query.Sort) > mobileproto.MaxCatalogQueryBytes {
@@ -676,7 +759,7 @@ func decodeBrokerRequest(line []byte) (mobileproto.Request, error) {
 	if request.Type == mobileproto.RequestReconnect && (request.PreviousAttachmentGeneration == 0 || request.PreviousAttachmentGeneration == ^uint64(0)) {
 		return request, errors.New("invalid previous attachment generation")
 	}
-	if request.Type == mobileproto.RequestInput {
+	if request.Type == mobileproto.RequestInput || request.Type == mobileproto.RequestPaste {
 		if len(request.DataBase64) > base64.StdEncoding.EncodedLen(mobileproto.MaxInputBytes) {
 			return request, errors.New("input exceeds protocol bound")
 		}

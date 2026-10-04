@@ -54,6 +54,8 @@ Every field is optional except `name` and `short` (and `id`, which defaults to t
 | `short` | string | Compact label for settings rows and the agent chip. |
 | `command` | string | The executable to launch. **A family with no command is detection-only**: Sidecar can recognise it running in a pane and never offers to start it. |
 | `launch_args` | array | Argv entries between the command and everything else, for a provider whose bare command is not the agent. Only `kiro` needs one (`kiro-cli chat`). |
+| `help_supported_args` | array | Optional global argv entries added to catalog launch and resume when the installed executable advertises them in `--help`. Probes run before provider start, are bounded, and cache successful results by executable identity. A failed probe refuses the launch; an older executable that does not advertise the flag keeps its previous argv. |
+| `help_arg_conflicts` | table | Lists caller options incompatible with an optional argument. An explicit conflicting option, including `--option=value`, suppresses that optional argument. |
 | `skip_permissions_arg` | string | One argv entry, appended when you turn on auto-approve. Leave it out when the provider has no such flag. |
 | `aliases` | array | Other identifiers naming this family: process spellings Sidecar may see in a pane, and a conversation adapter id that differs from the family id. |
 | `adapter_id` | string | The conversation-history adapter's registered id, when it differs from `id`. |
@@ -97,3 +99,7 @@ The `PATH` lookup runs once per process, in the background at startup. The CLI d
 
 - `internal/agentcatalog/families/README.md`: the same schema from the maintainer's side, with the rules a bundled file has to follow.
 - [Adding new agent CLIs](../guides/active/adding-new-agent-clis.md): the full seven-subsystem guide, of which this catalog is step one.
+
+## Managed Codex sessions
+
+Catalog launches and resumes add `--no-daemon` when the installed Codex CLI supports it. This gives each Sidecar shell its own execution environment instead of attaching to a shared daemon that retained another shell's identity. User-authored `.sidecar-agent-start` and `plugins.workspace.agentStart` commands stay explicit; include `--no-daemon` in those commands when using a Codex version that supports it. Legacy remote command strings keep their existing behavior; remote `sidecar agent start` resolves the capability on the owning host.

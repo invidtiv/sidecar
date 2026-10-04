@@ -26,6 +26,7 @@ type brokerTestOwner struct {
 	valid   atomic.Bool
 	streams []*brokerTestStream
 	hold    string
+	hellos  []mobileproto.Request
 }
 
 func newBrokerTestOwner(name string) *brokerTestOwner {
@@ -43,8 +44,9 @@ func (o *brokerTestOwner) endpoint(host string) OwnerEndpoint {
 				}
 				return nil
 			},
-			Start: func(context.Context) (LineStream, mobileproto.Response, error) {
+			Start: func(ctx context.Context) (LineStream, mobileproto.Response, error) {
 				o.mu.Lock()
+				o.hellos = append(o.hellos, ownerHelloRequest(ctx))
 				defer o.mu.Unlock()
 				s := &brokerTestStream{raw: o.raw, lines: make(chan []byte, 64), done: make(chan struct{}), hold: o.hold, held: make(chan struct{}, 1), release: make(chan struct{})}
 				o.streams = append(o.streams, s)
@@ -176,7 +178,9 @@ func (s *brokerTestStream) WriteLine(line []byte) error {
 		s.output++
 		s.push(s.frame("owner-resized"))
 		return nil
-	case mobileproto.RequestInput:
+	case mobileproto.RequestPresence:
+		response.Control = s.control
+	case mobileproto.RequestInput, mobileproto.RequestPaste:
 		response.Control = s.control
 		s.push(response)
 		s.output++
@@ -237,7 +241,7 @@ func brokerTestRouter(t *testing.T, owners ...*brokerTestOwner) *CatalogRouter {
 	}
 	return router
 }
-func newBrokerRig(t *testing.T, router *CatalogRouter) *brokerRig {
+func newBrokerRig(t *testing.T, router *CatalogRouter, helloOptions ...mobileproto.Request) *brokerRig {
 	t.Helper()
 	input, in := io.Pipe()
 	out, output := io.Pipe()
@@ -266,7 +270,11 @@ func newBrokerRig(t *testing.T, router *CatalogRouter) *brokerRig {
 		}
 	}()
 	t.Cleanup(func() { cancel(); _ = in.Close() })
-	r.send(mobileproto.Request{Type: "hello", RequestID: "hub-owner-hello"})
+	hello := mobileproto.Request{Type: "hello", RequestID: "hub-owner-hello"}
+	if len(helloOptions) > 0 {
+		hello.Capabilities, hello.Viewer = helloOptions[0].Capabilities, helloOptions[0].Viewer
+	}
+	r.send(hello)
 	r.hello = r.next("hello")
 	return r
 }
