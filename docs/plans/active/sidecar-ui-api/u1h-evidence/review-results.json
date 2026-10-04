@@ -1,0 +1,121 @@
+{
+  "sidecar_ui_commit": "fdad8665c3f846591d743b91ac01ca4fb3ae6253",
+  "handoffs": [
+    {
+      "to": "ios",
+      "ms": 10,
+      "geometry": "73x19"
+    },
+    {
+      "to": "tui",
+      "ms": 228,
+      "geometry": "91x39"
+    },
+    {
+      "to": "browser",
+      "ms": 813,
+      "bytes": 3,
+      "geometry": "121x41"
+    },
+    {
+      "to": "ios",
+      "ms": 65,
+      "bytes": 3,
+      "geometry": "73x19"
+    },
+    {
+      "to": "tui",
+      "ms": 149,
+      "bytes": 3,
+      "geometry": "91x39"
+    },
+    {
+      "to": "browser",
+      "ms": 195,
+      "bytes": 3,
+      "geometry": "121x41"
+    },
+    {
+      "to": "ios",
+      "ms": 35,
+      "bytes": 3,
+      "geometry": "73x19"
+    },
+    {
+      "to": "tui",
+      "ms": 147,
+      "bytes": 3,
+      "geometry": "91x39"
+    },
+    {
+      "to": "browser",
+      "ms": 206,
+      "bytes": 3,
+      "geometry": "121x41"
+    },
+    {
+      "to": "ios",
+      "ms": 37,
+      "bytes": 3,
+      "geometry": "73x19"
+    },
+    {
+      "to": "tui",
+      "ms": 267,
+      "bytes": 3,
+      "geometry": "91x39"
+    },
+    {
+      "to": "browser",
+      "ms": 68,
+      "bytes": 3,
+      "geometry": "121x41"
+    },
+    {
+      "to": "ios",
+      "ms": 35,
+      "bytes": 3,
+      "geometry": "73x19"
+    },
+    {
+      "to": "tui",
+      "ms": 147,
+      "bytes": 3,
+      "geometry": "91x39"
+    }
+  ],
+  "quiet_windows": [
+    {
+      "ms": 6672,
+      "resize_window_calls": 0
+    }
+  ],
+  "holder_checks": 18,
+  "tui_geometry": "91x39",
+  "browser_geometry": "121x41",
+  "browser_blur_ms": 7,
+  "ios_blur_ms": 50,
+  "expected_bytes": 40,
+  "received_bytes": 40,
+  "input_exact": true,
+  "idle_preemption": {
+    "abandoned_ms": 7990,
+    "active_to_holder_ms": 179,
+    "browser_label": "Browser"
+  },
+  "browser_hint_checks": 1,
+  "focused_input_takeovers": {
+    "count": 2,
+    "ms": 1634
+  },
+  "resize_hook_positive_control": true,
+  "browser_pageerrors": [
+    "Cannot read properties of undefined (reading 'setCellFromCodepoint')",
+    "Cannot read properties of undefined (reading 'loadCell')",
+    "Cannot read properties of undefined (reading 'loadCell')",
+    "Cannot read properties of undefined (reading 'loadCell')",
+    "Cannot read properties of undefined (reading 'loadCell')",
+    "Cannot read properties of undefined (reading 'loadCell')",
+    "Cannot read properties of undefined (reading 'loadCell')"
+  ]
+}
