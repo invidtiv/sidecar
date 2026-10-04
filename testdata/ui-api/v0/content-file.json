@@ -1,0 +1,9 @@
+{
+  "kind": "file",
+  "operation": "document",
+  "workspace": "fixture-project",
+  "display": "README.md",
+  "path": "/workspace/fixture/README.md",
+  "revision": "fixture-file-v1",
+  "content": "# Fixture project\n\nA Markdown pane.\n"
+}

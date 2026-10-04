@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/marcus/sidecar/internal/contentservice"
 	"github.com/marcus/sidecar/internal/mobile"
 	"github.com/marcus/sidecar/internal/mobileproto"
 	"github.com/marcus/sidecar/internal/tty"
@@ -17,6 +18,8 @@ import (
 // FixtureBackend serves recorded resource data through the real server and
 // runs the real terminal protocol Service with a synthetic capture adapter.
 type FixtureBackend struct {
+	content  map[string]contentservice.ReadResult
+	tree     contentservice.TreeResult
 	catalog  mobileproto.CatalogSnapshot
 	Status   Status
 	targets  map[string]mobileproto.TargetIdentity
@@ -73,6 +76,9 @@ func LoadFixtures(dir string) (*FixtureBackend, error) {
 	}
 	if _, err := backend.Sessions(context.Background(), backend.catalog.Query); err != nil {
 		return nil, fmt.Errorf("validate sessions.json: %w", err)
+	}
+	if err := backend.loadContent(dir); err != nil {
+		return nil, err
 	}
 	return backend, nil
 }
