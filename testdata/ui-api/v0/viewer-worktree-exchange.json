@@ -1,0 +1,102 @@
+[
+  {
+    "type": "hello",
+    "seq": 1,
+    "api_version": 0,
+    "api_instance": "api_fixture",
+    "server_version": "fixture",
+    "capabilities": [
+      "catalog",
+      "attention",
+      "terminals",
+      "workspace",
+      "content",
+      "uiRequestRelayV1",
+      "shutdown"
+    ]
+  },
+  {
+    "viewer": {
+      "id": "api-viewer-fixture",
+      "capability": "uiRequestRelayV1"
+    },
+    "type": "viewer",
+    "seq": 2,
+    "api_version": 0
+  },
+  {
+    "viewer_id": "api-viewer-fixture",
+    "focused": true,
+    "visible": true,
+    "project": "fixture-project",
+    "workspace": "/workspace/fixture:worktree:/workspace/feature",
+    "session": "fixture-echo",
+    "focused_pane": 1,
+    "viewport": {
+      "width": 1200,
+      "height": 800
+    }
+  },
+  {
+    "holder": true
+  },
+  {
+    "ui_request": {
+      "id": "fixture-request",
+      "action": "open",
+      "project": "fixture-project",
+      "workspace": "/workspace/fixture:worktree:/workspace/feature",
+      "request": {
+        "viewer": "api-viewer-fixture",
+        "version": 1,
+        "id": "fixture-request",
+        "createdAt": "2026-10-03T00:00:00Z",
+        "ttlMs": 15000,
+        "origin": {
+          "tmuxSession": "fixture-echo",
+          "namespace": "",
+          "projectKey": "",
+          "workDir": "/workspace/feature",
+          "pid": 0
+        },
+        "action": "open",
+        "target": {
+          "kind": "file",
+          "value": "README.md",
+          "line": 0
+        },
+        "options": {}
+      },
+      "document": {
+        "layout": {
+          "split": {
+            "axis": "cols",
+            "ratio": 50,
+            "a": {
+              "kind": "terminal",
+              "session": "fixture-echo"
+            },
+            "b": {
+              "kind": "doc",
+              "tabs": [
+                {
+                  "path": "README.md"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "etag": "\"synthetic-layout-revision\"",
+      "expires_at": "2026-10-03T00:00:15Z"
+    },
+    "type": "ui_request",
+    "seq": 3,
+    "api_version": 0
+  },
+  {
+    "viewer_id": "api-viewer-fixture",
+    "id": "fixture-request",
+    "status": "opened"
+  }
+]
