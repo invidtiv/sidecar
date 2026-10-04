@@ -67,10 +67,10 @@ func apiCommand() *Command {
 		Run:       runAPIOpen,
 	}
 	pair := &Command{
-		Name: "pair", Summary: "Manage paired origins and browser sessions", Usage: "sidecar api pair --origin URL [--scopes LIST] | --list | --revoke URL | --revoke-sessions [--origin URL] [--json]",
-		Long: "Register another web origin (an app embedding Sidecar components) and print its bearer token, which is shown only once and stored only as a hash in $STATE/api/origins.json. Pairing an origin again rotates its token and closes the terminals and event streams the old token opened. --scopes takes a comma-separated list, full by default; content:read restricts access to content and layout preferences. --list shows registrations without tokens; --revoke removes one. " +
+		Name: "pair", Summary: "Manage paired origins and browser sessions", Usage: "sidecar api pair --origin URL [--scope SCOPE] [--scopes LIST] | --list | --revoke URL | --revoke-sessions [--origin URL] [--json]",
+		Long: "Register another web origin (an app embedding Sidecar components) and print its bearer token, which is shown only once and stored only as a hash in $STATE/api/origins.json. Pairing an origin again rotates its token and closes the terminals and event streams the old token opened. --scope selects a paired origin scope, repeatable; --scopes accepts a comma-separated list. Both accept full, workspace:write and content:read and may be combined. Full is the default. --list shows registrations without tokens; --revoke removes one. " +
 			"--revoke-sessions signs out every browser paired with `sidecar api open` without restarting the server: their session tokens get 401 from then on and their open terminals close with 4401. With --origin it signs out only the browsers on that origin. Revocation persists across API restarts. Paired origins keep their tokens; --revoke URL also revokes browser sessions bound to that exact origin.",
-		Flags: []Flag{{Name: "--origin", Arg: "URL", Summary: "Pair this origin (scheme://host[:port]); with --revoke-sessions, the origin to sign out"}, {Name: "--scopes", Arg: "LIST", Summary: "Comma-separated scopes for a new pairing (full or content:read)"}, {Name: "--list", Summary: "List paired origins", Bool: true}, {Name: "--revoke", Arg: "URL", Summary: "Revoke a paired origin"},
+		Flags: []Flag{{Name: "--origin", Arg: "URL", Summary: "Pair this origin (scheme://host[:port]); with --revoke-sessions, the origin to sign out"}, {Name: "--scope", Arg: "SCOPE", Summary: "Paired origin scope, repeatable (default full)"}, {Name: "--scopes", Arg: "LIST", Summary: "Comma-separated scopes (full, workspace:write or content:read)"}, {Name: "--list", Summary: "List paired origins", Bool: true}, {Name: "--revoke", Arg: "URL", Summary: "Revoke a paired origin"},
 			{Name: "--revoke-sessions", Summary: "Sign out browser sessions from `sidecar api open`", Bool: true}, jsonFlag, help},
 		ExitCodes: []ExitCode{{Code: 0, Summary: "success"}, {Code: 1, Summary: "no server running or the server refused"}, {Code: 2, Summary: "usage error"}},
 		Examples: []Example{{Command: "sidecar api pair --origin http://localhost:5173"}, {Command: "sidecar api pair --list --json"}, {Command: "sidecar api pair --revoke http://localhost:5173"},
@@ -106,20 +106,26 @@ func runAPIRoot(env Env, args []string) int {
 }
 
 // apiFlags is a small parser for the api verbs: boolean flags and
-// single-valued flags given as `--name value` or `--name=value`.
+// value flags given as `--name value` or `--name=value`.
 type apiFlags struct {
-	bools  map[string]bool
-	values map[string]string
+	bools    map[string]bool
+	values   map[string]string
+	repeated map[string][]string
 }
 
-func parseAPIFlags(args []string, boolNames, valueNames []string) (apiFlags, error) {
-	flags := apiFlags{bools: map[string]bool{}, values: map[string]string{}}
+func parseAPIFlags(args []string, boolNames, valueNames []string, repeatNames ...string) (apiFlags, error) {
+	flags := apiFlags{bools: map[string]bool{}, values: map[string]string{}, repeated: map[string][]string{}}
 	isBool := map[string]bool{}
 	for _, name := range boolNames {
 		isBool[name] = true
 	}
 	isValue := map[string]bool{}
 	for _, name := range valueNames {
+		isValue[name] = true
+	}
+	isRepeated := map[string]bool{}
+	for _, name := range repeatNames {
+		isRepeated[name] = true
 		isValue[name] = true
 	}
 	for i := 0; i < len(args); i++ {
@@ -134,6 +140,10 @@ func parseAPIFlags(args []string, boolNames, valueNames []string) (apiFlags, err
 				}
 				i++
 				value = args[i]
+			}
+			if isRepeated[name] {
+				flags.repeated[name] = append(flags.repeated[name], value)
+				continue
 			}
 			if _, seen := flags.values[name]; seen {
 				return flags, fmt.Errorf("%s was given more than once", name)
@@ -377,7 +387,7 @@ func runAPIPair(env Env, args []string) int {
 		_, _ = fmt.Fprint(env.Stdout, RenderHelp(cmd))
 		return 0
 	}
-	flags, err := parseAPIFlags(args, []string{"--list", "--json", "--revoke-sessions"}, []string{"--origin", "--revoke", "--scopes"})
+	flags, err := parseAPIFlags(args, []string{"--list", "--json", "--revoke-sessions"}, []string{"--origin", "--revoke", "--scopes"}, "--scope")
 	if err != nil {
 		cliErrf(env.Stderr, "%v\n\n%s", err, RenderHelp(cmd))
 		return 2
@@ -393,6 +403,10 @@ func runAPIPair(env Env, args []string) int {
 		if on {
 			modes++
 		}
+	}
+	if len(flags.repeated["--scope"]) > 0 && !pairing {
+		cliErrln(env.Stderr, "--scope requires origin pairing")
+		return 2
 	}
 	if modes != 1 {
 		cliErrf(env.Stderr, "give exactly one of --origin, --list, --revoke or --revoke-sessions\n\n%s", RenderHelp(cmd))
@@ -426,7 +440,7 @@ func runAPIPair(env Env, args []string) int {
 		_, _ = fmt.Fprintf(env.Stdout, "Signed out %d browser session(s) on %s and closed %d terminal(s). Pair again with `sidecar api open`.\n",
 			revocation.Revoked, scope, revocation.TerminalsClosed)
 	case pairing:
-		var scopes []string
+		scopes := append([]string(nil), flags.repeated["--scope"]...)
 		if raw, ok := flags.values["--scopes"]; ok {
 			for _, scope := range strings.Split(raw, ",") {
 				scopes = append(scopes, strings.TrimSpace(scope))

@@ -1,0 +1,22 @@
+{
+  "type": "workspace",
+  "seq": 4,
+  "api_version": 0,
+  "workspace": {
+    "projects": {
+      "projects": [
+        {
+          "name": "Fixture project",
+          "path": "/workspace/fixture",
+          "key": "fixture-project"
+        }
+      ],
+      "aligned": false
+    },
+    "workspaces": [
+      {
+        "project": "fixture-project"
+      }
+    ]
+  }
+}

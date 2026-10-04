@@ -218,8 +218,10 @@ func normalizeScopes(scopes []string) ([]string, error) {
 	seen := map[string]bool{}
 	out := []string{}
 	for _, scope := range scopes {
-		if scope != ScopeFull && scope != ScopeContentRead {
-			return nil, fmt.Errorf("scope %q is not available; use full or content:read", scope)
+		switch scope {
+		case ScopeFull, ScopeWorkspaceWrite, ScopeContentRead:
+		default:
+			return nil, fmt.Errorf("scope %q is not available", scope)
 		}
 		if !seen[scope] {
 			out = append(out, scope)
@@ -229,7 +231,18 @@ func normalizeScopes(scopes []string) ([]string, error) {
 	if seen[ScopeFull] {
 		return []string{ScopeFull}, nil
 	}
+	sort.Strings(out)
 	return out, nil
+}
+func (s *originStore) lookupCredential(origin, hash string) (OriginRecord, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, r := range s.records {
+		if r.Origin == origin && r.TokenSHA256 == hash {
+			return r, true
+		}
+	}
+	return OriginRecord{}, false
 }
 
 func (s *originStore) lookup(origin string) (OriginRecord, bool) {

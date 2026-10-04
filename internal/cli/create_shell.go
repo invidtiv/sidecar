@@ -14,6 +14,7 @@ import (
 	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspaceops"
+	"github.com/marcus/sidecar/internal/workspacewire"
 )
 
 func runCreateShell(env Env, args []string) int {
@@ -523,23 +524,9 @@ func runCreateShellSplit(env Env, dest openDestination, flags createCommonFlags,
 	return 3
 }
 
-type createShellInfo struct {
-	DisplayName string `json:"displayName"`
-	Session     string `json:"session"`
-	WorkDir     string `json:"workDir"`
-}
+type createShellInfo = workspacewire.ShellInfo
 
-type createShellResult struct {
-	AgentStart *createAgentStartResult `json:"agent_start,omitempty"`
-	Shell      createShellInfo         `json:"shell"`
-	// Project is the registered project slug the shell belongs to: the value
-	// `--project` on every other verb accepts, so a caller holding this result
-	// can address what it created without guessing the selector.
-	Project   string `json:"project,omitempty"`
-	Acked     bool   `json:"acked"`
-	Surface   string `json:"surface,omitempty"`
-	Placement string `json:"placement"`
-}
+type createShellResult = workspacewire.ShellCreated
 
 func emitShellCreateError(env Env, jsonOutput bool, err error) int {
 	var named *workspaceops.ShellCreateError

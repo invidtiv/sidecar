@@ -47,6 +47,7 @@ func agentCommand() *Command {
 			"With one, the prompt goes to the shell named by SIDECAR_SHELL — unless that one\n" +
 			"argument names a managed target, which is read as a missing prompt rather than as\n" +
 			"a prompt that happens to be a target's name. Empty text is a usage error too.\n\n" +
+			"Use -- before TARGET TEXT to send literal prompt text beginning with a dash.\n\n" +
 			"Nothing is written to a target that is blocked, unidentified, stale, dead, or\n" +
 			"occupied by a replacement process. The text goes through the same ordered,\n" +
 			"bracketed-paste-aware path the embedded terminal uses, and the submission key is\n" +
@@ -233,6 +234,9 @@ func parseAgentArgs(env Env, args []string, help string, allowed agentOpt) (agen
 		arg := args[i]
 		name, _, _ := strings.Cut(arg, "=")
 		switch {
+		case arg == "--":
+			f.positional = append(f.positional, args[i+1:]...)
+			i = len(args)
 		case isHelp(arg):
 			_, _ = fmt.Fprint(env.Stdout, help)
 			return f, 0

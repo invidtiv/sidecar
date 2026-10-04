@@ -138,6 +138,7 @@ func (c Client) PromptArgs(session, text string, wait bool, until []agentcontrol
 		}
 		args = appendUntil(args, until)
 	}
+	args = append(args, "--")
 	args = appendTarget(args, session)
 	return append(args, text)
 }

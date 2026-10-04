@@ -508,6 +508,8 @@ With one, the prompt goes to the shell named by SIDECAR_SHELL — unless that on
 argument names a managed target, which is read as a missing prompt rather than as
 a prompt that happens to be a target's name. Empty text is a usage error too.
 
+Use -- before TARGET TEXT to send literal prompt text beginning with a dash.
+
 Nothing is written to a target that is blocked, unidentified, stale, dead, or
 occupied by a replacement process. The text goes through the same ordered,
 bracketed-paste-aware path the embedded terminal uses, and the submission key is
@@ -948,16 +950,17 @@ sidecar api open --print
 
 Manage paired origins and browser sessions
 
-Register another web origin (an app embedding Sidecar components) and print its bearer token, which is shown only once and stored only as a hash in $STATE/api/origins.json. Pairing an origin again rotates its token and closes the terminals and event streams the old token opened. --scopes takes a comma-separated list, full by default; content:read restricts access to content and layout preferences. --list shows registrations without tokens; --revoke removes one. --revoke-sessions signs out every browser paired with `sidecar api open` without restarting the server: their session tokens get 401 from then on and their open terminals close with 4401. With --origin it signs out only the browsers on that origin. Revocation persists across API restarts. Paired origins keep their tokens; --revoke URL also revokes browser sessions bound to that exact origin.
+Register another web origin (an app embedding Sidecar components) and print its bearer token, which is shown only once and stored only as a hash in $STATE/api/origins.json. Pairing an origin again rotates its token and closes the terminals and event streams the old token opened. --scope selects a paired origin scope, repeatable; --scopes accepts a comma-separated list. Both accept full, workspace:write and content:read and may be combined. Full is the default. --list shows registrations without tokens; --revoke removes one. --revoke-sessions signs out every browser paired with `sidecar api open` without restarting the server: their session tokens get 401 from then on and their open terminals close with 4401. With --origin it signs out only the browsers on that origin. Revocation persists across API restarts. Paired origins keep their tokens; --revoke URL also revokes browser sessions bound to that exact origin.
 
 ```
-Usage: sidecar api pair --origin URL [--scopes LIST] | --list | --revoke URL | --revoke-sessions [--origin URL] [--json]
+Usage: sidecar api pair --origin URL [--scope SCOPE] [--scopes LIST] | --list | --revoke URL | --revoke-sessions [--origin URL] [--json]
 ```
 
 **Options:**
 
 - `--origin URL`: Pair this origin (scheme://host[:port]); with --revoke-sessions, the origin to sign out
-- `--scopes LIST`: Comma-separated scopes for a new pairing (full or content:read)
+- `--scope SCOPE`: Paired origin scope, repeatable (default full)
+- `--scopes LIST`: Comma-separated scopes (full, workspace:write or content:read)
 - `--list`: List paired origins
 - `--revoke URL`: Revoke a paired origin
 - `--revoke-sessions`: Sign out browser sessions from `sidecar api open`
@@ -4060,6 +4063,49 @@ sidecar terminal-links list --json
 sidecar terminal-links list --describe --json
 ```
 
+## `sidecar workspace`
+
+Query project workspaces
+
+```
+Usage: sidecar workspace list
+```
+
+### `sidecar workspace list`
+
+Read a project's ordered workspace and recoverable shells
+
+Use the configured owning project key or path. The JSON resource contains project metadata, the shared ordered catalog and all durable shell records, including recoverable forgotten shells. Filters apply to the catalog; shell records remain complete.
+
+```
+Usage: sidecar workspace list --project NAME [--host ID] [--sort MODE] [--search TEXT] [--json]
+```
+
+**Options:**
+
+- `--project NAME`: Configured owning project (required)
+- `--host ID`: Owning remote host
+- `--sort MODE`: activity, project, recent or name
+- `--search TEXT`: Shared workspace search
+- `--provider ID`: Filter provider (repeatable)
+- `--state STATE`: Filter state (repeatable)
+- `--show-idle-sessions BOOL`: Include idle worktrees
+- `--json`: Write the shared workspace resource
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: success
+- `1`: workspace or owning host unavailable
+- `2`: usage or query error
+
+**Examples:**
+
+```bash
+sidecar workspace list --project sidecar --json
+sidecar workspace list --project sidecar --sort name --search review
+```
+
 ## `sidecar worktree`
 
 Manage Sidecar-visible git worktrees
@@ -4089,6 +4135,9 @@ A real deletion always requires --yes. For a plan-first deletion, use the return
 absolute path as TARGET and pass its branch and headOid back with --expect-branch
 and --expect-head-oid. Both expectations are required together, so a branch rename
 at the same commit is refused rather than mistaken for the confirmed checkout.
+Pass deleteState back with --expect-delete-state to also fence the checkout incarnation
+and every file being removed, including ignored work. Unverifiable plans have an empty
+deleteState and cannot be used for state-fenced deletion.
 
 Deleting closes the Sidecar worktree session and any managed shells rooted in the
 worktree before removing its directory, then forgets those shell records. A dirty
@@ -4114,6 +4163,7 @@ Usage: sidecar worktree delete <name|branch|path> [--project NAME] [--plan|--dry
 - `--delete-remote-branch`: Also delete the branch from origin when it exists
 - `--expect-branch BRANCH`: Refuse if the absolute target no longer checks out this planned branch
 - `--expect-head-oid OID`: Refuse if HEAD differs from a previously returned plan
+- `--expect-delete-state HASH`: Refuse if checkout incarnation or contents differ from the deleteState in a plan
 - `--json`: Write one structured plan or result object to stdout
 - `-h, --help`: Show this help
 

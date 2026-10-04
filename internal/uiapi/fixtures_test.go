@@ -17,10 +17,14 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/marcus/sidecar/internal/agentcontrol"
 	"github.com/marcus/sidecar/internal/contentservice"
 	"github.com/marcus/sidecar/internal/mobile"
 	"github.com/marcus/sidecar/internal/mobileproto"
+	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/workspaceops"
+	"github.com/marcus/sidecar/internal/workspacewire"
 )
 
 func fixtureDir() string { return filepath.Join("..", "..", "testdata", "ui-api", "v0") }
@@ -35,7 +39,7 @@ func TestUIAPIFixtureCorpus(t *testing.T) {
 			map[string]any{"method": "POST", "path": "/api/v0/pairing/session-proof", "listener": "browser", "origin": "http://127.0.0.1:7861", "request": SessionProofChallengeRequest{RegistrationID: browserRegistrationID("http://127.0.0.1:7861", fixtureBrowserPublicKey())}, "response": SessionProofChallenge{Nonce: "synthetic-nonce", Timestamp: now.UnixMilli(), ExpiresAt: now.Add(pairingCodeTTL)}},
 			map[string]any{"method": "POST", "path": "/api/v0/pairing/session-proof/verify", "listener": "browser", "origin": "http://127.0.0.1:7861", "request": SessionProofRequest{RegistrationID: browserRegistrationID("http://127.0.0.1:7861", fixtureBrowserPublicKey()), Nonce: "synthetic-nonce", Timestamp: now.UnixMilli(), Signature: fixtureBrowserSignature}, "response": SessionToken{Token: "synthetic-memory-token", ExpiresAt: now.Add(browserBearerTTL)}},
 		},
-		"hello.json":         Hello{APIVersion: 0, APIInstance: "api_fixture", ServerVersion: "fixture", Capabilities: []string{"sessions", "status", "terminal", "ws_tickets", "events", "content", "layouts"}, Terminal: TerminalProtocol{Protocol: "mobile", Version: 0}},
+		"hello.json":         Hello{APIVersion: 0, APIInstance: "api_fixture", ServerVersion: "fixture", Capabilities: []string{"sessions", "status", "terminal", "ws_tickets", "events", "projects", "workspace", "workspace_operations", "content", "layouts"}, Terminal: TerminalProtocol{Protocol: "mobile", Version: 0}},
 		"sessions.json":      catalog,
 		"content-file.json":  contentservice.ReadResult{Kind: "file", Operation: "document", Workspace: "fixture-project", Display: "README.md", Path: "/workspace/fixture/README.md", Revision: "fixture-file-v1", Content: "# Fixture project\n\nA Markdown pane.\n"},
 		"content-issue.json": contentservice.ReadResult{Kind: "issue", Operation: "card", Workspace: "fixture-project", Target: "td-123456", Revision: "fixture-issue-v1", Issue: &contentservice.IssueDTO{ID: "td-123456", Title: "Fixture issue", Status: "open"}},
@@ -48,6 +52,33 @@ func TestUIAPIFixtureCorpus(t *testing.T) {
 		"error.json":         ErrorBody{Error: ErrorDetail{Code: CodeUnauthenticated, Message: "Pair this browser with sidecar api open."}},
 		"pairing.json":       []any{map[string]any{"method": "POST", "path": "/api/v0/pairing/codes", "listener": "local", "request": PairingCodeRequest{Next: "/s/fixture"}, "response": PairingCode{Code: "synthetic-code", URL: "http://127.0.0.1:7861/pair#code=synthetic-code&next=%2Fs%2Ffixture", ExpiresAt: now.Add(time.Minute)}}, map[string]any{"method": "POST", "path": "/api/v0/pairing/exchange", "listener": "browser", "origin": "http://127.0.0.1:7861", "request": PairingExchangeRequest{Code: "synthetic-code", Next: "/s/fixture", PublicKey: fixtureBrowserPublicKey()}, "response": PairingExchange{RegistrationID: browserRegistrationID("http://127.0.0.1:7861", fixtureBrowserPublicKey()), Token: "synthetic-memory-token", ExpiresAt: now.Add(browserBearerTTL), Next: "/s/fixture"}}},
 	}
+	project := workspacewire.Project{Key: "fixture-project", Name: "Fixture project", Path: "/workspace/fixture"}
+	values["projects.json"] = workspacewire.Projects{Projects: []workspacewire.Project{project}}
+	values["workspace.json"] = workspacewire.Workspace{Project: project, Catalog: catalog, Shells: []workspacewire.ShellRecord{{Shell: "fixture-echo", Name: row.DisplayName, WorkDir: project.Path, Status: "live"}, {Shell: "fixture-forgotten", Name: "Recoverable shell", Status: "forgotten", DeletedAt: &now}}}
+	values["workspace-event.json"] = EventMessage{Type: "workspace", Seq: 4, Workspace: &workspacewire.WorkspaceEvent{Projects: workspacewire.Projects{Projects: []workspacewire.Project{project}}, Workspaces: []workspacewire.WorkspaceRef{{Project: project.Key}}}}
+	plan := workspaceops.WorktreePlan{SourceWorktree: project.Path, MainWorktree: project.Path, SourceRef: "refs/heads/main", SourceOID: strings.Repeat("a", 40), Branch: "feature", Path: "/workspace/feature", DisplayName: "Feature", RemotePolicy: "local"}
+	values["workspace-operations.json"] = []any{
+		map[string]any{"path": "/api/v0/projects/fixture-project/shells/create", "request": WorkspaceCommand{Name: "New shell"}, "response": workspacewire.ShellCreated{Project: project.Key, Shell: workspacewire.ShellInfo{DisplayName: "New shell", Session: "fixture-new", WorkDir: project.Path}, Placement: "workspace"}},
+		map[string]any{"path": "/api/v0/projects/fixture-project/shells/rename", "request": WorkspaceCommand{Target: "fixture-new", Name: "Review"}, "response": shellstate.RenameResult{Shell: "fixture-new", OldName: "New shell", Name: "Review", Changed: true}},
+		map[string]any{"path": "/api/v0/projects/fixture-project/shells/delete", "request": WorkspaceCommand{Target: "fixture-new"}, "response": workspacewire.ShellDeleted{Shell: "fixture-new", Name: "Review", Status: "deleted", Deleted: true}},
+		map[string]any{"path": "/api/v0/projects/fixture-project/shells/restore", "request": WorkspaceCommand{Target: "fixture-new"}, "response": workspacewire.ShellRestored{Shell: "fixture-new", Name: "Review", Status: "restored"}},
+		map[string]any{"path": "/api/v0/projects/fixture-project/worktrees/plan", "request": WorkspaceCommand{Name: "Feature", Base: "main"}, "response": plan},
+		map[string]any{"path": "/api/v0/projects/fixture-project/worktrees/create", "request": WorkspaceCommand{Name: "Feature", Base: "main", Confirm: true, ExpectSourceOID: plan.SourceOID}, "response": workspacewire.WorktreeCreated{Project: project.Key, Path: plan.Path, Branch: plan.Branch, Shell: workspacewire.ShellInfo{DisplayName: plan.DisplayName, Session: "fixture-worktree", WorkDir: plan.Path}, Setup: []workspacewire.SetupOutcome{}, Placement: "workspace"}},
+	}
+
+	deletion := workspacewire.WorktreeDeletePlan{Project: project.Key, Name: plan.DisplayName, Path: plan.Path, Branch: plan.Branch, HeadOID: plan.SourceOID, DeleteState: strings.Repeat("b", 64), BranchOID: plan.SourceOID, Dirtiness: "dirty"}
+	target := agentcontrol.Target{Host: "local", Project: project.Key, Session: "fixture-new", PaneID: "%1"}
+	state := agentcontrol.AgentState{Kind: "codex", Status: agentcontrol.StatusIdle, Freshness: "fresh", InteractiveReady: true, CapturedAt: now}
+	exchanges := values["workspace-operations.json"].([]any)
+	values["workspace-operations.json"] = append(exchanges,
+		map[string]any{"path": "/api/v0/projects/fixture-project/worktrees/rename", "request": WorkspaceCommand{Target: "fixture-worktree", Name: "Review branch"}, "response": shellstate.RenameResult{Shell: "fixture-worktree", OldName: "Feature", Name: "Review branch", Changed: true}},
+		map[string]any{"path": "/api/v0/projects/fixture-project/worktrees/delete-plan", "request": WorkspaceCommand{Target: plan.Path}, "response": workspacewire.WorktreeDeleted{Status: "planned", Plan: deletion}},
+		map[string]any{"path": "/api/v0/projects/fixture-project/worktrees/delete", "request": WorkspaceCommand{Target: plan.Path, Confirm: true, ExpectHeadOID: plan.SourceOID, ExpectBranch: plan.Branch, ExpectDeleteState: deletion.DeleteState}, "response": workspacewire.WorktreeDeleted{Status: "deleted", Deleted: true, Plan: deletion}},
+		map[string]any{"path": "/api/v0/projects/fixture-project/agents/start", "request": WorkspaceCommand{Target: target.Session, Kind: "codex"}, "response": agentcontrol.Agent{Target: target, Agent: state}},
+		map[string]any{"path": "/api/v0/projects/fixture-project/agents/prompt", "request": WorkspaceCommand{Target: target.Session, Text: "--help is literal"}, "response": agentcontrol.PromptResult{Target: target, Agent: state, Receipt: agentcontrol.PromptReceipt{Target: target, Submission: agentcontrol.SubmissionSubmitted, Wait: agentcontrol.PromptWaitNotRequested}}},
+		map[string]any{"path": "/api/v0/projects/fixture-project/agents/prompt", "request": WorkspaceCommand{Target: target.Session, Text: "continue"}, "status": 409, "exit_code": 5, "response": agentcontrol.ErrorEnvelope{Error: &agentcontrol.Error{Code: agentcontrol.ErrFeatureDisabled, Message: "Enable agent_control before submitting input.", Receipt: &agentcontrol.PromptReceipt{Target: target, Submission: agentcontrol.SubmissionNotSubmitted, Wait: agentcontrol.PromptWaitNotRequested}}}},
+	)
+
 	if os.Getenv("UPDATE_UI_API_FIXTURES") == "1" {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			t.Fatal(err)

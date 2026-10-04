@@ -229,10 +229,14 @@ func parseMobileCatalogArgs(env Env, args []string, help string) (mobileproto.Ca
 }
 
 func mobileCatalogProvider(env Env) mobile.CatalogProvider {
+	return mobileCatalogProviderForProjects(env, configuredProjects)
+}
+
+func mobileCatalogProviderForProjects(env Env, loadProjects func() ([]hostserve.Project, error)) mobile.CatalogProvider {
 	seed := activitystore.Load(filepath.Join(env.StateDir, activitystore.FileName), time.Now())
 	collector := workspaceinventory.Collector{}.WithDefaults()
 	collector = collector.SeedTrackers(seed)
-	provider := newMobileCatalogProvider(env, configuredProjects, collector, seed, time.Now)
+	provider := newMobileCatalogProvider(env, loadProjects, collector, seed, time.Now)
 	return func(ctx context.Context) (mobile.CatalogInput, error) {
 		input, err := provider(ctx)
 		if err != nil {

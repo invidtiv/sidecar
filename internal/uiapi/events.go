@@ -16,6 +16,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/marcus/sidecar/internal/mobile"
 	"github.com/marcus/sidecar/internal/mobileproto"
+	"github.com/marcus/sidecar/internal/workspacewire"
 )
 
 const eventsPath = "/api/v0/events"
@@ -59,18 +60,19 @@ type AttentionEvent struct {
 // EventMessage is one text frame (or one JSONL line on the CLI bridge).
 // Seq starts at 1 with hello, increases on delivery, and resets on reconnect.
 type EventMessage struct {
-	Type          string                       `json:"type" jsonschema:"enum=hello,enum=catalog,enum=attention,enum=terminals,enum=content,enum=error,enum=shutdown"`
-	Seq           uint64                       `json:"seq" jsonschema:"minimum=1"`
-	APIVersion    int                          `json:"api_version" jsonschema:"enum=0"`
-	APIInstance   string                       `json:"api_instance,omitempty"`
-	ServerVersion string                       `json:"server_version,omitempty"`
-	Capabilities  []string                     `json:"capabilities,omitempty"`
-	Catalog       *mobileproto.CatalogSnapshot `json:"catalog,omitempty"`
-	Attention     *AttentionEvent              `json:"attention,omitempty"`
-	Terminals     *[]EventTerminal             `json:"terminals,omitempty"`
-	Error         *ErrorDetail                 `json:"error,omitempty"`
-	Content       *ContentEvent                `json:"content,omitempty"`
-	Reason        string                       `json:"reason,omitempty"`
+	Type          string                        `json:"type" jsonschema:"enum=hello,enum=catalog,enum=attention,enum=terminals,enum=workspace,enum=content,enum=error,enum=shutdown"`
+	Seq           uint64                        `json:"seq" jsonschema:"minimum=1"`
+	APIVersion    int                           `json:"api_version" jsonschema:"enum=0"`
+	APIInstance   string                        `json:"api_instance,omitempty"`
+	ServerVersion string                        `json:"server_version,omitempty"`
+	Capabilities  []string                      `json:"capabilities,omitempty"`
+	Catalog       *mobileproto.CatalogSnapshot  `json:"catalog,omitempty"`
+	Attention     *AttentionEvent               `json:"attention,omitempty"`
+	Terminals     *[]EventTerminal              `json:"terminals,omitempty"`
+	Error         *ErrorDetail                  `json:"error,omitempty"`
+	Workspace     *workspacewire.WorkspaceEvent `json:"workspace,omitempty"`
+	Content       *ContentEvent                 `json:"content,omitempty"`
+	Reason        string                        `json:"reason,omitempty"`
 }
 
 // eventSignals fans one backend observation stream out to bounded per-client
@@ -218,6 +220,7 @@ type eventPending struct {
 	wake           chan struct{}
 	catalog        *EventMessage
 	terminals      *EventMessage
+	workspace      *EventMessage
 	attention      map[string]EventMessage
 	attentionSizes map[string]int
 	attentionBytes int
@@ -235,6 +238,8 @@ func (p *eventPending) put(m EventMessage) {
 		p.catalog = &m
 	case "terminals":
 		p.terminals = &m
+	case "workspace":
+		p.workspace = &m
 	case "attention":
 		key := m.Attention.CatalogID + "\x00" + m.Attention.Kind
 		encoded, _ := json.Marshal(m)
@@ -288,6 +293,10 @@ func (p *eventPending) take() []EventMessage {
 	if p.terminals != nil {
 		out = append(out, *p.terminals)
 		p.terminals = nil
+	}
+	if p.workspace != nil {
+		out = append(out, *p.workspace)
+		p.workspace = nil
 	}
 	if len(p.content) != 0 {
 		keys := make([]string, 0, len(p.content))
@@ -394,7 +403,7 @@ func (s *Server) runEvents(conn *websocket.Conn, client *trackedClient, c caller
 		return
 	}
 	defer stop()
-	if err := write(EventMessage{Type: "hello", APIInstance: s.instance, ServerVersion: s.opts.Version, Capabilities: []string{"catalog", "attention", "terminals", "content", "shutdown"}}); err != nil {
+	if err := write(EventMessage{Type: "hello", APIInstance: s.instance, ServerVersion: s.opts.Version, Capabilities: []string{"catalog", "attention", "terminals", "workspace", "content", "shutdown"}}); err != nil {
 		return
 	}
 	if s.eventErr != nil {
@@ -457,6 +466,9 @@ func (s *Server) collectEvents(ctx context.Context, c caller, query mobileproto.
 		previous = &snapshot
 	}
 	refreshTerminals := func() {
+		if !s.hasScope(c, ScopeFull) {
+			return
+		}
 		current := s.eventTerminals(ctx, c)
 		if reflect.DeepEqual(lastTerminals, current) {
 			return
@@ -464,7 +476,13 @@ func (s *Server) collectEvents(ctx context.Context, c caller, query mobileproto.
 		pending.put(EventMessage{Type: "terminals", Terminals: &current})
 		lastTerminals = current
 	}
+	refreshWorkspace := func() {
+		if s.hasScope(c, ScopeWorkspaceWrite) {
+			s.refreshWorkspaceEvents(ctx, pending)
+		}
+	}
 	refreshCatalog()
+	refreshWorkspace()
 	refreshTerminals()
 	// Only the lease of an open attachment is observed on this clock. It
 	// never collects a catalog, Git inventory, or a terminal screen.
@@ -489,6 +507,7 @@ func (s *Server) collectEvents(ctx context.Context, c caller, query mobileproto.
 		case <-debounce:
 			debounce = nil
 			refreshCatalog()
+			refreshWorkspace()
 		case <-terminals:
 			refreshTerminals()
 		case <-leaseTick.C:

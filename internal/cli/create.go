@@ -8,6 +8,7 @@ import (
 
 	"github.com/marcus/sidecar/internal/agentcontrol"
 	"github.com/marcus/sidecar/internal/uirequest"
+	"github.com/marcus/sidecar/internal/workspacewire"
 )
 
 const createWaitDefault = 1200 * time.Millisecond
@@ -243,11 +244,7 @@ func createAcksAllDeclined(acks []uirequest.Ack) bool {
 
 // createAgentStartResult distinguishes creating durable identity from starting
 // a provider. A failure keeps the new shell/worktree available for recovery.
-type createAgentStartResult struct {
-	Kind   string              `json:"kind"`
-	Status string              `json:"status"`
-	Error  *agentcontrol.Error `json:"error,omitempty"`
-}
+type createAgentStartResult = workspacewire.AgentStartResult
 
 func createdAgentStart(kind string, requested bool, err error) *createAgentStartResult {
 	if kind == "" {
