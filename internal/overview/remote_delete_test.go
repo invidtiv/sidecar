@@ -53,7 +53,7 @@ func TestRemoteShellDeleteRunsOnItsHost(t *testing.T) {
 	if done.Err != nil {
 		t.Fatalf("remote delete failed: %v", done.Err)
 	}
-	want := []string{"shell", "delete", "--target", "api-claude", "--project", "/home/me/api", "--json"}
+	want := []string{"shell", "delete", "--exact-target", "--target", "api-claude", "--project", "/home/me/api", "--json"}
 	if got := stub.argv(t, 0); !equalArgs(got, want) {
 		t.Fatalf("argv = %v, want %v", got, want)
 	}

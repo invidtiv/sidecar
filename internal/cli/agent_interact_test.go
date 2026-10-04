@@ -147,7 +147,7 @@ func TestAgentPromptPreServiceRefusalsReportNotSubmitted(t *testing.T) {
 		writeProjectShells(t, stateDir, "alpha", shellstate.Definition{TmuxName: "sidecar-sh-alpha-1", DisplayName: "reviewer", WorkDir: alpha})
 		writeProjectShells(t, stateDir, "beta", shellstate.Definition{TmuxName: "sidecar-sh-beta-1", DisplayName: "reviewer", WorkDir: beta})
 		t.Chdir(t.TempDir())
-		code, out, errOut := runAgentCLI(t, "agent", "prompt", "reviewer", "go", "--json")
+		code, out, errOut := runAgentCLI(t, "agent", "prompt", "name:reviewer", "go", "--json")
 		assertReceipt(t, code, out, errOut, agentcontrol.ErrTransport)
 	})
 }

@@ -197,7 +197,7 @@ func TestWorkspaceRemotePromptLiteralAndOwnerReceipt(t *testing.T) {
 			t.Fatalf("host=%q", host)
 		}
 		return func(_ context.Context, h string, args []string, out any) error {
-			want := []string{"agent", "prompt", "--json", "--project", "proof", "--", "managed", text}
+			want := []string{"agent", "prompt", "--json", "--exact-target", "--project", "proof", "--", "managed", text}
 			if h != "owner" || !reflect.DeepEqual(args, want) {
 				t.Fatalf("owner=%q args=%v", h, args)
 			}

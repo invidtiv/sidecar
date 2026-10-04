@@ -338,12 +338,12 @@ func (s *Service) sessions(ctx context.Context, request mobileproto.Request) {
 }
 
 func (s *Service) resolveTarget(ctx context.Context, request mobileproto.Request) {
-	target := strings.TrimSpace(request.Target)
-	if target == "" || len(target) > mobileproto.MaxTargetBytes {
+	target := request.Target
+	if strings.TrimSpace(target) == "" || len(target) > mobileproto.MaxTargetBytes {
 		s.writeError(request.RequestID, mobileproto.ErrorInvalidRequest, "target is required and bounded", false)
 		return
 	}
-	if IsCandidateSelector(target) && request.ExpectedTarget == nil {
+	if IsCandidateSelector(strings.TrimSpace(target)) && request.ExpectedTarget == nil {
 		s.writeError(request.RequestID, mobileproto.ErrorInvalidRequest, "terminal candidate target requires its paired expected_target identity", false)
 		return
 	}

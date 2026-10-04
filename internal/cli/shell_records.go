@@ -244,6 +244,9 @@ func parseShellRecordArgs(args []string, help string, env Env, wantPositional in
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch {
+		case arg == "--":
+			flags.positional = append(flags.positional, args[i+1:]...)
+			i = len(args)
 		case isHelp(arg):
 			if _, err := fmt.Fprint(env.Stdout, help); err != nil {
 				return flags, 1

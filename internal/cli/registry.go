@@ -88,9 +88,10 @@ func RootCommand() *Command {
 			"list`, or a sidecar-ws-… worktree agent. The session must belong to the resolved\n" +
 			"project (--project, or the project this directory is in) — a name Sidecar does\n" +
 			"not own is refused rather than renamed. --shell and --project only scope a\n" +
-			"--target; without one, the current shell is the only subject.",
+			"--target; without one, the current shell is the only subject.\n\n" + managedTargetHelp,
 		Flags: []Flag{
-			{Name: "--target", Arg: "SESSION", Summary: "Rename this tmux session instead of the current shell"},
+			{Name: "--exact-target", Summary: "Interpret --target as a literal session identity (required by API callers)", Bool: true},
+			{Name: "--target", Arg: "SESSION", Summary: "Session or unique ordinary display name; name:DISPLAY/session:NAME are explicit forms"},
 			{Name: "--shell", Arg: "NAME", Summary: "Resolve the project from a registered shell (with --target)"},
 			{Name: "--project", Arg: "NAME", Summary: "Target project (slug, basename, or path; with --target)"},
 			{Name: "--json", Summary: "Write one structured result object to stdout", Bool: true},
@@ -130,9 +131,10 @@ func RootCommand() *Command {
 			"it, so an unregistered name is refused (exit 3) rather than typed into.\n\n" +
 			"The keys go to the tmux server this process resolves, and the session must be\n" +
 			"running: a record for a session that is not up is a tmux failure (exit 1), not\n" +
-			"a silent success.",
+			"a silent success.\n\n" + managedTargetHelp,
 		Flags: []Flag{
-			{Name: "--target", Arg: "SESSION", Summary: "The tmux session to send to (required)"},
+			{Name: "--exact-target", Summary: "Interpret --target as a literal session identity (required by remote viewers)", Bool: true},
+			{Name: "--target", Arg: "SESSION", Summary: "Session or unique ordinary display name; name:DISPLAY/session:NAME are explicit forms"},
 			{Name: "--run", Arg: "COMMAND", Summary: "Execute COMMAND in the session"},
 			{Name: "--type", Arg: "COMMAND", Summary: "Type COMMAND without pressing Enter"},
 			{Name: "--shell", Arg: "NAME", Summary: "Resolve the project from a registered shell"},
@@ -250,9 +252,10 @@ func RootCommand() *Command {
 			"has no record to tombstone — this is the only CLI path that closes one, and\n" +
 			"--shell/--project are refused alongside it since neither applies.\n\n" +
 			"There is no current-shell form. Deleting the shell you are sitting in would\n" +
-			"kill the session running the command, so the subject is always named.",
+			"kill the session running the command, so the subject is always named.\n\n" + managedTargetHelp,
 		Flags: []Flag{
-			{Name: "--target", Arg: "SESSION", Summary: "The tmux session to delete (required)"},
+			{Name: "--exact-target", Summary: "Interpret --target as a literal session identity (required by API callers)", Bool: true},
+			{Name: "--target", Arg: "SESSION", Summary: "Session or unique ordinary display name; name:DISPLAY/session:NAME are explicit forms"},
 			{Name: "--shell", Arg: "NAME", Summary: "Resolve the project from a registered shell"},
 			{Name: "--project", Arg: "NAME", Summary: "Target project (slug, basename, or path)"},
 			{Name: "--json", Summary: "Write one structured result object to stdout", Bool: true},

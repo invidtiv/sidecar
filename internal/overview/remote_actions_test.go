@@ -331,7 +331,7 @@ func TestRemoteCreateShellOmitsAgentOnAHostThatCannotParseIt(t *testing.T) {
 		t.Fatalf("invocations = %v, want create then send", stub.calls)
 	}
 	send := stub.argv(t, 1)
-	for i, want := range []string{"shell", "send", "--target", "api-claude-2", "--project", "/home/me/api", "--run"} {
+	for i, want := range []string{"shell", "send", "--exact-target", "--target", "api-claude-2", "--project", "/home/me/api", "--run"} {
 		if i >= len(send) || send[i] != want {
 			t.Fatalf("send argv = %v, want %v at %d", send, want, i)
 		}
@@ -536,7 +536,7 @@ func TestRemoteRenameTargetsTheSessionOnItsHost(t *testing.T) {
 	if done.Err != nil {
 		t.Fatalf("remote rename failed: %v", done.Err)
 	}
-	want := []string{"shell", "rename", "--target", "api-claude", "--project", "/home/me/api", "--json", "--", "Reviewer"}
+	want := []string{"shell", "rename", "--exact-target", "--target", "api-claude", "--project", "/home/me/api", "--json", "--", "Reviewer"}
 	if got := stub.argv(t, 0); !equalArgs(got, want) {
 		t.Fatalf("argv = %v, want %v", got, want)
 	}

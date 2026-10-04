@@ -548,3 +548,12 @@ func TestAskStartupPrefillsReportedConversationWithoutExecutingIt(t *testing.T) 
 		t.Fatalf("step = %+v, want no-Enter prefill", step)
 	}
 }
+
+func TestRestoreExactSessionNeverSelectsDisplayNameCollision(t *testing.T) {
+	in := baseInput(shell("live", func(def *shellstate.Definition) { def.DisplayName = "deleted-session" }))
+	in.Request.OnlyShell = "deleted-session"
+	step := only(t, Build(in))
+	if step.Action != ActionSkip || step.Reason != ReasonNotSelected {
+		t.Fatalf("stale session selected display-name collision: %+v", step)
+	}
+}

@@ -488,7 +488,7 @@ func remoteCreateShellArgs(projectRef, displayName, agentType, runCommand string
 // because the host resolves --target against that project's manifest and
 // refuses a session it does not own.
 func remoteShellSendArgs(projectRef, session, command string) []string {
-	return []string{"shell", "send", "--target", session, "--project", projectRef, "--run", command, "--json"}
+	return []string{"shell", "send", "--exact-target", "--target", session, "--project", projectRef, "--run", command, "--json"}
 }
 
 // remoteWorktreeArgs is `sidecar create worktree`, in its planning form when
@@ -529,7 +529,7 @@ func remoteRenameArgs(projectRef, session, newName string) []string {
 	// `--` for the same reason remoteWorktreeArgs passes one: shellstate accepts
 	// a leading dash in a display name, so "-wip" must reach the host as a name
 	// rather than as an unknown option.
-	return []string{"shell", "rename", "--target", session, "--project", projectRef, "--json", "--", newName}
+	return []string{"shell", "rename", "--exact-target", "--target", session, "--project", projectRef, "--json", "--", newName}
 }
 
 // remoteDeleteShellArgs is `sidecar shell delete`, the host-side verb that
@@ -541,7 +541,7 @@ func remoteRenameArgs(projectRef, session, newName string) []string {
 // belonging to somebody else. No `--` terminator, because this verb takes no
 // positional and a tmux session name is never a flag.
 func remoteDeleteShellArgs(projectRef, session string) []string {
-	return []string{"shell", "delete", "--target", session, "--project", projectRef, "--json"}
+	return []string{"shell", "delete", "--exact-target", "--target", session, "--project", projectRef, "--json"}
 }
 
 // remoteTargetSession is the tmux session name a remote row is addressed by.

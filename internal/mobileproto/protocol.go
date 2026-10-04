@@ -177,7 +177,8 @@ type CatalogRow struct {
 	WorkspaceKind string `json:"workspace_kind"`
 	DisplayName   string `json:"display_name"`
 	// Path is presentation metadata on the owning host, never a scoped selector.
-	Path string `json:"path,omitempty"`
+	Path         string `json:"path,omitempty"`
+	MainCheckout *bool  `json:"main_checkout,omitempty"`
 	// ContentWorkspaceID selects the owning root on project content, tree,
 	// layout and viewer-presence routes. Empty selects the configured root.
 	ContentWorkspaceID  string             `json:"content_workspace_id,omitempty" jsonschema_description:"Selector for project content, tree, layout and viewer-presence routes. Empty or omitted selects the configured root; nonempty names the owning linked worktree. Omitted on hub-remapped remote rows. Independent of terminal expected_target."`

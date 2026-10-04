@@ -18,10 +18,14 @@ func TestCatalogContentWorkspaceSelectors(t *testing.T) {
 		for _, kind := range []workspaceinventory.Kind{workspaceinventory.KindShell, workspaceinventory.KindWorktree} {
 			workspace := catalogShell("opaque-row", "Shell", "shell", "%1", now)
 			workspace.ProjectKey, workspace.ProjectRoot, workspace.Path, workspace.Kind = "/repo", "/repo", path, kind
+			workspace.IsMain = kind == workspaceinventory.KindWorktree && path != "/linked"
 			snapshot := mustCatalog(t, CatalogInput{ObservedAt: now, Projects: []CatalogProject{{Result: workspaceinventory.ProjectResult{ProjectKey: "/repo", Workspaces: []workspaceinventory.Workspace{workspace}}}}}, mobileproto.CatalogQuery{})
 			row := catalogRowsByID(snapshot)["opaque-row"]
 			if row.ContentWorkspaceID != want {
 				t.Fatalf("%s %q: selector %q, want %q", kind, path, row.ContentWorkspaceID, want)
+			}
+			if row.MainCheckout == nil || *row.MainCheckout != workspace.IsMain {
+				t.Fatalf("%s %q: main checkout metadata disagrees with content scope: %+v", kind, path, row)
 			}
 			if kind == workspaceinventory.KindShell && (row.ExpectedTarget == nil || row.ExpectedTarget.WorkspaceID != "repo" || row.WorkspaceID != "repo") {
 				t.Fatal("content selector changed terminal identity")

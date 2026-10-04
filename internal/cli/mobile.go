@@ -16,6 +16,7 @@ import (
 	"github.com/marcus/sidecar/internal/agentactivity"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/hostserve"
+	"github.com/marcus/sidecar/internal/managedtarget"
 	"github.com/marcus/sidecar/internal/mobile"
 	"github.com/marcus/sidecar/internal/mobileproto"
 	"github.com/marcus/sidecar/internal/tmuxenv"
@@ -364,13 +365,12 @@ func resolveMobileCatalogShell(ctx context.Context, env Env, lookup *shellTarget
 	if lookup == nil || inspect == nil {
 		return mobile.ResolvedTarget{}, &mobile.ResolveError{Code: mobileproto.ErrorUnsupported, Message: "mobile terminal resolver is unavailable"}
 	}
-	value = strings.TrimSpace(value)
 	if mobile.IsCandidateSelector(value) {
 		return mobile.ResolvedTarget{}, &mobile.ResolveError{Code: mobileproto.ErrorIdentityChanged, Message: "worktree candidate requires the candidate resolver"}
 	}
 	scoped := env
 	scoped.Ctx = ctx
-	target, code, err := lookup.resolve(scoped, value, "", "", true, tmuxenv.Namespace())
+	target, code, err := lookup.resolve(scoped, managedtarget.SessionSelector(value), "", "", true, tmuxenv.Namespace())
 	if err != nil {
 		kind := mobileproto.ErrorAmbiguous
 		if code == shellTargetUnregistered {

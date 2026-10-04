@@ -175,6 +175,8 @@ func callerShellOrigin(stateDir string) (shellstate.OriginInfo, bool) {
 	return origin, true
 }
 
+const managedTargetHelp = "A bare TARGET first matches an exact tmux session name. If no session matches, an ordinary display name such as \"rev U3-c\" or \"Shell 3\" resolves only when unique. Missing sidecar-sh-*, sidecar-ws-* and sidecar-tp-* targets never fall back to display names and refuse. Use name:DISPLAY for explicit display-name lookup, including session-shaped display names; session:NAME for exact session lookup, including literal names beginning with name: or session:. Display-name ambiguity refuses; address the exact session or use explicit --project scope where supported."
+
 type shellTargetScan struct {
 	projects   []registeredProject
 	candidates []managedtarget.Target
@@ -184,8 +186,7 @@ type shellTargetScan struct {
 
 // resolve answers one target value, reusing the scan for these flags.
 func (l *shellTargetLookup) resolve(env Env, target, shellFlag, projectFlag string, globalExplicit bool, namespace string) (shellTarget, int, error) {
-	target = strings.TrimSpace(target)
-	if target == "" {
+	if strings.TrimSpace(target) == "" {
 		return shellTarget{}, 2, fmt.Errorf("target is required")
 	}
 	scan := l.scan(env, shellFlag, projectFlag, globalExplicit)
@@ -203,7 +204,7 @@ func (l *shellTargetLookup) resolve(env Env, target, shellFlag, projectFlag stri
 		if ok && typed.Kind == managedtarget.NotFound {
 			return shellTarget{}, shellTargetUnregistered, err
 		}
-		if ok && typed.Kind == managedtarget.Ambiguous && shellFlag == "" && projectFlag == "" {
+		if ok && typed.Kind == managedtarget.Ambiguous && !typed.ByName && shellFlag == "" && projectFlag == "" {
 			// The caller's own project breaks a tie a global search cannot.
 			// An agent driving a sibling worktree from its managed shell has
 			// already said which Sidecar it means — SIDECAR_SHELL names it —
@@ -414,6 +415,7 @@ func runShellRenameTarget(env Env, args []string) int {
 	help := RenderHelp(renameCmd)
 
 	jsonOutput := false
+	exactTarget := false
 	target, shellFlag, projectFlag := "", "", ""
 	var positional []string
 	for i := 0; i < len(args); i++ {
@@ -424,6 +426,8 @@ func runShellRenameTarget(env Env, args []string) int {
 				return 1
 			}
 			return 0
+		case arg == "--exact-target":
+			exactTarget = true
 		case arg == "--json":
 			jsonOutput = true
 		case arg == "--target" || strings.HasPrefix(arg, "--target="):
@@ -475,6 +479,9 @@ func runShellRenameTarget(env Env, args []string) int {
 		return exitInputRejected
 	}
 
+	if exactTarget {
+		target = managedtarget.SessionSelector(target)
+	}
 	tgt, code := resolveShellTarget(env, target, shellFlag, projectFlag, help)
 	if code != 0 {
 		return code
@@ -596,6 +603,7 @@ func runShellSend(env Env, args []string) int {
 	help := RenderHelp(sendCmd)
 
 	jsonOutput := false
+	exactTarget := false
 	target, shellFlag, projectFlag := "", "", ""
 	runCommand, typeCommand := "", ""
 	var positional []string
@@ -607,6 +615,8 @@ func runShellSend(env Env, args []string) int {
 				return 1
 			}
 			return 0
+		case arg == "--exact-target":
+			exactTarget = true
 		case arg == "--json":
 			jsonOutput = true
 		case arg == "--target" || strings.HasPrefix(arg, "--target="):
@@ -682,6 +692,9 @@ func runShellSend(env Env, args []string) int {
 		return 2
 	}
 
+	if exactTarget {
+		target = managedtarget.SessionSelector(target)
+	}
 	tgt, code := resolveShellTarget(env, target, shellFlag, projectFlag, help)
 	if code != 0 {
 		return code

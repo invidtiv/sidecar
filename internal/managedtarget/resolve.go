@@ -26,37 +26,65 @@ const (
 type Error struct {
 	Kind    ErrorKind
 	Message string
+	// ByName distinguishes display-name ambiguity from a session identity
+	// collision, so callers cannot hide it using implicit project context.
+	ByName bool
 }
 
 func (e *Error) Error() string { return e.Message }
 
-// Resolve prefers exact durable session identity over display name. Every
-// filter is exact; an empty field means the caller has not scoped that axis.
+// SessionSelector protects a literal session name, including one that starts
+// with the human display-name selector prefix.
+func SessionSelector(session string) string { return "session:" + session }
+
+// IsManagedSession reports the reserved session-name shapes. Missing values
+// in these namespaces must never be reinterpreted as display names.
+func IsManagedSession(value string) bool {
+	return strings.HasPrefix(value, "sidecar-sh-") || strings.HasPrefix(value, "sidecar-ws-") || strings.HasPrefix(value, "sidecar-tp-")
+}
+
+// Resolve prefers exact session identities. Ordinary bare values may fall back
+// to a unique display name; managed session-shaped values and session: selectors
+// never do. name: selects a display name explicitly, including session-shaped names.
+// Every filter is exact; an empty field leaves that axis unscoped.
 func Resolve(candidates []Target, q Query) (Target, error) {
+	value := q.Value
+	named := false
+	exactOnly := IsManagedSession(value)
+	if strings.HasPrefix(value, "session:") {
+		value = strings.TrimPrefix(value, "session:")
+		exactOnly = true
+	} else if strings.HasPrefix(value, "name:") {
+		value = strings.TrimPrefix(value, "name:")
+		named = true
+	}
 	filter := func(t Target) bool {
 		return (q.Host == "" || t.Host == q.Host) && (q.Project == "" || t.Project == q.Project) && (q.Namespace == "" || t.Namespace == "" || t.Namespace == q.Namespace)
 	}
-	var exact, named []Target
+	var matches, names []Target
 	for _, t := range candidates {
 		if !filter(t) {
 			continue
 		}
-		if t.Session == q.Value {
-			exact = append(exact, t)
-		} else if t.Name == q.Value {
-			named = append(named, t)
+		if (!named && t.Session == value) || (named && t.Name == value) {
+			matches = append(matches, t)
+		}
+		if !named && !exactOnly && t.Name == value {
+			names = append(names, t)
 		}
 	}
-	matches := exact
-	if len(matches) == 0 {
-		matches = named
+	if !named && !exactOnly && len(matches) == 0 {
+		matches, named = names, true
 	}
 	matches = dedupeEquivalent(matches)
 	if len(matches) == 1 {
 		return matches[0], nil
 	}
 	if len(matches) > 1 {
-		return Target{}, &Error{Kind: Ambiguous, Message: ambiguousMessage(q.Value, matches)}
+		return Target{}, &Error{Kind: Ambiguous, Message: ambiguousMessage(q.Value, matches), ByName: named}
+	}
+	if exactOnly {
+		return Target{}, &Error{Kind: NotFound, Message: fmt.Sprintf("no Sidecar-managed session named %q; exact session targets never fall back to display names", value)}
 	}
 	return Target{}, &Error{Kind: NotFound, Message: fmt.Sprintf("no Sidecar-managed target named %q", strings.TrimSpace(q.Value))}
 }

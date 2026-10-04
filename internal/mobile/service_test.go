@@ -104,6 +104,24 @@ func TestResolveRefusesCatalogIdentityChangedAfterListing(t *testing.T) {
 	}
 }
 
+func TestResolvePreservesLiteralSessionWhitespace(t *testing.T) {
+	var output bytes.Buffer
+	s := testService(&output)
+	s.resolve = func(_ context.Context, target string) (ResolvedTarget, error) {
+		if target != "mobile " {
+			t.Fatalf("literal target changed to %q", target)
+		}
+		resolved := testTarget().resolved
+		resolved.Session = target
+		return resolved, nil
+	}
+	s.resolveTarget(context.Background(), mobileproto.Request{RequestID: "literal-session", Target: "mobile "})
+	responses := decodeResponses(t, &output)
+	if len(responses) != 1 || responses[0].Target == nil || responses[0].Target.Session != "mobile " {
+		t.Fatalf("responses = %+v", responses)
+	}
+}
+
 func TestResolveRequiresExpectedIdentityForCandidateSelector(t *testing.T) {
 	var output bytes.Buffer
 	s := testService(&output)

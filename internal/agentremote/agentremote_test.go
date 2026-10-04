@@ -81,7 +81,7 @@ func TestTheTargetIsTheLastArgumentSoAFlagCannotSwallowIt(t *testing.T) {
 		t.Fatalf("target is not last: %v", args)
 	}
 	start := c.StartArgs("reviewer", "codex", 0, []string{"-m", "gpt-5.4"})
-	want := []string{"agent", "start", "--json", "--kind", "codex", "reviewer", "--", "-m", "gpt-5.4"}
+	want := []string{"agent", "start", "--json", "--kind", "codex", "--target", "reviewer", "--", "-m", "gpt-5.4"}
 	if !reflect.DeepEqual(start, want) {
 		t.Fatalf("start argv = %v, want %v", start, want)
 	}

@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/marcus/sidecar/internal/agentremote"
 	"github.com/marcus/sidecar/internal/agentsession"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/managedtarget"
 	"github.com/marcus/sidecar/internal/sessionrestore"
 	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/tmuxenv"
@@ -68,7 +70,7 @@ func sessionCommand() *Command {
 		Name:    "restore",
 		Summary: "Recreate managed shells, and optionally resume their exact conversations",
 		Usage:   "sidecar session restore [--dry-run] [--shell TARGET] [--prefill | --agents --yes] [--host ID] [--json]",
-		Long: "Executes the plan `session status` prints.\n\n" +
+		Long: managedTargetHelp + "\n\nExecutes the plan `session status` prints.\n\n" +
 			"Shells are recreated under their own tmux session names and existing working directories; no --run command, dev server, " +
 			"or test watcher is ever replayed. A missing working directory is a refusal, never a fallback to another directory, and a " +
 			"tmux session name held by something else is a refusal too — Sidecar never closes a live session to take its name.\n\n" +
@@ -79,7 +81,8 @@ func sessionCommand() *Command {
 			"If tmux is shutting down behind orphaned Sidecar control clients, restore terminates only those verified clients and waits for the server to exit on its own. A client with a live parent prevents recovery. The server itself is never signalled by restore. Nothing here deletes a shell record.",
 		Flags: []Flag{
 			{Name: "--dry-run", Summary: "Print the plan and exit without creating or starting anything", Bool: true},
-			{Name: "--shell", Arg: "TARGET", Summary: "Restore only this shell, by tmux session name or display name"},
+			{Name: "--exact-shell", Summary: "Treat --shell as a literal session identity; older owners refuse", Bool: true},
+			{Name: "--shell", Arg: "TARGET", Summary: "Restore one session or unique display name; name:DISPLAY/session:NAME are explicit forms"},
 			{Name: "--agents", Summary: "Also resume eligible exact agent conversations", Bool: true},
 			{Name: "--prefill", Summary: "Type eligible resume commands without pressing Enter", Bool: true},
 			{Name: "--yes", Summary: "Confirm agent resumes non-interactively when the policy is ask", Bool: true},
@@ -94,7 +97,7 @@ func sessionCommand() *Command {
 			{Description: "Recreate eligible shells, no agents", Command: "sidecar session restore"},
 			{Description: "Type resume commands for review", Command: "sidecar session restore --prefill"},
 			{Description: "See exactly what would happen first", Command: "sidecar session restore --agents --dry-run"},
-			{Description: "Recreate one shell and resume its conversation", Command: "sidecar session restore --shell reviewer --agents --yes"},
+			{Description: "Recreate one shell and resume its conversation", Command: "sidecar session restore --shell sidecar-sh-project-1 --agents --yes"},
 		},
 		Agent: AgentDoc{
 			Invocation: "sidecar session restore --dry-run --json",
@@ -128,8 +131,8 @@ func sessionCommand() *Command {
 		Mutates:   true,
 		Examples: []Example{
 			{Description: "Read this shell's policy", Command: "sidecar session policy"},
-			{Description: "Never resume this agent automatically", Command: "sidecar session policy reviewer --shell"},
-			{Description: "Always resume this one", Command: "sidecar session policy reviewer --resume"},
+			{Description: "Never resume this agent automatically", Command: "sidecar session policy name:reviewer --shell"},
+			{Description: "Always resume this one", Command: "sidecar session policy name:reviewer --resume"},
 		},
 		Agent: AgentDoc{
 			Invocation: "sidecar session policy TARGET --shell",
@@ -292,6 +295,24 @@ func buildSessionPlan(env Env, cfg sessionrestore.Config, req sessionrestore.Req
 		cliErrf(env.Stderr, "read restore state: %v", err)
 		return sessionrestore.Plan{}, 1
 	}
+	if req.OnlyShell != "" {
+		candidates := make([]managedtarget.Target, 0, len(in.Shells))
+		for _, shell := range in.Shells {
+			candidates = append(candidates, managedtarget.Target{Host: "local", Project: shell.Project, Kind: "shell", Session: shell.Def.TmuxName, Name: shell.Def.DisplayName, Namespace: shell.Def.Namespace})
+		}
+		target, err := managedtarget.Resolve(candidates, managedtarget.Query{Value: req.OnlyShell, Namespace: tmuxenv.Namespace()})
+		if err != nil {
+			if refusal, ok := err.(*managedtarget.Error); ok && refusal.Kind == managedtarget.Ambiguous {
+				err = fmt.Errorf("restore target %q is ambiguous; use an exact tmux session name from sidecar session status", req.OnlyShell)
+			}
+			if jsonOutput {
+				return sessionrestore.Plan{}, writeSessionJSONError(env, "target_refused", err.Error())
+			}
+			cliErrln(env.Stderr, err)
+			return sessionrestore.Plan{}, sessionExitPlanRefused
+		}
+		in.Request.OnlyShell = target.Session
+	}
 	return sessionrestore.Build(in), 0
 }
 
@@ -304,8 +325,8 @@ func runSessionRestore(env Env, args []string) int {
 	}
 
 	var (
-		jsonOutput, dryRun, agents, yes, prefill bool
-		shellTargetName, host                    string
+		jsonOutput, dryRun, agents, yes, prefill, exactShell bool
+		shellTargetName, host                                string
 	)
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -314,6 +335,15 @@ func runSessionRestore(env Env, args []string) int {
 		case isHelp(arg):
 			_, _ = fmt.Fprint(env.Stdout, help)
 			return 0
+		case name == "--exact-shell":
+			exactShell = true
+			if _, value, ok := strings.Cut(arg, "="); ok {
+				parsed, err := strconv.ParseBool(value)
+				if err != nil {
+					return usage("invalid --exact-shell value")
+				}
+				exactShell = parsed
+			}
 		case arg == "--json":
 			jsonOutput = true
 		case arg == "--dry-run":
@@ -351,7 +381,9 @@ func runSessionRestore(env Env, args []string) int {
 		// the flags rather than deciding here is what keeps a remote restore
 		// answerable by the machine that would run the agents.
 		return runRemoteSessionDocument(env, host, jsonOutput, func(c agentremote.Client) ([]string, error) {
-			return c.SessionRestoreArgsWithPrefill(dryRun, agents, yes, prefill, shellTargetName), nil
+			target, flags := remoteSelector(shellTargetName, agentFlags{exact: exactShell})
+			c.ExactTargets, c.NameTarget = flags.exact, flags.nameTarget
+			return c.SessionRestoreArgsWithPrefill(dryRun, agents, yes, prefill, target), nil
 		})
 	}
 
@@ -368,6 +400,9 @@ func runSessionRestore(env Env, args []string) int {
 				return 1
 			}
 		}
+	}
+	if exactShell && shellTargetName != "" {
+		shellTargetName = managedtarget.SessionSelector(shellTargetName)
 	}
 	req := sessionrestore.Request{OnlyShell: shellTargetName, Agents: agents, Prefill: prefill, Confirmed: yes, RecordCandidates: !dryRun}
 	plan, code := buildSessionPlan(env, cfg, req, jsonOutput)

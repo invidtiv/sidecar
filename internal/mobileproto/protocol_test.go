@@ -13,6 +13,31 @@ import (
 	"testing"
 )
 
+func TestCatalogRowPreservesUnknownMainCheckoutAcrossRelay(t *testing.T) {
+	for _, input := range []string{`{}`, `{"main_checkout":false}`, `{"main_checkout":true}`} {
+		var row CatalogRow
+		if err := json.Unmarshal([]byte(input), &row); err != nil {
+			t.Fatal(err)
+		}
+		data, err := json.Marshal(row)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var before, after map[string]any
+		if err := json.Unmarshal([]byte(input), &before); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(data, &after); err != nil {
+			t.Fatal(err)
+		}
+		want, present := before["main_checkout"]
+		got, emitted := after["main_checkout"]
+		if present != emitted || got != want {
+			t.Fatalf("relay %s emitted main_checkout=%v present=%v", input, got, emitted)
+		}
+	}
+}
+
 func TestProductionCorpusManifestAndFreshProcessReconnect(t *testing.T) {
 	root := filepath.Join("..", "..", "testdata", "mobile-protocol", "v0")
 	manifest, err := os.ReadFile(filepath.Join(root, "SHA256SUMS"))

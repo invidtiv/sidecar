@@ -87,7 +87,7 @@ func TestWorkspaceRemoteOperationsNeverResolveOnViewer(t *testing.T) {
 	if exit != 0 || err != nil || !strings.Contains(string(result), "deleted") {
 		t.Fatalf("exit=%d err=%v result=%s", exit, err, result)
 	}
-	want := []string{"shell", "delete", "--target", "remote-session", "--project", "owner-project", "--json"}
+	want := []string{"shell", "delete", "--exact-target", "--target", "remote-session", "--project", "owner-project", "--json"}
 	if !reflect.DeepEqual(calls, [][]string{want}) {
 		t.Fatalf("calls=%v", calls)
 	}

@@ -33,11 +33,13 @@ func TestUIAPIFixtureCorpus(t *testing.T) {
 	dir := fixtureDir()
 	now := time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC)
 	identity := mobile.FixtureIdentity("fixture", "local:fixture", "fixture-config", "fixture-project", "fixture-echo", "%1")
-	row := mobileproto.CatalogRow{ID: "fixture-shell", OwnerHostID: identity.OwnerHostID, ProjectID: "fixture-project", ProjectName: "Fixture project", WorkspaceID: identity.WorkspaceID, WorkspaceKind: "shell", DisplayName: "Echo terminal", Path: "/workspace/fixture", Provider: "codex", Status: "working", Group: "Working", Session: identity.Session, Pane: identity.Pane, Target: identity.Session, ExpectedTarget: &identity, AttachState: "ready", ObservedAt: now.Format(time.RFC3339), ChangedAt: now.Format(time.RFC3339), Live: true, SemanticStatus: true, AttachmentReady: true}
+	shellMainCheckout := false
+	row := mobileproto.CatalogRow{MainCheckout: &shellMainCheckout, ID: "fixture-shell", OwnerHostID: identity.OwnerHostID, ProjectID: "fixture-project", ProjectName: "Fixture project", WorkspaceID: identity.WorkspaceID, WorkspaceKind: "shell", DisplayName: "Echo terminal", Path: "/workspace/fixture", Provider: "codex", Status: "working", Group: "Working", Session: identity.Session, Pane: identity.Pane, Target: identity.Session, ExpectedTarget: &identity, AttachState: "ready", ObservedAt: now.Format(time.RFC3339), ChangedAt: now.Format(time.RFC3339), Live: true, SemanticStatus: true, AttachmentReady: true}
 	catalog := mobileproto.CatalogSnapshot{Generation: "fixture-generation", ObservedAt: row.ObservedAt, HubID: identity.HubID, OwnerHostID: identity.OwnerHostID, OwnerConfigGeneration: identity.OwnerConfigGeneration, Query: mobileproto.CatalogQuery{Sort: "project"}, Hosts: []mobileproto.CatalogHost{{ID: identity.OwnerHostID, Name: "Fixture host", State: "online", Local: true}}, Sections: []mobileproto.CatalogSection{{Key: "fixture-project", Title: "Fixture project", Rows: []mobileproto.CatalogRow{row}}}, Failures: []mobileproto.CatalogFailure{}, Total: 1}
 	for _, kind := range []string{"shell", "worktree"} {
 		catalog.Sections[0].Rows = append(catalog.Sections[0].Rows, mobileproto.CatalogRow{
 			ID: "fixture-feature-" + kind, OwnerHostID: identity.OwnerHostID, ProjectID: row.ProjectID, ProjectName: row.ProjectName,
+			MainCheckout:  &shellMainCheckout,
 			WorkspaceKind: kind, DisplayName: "Feature " + kind, Path: "/workspace/feature",
 			ContentWorkspaceID: "/workspace/fixture:worktree:/workspace/feature",
 			Status:             "idle", Group: "No Session", AttachState: "unavailable", ObservedAt: row.ObservedAt,
@@ -119,6 +121,12 @@ func TestUIAPIFixtureCorpus(t *testing.T) {
 		ViewerAckResponse{Document: candidates, ETag: `"synthetic-candidate-layout"`},
 	}
 	project := workspacewire.Project{Key: "fixture-project", Name: "Fixture project", Path: "/workspace/fixture"}
+	mainCheckout := true
+	mainRow := mobileproto.CatalogRow{ID: "fixture-main-checkout", OwnerHostID: identity.OwnerHostID, ProjectID: project.Key, ProjectName: project.Name, WorkspaceKind: "worktree", DisplayName: "Main checkout", Path: project.Path, MainCheckout: &mainCheckout, Branch: "main", Status: "no session", Group: "No Session", AttachState: "unavailable", ObservedAt: row.ObservedAt}
+	mainCatalog := catalog
+	mainCatalog.Total = 1
+	mainCatalog.Sections = []mobileproto.CatalogSection{{Key: project.Key, Title: project.Name, Rows: []mobileproto.CatalogRow{mainRow}}}
+	values["workspace-main-checkout.json"] = workspacewire.Workspace{Project: project, Catalog: mainCatalog, Shells: []workspacewire.ShellRecord{}}
 	values["projects.json"] = workspacewire.Projects{Projects: []workspacewire.Project{project}}
 	values["workspace.json"] = workspacewire.Workspace{Project: project, Catalog: catalog, Shells: []workspacewire.ShellRecord{{Shell: "fixture-echo", Name: row.DisplayName, WorkDir: project.Path, Status: "live"}, {Shell: "fixture-forgotten", Name: "Recoverable shell", Status: "forgotten", DeletedAt: &now}}}
 	values["workspace-event.json"] = EventMessage{Type: "workspace", Seq: 4, Workspace: &workspacewire.WorkspaceEvent{Projects: workspacewire.Projects{Projects: []workspacewire.Project{project}}, Workspaces: []workspacewire.WorkspaceRef{{Project: project.Key}}}}
@@ -141,7 +149,7 @@ func TestUIAPIFixtureCorpus(t *testing.T) {
 		map[string]any{"path": "/api/v0/projects/fixture-project/worktrees/delete-plan", "request": WorkspaceCommand{Target: plan.Path}, "response": workspacewire.WorktreeDeleted{Status: "planned", Plan: deletion}},
 		map[string]any{"path": "/api/v0/projects/fixture-project/worktrees/delete", "request": WorkspaceCommand{Target: plan.Path, Confirm: true, ExpectHeadOID: plan.SourceOID, ExpectBranch: plan.Branch, ExpectDeleteState: deletion.DeleteState}, "response": workspacewire.WorktreeDeleted{Status: "deleted", Deleted: true, Plan: deletion}},
 		map[string]any{"path": "/api/v0/projects/fixture-project/agents/start", "request": WorkspaceCommand{Target: target.Session, Kind: "codex"}, "response": agentcontrol.Agent{Target: target, Agent: state}},
-		map[string]any{"path": "/api/v0/projects/fixture-project/agents/prompt", "request": WorkspaceCommand{Target: target.Session, Text: "--help is literal"}, "response": agentcontrol.PromptResult{Target: target, Agent: state, Receipt: agentcontrol.PromptReceipt{Target: target, Submission: agentcontrol.SubmissionSubmitted, Wait: agentcontrol.PromptWaitNotRequested}}},
+		map[string]any{"path": "/api/v0/projects/fixture-project/agents/prompt", "request": WorkspaceCommand{Target: target.Session, Text: "-"}, "response": agentcontrol.PromptResult{Target: target, Agent: state, Receipt: agentcontrol.PromptReceipt{Target: target, Submission: agentcontrol.SubmissionSubmitted, Wait: agentcontrol.PromptWaitNotRequested}}},
 		map[string]any{"path": "/api/v0/projects/fixture-project/agents/prompt", "request": WorkspaceCommand{Target: target.Session, Text: "continue"}, "status": 409, "exit_code": 5, "response": agentcontrol.ErrorEnvelope{Error: &agentcontrol.Error{Code: agentcontrol.ErrFeatureDisabled, Message: "Enable agent_control before submitting input.", Receipt: &agentcontrol.PromptReceipt{Target: target, Submission: agentcontrol.SubmissionNotSubmitted, Wait: agentcontrol.PromptWaitNotRequested}}}},
 	)
 
