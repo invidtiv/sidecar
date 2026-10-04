@@ -1008,6 +1008,12 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.uiRequestWatcher != nil {
 			cmds = append(cmds, listenForUIRequests(m.uiRequestWatcher.Messages()))
 		}
+		// A request pinned to a focused API viewer belongs to that browser.
+		// No TUI surface (app content deck, Sessions, plugins) may consume it,
+		// or the same pane would open on two screens.
+		if msg.Request.Viewer != "" {
+			return m, tea.Batch(cmds...)
+		}
 		if msg.Request.Action == uirequest.ActionNotify {
 			if cmd := (&m).handleNotifyRequest(msg.Request); cmd != nil {
 				cmds = append(cmds, cmd)

@@ -16,14 +16,22 @@ const Version = 1
 
 // Report is one versioned JSON document describing a surface's pane tree.
 type Report struct {
-	Version  int             `json:"version"`
-	Surface  string          `json:"surface,omitempty"`
-	Root     string          `json:"root,omitempty"`
-	Grid     *Grid           `json:"grid"`
-	Tree     json.RawMessage `json:"tree,omitempty"`
-	Viewport *Box            `json:"viewport,omitempty"`
-	Caps     Caps            `json:"caps"`
-	Floors   Floors          `json:"floors"`
+	Version     int             `json:"version"`
+	Surface     string          `json:"surface,omitempty"`
+	Root        string          `json:"root,omitempty"`
+	Grid        *Grid           `json:"grid"`
+	Tree        json.RawMessage `json:"tree,omitempty"`
+	Viewport    *Box            `json:"viewport,omitempty"`
+	CSSViewport *CSSViewport    `json:"viewport_css_pixels,omitempty"`
+	FloorsUnit  string          `json:"floors_unit,omitempty"`
+	Caps        Caps            `json:"caps"`
+	Floors      Floors          `json:"floors"`
+}
+
+// CSSViewport describes a graphical screen without terminal cell geometry.
+type CSSViewport struct {
+	Width  int `json:"width"`
+	Height int `json:"height"`
 }
 
 type Grid struct {
@@ -74,22 +82,27 @@ type Floor struct {
 // panecodec encoding of Tree (tabs, session, raw tree); Boxes are live outer
 // geometry keyed by leaf id, omitted when the tree does not fit.
 type Source struct {
-	Surface  string
-	Root     string
-	Tree     *panelayout.Node
-	Viewport *panelayout.Box
-	Floors   panelayout.Floors
-	Layout   *state.PaneLayoutJSON
-	Boxes    map[int]panelayout.Box
+	Surface     string
+	Root        string
+	Tree        *panelayout.Node
+	CSSViewport *CSSViewport
+	FloorsUnit  string
+	Viewport    *panelayout.Box
+	Floors      panelayout.Floors
+	Layout      *state.PaneLayoutJSON
+	Boxes       map[int]panelayout.Box
+	LeafLayouts map[int]*state.PaneLayoutJSON
 }
 
 // Build projects Source onto the get-report JSON document. A tree that
 // escapes the grid vocabulary reports "grid": null plus the raw tree.
 func Build(src Source) json.RawMessage {
 	report := Report{
-		Version: Version,
-		Surface: src.Surface,
-		Root:    src.Root,
+		Version:     Version,
+		CSSViewport: src.CSSViewport,
+		FloorsUnit:  src.FloorsUnit,
+		Surface:     src.Surface,
+		Root:        src.Root,
 		Caps: Caps{
 			MaxColumns: panelayout.MaxGridColumns,
 			MaxRows:    panelayout.MaxGridRows,
@@ -106,7 +119,7 @@ func Build(src Source) json.RawMessage {
 		for col, column := range grid.Columns {
 			projected.Columns = append(projected.Columns, Column{
 				Column: col + 1,
-				Panes:  cellPanes(col+1, column.Cells, src.Layout, src.Boxes),
+				Panes:  cellPanes(col+1, column.Cells, src.Layout, src.Boxes, src.LeafLayouts),
 			})
 		}
 		report.Grid = projected
@@ -118,7 +131,7 @@ func Build(src Source) json.RawMessage {
 	return out
 }
 
-func cellPanes(col int, cells []*panelayout.Node, layout *state.PaneLayoutJSON, boxes map[int]panelayout.Box) []Pane {
+func cellPanes(col int, cells []*panelayout.Node, layout *state.PaneLayoutJSON, boxes map[int]panelayout.Box, leafLayouts map[int]*state.PaneLayoutJSON) []Pane {
 	panes := make([]Pane, 0, len(cells))
 	for row, leaf := range cells {
 		cell := Pane{
@@ -126,7 +139,11 @@ func cellPanes(col int, cells []*panelayout.Node, layout *state.PaneLayoutJSON, 
 			Kind: leaf.Kind.Name(),
 			Pane: leaf.ID,
 		}
-		cell.Tabs, cell.Active, cell.Provider, cell.Collection, cell.Query, cell.Session = leafInfo(layout, leaf.Kind)
+		leafLayout := layout
+		if saved := leafLayouts[leaf.ID]; saved != nil {
+			leafLayout = saved
+		}
+		cell.Tabs, cell.Active, cell.Provider, cell.Collection, cell.Query, cell.Session = leafInfo(leafLayout, leaf.Kind)
 		if box, ok := boxes[leaf.ID]; ok {
 			cell.Box = &Box{X: box.X, Y: box.Y, W: box.W, H: box.H}
 		}
@@ -237,10 +254,11 @@ func treeJSON(layout *state.PaneLayoutJSON, root, surface string) json.RawMessag
 	if layout == nil {
 		return nil
 	}
-	layout.Root = root
-	layout.Surface = surface
-	layout.Open = true
-	out, err := json.Marshal(layout)
+	copy := *layout
+	copy.Root = root
+	copy.Surface = surface
+	copy.Open = true
+	out, err := json.Marshal(&copy)
 	if err != nil {
 		return nil
 	}

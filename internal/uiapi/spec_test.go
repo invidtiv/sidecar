@@ -172,7 +172,14 @@ func TestSpecDocumentsEventsStreamAndSharedCatalogQuery(t *testing.T) {
 		t.Fatal("missing upgrade authentication parameters")
 	}
 	sessionsParams := paths["/api/v0/sessions"].(map[string]any)["get"].(map[string]any)["parameters"]
-	if !reflect.DeepEqual(params[2:len(params)-1], sessionsParams) {
+	var catalogParams []any
+	for _, p := range params[2:] {
+		name := p.(map[string]any)["name"]
+		if name != "content" && name != "viewer" {
+			catalogParams = append(catalogParams, p)
+		}
+	}
+	if !reflect.DeepEqual(catalogParams, sessionsParams) {
 		t.Fatal("event query differs from Sessions query")
 	}
 	if get["responses"].(map[string]any)["101"] == nil {
@@ -233,4 +240,20 @@ func TestTypedHelloAdvertisesEvents(t *testing.T) {
 		}
 	}
 	t.Fatal("typed hello dropped events capability")
+}
+
+func TestViewerSpecGenerationIsDeterministic(t *testing.T) {
+	want, err := Spec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 20; i++ {
+		got, err := Spec()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != string(want) {
+			t.Fatal("request schema names collide nondeterministically")
+		}
+	}
 }

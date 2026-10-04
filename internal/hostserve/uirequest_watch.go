@@ -21,6 +21,8 @@ const (
 )
 
 type uiRequestFile struct {
+	// Viewer pins the request to a focused local API viewer; it is not relayed.
+	Viewer    string                     `json:"viewer"`
 	ID        string                     `json:"id"`
 	CreatedAt time.Time                  `json:"createdAt"`
 	TTLMs     int                        `json:"ttlMs"`
@@ -156,7 +158,7 @@ func (w *requestWatch) drain(now time.Time, hostID, viewerInstance string, owner
 			w.seen[req.ID] = struct{}{}
 			continue
 		}
-		if req.Origin.TmuxSession == "" {
+		if req.Origin.TmuxSession == "" || req.Viewer != "" {
 			w.seen[req.ID] = struct{}{}
 			continue
 		}

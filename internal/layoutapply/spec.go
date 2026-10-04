@@ -249,6 +249,9 @@ func specLeafJSON(item *ItemPlan) *state.PaneLayoutJSON {
 	}
 }
 
+// SpecLeafJSON projects validated targets onto the shared persistence shape.
+func SpecLeafJSON(item *ItemPlan) *state.PaneLayoutJSON { return specLeafJSON(item) }
+
 func specStateKind(kind panelayout.Kind) string {
 	switch kind {
 	case panelayout.Document:

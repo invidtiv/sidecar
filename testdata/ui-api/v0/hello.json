@@ -12,7 +12,8 @@
     "workspace",
     "workspace_operations",
     "content",
-    "layouts"
+    "layouts",
+    "uiRequestRelayV1"
   ],
   "terminal": {
     "protocol": "mobile",

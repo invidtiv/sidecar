@@ -527,6 +527,7 @@ func RootCommand() *Command {
 			"rather than land elsewhere (--split expresses a preference; --at, a demand).\n\n" +
 			"From a Sidecar-managed pane whose geometry lease is held by a connected viewer,\n" +
 			"the open lands on that viewer's screen — not on a host TUI that may not be running.\n" +
+			"A focused, visible API viewer with uiRequestRelayV1 receives open on its browser screen.\n" +
 			"There is no --host flag: routing is the lease. A relayed open never queues: if that\n" +
 			"row is not on the viewer's screen, or the lease holder cannot receive pane requests\n" +
 			"(disconnected, too old, or presence expired), the command declines (exit 4).",

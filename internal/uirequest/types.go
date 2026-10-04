@@ -547,6 +547,8 @@ type Options struct {
 
 // Request is the payload written by the CLI into the request bus.
 type Request struct {
+	// Viewer pins an API events connection. Other surfaces must not consume it.
+	Viewer    string    `json:"viewer,omitempty"`
 	Version   int       `json:"version"`
 	ID        string    `json:"id"`
 	CreatedAt time.Time `json:"createdAt"`

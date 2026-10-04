@@ -165,3 +165,12 @@ func (s FileStore) access(viewer, project, match string, next *Document) (Docume
 	}
 	return *next, layoutETag(data), nil
 }
+
+// Validate checks the shared viewer layout grammar without writing storage.
+func Validate(doc Document) error {
+	count := 0
+	if err := validateLayout(doc.Layout, 0, &count); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	return nil
+}

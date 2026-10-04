@@ -123,6 +123,8 @@ type Server struct {
 	eventErr      error
 	catalogEvents eventSignals
 	holderCache   legacyHolderCache
+	viewer        viewerRelay
+	viewerErr     error
 	// contentWatches bounds live content registrations per credential.
 	contentWatches  watchBudget
 	contentRequests contentRequestBudget
@@ -377,7 +379,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 			}
 		}
 		done := make(chan struct{})
-		go func() { s.streams.Wait(); close(done) }()
+		go func() { s.streams.Wait(); s.viewer.workers.Wait(); close(done) }()
 		select {
 		case <-done:
 		case <-ctx.Done():
@@ -405,7 +407,7 @@ func (s *Server) beginStream() bool {
 
 func (s *Server) hello() Hello {
 	return Hello{APIVersion: APIVersion, APIInstance: s.instance, ServerVersion: s.opts.Version,
-		Capabilities: []string{"sessions", "status", "terminal", "ws_tickets", "events", "projects", "workspace", "workspace_operations", "content", "layouts"},
+		Capabilities: []string{"sessions", "status", "terminal", "ws_tickets", "events", "projects", "workspace", "workspace_operations", "content", "layouts", "uiRequestRelayV1"},
 		Terminal:     TerminalProtocol{Protocol: "mobile", Version: mobileproto.Version}}
 }
 

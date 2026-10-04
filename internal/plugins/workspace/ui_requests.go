@@ -40,6 +40,9 @@ func hostInstanceID() string {
 const relayedOpenNotOnScreenReason = "the origin shell is not on screen, and relayed open requests are never queued"
 
 func (p *Plugin) handleUIRequest(req uirequest.Request) tea.Cmd {
+	if req.Viewer != "" {
+		return nil
+	}
 	if req.Action == uirequest.ActionRenameWorktree {
 		p.applyWorktreeRenameRequest(req)
 		return nil

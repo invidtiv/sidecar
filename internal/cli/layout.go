@@ -31,7 +31,8 @@ func layoutCommand() *Command {
 			"screen the request declines instead (exit 4), because a stale answer is\n" +
 			"worse than a refusal.\n\n" +
 			"From a Sidecar-managed pane on a host you are viewing, the JSON is that\n" +
-			"viewer's grid for the matching Sessions row.",
+			"viewer's grid for the matching Sessions row.\n" +
+			"A focused, visible API viewer with uiRequestRelayV1 receives these requests; its viewport uses CSS pixels.",
 		Flags: []Flag{
 			{Name: "--shell", Arg: "NAME", Summary: "Target a registered shell by display name or tmux name"},
 			{Name: "--project", Arg: "NAME", Summary: "Target a project's Workspaces surface (slug, basename, or path)"},

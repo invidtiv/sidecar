@@ -1953,3 +1953,27 @@ func TestAppContentDeckActivatesFromDocumentLeafIntoSameDeck(t *testing.T) {
 		t.Fatal("activation from a document leaf left the deck it was drawn in")
 	}
 }
+
+// A request pinned to a focused API viewer belongs to that browser. No TUI
+// surface, including the app-level content deck, may also open it.
+func TestPinnedAPIViewerRequestIsIgnoredByEveryTUISurface(t *testing.T) {
+	root := t.TempDir()
+	ackDir := t.TempDir()
+	config.SetTestStateDir(ackDir)
+	t.Cleanup(config.ResetTestStateDir)
+	p := &deckHostTestPlugin{id: "file-browser", focus: "preview", frame: "plain"}
+	m := appDeckTestModel(t, root, p)
+	m.renderContent(200, 40)
+	req := uirequest.Request{
+		ID: "pinned-open", Action: uirequest.ActionOpen, CreatedAt: time.Now().UTC(), Viewer: "api-viewer-example",
+		Origin: uirequest.Origin{ProjectKey: "sidecar", WorkDir: root},
+		Target: uirequest.Target{Kind: uirequest.TargetKindIssue, Value: "td-22f35f"},
+	}
+	_, _ = m.Update(uirequest.RequestMsg{Request: req})
+	if h := m.currentContentDeck(); h != nil && h.deck.Leaf(panelayout.Issue) != 0 {
+		t.Fatal("TUI content deck opened a request pinned to an API viewer")
+	}
+	if acks, _ := uirequest.ReadAcks(ackDir, req.ID, req.Action); len(acks) != 0 {
+		t.Fatalf("TUI acknowledged a pinned request: %+v", acks)
+	}
+}

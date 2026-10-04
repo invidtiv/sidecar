@@ -66,6 +66,11 @@ func AcksDirPath(stateDir, id string, action Action) string {
 
 // WriteRequest atomically creates the request file and its matching acks directory.
 func WriteRequest(stateDir string, req Request) (string, error) {
+	if req.Viewer == "" && (req.Action == ActionOpen || req.Action == ActionLayout) && req.Origin.HostID == "" {
+		if v, ok := ReadAPIViewer(stateDir, time.Now()); ok && v.Focused && v.HasCapability(APIViewerRelay) {
+			req.Viewer = v.Instance
+		}
+	}
 	if _, err := Dir(stateDir); err != nil {
 		return "", err
 	}
