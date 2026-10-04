@@ -115,15 +115,38 @@ Browser pairing on loopback exists for the same reason. It is the one thing that
 
 The web surface never auto-answers an agent approval, the same as `agent send-keys`.
 
-## Geometry: who decides the terminal size
+## Geometry: the screen you are using wins
 
-tmux has one size per pane. Every viewer shares it through the existing `@sidecar-owner` lease (`internal/tty/geometry_lease.go`), with the rules unchanged:
+tmux has one size per pane, so every viewer shares it through the `@sidecar-owner` lease (`internal/tty/geometry_lease.go`). The rule for browsers and phones is the one two TUIs already follow: **the screen you are using wins.** No client has a "take control" button or a control mode. The user never needs to know a lease exists.
 
-- **Viewing never resizes.** A watching client renders the owner's columns and rows. A browser can scale the font to fit its box, so watching costs the desktop nothing.
-- **Taking control resizes.** `control` claims the lease and resizes tmux to the client's fitted size. Other viewers letterbox, as the TUI already does for mobile and remote viewers.
-- **Idle releases control.** Presence heartbeats expire after 15 seconds, so a closed laptop lid does not leave the pane stuck at a phone's width.
+The TUI arbitrates with `DecideGeometryLease`, a state-free rule that was written so a headless caller could adopt it unchanged:
 
-The SDK makes this a property of the component. `<sidecar-terminal control="auto|manual|never">` decides whether focus-and-type claims control, and the component shows who holds it.
+- An unfocused instance never asserts geometry, and it releases what it holds.
+- A focused instance claims a lease that is unowned, stale, or held by a defunct instance.
+- It also preempts an owner that has gone at least 5 seconds longer without input than it has, which handles walking away from a machine that never reports a blur.
+- An unambiguous local action claims outright.
+
+Today the headless (mobile) path uses explicit compare-and-set `control`/`release` instead. v1 makes every API client an ordinary peer under the TUI's rule:
+
+- **Clients report presence, not control.** A `presence` operation carries whether the window or app is focused and visible, the time since the user's last input, and the fitted columns and rows of each displayed terminal. The owning service runs `DecideGeometryLease` for each attachment on every presence change and heartbeat. Each attachment has its own lease identity, so two tabs or two devices compete correctly.
+- **User actions count as input.** Selecting a shell, clicking into a terminal and typing all count. Typing claims outright, as an interactive keypress does in the TUI. Input from a client that does not hold the lease claims first and then delivers, so a keystroke is never refused for lease reasons.
+- **Losing focus releases.** Switching from the browser to the TUI on the same Mac hands the size over immediately. Switching between machines resolves within the 5-second idle preemption, or instantly on the first keystroke.
+- **The explicit `control`/`release` operations remain** in the protocol for compatibility and for tools, but neither the SDK nor the native app exposes them.
+
+### Making shell-cycling smooth
+
+The rough edge is browsing shells in a sidebar. Each shell is sized for some other screen until this one claims it, so a naive client jumps on the first click. The client chain removes that jump:
+
+1. **Claim on display, not on click.** Selecting a shell in a focused window is input, so the shell is resized for this window while you look at it. By the time you click in, it already fits.
+2. **Send the size up front.** The SDK measures font metrics once and computes the box's columns and rows before it opens the terminal. That way the first claimed frame is already the right size.
+3. **Never blank, never flash.** Until the resized frame arrives, the previous frame stays on screen, scaled to fit. The swap happens in one paint.
+4. **Settle before resizing.** While the user moves quickly through the sidebar with the keyboard, the client claims only once the selection rests (about 150 ms). Shells flicked past are shown scaled and never resized, so a dozen agents do not each get a burst of window-size changes.
+5. **Window resizes are debounced** and refit the same way.
+6. **When another screen holds the size,** the terminal shows that geometry scaled to fit. A quiet corner hint such as "sized for iPhone" fades on its own. It has no buttons, and touching the terminal takes the size back.
+
+`<sidecar-terminal>` follows focus by default. A `readonly` attribute makes a pure viewer that never claims and never sends input, for dashboard widgets and the `sessions:read` scope.
+
+The native app adopts the same presence model. It drops its explicit control UI and reports foreground state, the visible terminal and taps.
 
 ## Terminal protocol v1
 
@@ -134,7 +157,8 @@ The mobile protocol becomes the terminal protocol for every client, and the nati
 3. **Slow-socket behavior.** The outbound queue holds 8 responses and an overflow aborts the stream (`internal/mobile/service.go:104-108`). Frames are latest-wins, so coalesce them before the queue and keep the abort only for control responses.
 4. **Server-side paste.** Add a `paste` operation that uses `load-buffer` + `paste-buffer -p`, as the TUI does, so tmux decides bracketing. Clients stop wrapping bracketed paste themselves.
 5. **Catalog push and attention** move to the events stream, which the native app also consumes. This is mobile M2's attention work, designed once for every client.
-6. **Reconnect continuity.** The SDK reconnects with the attachment's identity and resumes view-only, as v0 `reconnect` already does. It then re-claims control only if the user still has the terminal focused.
+6. **Reconnect continuity.** The SDK reconnects with the attachment's identity, resumes view-only as v0 `reconnect` already does, and reports presence again. If the window is still focused, the lease rule hands the size straight back.
+7. **Presence replaces control in clients.** See "Geometry: the screen you are using wins".
 
 Inherited and unchanged for now: tmux 3.4 is view-only (no `bracket_paste_flag` probe), and History refuses on the alternate screen and has no pagination. Clients show these refusals as they are.
 
@@ -172,7 +196,7 @@ Each milestone ends in something Marcus can use. Every live proof isolates both 
 
 ### U0: Steel thread through every layer
 
-Create the `sidecar-ui` repo. `sidecar api serve` runs on the Unix socket and loopback, with the always-on guards and browser pairing. A terminal WebSocket bridges the unchanged v0 protocol. A minimal `@marcusv/sidecar-client` `Terminal` and `<sidecar-terminal>`. Two consumers: the plain-HTML example, and the same element embedded in a page served from a second origin.
+Create the `sidecar-ui` repo. `sidecar api serve` runs on the Unix socket and loopback, with the always-on guards and browser pairing. A terminal WebSocket bridges the unchanged v0 protocol. A minimal `@marcusv/sidecar-client` `Terminal` and `<sidecar-terminal>`. Two consumers: the plain-HTML example, and the same element embedded in a page served from a second origin. The SDK hides control in U0 as well, approximating focus-wins on the v0 operations: it claims on display while the window is focused, claims on input, releases on blur, and supports the `readonly` attribute. U1 moves that rule into the server.
 
 Exit:
 - From a tailnet device through `tailscale serve`, type into a running agent session. The desktop TUI shows the same session and is never resized until control is taken.
@@ -181,7 +205,7 @@ Exit:
 
 ### U1: Contract v1 and Sessions
 
-Generated schemas and `sidecar api spec`. The events stream with catalog push and attention. v1 frames (reset-free, coalesced, server-side paste). Fixture mode. `<sidecar-sessions>` and the Sessions view in `sidecar-ui`, including cross-host rows through the hub, History and notifications. The native app moves to v1 and the events stream. `sidecar api service install` with the launchd and systemd adapters. Two proofs: a three-viewer lease proof (TUI, phone, browser), and an independent security review of the auth and guards.
+Presence-based geometry first (see "Geometry: the screen you are using wins"): the `presence` operation, `DecideGeometryLease` for each attachment in the owning service, claim-on-input, and the native app dropping its control UI. Then generated schemas and `sidecar api spec`. The events stream with catalog push and attention. v1 frames (reset-free, coalesced, server-side paste). Fixture mode. `<sidecar-sessions>` and the Sessions view in `sidecar-ui`, including cross-host rows through the hub, History and notifications. The native app moves to v1 and the events stream. `sidecar api service install` with the launchd and systemd adapters. Two proofs: a three-viewer lease proof (TUI, phone, browser), and an independent security review of the auth and guards.
 
 ### U2: Project workspaces and operations
 
