@@ -3,6 +3,7 @@ package uiapi
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -27,29 +28,28 @@ type grant struct {
 	origin     string
 	login      string
 	client     string
-	credential string // paired-origin token hash at authorization time
+	credential string // bearer token hash at authorization time
 	expires    time.Time
 }
 
-// session is a browser session minted by a pairing exchange. Its token is a
-// bearer credential bound to the origin that exchanged the code.
-type session struct {
-	origin  string
-	created time.Time
-}
-
-// authStore holds the in-memory credentials: single-use pairing codes, browser
-// sessions and WebSocket tickets. Nothing here survives a restart (v0).
+// authStore keeps codes, tickets and short-lived bearers in memory. Only
+// browser public-key registrations survive a restart.
 type authStore struct {
-	mu       sync.Mutex
-	now      func() time.Time
-	codes    map[string]time.Time // code hash -> expiry
-	sessions map[string]session   // token hash -> session
-	tickets  map[string]grant     // ticket hash -> grant
+	sessionPath string
+	sessionInfo os.FileInfo
+	storeErr    error
+	bearers     map[string]browserBearer
+	proofs      map[string]browserProof
+	logf        func(string, ...any)
+	mu          sync.Mutex
+	now         func() time.Time
+	codes       map[string]time.Time // code hash -> expiry
+	sessions    map[string]session   // public registration ID -> registration
+	tickets     map[string]grant     // ticket hash -> grant
 }
 
 func newAuthStore(now func() time.Time) *authStore {
-	return &authStore{now: now, codes: map[string]time.Time{}, sessions: map[string]session{}, tickets: map[string]grant{}}
+	return &authStore{now: now, codes: map[string]time.Time{}, sessions: map[string]session{}, tickets: map[string]grant{}, bearers: map[string]browserBearer{}, proofs: map[string]browserProof{}}
 }
 
 func (a *authStore) issueCode() (string, time.Time, error) {
@@ -82,61 +82,36 @@ func (a *authStore) redeemCode(code string) bool {
 	return ok && a.now().Before(expires)
 }
 
-// newSession mints a session token bound to origin.
-func (a *authStore) newSession(origin string) (string, error) {
-	token, err := randomToken(32)
-	if err != nil {
-		return "", err
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if len(a.sessions) >= maxSessions {
-		// Evict the oldest: a browser that paired a thousand sessions ago
-		// re-pairs with `sidecar api open`.
-		var oldestKey string
-		var oldest time.Time
-		for key, s := range a.sessions {
-			if oldestKey == "" || s.created.Before(oldest) {
-				oldestKey, oldest = key, s.created
-			}
-		}
-		delete(a.sessions, oldestKey)
-	}
-	a.sessions[hashToken(token)] = session{origin: origin, created: a.now()}
-	return token, nil
-}
-
-// lookupSession returns the origin a session token is bound to, and the key
-// that identifies this session as one client.
-func (a *authStore) lookupSession(token string) (origin, client string, ok bool) {
-	if token == "" {
-		return "", "", false
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	key := hashToken(token)
-	s, ok := a.sessions[key]
-	if !ok {
-		return "", "", false
-	}
-	return s.origin, sessionClient(key), true
-}
-
 // sessionClient is the client key a session's requests, tickets and
 // terminals are counted under.
-func sessionClient(key string) string { return "session:" + key[:16] }
+func sessionClient(key string) string { return "session:" + key }
 
 // revokeSessions drops every browser session, or only those bound to origin
 // when it is not empty, together with the tickets they issued. It returns the
 // client keys it revoked, so their open terminals can be closed.
-func (a *authStore) revokeSessions(origin string) map[string]bool {
+func (a *authStore) revokeSessions(origin string) (map[string]bool, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	revoked := map[string]bool{}
-	for key, s := range a.sessions {
-		if origin == "" || s.origin == origin {
-			delete(a.sessions, key)
-			revoked[sessionClient(key)] = true
+	if err := a.withSessionsLocked(func(sessions map[string]session) bool {
+		for key, s := range sessions {
+			if origin == "" || s.Origin == origin {
+				delete(sessions, key)
+				revoked[sessionClient(key)] = true
+			}
+		}
+		return true
+	}); err != nil {
+		return nil, err
+	}
+	for hash, bearer := range a.bearers {
+		if origin == "" || bearer.origin == origin {
+			delete(a.bearers, hash)
+		}
+	}
+	for hash, proof := range a.proofs {
+		if origin == "" || proof.origin == origin {
+			delete(a.proofs, hash)
 		}
 	}
 	for key, g := range a.tickets {
@@ -144,7 +119,7 @@ func (a *authStore) revokeSessions(origin string) map[string]bool {
 			delete(a.tickets, key)
 		}
 	}
-	return revoked
+	return revoked, nil
 }
 
 func (a *authStore) revokeTickets(keys map[string]bool) {
@@ -155,22 +130,6 @@ func (a *authStore) revokeTickets(keys map[string]bool) {
 			delete(a.tickets, key)
 		}
 	}
-}
-
-// sessionClientLive reports whether client, a key from sessionClient, still
-// names a session. Keys of other kinds are not sessions and always are.
-func (a *authStore) sessionClientLive(client string) bool {
-	if !strings.HasPrefix(client, "session:") {
-		return true
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	for key := range a.sessions {
-		if sessionClient(key) == client {
-			return true
-		}
-	}
-	return false
 }
 
 func (a *authStore) issueTicket(g grant) (string, time.Time, error) {

@@ -188,6 +188,11 @@ func Start(opts Options) (*Server, error) {
 	if s.origins, err = loadOriginStore(filepath.Join(dir, originsFileName)); err != nil {
 		return nil, err
 	}
+	s.auth.sessionPath = filepath.Join(dir, sessionsFileName)
+	s.auth.logf = opts.Logf
+	if err := s.auth.withSessionsLocked(func(map[string]session) bool { return false }); err != nil {
+		return nil, err
+	}
 	if s.static, err = newStaticHandler(opts.UIDir); err != nil {
 		return nil, err
 	}
