@@ -68,6 +68,20 @@ type ResumePlan struct {
 // separate from PlanResume so a discovered reference can never become auto
 // resume authority by passing through the wrong caller.
 func PlanCandidatePrefill(kind string, candidate Candidate) (ResumePlan, error) {
+	return PlanCandidatePrefillInDir("", kind, candidate)
+}
+
+// PlanCandidatePrefillInDir resolves a reviewed prefill for the destination directory.
+func PlanCandidatePrefillInDir(workDir, kind string, candidate Candidate) (ResumePlan, error) {
+	return planCandidatePrefill(workDir, kind, candidate, false)
+}
+
+// PlanCandidatePrefillPreview validates a prefill without consulting installed executables.
+func PlanCandidatePrefillPreview(kind string, candidate Candidate) (ResumePlan, error) {
+	return planCandidatePrefill("", kind, candidate, true)
+}
+
+func planCandidatePrefill(workDir, kind string, candidate Candidate, preview bool) (ResumePlan, error) {
 	family, ok := agentcatalog.Lookup(kind)
 	if !ok {
 		return ResumePlan{}, fmt.Errorf("unknown agent kind %q", kind)
@@ -75,9 +89,17 @@ func PlanCandidatePrefill(kind string, candidate Candidate) (ResumePlan, error) 
 	var argv []string
 	var err error
 	if candidate.Picker {
-		argv, err = family.ResumePickerArgv()
+		if preview {
+			argv, err = family.ResumePickerArgv()
+		} else {
+			argv, err = family.ResumePickerArgvInDir(workDir)
+		}
 	} else {
-		argv, err = family.ResumeArgv(string(candidate.Ref.Kind), candidate.Ref.Value, nil)
+		if preview {
+			argv, err = family.ResumePreviewArgv(string(candidate.Ref.Kind), candidate.Ref.Value, nil)
+		} else {
+			argv, err = family.ResumeArgvInDir(workDir, string(candidate.Ref.Kind), candidate.Ref.Value, nil)
+		}
 	}
 	if err != nil {
 		return ResumePlan{}, err
@@ -93,6 +115,20 @@ func PlanCandidatePrefill(kind string, candidate Candidate) (ResumePlan, error) 
 // exact enough to resume from, and a candidate discovered by matching working
 // directories is a suggestion for a human, not a command to run.
 func PlanResume(kind string, ref Ref) (ResumePlan, error) {
+	return PlanResumeInDir("", kind, ref)
+}
+
+// PlanResumeInDir resolves a bound conversation for its destination directory.
+func PlanResumeInDir(workDir, kind string, ref Ref) (ResumePlan, error) {
+	return planResume(workDir, kind, ref, false)
+}
+
+// PlanResumePreview validates restore intent without consulting installed executables.
+func PlanResumePreview(kind string, ref Ref) (ResumePlan, error) {
+	return planResume("", kind, ref, true)
+}
+
+func planResume(workDir, kind string, ref Ref, preview bool) (ResumePlan, error) {
 	if ref.Empty() {
 		return ResumePlan{}, fmt.Errorf("%w: there is no session reference to resume", ErrInvalidRef)
 	}
@@ -110,7 +146,13 @@ func PlanResume(kind string, ref Ref) (ResumePlan, error) {
 	if !family.ResumesKind(string(ref.Kind)) {
 		return ResumePlan{}, fmt.Errorf("%w: %s cannot resume from a %q reference", ErrUnsupportedKind, family.Name, ref.Kind)
 	}
-	argv, err := family.ResumeArgv(string(ref.Kind), ref.Value, nil)
+	var argv []string
+	var err error
+	if preview {
+		argv, err = family.ResumePreviewArgv(string(ref.Kind), ref.Value, nil)
+	} else {
+		argv, err = family.ResumeArgvInDir(workDir, string(ref.Kind), ref.Value, nil)
+	}
 	if err != nil {
 		return ResumePlan{}, err
 	}

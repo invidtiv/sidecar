@@ -83,14 +83,15 @@ func ObserveWorktreeOrphans(ctx context.Context, projects []Project, opts Observ
 	} else {
 		index := map[string]int{}
 		for _, line := range strings.Split(out, "\n") {
-			fields := strings.SplitN(strings.TrimRight(line, "\r"), "\t", 3)
+			// Local tmux output uses LF; a final CR is literal cwd evidence.
+			fields := strings.SplitN(line, "\t", 3)
 			name := strings.TrimSpace(fields[0])
 			if name == "" {
 				continue
 			}
 			i, seen := index[name]
 			if !seen {
-				session := shellliveness.TmuxSession{Name: name}
+				session := shellliveness.TmuxSession{Name: name, PanePathsMissing: true}
 				if len(fields) > 1 {
 					if path := strings.TrimSpace(fields[1]); path != "" && filepath.IsAbs(path) {
 						session.Path = workspaceops.CanonicalWorkPath(path)
@@ -102,14 +103,12 @@ func ObserveWorktreeOrphans(ctx context.Context, projects []Project, opts Observ
 				index[name] = i
 				obs.Sessions = append(obs.Sessions, session)
 			}
-			if len(fields) > 2 {
-				if pane := strings.TrimSpace(fields[2]); pane != "" && directoryExists(pane) {
-					obs.Sessions[i].PaneInExistingDir = true
-				}
+			if len(fields) != 3 || !workspaceops.PaneDirectoryMissing(fields[2]) {
+				obs.Sessions[i].PanePathsMissing = false
 			}
 		}
 		for _, session := range obs.Sessions {
-			if session.PathMissing && !session.PaneInExistingDir && strings.HasPrefix(session.Name, workspaceops.WorktreeSessionPrefix) {
+			if session.PathMissing && session.PanePathsMissing && strings.HasPrefix(session.Name, workspaceops.WorktreeSessionPrefix) {
 				suspect = true
 			}
 		}
@@ -161,11 +160,6 @@ func pathMissingWithParent(path string) bool {
 		return false
 	}
 	info, err := os.Stat(filepath.Dir(path))
-	return err == nil && info.IsDir()
-}
-
-func directoryExists(path string) bool {
-	info, err := os.Stat(path)
 	return err == nil && info.IsDir()
 }
 

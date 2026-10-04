@@ -1222,6 +1222,14 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			return app.ToastMsg{Message: "Failed to inject resume command", Duration: 3 * time.Second, IsError: true}
 		}
 
+	case shellResumeResolvedMsg:
+		if msg.Err != nil {
+			return p, func() tea.Msg {
+				return app.ToastMsg{Message: msg.Err.Error(), Duration: 5 * time.Second, IsError: true}
+			}
+		}
+		return p, p.createShellWithResume(msg.ResumeArgv)
+
 	case worktreeResumeCreatedMsg:
 		// Worktree created for resume - start agent with resume command (td-aa4136)
 		if msg.Err != nil {
@@ -1241,7 +1249,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		p.pendingResumeWorktree = msg.Worktree.Name
 
 		// Start agent with resume command
-		return p, p.startAgentWithResumeCmd(msg.Worktree, msg.AgentType, msg.SkipPerms, msg.ResumeArgv)
+		return p, p.startAgentWithResumeCmd(msg.Worktree, msg.AgentType, msg.SkipPerms, msg.ResumeArgv, msg.AdapterID, msg.SessionID)
 
 	case ShellKilledMsg:
 		if msg.Err != nil {

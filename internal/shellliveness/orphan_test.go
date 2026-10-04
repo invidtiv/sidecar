@@ -21,7 +21,7 @@ func TestRemovedWorktreeWithLiveSessionIsAnOrphan(t *testing.T) {
 		SessionPrefix: wsPrefix,
 		Inventories:   []WorktreeInventory{repoInventory()},
 		Registered:    []RegisteredRoot{registered("/code/repo-foo", "sidecar-ws-repo-foo")},
-		Sessions:      []TmuxSession{{Name: "sidecar-ws-repo-foo", Path: "/code/repo-foo", PathMissing: true, NameFromPath: true}},
+		Sessions:      []TmuxSession{{PanePathsMissing: true, Name: "sidecar-ws-repo-foo", Path: "/code/repo-foo", PathMissing: true, NameFromPath: true}},
 	})
 	if len(plan.Orphans) != 1 {
 		t.Fatalf("orphans = %+v, want the one removed worktree", plan.Orphans)
@@ -40,7 +40,7 @@ func TestPrunableWorktreeIsAnOrphan(t *testing.T) {
 		SessionPrefix: wsPrefix,
 		Inventories:   []WorktreeInventory{repoInventory(ListedWorktree{Path: "/code/repo-foo", Prunable: true, Sessions: []string{"sidecar-ws-repo-foo"}})},
 		Registered:    []RegisteredRoot{registered("/code/repo-foo", "sidecar-ws-repo-foo")},
-		Sessions:      []TmuxSession{{Name: "sidecar-ws-repo-foo", Path: "/code/repo-foo"}},
+		Sessions:      []TmuxSession{{PanePathsMissing: true, Name: "sidecar-ws-repo-foo", Path: "/code/repo-foo"}},
 	})
 	if len(plan.Orphans) != 1 || plan.Orphans[0].Reason != OrphanPrunable {
 		t.Fatalf("orphans = %+v, want one prunable orphan", plan.Orphans)
@@ -52,7 +52,7 @@ func TestListedWorktreeIsNeverAnOrphan(t *testing.T) {
 		SessionPrefix: wsPrefix,
 		Inventories:   []WorktreeInventory{repoInventory(ListedWorktree{Path: "/code/repo-foo", Sessions: []string{"sidecar-ws-repo-foo"}})},
 		Registered:    []RegisteredRoot{registered("/code/repo-foo", "sidecar-ws-repo-foo")},
-		Sessions:      []TmuxSession{{Name: "sidecar-ws-repo-foo", Path: "/code/repo-foo"}},
+		Sessions:      []TmuxSession{{PanePathsMissing: true, Name: "sidecar-ws-repo-foo", Path: "/code/repo-foo"}},
 	})
 	if len(plan.Orphans) != 0 || len(plan.Roots) != 0 {
 		t.Fatalf("plan = %+v, want nothing", plan)
@@ -69,7 +69,7 @@ func TestUnansweredInventoryProducesNoVerdict(t *testing.T) {
 		SessionPrefix: wsPrefix,
 		Inventories:   []WorktreeInventory{inv},
 		Registered:    []RegisteredRoot{registered("/code/repo-foo", "sidecar-ws-repo-foo")},
-		Sessions:      []TmuxSession{{Name: "sidecar-ws-repo-foo", Path: "/code/repo-foo", PathMissing: true, NameFromPath: true}},
+		Sessions:      []TmuxSession{{PanePathsMissing: true, Name: "sidecar-ws-repo-foo", Path: "/code/repo-foo", PathMissing: true, NameFromPath: true}},
 	})
 	if len(plan.Orphans) != 0 || len(plan.Roots) != 0 {
 		t.Fatalf("plan = %+v, want nothing from an unanswered inventory", plan)
@@ -93,7 +93,7 @@ func TestSessionNameClaimedByAListedWorktreeIsNotAnOrphan(t *testing.T) {
 		SessionPrefix: wsPrefix,
 		Inventories:   []WorktreeInventory{repoInventory(ListedWorktree{Path: "/elsewhere/repo-foo", Sessions: []string{"sidecar-ws-repo-foo"}})},
 		Registered:    []RegisteredRoot{registered("/code/repo-foo", "sidecar-ws-repo-foo")},
-		Sessions:      []TmuxSession{{Name: "sidecar-ws-repo-foo", Path: "/elsewhere/repo-foo"}},
+		Sessions:      []TmuxSession{{PanePathsMissing: true, Name: "sidecar-ws-repo-foo", Path: "/elsewhere/repo-foo"}},
 	})
 	if len(plan.Orphans) != 0 {
 		t.Fatalf("orphans = %+v, the session belongs to the recreated worktree", plan.Orphans)
@@ -111,7 +111,7 @@ func TestSessionStartedElsewhereIsNotAnOrphan(t *testing.T) {
 			SessionPrefix: wsPrefix,
 			Inventories:   []WorktreeInventory{repoInventory()},
 			Registered:    []RegisteredRoot{registered("/code/repo-foo", "sidecar-ws-repo-foo")},
-			Sessions:      []TmuxSession{{Name: "sidecar-ws-repo-foo", Path: path}},
+			Sessions:      []TmuxSession{{PanePathsMissing: true, Name: "sidecar-ws-repo-foo", Path: path}},
 		})
 		if len(plan.Orphans) != 0 {
 			t.Fatalf("session path %q: orphans = %+v", path, plan.Orphans)
@@ -124,7 +124,7 @@ func TestSessionStartedInASubdirectoryOfTheRootIsAnOrphan(t *testing.T) {
 		SessionPrefix: wsPrefix,
 		Inventories:   []WorktreeInventory{repoInventory()},
 		Registered:    []RegisteredRoot{registered("/code/repo-foo", "sidecar-ws-repo-foo")},
-		Sessions:      []TmuxSession{{Name: "sidecar-ws-repo-foo", Path: "/code/repo-foo/sub"}},
+		Sessions:      []TmuxSession{{PanePathsMissing: true, Name: "sidecar-ws-repo-foo", Path: "/code/repo-foo/sub"}},
 	})
 	if len(plan.Orphans) != 1 {
 		t.Fatalf("orphans = %+v", plan.Orphans)
@@ -136,7 +136,7 @@ func TestFailedTmuxListingProducesNoOrphans(t *testing.T) {
 		SessionPrefix: wsPrefix,
 		Inventories:   []WorktreeInventory{repoInventory()},
 		Registered:    []RegisteredRoot{registered("/code/repo-foo", "sidecar-ws-repo-foo")},
-		Sessions:      []TmuxSession{{Name: "sidecar-ws-repo-foo", Path: "/code/repo-foo"}},
+		Sessions:      []TmuxSession{{PanePathsMissing: true, Name: "sidecar-ws-repo-foo", Path: "/code/repo-foo"}},
 		ListingFailed: true,
 	})
 	if len(plan.Orphans) != 0 || plan.Skipped == "" {
@@ -151,7 +151,7 @@ func TestFailedTmuxListingProducesNoOrphans(t *testing.T) {
 func TestOnlyWorktreeSessionsAreJudged(t *testing.T) {
 	plan := PlanWorktreeOrphans(OrphanObservation{
 		SessionPrefix: wsPrefix,
-		Sessions:      []TmuxSession{{Name: "sidecar-sh-repo-1", Path: "/gone", PathMissing: true, NameFromPath: true}},
+		Sessions:      []TmuxSession{{PanePathsMissing: true, Name: "sidecar-sh-repo-1", Path: "/gone", PathMissing: true, NameFromPath: true}},
 	})
 	if len(plan.Orphans) != 0 {
 		t.Fatalf("orphans = %+v", plan.Orphans)
@@ -167,9 +167,9 @@ func TestUnattributedSessionWithMissingDirectoryIsAnOrphan(t *testing.T) {
 		SessionPrefix: wsPrefix,
 		Inventories:   []WorktreeInventory{repoInventory()},
 		Sessions: []TmuxSession{
-			{Name: "sidecar-ws-gone", Path: "/code/gone", PathMissing: true, NameFromPath: true},
-			{Name: "sidecar-ws-present", Path: "/code/present"},
-			{Name: "sidecar-ws-renamed", Path: "/code/gone-too", PathMissing: true, NameFromPath: false},
+			{PanePathsMissing: true, Name: "sidecar-ws-gone", Path: "/code/gone", PathMissing: true, NameFromPath: true},
+			{PanePathsMissing: true, Name: "sidecar-ws-present", Path: "/code/present"},
+			{PanePathsMissing: true, Name: "sidecar-ws-renamed", Path: "/code/gone-too", PathMissing: true, NameFromPath: false},
 		},
 	})
 	if len(plan.Orphans) != 1 || plan.Orphans[0].Session != "sidecar-ws-gone" || plan.Orphans[0].Reason != OrphanDirectoryMissing {
@@ -189,7 +189,7 @@ func TestMissingDirectoryInsideAnUnjudgedRegisteredRootIsNotAnOrphan(t *testing.
 		SessionPrefix: wsPrefix,
 		Inventories:   []WorktreeInventory{inv},
 		Registered:    []RegisteredRoot{registered("/code/repo-foo", "sidecar-ws-repo-foo-old")},
-		Sessions:      []TmuxSession{{Name: "sidecar-ws-repo-foo", Path: "/code/repo-foo", PathMissing: true, NameFromPath: true}},
+		Sessions:      []TmuxSession{{PanePathsMissing: true, Name: "sidecar-ws-repo-foo", Path: "/code/repo-foo", PathMissing: true, NameFromPath: true}},
 	})
 	if len(plan.Orphans) != 0 {
 		t.Fatalf("orphans = %+v", plan.Orphans)
@@ -223,7 +223,7 @@ func TestRootThatStillExistsIsNeverAnOrphan(t *testing.T) {
 		SessionPrefix: wsPrefix,
 		Inventories:   []WorktreeInventory{repoInventory()},
 		Registered:    []RegisteredRoot{root},
-		Sessions:      []TmuxSession{{Name: "sidecar-ws-repo-foo", Path: "/code/repo-foo"}},
+		Sessions:      []TmuxSession{{PanePathsMissing: true, Name: "sidecar-ws-repo-foo", Path: "/code/repo-foo"}},
 	})
 	if len(plan.Orphans) != 0 || len(plan.Roots) != 0 {
 		t.Fatalf("plan = %+v, want nothing for an existing root", plan)
@@ -248,7 +248,7 @@ func TestEitherSessionSpellingIsJudged(t *testing.T) {
 		SessionPrefix: wsPrefix,
 		Inventories:   []WorktreeInventory{repoInventory()},
 		Registered:    []RegisteredRoot{root},
-		Sessions:      []TmuxSession{{Name: "sidecar-ws-My_Feature", Path: "/code/My_Feature"}},
+		Sessions:      []TmuxSession{{PanePathsMissing: true, Name: "sidecar-ws-My_Feature", Path: "/code/My_Feature"}},
 	})
 	if len(plan.Orphans) != 1 || plan.Orphans[0].Session != "sidecar-ws-My_Feature" {
 		t.Fatalf("orphans = %+v", plan.Orphans)
@@ -263,8 +263,8 @@ func TestSessionWithAPaneInAnExistingDirectoryIsNotAnOrphan(t *testing.T) {
 		Inventories:   []WorktreeInventory{repoInventory()},
 		Registered:    []RegisteredRoot{registered("/code/repo-foo", "sidecar-ws-repo-foo")},
 		Sessions: []TmuxSession{
-			{Name: "sidecar-ws-repo-foo", Path: "/code/repo-foo", PathMissing: true, NameFromPath: true, PaneInExistingDir: true},
-			{Name: "sidecar-ws-loose", Path: "/code/loose", PathMissing: true, NameFromPath: true, PaneInExistingDir: true},
+			{PanePathsMissing: false, Name: "sidecar-ws-repo-foo", Path: "/code/repo-foo", PathMissing: true, NameFromPath: true},
+			{PanePathsMissing: false, Name: "sidecar-ws-loose", Path: "/code/loose", PathMissing: true, NameFromPath: true},
 		},
 	})
 	if len(plan.Orphans) != 0 {
@@ -279,9 +279,16 @@ func TestUnattributedSessionNeedsEveryInventoryToAnswer(t *testing.T) {
 	plan := PlanWorktreeOrphans(OrphanObservation{
 		SessionPrefix: wsPrefix,
 		Inventories:   []WorktreeInventory{repoInventory(), failed},
-		Sessions:      []TmuxSession{{Name: "sidecar-ws-gone", Path: "/code/gone", PathMissing: true, NameFromPath: true}},
+		Sessions:      []TmuxSession{{PanePathsMissing: true, Name: "sidecar-ws-gone", Path: "/code/gone", PathMissing: true, NameFromPath: true}},
 	})
 	if len(plan.Orphans) != 0 {
 		t.Fatalf("orphans = %+v", plan.Orphans)
+	}
+}
+
+func TestUnknownPaneDirectoriesNeverPermitPrune(t *testing.T) {
+	plan := PlanWorktreeOrphans(OrphanObservation{SessionPrefix: wsPrefix, Inventories: []WorktreeInventory{repoInventory()}, Registered: []RegisteredRoot{registered("/code/repo-foo", "sidecar-ws-repo-foo")}, Sessions: []TmuxSession{{Name: "sidecar-ws-repo-foo", Path: "/code/repo-foo", PathMissing: true, NameFromPath: true}, {Name: "sidecar-ws-loose", Path: "/code/loose", PathMissing: true, NameFromPath: true}}})
+	if len(plan.Orphans) != 0 {
+		t.Fatalf("unknown panes permitted prune: %+v", plan.Orphans)
 	}
 }

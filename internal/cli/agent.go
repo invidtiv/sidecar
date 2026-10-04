@@ -346,6 +346,11 @@ func resolveAgentTarget(env Env, lookup *shellTargetLookup, target string, f age
 }
 
 func resolveAgentTargetError(env Env, lookup *shellTargetLookup, target string, f agentFlags, explicit bool) (agentcontrol.Target, error) {
+	if !explicit {
+		if err := validateImplicitCaller(env.Ctx, env.StateDir); err != nil {
+			return agentcontrol.Target{}, &agentcontrol.Error{Code: agentcontrol.ErrNotReady, Message: err.Error(), Err: err}
+		}
+	}
 	if lookup == nil {
 		lookup = &shellTargetLookup{}
 	}
@@ -777,6 +782,9 @@ func runAgentGet(env Env, args []string) int {
 	if len(f.positional) == 1 {
 		target = f.positional[0]
 	} else {
+		if err := validateImplicitCaller(env.Ctx, env.StateDir); err != nil {
+			return emitAgentError(env, f.json, &agentcontrol.Error{Code: agentcontrol.ErrNotReady, Message: err.Error(), Err: err})
+		}
 		target = os.Getenv(shellstate.SessionEnv)
 	}
 	if target == "" {
@@ -896,18 +904,21 @@ func runAgentStart(env Env, args []string) int {
 	if len(f.positional) == 1 {
 		target = f.positional[0]
 	} else {
+		if err := validateImplicitCaller(env.Ctx, env.StateDir); err != nil {
+			return emitAgentError(env, f.json, &agentcontrol.Error{Code: agentcontrol.ErrNotReady, Message: err.Error(), Err: err})
+		}
 		target = os.Getenv(shellstate.SessionEnv)
 	}
 	if target == "" {
 		return emitAgentError(env, f.json, &agentcontrol.Error{Code: agentcontrol.ErrNotFound, Message: "target is required outside a managed shell"})
 	}
-	argv, err := agentcatalog.BuildLaunch(kind, extra, false)
-	if err != nil {
-		return emitAgentError(env, f.json, &agentcontrol.Error{Code: agentcontrol.ErrNotReady, Message: err.Error(), Err: err})
-	}
 	tgt, code := resolveAgentShellTarget(env, nil, target, f.shell, f.project, len(f.positional) == 1 && f.shell == "" && f.project == "", f.json)
 	if code != 0 {
 		return code
+	}
+	argv, err := agentcatalog.BuildLaunchInDir(tgt.WorkDir, kind, extra, false)
+	if err != nil {
+		return emitAgentError(env, f.json, &agentcontrol.Error{Code: agentcontrol.ErrNotReady, Message: err.Error(), Err: err})
 	}
 	ctx := env.Ctx
 	if ctx == nil {

@@ -68,6 +68,9 @@ func TestCompletionSiblingsDoNotAlterReplacementProject(t *testing.T) {
 			return shellResumeInjectedMsg{OperationScope: s, TmuxSession: "collision"}
 		},
 		func(s OperationScope) tea.Msg { return shellResumeErrorMsg{OperationScope: s, Err: late} },
+		func(s OperationScope) tea.Msg {
+			return shellResumeResolvedMsg{OperationScope: s, ResumeArgv: []string{"codex", "resume", "old"}}
+		},
 		func(s OperationScope) tea.Msg { return worktreeResumeCreatedMsg{OperationScope: s, Err: late} },
 		func(s OperationScope) tea.Msg { return TermPanelSessionCreatedMsg{OperationScope: s, Err: late} },
 		func(s OperationScope) tea.Msg { return TermPanelSeedFailedMsg{OperationScope: s, Err: late} },

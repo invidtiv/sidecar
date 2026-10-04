@@ -15,6 +15,8 @@ A user extends the same catalog without a rebuild by dropping files into `<confi
 | `short` | string | Compact label. Lowercased, it is the token the agent chip renders, so it must lowercase to either the id or the command. |
 | `command` | string | The executable Sidecar launches. **A family with no command is detection-only**: Sidecar can recognise it in a pane and never offers to start it. |
 | `launch_args` | array | Argv entries between the command and everything else, for a provider whose bare command is not the agent. Only `kiro` needs one. |
+| `help_supported_args` | array | Global arguments added before launch or resume arguments only when the local installed command advertises them in `--help`. Probes happen before launch, are bounded, and cache native executable help by resolved path, size and modification time; script and differently named shim targets are rechecked. Missing or older commands retain their argv; a failed probe refuses launch rather than guessing. Legacy remote command resolution stays independent of local capabilities. |
+| `help_arg_conflicts` | table | Optional argument to a list of incompatible caller arguments. An explicit conflicting option (including `--option=value`) suppresses the optional argument, preserving the caller's selected provider mode. |
 | `skip_permissions_arg` | string | One argv entry, appended when the caller asks for the provider's auto-approve mode. Empty when the provider has none. |
 | `aliases` | array | Other identifiers naming this family: Herdr's process spellings, and the conversation adapter ids that do not match the id. |
 | `adapter_id` | string | The conversation-history adapter's registered id, when it differs from `id`. |

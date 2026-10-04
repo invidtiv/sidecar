@@ -726,11 +726,17 @@ var readOrphanSession = func(ctx context.Context, session string) (orphanSession
 		}
 		return orphanSessionState{}, fmt.Errorf("read session %s: %s: %w", session, strings.TrimSpace(message), err)
 	}
+	return parseOrphanSession(session, string(out))
+}
+
+func parseOrphanSession(session, listing string) (orphanSessionState, error) {
 	var state orphanSessionState
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	// tmux's local stdout terminates rows with LF. A CR before that LF may
+	// belong to the literal directory name and must not become false absence.
+	for _, line := range strings.Split(strings.TrimSuffix(listing, "\n"), "\n") {
 		fields := strings.SplitN(line, "\t", 3)
-		if len(fields) != 3 {
-			continue
+		if len(fields) != 3 || fields[0] == "" || fields[1] == "" {
+			return state, fmt.Errorf("read session %s: incomplete pane evidence", session)
 		}
 		state.ID, state.Path = fields[0], fields[1]
 		state.PanePaths = append(state.PanePaths, fields[2])
@@ -772,8 +778,8 @@ var rootStillMissing = func(root string) bool {
 //   - the root must still be gone (a checkout can have been re-created there);
 //   - the session must still start in the planned directory, inside the root
 //     (its name is derived from a base name, so a new worktree can reuse it);
-//   - no pane may be working in a directory that exists (an agent follows a
-//     moved worktree; the session's start directory does not).
+//   - every pane, including associated managed shells, must have positive
+//     missing-directory evidence (an agent may follow a moved worktree).
 //
 // gone reports that the session had already closed, which is success.
 func PruneOrphanedWorktreeSession(ctx context.Context, req OrphanedSessionPrune) (gone bool, err error) {
@@ -796,27 +802,28 @@ func PruneOrphanedWorktreeSession(ctx context.Context, req OrphanedSessionPrune)
 	if req.SessionPath == "" || CanonicalWorkPath(state.Path) != CanonicalWorkPath(req.SessionPath) || !PathRootedIn(state.Path, req.Root) {
 		return false, fmt.Errorf("%w: %s now starts in %q", ErrOrphanChanged, req.Session, state.Path)
 	}
+	if len(state.PanePaths) == 0 {
+		return false, fmt.Errorf("%w: %s has no pane directory evidence", ErrOrphanChanged, req.Session)
+	}
 	for _, pane := range state.PanePaths {
-		if strings.TrimSpace(pane) == "" {
-			continue
-		}
-		if _, err := os.Stat(pane); err == nil {
-			return false, fmt.Errorf("%w: %s has a pane working in %q, which exists", ErrOrphanChanged, req.Session, pane)
+		if !PaneDirectoryMissing(pane) {
+			return false, fmt.Errorf("%w: %s pane directory %q is not known to be missing", ErrOrphanChanged, req.Session, pane)
 		}
 	}
-	// Shells go first, as in DeleteWorktree. One that will not close does not
-	// stop the session closing: the error is reported alongside.
-	var shellErr error
+	// Verify associated shells before any teardown, then close only the
+	// verified snapshot. Unknown or changed evidence refuses the prune.
 	if strings.TrimSpace(req.ProjectRoot) != "" {
-		shellErr = forgetShellsInWorktree(req.ProjectRoot, req.Root)
+		if err := pruneOrphanedManagedShells(ctx, req.ProjectRoot, req.Root); err != nil {
+			return false, err
+		}
 	}
 	if err := killSessionByID(ctx, state.ID); err != nil {
-		return false, errors.Join(err, shellErr)
+		return false, err
 	}
 	if err := ForgetRecoverableSession(req.Session); err != nil {
-		return false, errors.Join(err, shellErr)
+		return false, err
 	}
-	return false, shellErr
+	return false, nil
 }
 
 // sessionGoneMessage recognises tmux's own statements that a session, or the
@@ -829,4 +836,18 @@ func sessionGoneMessage(message string) bool {
 		strings.Contains(message, "can't find window") ||
 		strings.Contains(message, "no server running") ||
 		(strings.Contains(message, "error connecting to") && strings.Contains(message, "No such file or directory"))
+}
+
+// PaneDirectoryMissing is the same conservative filesystem evidence for the
+// orphan plan and its close-time recheck. Unknown cwd or an unmounted parent
+// must never count as a removed directory.
+func PaneDirectoryMissing(path string) bool {
+	if strings.TrimSpace(path) == "" || !filepath.IsAbs(path) {
+		return false
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		return false
+	}
+	info, err := os.Stat(filepath.Dir(path))
+	return err == nil && info.IsDir()
 }

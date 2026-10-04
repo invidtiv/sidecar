@@ -1,12 +1,15 @@
 package workspaceops
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/shellstate"
+	"github.com/marcus/sidecar/internal/tmuxenv"
 )
 
 // Deleting a worktree used to leave the shells that lived in it behind in
@@ -178,3 +181,67 @@ var deleteManagedShellForForget = DeleteManagedShell
 // forgetShellsInWorktree is indirected so DeleteWorktree's tests can exercise
 // the removal ordering without a manifest or a tmux server.
 var forgetShellsInWorktree = ForgetShellsInWorktree
+
+// pruneOrphanedManagedShells is the prune-only cleanup. Recorded ownership
+// selects shells for an explicit worktree delete, but cannot prove their live
+// directories disappeared: a dedicated shell may have followed a moved checkout.
+// Refuse the entire prune before any teardown if a selected shell is live or
+// unknown. Explicit DeleteWorktree retains its intentional closure semantics.
+func pruneOrphanedManagedShells(ctx context.Context, projectRoot, root string) error {
+	type selectedShell struct {
+		project string
+		def     shellstate.Definition
+		id      string
+	}
+	var selected []selectedShell
+	for _, project := range projectdir.LookupEquivalent(projectRoot) {
+		defs, err := shellstate.ListAtPath(filepath.Join(project.Dir, "shells.json"))
+		if err != nil {
+			return err
+		}
+		for _, def := range ShellsRootedIn(defs, root) {
+			if def.CreatedAt.IsZero() {
+				return fmt.Errorf("%w: shell %s has no record incarnation", ErrOrphanChanged, def.TmuxName)
+			}
+			if def.Namespace != "" && CanonicalWorkPath(def.Namespace) != CanonicalWorkPath(tmuxenv.Namespace()) {
+				return fmt.Errorf("%w: cannot verify shell %s on another tmux socket", ErrOrphanChanged, def.TmuxName)
+			}
+			state, err := readOrphanSession(ctx, def.TmuxName)
+			if errors.Is(err, errOrphanSessionGone) {
+				selected = append(selected, selectedShell{project: project.Registered, def: def})
+				continue
+			}
+			if err != nil {
+				return fmt.Errorf("%w: cannot verify shell %s: %v", ErrOrphanChanged, def.TmuxName, err)
+			}
+			if state.ID == "" || !PathRootedIn(state.Path, root) || len(state.PanePaths) == 0 {
+				return fmt.Errorf("%w: shell %s no longer has verified worktree directory evidence", ErrOrphanChanged, def.TmuxName)
+			}
+			for _, pane := range state.PanePaths {
+				if !PaneDirectoryMissing(pane) {
+					return fmt.Errorf("%w: shell %s pane directory %q is not known to be missing", ErrOrphanChanged, def.TmuxName, pane)
+				}
+			}
+			selected = append(selected, selectedShell{project: project.Registered, def: def, id: state.ID})
+		}
+	}
+	if !rootStillMissing(root) {
+		return fmt.Errorf("%w: %s exists again", ErrOrphanChanged, root)
+	}
+	// Carry only the verified snapshot into teardown. Re-listing would include
+	// unverified new rows; killing by name would reach replacement sessions.
+	for _, shell := range selected {
+		if err := ForgetManagedShell(shell.project, shell.def.TmuxName, shell.def.Namespace, shell.def.CreatedAt); err != nil {
+			if errors.Is(err, shellstate.ErrShellChanged) {
+				return fmt.Errorf("%w: %s: %v", ErrOrphanChanged, shell.def.TmuxName, err)
+			}
+			return err
+		}
+		if shell.id != "" {
+			if err := killSessionByID(ctx, shell.id); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}

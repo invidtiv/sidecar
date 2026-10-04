@@ -39,13 +39,22 @@ mkdirSync(argvDir, { recursive: true })
 // The stub records one file per report process, named by its arrival order, with
 // the complete argv one element per line. One file per process, so nothing has
 // to interleave into a shared file to be read back, and an element containing a
-// space cannot be mistaken for two.
+// space cannot be mistaken for two. Publish by rename: counting an output file
+// before printf has filled it can mistake a report in progress for a completed
+// one. The optional gate holds that interleaving for the Go regression test.
 writeFileSync(
   stub,
   `#!/bin/sh
 n=1
 while [ -e "$SIDECAR_ARGV_DIR/$n" ]; do n=$((n+1)); done
-printf '%s\\n' "$@" > "$SIDECAR_ARGV_DIR/$n"
+output="$SIDECAR_ARGV_DIR/$n.pending"
+: > "$output"
+if [ "$n" = 2 ] && [ -n "$SIDECAR_ARGV_WRITE_GATE" ]; then
+  printf 'ready\\n' > "$SIDECAR_ARGV_WRITE_GATE.ready"
+  IFS= read -r release < "$SIDECAR_ARGV_WRITE_GATE"
+fi
+printf '%s\\n' "$@" > "$output"
+mv "$output" "$SIDECAR_ARGV_DIR/$n"
 `,
   "utf8",
 )

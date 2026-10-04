@@ -1019,6 +1019,9 @@ func pollProjectSwitchAcks(stateDir, id string, action uirequest.Action, wait ti
 }
 
 func resolveCallingProject(env Env, cfg *config.Config) (*projectJSONItem, error) {
+	if err := validateImplicitCaller(env.Ctx, env.StateDir); err != nil {
+		return nil, err
+	}
 	if cfg == nil || len(cfg.Projects.List) == 0 {
 		return nil, fmt.Errorf("not in a Sidecar project shell and current directory is not a configured project")
 	}
@@ -1272,6 +1275,11 @@ func projectOrigin(env Env) uirequest.Origin {
 	orig := uirequest.Origin{
 		WorkDir: wd,
 		PID:     os.Getpid(),
+	}
+	// Explicit project mutations keep their selected destination, but a stale
+	// caller must not label their notification with another lane's identity.
+	if err := validateImplicitCaller(env.Ctx, env.StateDir); err != nil {
+		return orig
 	}
 	if shellOrig, ok := callerShellOrigin(env.StateDir); ok {
 		orig.TmuxSession = shellOrig.TmuxName
