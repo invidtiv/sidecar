@@ -155,3 +155,17 @@ func TestParseTailscaleStatusIdentity(t *testing.T) {
 		t.Fatal("a node without MagicDNS was accepted")
 	}
 }
+
+func TestTailnetHintWarnsOnlyForTheLoopbackPort(t *testing.T) {
+	tailnet := &uiapi.TailnetOptions{Host: "node.example.ts.net", Logins: []string{"owner@example.com"}}
+	var out bytes.Buffer
+	printTailnetHint(uiapi.Endpoint{TailnetTCP: "127.0.0.1:7862"}, tailnet, &out)
+	if !strings.Contains(out.String(), "tailscale serve --bg http://127.0.0.1:7862") || !strings.Contains(out.String(), "any local process or OS user") {
+		t.Fatalf("port hint = %q", out.String())
+	}
+	out.Reset()
+	printTailnetHint(uiapi.Endpoint{TailnetSocket: "/tmp/s/tailnet.sock"}, tailnet, &out)
+	if !strings.Contains(out.String(), "unix:/tmp/s/tailnet.sock") || strings.Contains(out.String(), "Warning") {
+		t.Fatalf("socket hint = %q", out.String())
+	}
+}
