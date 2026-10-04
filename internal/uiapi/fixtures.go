@@ -12,22 +12,31 @@ import (
 	"github.com/marcus/sidecar/internal/mobile"
 	"github.com/marcus/sidecar/internal/mobileproto"
 	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/workspacewire"
 )
 
 // FixtureBackend serves recorded resource data through the real server and
 // runs the real terminal protocol Service with a synthetic capture adapter.
 type FixtureBackend struct {
-	catalog  mobileproto.CatalogSnapshot
-	Status   Status
-	targets  map[string]mobileproto.TargetIdentity
-	terminal mobile.EchoTerminal
+	workspace *workspacewire.Workspace
+	catalog   mobileproto.CatalogSnapshot
+	Status    Status
+	targets   map[string]mobileproto.TargetIdentity
+	terminal  mobile.EchoTerminal
 }
 
 // LoadFixtures requires a project-ordered sessions.json and status.json. Files
 // are bounded and decoded strictly; malformed fixture authority fails at start.
 func LoadFixtures(dir string) (*FixtureBackend, error) {
 	backend := &FixtureBackend{targets: map[string]mobileproto.TargetIdentity{}}
-	for name, into := range map[string]any{"sessions.json": &backend.catalog, "status.json": &backend.Status} {
+	inputs := map[string]any{"sessions.json": &backend.catalog, "status.json": &backend.Status}
+	if _, err := os.Stat(filepath.Join(dir, "workspace.json")); err == nil {
+		backend.workspace = &workspacewire.Workspace{}
+		inputs["workspace.json"] = backend.workspace
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	for name, into := range inputs {
 		file, err := os.Open(filepath.Join(dir, name))
 		if err != nil {
 			return nil, fmt.Errorf("load UI API fixture %s: %w", name, err)
@@ -49,6 +58,9 @@ func LoadFixtures(dir string) (*FixtureBackend, error) {
 		if err != nil {
 			return nil, fmt.Errorf("load UI API fixture %s: %w", name, err)
 		}
+	}
+	if backend.workspace != nil && !backend.workspace.ValidRemoteResult() {
+		return nil, fmt.Errorf("workspace.json requires project, catalog and shell records")
 	}
 	q := backend.catalog.Query
 	if q.Sort != "project" || q.Search != "" || len(q.Hosts)+len(q.Providers)+len(q.States) > 0 || q.ShowIdleSessions != nil {

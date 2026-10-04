@@ -1,6 +1,256 @@
 {
   "components": {
     "schemas": {
+      "Agent": {
+        "$ref": "#/components/schemas/AgentControlAgent"
+      },
+      "AgentControlAgent": {
+        "additionalProperties": false,
+        "properties": {
+          "agent": {
+            "$ref": "#/components/schemas/AgentControlAgentState"
+          },
+          "orphan": {
+            "$ref": "#/components/schemas/AgentControlOrphan"
+          },
+          "target": {
+            "$ref": "#/components/schemas/AgentControlTarget"
+          }
+        },
+        "required": [
+          "target",
+          "agent"
+        ],
+        "type": "object"
+      },
+      "AgentControlAgentState": {
+        "additionalProperties": false,
+        "properties": {
+          "attention": {
+            "type": "boolean"
+          },
+          "candidate": {
+            "$ref": "#/components/schemas/AgentControlSessionCandidate"
+          },
+          "capturedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "changedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "evidence": {
+            "type": "string"
+          },
+          "freshness": {
+            "type": "string"
+          },
+          "interactiveReady": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "sessionRef": {
+            "$ref": "#/components/schemas/AgentControlSessionRef"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "freshness",
+          "attention",
+          "changedAt",
+          "capturedAt",
+          "interactiveReady"
+        ],
+        "type": "object"
+      },
+      "AgentControlError": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "receipt": {
+            "$ref": "#/components/schemas/AgentControlPromptReceipt"
+          },
+          "target": {
+            "$ref": "#/components/schemas/AgentControlTarget"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "type": "object"
+      },
+      "AgentControlErrorEnvelope": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/AgentControlError"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "type": "object"
+      },
+      "AgentControlOrphan": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "root": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "root"
+        ],
+        "type": "object"
+      },
+      "AgentControlPromptReceipt": {
+        "additionalProperties": false,
+        "properties": {
+          "submission": {
+            "type": "string"
+          },
+          "target": {
+            "$ref": "#/components/schemas/AgentControlTarget"
+          },
+          "wait": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "submission",
+          "wait",
+          "target"
+        ],
+        "type": "object"
+      },
+      "AgentControlPromptResult": {
+        "additionalProperties": false,
+        "properties": {
+          "agent": {
+            "$ref": "#/components/schemas/AgentControlAgentState"
+          },
+          "receipt": {
+            "$ref": "#/components/schemas/AgentControlPromptReceipt"
+          },
+          "target": {
+            "$ref": "#/components/schemas/AgentControlTarget"
+          }
+        },
+        "required": [
+          "target",
+          "agent",
+          "receipt"
+        ],
+        "type": "object"
+      },
+      "AgentControlSessionCandidate": {
+        "additionalProperties": false,
+        "properties": {
+          "confidence": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "lastWriteAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "picker": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "lastWriteAt",
+          "confidence",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "AgentControlSessionRef": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "reported": {
+            "type": "boolean"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "reported"
+        ],
+        "type": "object"
+      },
+      "AgentControlTarget": {
+        "additionalProperties": false,
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "paneId": {
+            "type": "string"
+          },
+          "panePid": {
+            "type": "integer"
+          },
+          "project": {
+            "type": "string"
+          },
+          "serverIncarnation": {
+            "type": "string"
+          },
+          "serverPid": {
+            "type": "integer"
+          },
+          "session": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "host",
+          "project",
+          "session"
+        ],
+        "type": "object"
+      },
+      "AgentError": {
+        "$ref": "#/components/schemas/AgentControlErrorEnvelope"
+      },
       "AttentionEvent": {
         "additionalProperties": false,
         "properties": {
@@ -663,10 +913,14 @@
               "catalog",
               "attention",
               "terminals",
+              "workspace",
               "error",
               "shutdown"
             ],
             "type": "string"
+          },
+          "workspace": {
+            "$ref": "#/components/schemas/WorkspaceEvent"
           }
         },
         "required": [
@@ -1107,6 +1361,90 @@
         ],
         "type": "object"
       },
+      "Project": {
+        "additionalProperties": false,
+        "properties": {
+          "addedAt": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "openIn": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "theme": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "path",
+          "key"
+        ],
+        "type": "object"
+      },
+      "Projects": {
+        "additionalProperties": false,
+        "properties": {
+          "aligned": {
+            "type": "boolean"
+          },
+          "projects": {
+            "items": {
+              "$ref": "#/components/schemas/Project"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "shell": {
+            "$ref": "#/components/schemas/Project"
+          },
+          "visible": {
+            "$ref": "#/components/schemas/Project"
+          }
+        },
+        "required": [
+          "projects",
+          "aligned"
+        ],
+        "type": "object"
+      },
+      "PromptResult": {
+        "$ref": "#/components/schemas/AgentControlPromptResult"
+      },
+      "RenameResult": {
+        "additionalProperties": false,
+        "properties": {
+          "changed": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "oldName": {
+            "type": "string"
+          },
+          "shell": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "shell",
+          "oldName",
+          "name",
+          "changed"
+        ],
+        "type": "object"
+      },
       "Request": {
         "additionalProperties": false,
         "properties": {
@@ -1276,6 +1614,159 @@
         "required": [
           "revoked",
           "terminals_closed"
+        ],
+        "type": "object"
+      },
+      "SetupOutcome": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "required": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "kind",
+          "action",
+          "required"
+        ],
+        "type": "object"
+      },
+      "ShellCreated": {
+        "additionalProperties": false,
+        "properties": {
+          "acked": {
+            "type": "boolean"
+          },
+          "placement": {
+            "type": "string"
+          },
+          "project": {
+            "type": "string"
+          },
+          "shell": {
+            "$ref": "#/components/schemas/ShellInfo"
+          },
+          "surface": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "shell",
+          "acked",
+          "placement"
+        ],
+        "type": "object"
+      },
+      "ShellDeleted": {
+        "additionalProperties": false,
+        "properties": {
+          "deleted": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "shell": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "shell",
+          "status",
+          "deleted"
+        ],
+        "type": "object"
+      },
+      "ShellInfo": {
+        "additionalProperties": false,
+        "properties": {
+          "displayName": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          },
+          "workDir": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "displayName",
+          "session",
+          "workDir"
+        ],
+        "type": "object"
+      },
+      "ShellRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "agentType": {
+            "type": "string"
+          },
+          "deletedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "orphanedRoot": {
+            "type": "string"
+          },
+          "shell": {
+            "type": "string"
+          },
+          "skipPerms": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string"
+          },
+          "workDir": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "shell",
+          "name",
+          "status"
+        ],
+        "type": "object"
+      },
+      "ShellRenamed": {
+        "$ref": "#/components/schemas/RenameResult"
+      },
+      "ShellRestored": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "shell": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "shell",
+          "status"
         ],
         "type": "object"
       },
@@ -1532,6 +2023,587 @@
         "required": [
           "kind",
           "label"
+        ],
+        "type": "object"
+      },
+      "Workspace": {
+        "additionalProperties": false,
+        "properties": {
+          "catalog": {
+            "$ref": "#/components/schemas/CatalogSnapshot"
+          },
+          "project": {
+            "$ref": "#/components/schemas/Project"
+          },
+          "shells": {
+            "items": {
+              "$ref": "#/components/schemas/ShellRecord"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "project",
+          "catalog",
+          "shells"
+        ],
+        "type": "object"
+      },
+      "WorkspaceCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "args": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "base": {
+            "type": "string"
+          },
+          "confirm": {
+            "type": "boolean"
+          },
+          "delete_local_branch": {
+            "type": "boolean"
+          },
+          "delete_remote_branch": {
+            "type": "boolean"
+          },
+          "expect_branch": {
+            "type": "string"
+          },
+          "expect_head_oid": {
+            "type": "string"
+          },
+          "expect_source_oid": {
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "timeout": {
+            "type": "string"
+          },
+          "wait": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "WorkspaceEvent": {
+        "additionalProperties": false,
+        "properties": {
+          "projects": {
+            "$ref": "#/components/schemas/Projects"
+          },
+          "workspaces": {
+            "items": {
+              "$ref": "#/components/schemas/WorkspaceRef"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projects",
+          "workspaces"
+        ],
+        "type": "object"
+      },
+      "WorkspaceRef": {
+        "additionalProperties": false,
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "project": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project"
+        ],
+        "type": "object"
+      },
+      "WorktreeCreated": {
+        "additionalProperties": false,
+        "properties": {
+          "acked": {
+            "type": "boolean"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "placement": {
+            "type": "string"
+          },
+          "project": {
+            "type": "string"
+          },
+          "setup": {
+            "items": {
+              "$ref": "#/components/schemas/SetupOutcome"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "shell": {
+            "$ref": "#/components/schemas/ShellInfo"
+          },
+          "surface": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "shell",
+          "path",
+          "branch",
+          "setup",
+          "acked",
+          "placement"
+        ],
+        "type": "object"
+      },
+      "WorktreeDeletePlan": {
+        "additionalProperties": false,
+        "properties": {
+          "branch": {
+            "type": "string"
+          },
+          "branchOid": {
+            "type": "string"
+          },
+          "deleteLocalBranch": {
+            "type": "boolean"
+          },
+          "deleteRemoteBranch": {
+            "type": "boolean"
+          },
+          "dirtiness": {
+            "type": "string"
+          },
+          "hasRemoteBranch": {
+            "type": "boolean"
+          },
+          "headOid": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "pendingCreation": {
+            "type": "boolean"
+          },
+          "project": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project",
+          "name",
+          "path",
+          "branch",
+          "headOid",
+          "branchOid",
+          "dirtiness",
+          "hasRemoteBranch",
+          "deleteLocalBranch",
+          "deleteRemoteBranch",
+          "pendingCreation"
+        ],
+        "type": "object"
+      },
+      "WorktreeDeleted": {
+        "additionalProperties": false,
+        "properties": {
+          "deleted": {
+            "type": "boolean"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/WorktreeDeletePlan"
+          },
+          "status": {
+            "type": "string"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "status",
+          "deleted",
+          "plan"
+        ],
+        "type": "object"
+      },
+      "WorktreePlan": {
+        "additionalProperties": false,
+        "properties": {
+          "agentType": {
+            "type": "string"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "copyEnv": {
+            "type": "boolean"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "envFiles": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "hookPath": {
+            "type": "string"
+          },
+          "hookRequired": {
+            "type": "boolean"
+          },
+          "mainWorktree": {
+            "type": "string"
+          },
+          "operationId": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "remotePolicy": {
+            "type": "string"
+          },
+          "repoKey": {
+            "type": "string"
+          },
+          "runHook": {
+            "type": "boolean"
+          },
+          "skipPerms": {
+            "type": "boolean"
+          },
+          "sourceOid": {
+            "type": "string"
+          },
+          "sourceRef": {
+            "type": "string"
+          },
+          "sourceWorktree": {
+            "type": "string"
+          },
+          "taskId": {
+            "type": "string"
+          },
+          "taskTitle": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "repoKey",
+          "operationId",
+          "sourceWorktree",
+          "mainWorktree",
+          "sourceRef",
+          "sourceOid",
+          "branch",
+          "path",
+          "displayName",
+          "remotePolicy",
+          "copyEnv",
+          "runHook",
+          "hookPath",
+          "hookRequired"
+        ],
+        "type": "object"
+      },
+      "agents_promptRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "target": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "text": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "timeout": {
+            "type": "string"
+          },
+          "wait": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "target",
+          "text"
+        ],
+        "type": "object"
+      },
+      "agents_startRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "args": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "host": {
+            "type": "string"
+          },
+          "kind": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "target": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "target",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "shells_createRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "shells_deleteRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "target": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "target"
+        ],
+        "type": "object"
+      },
+      "shells_renameRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "name": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "target": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "target",
+          "name"
+        ],
+        "type": "object"
+      },
+      "shells_restoreRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "target": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "target"
+        ],
+        "type": "object"
+      },
+      "worktrees_createRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "base": {
+            "type": "string"
+          },
+          "confirm": {
+            "const": true,
+            "type": "boolean"
+          },
+          "expect_source_oid": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          },
+          "name": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "confirm",
+          "expect_source_oid"
+        ],
+        "type": "object"
+      },
+      "worktrees_delete-planRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "delete_local_branch": {
+            "type": "boolean"
+          },
+          "delete_remote_branch": {
+            "type": "boolean"
+          },
+          "host": {
+            "type": "string"
+          },
+          "target": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "target"
+        ],
+        "type": "object"
+      },
+      "worktrees_deleteRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "confirm": {
+            "const": true,
+            "type": "boolean"
+          },
+          "delete_local_branch": {
+            "type": "boolean"
+          },
+          "delete_remote_branch": {
+            "type": "boolean"
+          },
+          "expect_branch": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "expect_head_oid": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          },
+          "target": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "target",
+          "confirm",
+          "expect_head_oid",
+          "expect_branch"
+        ],
+        "type": "object"
+      },
+      "worktrees_planRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "base": {
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          },
+          "name": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "worktrees_renameRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "name": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "target": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "target",
+          "name"
         ],
         "type": "object"
       }
@@ -2069,6 +3141,1375 @@
           "local"
         ],
         "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there."
+      }
+    },
+    "/api/v0/projects": {
+      "get": {
+        "operationId": "projects_get",
+        "parameters": [
+          {
+            "description": "Registered owning host; omit or use local for this machine.",
+            "in": "query",
+            "name": "host",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Projects"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there."
+      },
+      "head": {
+        "operationId": "projects_get_head",
+        "parameters": [
+          {
+            "description": "Registered owning host; omit or use local for this machine.",
+            "in": "query",
+            "name": "host",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "default": {
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there."
+      }
+    },
+    "/api/v0/projects/{project}/agents/prompt": {
+      "post": {
+        "description": "Calls the owning CLI's shared workspace operation. X-Sidecar-Exit-Code retains its exit status. A failed create can return its partial creation result; a failed prompt retains the CLI error receipt. Do not replay uncertain writes.",
+        "operationId": "projects_{project}_agents_prompt_post",
+        "parameters": [
+          {
+            "description": "Required on Browser and Tailnet; not on Local.",
+            "in": "header",
+            "name": "X-Sidecar-Request",
+            "required": false,
+            "schema": {
+              "const": "1",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Configured owning project key or root path, encoded as one path segment; never a hub-scoped catalog project_id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/agents_promptRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromptResult"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "X-Sidecar-Exit-Code": {
+                "description": "Original owning CLI exit status; absent for HTTP admission refusals.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ErrorBody"
+                    },
+                    {
+                      "$ref": "#/components/schemas/AgentError"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Named refusal; see ui-api.md for status codes and remedies",
+            "headers": {
+              "X-Sidecar-Exit-Code": {
+                "description": "Original owning CLI exit status; absent for HTTP admission refusals.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there.",
+        "x-scope": "workspace:write"
+      }
+    },
+    "/api/v0/projects/{project}/agents/start": {
+      "post": {
+        "description": "Calls the owning CLI's shared workspace operation. X-Sidecar-Exit-Code retains its exit status. A failed create can return its partial creation result; a failed prompt retains the CLI error receipt. Do not replay uncertain writes.",
+        "operationId": "projects_{project}_agents_start_post",
+        "parameters": [
+          {
+            "description": "Required on Browser and Tailnet; not on Local.",
+            "in": "header",
+            "name": "X-Sidecar-Request",
+            "required": false,
+            "schema": {
+              "const": "1",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Configured owning project key or root path, encoded as one path segment; never a hub-scoped catalog project_id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/agents_startRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Agent"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "X-Sidecar-Exit-Code": {
+                "description": "Original owning CLI exit status; absent for HTTP admission refusals.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ErrorBody"
+                    },
+                    {
+                      "$ref": "#/components/schemas/AgentError"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Named refusal; see ui-api.md for status codes and remedies",
+            "headers": {
+              "X-Sidecar-Exit-Code": {
+                "description": "Original owning CLI exit status; absent for HTTP admission refusals.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there.",
+        "x-scope": "workspace:write"
+      }
+    },
+    "/api/v0/projects/{project}/shells/create": {
+      "post": {
+        "description": "Calls the owning CLI's shared workspace operation. X-Sidecar-Exit-Code retains its exit status. A failed create can return its partial creation result; a failed prompt retains the CLI error receipt. Do not replay uncertain writes.",
+        "operationId": "projects_{project}_shells_create_post",
+        "parameters": [
+          {
+            "description": "Required on Browser and Tailnet; not on Local.",
+            "in": "header",
+            "name": "X-Sidecar-Request",
+            "required": false,
+            "schema": {
+              "const": "1",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Configured owning project key or root path, encoded as one path segment; never a hub-scoped catalog project_id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/shells_createRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShellCreated"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "X-Sidecar-Exit-Code": {
+                "description": "Original owning CLI exit status; absent for HTTP admission refusals.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ErrorBody"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ShellCreated"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Named refusal; see ui-api.md for status codes and remedies",
+            "headers": {
+              "X-Sidecar-Exit-Code": {
+                "description": "Original owning CLI exit status; absent for HTTP admission refusals.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there.",
+        "x-scope": "workspace:write"
+      }
+    },
+    "/api/v0/projects/{project}/shells/delete": {
+      "post": {
+        "description": "Calls the owning CLI's shared workspace operation. X-Sidecar-Exit-Code retains its exit status. A failed create can return its partial creation result; a failed prompt retains the CLI error receipt. Do not replay uncertain writes.",
+        "operationId": "projects_{project}_shells_delete_post",
+        "parameters": [
+          {
+            "description": "Required on Browser and Tailnet; not on Local.",
+            "in": "header",
+            "name": "X-Sidecar-Request",
+            "required": false,
+            "schema": {
+              "const": "1",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Configured owning project key or root path, encoded as one path segment; never a hub-scoped catalog project_id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/shells_deleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShellDeleted"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "X-Sidecar-Exit-Code": {
+                "description": "Original owning CLI exit status; absent for HTTP admission refusals.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ErrorBody"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Named refusal; see ui-api.md for status codes and remedies",
+            "headers": {
+              "X-Sidecar-Exit-Code": {
+                "description": "Original owning CLI exit status; absent for HTTP admission refusals.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there.",
+        "x-scope": "workspace:write"
+      }
+    },
+    "/api/v0/projects/{project}/shells/rename": {
+      "post": {
+        "description": "Calls the owning CLI's shared workspace operation. X-Sidecar-Exit-Code retains its exit status. A failed create can return its partial creation result; a failed prompt retains the CLI error receipt. Do not replay uncertain writes.",
+        "operationId": "projects_{project}_shells_rename_post",
+        "parameters": [
+          {
+            "description": "Required on Browser and Tailnet; not on Local.",
+            "in": "header",
+            "name": "X-Sidecar-Request",
+            "required": false,
+            "schema": {
+              "const": "1",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Configured owning project key or root path, encoded as one path segment; never a hub-scoped catalog project_id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/shells_renameRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShellRenamed"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "X-Sidecar-Exit-Code": {
+                "description": "Original owning CLI exit status; absent for HTTP admission refusals.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ErrorBody"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Named refusal; see ui-api.md for status codes and remedies",
+            "headers": {
+              "X-Sidecar-Exit-Code": {
+                "description": "Original owning CLI exit status; absent for HTTP admission refusals.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there.",
+        "x-scope": "workspace:write"
+      }
+    },
+    "/api/v0/projects/{project}/shells/restore": {
+      "post": {
+        "description": "Calls the owning CLI's shared workspace operation. X-Sidecar-Exit-Code retains its exit status. A failed create can return its partial creation result; a failed prompt retains the CLI error receipt. Do not replay uncertain writes.",
+        "operationId": "projects_{project}_shells_restore_post",
+        "parameters": [
+          {
+            "description": "Required on Browser and Tailnet; not on Local.",
+            "in": "header",
+            "name": "X-Sidecar-Request",
+            "required": false,
+            "schema": {
+              "const": "1",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Configured owning project key or root path, encoded as one path segment; never a hub-scoped catalog project_id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/shells_restoreRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShellRestored"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "X-Sidecar-Exit-Code": {
+                "description": "Original owning CLI exit status; absent for HTTP admission refusals.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ErrorBody"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Named refusal; see ui-api.md for status codes and remedies",
+            "headers": {
+              "X-Sidecar-Exit-Code": {
+                "description": "Original owning CLI exit status; absent for HTTP admission refusals.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there.",
+        "x-scope": "workspace:write"
+      }
+    },
+    "/api/v0/projects/{project}/workspace": {
+      "get": {
+        "operationId": "projects_{project}_workspace_get",
+        "parameters": [
+          {
+            "description": "Configured owning project key or root path, encoded as one path segment; never a hub-scoped catalog project_id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "sort",
+            "schema": {
+              "enum": [
+                "activity",
+                "project",
+                "recent",
+                "name"
+              ],
+              "type": "string"
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "search",
+            "schema": {
+              "type": "string"
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "provider",
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 32,
+              "type": "array"
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "state",
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 32,
+              "type": "array"
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "show_idle_sessions",
+            "schema": {
+              "type": "boolean"
+            },
+            "style": "form"
+          },
+          {
+            "description": "Registered owning host; omit or use local for this machine.",
+            "in": "query",
+            "name": "host",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workspace"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there."
+      },
+      "head": {
+        "operationId": "projects_{project}_workspace_get_head",
+        "parameters": [
+          {
+            "description": "Configured owning project key or root path, encoded as one path segment; never a hub-scoped catalog project_id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "sort",
+            "schema": {
+              "enum": [
+                "activity",
+                "project",
+                "recent",
+                "name"
+              ],
+              "type": "string"
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "search",
+            "schema": {
+              "type": "string"
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "provider",
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 32,
+              "type": "array"
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "state",
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 32,
+              "type": "array"
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "show_idle_sessions",
+            "schema": {
+              "type": "boolean"
+            },
+            "style": "form"
+          },
+          {
+            "description": "Registered owning host; omit or use local for this machine.",
+            "in": "query",
+            "name": "host",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "default": {
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there."
+      }
+    },
+    "/api/v0/projects/{project}/worktrees/create": {
+      "post": {
+        "description": "Calls the owning CLI's shared workspace operation. X-Sidecar-Exit-Code retains its exit status. A failed create can return its partial creation result; a failed prompt retains the CLI error receipt. Do not replay uncertain writes.",
+        "operationId": "projects_{project}_worktrees_create_post",
+        "parameters": [
+          {
+            "description": "Required on Browser and Tailnet; not on Local.",
+            "in": "header",
+            "name": "X-Sidecar-Request",
+            "required": false,
+            "schema": {
+              "const": "1",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Configured owning project key or root path, encoded as one path segment; never a hub-scoped catalog project_id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/worktrees_createRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorktreeCreated"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "X-Sidecar-Exit-Code": {
+                "description": "Original owning CLI exit status; absent for HTTP admission refusals.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ErrorBody"
+                    },
+                    {
+                      "$ref": "#/components/schemas/WorktreeCreated"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Named refusal; see ui-api.md for status codes and remedies",
+            "headers": {
+              "X-Sidecar-Exit-Code": {
+                "description": "Original owning CLI exit status; absent for HTTP admission refusals.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there.",
+        "x-scope": "workspace:write"
+      }
+    },
+    "/api/v0/projects/{project}/worktrees/delete": {
+      "post": {
+        "description": "Calls the owning CLI's shared workspace operation. X-Sidecar-Exit-Code retains its exit status. A failed create can return its partial creation result; a failed prompt retains the CLI error receipt. Do not replay uncertain writes.",
+        "operationId": "projects_{project}_worktrees_delete_post",
+        "parameters": [
+          {
+            "description": "Required on Browser and Tailnet; not on Local.",
+            "in": "header",
+            "name": "X-Sidecar-Request",
+            "required": false,
+            "schema": {
+              "const": "1",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Configured owning project key or root path, encoded as one path segment; never a hub-scoped catalog project_id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/worktrees_deleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorktreeDeleted"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "X-Sidecar-Exit-Code": {
+                "description": "Original owning CLI exit status; absent for HTTP admission refusals.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ErrorBody"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Named refusal; see ui-api.md for status codes and remedies",
+            "headers": {
+              "X-Sidecar-Exit-Code": {
+                "description": "Original owning CLI exit status; absent for HTTP admission refusals.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there.",
+        "x-scope": "workspace:write"
+      }
+    },
+    "/api/v0/projects/{project}/worktrees/delete-plan": {
+      "post": {
+        "description": "Calls the owning CLI's shared workspace operation. X-Sidecar-Exit-Code retains its exit status. A failed create can return its partial creation result; a failed prompt retains the CLI error receipt. Do not replay uncertain writes.",
+        "operationId": "projects_{project}_worktrees_delete-plan_post",
+        "parameters": [
+          {
+            "description": "Required on Browser and Tailnet; not on Local.",
+            "in": "header",
+            "name": "X-Sidecar-Request",
+            "required": false,
+            "schema": {
+              "const": "1",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Configured owning project key or root path, encoded as one path segment; never a hub-scoped catalog project_id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/worktrees_delete-planRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorktreeDeleted"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "X-Sidecar-Exit-Code": {
+                "description": "Original owning CLI exit status; absent for HTTP admission refusals.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ErrorBody"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Named refusal; see ui-api.md for status codes and remedies",
+            "headers": {
+              "X-Sidecar-Exit-Code": {
+                "description": "Original owning CLI exit status; absent for HTTP admission refusals.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there.",
+        "x-scope": "workspace:write"
+      }
+    },
+    "/api/v0/projects/{project}/worktrees/plan": {
+      "post": {
+        "description": "Calls the owning CLI's shared workspace operation. X-Sidecar-Exit-Code retains its exit status. A failed create can return its partial creation result; a failed prompt retains the CLI error receipt. Do not replay uncertain writes.",
+        "operationId": "projects_{project}_worktrees_plan_post",
+        "parameters": [
+          {
+            "description": "Required on Browser and Tailnet; not on Local.",
+            "in": "header",
+            "name": "X-Sidecar-Request",
+            "required": false,
+            "schema": {
+              "const": "1",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Configured owning project key or root path, encoded as one path segment; never a hub-scoped catalog project_id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/worktrees_planRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorktreePlan"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "X-Sidecar-Exit-Code": {
+                "description": "Original owning CLI exit status; absent for HTTP admission refusals.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ErrorBody"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Named refusal; see ui-api.md for status codes and remedies",
+            "headers": {
+              "X-Sidecar-Exit-Code": {
+                "description": "Original owning CLI exit status; absent for HTTP admission refusals.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there.",
+        "x-scope": "workspace:write"
+      }
+    },
+    "/api/v0/projects/{project}/worktrees/rename": {
+      "post": {
+        "description": "Calls the owning CLI's shared workspace operation. X-Sidecar-Exit-Code retains its exit status. A failed create can return its partial creation result; a failed prompt retains the CLI error receipt. Do not replay uncertain writes.",
+        "operationId": "projects_{project}_worktrees_rename_post",
+        "parameters": [
+          {
+            "description": "Required on Browser and Tailnet; not on Local.",
+            "in": "header",
+            "name": "X-Sidecar-Request",
+            "required": false,
+            "schema": {
+              "const": "1",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Configured owning project key or root path, encoded as one path segment; never a hub-scoped catalog project_id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/worktrees_renameRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShellRenamed"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "X-Sidecar-Exit-Code": {
+                "description": "Original owning CLI exit status; absent for HTTP admission refusals.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ErrorBody"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Named refusal; see ui-api.md for status codes and remedies",
+            "headers": {
+              "X-Sidecar-Exit-Code": {
+                "description": "Original owning CLI exit status; absent for HTTP admission refusals.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there.",
+        "x-scope": "workspace:write"
       }
     },
     "/api/v0/sessions": {

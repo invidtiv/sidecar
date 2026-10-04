@@ -371,8 +371,8 @@ model {
     }
 
     events = component 'Events Stream' {
-      summary 'Authenticated catalog, attention and attachment push'
-      description 'GET /api/v0/events uses the terminal trust model on every listener and emits hello, generation-numbered catalog snapshots, needs-input or finished attention, attachment and holder snapshots, and orderly shutdown. A single hostserve observer reuses manifest watches and desktop agent status collection; remote invalidations come from registry snapshots and diffs. State coalesces in bounded per-client buffers. sidecar api events --stdio bridges the Local socket to JSONL for SSH consumers; native adoption and content invalidation remain proposed.'
+      summary 'Authenticated catalog, attention, workspace and attachment push'
+      description 'GET /api/v0/events uses the terminal trust model on every listener and emits hello, generation-numbered catalog snapshots, needs-input or finished attention, attachment and holder snapshots, workspace resource invalidations, and orderly shutdown. A single hostserve observer reuses manifest watches and desktop agent status collection; remote invalidations come from registry snapshots and diffs. State coalesces in bounded per-client buffers. sidecar api events --stdio bridges the Local socket to JSONL for SSH consumers; native adoption and content invalidation remain proposed.'
       metadata { uid 'api.events' fractalColor '#7F9FC4' evidence ['internal/uiapi/events.go', 'internal/cli/api_events_source.go', 'internal/cli/api_events.go', 'scripts/ui-api-proof.sh', 'docs/reference/ui-api.md'] }
     }
 
@@ -389,10 +389,9 @@ model {
     }
 
     workspace_routes = component 'Workspace Resources & Operations' {
-      #proposed
-      summary 'Workspaces, shells, worktrees and agent operations (U2)'
-      description 'Planned for U2, after the core extraction: workspace resources plus create, rename, delete and restore of shells and worktrees and agent start or prompt, all through the same state-free workspace-operation service the CLI and TUI call.'
-      metadata { uid 'api.workspace_routes' fractalColor '#7F9FC4' evidence ['docs/plans/active/sidecar-ui-api.md'] }
+      summary 'Project workspaces, guarded writes and agent operations'
+      description 'Project resources use the shared catalog projection and durable shell records. Workspace-write POST routes invoke the CLI command adapters over workspaceops and agentcontrol with explicit owning projects, preserving JSON results, refusal codes and confirmation guards. Remote reads and writes run on the owning host through its CLI. Shared manifest and configuration watchers emit bounded workspace resource invalidations.'
+      metadata { uid 'api.workspace_routes' fractalColor '#7F9FC4' evidence ['internal/uiapi/workspace.go', 'internal/cli/api_workspace.go', 'internal/workspacewire/wire.go', 'internal/cli/api_events_source.go', 'docs/reference/ui-api.md'] }
     }
 
     layouts = store 'Per-Viewer Layout Store' {

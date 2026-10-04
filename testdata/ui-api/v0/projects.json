@@ -1,0 +1,10 @@
+{
+  "projects": [
+    {
+      "name": "Fixture project",
+      "path": "/workspace/fixture",
+      "key": "fixture-project"
+    }
+  ],
+  "aligned": false
+}

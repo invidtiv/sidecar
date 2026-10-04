@@ -3,6 +3,7 @@ package uiapi
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/invopop/jsonschema"
@@ -23,8 +24,9 @@ func Spec() ([]byte, error) {
 		"CatalogSnapshot": mobileproto.CatalogSnapshot{}, "TerminalRequest": mobileproto.Request{},
 		"TerminalResponse": mobileproto.Response{}, "EventMessage": EventMessage{},
 	}
+	workspaceSpecTypes(values)
 	for name, value := range values {
-		reflected := (&jsonschema.Reflector{Anonymous: true}).Reflect(value)
+		reflected := (&jsonschema.Reflector{Anonymous: true, Namer: workspaceSchemaName}).Reflect(value)
 		data, err := json.Marshal(reflected)
 		if err != nil {
 			return nil, err
@@ -49,7 +51,7 @@ func Spec() ([]byte, error) {
 	// Named aliases must not point at themselves.
 	for name, value := range schemas {
 		if m, ok := value.(map[string]any); ok && m["$ref"] == "#/components/schemas/"+name {
-			reflected := (&jsonschema.Reflector{Anonymous: true, ExpandedStruct: true}).Reflect(values[name])
+			reflected := (&jsonschema.Reflector{Anonymous: true, ExpandedStruct: true, Namer: workspaceSchemaName}).Reflect(values[name])
 			data, err := json.Marshal(reflected)
 			if err != nil {
 				return nil, err
@@ -133,6 +135,7 @@ func Spec() ([]byte, error) {
 	events["parameters"] = append(events["parameters"].([]any), params...)
 	paths["/pair"] = map[string]any{"get": map[string]any{"operationId": "pair_page", "security": []any{}, "x-listeners": []string{"browser"}, "responses": map[string]any{"200": map[string]any{"description": "Pairing page, consumes no code", "content": map[string]any{"text/html": map[string]any{"schema": map[string]any{"type": "string"}}}}}}}
 	paths["/{path}"] = map[string]any{"get": map[string]any{"operationId": "ui_files", "x-listeners": remote, "description": "Static UI files with SPA fallback. Browser listener public; Tailnet requires allowed login. API paths never fall back.", "parameters": []any{map[string]any{"name": "path", "in": "path", "required": true, "schema": map[string]any{"type": "string"}}}, "responses": map[string]any{"200": map[string]any{"description": "UI file or index.html"}}}}
+	workspaceSpec(schemas, paths, add)
 	// dispatch maps HEAD to GET, and static files also support HEAD. A
 	// WebSocket handshake remains GET-only. HEAD responses have no body.
 	for path, value := range paths {
@@ -211,4 +214,13 @@ func streamOperation(name string, listeners []string) map[string]any {
 		"description": "Authenticated WebSocket upgrade. Exact Host guard before upgrade; Origin/auth failures use close codes after upgrade. A single-use origin-bound ticket or explicit bearer authenticates Browser; Local is trusted; Tailnet uses its allowed login. See ui-api.md.",
 		"parameters":  []any{map[string]any{"name": "ticket", "in": "query", "schema": map[string]any{"type": "string"}}, map[string]any{"name": "Origin", "in": "header", "schema": map[string]any{"type": "string"}, "description": "Required for tickets and Tailnet. Explicit Browser bearer clients may omit Origin."}},
 		"responses":   map[string]any{"101": map[string]any{"description": "WebSocket upgraded; see x-streams for messages and close codes"}, "426": map[string]any{"description": "Upgrade required", "content": jsonContent("ErrorBody")}, "421": map[string]any{"description": "Host refused", "content": jsonContent("ErrorBody")}}}}
+}
+
+// Agent control and mobile both define Target and Error. Package identity is
+// part of their schema name so map iteration cannot overwrite either contract.
+func workspaceSchemaName(t reflect.Type) string {
+	if strings.HasSuffix(t.PkgPath(), "/agentcontrol") {
+		return "AgentControl" + t.Name()
+	}
+	return t.Name()
 }

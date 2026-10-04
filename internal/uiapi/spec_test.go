@@ -80,9 +80,9 @@ func TestSpecDocumentsHeadMethodsServedByHandlers(t *testing.T) {
 		}
 		var response *http.Response
 		if route.allows(ListenerLocal) {
-			response, _ = h.localDo(req{method: http.MethodHead, path: path})
+			response, _ = h.localDo(req{method: http.MethodHead, path: strings.ReplaceAll(path, "{project}", "fixture-project")})
 		} else {
-			response, _ = h.browserDo(req{method: http.MethodHead, path: path})
+			response, _ = h.browserDo(req{method: http.MethodHead, path: strings.ReplaceAll(path, "{project}", "fixture-project")})
 		}
 		if response.StatusCode != http.StatusOK {
 			t.Fatalf("HEAD %s: %d", path, response.StatusCode)

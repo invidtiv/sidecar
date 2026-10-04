@@ -690,7 +690,7 @@ func TestOriginsFileIsPrivateAndHashOnly(t *testing.T) {
 	expect(t, response, body, http.StatusForbidden, CodeOriginRefused)
 	response, body = h.localDo(req{method: http.MethodDelete, path: "/api/v0/origins?origin=http://app.example"})
 	expect(t, response, body, http.StatusNotFound, CodeOriginNotFound)
-	response, body = h.localDo(req{method: http.MethodPost, path: "/api/v0/origins", body: `{"origin":"http://a.example","scopes":["sessions:read"]}`})
+	response, body = h.localDo(req{method: http.MethodPost, path: "/api/v0/origins", body: `{"origin":"http://a.example","scopes":["future:write"]}`})
 	expect(t, response, body, http.StatusBadRequest, CodeInvalidRequest)
 	response, body = h.localDo(req{method: http.MethodPost, path: "/api/v0/origins", body: `{"origin":"http://a.example/path"}`})
 	expect(t, response, body, http.StatusBadRequest, CodeInvalidRequest)

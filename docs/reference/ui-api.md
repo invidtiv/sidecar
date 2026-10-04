@@ -2,7 +2,7 @@
 
 `sidecar api serve` exposes Sidecar's Sessions and terminals to UIs that are not the TUI: the reference web UI in `~/code/sidecar-ui`, embedded components in other apps, and agents and scripts. This document is the wire contract. The plan and the reasoning behind it are in [the Sidecar UI API plan](../plans/active/sidecar-ui-api.md).
 
-v0 is the U0 steel thread. It serves the Sessions catalog and the existing terminal protocol over HTTP and WebSocket, with the transports, guards and pairing that every later version keeps. U1 adds catalog and attention events. Later versions add workspaces, operations and content. v0 changes in place while the API is private, and fixtures and clients move with it.
+v0 is the U0 steel thread. It serves the Sessions catalog and the existing terminal protocol over HTTP and WebSocket, with the transports, guards and pairing that every later version keeps. U1 adds catalog and attention events. U2 adds project workspaces and operations; later versions add content. v0 changes in place while the API is private, and fixtures and clients move with it.
 
 ## Process and discovery
 
@@ -96,7 +96,7 @@ Sessions are kept in memory in v0, so a server restart means pairing again, and 
 
 `sidecar api pair --origin https://app.example:5173` registers the origin over the Local socket (`POST /api/v0/origins`) and prints a bearer token. Registrations persist in `$STATE/api/origins.json` with mode 0600, as `{origin, token_sha256, scopes, created_at}`. The server keeps only the token hash. `sidecar api pair --list` lists registrations. `sidecar api pair --revoke ORIGIN` (`DELETE /api/v0/origins?origin=…`, Local only) removes the registration, invalidates its unused tickets, and closes every terminal authenticated with that origin's token or tickets with `4401`. A concurrent request authorized before revocation cannot issue a new ticket or register a terminal afterward. Re-pairing the same URL does not revive the old credential or its tickets. Other origins and browser sessions remain valid.
 
-The only v0 scope is `full`. Narrower scopes arrive with the routes they protect.
+The scopes are `full` and `workspace:write`. See the workspace operation contract below; `full` implies every narrower scope.
 
 HTTP calls from a paired origin send `Authorization: Bearer <token>`. Pairing an origin again rotates its token. Browsers cannot set headers on a WebSocket, so a paired origin first gets a ticket with `POST /api/v0/ws-tickets` (bearer-authenticated, single-use, 30-second expiry). It then connects with `?ticket=<ticket>`. A ticket is bound to the listener and the origin it was issued to. The same-origin UI does the same with its session token. A non-browser client may instead send `Authorization: Bearer <token>` on the upgrade itself. It either sends no `Origin` or sends the origin that token is bound to (the paired origin, or for a session token the origin that exchanged it); any other `Origin` closes with `4403`.
 
@@ -109,6 +109,36 @@ Worktree creation uses a confirmed `WorktreePlan`: plan, begin (Git execution an
 Shell create, rename, delete, and tombstone restore, and worktree display-name rename and deletion, go through that service. Shell persistence and locking live only in `shellstate`; the plugin's `ShellManifest` is a compatibility projection with local revision tracking. Tombstone restore restores a durable shell record without starting tmux; cold session recreation remains the existing `sessionrestore` executor. Worktree launch reconnects an existing session rather than creating another one. No operation restarts the tmux server.
 
 `workspaceops.AgentLauncher` shares readiness and provider start sequencing, retaining each caller's resolved argv, deadlines, target policy, and error wording. Reconnecting worktree sessions skip shell-readiness waiting. `agentresolve.ResolveTarget` accepts explicit caller context and a target lookup adapter, so headless callers share the CLI's target-required and project/shell scoping rules. `workspacelist.Projected`, `SectionsAt`, the pin helpers, and `Hidden` provide state-free list policy; clocks, pins, and source-resolved visibility facts are caller inputs. Human selection, scrolling, collapsed sections, and presentation remain in their models.
+
+## Project workspaces and operations
+
+U2 serves configured projects and their workspaces. `GET /api/v0/projects` uses the `sidecar project list --json` types (`projects: [{key, name, path, theme?, openIn?, addedAt?}]`, `aligned: false`). Shell/visible project cues belong to the CLI caller and are omitted by the headless API. `?host=ID` reads the owning registered host's CLI; omit it or use `local` for this machine. A project key is the `key` from that owner's projects resource, not the hub-scoped `project_id` in Sessions. Encode the entire project selector as one path segment; an owning root path such as `/remote/repo` is `%2Fremote%2Frepo`.
+
+`GET /api/v0/projects/{project}/workspace` returns `{project, catalog, shells}`. `catalog` is the existing `CatalogSnapshot`, restricted to this project after the shared filtering, sorting and grouping rules; it retains the agent state, attention and attachment verdicts of Sessions. `shells` is the full `sidecar shell list --json` record list, including `status: "forgotten"` and `deletedAt` for recoverable tombstones. Workspace `catalog.generation` additionally covers those records. Query parameters are `sort`, `search`, repeatable `provider` and `state`, `show_idle_sessions`, and a single owning `host`. Omitted idle preference includes all rows. `sidecar workspace list --project NAME [--host ID] --json` returns this exact resource; filtering never removes recoverable records from `shells`.
+
+Every operation below is POST under `/api/v0/projects/{project}/`. The request is one bounded JSON object. An optional `host` selects a registered owning host; no remote target is ever resolved or mutated on the viewer. Unknown fields and irrelevant operation fields are refused. Local operations reuse the CLI's explicit-project command adapters over `workspaceops.Service`, `agentresolve` and `agentcontrol.Service`; remote operations invoke the owning CLI through the same host transport Sessions uses. This retains the CLI's target resolution, setup/recovery sequencing and provider refusal policy. Create requests use workspace placement and a zero UI-ack wait, as an agent's `--tab --wait 0` invocation does.
+
+| POST suffix | Request fields, besides optional `host` | CLI response |
+| --- | --- | --- |
+| `shells/create` | optional `name` | `create shell --tab --json`: `{shell: {displayName, session, workDir}, project, acked, surface?, placement}` |
+| `shells/rename` | `target`, `name` | `shell rename --target --json`: `{shell, oldName, name, changed}` |
+| `shells/delete` | `target` | `shell delete --target --json`: `{shell, name?, status, deleted}` |
+| `shells/restore` | `target` (the forgotten tmux name) | `shell restore --json`: `{shell, name?, status}`. Restores the record only; never starts tmux or resumes an agent. |
+| `worktrees/plan` | `name`, optional `base` | `create worktree --plan --json`: `WorktreePlan`, including `sourceRef`, `sourceOid`, `branch` and `path`. Reads only. |
+| `worktrees/create` | `name`, optional `base`, `confirm: true`, `expect_source_oid` | `create worktree --expect-source-oid --json`: `{shell, project, path, branch, setup, acked, surface?, placement}`. The source OID must be the plan's `sourceOid`; a moved source refuses before Git writes. |
+| `worktrees/rename` | `target` (worktree session), `name` | The same `shell rename --target --json` result for a worktree display name. |
+| `worktrees/delete-plan` | `target`, optional `delete_local_branch`, `delete_remote_branch` | `worktree delete --plan --json`: `{status: "planned", deleted: false, plan}`. Includes the current dirty/unknown probe and branch decisions. |
+| `worktrees/delete` | absolute `target` from the plan's `path`, `confirm: true`, `expect_head_oid`, `expect_branch`, optional branch decisions | `worktree delete --yes --expect-head-oid --expect-branch --json`: `{status: "deleted", deleted: true, plan, warnings?}`. Re-probes dirtiness, then fences HEAD and branch before deletion. No dirty or unknown checkout is removed without explicit confirmation. |
+| `agents/start` | `target`, `kind`, optional `args` (provider argv) | `agent start --json`: `{target, agent}`. Returns only at provider readiness; keeps `agent_control` gating. |
+| `agents/prompt` | `target`, literal `text`, optional `wait`, `timeout` | `agent prompt --json`: `{target, agent, receipt}`. `wait: true` requires a positive timeout of at most `2m`; timeout without wait is refused. Failure preserves the CLI error envelope, including its receipt. An unknown submission must never be retried automatically. |
+
+Operations require `workspace:write`; `full` implies it. Local and owner-tailnet access and paired browser sessions retain full access. Paired-origin scopes default to `full`; an explicitly scoped credential without `workspace:write` or `full` receives `403 scope_refused` on these POSTs. Pairing accepts `workspace:write` alongside `full`; agents select scopes with `sidecar api pair --origin URL --scope workspace:write --json` (repeat `--scope` for multiple scopes). This scope does not change the pre-existing terminal stream contract.
+
+HTTP success bodies are the shared CLI JSON types, with a trailing newline. `X-Sidecar-Exit-Code` reports the original CLI status and is exposed to paired-origin CORS clients. CLI exit 2 maps to HTTP 400, 3 to 404, 4/5 to 409, and other failures to 503. Named CLI refusal codes are preserved; older commands that emit plain stderr map to `invalid_request`, `not_found`, `refused`, `rejected` or `backend` according to their exit status. Worktree setup/launch failures can carry the CLI's partial creation result with a non-success HTTP status, so the created identity and recovery outcomes remain inspectable. Never infer that a failed response means no work happened.
+
+A `workspace` event carries `workspace: {projects, workspaces: [{project, host?}]}`. It follows the initial catalog/terminal baseline and invalidates the projects resource and each listed workspace; clients refetch only the resources they have open. `projects` replaces the local configured project list, including an empty list after removal; remote references retain the owner's canonical project root and registered host, which the owning CLI accepts as a project selector. A workspace event also invalidates any open remote project/workspace resources, so removed projects and disconnected hosts clear stale views. These events share the existing manifest/configuration/agent/host observation signals and the 250 ms debounce. The pending event is latest-wins, bounded to one resource invalidation per connection. There is no extra fast inventory polling. API writes also signal the same event bus, including record-only restore.
+
+The synthetic projects, workspace, workspace event and operation exchanges are in `testdata/ui-api/v0/`, under the same schema/checksum gate. Fixture workspaces support reads; mutations refuse `unsupported` and never fall through to the machine. `./scripts/ui-api-proof.sh` exercises HTTP/CLI workspace parity, shell create/rename/delete/restore, workspace push, worktree planning/source fencing, dirty confirmation, delete identity fencing and agent-feature refusals with both tmux and state isolated. Unit tests also exercise simultaneous API and TUI manifest writers with the live path watcher.
 
 ## HTTP routes
 
@@ -136,7 +166,7 @@ All JSON, encoded exactly as the CLI's `--json` output: one object and a trailin
 
 | Route | Listener | Returns |
 | --- | --- | --- |
-| `GET /api/v0/hello` | any | `{api_version, api_instance, server_version, capabilities: ["sessions", "status", "terminal", "ws_tickets", "events"], terminal: {protocol: "mobile", version: 0}}` |
+| `GET /api/v0/hello` | any | `{api_version, api_instance, server_version, capabilities: ["sessions", "status", "terminal", "ws_tickets", "events", "projects", "workspace", "workspace_operations"], terminal: {protocol: "mobile", version: 0}}` |
 | `GET /api/v0/sessions` | any | The Sessions catalog: the same `mobileproto.CatalogSnapshot` JSON as `sidecar mobile sessions --json`. Query parameters map to `catalog_query`: `sort`, `search`, repeatable `host`, `provider`, `state`, and `show_idle_sessions=true\|false`. It is served by the same code path as the CLI. Any other parameter, or a repeated `sort`, `search` or `show_idle_sessions`, gets `400 invalid_request`. |
 | `GET /api/v0/events` | any | The events WebSocket described below; query parameters match `sessions`, plus a single optional `ticket`. |
 | `GET /api/v0/status` | any | `{api_version, api_instance, server_version, pid, started_at, listeners: [{name, network, address, host?}], clients: [{id, kind, listener, auth, origin?, login?, since}], terminals: [{client_id, owner_host_id?, workspace_id?, session?, pane?, display_name?, control, holder?: {kind, label}}]}`. A client is one open terminal or events WebSocket, and `auth` is `local`, `session`, `bearer`, `ticket` or `tailnet`. `terminals` lists the clients with an open attachment, and `control` is observed from the stream's own responses. `sidecar api status --json` prints this document byte for byte. |
@@ -184,10 +214,11 @@ Every text frame is one `uiapi.EventMessage` JSON object with `api_version: 0`, 
 
 | Type | Payload | When |
 | --- | --- | --- |
-| `hello` | `api_instance`, `server_version`, `capabilities: ["catalog", "attention", "terminals", "shutdown"]` | First message. |
+| `hello` | `api_instance`, `server_version`, `capabilities: ["catalog", "attention", "terminals", "workspace", "shutdown"]` | First message. |
 | `catalog` | `catalog: CatalogSnapshot` | Once on connection, then when the full authorized catalog generation changes. Its `query` and rows use the same path as `sessions`. |
 | `attention` | `attention: {kind: "needs_input"\|"finished", catalog_id, title, time}` | A previously observed live row gains attention, or changes from `working` to `done`. `time` is the server's UTC observation time; `title` is the human session name. Initial, newly appearing and stale rows do not replay alerts. Alerts use the connection's catalog query. |
 | `terminals` | `terminals: [{client_id, owner_host_id?, session, pane, display_name?, holder: {kind, label}\|null}]` | Initial baseline, attachment open/close/disconnect, or an observed holder change. Empty is `[]`. Only attachments belonging to the same credential holder are included; Local connections share the trusted local credential. |
+| `workspace` | `workspace: {projects, workspaces: [{project, host?}]}` | Initial resource invalidation and watcher-driven workspace/configuration changes; see the workspace contract above. |
 | `error` | `error: {code, message}` | Catalog collection failure (`backend`), or attention pending-bound overflow (`overflow`). The connection stays open; clients can reconcile through `sessions` and reconnect. |
 | `shutdown` | `reason` | Before orderly close `4409` when the server stops. Delivery to an unresponsive peer is best-effort, bounded by the socket write deadline. |
 

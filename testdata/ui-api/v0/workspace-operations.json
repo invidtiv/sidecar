@@ -1,0 +1,242 @@
+[
+  {
+    "path": "/api/v0/projects/fixture-project/shells/create",
+    "request": {
+      "name": "New shell"
+    },
+    "response": {
+      "shell": {
+        "displayName": "New shell",
+        "session": "fixture-new",
+        "workDir": "/workspace/fixture"
+      },
+      "project": "fixture-project",
+      "acked": false,
+      "placement": "workspace"
+    }
+  },
+  {
+    "path": "/api/v0/projects/fixture-project/shells/rename",
+    "request": {
+      "target": "fixture-new",
+      "name": "Review"
+    },
+    "response": {
+      "shell": "fixture-new",
+      "oldName": "New shell",
+      "name": "Review",
+      "changed": true
+    }
+  },
+  {
+    "path": "/api/v0/projects/fixture-project/shells/delete",
+    "request": {
+      "target": "fixture-new"
+    },
+    "response": {
+      "shell": "fixture-new",
+      "name": "Review",
+      "status": "deleted",
+      "deleted": true
+    }
+  },
+  {
+    "path": "/api/v0/projects/fixture-project/shells/restore",
+    "request": {
+      "target": "fixture-new"
+    },
+    "response": {
+      "shell": "fixture-new",
+      "name": "Review",
+      "status": "restored"
+    }
+  },
+  {
+    "path": "/api/v0/projects/fixture-project/worktrees/plan",
+    "request": {
+      "name": "Feature",
+      "base": "main"
+    },
+    "response": {
+      "repoKey": "",
+      "operationId": "",
+      "sourceWorktree": "/workspace/fixture",
+      "mainWorktree": "/workspace/fixture",
+      "sourceRef": "refs/heads/main",
+      "sourceOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "branch": "feature",
+      "path": "/workspace/feature",
+      "displayName": "Feature",
+      "remotePolicy": "local",
+      "copyEnv": false,
+      "runHook": false,
+      "hookPath": "",
+      "hookRequired": false
+    }
+  },
+  {
+    "path": "/api/v0/projects/fixture-project/worktrees/create",
+    "request": {
+      "name": "Feature",
+      "base": "main",
+      "confirm": true,
+      "expect_source_oid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "response": {
+      "shell": {
+        "displayName": "Feature",
+        "session": "fixture-worktree",
+        "workDir": "/workspace/feature"
+      },
+      "project": "fixture-project",
+      "path": "/workspace/feature",
+      "branch": "feature",
+      "setup": [],
+      "acked": false,
+      "placement": "workspace"
+    }
+  },
+  {
+    "path": "/api/v0/projects/fixture-project/worktrees/rename",
+    "request": {
+      "target": "fixture-worktree",
+      "name": "Review branch"
+    },
+    "response": {
+      "shell": "fixture-worktree",
+      "oldName": "Feature",
+      "name": "Review branch",
+      "changed": true
+    }
+  },
+  {
+    "path": "/api/v0/projects/fixture-project/worktrees/delete-plan",
+    "request": {
+      "target": "/workspace/feature"
+    },
+    "response": {
+      "status": "planned",
+      "deleted": false,
+      "plan": {
+        "project": "fixture-project",
+        "name": "Feature",
+        "path": "/workspace/feature",
+        "branch": "feature",
+        "headOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "branchOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "dirtiness": "dirty",
+        "hasRemoteBranch": false,
+        "deleteLocalBranch": false,
+        "deleteRemoteBranch": false,
+        "pendingCreation": false
+      }
+    }
+  },
+  {
+    "path": "/api/v0/projects/fixture-project/worktrees/delete",
+    "request": {
+      "target": "/workspace/feature",
+      "confirm": true,
+      "expect_head_oid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expect_branch": "feature"
+    },
+    "response": {
+      "status": "deleted",
+      "deleted": true,
+      "plan": {
+        "project": "fixture-project",
+        "name": "Feature",
+        "path": "/workspace/feature",
+        "branch": "feature",
+        "headOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "branchOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "dirtiness": "dirty",
+        "hasRemoteBranch": false,
+        "deleteLocalBranch": false,
+        "deleteRemoteBranch": false,
+        "pendingCreation": false
+      }
+    }
+  },
+  {
+    "path": "/api/v0/projects/fixture-project/agents/start",
+    "request": {
+      "target": "fixture-new",
+      "kind": "codex"
+    },
+    "response": {
+      "target": {
+        "host": "local",
+        "project": "fixture-project",
+        "session": "fixture-new",
+        "paneId": "%1"
+      },
+      "agent": {
+        "kind": "codex",
+        "status": "idle",
+        "freshness": "fresh",
+        "attention": false,
+        "capturedAt": "2026-10-03T00:00:00Z",
+        "interactiveReady": true
+      }
+    }
+  },
+  {
+    "path": "/api/v0/projects/fixture-project/agents/prompt",
+    "request": {
+      "target": "fixture-new",
+      "text": "--help is literal"
+    },
+    "response": {
+      "target": {
+        "host": "local",
+        "project": "fixture-project",
+        "session": "fixture-new",
+        "paneId": "%1"
+      },
+      "agent": {
+        "kind": "codex",
+        "status": "idle",
+        "freshness": "fresh",
+        "attention": false,
+        "capturedAt": "2026-10-03T00:00:00Z",
+        "interactiveReady": true
+      },
+      "receipt": {
+        "submission": "submitted",
+        "wait": "not_requested",
+        "target": {
+          "host": "local",
+          "project": "fixture-project",
+          "session": "fixture-new",
+          "paneId": "%1"
+        }
+      }
+    }
+  },
+  {
+    "exit_code": 5,
+    "path": "/api/v0/projects/fixture-project/agents/prompt",
+    "request": {
+      "target": "fixture-new",
+      "text": "continue"
+    },
+    "response": {
+      "error": {
+        "code": "feature_disabled",
+        "message": "Enable agent_control before submitting input.",
+        "receipt": {
+          "submission": "not_submitted",
+          "wait": "not_requested",
+          "target": {
+            "host": "local",
+            "project": "fixture-project",
+            "session": "fixture-new",
+            "paneId": "%1"
+          }
+        }
+      }
+    },
+    "status": 409
+  }
+]
