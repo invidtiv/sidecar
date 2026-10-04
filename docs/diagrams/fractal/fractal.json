@@ -3,7 +3,7 @@
   "id": "sidecar",
   "title": "Sidecar",
   "description": "The terminal-centric workspace for AI coding agents.",
-  "provenance": "Authored 2026-09-10 from the Sidecar codebase and documentation. Reviewed against internal implementation files and controlling docs. This model represents verified architecture and boundaries, not an exhaustive AST scan. Extended 2026-10-03 with the UI API host (sidecar api serve), the headless terminal protocol services, UI API clients and their trust boundaries, from internal/uiapi, internal/cli/api.go, internal/mobile, internal/mobilehub, docs/reference/ui-api.md and docs/plans/active/sidecar-ui-api.md. UI API elements without #proposed are U0 as implemented on main at 2f0dc1e7; #proposed elements are U1 to U4 plan work. The sidecar-ui repository has no model of its own, so its packages are modeled here from the plan and wire contract rather than its source.",
+  "provenance": "Authored 2026-09-10 from the Sidecar codebase and documentation. Reviewed against internal implementation files and controlling docs. This model represents verified architecture and boundaries, not an exhaustive AST scan. Extended 2026-10-03 with the UI API host (sidecar api serve), the headless terminal protocol services, UI API clients and their trust boundaries, from internal/uiapi, internal/cli/api.go, internal/mobile, internal/mobilehub, docs/reference/ui-api.md and docs/plans/active/sidecar-ui-api.md. UI API elements without #proposed include U0 and U1-b schema/spec and deterministic fixture responsibilities verified on u1b-spec; #proposed elements remain plan work. The sidecar-ui repository has no model of its own, so its packages are modeled here from the plan and wire contract rather than its source.",
   "boundaries": [
     {
       "id": "ui-boundary",
@@ -151,7 +151,7 @@
     {
       "id": "ui-api",
       "title": "Inside sidecar api serve",
-      "description": "Three listeners, one route set: how the UI API host admits a caller and hands each terminal WebSocket to the shared terminal protocol (U0, on main).",
+      "description": "Three listeners, one route set: how the UI API host admits a caller and hands each terminal WebSocket to the shared terminal protocol, with generated schemas and deterministic fixture development.",
       "expanded": ["api"],
       "proposed": false,
       "lens": "structure",

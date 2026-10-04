@@ -25,7 +25,7 @@ func TestSpecMatchesCommittedDocumentAndRoutes(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(data, got) {
-		t.Fatal("OpenAPI is stale: UPDATE_UI_API_SPEC=1 go test ./internal/uiapi -run TestSpecMatchesCommittedDocumentAndRoutes")
+		t.Fatal("OpenAPI is stale: run ./scripts/update-ui-api-contract.sh")
 	}
 	var doc map[string]any
 	if err := json.Unmarshal(data, &doc); err != nil {

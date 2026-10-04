@@ -58,7 +58,7 @@ func TestUIAPIFixtureCorpus(t *testing.T) {
 			t.Fatal(err)
 		}
 		if string(got) != string(append(data, '\n')) {
-			t.Fatalf("stale fixture %s", name)
+			t.Fatalf("stale fixture %s: run ./scripts/update-ui-api-contract.sh", name)
 		}
 	}
 	names, err := filepath.Glob(filepath.Join(dir, "*.json*"))
@@ -85,7 +85,7 @@ func TestUIAPIFixtureCorpus(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(got) != sums.String() {
-		t.Fatal("UI API SHA256SUMS is stale")
+		t.Fatal("UI API SHA256SUMS is stale: run ./scripts/update-ui-api-contract.sh")
 	}
 	if _, err := LoadFixtures(dir); err != nil {
 		t.Fatal(err)
@@ -261,7 +261,7 @@ func TestFixtureServerTerminalUsesRealOrderingAndGuards(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(want) != normalized {
-		t.Fatal("terminal transcript differs from the real Service; UPDATE_UI_API_FIXTURES=1 go test ./internal/uiapi -run TestFixtureServerTerminalUsesRealOrderingAndGuards")
+		t.Fatal("terminal transcript differs from the real Service; run ./scripts/update-ui-api-contract.sh")
 	}
 }
 
