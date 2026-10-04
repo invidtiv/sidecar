@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
@@ -41,16 +42,8 @@ func TestConfigurationReorderPreservesOperations(t *testing.T) {
 			seed := &previewSplitSeed{session: "original", run: "echo ready"}
 			m.pendingSplitSeed = seed
 			reordered := []Project{projects[1], projects[0]}
-			originalContext := m.ctx
 			if refresh == "set projects" {
-				if cmd := m.SetProjects(reordered); cmd != nil {
-					t.Error("reordering projects restarted collection")
-				}
-				select {
-				case <-originalContext.Done():
-					t.Error("reordering projects canceled the in-flight collection")
-				default:
-				}
+				m.SetProjects(reordered)
 			} else {
 				m.start(reordered, refresh)
 			}
@@ -69,7 +62,7 @@ func TestConfigurationReorderPreservesOperations(t *testing.T) {
 	}
 }
 
-func TestSameConfiguredProjectsComparesMembership(t *testing.T) {
+func TestSameConfiguredProjectMembership(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		paths    []string
@@ -84,9 +77,38 @@ func TestSameConfiguredProjectsComparesMembership(t *testing.T) {
 		{name: "duplicate is not replacement", paths: []string{"/one", "/two"}, projects: []Project{{Path: "/one"}, {Path: "/one"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := sameConfiguredProjects(tc.paths, tc.projects); got != tc.want {
-				t.Fatalf("sameConfiguredProjects = %v, want %v", got, tc.want)
+			if got := sameConfiguredProjectMembership(tc.paths, tc.projects); got != tc.want {
+				t.Fatalf("sameConfiguredProjectMembership = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestConfigurationReorderRefreshesPresentationOrder(t *testing.T) {
+	m := New(workspaceinventory.Collector{Runner: &stageRunner{}})
+	defer m.Stop()
+	projects := []Project{{Name: "one", Path: workspaceinventory.CanonicalPath(t.TempDir())}, {Name: "two", Path: workspaceinventory.CanonicalPath(t.TempDir())}}
+	m.SetProjects(projects)
+	reordered := []Project{projects[1], projects[0]}
+	cmd := m.SetProjects(reordered)
+	if cmd == nil {
+		t.Fatal("reordering did not schedule collection with the new presentation order")
+	}
+	queue := []tea.Cmd{cmd}
+	for steps := 0; m.loading && len(queue) > 0 && steps < 100; steps++ {
+		next := queue[0]
+		queue = queue[1:]
+		if next == nil {
+			continue
+		}
+		msg := next()
+		if batch, ok := msg.(tea.BatchMsg); ok {
+			queue = append(queue, batch...)
+		} else {
+			queue = append(queue, m.Update(msg))
+		}
+	}
+	if m.loading || len(m.projects) != 2 || m.projects[0].Path != reordered[0].Path || m.projects[1].Path != reordered[1].Path {
+		t.Fatalf("reordered inventory did not adopt presentation order: loading=%v projects=%+v", m.loading, m.projects)
 	}
 }

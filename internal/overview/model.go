@@ -648,8 +648,21 @@ func sameConfiguredProjects(paths []string, projects []Project) bool {
 	if len(paths) != len(projects) {
 		return false
 	}
+	for i, project := range projects {
+		if paths[i] != project.Path {
+			return false
+		}
+	}
+	return true
+}
+
+func sameConfiguredProjectMembership(paths []string, projects []Project) bool {
+	if len(paths) != len(projects) {
+		return false
+	}
 	// Ordering is presentation, not configuration authority. Keep pending
-	// operations and collection alive when the same projects are reordered.
+	// operations alive when the same projects are reordered. Collection still
+	// refreshes to apply the configured presentation order.
 	membership := make(map[string]int, len(paths))
 	for _, path := range paths {
 		membership[path]++
@@ -676,7 +689,7 @@ func (m *Model) SetProjects(projects []Project) tea.Cmd {
 }
 
 func (m *Model) start(projects []Project, reason string) tea.Cmd {
-	if !sameConfiguredProjects(m.configuredPaths, projects) {
+	if !sameConfiguredProjectMembership(m.configuredPaths, projects) {
 		m.configurationGeneration++
 		// Their replies now belong to the previous configuration. Retire the
 		// dialogs too, rather than leaving a busy modal with no valid reply.
