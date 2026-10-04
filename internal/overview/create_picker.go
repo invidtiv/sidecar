@@ -98,7 +98,7 @@ func (m *Model) loadCreatePickerData() tea.Cmd {
 	dir := root
 	return func() tea.Msg {
 		ctx := context.Background()
-		msg := createPickerDataMsg{completionScope: scope}
+		msg := createPickerDataMsg{completionScope: scope, Root: dir}
 		if refs, err := workspaceops.RecentDiffRefs(ctx, dir, 15); err == nil {
 			msg.Refs = refs
 		}

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/workspacecreate"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
@@ -52,14 +53,43 @@ func TestLateCreateCompletionCannotCloseNewDialog(t *testing.T) {
 
 func TestCompletionConfigurationFenceSurvivesRefreshPoll(t *testing.T) {
 	m := New(workspaceinventory.Collector{})
-	m.configurationGeneration = 1
+	defer m.Stop()
+	projects := []Project{{Path: t.TempDir()}}
+	m.start(projects, "refresh")
 	scope := m.completionScope()
-	m.generation++
+	m.start(projects, "poll")
 	if !m.completionCurrent(scope) {
 		t.Fatal("a normal inventory poll invalidated an owned completion")
 	}
-	m.configurationGeneration++
+	m.SetProjects([]Project{{Path: t.TempDir()}})
 	if m.completionCurrent(scope) {
 		t.Fatal("a changed project set retained the old completion")
+	}
+}
+
+func TestPickerCompletionCarriesSourceRoot(t *testing.T) {
+	root := initPreviewTwoCommitRepo(t)
+	m := New(workspaceinventory.Collector{})
+	m.projects = []Project{{Path: root}}
+	cmd := m.loadCreatePickerData()
+	msg := cmd().(createPickerDataMsg)
+	if msg.Root != root || !msg.Scoped {
+		t.Fatalf("picker reply lost its root or authority: %+v", msg)
+	}
+	m.projects = []Project{{Path: t.TempDir()}}
+	m.createForm = workspacecreate.Open(workspacecreate.OpenOpts{})
+	m.createForm.SetKind(workspacecreate.KindDiff)
+	m.createForm.AdvanceToTarget()
+	m.createForm.SetDiffRefs([]workspacecreate.Suggestion{{Value: "new", Label: "New project"}})
+	m.update(msg)
+	got := m.createForm.PickerSuggestions()
+	found := false
+	for _, suggestion := range got {
+		if suggestion.Value == "new" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("previous project's picker reply replaced the new suggestions")
 	}
 }
