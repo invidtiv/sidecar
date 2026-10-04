@@ -192,7 +192,7 @@ func (c *trackedClient) observe(line []byte) {
 		c.open, c.term.Control = false, false
 	case mobileproto.ResponseReset:
 		// A deliberate resize keeps control; every other reset revokes it.
-		if response.Reason != "resize" {
+		if response.Reason != mobileproto.ResetResize {
 			c.term.Control = false
 		}
 	case mobileproto.ResponseError:

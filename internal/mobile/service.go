@@ -761,7 +761,7 @@ func (s *Service) control(ctx context.Context, request mobileproto.Request) {
 	}
 	if resized {
 		s.emit(mobileproto.Response{Version: mobileproto.Version, Type: mobileproto.ResponseReset,
-			AttachmentHandle: a.handle, AttachmentGeneration: a.generation, ResetGeneration: reset, Reason: "resize"})
+			AttachmentHandle: a.handle, AttachmentGeneration: a.generation, ResetGeneration: reset, Reason: mobileproto.ResetResize})
 		a.requestSnapshot()
 	}
 }
@@ -825,7 +825,7 @@ func (s *Service) resize(ctx context.Context, request mobileproto.Request) {
 		return
 	}
 	s.emit(mobileproto.Response{Version: mobileproto.Version, Type: mobileproto.ResponseReset,
-		AttachmentHandle: a.handle, AttachmentGeneration: a.generation, ResetGeneration: reset, Reason: "resize"})
+		AttachmentHandle: a.handle, AttachmentGeneration: a.generation, ResetGeneration: reset, Reason: mobileproto.ResetResize})
 	a.requestSnapshot()
 }
 
@@ -1130,22 +1130,22 @@ func (a *attachment) skippedDiscontinuity(dropped, replacement queuedSnapshot) s
 	expectedColumns, expectedRows := a.expectedColumns, a.expectedRows
 	a.mu.Unlock()
 	if captureIdentityChanged(dropped.snapshot, a.target.resolved) {
-		reason = strongerDiscontinuity(reason, "identity_changed")
+		reason = strongerDiscontinuity(reason, mobileproto.ResetIdentityChanged)
 	}
 	hadLatest := latest.Pane != ""
 	if hadLatest && (dropped.snapshot.AltScreen != latest.AltScreen || dropped.snapshot.AltScreen != replacement.snapshot.AltScreen) {
-		reason = strongerDiscontinuity(reason, "alternate_screen")
+		reason = strongerDiscontinuity(reason, mobileproto.ResetAlternateScreen)
 	}
 	if expectedColumns > 0 && expectedRows > 0 {
 		droppedWasExpected := dropped.snapshot.PaneWidth == expectedColumns && dropped.snapshot.PaneHeight == expectedRows
 		replacementIsExpected := replacement.snapshot.PaneWidth == expectedColumns && replacement.snapshot.PaneHeight == expectedRows
 		if droppedWasExpected && !replacementIsExpected {
-			reason = strongerDiscontinuity(reason, "geometry_changed")
+			reason = strongerDiscontinuity(reason, mobileproto.ResetGeometryChanged)
 		}
 		return reason
 	}
 	if hadLatest && (snapshotGeometryChanged(latest, dropped.snapshot) || snapshotGeometryChanged(dropped.snapshot, replacement.snapshot)) {
-		reason = strongerDiscontinuity(reason, "geometry_changed")
+		reason = strongerDiscontinuity(reason, mobileproto.ResetGeometryChanged)
 	}
 	return reason
 }
@@ -1153,11 +1153,11 @@ func (a *attachment) skippedDiscontinuity(dropped, replacement queuedSnapshot) s
 func strongerDiscontinuity(current, candidate string) string {
 	priority := func(reason string) int {
 		switch reason {
-		case "identity_changed":
+		case mobileproto.ResetIdentityChanged:
 			return 3
-		case "alternate_screen":
+		case mobileproto.ResetAlternateScreen:
 			return 2
-		case "geometry_changed":
+		case mobileproto.ResetGeometryChanged:
 			return 1
 		default:
 			return 0
@@ -1229,20 +1229,20 @@ func (a *attachment) publishQueued(observed queuedSnapshot) {
 	}
 	snapshot := observed.snapshot
 	want := a.target.resolved
-	if captureIdentityChanged(snapshot, want) || observed.discontinuity == "identity_changed" {
-		a.advanceResetLocked("identity_changed", true)
+	if captureIdentityChanged(snapshot, want) || observed.discontinuity == mobileproto.ResetIdentityChanged {
+		a.advanceResetLocked(mobileproto.ResetIdentityChanged, true)
 		a.service.writeError("", mobileproto.ErrorIdentityChanged, "capture target identity changed", false)
 		a.requestSnapshot()
 		return
 	}
 	vt, modes, err := normalizedFullFrame(snapshot)
 	if err != nil {
-		a.failLocked("capture_invalid", err)
+		a.failLocked(mobileproto.ResetCaptureInvalid, err)
 		return
 	}
 	encoded := base64.StdEncoding.EncodeToString(vt)
 	if len(encoded) > mobileproto.MaxLineBytes-(64<<10) {
-		a.failLocked("frame_too_large", fmt.Errorf("normalized frame exceeds line bound"))
+		a.failLocked(mobileproto.ResetFrameTooLarge, fmt.Errorf("normalized frame exceeds line bound"))
 		return
 	}
 	a.mu.Lock()
@@ -1270,10 +1270,10 @@ func (a *attachment) publishQueued(observed queuedSnapshot) {
 	}
 	reason := observed.discontinuity
 	if altChanged {
-		reason = strongerDiscontinuity(reason, "alternate_screen")
+		reason = strongerDiscontinuity(reason, mobileproto.ResetAlternateScreen)
 	}
 	if geometryChanged && !expectedGeometry {
-		reason = strongerDiscontinuity(reason, "geometry_changed")
+		reason = strongerDiscontinuity(reason, mobileproto.ResetGeometryChanged)
 	}
 	if reason != "" {
 		a.advanceResetLocked(reason, true)
@@ -1298,7 +1298,7 @@ func (a *attachment) publishQueued(observed queuedSnapshot) {
 		a.mu.Unlock()
 	} else if err != nil {
 		a.service.abort(err)
-		a.advanceResetLocked("output_unavailable", true)
+		a.advanceResetLocked(mobileproto.ResetOutputUnavailable, true)
 	}
 }
 
@@ -1330,7 +1330,7 @@ func (a *attachment) captureFailed(err error) bool {
 		a.opMu.Unlock()
 		return true
 	}
-	a.failLocked("capture_failed", err)
+	a.failLocked(mobileproto.ResetCaptureFailed, err)
 	a.opMu.Unlock()
 	a.mu.Lock()
 	delay := a.reseedDelay
@@ -1389,7 +1389,7 @@ func (a *attachment) expirePresence() {
 	}
 	expired, err := geometry.ExpirePresence()
 	if err != nil {
-		a.failLocked("presence_release_failed", err)
+		a.failLocked(mobileproto.ResetPresenceReleaseFailed, err)
 		return
 	}
 	if !expired {
@@ -1399,7 +1399,7 @@ func (a *attachment) expirePresence() {
 	a.geometry = nil
 	a.control = false
 	a.mu.Unlock()
-	a.advanceResetLocked("presence_timeout", false)
+	a.advanceResetLocked(mobileproto.ResetPresenceTimeout, false)
 	// The pane may be completely idle. Explicitly request the replacement
 	// frame that lets the client acknowledge this reset and take control again.
 	a.requestSnapshot()
