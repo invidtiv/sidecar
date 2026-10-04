@@ -78,6 +78,7 @@ func New(options Options) (*Native, error) {
 			return nil, fmt.Errorf("%s must be an absolute path without line breaks; reinstall with `sidecar api service install` from a normal user shell", name)
 		}
 	}
+	options.Path = ServicePath(options.Path, options.UID)
 	if options.Run == nil {
 		options.Run = func(ctx context.Context, command string, args ...string) ([]byte, error) {
 			return exec.CommandContext(ctx, command, args...).CombinedOutput()
