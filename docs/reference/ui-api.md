@@ -138,7 +138,7 @@ All JSON, encoded exactly as the CLI's `--json` output: one object and a trailin
 
 ## Terminal stream
 
-`GET /api/v0/terminal` upgrades to a WebSocket. Each connection is one terminal protocol stream: the [mobile terminal protocol v0](mobile-protocol.md), unchanged. Every rule in that document applies, including `hello` first, `operation_sequence`, heartbeats, the geometry lease, `history`, `reconnect`, and the refusal of `sessions` while an attachment is open (use `GET /api/v0/sessions` instead).
+`GET /api/v0/terminal` upgrades to a WebSocket. Each connection is one terminal protocol stream: the [mobile terminal protocol](mobile-protocol.md), with unchanged v0 behavior and capability-negotiated v1 presence, reset-free/coalesced frames, holder labels and server-side paste. Every rule in that document applies, including `hello` first, `operation_sequence`, heartbeats, the geometry lease, `history`, `reconnect`, and the refusal of `sessions` while an attachment is open (use `GET /api/v0/sessions` instead).
 
 - Each WebSocket **text** message carries exactly one protocol JSON envelope, with no trailing newline. The 8 MiB line bound applies per message. A binary message, an empty message, or one that contains a CR or LF closes the connection with code `4400`. A message over the bound closes with `1009`.
 - Closing the socket is end-of-stream. The server releases that stream's lease exactly as it does on stdin EOF.
@@ -156,7 +156,7 @@ All JSON, encoded exactly as the CLI's `--json` output: one object and a trailin
   The close reason is one human sentence of at most 123 bytes.
 - When remote hosts are configured, the stream is brokered to the owning host exactly as `sidecar mobile serve --stdio` does. When they are not, it is served by the local owner service in-process.
 
-v0 inherits the mobile service's bounded outbound queue, so a peer that stops reading ends the stream. U0 measures this, and v1 coalesces frames before the queue.
+Unnegotiated v0 inherits the mobile service's bounded outbound queue. Clients that negotiate `coalesced_frames` receive latest-wins full frames while control/reset ordering remains intact. The terminal WebSocket offers `permessage-deflate` with context takeover; clients opt into compression in the WebSocket handshake. See [negotiated terminal v1](mobile-protocol.md#negotiated-terminal-v1) for the exact hello, presence, holder, frame flags and paste contract.
 
 ## CLI
 

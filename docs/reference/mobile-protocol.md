@@ -63,3 +63,54 @@ A `reset` event's `reason` says why the attachment's reset generation advanced. 
 | `capture_invalid` | A capture could not be normalized into a frame. A retryable `backend` error accompanies it. | Keep the attachment. The replacement frame arrives with the next capture that succeeds. |
 | `frame_too_large` | A normalized frame would exceed the line bound. A retryable `backend` error accompanies it. | As for `capture_invalid`. A smaller geometry avoids it. |
 | `output_unavailable` | Writing a frame failed, so the stream is ending. It is sent on a stream that is already closing, so a client rarely sees it. | Expect the stream to end, then reconnect. |
+
+
+## Negotiated terminal v1
+
+v1 is additive: **envelopes still carry `version: 0`** on SSH stdio and WebSocket. A hello without `capabilities` receives the unchanged v0 capabilities and behavior, including RIS frames, contiguous output sequences, explicit control and lease-gated input. A new client sends a `capabilities` object in its first hello; the hello and later status advertise the server's supported bits. The server enables only the requested bits for that stream. Reconnect opens a fresh stream and negotiates again. Unknown fields are refused. The new bits are `presence`, `reset_free_frames`, `coalesced_frames`, `server_paste`, and `holder_labels`. `coalesced_frames` requires `reset_free_frames`. `changed_row_frames` remains false; screen-model and changed-row frames are deferred to U3.
+
+```json
+{"version":0,"type":"hello","request_id":"hello-1","capabilities":{"presence":true,"reset_free_frames":true,"coalesced_frames":true,"server_paste":true,"holder_labels":true},"viewer":{"kind":"ios","label":"iPhone"}}
+```
+
+`viewer` is optional and defaults to `{kind:"unknown", label:"Sidecar viewer"}`. Its kind is `tui`, `browser`, `ios`, `cli`, or `unknown`; its label is 1 through 128 UTF-8 bytes, nonblank and without control characters. It is advisory display text, never an authenticated identity or authority. The owning host, including when reached through the hub, negotiates the same requested capabilities. A selected owner that cannot support a requested bit is refused as `unsupported`; v0 owners stay usable by v0 clients.
+
+### Presence request and acknowledgment
+
+One terminal stream may contain several attachments; presence describes exactly the `attachment_handle` named by its envelope, with one independent lease identity per attachment. It uses the same `operation_sequence`, applied reset and applied output checkpoint fences as input. Fitted geometry describes the client's box, not the geometry of the frame it is currently scaling.
+
+```json
+{"version":0,"type":"presence","request_id":"presence-1","attachment_handle":"attachment_example","operation_sequence":1,"last_reset_generation":1,"last_output_sequence":1,"presence":{"focused":true,"visible":true,"idle_ms":0,"columns":100,"rows":30}}
+```
+
+All five presence fields are required. `idle_ms` is an integer from 0 through 86400000, `columns` from 2 through 512, and `rows` from 1 through 256. A focused, visible viewer competes through `DecideGeometryLease`, the same rule the TUI uses. A viewer that loses focus or becomes invisible releases its own lease immediately. An idle foreign owner is preempted only when this viewer has sufficiently newer input (the existing five-second margin); polling alone cannot repeatedly steal the size. Selecting a terminal or tapping it counts as input: send `idle_ms:0`. Debounce rapidly changing selections and fitted sizes before sending.
+
+The correlated acknowledgment is `type:"presence"`, with the attachment handle/generation, accepted `operation_sequence`, current `output_sequence` and `reset_generation`, and `control:true` only when this attachment holds the size. False is represented by an omitted `control`, as in v0. A presence resize acknowledges first, then emits `reset` with reason `resize`, then the replacement full frame. Further operations wait for that frame. A failed operation does not consume its sequence.
+
+Heartbeats remain at five seconds and use the same operation/checkpoint fields. With `presence` negotiated, a heartbeat is valid while viewing without control. It may carry a full `presence` object, or omit it to reuse the last accepted presence while increasing idle time by the elapsed server time. The first heartbeat must supply presence if no presence has been accepted. After fifteen seconds without presence, heartbeat or input, an owned lease expires as in v0. The next presence or input can acquire again.
+
+Input with presence negotiated claims outright and delivers the bytes in one owning-service tmux transaction, even when another viewer owns the size. It retains identity, input-mode and sequence/checkpoint validation. It uses the most recently accepted fitted geometry, or the current frame geometry before any presence. Input is never replayed after an uncertain acknowledgment. The explicit `control`, `resize` and `release` operations remain available for tools and legacy clients.
+
+### Holder labels
+
+With `holder_labels` negotiated, the service emits asynchronous `holder` events whenever its observed holder changes, including on an idle pane. They carry the attachment handle/generation and a `holder` object, never a lease token, owner id or PID:
+
+```json
+{"version":0,"type":"holder","attachment_handle":"attachment_example","attachment_generation":1,"holder":{"kind":"ios","label":"iPhone"}}
+```
+
+An unowned pane uses empty kind and label. A TUI holder is described as `kind:"tui"`, with a host label such as `TUI on aerie`; an unknown owner falls back to an advisory label. Clients use this event for a quiet, fading “sized for …” hint. Labels convey presentation only and must be rendered as text. The events-stream terminal projection can reuse this holder object.
+
+### Full-frame flags and slow peers
+
+A reset-free frame has `frame_kind:"full"` and `reset_free:true`. Its decoded `render_vt_base64` homes the cursor, clears carried rendition, hyperlink, margins, origin and insert modes, and repaints every row with wrap temporarily disabled. It never emits RIS (`ESC c`) or repeatedly toggles alternate buffers. `modes.alternate_screen` still describes the source application. The client keeps its renderer and selection across ordinary full frames; a new reset generation still invalidates the previous checkpoint and requires a replacement full frame. History remains an independent frozen v0-style transcript.
+
+A frame with `coalesced:true` is a complete replacement: **output sequence gaps are valid** within the same attachment/reset generation. Reject stale or decreasing sequences; apply the newest complete frame. The server replaces waiting frames before outbound delivery while keeping correlated acknowledgments, reset events and holder events ordered as barriers. A slow peer receives the latest frame, instead of aborting merely because frames accumulate. Control responses remain bounded and an unread stream can still end when their queue fills or the transport deadline expires. Unnegotiated v0 streams retain contiguous sequences and their original overflow behavior.
+
+Terminal WebSockets offer `permessage-deflate` with context takeover. This is independently negotiated by the WebSocket handshake, so clients that do not offer compression retain their existing transport. It changes no decoded protocol bytes and does not apply to SSH stdio. The 8 MiB limit remains a limit on the decompressed message.
+
+### Server-side paste
+
+With `server_paste` negotiated, send `type:"paste"` with the ordinary attachment/operation/checkpoint fields and `data_base64`, standard base64 encoding 1 through 65536 bytes. Send only the pasted bytes: do not add bracketed-paste escape sequences. The owning service loads a private tmux buffer and uses `paste-buffer -p`; tmux decides whether to bracket for the target application and deletes the buffer afterward. Presence clients claim and deliver exactly as input does; without presence, paste requires explicit control. The acknowledgment is `type:"accepted"`. Unsupported input-mode probes (including tmux 3.4's missing bracket-paste probe) remain view-only.
+
+The shared synthetic v1 transcript and SHA-256 manifest live in `testdata/ui-api/v1/terminal.jsonl`. They cover hello, frame flags, presence, holder change, paste, heartbeat and blur. The existing v0 fixture corpus remains unchanged.
