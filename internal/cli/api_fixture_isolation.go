@@ -17,7 +17,7 @@ func checkAPIFixtureIsolation(stateDir string) error {
 		return fmt.Errorf("--fixtures requires %s=1, XDG_STATE_HOME and -config pointing at a temporary tree; see scripts/ui-api-fixture-proof.sh", config.IsolationEnv)
 	}
 	paths := []string{stateDir, config.ConfigPath(), uiapi.Dir(stateDir)}
-	for _, name := range []string{"origins.json", "serve.lock", "endpoint.json", "api.sock", "tailnet.sock", "layouts"} {
+	for _, name := range []string{"origins.json", "sessions.json", "sessions.json.lock", "serve.lock", "endpoint.json", "api.sock", "tailnet.sock", "layouts"} {
 		paths = append(paths, filepath.Join(uiapi.Dir(stateDir), name))
 	}
 	for _, path := range paths {

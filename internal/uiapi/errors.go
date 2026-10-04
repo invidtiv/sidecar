@@ -8,21 +8,22 @@ import (
 
 // Error codes the API adds to the mobile protocol's refusal vocabulary.
 const (
-	CodeHostRefused     = "host_refused"
-	CodeOriginRefused   = "origin_refused"
-	CodeMutationRefused = "mutation_refused"
-	CodeUnauthenticated = "unauthenticated"
-	CodeLoginRefused    = "tailnet_login_refused"
-	CodeLocalOnly       = "local_only"
-	CodeNotServedHere   = "not_served_here"
-	CodeNotFound        = "not_found"
-	CodeMethod          = "method_not_allowed"
-	CodeInvalidRequest  = "invalid_request"
-	CodeOriginNotFound  = "origin_not_found"
-	CodePairingInvalid  = "pairing_code_invalid"
-	CodeTooMany         = "too_many_outstanding"
-	CodeBackend         = "backend"
-	CodeUpgradeRequired = "upgrade_required"
+	CodeHostRefused         = "host_refused"
+	CodeOriginRefused       = "origin_refused"
+	CodeMutationRefused     = "mutation_refused"
+	CodeUnauthenticated     = "unauthenticated"
+	CodeLoginRefused        = "tailnet_login_refused"
+	CodeLocalOnly           = "local_only"
+	CodeNotServedHere       = "not_served_here"
+	CodeNotFound            = "not_found"
+	CodeMethod              = "method_not_allowed"
+	CodeInvalidRequest      = "invalid_request"
+	CodeOriginNotFound      = "origin_not_found"
+	CodePairingInvalid      = "pairing_code_invalid"
+	CodeSessionProofInvalid = "session_proof_invalid"
+	CodeTooMany             = "too_many_outstanding"
+	CodeBackend             = "backend"
+	CodeUpgradeRequired     = "upgrade_required"
 )
 
 var errTooManyOutstanding = errors.New("too many outstanding pairing codes or tickets")

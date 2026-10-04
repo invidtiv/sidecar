@@ -274,7 +274,8 @@ func (h *harness) pairBrowser() string {
 // exchange posts a pairing code as the pairing page would from origin.
 func (h *harness) exchange(origin, code, next string) (*http.Response, []byte) {
 	h.t.Helper()
-	body, _ := json.Marshal(map[string]string{"code": code, "next": next})
+	_, public := browserTestKey(h.t)
+	body, _ := json.Marshal(PairingExchangeRequest{Code: code, Next: next, PublicKey: public})
 	return h.browserDo(req{method: http.MethodPost, path: "/api/v0/pairing/exchange", body: string(body), header: mutationHeaders(origin, nil)})
 }
 
