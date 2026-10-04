@@ -55,11 +55,13 @@ type fakeBackend struct {
 	err       error
 	eof       chan struct{}
 	ctxEnded  chan struct{}
+	stalled   chan struct{} // a stall request has stopped the backend reading
+	release   chan struct{} // closing it ends every stall
 	terminals int
 }
 
 func newFakeBackend() *fakeBackend {
-	return &fakeBackend{eof: make(chan struct{}, 8), ctxEnded: make(chan struct{}, 8),
+	return &fakeBackend{eof: make(chan struct{}, 8), ctxEnded: make(chan struct{}, 8), stalled: make(chan struct{}, 8), release: make(chan struct{}),
 		snapshot: mobileproto.CatalogSnapshot{HubID: "hub-<test>&", Generation: "g1"}}
 }
 
@@ -95,6 +97,16 @@ func (b *fakeBackend) ServeTerminal(ctx context.Context, input io.Reader, output
 			switch line {
 			case `{"cmd":"end"}`:
 				return nil
+			case `{"cmd":"stall"}`:
+				// Stop reading requests, as a service busy with one does.
+				notify(b.stalled)
+				select {
+				case <-b.release:
+				case <-ctx.Done():
+					notify(b.ctxEnded)
+					return ctx.Err()
+				}
+				continue
 			case `{"cmd":"fail"}`:
 				return errors.New("backend exploded")
 			case `{"cmd":"protocol"}`:
@@ -395,6 +407,15 @@ func TestBearerClientsMayOmitOrigin(t *testing.T) {
 	_ = json.Unmarshal(data, &issued)
 	h.expectBrowserClose(t, "ticket without origin", "?ticket="+issued.Ticket, nil, CloseOriginRefused)
 	h.expectBrowserClose(t, "ticket and bearer without origin", "?ticket="+issued.Ticket, http.Header{"Authorization": {"Bearer " + token}}, CloseOriginRefused)
+	// Only Authorization: Bearer with a token earns the relaxation; any other
+	// scheme, or an empty token, still needs an Origin.
+	for _, authorization := range []string{"Basic " + token, "Token " + token, "Bearer", "Bearer   ", token} {
+		headers := mutationHeaders("", map[string]string{"Authorization": authorization})
+		delete(headers, "Origin")
+		response, data := h.browserDo(req{method: http.MethodPost, path: "/api/v0/ws-tickets", body: "{}", header: headers})
+		expect(t, response, data, http.StatusForbidden, CodeOriginRefused)
+		h.expectBrowserClose(t, "upgrade with "+authorization, "", http.Header{"Authorization": {authorization}}, CloseOriginRefused)
+	}
 	// The Tailnet login is ambient, so the relaxation does not reach it.
 	login := map[string]string{tailscaleLoginHead: testTailnetLogin, "Authorization": "Bearer " + token}
 	headers := mutationHeaders("", login)

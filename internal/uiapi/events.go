@@ -311,7 +311,7 @@ func (s *Server) runEvents(conn *websocket.Conn, c caller, query mobileproto.Cat
 	// The stream is server-to-client; still read to process pongs and EOF.
 	readDone := make(chan error, 1)
 	go func() { _, _, err := conn.Read(context.Background()); readDone <- err }()
-	go s.keepalive(ctx, conn)
+	go s.keepalive(ctx, conn, newInboundGate())
 	seq := uint64(0)
 	write := func(m EventMessage) error {
 		seq++

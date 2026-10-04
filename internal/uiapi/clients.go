@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,7 +20,8 @@ type caller struct {
 	login    string
 	// client identifies one credential holder for per-client limits: a
 	// browser session, a paired origin, a tailnet login, or local.
-	client string
+	client     string
+	credential string
 }
 
 // maxTerminalsPerClient bounds the terminal WebSockets one client may hold
@@ -68,6 +70,10 @@ type trackedClient struct {
 	// that was the latest message on the stream, used to pick a close code.
 	lastErrorCode string
 	changed       func()
+	// revoked closes when the credential this client connected with is
+	// revoked; its terminal then closes with 4401.
+	revoked    chan struct{}
+	revokeOnce sync.Once
 }
 
 func newClientRegistry(now func() time.Time) *clientRegistry {
@@ -95,8 +101,23 @@ func (r *clientRegistry) add(kind string, c caller) (*trackedClient, bool) {
 	client.term.ClientID = id
 	client.key = c.client
 	client.changed = r.changes.signal
+	client.revoked = make(chan struct{})
 	r.clients[id] = client
 	return client, true
+}
+
+// revoke signals every client whose key is in keys and returns how many.
+func (r *clientRegistry) revoke(keys map[string]bool) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	count := 0
+	for _, client := range r.clients {
+		if keys[client.key] {
+			client.revokeOnce.Do(func() { close(client.revoked) })
+			count++
+		}
+	}
+	return count
 }
 
 func (r *clientRegistry) remove(client *trackedClient) {
@@ -104,6 +125,20 @@ func (r *clientRegistry) remove(client *trackedClient) {
 	defer r.mu.Unlock()
 	delete(r.clients, client.info.ID)
 	r.changes.signal()
+}
+
+// sessionKeys includes established streams whose session token was evicted
+// from the bounded auth store. They still belong in an explicit sign-out.
+func (r *clientRegistry) sessionKeys(origin string) map[string]bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	keys := map[string]bool{}
+	for _, client := range r.clients {
+		if strings.HasPrefix(client.key, "session:") && (origin == "" || client.info.Origin == origin) {
+			keys[client.key] = true
+		}
+	}
+	return keys
 }
 
 func (r *clientRegistry) snapshot() ([]ClientInfo, []TerminalInfo) {
@@ -184,7 +219,7 @@ func (c *trackedClient) observe(line []byte) {
 		c.open, c.term.Control = false, false
 	case mobileproto.ResponseReset:
 		// A deliberate resize keeps control; every other reset revokes it.
-		if response.Reason != "resize" {
+		if response.Reason != mobileproto.ResetResize {
 			c.term.Control = false
 		}
 	case mobileproto.ResponseError:

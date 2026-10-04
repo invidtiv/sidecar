@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -90,5 +91,29 @@ func TestMobileServeOwnerOnlyAcceptsTheFixedRemoteInvocation(t *testing.T) {
 	var response mobileproto.Response
 	if err := json.Unmarshal(bytes.TrimSpace(output.Bytes()), &response); err != nil || response.Type != mobileproto.ResponseHello || response.RequestID != "hello" {
 		t.Fatalf("owner-only hello=%+v err=%v output=%q", response, err, output.String())
+	}
+}
+
+// `sidecar mobile sessions` builds the shared backend, whose setup takes the
+// first directory snapshot before any query runs. The one-shot command must
+// bound that setup too, not only the query after it.
+func TestMobileSessionsBoundsBackendSetup(t *testing.T) {
+	previous := mobileOneShotBackend
+	t.Cleanup(func() { mobileOneShotBackend = previous })
+	refused := errors.New("setup observed")
+	var deadline time.Time
+	var bounded bool
+	mobileOneShotBackend = func(ctx context.Context, _ Env) (*mobileBackend, error) {
+		deadline, bounded = ctx.Deadline()
+		return nil, refused
+	}
+	if _, err := queryMobileCatalog(Env{Ctx: context.Background()}, mobileproto.CatalogQuery{}); !errors.Is(err, refused) {
+		t.Fatalf("query error = %v", err)
+	}
+	if !bounded {
+		t.Fatal("backend setup for the one-shot sessions query ran without a deadline")
+	}
+	if limit := time.Now().Add(mobileSessionsTimeout); deadline.After(limit) {
+		t.Fatalf("setup deadline %v is later than the sessions budget %v", deadline, limit)
 	}
 }

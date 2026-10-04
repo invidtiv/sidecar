@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -52,6 +53,9 @@ func revalidateMobileShell(ctx context.Context, stateDir string, target mobile.R
 	}
 	identity, err := inspect(ctx, target.Pane)
 	if err != nil {
+		if ctx.Err() != nil || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			return mobile.ResolvedTarget{}, err
+		}
 		return mobile.ResolvedTarget{}, &mobile.ResolveError{Code: mobileproto.ErrorIdentityChanged, Message: "managed shell authority is unavailable: " + err.Error()}
 	}
 	current, err := mobileShellSource(ctx, stateDir, target)

@@ -36,17 +36,28 @@ func runMobileHubOrOwner(env Env) error {
 	return backend.ServeTerminal(ctx, env.Stdin, env.Stdout)
 }
 
+// mobileOneShotBackend builds the backend for a one-shot catalog query;
+// tests replace it to observe the context it is given.
+var mobileOneShotBackend = newMobileBackend
+
+// queryMobileCatalog answers `sidecar mobile sessions`. The whole one-shot
+// query is bounded, setup included: building the registry, the first
+// directory snapshot and the query share one deadline, so a slow setup cannot
+// hang the command. The long-lived API server builds its backend under its
+// own lifetime instead and bounds each query in Sessions.
 func queryMobileCatalog(env Env, query mobileproto.CatalogQuery) (mobileproto.CatalogSnapshot, error) {
 	ctx := env.Ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	backend, err := newMobileBackend(ctx, env)
+	queryCtx, cancel := context.WithTimeout(ctx, mobileSessionsTimeout)
+	defer cancel()
+	backend, err := mobileOneShotBackend(queryCtx, env)
 	if err != nil {
 		return mobileproto.CatalogSnapshot{}, err
 	}
 	defer backend.Close()
-	return backend.Sessions(ctx, query)
+	return backend.Sessions(queryCtx, query)
 }
 
 // mobileBackend is the terminal and catalog authority behind every mobile

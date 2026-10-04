@@ -220,6 +220,14 @@ step "terminal round-trip over the Local socket"
 "$root/uiapiproof" -socket "$api_sock" -url "ws://sidecar/api/v0/terminal" -target "$session" -marker UIAPI_LOCAL_PROOF > /dev/null
 local_get /api/v0/status | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["terminals"]==[], d["terminals"]; print("status ok: no open attachments")'
 
+step "revoke browser sessions without a restart (sidecar api pair --revoke-sessions)"
+sc api pair --revoke-sessions --json | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["revoked"]>=1, d; print("revoked", d["revoked"], "session(s)")'
+code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $browser_token" "$base/api/v0/hello")
+[ "$code" = 401 ] || fail "revoked session token answered $code"
+code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" "$base/api/v0/hello")
+[ "$code" = 200 ] || fail "paired origin token answered $code after a session revocation"
+echo "session revocation ok: session token 401, paired origin token still 200"
+
 step "stop"
 kill -TERM "$server_pid"
 wait "$server_pid" || fail "serve exited non-zero: $(cat "$root/serve.err")"

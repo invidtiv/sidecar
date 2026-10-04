@@ -149,6 +149,19 @@ func (s *originStore) has(origin string) bool {
 	return false
 }
 
+// credentialLive binds an authorization snapshot to this registration, so
+// revoking and re-pairing the same URL cannot revive the old token's tickets.
+func (s *originStore) credentialLive(origin, credential string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, record := range s.records {
+		if record.Origin == origin && credential != "" && record.TokenSHA256 == credential {
+			return true
+		}
+	}
+	return false
+}
+
 // lookupToken returns the origin a bearer token was issued to.
 func (s *originStore) lookupToken(token string) (OriginRecord, bool) {
 	if token == "" {
