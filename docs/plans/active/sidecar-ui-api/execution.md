@@ -59,7 +59,7 @@ The status values are `queued`, `running`, `review`, `fixing`, `merged` and `blo
 | U1-g iOS adopts presence and events | td-fde8cf | sidecar-mobile | Codex | U1-a, U1-d | merged into sidecar-mobile main locally (not pushed). Claude review fixed 3 bugs, including tolerance for unknown event types. Device proof by Marcus; U1-g2 follow-up for UX |
 | U1-i persist browser sessions | td-165353 | sidecar | Codex | U1-a, U1-b merged (both touch internal/uiapi) | merged (7f2ce809). SDK adoption running (td-3ac23b, ~/code/sidecar-ui-u1i-sdk) |
 | U1-e2 web app polish | td-71e0e5 | sidecar-ui | Codex | U1-e | merged (sidecar-ui 5e0ecb2) |
-| U1-c2 socket activation | td-11f799 | sidecar | Codex | U1-c | review (Codex reviewer, shell "rev U1-c2"); branch @9006be74, adds the purego dependency |
+| U1-c2 socket activation | td-11f799 | sidecar | Codex | U1-c | merged (7f684dc4). Review fixed an IPv4-mapped IPv6 and socket-type masquerade. The fake-supervisor proof refused 827 competing binds across a restart |
 | U1-g2 native follow-ups | td-468816 | sidecar-mobile | Codex | U1-g | running (Codex, ~/code/sidecar-mobile-u1g2-native): global alerts, banner instead of a modal, events liveness, fewer channel reopens |
 | U1-h security review and three-viewer proof | td-295605 | all | Claude, then Codex | U1-a, U1-d, U1-f | security merged (6176110f). Three-viewer proof passes on transport (40/40 bytes, 14 handoffs, zero ping-pong); in Codex review (branch u1h-three-viewer, which also carries TUI geometry fixes) |
 | U2-a core extraction | td-c709a9 | sidecar | Codex | U0-a | merged (d95b66f5) |
@@ -242,6 +242,7 @@ A project page with worktrees and shells, and native, keyboard-first create, ren
 - Any credential grants full control until narrower scopes land with U2-b and U3-a. `readonly` on `<sidecar-terminal>` is a client promise; the server does not enforce it.
 - A viewer chooses its own holder label, so the "sized for …" hint can be spoofed by another client the owner has paired.
 - `--tailnet-port` lets any local process act as the owner on the tailnet listener. It is documented, and warned at start.
+- Browser sessions remain exposed to an origin takeover only when the port is free: foreground `api serve` restarts, or a stopped or uninstalled service. Under the socket-activated service the supervisor holds the port continuously.
 - A paired origin trusts everything served from that origin, including whatever serves that port next.
 - The static UI has no script CSP. sidecar-ui must render every server and agent string as text. Reviews have confirmed it does.
 - `content:read` can read everything under a project root, including `.git/config` and `.env`. Whether to refuse `.git/` internals is an open follow-up, with diff memory bounds (td-0e9748).
