@@ -1,11 +1,100 @@
 package tty
 
 import (
+	"context"
 	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/marcus/sidecar/internal/testenv"
+	"github.com/marcus/sidecar/internal/tmuxenv"
 )
+
+// Capture teardown must clear a session-scoped lease even when the selected
+// pane vanished or the capture pipe is dead. Another viewer's token survives.
+func TestHeadlessReleaseAfterCaptureTargetOrTransportLoss(t *testing.T) {
+	testenv.RequireTmux(t)
+	root, err := os.MkdirTemp("/tmp", "sidecar-release-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUX", "")
+	t.Setenv("TMUX_PANE", "")
+	t.Setenv("TMUX_TMPDIR", root)
+	socket := tmuxenv.SocketPath()
+	if err := os.MkdirAll(filepath.Dir(socket), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = exec.Command("tmux", "-S", socket, "kill-server").Run()
+		_ = os.RemoveAll(root)
+	})
+	run := func(t *testing.T, args ...string) string {
+		t.Helper()
+		out, err := exec.Command("tmux", append([]string{"-S", socket}, args...)...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("tmux %v: %v: %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	run(t, "new-session", "-d", "-s", "release-test", "-x", "80", "-y", "24", "sleep 120")
+	for _, loss := range []string{"pane", "transport", "foreign token", "incarnation changed"} {
+		t.Run(loss, func(t *testing.T) {
+			pane := run(t, "new-window", "-d", "-P", "-F", "#{pane_id}", "-t", "release-test", "sleep 120")
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			identity, err := InspectHeadlessPane(ctx, pane)
+			if err != nil {
+				t.Fatal(err)
+			}
+			manager := newControlManager(func(session string) (controlChannel, error) {
+				return newProcessControlChannelForSocket(socket, session)
+			}, 5*time.Millisecond)
+			defer manager.Stop()
+			sub, err := manager.Subscribe(ControlRequest{Session: identity.Session, Pane: pane, Visible: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer sub.Close()
+			waitFor(t, sub.UsingControl)
+			g, err := NewHeadlessGeometry(manager, identity, "aerie-mobile-abcdef-123")
+			if err != nil {
+				t.Fatal(err)
+			}
+			g.token = "aerie-mobile-abcdef-123:1:0"
+			run(t, "set-option", "-t", "release-test", leaseOptionName, g.token)
+			if loss == "pane" {
+				run(t, "kill-pane", "-t", pane)
+			} else {
+				manager.Stop()
+			}
+			if loss == "foreign token" {
+				run(t, "set-option", "-t", "release-test", leaseOptionName, "another-viewer:2:0")
+			}
+			if loss == "incarnation changed" {
+				g.expected.ServerPID++
+			}
+			if err := g.Release(); err != nil {
+				t.Fatalf("release after %s loss: %v", loss, err)
+			}
+			owner := run(t, "show-options", "-qv", "-t", "release-test", leaseOptionName)
+			want := ""
+			if loss == "foreign token" {
+				want = "another-viewer:2:0"
+			}
+			if loss == "incarnation changed" {
+				want = "aerie-mobile-abcdef-123:1:0"
+			}
+			if owner != want {
+				t.Fatalf("owner after %s loss = %q, want %q", loss, owner, want)
+			}
+		})
+	}
+}
 
 func headlessGeometryHarness(t *testing.T) (*HeadlessGeometry, *fakeControlChannel) {
 	t.Helper()
