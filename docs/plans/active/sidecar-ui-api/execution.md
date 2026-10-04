@@ -67,7 +67,7 @@ The status values are `queued`, `running`, `review`, `fixing`, `merged` and `blo
 | U2-c workspace UI | td-37a00e | sidecar-ui | Codex | U2-b | running (Codex, ~/code/sidecar-ui-u2c-workspace-ui) |
 | U3-a content and layouts API | td-f8784a | sidecar | Codex | U1-a | merged (05dd383b). Claude review fixed a HIGH arbitrary file write through the diff parent parameter (git --output), a watch fd-exhaustion cap, and an existence oracle through symlinks |
 | U3-b pane tree UI | td-cf59cd | sidecar-ui | Codex | U3-a, U1-f | merged (sidecar-ui 13bd63a); 70 e2e tests pass on merged main |
-| U3-c pane and content polish | td-c53032 | both | Codex | U3-b | running (Codex, ~/code/sidecar-ui-u3c-polish), plus Sidecar fix td-331945 |
+| U3-c pane and content polish | td-c53032 | both | Codex | U3-b | review (Codex, shell "rev U3-c"); sidecar-ui u3c-polish @d4f9c78 and Sidecar u3c-quoted-paths @6b0c51ef |
 | U4 viewers agents can target | td-799dd6 | both | Codex | U3 | U4-a in Claude security review (branch u4a-viewer @7c8382c7); U4-b after merge |
 
 U2-b onward are briefed below.
@@ -276,3 +276,5 @@ Each one is a td issue with the exact command and output. Fixes run as their own
 | td-58caeb | `comms send @ui-u2b` returned agent-not-found from another lane; peer handles are not reliably discoverable | open |
 | td-07f7b1 | Eight simultaneous valid `create shell` calls gave 1 success and 7 generic exit-1 errors (allocation race). Fixed on bug-07f7b1 @d375077a with atomic allocation under the shellstate lock | merged (94f34653); review added a 2 s tmux budget under the lock |
 | td-945516 | P1: after geometry handoffs xterm throws cell exceptions and the browser terminal goes blank (sidecar-ui). Fixed on bug-945516 (reset before resize, one atomic write); docs on Sidecar branch bug-945516-docs | merged (sidecar-ui 0f9cb5f, docs 6d247084). Review closed a server-content CSI injection |
+| td-9fe445 | internal/app startup test hung in a full suite run under heavy load; passes alone on main and on the branch (27 s) | open (load-dependent) |
+| td-f0f340 | `create worktree --project PATH` refused because several Sidecar instances show the same project; needed --shell | open |
