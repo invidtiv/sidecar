@@ -278,3 +278,6 @@ Each one is a td issue with the exact command and output. Fixes run as their own
 | td-945516 | P1: after geometry handoffs xterm throws cell exceptions and the browser terminal goes blank (sidecar-ui). Fixed on bug-945516 (reset before resize, one atomic write); docs on Sidecar branch bug-945516-docs | merged (sidecar-ui 0f9cb5f, docs 6d247084). Review closed a server-content CSI injection |
 | td-9fe445 | internal/app startup test hung in a full suite run under heavy load; passes alone on main and on the branch (27 s) | open (load-dependent) |
 | td-f0f340 | `create worktree --project PATH` refused because several Sidecar instances show the same project; needed --shell | open |
+| td-17b5e2 | Worktree delete leaves other projects' shells rooted in the removed worktree live, with a vanished cwd | open |
+| td-00b64e | shell list/rename resolve the current project from env, not cwd; shell list has no --project | open |
+| td-f9306b | Shell renames keep no history; the td-ac892f collateral rename of sidecar-sh-clara-home-23 could only be guessed back to 'Shell 23' | open |
