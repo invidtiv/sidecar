@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/marcus/sidecar/internal/config"
@@ -23,58 +24,116 @@ const (
 )
 
 func runMobileHubOrOwner(env Env) error {
-	cfg, err := config.Load()
-	if err != nil {
-		return err
-	}
-	if !remoteHostsEnabled(env, cfg) || len(cfg.Hosts.List) == 0 {
-		return runMobileOwnerService(env)
-	}
 	ctx := env.Ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	registry, directory, router, err := newMobileCatalogRouter(ctx, env)
+	backend, err := newMobileBackend(ctx, env)
 	if err != nil {
 		return err
 	}
-	defer registry.Stop()
-	// Start configured owner observers before the phone's first catalog request.
-	// Snapshot is nonblocking with respect to SSH; the first request can retain
-	// local rows while a slow owner remains explicitly connecting.
-	if _, err := directory.Snapshot(ctx); err != nil {
-		return err
-	}
-	broker, err := mobilehub.NewProtocolBroker(router)
-	if err != nil {
-		return err
-	}
-	return broker.Run(ctx, env.Stdin, env.Stdout)
+	defer backend.Close()
+	return backend.ServeTerminal(ctx, env.Stdin, env.Stdout)
 }
 
 func queryMobileCatalog(env Env, query mobileproto.CatalogQuery) (mobileproto.CatalogSnapshot, error) {
-	cfg, err := config.Load()
-	if err != nil {
-		return mobileproto.CatalogSnapshot{}, err
-	}
 	ctx := env.Ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if !remoteHostsEnabled(env, cfg) || len(cfg.Hosts.List) == 0 {
-		return queryLocalMobileCatalog(ctx, env, query)
-	}
-	queryCtx, cancel := context.WithTimeout(ctx, mobileSessionsTimeout)
-	defer cancel()
-	registry, directory, router, err := newMobileCatalogRouter(queryCtx, env)
+	backend, err := newMobileBackend(ctx, env)
 	if err != nil {
 		return mobileproto.CatalogSnapshot{}, err
 	}
-	defer registry.Stop()
-	if err := directory.WaitInitial(queryCtx, mobileInitialOwnerWait); err != nil {
-		return mobileproto.CatalogSnapshot{}, err
+	defer backend.Close()
+	return backend.Sessions(ctx, query)
+}
+
+// mobileBackend is the terminal and catalog authority behind every mobile
+// protocol transport: stdio for `sidecar mobile serve`, a one-shot query for
+// `sidecar mobile sessions`, and the long-lived UI API server. It holds at most
+// one remote-host registry and catalog router for its lifetime and gives every
+// stream its own broker run (or local owner service), so a server with many
+// connections composes exactly what one stdio process does.
+//
+// Whether remote hosts route through the hub is decided once, at construction,
+// from the configuration then in force.
+type mobileBackend struct {
+	env         Env
+	registry    *hosts.Registry
+	directory   *mobilehub.RegistryDirectory
+	router      *mobilehub.CatalogRouter
+	broker      *mobilehub.ProtocolBroker
+	initialWait sync.Once
+}
+
+func newMobileBackend(ctx context.Context, env Env) (*mobileBackend, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, err
 	}
-	return router.Query(queryCtx, query)
+	backend := &mobileBackend{env: env}
+	if !remoteHostsEnabled(env, cfg) || len(cfg.Hosts.List) == 0 {
+		return backend, nil
+	}
+	registry, directory, router, err := newMobileCatalogRouter(ctx, env)
+	if err != nil {
+		return nil, err
+	}
+	// Start configured owner observers before the first catalog request.
+	// Snapshot is nonblocking with respect to SSH; the first request can retain
+	// local rows while a slow owner remains explicitly connecting.
+	if _, err := directory.Snapshot(ctx); err != nil {
+		registry.Stop()
+		return nil, err
+	}
+	broker, err := mobilehub.NewProtocolBroker(router)
+	if err != nil {
+		registry.Stop()
+		return nil, err
+	}
+	backend.registry, backend.directory, backend.router, backend.broker = registry, directory, router, broker
+	return backend, nil
+}
+
+// Close stops the remote-host registry, if this backend holds one.
+func (b *mobileBackend) Close() {
+	if b.registry != nil {
+		b.registry.Stop()
+	}
+}
+
+// ServeTerminal runs one protocol stream until input reaches EOF or ctx ends.
+// Without remote hosts the local owner service serves it in-process; with them
+// a fresh broker run routes it to the owning Sidecar.
+func (b *mobileBackend) ServeTerminal(ctx context.Context, input io.Reader, output io.Writer) error {
+	if b.broker == nil {
+		service, err := newMobileOwnerService(b.env, input, output)
+		if err != nil {
+			return err
+		}
+		return service.Run(ctx)
+	}
+	return b.broker.Run(ctx, input, output)
+}
+
+// Sessions answers one catalog query: the code path behind both `sidecar
+// mobile sessions --json` and GET /api/v0/sessions.
+func (b *mobileBackend) Sessions(ctx context.Context, query mobileproto.CatalogQuery) (mobileproto.CatalogSnapshot, error) {
+	if b.router == nil {
+		return queryLocalMobileCatalog(ctx, b.env, query)
+	}
+	queryCtx, cancel := context.WithTimeout(ctx, mobileSessionsTimeout)
+	defer cancel()
+	// Only the first query waits for newly started owners to report. Later
+	// queries in a long-lived process see a reconnecting owner as an explicit
+	// connecting failure, as a stream's own sessions request does.
+	var waitErr error
+	b.initialWait.Do(func() { waitErr = b.directory.WaitInitial(queryCtx, mobileInitialOwnerWait) })
+	if waitErr != nil {
+		return mobileproto.CatalogSnapshot{}, waitErr
+	}
+	return b.router.Query(queryCtx, query)
 }
 
 func queryLocalMobileCatalog(ctx context.Context, env Env, query mobileproto.CatalogQuery) (mobileproto.CatalogSnapshot, error) {

@@ -47,6 +47,16 @@ type Config struct {
 	// state, and for `sidecar agent explain` in a process that loads no
 	// plugins at all.
 	Detection DetectionConfig `json:"detection,omitempty"`
+	// API configures `sidecar api serve`. It is read-only: nothing in Sidecar
+	// writes it, so a save carries the section forward as the user wrote it.
+	API APIConfig `json:"api,omitempty"`
+}
+
+// APIConfig configures the UI API server (docs/reference/ui-api.md).
+type APIConfig struct {
+	// TailnetLogins are the Tailscale logins trusted on the Tailnet listener.
+	// Empty means the login that owns the local Tailscale node.
+	TailnetLogins []string `json:"tailnetLogins,omitempty"`
 }
 
 // The values detection.remoteManifests takes, besides an arbitrary catalog URL.

@@ -2,6 +2,12 @@
 
 All notable changes to sidecar are documented here.
 
+## [Unreleased]
+
+### Features
+
+- **A UI API for web and embedded clients.** `sidecar api serve` exposes the Sessions catalog and live terminals over HTTP and WebSocket, so a web UI, a component embedded in another app, or an agent with curl can use them. It listens on a Unix socket in the state directory for local agents and the CLI, on `127.0.0.1` for browsers, and with `--tailnet` on a second socket for `tailscale serve`, trusting only allowed tailnet logins. Browsers pair once with `sidecar api open`, and other origins with `sidecar api pair --origin URL`. Host, Origin and mutation guards are always on, and only paired origins get CORS. Each terminal WebSocket is one mobile protocol v0 stream, served exactly as `sidecar mobile serve --stdio` serves stdin, and `GET /api/v0/sessions` returns the same document as `sidecar mobile sessions --json`. `sidecar api status` shows who is connected and who holds terminal control. The wire contract is `docs/reference/ui-api.md`. (td-ba925d)
+
 ## [v1.15.1] - 2026-09-30
 
 ### Bug Fixes

@@ -915,3 +915,103 @@ func TestClientCloseAlwaysReportsTerminalModelInvalidation(t *testing.T) {
 	case <-time.After(500 * time.Millisecond):
 	}
 }
+
+// A headless consumer (the mobile service) is told through OnFallback that its
+// session's control client died, then asks for a snapshot to reseed. That
+// request must start a replacement client and capture the pane again, or an
+// idle pane never produces the replacement frame the consumer is waiting for.
+func TestControlManagerRequestSnapshotRestartsADeadClient(t *testing.T) {
+	factory := newFakeControlFactory()
+	manager := newControlManager(factory.create, 0)
+	defer manager.Stop()
+	fallbacks := make(chan error, 4)
+	sub, err := manager.Subscribe(ControlRequest{Session: "idle", Pane: "%3", Visible: true, Focused: true, OnFallback: func(err error) { fallbacks <- err }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Close()
+	waitFor(t, sub.UsingControl)
+	first := factory.channel("idle")
+	first.done <- errors.New("reader EOF")
+	select {
+	case <-fallbacks:
+	case <-time.After(time.Second):
+		t.Fatal("no fallback after the client died")
+	}
+	waitFor(t, func() bool { return !sub.UsingControl() })
+
+	sub.RequestSnapshot()
+	waitFor(t, func() bool { return factory.callCount("idle") == 2 })
+	waitFor(t, sub.UsingControl)
+	waitFor(t, func() bool {
+		replacement := factory.channel("idle")
+		return replacement != first && replacement.commandCountContaining("capture-pane") >= 1
+	})
+}
+
+// The mobile service's reseed timer can fire after its attachment closed or
+// after the manager stopped. Neither late request may start a control client,
+// and concurrent requests from consumers of one dead session start exactly one
+// replacement.
+func TestControlManagerRequestSnapshotRestartIsDedupedAndEndsWithItsConsumer(t *testing.T) {
+	factory := newFakeControlFactory()
+	manager := newControlManager(factory.create, 0)
+	defer manager.Stop()
+	fallbacks := make(chan error, 8)
+	subscribe := func(pane string) *ControlSubscription {
+		sub, err := manager.Subscribe(ControlRequest{Session: "gone", Pane: pane, Visible: true, Focused: true, OnFallback: func(err error) { fallbacks <- err }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sub
+	}
+	first, second := subscribe("%1"), subscribe("%2")
+	waitFor(t, func() bool { return first.UsingControl() && second.UsingControl() })
+	dead := factory.channel("gone")
+	dead.done <- errors.New("reader EOF")
+	for i := 0; i < 2; i++ {
+		select {
+		case <-fallbacks:
+		case <-time.After(time.Second):
+			t.Fatal("no fallback after the client died")
+		}
+	}
+	waitFor(t, func() bool { return !first.UsingControl() && !second.UsingControl() })
+
+	var wg sync.WaitGroup
+	for _, sub := range []*ControlSubscription{first, second, first, second} {
+		wg.Add(1)
+		go func(sub *ControlSubscription) { defer wg.Done(); sub.RequestSnapshot() }(sub)
+	}
+	wg.Wait()
+	waitFor(t, func() bool { return first.UsingControl() && second.UsingControl() })
+	if calls := factory.callCount("gone"); calls != 2 {
+		t.Fatalf("concurrent reseeds started %d clients in total, want 2", calls)
+	}
+
+	// Kill the replacement too, then close both consumers before their
+	// (late) reseed requests arrive.
+	factory.channel("gone").done <- errors.New("reader EOF")
+	waitFor(t, func() bool { return !first.UsingControl() && !second.UsingControl() })
+	first.Close()
+	second.Close()
+	first.RequestSnapshot()
+	second.RequestSnapshot()
+	time.Sleep(50 * time.Millisecond)
+	if calls := factory.callCount("gone"); calls != 2 {
+		t.Fatalf("a closed subscription's reseed started a client: %d calls", calls)
+	}
+
+	// A stopped manager starts nothing either.
+	third := subscribe("%3")
+	waitFor(t, third.UsingControl)
+	factory.channel("gone").done <- errors.New("reader EOF")
+	waitFor(t, func() bool { return !third.UsingControl() })
+	manager.Stop()
+	before := factory.callCount("gone")
+	third.RequestSnapshot()
+	time.Sleep(50 * time.Millisecond)
+	if calls := factory.callCount("gone"); calls != before {
+		t.Fatalf("a stopped manager started a client: %d -> %d", before, calls)
+	}
+}

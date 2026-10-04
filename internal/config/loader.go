@@ -87,6 +87,8 @@ type rawConfig struct {
 	// Detection is a pointer for the same reason: an absent section leaves the
 	// default (remoteManifests off) alone, and an explicitly empty one says so.
 	Detection *rawDetectionConfig `json:"detection"`
+	// API is read here for the same field-by-field merge reason as Hosts.
+	API *APIConfig `json:"api"`
 }
 
 type rawDetectionConfig struct {
@@ -666,6 +668,15 @@ func mergeConfig(cfg *Config, raw *rawConfig) {
 					"value", value, "error", err)
 			}
 			cfg.Detection.RemoteManifests = value
+		}
+	}
+
+	// API
+	if raw.API != nil {
+		for _, login := range raw.API.TailnetLogins {
+			if login = strings.TrimSpace(login); login != "" {
+				cfg.API.TailnetLogins = append(cfg.API.TailnetLogins, login)
+			}
 		}
 	}
 
