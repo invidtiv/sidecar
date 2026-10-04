@@ -21,14 +21,14 @@ const (
 )
 
 var (
-	deleteManagedShell = workspaceops.DeleteManagedShell
+	deleteManagedShell = (workspaceops.Service{}).DeleteShell
 	// The worktree delete path is the same one the project surface runs.
 	// Indirection is here so tests can execute the flow without touching a
 	// real repository.
 	// DeleteWorktree is the whole teardown: it also forgets and closes the
 	// shells rooted in the worktree (td-f017b9), which is why the removal
 	// carries ProjectRoot as well as RepoPath.
-	execDeleteWorktree     = workspaceops.DeleteWorktree
+	execDeleteWorktree     = (workspaceops.Service{}).DeleteWorktree
 	execDeleteLocalBranch  = workspaceops.DeleteLocalBranch
 	execDeleteRemoteBranch = workspaceops.DeleteRemoteBranch
 )

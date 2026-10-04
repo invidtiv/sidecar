@@ -403,7 +403,7 @@ func canonicalSocketPath(path string) string {
 // in. It resolves the project explicitly and then dispatches exactly as the
 // current-shell path does: a shells.json record through
 // shellstate.RenameAtPath, a registered worktree through
-// workspaceops.RenameWorktreeDisplayName.
+// (workspaceops.Service{}).RenameWorktree.
 func runShellRenameTarget(env Env, args []string) int {
 	renameCmd := RootCommand().FindSubcommand("shell").FindSubcommand("rename")
 	help := RenderHelp(renameCmd)
@@ -482,14 +482,14 @@ func runShellRenameTarget(env Env, args []string) int {
 
 	var result shellstate.RenameResult
 	if tgt.Kind == shellTargetKindShell {
-		result, err = shellstate.RenameAtPath(tgt.ManifestPath, shellstate.RenameRequest{
+		result, err = (workspaceops.Service{}).RenameShell(tgt.ManifestPath, shellstate.RenameRequest{
 			TmuxName:  tgt.Session,
 			Namespace: tgt.Namespace,
 			Name:      name,
 		})
 	} else {
 		var renamed workspaceops.WorktreeDisplayNameResult
-		renamed, err = workspaceops.RenameWorktreeDisplayName(ctx, env.StateDir, tgt.Project.Path, tgt.WorktreeRoot, name)
+		renamed, err = (workspaceops.Service{}).RenameWorktree(ctx, env.StateDir, tgt.Project.Path, tgt.WorktreeRoot, name)
 		result = shellstate.RenameResult{Shell: tgt.Session, OldName: renamed.OldName, Name: renamed.Name, Changed: renamed.Changed}
 	}
 	if err != nil {

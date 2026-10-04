@@ -100,6 +100,16 @@ HTTP calls from a paired origin send `Authorization: Bearer <token>`. Pairing an
 
 ## HTTP routes
 
+### Workspace operation core
+
+Workspace writes are prepared for U2 through `workspaceops.Service`, a transport-neutral service with no viewer, selection, or in-flight operation state. The CLI, project Workspaces TUI, and global Sessions view use the same local operation boundary; remote mutations call it on the owning host through the CLI. U2-a adds no HTTP routes, capabilities, or wire fields.
+
+Worktree creation uses a confirmed `WorktreePlan`: plan, begin (Git execution and recovery journal), identity and configured setup, finalization, then launch. The non-interactive `CreateWorktree` composes the same phases the TUI calls separately for progress and recovery. A partial Git success is journaled even after cancellation. Required journal or setup failures retain the created identity and prevent normal finalization and launch. Retry runs setup against that identity; the TUI retains its explicit open-anyway decision and can finalize before opening. Optional warnings retain each surface's existing presentation policy. Task start remains explicit: the project form starts its linked task; CLI and Sessions link without an additional task-start subprocess during setup.
+
+Shell create, rename, delete, and tombstone restore, and worktree display-name rename and deletion, go through that service. Shell persistence and locking live only in `shellstate`; the plugin's `ShellManifest` is a compatibility projection with local revision tracking. Tombstone restore restores a durable shell record without starting tmux; cold session recreation remains the existing `sessionrestore` executor. Worktree launch reconnects an existing session rather than creating another one. No operation restarts the tmux server.
+
+`workspaceops.AgentLauncher` shares readiness and provider start sequencing, retaining each caller's resolved argv, deadlines, target policy, and error wording. Reconnecting worktree sessions skip shell-readiness waiting. `agentresolve.ResolveTarget` accepts explicit caller context and a target lookup adapter, so headless callers share the CLI's target-required and project/shell scoping rules. `workspacelist.Projected`, `SectionsAt`, the pin helpers, and `Hidden` provide state-free list policy; clocks, pins, and source-resolved visibility facts are caller inputs. Human selection, scrolling, collapsed sections, and presentation remain in their models.
+
 All JSON, encoded exactly as the CLI's `--json` output: one object and a trailing newline. Successful responses are `200`. Errors are `{"error": {"code": "snake_case_code", "message": "One human sentence that says what to do."}}` with a fitting status. Codes match the CLI's refusal vocabulary where one exists. The API adds these:
 
 | Code | Status | When |
@@ -171,3 +181,5 @@ v0 inherits the mobile service's bounded outbound queue, so a peer that stops re
 Live proofs follow the `scripts/tmux-drive.sh` isolation rules: a private tmux socket, `unset TMUX TMUX_PANE`, an isolated `XDG_STATE_HOME`, a `-config` temp path, and `SIDECAR_ISOLATED_STATE=1`. The Unix sockets and `endpoint.json` live under the isolated state tree, so a proof can never reach the user's real server. Unix socket paths are limited to 103 bytes, so a proof keeps its state tree short, under `/tmp`.
 
 `scripts/ui-api-proof.sh` is the v0 proof. It builds a temporary binary, creates one managed shell on a private tmux server, runs `sidecar api serve`, and checks the Local routes with `curl --unix-socket`, the Browser guards, `sidecar api open` pairing, origin pairing with a ticket, and one terminal round trip over the WebSocket through `internal/tools/uiapiproof`. `TestAPITerminalRoundTripAgainstLocalOwner` in `internal/cli` covers the same terminal sequence in process.
+
+`scripts/workspace-operations-proof.sh` proves U2-a through the real TUI and CLI: project shell creation, CLI rename visible in Workspaces and Sessions, Sessions shell creation, shell deletion and tombstone restore, and planned worktree creation and identity-pinned deletion. It builds a temporary binary and uses `tmux-drive.sh` to isolate both servers and state and clean up on exit. Set `WORKSPACE_PROOF_OUTPUT` to a directory to retain the captured text and PNGs. Pure-core regression tests cover interrupted creation, required-failure journal retention, readiness failures, and the stale-refresh fence after service deletion.

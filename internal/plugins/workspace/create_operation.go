@@ -5,12 +5,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
-	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/config"
-	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/workspaceops"
 )
@@ -74,7 +71,7 @@ func (p *Plugin) clearPendingCreation(plan *CreateOperationPlan) error {
 	if p.removePendingCreationFn != nil {
 		return p.removePendingCreationFn(plan)
 	}
-	return removePendingCreation(plan)
+	return (workspaceops.Service{}).FinalizeWorktree(sharedCreatePlan(plan))
 }
 
 func loadPendingCreation(ctx context.Context, projectRoot string, worktrees []*Worktree, repoKey string) (*pendingCreationJournal, error) {
@@ -228,7 +225,7 @@ func (r *CreateSetupResult) Warnings() []CreateSetupOutcome {
 }
 
 func resolveCreateOperation(ctx context.Context, workDir, projectRoot, name, base string, dirPrefix bool, setup config.WorktreeSetupConfig) (*CreateOperationPlan, error) {
-	shared, err := workspaceops.ResolveWorktreePlan(ctx, workDir, projectRoot, name, base, dirPrefix, setup)
+	shared, err := (workspaceops.Service{}).PlanWorktree(ctx, workDir, projectRoot, name, base, dirPrefix, setup)
 	if err != nil {
 		return nil, err
 	}
@@ -293,7 +290,6 @@ func worktreeFromShared(record *workspaceops.WorktreeRecord, plan *CreateOperati
 var (
 	openContainedRegularFile         = workspaceops.OpenContainedRegularFile
 	openContainedRegularFileWithHook = workspaceops.OpenContainedRegularFileWithHook
-	writeDurableFile                 = workspaceops.WriteDurableFile
 )
 
 // containmentPathError is the plugin's name for the shared refusal type, kept
@@ -322,35 +318,8 @@ func addCreatedWorktreeWithRunner(ctx context.Context, repoKey string, plan *Cre
 
 func runCreateSetup(ctx context.Context, plan *CreateOperationPlan, wt *Worktree) *CreateSetupResult {
 	result := &CreateSetupResult{Worktree: wt}
-	add := func(kind CreateOutcomeKind, action string, required bool, err error) {
-		result.Outcomes = append(result.Outcomes, CreateSetupOutcome{Kind: kind, Action: action, Required: required, Err: err})
-	}
-	base := strings.TrimPrefix(plan.SourceRef, "refs/heads/")
-	add(CreateOutcomeIdentity, "base metadata", true, saveBaseBranchContext(ctx, plan.MainWorktree, plan.Path, base))
-	add(CreateOutcomeIdentity, "display name", true, saveDisplayNameContext(ctx, plan.MainWorktree, plan.Path, plan.DisplayName))
-	add(CreateOutcomeAgent, "agent metadata", true, saveAgentTypeContext(ctx, plan.MainWorktree, plan.Path, plan.AgentType))
-
-	if plan.TaskID != "" {
-		var linkErr error
-		if wtDir, err := projectdir.WorktreeDirContext(ctx, plan.MainWorktree, plan.Path); err != nil {
-			linkErr = err
-		} else {
-			linkErr = writeDurableFile(filepath.Join(wtDir, sidecarTaskFile), []byte(plan.TaskID+"\n"), 0644)
-		}
-		add(CreateOutcomeTaskLink, "task link "+plan.TaskID, true, linkErr)
-		if linkErr == nil {
-			cmd := exec.CommandContext(ctx, "td", "start", plan.TaskID)
-			cmd.Dir = plan.Path
-			output, err := cmd.CombinedOutput()
-			if err != nil {
-				err = fmt.Errorf("td start %s: %s: %w", plan.TaskID, strings.TrimSpace(string(output)), err)
-			}
-			add(CreateOutcomeTDStart, "td start "+plan.TaskID, false, err)
-		}
-	}
-
-	for _, outcome := range workspaceops.RunConfiguredSetup(ctx, sharedCreatePlan(plan)) {
-		add(CreateOutcomeKind(outcome.Kind), outcome.Action, outcome.Required, outcome.Err)
+	for _, outcome := range (workspaceops.Service{}).SetupWorktree(ctx, sharedCreatePlan(plan), true) {
+		result.Outcomes = append(result.Outcomes, CreateSetupOutcome{Kind: CreateOutcomeKind(outcome.Kind), Action: outcome.Action, Required: outcome.Required, Err: outcome.Err})
 	}
 	return result
 }

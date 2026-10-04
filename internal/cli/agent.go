@@ -957,11 +957,9 @@ func startCreatedAgent(ctx context.Context, proj registeredProject, session, dis
 	readyCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	svc := agentcontrol.Service{Terminal: newAgentTerminal()}
-	ready, err := svc.WaitShellReady(readyCtx, target, 30*time.Second)
-	if err != nil {
-		return agentcontrol.Agent{}, err
-	}
-	return svc.Start(readyCtx, agentcontrol.StartRequest{Target: ready.Target, Kind: kind, Argv: argv, Timeout: 30 * time.Second})
+	started, _, err := (workspaceops.AgentLauncher{Wait: svc.WaitShellReady, StartAgent: svc.Start}).Start(readyCtx,
+		agentcontrol.StartRequest{Target: target, Kind: kind, Argv: argv, Timeout: 30 * time.Second}, true, true)
+	return started, err
 }
 func emitAgent(env Env, jsonOutput bool, a agentcontrol.Agent) int {
 	if jsonOutput {

@@ -47,6 +47,18 @@ func (m *ShellManifest) Revision() uint64 {
 	return m.revision
 }
 
+// NoteExternalMutation fences snapshots taken before a successful mutation
+// through workspaceops. Its durable write may already be a no-op when the UI
+// reconciles it, but that does not make an older in-flight snapshot current.
+func (m *ShellManifest) NoteExternalMutation() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.revision++
+}
+
 // ShellDefinition is retained as the workspace-facing name for the shared
 // persisted model. New non-interactive surfaces use shellstate.Definition
 // directly rather than defining another manifest shape.

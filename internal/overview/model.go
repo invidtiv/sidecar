@@ -1111,7 +1111,7 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 			m.createModal = nil
 			return nil
 		}
-		if err := removeGlobalJournal(msg.Plan); err != nil {
+		if err := globalOperationService().FinalizeWorktree(msg.Plan); err != nil {
 			m.createError = "finalize pending creation journal: " + err.Error()
 			m.createModal = nil
 			return nil

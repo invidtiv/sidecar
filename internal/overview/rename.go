@@ -1,14 +1,15 @@
 package overview
 
 import (
+	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
@@ -17,6 +18,7 @@ import (
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
+	"github.com/marcus/sidecar/internal/workspaceops"
 )
 
 const (
@@ -368,11 +370,8 @@ func persistWorktreeDisplayName(projectRoot, worktreePath, name string) error {
 	if projectRoot == "" || worktreePath == "" {
 		return fmt.Errorf("owning project worktree state is unavailable")
 	}
-	dir, err := projectdir.WorktreeDir(projectRoot, worktreePath)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(dir, "display-name"), []byte(name+"\n"), 0644)
+	_, err := (workspaceops.Service{}).RenameWorktree(context.Background(), config.StateDir(), projectRoot, worktreePath, name)
+	return err
 }
 
 func (m *Model) executeRenameShell() tea.Cmd {
@@ -395,7 +394,7 @@ func (m *Model) executeRenameShell() tea.Cmd {
 	namespace := workspace.Namespace
 	m.renameBusy = true
 	return func() tea.Msg {
-		result, err := shellstate.RenameAtPath(path, shellstate.RenameRequest{
+		result, err := (workspaceops.Service{}).RenameShell(path, shellstate.RenameRequest{
 			TmuxName:  tmuxName,
 			Namespace: namespace,
 			Name:      newName,

@@ -355,7 +355,7 @@ type worktreeDeleteWarnings struct {
 
 func executeWorktreeDeletePlan(ctx context.Context, project registeredProject, plan worktreeDeletePlan) worktreeDeleteWarnings {
 	var warnings []string
-	if err := workspaceops.DeleteWorktree(ctx, workspaceops.WorktreeRemoval{
+	if err := (workspaceops.Service{}).DeleteWorktree(ctx, workspaceops.WorktreeRemoval{
 		RepoPath: project.Path, ProjectRoot: project.Path, Path: plan.resolvedWorktreePath,
 		Branch: plan.Branch, ExpectedOID: plan.HeadOID, Force: true,
 	}); err != nil {

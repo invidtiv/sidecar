@@ -1239,6 +1239,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, p.startAgentWithResumeCmd(msg.Worktree, msg.AgentType, msg.SkipPerms, msg.ResumeArgv)
 
 	case ShellKilledMsg:
+		p.shellManifest.NoteExternalMutation()
 		// Timer leak prevention (td-83dc22): increment generation to invalidate pending timers
 		p.pollScheduler.Invalidate(shellPollKey(msg.SessionName))
 		// Shell session killed, remove from list
