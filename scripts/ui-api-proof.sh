@@ -152,6 +152,16 @@ code=$(exchange "$base")
 session_ticket=$(curl -fsS -X POST -H "Origin: $base" -H "Authorization: Bearer $browser_token" -H 'Content-Type: application/json' -H 'X-Sidecar-Request: 1' -d '{}' "$base/api/v0/ws-tickets" |
 	python3 -c 'import json,sys; print(json.load(sys.stdin)["ticket"])')
 echo "browser pairing ok: fragment link, no cookie, single-use exchange, origin-bound session token"
+if command -v node > /dev/null 2>&1; then
+	link2=$(sc api open --print --path /s/proof)
+	paged=$(node "$repo/scripts/ui-api-pair-page.mjs" "$root/pair.html" "$link2") || fail "the pairing page script did not pair"
+	page_token=$(printf '%s' "$paged" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["stored"] and d["navigated"].endswith("/s/proof"), d; print(d["stored"])')
+	code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $page_token" "$base/api/v0/hello")
+	[ "$code" = 200 ] || fail "token stored by the pairing page answered $code"
+	echo "pairing page script ok under node: stored sidecar.session and went to /s/proof"
+else
+	echo "node not installed; skipped running the pairing page script"
+fi
 
 step "pair an origin and take a WebSocket ticket"
 app=http://proof.example
@@ -172,6 +182,9 @@ owner=$(env -u TMUX -u TMUX_PANE "$tmux_bin" -S "$socket" show-options -v -t "$s
 
 step "terminal round-trip over the WebSocket (same-origin UI, session ticket)"
 "$root/uiapiproof" -url "ws://$tcp/api/v0/terminal?ticket=$session_ticket" -origin "$base" -target "$session" -marker UIAPI_SESSION_PROOF > /dev/null
+
+step "terminal round-trip over the WebSocket (bearer token, no Origin, as Node sends)"
+"$root/uiapiproof" -url "ws://$tcp/api/v0/terminal" -bearer "$token" -target "$session" -marker UIAPI_BEARER_PROOF > /dev/null
 
 step "terminal round-trip over the Local socket"
 "$root/uiapiproof" -socket "$api_sock" -url "ws://sidecar/api/v0/terminal" -target "$session" -marker UIAPI_LOCAL_PROOF > /dev/null

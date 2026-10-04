@@ -88,6 +88,7 @@ func run() error {
 	target := flag.String("target", "", "terminal target (a managed shell session)")
 	wsURL := flag.String("url", "", "WebSocket URL of /api/v0/terminal")
 	origin := flag.String("origin", "", "Origin header to send")
+	bearer := flag.String("bearer", "", "send Authorization: Bearer with this token on the upgrade")
 	socket := flag.String("socket", "", "dial this Unix socket instead of the URL's host")
 	marker := flag.String("marker", "UIAPI_PROOF", "text the shell must echo back")
 	timeout := flag.Duration("timeout", 30*time.Second, "overall deadline")
@@ -98,6 +99,9 @@ func run() error {
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
 	options := &websocket.DialOptions{HTTPHeader: http.Header{}}
+	if *bearer != "" {
+		options.HTTPHeader.Set("Authorization", "Bearer "+*bearer)
+	}
 	if *origin != "" {
 		options.HTTPHeader.Set("Origin", *origin)
 	}
