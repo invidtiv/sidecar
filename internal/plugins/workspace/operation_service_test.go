@@ -116,7 +116,7 @@ func TestDelayedShellOperationsRetainProjectAdapter(t *testing.T) {
 	kill := p.killShellSessionByName(msg.SessionName)
 	p.ctx = &plugin.Context{Epoch: 4, ProjectRoot: next, WorkDir: next, Config: config.Default()}
 	p.shellManifest = nextManifest
-	if result := kill(); result != (ShellKilledMsg{SessionName: msg.SessionName}) {
+	if result := kill().(ShellKilledMsg); result.SessionName != msg.SessionName || result.Epoch != 3 || result.ProjectRoot != original {
 		t.Fatalf("delete: %#v", result)
 	}
 	if originalManifest.FindShell(msg.SessionName) != nil {

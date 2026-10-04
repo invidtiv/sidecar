@@ -140,12 +140,14 @@ func (p *Plugin) remoteControlReady() bool {
 }
 
 func (p *Plugin) refuseRemoteCreate(kind string) tea.Cmd {
+	completionScope := p.completionScope()
+
 	host := ""
 	if p.ctx != nil {
 		host = p.ctx.HostID
 	}
 	return func() tea.Msg {
-		return ShellCreatedMsg{Err: fmt.Errorf("creating a %s on [%s] is not available from this workspace yet", kind, host)}
+		return ShellCreatedMsg{OperationScope: completionScope, Err: fmt.Errorf("creating a %s on [%s] is not available from this workspace yet", kind, host)}
 	}
 }
 

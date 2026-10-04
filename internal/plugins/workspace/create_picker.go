@@ -39,6 +39,7 @@ func (p *Plugin) configuredProviders() []workspacecreate.ProviderItem {
 // trip. Files travel separately: their scan can take whole seconds on a large
 // tree, and the refs/issues/notes answers must not wait behind it.
 type createPickerDataMsg struct {
+	OperationScope
 	Refs   []workspaceops.DiffRef
 	Issues []workspaceops.IssueRef
 	Notes  []workspaceops.NoteRef
@@ -48,6 +49,8 @@ type createPickerDataMsg struct {
 // loadCreatePickerData fetches everything the target pickers offer except the
 // file list. It runs in a command, never before the first frame.
 func (p *Plugin) loadCreatePickerData() tea.Cmd {
+	completionScope := p.completionScope()
+
 	if p.ctx == nil || p.ctx.WorkDir == "" {
 		return nil
 	}
@@ -55,7 +58,7 @@ func (p *Plugin) loadCreatePickerData() tea.Cmd {
 	wantNotes := p.notesPluginPresent()
 	return func() tea.Msg {
 		ctx := context.Background()
-		msg := createPickerDataMsg{}
+		msg := createPickerDataMsg{OperationScope: completionScope}
 		if refs, err := workspaceops.RecentDiffRefs(ctx, workDir, 15); err == nil {
 			msg.Refs = refs
 		}
