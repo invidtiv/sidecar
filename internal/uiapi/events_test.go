@@ -354,6 +354,8 @@ func TestEventsFixtureTranscript(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	initial := []string{"hello", "catalog", "terminals"}
+	var catalog *mobileproto.CatalogSnapshot
 	for i, line := range lines {
 		var m EventMessage
 		dec := json.NewDecoder(strings.NewReader(line))
@@ -364,6 +366,9 @@ func TestEventsFixtureTranscript(t *testing.T) {
 		if m.Seq != uint64(i+1) || m.APIVersion != APIVersion {
 			t.Fatalf("fixture sequence/version: %+v", m)
 		}
+		if i < len(initial) && m.Type != initial[i] {
+			t.Fatalf("fixture initial ordering: %s, want %s", m.Type, initial[i])
+		}
 		switch m.Type {
 		case "hello":
 			if i != 0 || m.APIInstance == "" {
@@ -373,9 +378,17 @@ func TestEventsFixtureTranscript(t *testing.T) {
 			if m.Catalog == nil || m.Catalog.Generation == "" {
 				t.Fatal("catalog missing")
 			}
+			catalog = m.Catalog
 		case "attention":
 			if m.Attention == nil || (m.Attention.Kind != "needs_input" && m.Attention.Kind != "finished") || m.Attention.CatalogID == "" || m.Attention.Time.IsZero() {
 				t.Fatal("attention missing")
+			}
+			if catalog == nil || len(catalog.Sections) != 1 || len(catalog.Sections[0].Rows) != 1 {
+				t.Fatal("attention must follow the current row's catalog")
+			}
+			row := catalog.Sections[0].Rows[0]
+			if row.ID != m.Attention.CatalogID || (m.Attention.Kind == "needs_input" && !row.Attention) || (m.Attention.Kind == "finished" && row.Status != "done") {
+				t.Fatal("fixture alert precedes its catalog transition")
 			}
 		case "terminals":
 			if m.Terminals == nil {
