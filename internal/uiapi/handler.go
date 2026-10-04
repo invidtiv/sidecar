@@ -142,6 +142,11 @@ func (h *listenerHandler) dispatch(w http.ResponseWriter, r *http.Request, c cal
 				return
 			}
 		}
+		// The UI may only be framed by itself. On the Tailnet listener the
+		// credential is ambient, so a page on another site could otherwise
+		// frame a live terminal and steer the user's clicks and keys into it.
+		w.Header().Set("Content-Security-Policy", "frame-ancestors 'self'")
+		w.Header().Set("X-Frame-Options", "SAMEORIGIN")
 		h.s.static.ServeHTTP(w, r)
 		return
 	}
