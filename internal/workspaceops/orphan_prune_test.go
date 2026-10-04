@@ -3,7 +3,9 @@ package workspaceops
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 )
 
@@ -45,7 +47,8 @@ func planned() OrphanedSessionPrune {
 }
 
 func TestPruneOrphanedSessionClosesTheSessionItPlannedByID(t *testing.T) {
-	stub := &orphanStub{alive: true, rootMissing: true, state: orphanSessionState{ID: "$7", Path: orphanRoot, PanePaths: []string{orphanRoot}}}
+	missingPane := filepath.Join(t.TempDir(), "removed")
+	stub := &orphanStub{alive: true, rootMissing: true, state: orphanSessionState{ID: "$7", Path: orphanRoot, PanePaths: []string{missingPane}}}
 	stubOrphanTmux(t, stub)
 	gone, err := PruneOrphanedWorktreeSession(t.Context(), planned())
 	if err != nil || gone {
@@ -60,10 +63,20 @@ func TestPruneOrphanedSessionClosesTheSessionItPlannedByID(t *testing.T) {
 // can change in between, and each must leave the session alone.
 func TestPruneOrphanedSessionRevalidatesBeforeTheKill(t *testing.T) {
 	existing := t.TempDir()
+	missingPane := filepath.Join(existing, "removed")
+	unreadable := filepath.Join(existing, "loop")
+	if err := os.Symlink(unreadable, unreadable); err != nil {
+		t.Fatal(err)
+	}
 	cases := map[string]*orphanStub{
-		"root re-created":       {alive: true, rootMissing: false, state: orphanSessionState{ID: "$7", Path: orphanRoot}},
-		"name reused elsewhere": {alive: true, rootMissing: true, state: orphanSessionState{ID: "$7", Path: "/elsewhere/repo-foo"}},
-		"pane followed a move":  {alive: true, rootMissing: true, state: orphanSessionState{ID: "$7", Path: orphanRoot, PanePaths: []string{orphanRoot, existing}}},
+		"root re-created":           {alive: true, rootMissing: false, state: orphanSessionState{ID: "$7", Path: orphanRoot, PanePaths: []string{missingPane}}},
+		"name reused elsewhere":     {alive: true, rootMissing: true, state: orphanSessionState{ID: "$7", Path: "/elsewhere/repo-foo", PanePaths: []string{missingPane}}},
+		"blank pane directory":      {alive: true, rootMissing: true, state: orphanSessionState{ID: "$7", Path: orphanRoot, PanePaths: []string{missingPane, ""}}},
+		"unreadable pane directory": {alive: true, rootMissing: true, state: orphanSessionState{ID: "$7", Path: orphanRoot, PanePaths: []string{unreadable}}},
+		"unmounted pane parent":     {alive: true, rootMissing: true, state: orphanSessionState{ID: "$7", Path: orphanRoot, PanePaths: []string{filepath.Join(existing, "unmounted", "worktree")}}},
+		"no pane evidence":          {alive: true, rootMissing: true, state: orphanSessionState{ID: "$7", Path: orphanRoot}},
+		"relative pane directory":   {alive: true, rootMissing: true, state: orphanSessionState{ID: "$7", Path: orphanRoot, PanePaths: []string{"relative"}}},
+		"pane followed a move":      {alive: true, rootMissing: true, state: orphanSessionState{ID: "$7", Path: orphanRoot, PanePaths: []string{missingPane, existing}}},
 	}
 	for name, stub := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -89,7 +102,8 @@ func TestPruneOrphanedSessionAlreadyGoneIsSuccess(t *testing.T) {
 }
 
 func TestPruneOrphanedSessionRefusesNonWorktreeSessions(t *testing.T) {
-	stub := &orphanStub{alive: true, rootMissing: true, state: orphanSessionState{ID: "$7", Path: orphanRoot}}
+	missingPane := filepath.Join(t.TempDir(), "removed")
+	stub := &orphanStub{alive: true, rootMissing: true, state: orphanSessionState{ID: "$7", Path: orphanRoot, PanePaths: []string{missingPane}}}
 	stubOrphanTmux(t, stub)
 	for _, session := range []string{"", "sidecar-sh-repo-1", "probe"} {
 		req := planned()
@@ -139,5 +153,32 @@ func TestReadOrphanSessionIsExactAndRecognisesGone(t *testing.T) {
 		if _, err := readOrphanSession(t.Context(), name); !errors.Is(err, errOrphanSessionGone) {
 			t.Errorf("read %q = %v, want errOrphanSessionGone", name, err)
 		}
+	}
+}
+
+func TestOrphanPaneListingPreservesUnknownLastPane(t *testing.T) {
+	listing := "$7\t" + orphanRoot + "\t" + orphanRoot + "\n$7\t" + orphanRoot + "\t\n"
+	state, err := parseOrphanSession("sidecar-ws-repo-foo", listing)
+	if err != nil || len(state.PanePaths) != 2 || state.PanePaths[1] != "" {
+		t.Fatalf("read lost unknown final pane: %+v, %v", state, err)
+	}
+}
+func TestOrphanPaneListingRejectsIncompleteRows(t *testing.T) {
+	for _, listing := range []string{"$7\t" + orphanRoot + "\t" + orphanRoot + "\n$7\t" + orphanRoot + "\n", "$7\t" + orphanRoot + "\n$7\t" + orphanRoot + "\t" + orphanRoot + "\n"} {
+		if _, err := parseOrphanSession("sidecar-ws-repo-foo", listing); err == nil {
+			t.Fatalf("incomplete pane row accepted: %q", listing)
+		}
+	}
+}
+func TestPaneDirectoryMissingRequiresPositiveEvidence(t *testing.T) {
+	base := t.TempDir()
+	gone := filepath.Join(base, "removed")
+	for _, path := range []string{"", "relative", base, filepath.Join(base, "unmounted", "checkout")} {
+		if PaneDirectoryMissing(path) {
+			t.Errorf("unknown or existing directory %q counted as missing", path)
+		}
+	}
+	if !PaneDirectoryMissing(gone) {
+		t.Fatalf("removed directory %q with existing parent not missing", gone)
 	}
 }

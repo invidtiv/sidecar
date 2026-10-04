@@ -38,7 +38,7 @@ func TestObserveWorktreeOrphansFindsTheRemovedWorktreesSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	stubOrphanEvidence(t,
-		"sidecar-ws-repo-foo\t"+removed+"\nsidecar-ws-repo\t"+repo+"\nprobe\t/tmp\n", nil,
+		"sidecar-ws-repo-foo\t"+removed+"\t"+removed+"\nsidecar-ws-repo\t"+repo+"\nprobe\t/tmp\n", nil,
 		map[string][]workspaceops.WorktreeState{repo: {{Path: repo, Branch: "main"}}})
 
 	plan := WorktreeOrphans(t.Context(), []Project{{Key: "repo", Path: repo, Worktrees: []string{removed}}}, ObserveOptions{})
@@ -135,7 +135,7 @@ func TestObserveWorktreeOrphansRecordsProjectsTheDeadlineSkipped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stubOrphanEvidence(t, "sidecar-ws-gone\t"+filepath.Join(base, "gone")+"\n", nil, nil)
+	stubOrphanEvidence(t, "sidecar-ws-gone\t"+filepath.Join(base, "gone")+"\t"+filepath.Join(base, "gone")+"\n", nil, nil)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	obs := ObserveWorktreeOrphans(ctx, []Project{{Key: "a", Path: filepath.Join(base, "a")}, {Key: "b", Path: filepath.Join(base, "b")}}, ObserveOptions{})
@@ -149,5 +149,30 @@ func TestObserveWorktreeOrphansRecordsProjectsTheDeadlineSkipped(t *testing.T) {
 	}
 	if plan := WorktreeOrphans(ctx, []Project{{Key: "a", Path: filepath.Join(base, "a")}}, ObserveOptions{}); len(plan.Orphans) != 0 {
 		t.Fatalf("orphans = %+v after a cut-short pass", plan.Orphans)
+	}
+}
+
+func TestObserveWorktreeOrphansUnknownPaneNeverPermitsPrune(t *testing.T) {
+	for _, pane := range []string{"", "relative", "malformed"} {
+		t.Run(pane, func(t *testing.T) {
+			base, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			repo := filepath.Join(base, "repo")
+			removed := filepath.Join(base, "repo-foo")
+			if err := os.Mkdir(repo, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			listing := "sidecar-ws-repo-foo\t" + removed
+			if pane != "malformed" {
+				listing += "\t" + pane
+			}
+			stubOrphanEvidence(t, listing+"\n", nil, map[string][]workspaceops.WorktreeState{repo: {{Path: repo}}})
+			plan := WorktreeOrphans(t.Context(), []Project{{Key: "repo", Path: repo, Worktrees: []string{removed}}}, ObserveOptions{})
+			if len(plan.Orphans) != 0 {
+				t.Fatalf("unknown pane directory permitted prune: %+v", plan.Orphans)
+			}
+		})
 	}
 }
