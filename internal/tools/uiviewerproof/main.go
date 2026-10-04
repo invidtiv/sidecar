@@ -88,6 +88,11 @@ func (p *proof) call(path string, body any, local bool) ([]byte, int, error) {
 		}
 		request.Header.Set("If-Match", etag)
 	}
+	if body == nil {
+		request.Method = "GET"
+		request.Body = nil
+		request.ContentLength = 0
+	}
 	response, err := client.Do(request)
 	if err != nil {
 		return nil, 0, err
@@ -185,7 +190,23 @@ func (p *proof) cli(args ...string) <-chan commandResult {
 }
 func (p *proof) command(args ...string) ([]byte, error) {
 	done := p.cli(args...)
-	event, err := p.next("ui_request")
+	type eventResult struct {
+		event uiapi.EventMessage
+		err   error
+	}
+	events := make(chan eventResult, 1)
+	go func() {
+		event, err := p.next("ui_request")
+		events <- eventResult{event, err}
+	}()
+	var event uiapi.EventMessage
+	var err error
+	select {
+	case result := <-done:
+		return nil, fmt.Errorf("CLI %v exited before a viewer request: %d %s", args, result.code, result.data)
+	case result := <-events:
+		event, err = result.event, result.err
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -215,10 +236,8 @@ func (p *proof) flags() []string {
 	return []string{"--project", p.projectRoot, "--shell", p.session, "--wait", "4s", "--json"}
 }
 func (p *proof) run() error {
-	if p.workspace != "" {
-		if err := p.shellWorkspaceCatalog(); err != nil {
-			return err
-		}
+	if err := p.shellWorkspaceCatalog(); err != nil {
+		return err
 	}
 	data, code, err := p.call("/api/v0/origins", uiapi.OriginRequest{Origin: "https://viewer-proof.example", Scopes: []string{uiapi.ScopeUIControl, uiapi.ScopeContentRead}}, true)
 	if err != nil {
@@ -261,10 +280,14 @@ func (p *proof) run() error {
 	if code != 200 {
 		return fmt.Errorf("layout PUT %d", code)
 	}
-	if p.workspace != "" {
-		alias, _, err := p.readLayout("/api/v0/projects/" + url.PathEscape(p.project) + "/layout?workspace=" + url.QueryEscape(p.projectRoot+":shell:"+p.session))
-		if err != nil || !reflect.DeepEqual(alias, doc) {
-			return fmt.Errorf("shell layout root disagrees with worktree: %+v %v", alias, err)
+	alias, _, err := p.readLayout("/api/v0/projects/" + url.PathEscape(p.project) + "/layout?workspace=" + url.QueryEscape(p.projectRoot+":shell:"+p.session))
+	if err != nil || !reflect.DeepEqual(alias, doc) {
+		return fmt.Errorf("durable shell layout root disagrees with catalog selector: %+v %v", alias, err)
+	}
+	for _, route := range []string{"content?kind=file&target=README.md&", "tree?"} {
+		data, code, err := p.call("/api/v0/projects/"+url.PathEscape(p.project)+"/"+route+"workspace="+url.QueryEscape(p.workspace), nil, false)
+		if err != nil || code != 200 {
+			return fmt.Errorf("catalog content selector on %s: %d %s %v", route, code, data, err)
 		}
 	}
 	if err = p.presence(true); err != nil {
@@ -418,6 +441,11 @@ func (p *proof) shellWorkspaceCatalog() error {
 				if row.Session == p.session {
 					got = row.Path
 					if got == p.root {
+						if row.ContentWorkspaceID != p.workspace {
+							return fmt.Errorf("catalog content selector %q, want %q", row.ContentWorkspaceID, p.workspace)
+						}
+						// Use only the documented catalog field from here on.
+						p.workspace = row.ContentWorkspaceID
 						return nil
 					}
 				}
@@ -523,7 +551,13 @@ func (p *proof) catalogAttachments() error {
 	for _, section := range snapshot.Sections {
 		for _, row := range section.Rows {
 			if row.WorkspaceKind == "worktree" && row.Path == p.root {
+				if row.ContentWorkspaceID != p.workspace {
+					return fmt.Errorf("worktree content selector disagrees with shell: %+v", row)
+				}
 				for _, c := range row.Candidates {
+					if c.ContentWorkspaceID != row.ContentWorkspaceID {
+						return fmt.Errorf("candidate content selector disagrees with parent: %+v", c)
+					}
 					if c.Session == session {
 						hints = append(hints, &state.PaneAttachmentJSON{Selector: c.Selector, ExpectedTarget: c.ExpectedTarget})
 					}

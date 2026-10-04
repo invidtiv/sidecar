@@ -133,6 +133,9 @@ func remapCatalogRow(authority CatalogAuthority, rawOwnerHostID string, raw mobi
 	// Preserve presentation metadata (including the owner filesystem path)
 	// verbatim; only identities and terminal authority are scoped by the hub.
 	row := raw
+	row.ContentWorkspaceID = ""
+	// Project content/layout/presence are local-only. Owner selectors cannot
+	// be used on this hub; preserve the real path as presentation metadata.
 	row.ID = hosts.ScopedKey(authority.OwnerHostID, raw.ID)
 	row.OwnerHostID = authority.OwnerHostID
 	row.ProjectID = hosts.ScopedKey(authority.OwnerHostID, raw.ProjectID)
@@ -145,6 +148,7 @@ func remapCatalogRow(authority CatalogAuthority, rawOwnerHostID string, raw mobi
 	row.Candidates = append([]mobileproto.CatalogCandidate(nil), raw.Candidates...)
 	bindings := make([]TargetBinding, 0, len(raw.Candidates)+1)
 	for i, candidate := range raw.Candidates {
+		row.Candidates[i].ContentWorkspaceID = ""
 		if candidate.OwnerHostID != rawOwnerHostID || candidate.WorkspaceID != raw.WorkspaceID || candidate.WorkspaceKind != raw.WorkspaceKind {
 			return mobileproto.CatalogRow{}, nil, fmt.Errorf("mobile hub: candidate does not match its raw owner row")
 		}

@@ -24,6 +24,9 @@ import (
 // projectMeta is stored as meta.json inside each project slug directory.
 type projectMeta struct {
 	Path string `json:"path"`
+	// ResolvedRoot pins the alias target observed at registration. Legacy entries
+	// gain it on their next creating Resolve, while read-only lookup stays read-only.
+	ResolvedRoot string `json:"resolved_root,omitempty"`
 }
 
 // worktreeMeta makes the collision-safe directory name inspectable and permits
@@ -88,18 +91,17 @@ func LookupAllWithBase(base string, projectRoots []string) map[string]string {
 	// configured path back up, and handing them a canonical key they never used
 	// would trade this bug for a lookup miss.
 	wanted := make(map[string]string, len(projectRoots))
+	var wantedOrder []string
 	for _, root := range projectRoots {
 		if root == "" {
 			continue
 		}
-		key := root
-		if normalized, err := normalizePath(root); err == nil {
-			key = normalized
-		}
+		key := resolvedPath(root)
 		// First configured root wins, so two entries naming one directory
 		// resolve deterministically rather than by map order.
 		if _, seen := wanted[key]; !seen {
 			wanted[key] = root
+			wantedOrder = append(wantedOrder, key)
 		}
 	}
 	entries, err := os.ReadDir(filepath.Join(base, "projects"))
@@ -119,11 +121,23 @@ func LookupAllWithBase(base string, projectRoots []string) map[string]string {
 		if err != nil {
 			continue
 		}
-		key := meta.Path
-		if normalized, err := normalizePath(meta.Path); err == nil {
-			key = normalized
+		registered, valid := registrationRoot(meta)
+		if !valid {
+			continue
 		}
+		key := resolvedPath(registered)
 		root, want := wanted[key]
+		if !want {
+			// EvalSymlinks does not normalize case on case-insensitive volumes.
+			// Probe filesystem identity only for case variants, keeping unrelated
+			// registrations on the single-pass text comparison path.
+			for _, candidate := range wantedOrder {
+				if strings.EqualFold(candidate, key) && sameProjectRoot(candidate, key) {
+					root, want = wanted[candidate], true
+					break
+				}
+			}
+		}
 		if !want {
 			continue
 		}
@@ -406,6 +420,16 @@ func resolveWithBase(base, projectRoot string) (string, error) {
 
 	// Scan existing project directories for a matching path.
 	if dir, found := findByMeta(projectsDir, projectRoot); found {
+		meta, err := readMeta(dir)
+		if err != nil {
+			return "", err
+		}
+		if meta.ResolvedRoot == "" {
+			meta.ResolvedRoot = resolvedPath(meta.Path)
+			if err := writeProjectMeta(dir, meta); err != nil {
+				return "", err
+			}
+		}
 		return dir, nil
 	}
 
@@ -434,7 +458,7 @@ func resolveWithBase(base, projectRoot string) (string, error) {
 			// Corrupt or missing meta -- skip to next candidate.
 			continue
 		}
-		if meta.Path == projectRoot {
+		if registered, valid := registrationRoot(meta); valid && sameProjectRoot(registered, projectRoot) {
 			return dir, nil
 		}
 		// Different project owns this slug -- try next suffix.
@@ -469,7 +493,8 @@ func sanitizeSlug(s string) string {
 type EquivalentProject struct {
 	// Dir is the project's state directory.
 	Dir string
-	// Registered is the project path as the registry spells it. Callers that go
+	// Registered is the registered spelling while it still names the root,
+	// otherwise the pinned root. Callers that go
 	// on to Resolve must pass it, not their own spelling, or Resolve creates a
 	// second project.
 	Registered string
@@ -502,8 +527,12 @@ func LookupEquivalent(projectRoot string) []EquivalentProject {
 		if err != nil || meta.Path == "" {
 			continue
 		}
-		if meta.Path == projectRoot || resolvedPath(meta.Path) == want {
-			matches = append(matches, EquivalentProject{Dir: dir, Registered: meta.Path})
+		if registered, valid := registrationRoot(meta); valid && sameProjectRoot(registered, projectRoot) {
+			spelling := meta.Path
+			if !sameProjectRoot(spelling, registered) {
+				spelling = registered
+			}
+			matches = append(matches, EquivalentProject{Dir: dir, Registered: spelling})
 		}
 	}
 	return matches
@@ -519,7 +548,46 @@ func resolvedPath(path string) string {
 	if resolved, err := filepath.EvalSymlinks(path); err == nil {
 		return filepath.Clean(resolved)
 	}
+	// A removed checkout still has a durable lexical identity. Resolve the
+	// existing ancestors so /var and /private/var do not diverge after a move.
+	parent, suffix := filepath.Dir(path), filepath.Base(path)
+	for parent != filepath.Dir(parent) {
+		if resolved, err := filepath.EvalSymlinks(parent); err == nil {
+			return filepath.Join(resolved, suffix)
+		}
+		suffix = filepath.Join(filepath.Base(parent), suffix)
+		parent = filepath.Dir(parent)
+	}
 	return filepath.Clean(path)
+}
+
+// sameProjectRoot preserves lexical identity for missing registrations and
+// recognizes case aliases only when the filesystem proves they are the same
+// directory. Lowercasing would merge distinct roots on case-sensitive volumes.
+func sameProjectRoot(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	if resolvedPath(a) == resolvedPath(b) {
+		return true
+	}
+	first, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	second, err := os.Stat(b)
+	return err == nil && first.IsDir() && second.IsDir() && os.SameFile(first, second)
+}
+
+// registrationRoot keeps state anchored to its original root even when its
+// alias is removed or repointed. It must not lend that manifest to the new
+// checkout. Paths, rather than inode
+// numbers, remain the durable identity, so normal process restarts are portable.
+func registrationRoot(meta projectMeta) (string, bool) {
+	if meta.ResolvedRoot == "" {
+		return meta.Path, meta.Path != ""
+	}
+	return meta.ResolvedRoot, true
 }
 
 // findByMeta scans all subdirectories in projectsDir looking for one
@@ -530,6 +598,7 @@ func findByMeta(projectsDir, projectRoot string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
+	equivalent := ""
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -539,11 +608,20 @@ func findByMeta(projectsDir, projectRoot string) (string, bool) {
 		if err != nil {
 			continue
 		}
+		registered, valid := registrationRoot(meta)
+		if !valid || !sameProjectRoot(registered, projectRoot) {
+			continue
+		}
 		if meta.Path == projectRoot {
 			return dir, true
 		}
+		if equivalent == "" {
+			equivalent = dir
+		}
 	}
-	return "", false
+	// Keep the exact spelling's priority for old split registrations, but
+	// never allocate another manifest for an alias of a registered root.
+	return equivalent, equivalent != ""
 }
 
 // readMeta reads and parses the meta.json in the given directory.
@@ -565,16 +643,38 @@ func createProjectDir(dir, projectRoot string) (string, error) {
 		return "", fmt.Errorf("creating project dir: %w", err)
 	}
 
-	meta := projectMeta{Path: projectRoot}
+	meta := projectMeta{Path: projectRoot, ResolvedRoot: resolvedPath(projectRoot)}
+	if err := writeProjectMeta(dir, meta); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
+// Write atomically because inventories read metadata without the allocation lock.
+func writeProjectMeta(dir string, meta projectMeta) error {
 	data, err := json.Marshal(meta)
 	if err != nil {
-		return "", fmt.Errorf("marshaling meta: %w", err)
+		return fmt.Errorf("marshaling meta: %w", err)
 	}
-
-	metaPath := filepath.Join(dir, "meta.json")
-	if err := os.WriteFile(metaPath, data, 0644); err != nil {
-		return "", fmt.Errorf("writing meta.json: %w", err)
+	file, err := os.CreateTemp(dir, ".meta-*")
+	if err != nil {
+		return fmt.Errorf("creating meta.json: %w", err)
 	}
-
-	return dir, nil
+	defer func() { _ = os.Remove(file.Name()) }()
+	if err := file.Chmod(0644); err != nil {
+		_ = file.Close()
+		return err
+	}
+	_, writeErr := file.Write(data)
+	closeErr := file.Close()
+	if writeErr != nil {
+		return writeErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	if err := os.Rename(file.Name(), filepath.Join(dir, "meta.json")); err != nil {
+		return fmt.Errorf("writing meta.json: %w", err)
+	}
+	return nil
 }

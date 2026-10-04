@@ -947,6 +947,19 @@ func OwningWorkspacePath(workDir, projectRoot string, roots []string) string {
 	return canonical(projectRoot)
 }
 
+// ContentWorkspaceID names the owning root for project-scoped content and
+// layout clients. Terminal identity is independent of this selector.
+func (w Workspace) ContentWorkspaceID() string {
+	if w.HostID != "" || w.Path == "" || w.ProjectRoot == "" || w.ProjectKey == "" {
+		return ""
+	}
+	root, path := canonical(w.ProjectRoot), canonical(w.Path)
+	if path == root {
+		return ""
+	}
+	return w.ProjectKey + ":worktree:" + path
+}
+
 func canonicalOwner(path string, roots []string) string {
 	owner := ""
 	for _, root := range roots {

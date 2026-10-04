@@ -35,6 +35,27 @@ func TestUIAPIFixtureCorpus(t *testing.T) {
 	identity := mobile.FixtureIdentity("fixture", "local:fixture", "fixture-config", "fixture-project", "fixture-echo", "%1")
 	row := mobileproto.CatalogRow{ID: "fixture-shell", OwnerHostID: identity.OwnerHostID, ProjectID: "fixture-project", ProjectName: "Fixture project", WorkspaceID: identity.WorkspaceID, WorkspaceKind: "shell", DisplayName: "Echo terminal", Path: "/workspace/fixture", Provider: "codex", Status: "working", Group: "Working", Session: identity.Session, Pane: identity.Pane, Target: identity.Session, ExpectedTarget: &identity, AttachState: "ready", ObservedAt: now.Format(time.RFC3339), ChangedAt: now.Format(time.RFC3339), Live: true, SemanticStatus: true, AttachmentReady: true}
 	catalog := mobileproto.CatalogSnapshot{Generation: "fixture-generation", ObservedAt: row.ObservedAt, HubID: identity.HubID, OwnerHostID: identity.OwnerHostID, OwnerConfigGeneration: identity.OwnerConfigGeneration, Query: mobileproto.CatalogQuery{Sort: "project"}, Hosts: []mobileproto.CatalogHost{{ID: identity.OwnerHostID, Name: "Fixture host", State: "online", Local: true}}, Sections: []mobileproto.CatalogSection{{Key: "fixture-project", Title: "Fixture project", Rows: []mobileproto.CatalogRow{row}}}, Failures: []mobileproto.CatalogFailure{}, Total: 1}
+	for _, kind := range []string{"shell", "worktree"} {
+		catalog.Sections[0].Rows = append(catalog.Sections[0].Rows, mobileproto.CatalogRow{
+			ID: "fixture-feature-" + kind, OwnerHostID: identity.OwnerHostID, ProjectID: row.ProjectID, ProjectName: row.ProjectName,
+			WorkspaceKind: kind, DisplayName: "Feature " + kind, Path: "/workspace/feature",
+			ContentWorkspaceID: "/workspace/fixture:worktree:/workspace/feature",
+			Status:             "idle", Group: "No Session", AttachState: "unavailable", ObservedAt: row.ObservedAt,
+		})
+	}
+	catalog.Total = 3
+	feature := &catalog.Sections[0].Rows[2]
+	feature.WorkspaceID = feature.ContentWorkspaceID
+	feature.Live, feature.Ambiguous = true, true
+	feature.AttachState, feature.CandidateGeneration = "ambiguous", "fixture-candidate-set"
+	for i, pane := range []string{"%2", "%3"} {
+		feature.Candidates = append(feature.Candidates, mobileproto.CatalogCandidate{
+			Selector: fmt.Sprintf("opaque-fixture-feature-%d", i+1), DisplayName: fmt.Sprintf("Feature terminal %d", i+1),
+			ContentWorkspaceID: feature.ContentWorkspaceID, OwnerHostID: identity.OwnerHostID, WorkspaceID: feature.WorkspaceID,
+			WorkspaceKind: "worktree", Session: "fixture-feature", Pane: pane,
+			ExpectedTarget: mobile.FixtureWorkspaceIdentity(identity.HubID, identity.OwnerHostID, identity.OwnerConfigGeneration, feature.WorkspaceID, "worktree", "fixture-feature", pane),
+		})
+	}
 	values := map[string]any{
 		"viewer-exchange.json": []any{
 			EventMessage{Type: "hello", Seq: 1, APIInstance: "api_fixture", ServerVersion: "fixture", Capabilities: []string{"catalog", "attention", "terminals", "workspace", "content", "uiRequestRelayV1", "shutdown"}},
