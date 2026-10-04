@@ -8,7 +8,9 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
+	"unicode/utf8"
 
+	"github.com/marcus/sidecar/internal/contentservice"
 	"github.com/marcus/sidecar/internal/viewerlayout"
 )
 
@@ -20,11 +22,14 @@ func (s *Server) handleLayout(w http.ResponseWriter, r *http.Request, c caller) 
 		return
 	}
 	_, project := projectContentRoute(r.URL.Path)
-	if len(r.URL.Query()) != 0 {
-		writeError(w, 400, CodeInvalidRequest, "Layout takes no query parameters; the credential identifies its viewer.")
-		return
+	q := r.URL.Query()
+	for key, values := range q {
+		if key != "workspace" || len(values) != 1 || len(values[0]) > contentservice.MaxLocatorBytes {
+			writeError(w, 400, CodeInvalidRequest, "Layout accepts one workspace parameter; the credential identifies its viewer.")
+			return
+		}
 	}
-	ws, err := s.contentBackend().LookupProject(r.Context(), project, "")
+	ws, err := s.contentBackend().LookupProject(r.Context(), project, q.Get("workspace"))
 	if err != nil {
 		writeContentError(w, err)
 		return
@@ -46,6 +51,9 @@ func (s *Server) handleLayout(w http.ResponseWriter, r *http.Request, c caller) 
 		return
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+	if err == nil && !utf8.Valid(body) {
+		err = fmt.Errorf("layout JSON must be valid UTF-8")
+	}
 	if err == nil {
 		var fields map[string]json.RawMessage
 		if json.Unmarshal(body, &fields) != nil || fields["layout"] == nil {

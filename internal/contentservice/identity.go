@@ -8,6 +8,7 @@ import (
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/shellstate"
+	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
 const (
@@ -77,12 +78,25 @@ func (s *Service) lookupWorkspace(ctx context.Context, workspaceID string) (Work
 		if err != nil {
 			return Workspace{}, Internal("list shells", err)
 		}
-		for _, sh := range shells {
-			if sh.TmuxName == key {
-				return Workspace{ID: workspaceID, Kind: kindShell, Key: key, Root: root}, nil
+		var match *shellstate.Definition
+		for i := range shells {
+			if shells[i].TmuxName == key {
+				if match != nil {
+					return Workspace{}, Rejected("shell %q has ambiguous durable ownership", key)
+				}
+				match = &shells[i]
 			}
 		}
-		return Workspace{}, Rejected("workspace %q no longer owns this shell", workspaceID)
+		if match == nil {
+			return Workspace{}, Rejected("workspace %q no longer owns this shell", workspaceID)
+		}
+		paths := []string{root}
+		if match.WorkDir != "" {
+			if worktrees, err := s.listWorktrees(ctx, root); err == nil {
+				paths = append(paths, worktrees...)
+			}
+		}
+		return Workspace{ID: workspaceID, Kind: kindShell, Key: key, Root: workspaceinventory.OwningWorkspacePath(match.WorkDir, root, paths)}, nil
 	case kindWorktree:
 		paths, err := s.listWorktrees(ctx, root)
 		if err != nil {
@@ -129,14 +143,17 @@ func (s *Service) listShells(projectRoot string) ([]shellstate.Definition, error
 	if s.ListShells != nil {
 		return s.ListShells(projectRoot)
 	}
-	dir, ok := projectdir.Lookup(projectRoot)
-	if !ok {
-		dir, ok = projectdir.Lookup(canonical(projectRoot))
+	// Inventory IDs are canonical, but the registry retains the configured
+	// spelling. Read every equivalent registration, including legacy aliases.
+	var shells []shellstate.Definition
+	for _, project := range projectdir.LookupEquivalent(projectRoot) {
+		defs, err := shellstate.ListAtPath(filepath.Join(project.Dir, "shells.json"))
+		if err != nil {
+			return nil, err
+		}
+		shells = append(shells, defs...)
 	}
-	if !ok {
-		return nil, nil
-	}
-	return shellstate.ListAtPath(filepath.Join(dir, "shells.json"))
+	return shells, nil
 }
 
 func (s *Service) listWorktrees(ctx context.Context, projectRoot string) ([]string, error) {

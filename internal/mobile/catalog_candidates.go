@@ -61,7 +61,8 @@ func WorkspaceCandidates(workspace workspaceinventory.Workspace, ownerHostID str
 			label = pane.Session + " " + pane.Pane
 		}
 		candidates = append(candidates, mobileproto.CatalogCandidate{
-			Selector: candidateSelectorPrefix + hex.EncodeToString(selectorSum[:16]), DisplayName: label,
+			ContentWorkspaceID: workspace.ContentWorkspaceID(),
+			Selector:           candidateSelectorPrefix + hex.EncodeToString(selectorSum[:16]), DisplayName: label,
 			OwnerHostID: ownerHostID, WorkspaceID: workspace.ID, WorkspaceKind: string(workspace.Kind),
 			Session: pane.Session, Pane: pane.Pane,
 		})

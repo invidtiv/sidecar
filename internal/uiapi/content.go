@@ -254,12 +254,16 @@ func addContentSpec(paths map[string]any) {
 						schema = map[string]any{"type": "integer", "minimum": 0}
 					}
 					params = append(params, map[string]any{"name": name, "in": "query", "schema": schema, "required": name == "kind"})
+					if name == "workspace" {
+						params[len(params)-1].(map[string]any)["description"] = contentWorkspaceDescription
+					}
 				}
 			}
 			if path == treeRoute {
-				params = append(params, map[string]any{"name": "workspace", "in": "query", "schema": map[string]any{"type": "string"}}, map[string]any{"name": "path", "in": "query", "schema": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "maxItems": contentservice.MaxTreePaths}, "style": "form", "explode": true})
+				params = append(params, map[string]any{"name": "workspace", "in": "query", "schema": map[string]any{"type": "string"}, "description": contentWorkspaceDescription}, map[string]any{"name": "path", "in": "query", "schema": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "maxItems": contentservice.MaxTreePaths}, "style": "form", "explode": true})
 			}
 			if path == layoutRoute {
+				params = append(params, map[string]any{"name": "workspace", "in": "query", "schema": map[string]any{"type": "string", "maxLength": contentservice.MaxLocatorBytes}, "description": contentWorkspaceDescription + " Layouts are isolated per credential and canonical workspace root, matching viewer presence and relay."})
 				header := "If-None-Match"
 				required := false
 				if op["requestBody"] != nil {
@@ -282,6 +286,8 @@ func addContentSpec(paths map[string]any) {
 		}
 	}
 }
+
+const contentWorkspaceDescription = "Pass the catalog row or candidate's content_workspace_id unchanged. Empty or omitted selects the configured project root; a nonempty selector names its linked worktree. Do not derive it from opaque row IDs or terminal expected_target. Legacy durable shell/worktree IDs remain accepted. Remote content forwarding is unavailable."
 
 func writeContentJSON(w http.ResponseWriter, data []byte) {
 	w.Header().Set("Content-Type", "application/json")

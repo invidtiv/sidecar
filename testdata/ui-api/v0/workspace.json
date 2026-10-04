@@ -62,12 +62,100 @@
             "semantic_status": true,
             "attention": false,
             "attachment_ready": true
+          },
+          {
+            "id": "fixture-feature-shell",
+            "owner_host_id": "local:fixture",
+            "project_id": "fixture-project",
+            "project_name": "Fixture project",
+            "workspace_kind": "shell",
+            "display_name": "Feature shell",
+            "path": "/workspace/feature",
+            "main_checkout": false,
+            "content_workspace_id": "/workspace/fixture:worktree:/workspace/feature",
+            "status": "idle",
+            "group": "No Session",
+            "attach_state": "unavailable",
+            "observed_at": "2026-10-03T00:00:00Z",
+            "live": false,
+            "ambiguous": false,
+            "stale": false,
+            "semantic_status": false,
+            "attention": false,
+            "attachment_ready": false
+          },
+          {
+            "id": "fixture-feature-worktree",
+            "owner_host_id": "local:fixture",
+            "project_id": "fixture-project",
+            "project_name": "Fixture project",
+            "workspace_id": "/workspace/fixture:worktree:/workspace/feature",
+            "workspace_kind": "worktree",
+            "display_name": "Feature worktree",
+            "path": "/workspace/feature",
+            "main_checkout": false,
+            "content_workspace_id": "/workspace/fixture:worktree:/workspace/feature",
+            "status": "idle",
+            "group": "No Session",
+            "candidate_generation": "fixture-candidate-set",
+            "candidates": [
+              {
+                "content_workspace_id": "/workspace/fixture:worktree:/workspace/feature",
+                "selector": "opaque-fixture-feature-1",
+                "display_name": "Feature terminal 1",
+                "owner_host_id": "local:fixture",
+                "workspace_id": "/workspace/fixture:worktree:/workspace/feature",
+                "workspace_kind": "worktree",
+                "session": "fixture-feature",
+                "pane": "%2",
+                "expected_target": {
+                  "hub_id": "fixture",
+                  "owner_host_id": "local:fixture",
+                  "owner_config_generation": "fixture-config",
+                  "workspace_id": "/workspace/fixture:worktree:/workspace/feature",
+                  "workspace_kind": "worktree",
+                  "session": "fixture-feature",
+                  "pane": "%2",
+                  "server_incarnation": "pid=42",
+                  "target_generation": "073809a54dcbd0f70650b4bc630d34d7"
+                }
+              },
+              {
+                "content_workspace_id": "/workspace/fixture:worktree:/workspace/feature",
+                "selector": "opaque-fixture-feature-2",
+                "display_name": "Feature terminal 2",
+                "owner_host_id": "local:fixture",
+                "workspace_id": "/workspace/fixture:worktree:/workspace/feature",
+                "workspace_kind": "worktree",
+                "session": "fixture-feature",
+                "pane": "%3",
+                "expected_target": {
+                  "hub_id": "fixture",
+                  "owner_host_id": "local:fixture",
+                  "owner_config_generation": "fixture-config",
+                  "workspace_id": "/workspace/fixture:worktree:/workspace/feature",
+                  "workspace_kind": "worktree",
+                  "session": "fixture-feature",
+                  "pane": "%3",
+                  "server_incarnation": "pid=42",
+                  "target_generation": "e86d0446c80340aa33971a8b062ae152"
+                }
+              }
+            ],
+            "attach_state": "ambiguous",
+            "observed_at": "2026-10-03T00:00:00Z",
+            "live": true,
+            "ambiguous": true,
+            "stale": false,
+            "semantic_status": false,
+            "attention": false,
+            "attachment_ready": false
           }
         ]
       }
     ],
     "failures": [],
-    "total": 1
+    "total": 3
   },
   "shells": [
     {

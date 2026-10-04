@@ -553,8 +553,14 @@ func (c Collector) CollectProjectInventory(ctx context.Context, name, root strin
 	// whole project from the global browser even though its shells were
 	// recorded and live.
 	appendShells := func() {
+		roots := []string{result.ProjectRoot}
+		for _, workspace := range result.Workspaces {
+			if workspace.Kind == KindWorktree {
+				roots = append(roots, workspace.Path)
+			}
+		}
 		for _, shell := range shells {
-			workspace := Workspace{ProjectKey: result.ProjectKey, ProjectName: name, ProjectRoot: result.ProjectRoot, Kind: KindShell, Key: shell.TmuxName, Name: shell.DisplayName, Path: result.ProjectRoot, TmuxName: shell.TmuxName, Provider: shell.AgentType, Namespace: shell.Namespace, CreatedAt: shell.CreatedAt, ObservedAt: now}
+			workspace := Workspace{ProjectKey: result.ProjectKey, ProjectName: name, ProjectRoot: result.ProjectRoot, Kind: KindShell, Key: shell.TmuxName, Name: shell.DisplayName, Path: OwningWorkspacePath(shell.WorkDir, result.ProjectRoot, roots), TmuxName: shell.TmuxName, Provider: shell.AgentType, Namespace: shell.Namespace, CreatedAt: shell.CreatedAt, ObservedAt: now}
 			workspace.ID = workspace.ProjectKey + ":shell:" + workspace.Key
 			workspace.Presentation = agentstatus.Resolve(agentstatus.Input{ProviderSupported: supported(shell.AgentType), Orphaned: true, CapturedAt: now, Now: now})
 			result.Workspaces = append(result.Workspaces, workspace)
@@ -862,6 +868,7 @@ func parseWorktrees(text string) []gitWorktree {
 }
 
 type shellDefinition struct {
+	WorkDir     string `json:"workDir"`
 	TmuxName    string `json:"tmuxName"`
 	DisplayName string `json:"displayName"`
 	AgentType   string `json:"agentType"`
@@ -926,6 +933,31 @@ func panesForOwnedSession(name, projectRoot string, roots []string, panes []Pane
 		}
 	}
 	return out
+}
+
+// OwningWorkspacePath maps a durable working directory to the deepest registered
+// workspace containing it. Unknown and legacy directories use the project root.
+// It projects location only; it grants no terminal or file authority.
+func OwningWorkspacePath(workDir, projectRoot string, roots []string) string {
+	if workDir != "" {
+		if root := canonicalOwner(canonical(workDir), roots); root != "" {
+			return root
+		}
+	}
+	return canonical(projectRoot)
+}
+
+// ContentWorkspaceID names the owning root for project-scoped content and
+// layout clients. Terminal identity is independent of this selector.
+func (w Workspace) ContentWorkspaceID() string {
+	if w.HostID != "" || w.Path == "" || w.ProjectRoot == "" || w.ProjectKey == "" {
+		return ""
+	}
+	root, path := canonical(w.ProjectRoot), canonical(w.Path)
+	if path == root {
+		return ""
+	}
+	return w.ProjectKey + ":worktree:" + path
 }
 
 func canonicalOwner(path string, roots []string) string {

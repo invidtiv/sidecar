@@ -29,6 +29,7 @@
     "focused": true,
     "visible": true,
     "project": "fixture-project",
+    "workspace": "/workspace/fixture:worktree:/workspace/feature",
     "session": "fixture-echo",
     "focused_pane": 1,
     "viewport": {
@@ -44,6 +45,7 @@
       "id": "fixture-request",
       "action": "open",
       "project": "fixture-project",
+      "workspace": "/workspace/fixture:worktree:/workspace/feature",
       "request": {
         "viewer": "api-viewer-fixture",
         "version": 1,
@@ -55,7 +57,7 @@
           "tmuxPane": "%1",
           "namespace": "",
           "projectKey": "",
-          "workDir": "/workspace/fixture",
+          "workDir": "/workspace/feature",
           "pid": 0
         },
         "action": "open",

@@ -191,3 +191,20 @@ func TestRemapOwnerCatalogPreservesRealPathThroughComposition(t *testing.T) {
 		})
 	}
 }
+
+func TestRemapOwnerCatalogOmitsLocalOnlyContentSelectors(t *testing.T) {
+	raw := rawOwnerCatalog("owner", "/repo", "candidate")
+	row := &raw.Sections[0].Rows[0]
+	row.ContentWorkspaceID = "/repo:worktree:/linked"
+	row.CandidateGeneration = "set"
+	row.Candidates = []mobileproto.CatalogCandidate{{ContentWorkspaceID: row.ContentWorkspaceID, Selector: row.Target, DisplayName: "Pane", OwnerHostID: row.OwnerHostID,
+		WorkspaceID: row.WorkspaceID, WorkspaceKind: row.WorkspaceKind, Session: row.Session, Pane: row.Pane, ExpectedTarget: *row.ExpectedTarget}}
+	remapped, err := RemapOwnerCatalog(CatalogAuthority{HubID: "hub", HubConfigGeneration: "cfg", OwnerHostID: "remote", RegistrationFingerprint: "reg"}, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := remapped.Source.Snapshot.Sections[0].Rows[0]
+	if got.ContentWorkspaceID != "" || got.Candidates[0].ContentWorkspaceID != "" || row.ContentWorkspaceID == "" || row.Candidates[0].ContentWorkspaceID == "" {
+		t.Fatalf("remote content selectors leaked or owner input changed: %+v", got)
+	}
+}

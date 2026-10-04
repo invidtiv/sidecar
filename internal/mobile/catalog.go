@@ -408,7 +408,7 @@ func catalogRow(workspace workspaceinventory.Workspace, item workspacelist.Item,
 	mainCheckout := workspace.Kind == workspaceinventory.KindWorktree && workspace.IsMain
 	row := mobileproto.CatalogRow{
 		ID: workspace.ID, OwnerHostID: owner, ProjectID: workspace.ProjectKey, ProjectName: item.Project,
-		WorkspaceKind: string(workspace.Kind), DisplayName: workspace.Name, Path: path,
+		WorkspaceKind: string(workspace.Kind), DisplayName: workspace.Name, Path: path, ContentWorkspaceID: workspace.ContentWorkspaceID(),
 		MainCheckout: &mainCheckout,
 		Branch:       workspace.Branch, Task: workspace.TaskID, Provider: workspace.Provider, Status: item.Status,
 		Group: string(item.Group), Session: workspace.TmuxName, Pane: workspace.PaneID,

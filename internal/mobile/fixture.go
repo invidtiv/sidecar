@@ -20,7 +20,13 @@ func FixtureTarget(identity mobileproto.TargetIdentity) ResolvedTarget {
 
 // FixtureIdentity returns the real service's stable identity for a synthetic shell.
 func FixtureIdentity(hub, owner, config, workspace, session, pane string) mobileproto.TargetIdentity {
-	target := FixtureTarget(mobileproto.TargetIdentity{WorkspaceID: workspace, WorkspaceKind: "shell", Session: session, Pane: pane})
+	return FixtureWorkspaceIdentity(hub, owner, config, workspace, "shell", session, pane)
+}
+
+// FixtureWorkspaceIdentity supplies the same deterministic echo authority for
+// shells and worktree terminal candidates, without changing legacy identities.
+func FixtureWorkspaceIdentity(hub, owner, config, workspace, kind, session, pane string) mobileproto.TargetIdentity {
+	target := FixtureTarget(mobileproto.TargetIdentity{WorkspaceID: workspace, WorkspaceKind: kind, Session: session, Pane: pane})
 	return targetIdentity(CatalogIdentity{HubID: hub, OwnerHostID: owner, OwnerConfigGeneration: config}, target)
 }
 

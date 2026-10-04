@@ -7,7 +7,7 @@
         "kind": "terminal",
         "session": "fixture-echo",
         "attachment": {
-          "selector": "opaque-fixture-selector",
+          "selector": "opaque-fixture-candidate-one",
           "expected_target": {
             "hub_id": "fixture",
             "owner_host_id": "local:fixture",
@@ -22,13 +22,22 @@
         }
       },
       "b": {
-        "kind": "doc",
-        "tabs": [
-          {
-            "path": "README.md",
-            "mode": "rendered"
+        "kind": "shell",
+        "session": "fixture-echo",
+        "attachment": {
+          "selector": "opaque-fixture-candidate-two",
+          "expected_target": {
+            "hub_id": "fixture",
+            "owner_host_id": "local:fixture",
+            "owner_config_generation": "fixture-config",
+            "workspace_id": "fixture-project",
+            "workspace_kind": "shell",
+            "session": "fixture-echo",
+            "pane": "%2",
+            "server_incarnation": "pid=42",
+            "target_generation": "7ec58660b39f129cfa46756f156eab44"
           }
-        ]
+        }
       }
     }
   }

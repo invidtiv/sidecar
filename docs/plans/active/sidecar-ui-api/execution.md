@@ -68,7 +68,7 @@ The status values are `queued`, `running`, `review`, `fixing`, `merged` and `blo
 | U3-a content and layouts API | td-f8784a | sidecar | Codex | U1-a | merged (05dd383b). Claude review fixed a HIGH arbitrary file write through the diff parent parameter (git --output), a watch fd-exhaustion cap, and an existence oracle through symlinks |
 | U3-b pane tree UI | td-cf59cd | sidecar-ui | Codex | U3-a, U1-f | merged (sidecar-ui 13bd63a); 70 e2e tests pass on merged main |
 | U3-c pane and content polish | td-c53032 | both | Codex | U3-b | merged (sidecar-ui 1edaf25, Sidecar c67cc04f). Review fixed two key-stealing bugs |
-| U4 viewers agents can target | td-799dd6 | both | Codex | U3 | U4-a merged (53c2d9b2). U4-b in Codex review (sidecar-ui u4b-viewer @78f8f4b) |
+| U4 viewers agents can target | td-799dd6 | both | Codex | U3 | U4-a merged (53c2d9b2); U4-b merged (sidecar-ui, review fixed reconnect starvation and workspace-match adoption). U4-c server merged (d07ac257; review fixed foreign-socket pane hints, legacy workDir and malformed UTF-8). U4-c client (td-32cbbb) running; U4-c server 2 merged (7ce51b37; review fixed a P1 retargeted-alias manifest inheritance and case-alias split); client running |
 
 U2-b onward are briefed below.
 
@@ -281,6 +281,8 @@ Each one is a td issue with the exact command and output. Fixes run as their own
 | td-17b5e2 | Worktree delete leaves other projects' shells rooted in the removed worktree live, with a vanished cwd | open |
 | td-00b64e | shell list/rename resolve the current project from env, not cwd; shell list has no --project | open |
 | td-f9306b | Shell renames keep no history; the td-ac892f collateral rename of sidecar-sh-clara-home-23 could only be guessed back to 'Shell 23' | open |
-| td-480c9b | P1: exact session-name targets fall back to display-name matching, so a destructive operation could hit another same-named shell. Also: unguarded positional targets, a literal '-' prompt refused, and no main-checkout flag. Codex bug lane ~/code/sidecar-bug-480c9b | running |
-| td-418046 | P1: layout routes resolve only the project root while the viewer relay reads the worktree root, so agent-driven layouts in worktrees cannot work. Codex bug lane ~/code/sidecar-bug-418046 | running |
-| td-4db5c6 | P2: a terminal renders very small even while this browser holds the size. Codex bug lane ~/code/sidecar-ui-bug-4db5c6 | running |
+| td-480c9b | P1: exact session-name targets fall back to display-name matching, so a destructive operation could hit another same-named shell. Also: unguarded positional targets, a literal '-' prompt refused, and no main-checkout flag. Fixed on bug-480c9b @8492a037; in Codex review, which is checking that documented display-name targets still work | review |
+| td-418046 | P1: layout routes resolve only the project root while the viewer relay reads the worktree root, so agent-driven layouts in worktrees cannot work. merged (30a92e4d); review fixed 2 P1 worktree-scope holes | merged |
+| td-4db5c6 | P2: a terminal renders very small even while this browser holds the size. Cause: an xterm WebGL viewport and backing mismatch on Retina; the terminal falls back to the DOM renderer. Merged (docs 0b79ce7f). Review made 'sized here' wait for an actual paint. DOM fallback benchmarked at ~60 Hz for normal panes | merged |
+| td-225c83 | `shell rename --target sidecar-ws-…` can't find worktree sessions that `agent list` reports | open |
+| td-c3850e, td-8facb0 | sidecar-ui e2e: headed-Retina wheel-delta assumption; one intermittent content-chooser timeout | open |

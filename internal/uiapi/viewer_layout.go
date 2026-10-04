@@ -39,6 +39,9 @@ type viewerLayoutHost struct {
 }
 
 func (s *Server) planViewerRequest(ctx context.Context, v *apiScreen, req uirequest.Request) (*viewerPlan, error) {
+	if err := s.validateViewerWorkspace(ctx, v, v.ws.Root); err != nil {
+		return nil, err
+	}
 	store := viewerlayout.FileStore{Dir: filepath.Join(s.dir, "layouts")}
 	doc, etag, err := store.Get(v.caller.client, v.ws.Root)
 	if err != nil {
@@ -52,16 +55,9 @@ func (s *Server) planViewerRequest(ctx context.Context, v *apiScreen, req uirequ
 		return nil, err
 	}
 	h.restore(doc.Layout)
-	if req.Origin.TmuxSession != "" {
-		found := false
-		for _, leaf := range h.leaves {
-			if (leaf.Kind == panecodec.KindTerminal || leaf.Kind == panecodec.KindShell) && leaf.Session == req.Origin.TmuxSession {
-				found = true
-			}
-		}
-		if !found {
-			return nil, fmt.Errorf("the origin shell is not on screen, and open/layout requests are never queued")
-		}
+	originPane, err := h.originLeaf(req.Origin)
+	if err != nil {
+		return nil, err
 	}
 	var payload uirequest.LayoutPayload
 	if req.Action == uirequest.ActionLayout {
@@ -152,8 +148,23 @@ func (s *Server) planViewerRequest(ctx context.Context, v *apiScreen, req uirequ
 	if ttl <= 0 || ttl > uirequest.DefaultTTL {
 		ttl = uirequest.DefaultTTL
 	}
-	return &viewerPlan{event: UIRequestEvent{ID: req.ID, Action: req.Action, Project: v.presence.Project, Workspace: v.presence.Workspace, Request: req, Document: next, ETag: etag, ExpiresAt: req.CreatedAt.Add(ttl)}, ack: h.ack, root: v.ws.Root, viewer: v.id}, nil
+	return &viewerPlan{event: UIRequestEvent{ID: req.ID, Action: req.Action, Project: v.presence.Project, Workspace: v.presence.Workspace, Request: req, OriginPane: originPane, Document: next, ETag: etag, ExpiresAt: req.CreatedAt.Add(ttl)}, ack: h.ack, root: v.ws.Root, viewer: v.id}, nil
 }
+
+// Presence is a snapshot, not continuing authority over a removed or
+// retargeted workspace. Re-resolve even when the tree has only terminals and
+// therefore no content references whose validation would check membership.
+func (s *Server) validateViewerWorkspace(ctx context.Context, v *apiScreen, root string) error {
+	ws, err := s.contentBackend().LookupProject(ctx, v.presence.Project, v.presence.Workspace)
+	if err != nil {
+		return err
+	}
+	if ws.Root != root {
+		return fmt.Errorf("the viewer workspace changed; select it again before retrying")
+	}
+	return nil
+}
+
 func (h *viewerLayoutHost) restore(layout *state.PaneLayoutJSON) {
 	h.leaves = map[int]*state.PaneLayoutJSON{}
 	next := 0
@@ -383,10 +394,13 @@ func (h *viewerLayoutHost) RestoreSpec(layout *state.PaneLayoutJSON) tea.Cmd {
 	layout.Open = false
 	// The primary spec means the existing primary, including its session.
 	var primary *state.PaneLayoutJSON
+	shells := map[string]*state.PaneLayoutJSON{}
 	for _, j := range h.leaves {
 		if j.Kind == "terminal" {
 			primary = j
-			break
+		}
+		if j.Kind == "shell" {
+			shells[j.Session] = j
 		}
 	}
 	var carry func(*state.PaneLayoutJSON)
@@ -397,8 +411,14 @@ func (h *viewerLayoutHost) RestoreSpec(layout *state.PaneLayoutJSON) tea.Cmd {
 		if j.Split != nil {
 			carry(j.Split.A)
 			carry(j.Split.B)
-		} else if j.Kind == "terminal" && primary != nil {
-			j.Session = primary.Session
+		} else {
+			source := shells[j.Session]
+			if j.Kind == "terminal" {
+				source = primary
+			}
+			if (j.Kind == "terminal" || j.Kind == "shell") && source != nil {
+				j.Session, j.Name, j.Attachment = source.Session, source.Name, source.Attachment
+			}
 		}
 	}
 	carry(layout)
@@ -483,4 +503,38 @@ func retargetViewerTabs[T any](current, incoming []T, key func(T) string) ([]T, 
 		active = found
 	}
 	return current, active
+}
+
+// originLeaf matches the authoritative session before consulting advisory
+// attachment data. Duplicate candidates require exactly one pane match.
+func (h *viewerLayoutHost) originLeaf(origin uirequest.Origin) (int, error) {
+	if origin.TmuxSession == "" {
+		return 0, nil
+	}
+	var candidates []int
+	for id, leaf := range h.leaves {
+		if (leaf.Kind == panecodec.KindTerminal || leaf.Kind == panecodec.KindShell) && leaf.Session == origin.TmuxSession {
+			candidates = append(candidates, id)
+		}
+	}
+	if len(candidates) == 0 {
+		return 0, fmt.Errorf("the origin shell is not on screen, and open/layout requests are never queued")
+	}
+	if len(candidates) == 1 {
+		return candidates[0], nil
+	}
+	match := 0
+	for _, id := range candidates {
+		a := h.leaves[id].Attachment
+		if origin.TmuxPane != "" && a != nil && a.ExpectedTarget.Session == origin.TmuxSession && a.ExpectedTarget.Pane == origin.TmuxPane {
+			if match != 0 {
+				return 0, fmt.Errorf("the origin session appears in several panes with the same pane identity; request is ambiguous")
+			}
+			match = id
+		}
+	}
+	if match == 0 {
+		return 0, fmt.Errorf("the origin session appears in several panes; request is ambiguous without one matching origin pane identity")
+	}
+	return match, nil
 }

@@ -49,9 +49,11 @@ type UIRequestEvent struct {
 	Project   string            `json:"project"`
 	Workspace string            `json:"workspace,omitempty"`
 	Request   uirequest.Request `json:"request"`
-	Document  LayoutDocument    `json:"document"`
-	ETag      string            `json:"etag"`
-	ExpiresAt time.Time         `json:"expires_at"`
+	// OriginPane identifies the matched leaf in the pre-proposal tree preorder.
+	OriginPane int            `json:"origin_pane,omitempty"`
+	Document   LayoutDocument `json:"document"`
+	ETag       string         `json:"etag"`
+	ExpiresAt  time.Time      `json:"expires_at"`
 }
 type ViewerAckRequest struct {
 	ViewerID string           `json:"viewer_id"`
@@ -349,6 +351,11 @@ func (s *Server) handleViewerAck(w http.ResponseWriter, r *http.Request, c calle
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
+	if err := s.validateViewerWorkspace(ctx, v, plan.root); err != nil {
+		s.declineViewer(plan.event.Request, err.Error())
+		writeError(w, 409, "content_changed", err.Error())
+		return
+	}
 	host := &viewerLayoutHost{s: s, ctx: ctx, v: v}
 	if err := host.validateSaved(plan.event.Document.Layout); err != nil {
 		s.declineViewer(plan.event.Request, err.Error())

@@ -36,13 +36,35 @@ func TestUIAPIFixtureCorpus(t *testing.T) {
 	shellMainCheckout := false
 	row := mobileproto.CatalogRow{MainCheckout: &shellMainCheckout, ID: "fixture-shell", OwnerHostID: identity.OwnerHostID, ProjectID: "fixture-project", ProjectName: "Fixture project", WorkspaceID: identity.WorkspaceID, WorkspaceKind: "shell", DisplayName: "Echo terminal", Path: "/workspace/fixture", Provider: "codex", Status: "working", Group: "Working", Session: identity.Session, Pane: identity.Pane, Target: identity.Session, ExpectedTarget: &identity, AttachState: "ready", ObservedAt: now.Format(time.RFC3339), ChangedAt: now.Format(time.RFC3339), Live: true, SemanticStatus: true, AttachmentReady: true}
 	catalog := mobileproto.CatalogSnapshot{Generation: "fixture-generation", ObservedAt: row.ObservedAt, HubID: identity.HubID, OwnerHostID: identity.OwnerHostID, OwnerConfigGeneration: identity.OwnerConfigGeneration, Query: mobileproto.CatalogQuery{Sort: "project"}, Hosts: []mobileproto.CatalogHost{{ID: identity.OwnerHostID, Name: "Fixture host", State: "online", Local: true}}, Sections: []mobileproto.CatalogSection{{Key: "fixture-project", Title: "Fixture project", Rows: []mobileproto.CatalogRow{row}}}, Failures: []mobileproto.CatalogFailure{}, Total: 1}
+	for _, kind := range []string{"shell", "worktree"} {
+		catalog.Sections[0].Rows = append(catalog.Sections[0].Rows, mobileproto.CatalogRow{
+			ID: "fixture-feature-" + kind, OwnerHostID: identity.OwnerHostID, ProjectID: row.ProjectID, ProjectName: row.ProjectName,
+			MainCheckout:  &shellMainCheckout,
+			WorkspaceKind: kind, DisplayName: "Feature " + kind, Path: "/workspace/feature",
+			ContentWorkspaceID: "/workspace/fixture:worktree:/workspace/feature",
+			Status:             "idle", Group: "No Session", AttachState: "unavailable", ObservedAt: row.ObservedAt,
+		})
+	}
+	catalog.Total = 3
+	feature := &catalog.Sections[0].Rows[2]
+	feature.WorkspaceID = feature.ContentWorkspaceID
+	feature.Live, feature.Ambiguous = true, true
+	feature.AttachState, feature.CandidateGeneration = "ambiguous", "fixture-candidate-set"
+	for i, pane := range []string{"%2", "%3"} {
+		feature.Candidates = append(feature.Candidates, mobileproto.CatalogCandidate{
+			Selector: fmt.Sprintf("opaque-fixture-feature-%d", i+1), DisplayName: fmt.Sprintf("Feature terminal %d", i+1),
+			ContentWorkspaceID: feature.ContentWorkspaceID, OwnerHostID: identity.OwnerHostID, WorkspaceID: feature.WorkspaceID,
+			WorkspaceKind: "worktree", Session: "fixture-feature", Pane: pane,
+			ExpectedTarget: mobile.FixtureWorkspaceIdentity(identity.HubID, identity.OwnerHostID, identity.OwnerConfigGeneration, feature.WorkspaceID, "worktree", "fixture-feature", pane),
+		})
+	}
 	values := map[string]any{
 		"viewer-exchange.json": []any{
 			EventMessage{Type: "hello", Seq: 1, APIInstance: "api_fixture", ServerVersion: "fixture", Capabilities: []string{"catalog", "attention", "terminals", "workspace", "content", "uiRequestRelayV1", "shutdown"}},
 			EventMessage{Type: "viewer", Seq: 2, Viewer: &ViewerIdentity{ID: "api-viewer-fixture", Capability: "uiRequestRelayV1"}},
 			ViewerPresenceRequest{ViewerID: "api-viewer-fixture", Focused: true, Visible: true, Project: "fixture-project", Session: "fixture-echo", Viewport: Viewport{Width: 1200, Height: 800}, FocusedPane: 1},
 			ViewerPresenceResponse{Holder: true},
-			EventMessage{Type: "ui_request", Seq: 3, UIRequest: &UIRequestEvent{ID: "fixture-request", Action: uirequest.ActionOpen, Project: "fixture-project", Request: uirequest.Request{Viewer: "api-viewer-fixture", Version: 1, ID: "fixture-request", CreatedAt: now, TTLMs: 15000, Action: uirequest.ActionOpen, Origin: uirequest.Origin{WorkDir: "/workspace/fixture", TmuxSession: "fixture-echo"}, Target: uirequest.Target{Kind: "file", Value: "README.md"}}, Document: LayoutDocument{Layout: &state.PaneLayoutJSON{Split: &state.PaneSplitJSON{Axis: "cols", Ratio: 50, A: &state.PaneLayoutJSON{Kind: "terminal", Session: "fixture-echo"}, B: &state.PaneLayoutJSON{Kind: "doc", Tabs: []state.PaneDocTabJSON{{Path: "README.md"}}}}}}, ETag: `"synthetic-layout-revision"`, ExpiresAt: now.Add(15 * time.Second)}},
+			EventMessage{Type: "ui_request", Seq: 3, UIRequest: &UIRequestEvent{ID: "fixture-request", Action: uirequest.ActionOpen, Project: "fixture-project", Request: uirequest.Request{Viewer: "api-viewer-fixture", Version: 1, ID: "fixture-request", CreatedAt: now, TTLMs: 15000, Action: uirequest.ActionOpen, Origin: uirequest.Origin{WorkDir: "/workspace/fixture", TmuxSession: "fixture-echo", TmuxPane: "%1"}, Target: uirequest.Target{Kind: "file", Value: "README.md"}}, OriginPane: 1, Document: LayoutDocument{Layout: &state.PaneLayoutJSON{Split: &state.PaneSplitJSON{Axis: "cols", Ratio: 50, A: &state.PaneLayoutJSON{Kind: "terminal", Session: "fixture-echo", Attachment: &state.PaneAttachmentJSON{Selector: "opaque-fixture-selector", ExpectedTarget: identity}}, B: &state.PaneLayoutJSON{Kind: "doc", Tabs: []state.PaneDocTabJSON{{Path: "README.md"}}}}}}, ETag: `"synthetic-layout-revision"`, ExpiresAt: now.Add(15 * time.Second)}},
 			ViewerAckRequest{ViewerID: "api-viewer-fixture", ID: "fixture-request", Status: uirequest.StatusOpened},
 		},
 		"session-proof.json": []any{
@@ -56,16 +78,53 @@ func TestUIAPIFixtureCorpus(t *testing.T) {
 		"content-note.json":  contentservice.ReadResult{Kind: "note", Operation: "note", Workspace: "fixture-project", Target: "nt-123456", Revision: "fixture-note-v1", Note: &contentservice.NoteDTO{ID: "nt-123456", Title: "Fixture note", Content: "A note pane."}},
 		"content-diff.json":  contentservice.ReadResult{Kind: "diff", Operation: "working-tree", Workspace: "fixture-project", Target: "working-tree", Revision: "fixture-diff-v1", Diff: &contentservice.DiffDTO{Target: "working-tree", Snapshot: &contentservice.DiffSnapshotDTO{Files: []contentservice.DiffFileRowDTO{{Path: "README.md", Raw: "@@ -1 +1 @@\n-old\n+new\n"}}}}},
 		"content-tree.json":  contentservice.TreeResult{Kind: "tree", Workspace: "fixture-project", Dirs: []contentservice.TreeDir{{Path: "", Entries: []contentservice.TreeEntry{{Name: "README.md"}}}}},
-		"layout.json":        LayoutDocument{Layout: &state.PaneLayoutJSON{Split: &state.PaneSplitJSON{Axis: "cols", Ratio: 50, A: &state.PaneLayoutJSON{Kind: "terminal", Session: "fixture-echo"}, B: &state.PaneLayoutJSON{Kind: "doc", Tabs: []state.PaneDocTabJSON{{Path: "README.md", Mode: "rendered"}}}}}},
+		"layout.json":        LayoutDocument{Layout: &state.PaneLayoutJSON{Split: &state.PaneSplitJSON{Axis: "cols", Ratio: 50, A: &state.PaneLayoutJSON{Kind: "terminal", Session: "fixture-echo", Attachment: &state.PaneAttachmentJSON{Selector: "opaque-fixture-selector", ExpectedTarget: identity}}, B: &state.PaneLayoutJSON{Kind: "doc", Tabs: []state.PaneDocTabJSON{{Path: "README.md", Mode: "rendered"}}}}}},
 		"content-event.json": EventMessage{Type: "content", Seq: 4, Content: &ContentEvent{Resources: []ContentRef{{Project: "fixture-project", Kind: "file", Target: "README.md"}}}},
 		"status.json":        Status{APIVersion: 0, APIInstance: "api_fixture", ServerVersion: "fixture", PID: 4242, StartedAt: now, Listeners: []ListenerInfo{{Name: ListenerLocal, Network: "unix", Address: "/tmp/fixture/api.sock"}, {Name: ListenerBrowser, Network: "tcp", Address: "127.0.0.1:7861"}}, Clients: []ClientInfo{}, Terminals: []TerminalInfo{}},
 		"error.json":         ErrorBody{Error: ErrorDetail{Code: CodeUnauthenticated, Message: "Pair this browser with sidecar api open."}},
 		"pairing.json":       []any{map[string]any{"method": "POST", "path": "/api/v0/pairing/codes", "listener": "local", "request": PairingCodeRequest{Next: "/s/fixture"}, "response": PairingCode{Code: "synthetic-code", URL: "http://127.0.0.1:7861/pair#code=synthetic-code&next=%2Fs%2Ffixture", ExpiresAt: now.Add(time.Minute)}}, map[string]any{"method": "POST", "path": "/api/v0/pairing/exchange", "listener": "browser", "origin": "http://127.0.0.1:7861", "request": PairingExchangeRequest{Code: "synthetic-code", Next: "/s/fixture", PublicKey: fixtureBrowserPublicKey()}, "response": PairingExchange{RegistrationID: browserRegistrationID("http://127.0.0.1:7861", fixtureBrowserPublicKey()), Token: "synthetic-memory-token", ExpiresAt: now.Add(browserBearerTTL), Next: "/s/fixture"}}},
 	}
+	// The same layout document is read/written at the scope carried by presence
+	// and the relay proposal. These examples are synthetic, not live authority.
+	workspace := "/workspace/fixture:worktree:/workspace/feature"
+	exchange := values["viewer-exchange.json"].([]any)
+	worktreeExchange := append([]any(nil), exchange...)
+	presence := worktreeExchange[2].(ViewerPresenceRequest)
+	presence.Workspace = workspace
+	worktreeExchange[2] = presence
+	proposal := worktreeExchange[4].(EventMessage)
+	uiRequest := *proposal.UIRequest
+	uiRequest.Workspace = workspace
+	uiRequest.Request.Origin.WorkDir = "/workspace/feature"
+	proposal.UIRequest = &uiRequest
+	worktreeExchange[4] = proposal
+	values["viewer-worktree-exchange.json"] = worktreeExchange
+	values["layout-workspace-exchange.json"] = []any{
+		map[string]any{"method": "GET", "path": "/api/v0/projects/fixture-project/layout", "query": map[string]string{"workspace": workspace}, "response": LayoutDocument{}, "etag": `"synthetic-empty-layout"`},
+		map[string]any{"method": "PUT", "path": "/api/v0/projects/fixture-project/layout", "query": map[string]string{"workspace": workspace}, "if_match": `"synthetic-empty-layout"`, "request": uiRequest.Document, "response": uiRequest.Document, "etag": `"synthetic-worktree-layout"`},
+	}
+	secondIdentity := identity
+	secondIdentity.Pane = "%2"
+	firstHint := &state.PaneAttachmentJSON{Selector: "opaque-fixture-candidate-one", ExpectedTarget: identity}
+	secondHint := &state.PaneAttachmentJSON{Selector: "opaque-fixture-candidate-two", ExpectedTarget: secondIdentity}
+	candidates := LayoutDocument{Layout: &state.PaneLayoutJSON{Split: &state.PaneSplitJSON{Axis: "cols", Ratio: 50,
+		A: &state.PaneLayoutJSON{Kind: "terminal", Session: identity.Session, Attachment: firstHint},
+		B: &state.PaneLayoutJSON{Kind: "shell", Session: identity.Session, Attachment: secondHint}}}}
+	values["layout-candidates.json"] = candidates
+	values["viewer-candidates-exchange.json"] = []any{
+		map[string]any{"method": "PUT", "path": "/api/v0/projects/fixture-project/layout", "request": candidates, "response": candidates, "etag": `"synthetic-candidate-layout"`},
+		EventMessage{Type: "ui_request", Seq: 3, UIRequest: &UIRequestEvent{ID: "fixture-candidate-request", Action: uirequest.ActionLayout, Project: "fixture-project", OriginPane: 3,
+			Request: uirequest.Request{Version: 1, ID: "fixture-candidate-request", CreatedAt: now, TTLMs: 15000, Action: uirequest.ActionLayout,
+				Origin: uirequest.Origin{TmuxSession: identity.Session, TmuxPane: secondIdentity.Pane, WorkDir: "/workspace/fixture"}, Payload: json.RawMessage(`{"mode":"get"}`)},
+			Document: candidates, ETag: `"synthetic-candidate-layout"`, ExpiresAt: now.Add(15 * time.Second)}},
+		ViewerAckRequest{ViewerID: "api-viewer-fixture", ID: "fixture-candidate-request", Status: uirequest.StatusOpened},
+		ViewerAckResponse{Document: candidates, ETag: `"synthetic-candidate-layout"`},
+	}
 	project := workspacewire.Project{Key: "fixture-project", Name: "Fixture project", Path: "/workspace/fixture"}
 	mainCheckout := true
 	mainRow := mobileproto.CatalogRow{ID: "fixture-main-checkout", OwnerHostID: identity.OwnerHostID, ProjectID: project.Key, ProjectName: project.Name, WorkspaceKind: "worktree", DisplayName: "Main checkout", Path: project.Path, MainCheckout: &mainCheckout, Branch: "main", Status: "no session", Group: "No Session", AttachState: "unavailable", ObservedAt: row.ObservedAt}
 	mainCatalog := catalog
+	mainCatalog.Total = 1
 	mainCatalog.Sections = []mobileproto.CatalogSection{{Key: project.Key, Title: project.Name, Rows: []mobileproto.CatalogRow{mainRow}}}
 	values["workspace-main-checkout.json"] = workspacewire.Workspace{Project: project, Catalog: mainCatalog, Shells: []workspacewire.ShellRecord{}}
 	values["projects.json"] = workspacewire.Projects{Projects: []workspacewire.Project{project}}

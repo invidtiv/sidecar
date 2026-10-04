@@ -71,15 +71,26 @@ func LoadFixtures(dir string) (*FixtureBackend, error) {
 	}
 	for _, section := range backend.catalog.Sections {
 		for _, row := range section.Rows {
+			for _, candidate := range row.Candidates {
+				identity := candidate.ExpectedTarget
+				want := mobile.FixtureWorkspaceIdentity(identity.HubID, identity.OwnerHostID, identity.OwnerConfigGeneration, identity.WorkspaceID, identity.WorkspaceKind, identity.Session, identity.Pane)
+				if identity != want || identity.OwnerHostID != backend.catalog.OwnerHostID || identity.OwnerConfigGeneration != backend.catalog.OwnerConfigGeneration {
+					return nil, fmt.Errorf("fixture candidate %q must use the deterministic echo identity", candidate.Selector)
+				}
+				if _, exists := backend.targets[candidate.Selector]; exists {
+					return nil, fmt.Errorf("duplicate fixture target %q", candidate.Selector)
+				}
+				backend.targets[candidate.Selector] = want
+			}
 			if row.AttachState == "ready" && row.Target != "" && row.ExpectedTarget != nil {
 				if row.ExpectedTarget.OwnerHostID != backend.catalog.OwnerHostID || row.ExpectedTarget.OwnerConfigGeneration != backend.catalog.OwnerConfigGeneration {
 					return nil, fmt.Errorf("ready fixture targets must belong to the fixture owner/configuration")
 				}
-				want := mobile.FixtureIdentity(row.ExpectedTarget.HubID, row.ExpectedTarget.OwnerHostID, row.ExpectedTarget.OwnerConfigGeneration, row.ExpectedTarget.WorkspaceID, row.ExpectedTarget.Session, row.ExpectedTarget.Pane)
+				want := mobile.FixtureWorkspaceIdentity(row.ExpectedTarget.HubID, row.ExpectedTarget.OwnerHostID, row.ExpectedTarget.OwnerConfigGeneration, row.ExpectedTarget.WorkspaceID, row.ExpectedTarget.WorkspaceKind, row.ExpectedTarget.Session, row.ExpectedTarget.Pane)
 				if want != *row.ExpectedTarget {
 					return nil, fmt.Errorf("fixture target %q must use the deterministic echo identity", row.Target)
 				}
-				if _, exists := backend.targets[row.Target]; exists {
+				if _, exists := backend.targets[row.Target]; exists && (len(row.Candidates) != 1 || row.Candidates[0].Selector != row.Target) {
 					return nil, fmt.Errorf("duplicate fixture target %q", row.Target)
 				}
 				backend.targets[row.Target] = want

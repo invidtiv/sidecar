@@ -1,0 +1,90 @@
+[
+  {
+    "etag": "\"synthetic-empty-layout\"",
+    "method": "GET",
+    "path": "/api/v0/projects/fixture-project/layout",
+    "query": {
+      "workspace": "/workspace/fixture:worktree:/workspace/feature"
+    },
+    "response": {
+      "layout": null
+    }
+  },
+  {
+    "etag": "\"synthetic-worktree-layout\"",
+    "if_match": "\"synthetic-empty-layout\"",
+    "method": "PUT",
+    "path": "/api/v0/projects/fixture-project/layout",
+    "query": {
+      "workspace": "/workspace/fixture:worktree:/workspace/feature"
+    },
+    "request": {
+      "layout": {
+        "split": {
+          "axis": "cols",
+          "ratio": 50,
+          "a": {
+            "kind": "terminal",
+            "session": "fixture-echo",
+            "attachment": {
+              "selector": "opaque-fixture-selector",
+              "expected_target": {
+                "hub_id": "fixture",
+                "owner_host_id": "local:fixture",
+                "owner_config_generation": "fixture-config",
+                "workspace_id": "fixture-project",
+                "workspace_kind": "shell",
+                "session": "fixture-echo",
+                "pane": "%1",
+                "server_incarnation": "pid=42",
+                "target_generation": "7ec58660b39f129cfa46756f156eab44"
+              }
+            }
+          },
+          "b": {
+            "kind": "doc",
+            "tabs": [
+              {
+                "path": "README.md"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "response": {
+      "layout": {
+        "split": {
+          "axis": "cols",
+          "ratio": 50,
+          "a": {
+            "kind": "terminal",
+            "session": "fixture-echo",
+            "attachment": {
+              "selector": "opaque-fixture-selector",
+              "expected_target": {
+                "hub_id": "fixture",
+                "owner_host_id": "local:fixture",
+                "owner_config_generation": "fixture-config",
+                "workspace_id": "fixture-project",
+                "workspace_kind": "shell",
+                "session": "fixture-echo",
+                "pane": "%1",
+                "server_incarnation": "pid=42",
+                "target_generation": "7ec58660b39f129cfa46756f156eab44"
+              }
+            }
+          },
+          "b": {
+            "kind": "doc",
+            "tabs": [
+              {
+                "path": "README.md"
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+]

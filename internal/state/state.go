@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/marcus/sidecar/internal/mobileproto"
 )
 
 // State holds persistent user preferences.
@@ -230,11 +232,14 @@ type PaneLayoutJSON struct {
 	// one-tab list when IssueTabs is absent.
 	Issue  string `json:"issue,omitempty"`
 	Scroll int    `json:"scroll,omitempty"`
-	// Session is a live leaf's durable target selector — the tmux session name
-	// it owns. It is never a tmux pane id: pane ids are reassigned by the
+	// Session is the exact tmux session name, the authoritative routing key.
+	// It is never an opaque catalog selector or a tmux pane id: pane ids are reassigned by the
 	// server and mean nothing after a restart, so a leaf that persisted one
 	// would reattach to whatever now holds that id.
 	Session string `json:"session,omitempty"`
+	// Attachment is an untrusted catalog hint. Session remains the routing key;
+	// a client must resolve/revalidate this hint before opening a terminal.
+	Attachment *PaneAttachmentJSON `json:"attachment,omitempty"`
 	// Name is a live leaf's display title (a terminal split's header). Empty
 	// on every other kind. Additive: older files omit it.
 	Name string `json:"name,omitempty"`
@@ -1696,4 +1701,11 @@ func SetProjectSwitcherView(label string) error {
 	current.ProjectSwitcherView = label
 	mu.Unlock()
 	return Save()
+}
+
+// PaneAttachmentJSON preserves a catalog candidate without interpreting its
+// opaque selector or granting terminal authority.
+type PaneAttachmentJSON struct {
+	Selector       string                     `json:"selector"`
+	ExpectedTarget mobileproto.TargetIdentity `json:"expected_target"`
 }

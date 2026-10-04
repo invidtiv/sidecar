@@ -481,6 +481,10 @@
       "CatalogCandidate": {
         "additionalProperties": false,
         "properties": {
+          "content_workspace_id": {
+            "description": "Same project content selector as the owning row. Pass unchanged as workspace; never derive it from opaque selectors or terminal identity.",
+            "type": "string"
+          },
           "display_name": {
             "type": "string"
           },
@@ -645,6 +649,10 @@
             ]
           },
           "changed_at": {
+            "type": "string"
+          },
+          "content_workspace_id": {
+            "description": "Selector for project content, tree, layout and viewer-presence routes. Empty or omitted selects the configured root; nonempty names the owning linked worktree. Omitted on hub-remapped remote rows. Independent of terminal expected_target.",
             "type": "string"
           },
           "display_name": {
@@ -2054,6 +2062,9 @@
           "active": {
             "type": "integer"
           },
+          "attachment": {
+            "$ref": "#/components/schemas/PaneAttachmentJSON"
+          },
           "box": {
             "$ref": "#/components/schemas/Box"
           },
@@ -2092,6 +2103,22 @@
           "cell",
           "kind",
           "pane"
+        ],
+        "type": "object"
+      },
+      "PaneAttachmentJSON": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_target": {
+            "$ref": "#/components/schemas/TargetIdentity"
+          },
+          "selector": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "selector",
+          "expected_target"
         ],
         "type": "object"
       },
@@ -2166,6 +2193,9 @@
         "properties": {
           "active": {
             "type": "integer"
+          },
+          "attachment": {
+            "$ref": "#/components/schemas/PaneAttachmentJSON"
           },
           "diffTabs": {
             "items": {
@@ -3319,6 +3349,9 @@
           "id": {
             "type": "string"
           },
+          "origin_pane": {
+            "type": "integer"
+          },
           "project": {
             "type": "string"
           },
@@ -3371,6 +3404,9 @@
             "type": "boolean"
           },
           "sessionsRow": {
+            "type": "string"
+          },
+          "tmuxPane": {
             "type": "string"
           },
           "tmuxSession": {
@@ -5410,6 +5446,7 @@
             }
           },
           {
+            "description": "Pass the catalog row or candidate's content_workspace_id unchanged. Empty or omitted selects the configured project root; a nonempty selector names its linked worktree. Do not derive it from opaque row IDs or terminal expected_target. Legacy durable shell/worktree IDs remain accepted. Remote content forwarding is unavailable.",
             "in": "query",
             "name": "workspace",
             "required": false,
@@ -5547,6 +5584,7 @@
             }
           },
           {
+            "description": "Pass the catalog row or candidate's content_workspace_id unchanged. Empty or omitted selects the configured project root; a nonempty selector names its linked worktree. Do not derive it from opaque row IDs or terminal expected_target. Legacy durable shell/worktree IDs remain accepted. Remote content forwarding is unavailable.",
             "in": "query",
             "name": "workspace",
             "required": false,
@@ -5665,6 +5703,15 @@
             }
           },
           {
+            "description": "Pass the catalog row or candidate's content_workspace_id unchanged. Empty or omitted selects the configured project root; a nonempty selector names its linked worktree. Do not derive it from opaque row IDs or terminal expected_target. Legacy durable shell/worktree IDs remain accepted. Remote content forwarding is unavailable. Layouts are isolated per credential and canonical workspace root, matching viewer presence and relay.",
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "maxLength": 4096,
+              "type": "string"
+            }
+          },
+          {
             "in": "header",
             "name": "If-None-Match",
             "required": false,
@@ -5739,6 +5786,15 @@
             }
           },
           {
+            "description": "Pass the catalog row or candidate's content_workspace_id unchanged. Empty or omitted selects the configured project root; a nonempty selector names its linked worktree. Do not derive it from opaque row IDs or terminal expected_target. Legacy durable shell/worktree IDs remain accepted. Remote content forwarding is unavailable. Layouts are isolated per credential and canonical workspace root, matching viewer presence and relay.",
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "maxLength": 4096,
+              "type": "string"
+            }
+          },
+          {
             "in": "header",
             "name": "If-None-Match",
             "required": false,
@@ -5805,6 +5861,15 @@
             "name": "project",
             "required": true,
             "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Pass the catalog row or candidate's content_workspace_id unchanged. Empty or omitted selects the configured project root; a nonempty selector names its linked worktree. Do not derive it from opaque row IDs or terminal expected_target. Legacy durable shell/worktree IDs remain accepted. Remote content forwarding is unavailable. Layouts are isolated per credential and canonical workspace root, matching viewer presence and relay.",
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "maxLength": 4096,
               "type": "string"
             }
           },
@@ -6299,6 +6364,7 @@
             }
           },
           {
+            "description": "Pass the catalog row or candidate's content_workspace_id unchanged. Empty or omitted selects the configured project root; a nonempty selector names its linked worktree. Do not derive it from opaque row IDs or terminal expected_target. Legacy durable shell/worktree IDs remain accepted. Remote content forwarding is unavailable.",
             "in": "query",
             "name": "workspace",
             "schema": {
@@ -6382,6 +6448,7 @@
             }
           },
           {
+            "description": "Pass the catalog row or candidate's content_workspace_id unchanged. Empty or omitted selects the configured project root; a nonempty selector names its linked worktree. Do not derive it from opaque row IDs or terminal expected_target. Legacy durable shell/worktree IDs remain accepted. Remote content forwarding is unavailable.",
             "in": "query",
             "name": "workspace",
             "schema": {

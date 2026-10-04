@@ -57,9 +57,12 @@ export XDG_STATE_HOME="$root/state"
 export TMUX_TMPDIR="$root/tmux"
 export SIDECAR_ISOLATED_STATE=1
 config="$root/config/config.json"
-printf '{"projects":{"list":[{"name":"proof","path":"%s"}]}}\n' "$root/project" > "$config"
+# Keep a configured/registered alias while catalog IDs use the canonical root
+# (td-cfc0ab). Both spellings remain inside this owned temporary tree.
+ln -s "$root/project" "$root/project-alias"
+printf '{"projects":{"list":[{"name":"proof","path":"%s"}]}}\n' "$root/project-alias" > "$config"
 mkdir -p "$root/state/sidecar/projects/proof"
-printf '{"path":"%s"}\n' "$root/project" > "$root/state/sidecar/projects/proof/meta.json"
+printf '{"path":"%s"}\n' "$root/project-alias" > "$root/state/sidecar/projects/proof/meta.json"
 git init -q "$root/project"
 printf "# Content proof\n" > "$root/project/README.md"
 git -C "$root/project" add README.md
@@ -75,7 +78,7 @@ go build -o "$root/uiviewerproof" ./internal/tools/uiviewerproof
 sc() { "$root/sidecar" -config "$config" "$@"; }
 
 step "create a managed shell on the private tmux server"
-created=$(cd "$root/project" && sc create shell --project "$root/project" --name "UI API proof" --json --wait 0)
+created=$(cd "$root/project" && sc create shell --project "$root/project-alias" --name "UI API proof" --json --wait 0)
 session=$(printf '%s' "$created" | python3 -c 'import json,sys; print(json.load(sys.stdin)["shell"]["session"])')
 env -u TMUX -u TMUX_PANE "$tmux_bin" -S "$socket" has-session -t "$session" || fail "shell $session is not on the private server"
 echo "session=$session socket=$socket"
@@ -136,6 +139,21 @@ timeout 40 "$root/uicontentproof" -socket "$api_sock" -root "$root/project"
 
 step "Focused API viewer: real CLI open/layout, scoped delivery and acknowledgements"
 timeout 50 "$root/uiviewerproof" -url "$base" -socket "$api_sock" -root "$root/project" -project proof -sidecar "$root/sidecar" -config "$config" -session "$session"
+
+step "Worktree API viewer: public scoped layout, real CLI open/layout and isolated main preference"
+git -C "$root/project" worktree add -qb viewer-worktree "$root/worktree"
+worktree_created=$(cd "$root/worktree" && sc create shell --project "$root/project" --cwd "$root/worktree" --name "Worktree viewer proof" --json --wait 0)
+printf '%s' "$worktree_created" > "$root/worktree-created.json"
+python3 - "$root/worktree-created.json" "$root/state/sidecar/projects/proof/shells.json" "$root/worktree" <<'PYWORKDIR'
+import json, sys
+created = json.load(open(sys.argv[1]))["shell"]
+assert created["workDir"] == sys.argv[3], created
+saved = next(s for s in json.load(open(sys.argv[2]))["shells"] if s["tmuxName"] == created["session"])
+assert saved["workDir"] == sys.argv[3], saved
+print("create --cwd ok: exact workDir persisted in shell manifest")
+PYWORKDIR
+worktree_session=$(printf '%s' "$worktree_created" | python3 -c 'import json,sys; print(json.load(sys.stdin)["shell"]["session"])')
+timeout 50 "$root/uiviewerproof" -url "$base" -socket "$api_sock" -root "$root/worktree" -project-root "$root/project" -workspace "$root/project:worktree:$root/worktree" -project proof -sidecar "$root/sidecar" -config "$config" -session "$worktree_session" -tmux-socket "$socket"
 
 step "Browser listener guards"
 code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: evil.example' "$base/api/v0/hello")

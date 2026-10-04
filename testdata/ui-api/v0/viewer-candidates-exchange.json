@@ -1,0 +1,228 @@
+[
+  {
+    "etag": "\"synthetic-candidate-layout\"",
+    "method": "PUT",
+    "path": "/api/v0/projects/fixture-project/layout",
+    "request": {
+      "layout": {
+        "split": {
+          "axis": "cols",
+          "ratio": 50,
+          "a": {
+            "kind": "terminal",
+            "session": "fixture-echo",
+            "attachment": {
+              "selector": "opaque-fixture-candidate-one",
+              "expected_target": {
+                "hub_id": "fixture",
+                "owner_host_id": "local:fixture",
+                "owner_config_generation": "fixture-config",
+                "workspace_id": "fixture-project",
+                "workspace_kind": "shell",
+                "session": "fixture-echo",
+                "pane": "%1",
+                "server_incarnation": "pid=42",
+                "target_generation": "7ec58660b39f129cfa46756f156eab44"
+              }
+            }
+          },
+          "b": {
+            "kind": "shell",
+            "session": "fixture-echo",
+            "attachment": {
+              "selector": "opaque-fixture-candidate-two",
+              "expected_target": {
+                "hub_id": "fixture",
+                "owner_host_id": "local:fixture",
+                "owner_config_generation": "fixture-config",
+                "workspace_id": "fixture-project",
+                "workspace_kind": "shell",
+                "session": "fixture-echo",
+                "pane": "%2",
+                "server_incarnation": "pid=42",
+                "target_generation": "7ec58660b39f129cfa46756f156eab44"
+              }
+            }
+          }
+        }
+      }
+    },
+    "response": {
+      "layout": {
+        "split": {
+          "axis": "cols",
+          "ratio": 50,
+          "a": {
+            "kind": "terminal",
+            "session": "fixture-echo",
+            "attachment": {
+              "selector": "opaque-fixture-candidate-one",
+              "expected_target": {
+                "hub_id": "fixture",
+                "owner_host_id": "local:fixture",
+                "owner_config_generation": "fixture-config",
+                "workspace_id": "fixture-project",
+                "workspace_kind": "shell",
+                "session": "fixture-echo",
+                "pane": "%1",
+                "server_incarnation": "pid=42",
+                "target_generation": "7ec58660b39f129cfa46756f156eab44"
+              }
+            }
+          },
+          "b": {
+            "kind": "shell",
+            "session": "fixture-echo",
+            "attachment": {
+              "selector": "opaque-fixture-candidate-two",
+              "expected_target": {
+                "hub_id": "fixture",
+                "owner_host_id": "local:fixture",
+                "owner_config_generation": "fixture-config",
+                "workspace_id": "fixture-project",
+                "workspace_kind": "shell",
+                "session": "fixture-echo",
+                "pane": "%2",
+                "server_incarnation": "pid=42",
+                "target_generation": "7ec58660b39f129cfa46756f156eab44"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "ui_request": {
+      "id": "fixture-candidate-request",
+      "action": "layout",
+      "project": "fixture-project",
+      "request": {
+        "version": 1,
+        "id": "fixture-candidate-request",
+        "createdAt": "2026-10-03T00:00:00Z",
+        "ttlMs": 15000,
+        "origin": {
+          "tmuxSession": "fixture-echo",
+          "tmuxPane": "%2",
+          "namespace": "",
+          "projectKey": "",
+          "workDir": "/workspace/fixture",
+          "pid": 0
+        },
+        "action": "layout",
+        "target": {
+          "kind": "",
+          "value": "",
+          "line": 0
+        },
+        "options": {},
+        "payload": {
+          "mode": "get"
+        }
+      },
+      "origin_pane": 3,
+      "document": {
+        "layout": {
+          "split": {
+            "axis": "cols",
+            "ratio": 50,
+            "a": {
+              "kind": "terminal",
+              "session": "fixture-echo",
+              "attachment": {
+                "selector": "opaque-fixture-candidate-one",
+                "expected_target": {
+                  "hub_id": "fixture",
+                  "owner_host_id": "local:fixture",
+                  "owner_config_generation": "fixture-config",
+                  "workspace_id": "fixture-project",
+                  "workspace_kind": "shell",
+                  "session": "fixture-echo",
+                  "pane": "%1",
+                  "server_incarnation": "pid=42",
+                  "target_generation": "7ec58660b39f129cfa46756f156eab44"
+                }
+              }
+            },
+            "b": {
+              "kind": "shell",
+              "session": "fixture-echo",
+              "attachment": {
+                "selector": "opaque-fixture-candidate-two",
+                "expected_target": {
+                  "hub_id": "fixture",
+                  "owner_host_id": "local:fixture",
+                  "owner_config_generation": "fixture-config",
+                  "workspace_id": "fixture-project",
+                  "workspace_kind": "shell",
+                  "session": "fixture-echo",
+                  "pane": "%2",
+                  "server_incarnation": "pid=42",
+                  "target_generation": "7ec58660b39f129cfa46756f156eab44"
+                }
+              }
+            }
+          }
+        }
+      },
+      "etag": "\"synthetic-candidate-layout\"",
+      "expires_at": "2026-10-03T00:00:15Z"
+    },
+    "type": "ui_request",
+    "seq": 3,
+    "api_version": 0
+  },
+  {
+    "viewer_id": "api-viewer-fixture",
+    "id": "fixture-candidate-request",
+    "status": "opened"
+  },
+  {
+    "document": {
+      "layout": {
+        "split": {
+          "axis": "cols",
+          "ratio": 50,
+          "a": {
+            "kind": "terminal",
+            "session": "fixture-echo",
+            "attachment": {
+              "selector": "opaque-fixture-candidate-one",
+              "expected_target": {
+                "hub_id": "fixture",
+                "owner_host_id": "local:fixture",
+                "owner_config_generation": "fixture-config",
+                "workspace_id": "fixture-project",
+                "workspace_kind": "shell",
+                "session": "fixture-echo",
+                "pane": "%1",
+                "server_incarnation": "pid=42",
+                "target_generation": "7ec58660b39f129cfa46756f156eab44"
+              }
+            }
+          },
+          "b": {
+            "kind": "shell",
+            "session": "fixture-echo",
+            "attachment": {
+              "selector": "opaque-fixture-candidate-two",
+              "expected_target": {
+                "hub_id": "fixture",
+                "owner_host_id": "local:fixture",
+                "owner_config_generation": "fixture-config",
+                "workspace_id": "fixture-project",
+                "workspace_kind": "shell",
+                "session": "fixture-echo",
+                "pane": "%2",
+                "server_incarnation": "pid=42",
+                "target_generation": "7ec58660b39f129cfa46756f156eab44"
+              }
+            }
+          }
+        }
+      }
+    },
+    "etag": "\"synthetic-candidate-layout\""
+  }
+]

@@ -34,7 +34,33 @@ func (s *Service) LookupProject(ctx context.Context, project, workspace string) 
 	if !ok || canonical(projectKey) != root {
 		return Workspace{}, Rejected("workspace does not belong to project %q", project)
 	}
-	return s.LookupWorkspace(ctx, workspace)
+	ws, err := s.LookupWorkspace(ctx, workspace)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if ws.Kind == kindWorktree || ws.Root != root {
+		// Git keeps registrations for directories deleted outside Git. Resolve
+		// the checkout itself too: a recreated directory or substituted symlink
+		// must not borrow that registration (or redirect a layout store key).
+		expectedPath := ws.Root
+		if ws.Kind == kindWorktree {
+			expectedPath = ws.Key
+		}
+		expected, err := filepath.Abs(expectedPath)
+		if err != nil {
+			return Workspace{}, Rejected("workspace no longer owns this worktree")
+		}
+		out, err := s.gitOutput(ctx, expected, "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir")
+		parts := strings.Split(strings.TrimSpace(string(out)), "\n")
+		if err != nil || len(parts) != 2 || filepath.Clean(parts[0]) != filepath.Clean(expected) || ws.Root != filepath.Clean(expected) {
+			return Workspace{}, Rejected("workspace no longer owns this worktree")
+		}
+		common, err := s.gitOutput(ctx, root, "rev-parse", "--path-format=absolute", "--git-common-dir")
+		if err != nil || canonical(parts[1]) != canonical(strings.TrimSpace(string(common))) {
+			return Workspace{}, Rejected("workspace no longer owns this worktree")
+		}
+	}
+	return ws, nil
 }
 
 // ReadProject applies the HTTP project's path boundary before the ordinary

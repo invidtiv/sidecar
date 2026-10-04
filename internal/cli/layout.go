@@ -26,7 +26,8 @@ func layoutCommand() *Command {
 			"mutually exclusive with --shell and --project.\n\n" +
 			"A layout that escapes the grid vocabulary reports \"grid\": null plus the raw\n" +
 			"tree; it is still valid. Human output is a small ASCII sketch plus a table;\n" +
-			"--json passes the payload through unchanged, which is the contract.\n\n" +
+			"--json passes the payload through unchanged, including opaque API-viewer\n" +
+			"attachment hints on live leaves. Those hints grant no terminal authority.\n\n" +
 			"Unlike open, a layout request never queues: when this shell is not on\n" +
 			"screen the request declines instead (exit 4), because a stale answer is\n" +
 			"worse than a refusal.\n\n" +
@@ -114,7 +115,9 @@ func applyLayoutSubcommand() *Command {
 			"{\"kind\":\"primary\"}, a split terminal as {\"kind\":\"shell\",\"session\":\n" +
 			"\"<tmux-session>\"}. A spec omitting a live terminal declines naming the\n" +
 			"session — apply never destroys one. Passive panes not named are closed\n" +
-			"freely (their content re-opens). Pass `-` to read the spec from stdin.\n\n" +
+			"freely (their content re-opens). Carried API-viewer leaves retain their saved\n" +
+			"attachment hints; a spec never creates or replaces them. Pass `-` to read\n" +
+			"the spec from stdin.\n\n" +
 			"--pane opens panes ADDITIVELY without closing anything. Each value is one\n" +
 			"descriptor as its JSON object verbatim:\n\n" +
 			"  {\"kind\":\"file\",\"targets\":[\"path:line\",...],\"at\":\"2.1\"}\n" +
