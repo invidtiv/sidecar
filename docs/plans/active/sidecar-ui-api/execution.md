@@ -58,7 +58,7 @@ The status values are `queued`, `running`, `review`, `fixing`, `merged` and `blo
 | U1-f SDK adopts v1 | td-820df7 | sidecar-ui | Codex | U1-a, U1-d | running (Codex, ~/code/sidecar-ui-u1f-sdk, branch u1f-sdk), against the u1d and ui-u1a-events branches |
 | U1-g iOS adopts presence and events | td-fde8cf | sidecar-mobile | Codex | U1-a, U1-d | running (Codex, ~/code/sidecar-mobile-u1g-presence, branch u1g-presence); presence first against the u1d branch, events after U1-a |
 | U1-i persist browser sessions | td-165353 | sidecar | Codex | U1-a, U1-b merged (both touch internal/uiapi) | running (Codex, ~/code/sidecar-u1i-sessions, branch u1i-sessions), plus td-affb04 (stale --ui root) |
-| U1-e2 web app polish | td-71e0e5 | sidecar-ui | Codex | U1-e | review (Codex reviewer, shell "rev U1-e2"; branch u1e2-polish @56fa332) |
+| U1-e2 web app polish | td-71e0e5 | sidecar-ui | Codex | U1-e | merged (sidecar-ui 5e0ecb2) |
 | U1-h security review and three-viewer proof | td-295605 | all | Claude, then Codex | U1-a, U1-d, U1-f | security review running (Claude) on main c75857ac; three-viewer proof after U1-f |
 | U2-a core extraction | td-c709a9 | sidecar | Codex | U0-a | merged (d95b66f5) |
 | U2-b workspace resources and operations API | td-eb3d80 | sidecar | Codex | U2-a | running |
