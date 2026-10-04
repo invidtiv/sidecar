@@ -19,15 +19,24 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 )
+
+var hostingSocket string
+
+// RememberHostingServer records the outer pane's namespace before main clears
+// TMUX. Pane IDs are unique only within one server. This performs no I/O.
+func RememberHostingServer() {
+	hostingSocket, _, _ = strings.Cut(os.Getenv("TMUX"), ",")
+}
 
 // SocketPath returns the path of the default tmux socket this process would use.
 func SocketPath() string {
 	return filepath.Join(tmpDir(), "tmux-"+strconv.Itoa(os.Getuid()), "default")
 }
 
-// HostingPane returns the tmux pane ID this process is running in, from
-// TMUX_PANE. Empty when sidecar was launched outside tmux.
+// HostingPane returns the tmux pane hosting this process only when it belongs
+// to the server Sidecar addresses. Empty outside tmux or across namespaces.
 //
 // main unsets TMUX early so sidecar's own tmux sessions stay independent of
 // the outer one, but it deliberately leaves TMUX_PANE alone: which pane hosts
@@ -36,6 +45,9 @@ func SocketPath() string {
 // bound to the hosting pane resizes the window sidecar itself draws in), and
 // the environment keeps that answer with no subprocess and no startup cost.
 func HostingPane() string {
+	if hostingSocket != "" && filepath.Clean(hostingSocket) != filepath.Clean(SocketPath()) {
+		return ""
+	}
 	return os.Getenv("TMUX_PANE")
 }
 
