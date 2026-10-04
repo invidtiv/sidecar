@@ -83,6 +83,9 @@ func editAtPath(path string, fallback *Snapshot, identityRemoval, requireExistin
 	defer releaseLock(lock)
 	m, readErr := readManifest(path)
 	if readErr != nil {
+		if err := CheckWritableVersion(m.Version); err != nil {
+			return Snapshot{}, false, err
+		}
 		switch {
 		case fallback != nil:
 			m = *fallback

@@ -51,7 +51,7 @@ func TestEditAtPathNoOpReturnsFreshSnapshotWithoutWriting(t *testing.T) {
 }
 
 func TestEditAtPathRecoveryIsExplicitAndNeverOverridesFutureSchema(t *testing.T) {
-	for _, content := range []string{"corrupt", `{"version":99,"shells":[],"future":true}`} {
+	for _, content := range []string{"corrupt", `{"version":99,"shells":[],"future":true}`, `{"version":99,"shells":{"future-format":true}}`, `{"shells":{"future-format":true},"version":99}`} {
 		t.Run(content, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "shells.json")
 			if err := os.WriteFile(path, []byte(content), 0644); err != nil {

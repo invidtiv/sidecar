@@ -684,7 +684,10 @@ func readManifest(path string) (manifest, error) {
 	}
 	var m manifest
 	if err := json.Unmarshal(data, &m); err != nil {
-		return manifest{}, err
+		// A valid JSON document may carry a known version field alongside a
+		// future shape for shells. Keep that version so recovery cannot mistake
+		// an incompatible schema for corrupt current-schema bytes.
+		return m, err
 	}
 	return m, nil
 }
