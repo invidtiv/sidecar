@@ -100,9 +100,7 @@ The only v0 scope is `full`. Narrower scopes arrive with the routes they protect
 
 HTTP calls from a paired origin send `Authorization: Bearer <token>`. Pairing an origin again rotates its token. Browsers cannot set headers on a WebSocket, so a paired origin first gets a ticket with `POST /api/v0/ws-tickets` (bearer-authenticated, single-use, 30-second expiry). It then connects with `?ticket=<ticket>`. A ticket is bound to the listener and the origin it was issued to. The same-origin UI does the same with its session token. A non-browser client may instead send `Authorization: Bearer <token>` on the upgrade itself. It either sends no `Origin` or sends the origin that token is bound to (the paired origin, or for a session token the origin that exchanged it); any other `Origin` closes with `4403`.
 
-## HTTP routes
-
-### Workspace operation core
+## Workspace operation core
 
 Workspace writes are prepared for U2 through `workspaceops.Service`, a transport-neutral service with no viewer, selection, or in-flight operation state. The CLI, project Workspaces TUI, and global Sessions view use the same local operation boundary; remote mutations call it on the owning host through the CLI. U2-a adds no HTTP routes, capabilities, or wire fields.
 
@@ -111,6 +109,8 @@ Worktree creation uses a confirmed `WorktreePlan`: plan, begin (Git execution an
 Shell create, rename, delete, and tombstone restore, and worktree display-name rename and deletion, go through that service. Shell persistence and locking live only in `shellstate`; the plugin's `ShellManifest` is a compatibility projection with local revision tracking. Tombstone restore restores a durable shell record without starting tmux; cold session recreation remains the existing `sessionrestore` executor. Worktree launch reconnects an existing session rather than creating another one. No operation restarts the tmux server.
 
 `workspaceops.AgentLauncher` shares readiness and provider start sequencing, retaining each caller's resolved argv, deadlines, target policy, and error wording. Reconnecting worktree sessions skip shell-readiness waiting. `agentresolve.ResolveTarget` accepts explicit caller context and a target lookup adapter, so headless callers share the CLI's target-required and project/shell scoping rules. `workspacelist.Projected`, `SectionsAt`, the pin helpers, and `Hidden` provide state-free list policy; clocks, pins, and source-resolved visibility facts are caller inputs. Human selection, scrolling, collapsed sections, and presentation remain in their models.
+
+## HTTP routes
 
 All JSON, encoded exactly as the CLI's `--json` output: one object and a trailing newline. Successful responses are `200`. Errors are `{"error": {"code": "snake_case_code", "message": "One human sentence that says what to do."}}` with a fitting status. Codes match the CLI's refusal vocabulary where one exists. The API adds these:
 
