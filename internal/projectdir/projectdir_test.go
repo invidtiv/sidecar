@@ -578,3 +578,135 @@ func TestResolveRegistryContentionIsBounded(t *testing.T) {
 		t.Fatalf("refused registration created entries: %v", entries)
 	}
 }
+
+func TestResolveCaseAliasesDoNotSplitOrMergeDistinctDirectories(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	parent := t.TempDir()
+	root := filepath.Join(parent, "CaseProject")
+	if err := os.Mkdir(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	lower := filepath.Join(parent, "caseproject")
+	if _, err := os.Stat(lower); err != nil {
+		if err = os.Mkdir(lower, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first, err := Resolve(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := Resolve(lower)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, _ := os.Stat(root)
+	b, _ := os.Stat(lower)
+	if os.SameFile(a, b) {
+		if first != second {
+			t.Fatalf("case aliases split one project: %s != %s", first, second)
+		}
+		if got := LookupAll([]string{lower}); got[lower] != first {
+			t.Fatalf("bulk case alias lookup: %+v", got)
+		}
+		if entries := LookupEquivalent(lower); len(entries) != 1 || entries[0].Dir != first {
+			t.Fatalf("case alias shell lookup: %+v", entries)
+		}
+	} else if first == second {
+		t.Fatal("distinct case-sensitive projects merged")
+	}
+}
+
+func TestResolveRetargetedAliasDoesNotClaimPreviousProject(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	first, second := t.TempDir(), t.TempDir()
+	alias := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(first, alias); err != nil {
+		t.Fatal(err)
+	}
+	original, err := Resolve(alias)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Rename(first, first+"-moved"); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(first + "-moved") }()
+	if err = os.Remove(alias); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Symlink(second, alias); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := Lookup(alias); ok {
+		t.Fatal("retargeted alias exact lookup inherited previous registration")
+	}
+	if got := LookupAll([]string{alias, second}); len(got) != 0 {
+		t.Fatalf("bulk lookup inherited previous registration: %+v", got)
+	}
+	if entries := LookupEquivalent(second); len(entries) != 0 {
+		t.Fatalf("retargeted alias claims unrelated project: %+v", entries)
+	}
+	if got := LookupAll([]string{first}); got[first] != original {
+		t.Fatalf("bulk moved registration lost pinned identity: %+v", got)
+	}
+	old := LookupEquivalent(first)
+	if len(old) != 1 || old[0].Dir != original || old[0].Registered != resolvedPath(first) {
+		t.Fatalf("old registration lost its pinned identity: %+v", old)
+	}
+	replacement, err := Resolve(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if original == replacement {
+		t.Fatal("new project inherited moved project's manifest")
+	}
+	if got, err := Resolve(alias); err != nil || got != replacement {
+		t.Fatalf("retargeted alias resolves old manifest: %q %v", got, err)
+	}
+}
+
+func TestResolvePinsLegacyAliasWithoutChangingReadOnlyLookup(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	root := t.TempDir()
+	alias := filepath.Join(t.TempDir(), "alias")
+	chain := filepath.Join(t.TempDir(), "chain")
+	if err := os.Symlink(root, alias); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(alias, chain); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := Resolve(chain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Retain the old on-disk shape, then adopt it through the creating resolver.
+	if err = writeProjectMeta(dir, projectMeta{Path: chain}); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := Lookup(root); !ok || got != dir {
+		t.Fatalf("legacy chain lookup: %q %v", got, ok)
+	}
+	before, err := readMeta(dir)
+	if err != nil || before.ResolvedRoot != "" {
+		t.Fatalf("lookup mutated legacy metadata: %+v %v", before, err)
+	}
+	if got, err := Resolve(root); err != nil || got != dir {
+		t.Fatalf("legacy chain reuse: %q %v", got, err)
+	}
+	after, err := readMeta(dir)
+	if err != nil || after.ResolvedRoot != resolvedPath(root) || after.Path != chain {
+		t.Fatalf("legacy identity was not pinned: %+v %v", after, err)
+	}
+	other := t.TempDir()
+	if err = os.Remove(alias); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Symlink(other, alias); err != nil {
+		t.Fatal(err)
+	}
+	if entries := LookupEquivalent(other); len(entries) != 0 {
+		t.Fatalf("adopted alias chain inherited old state: %+v", entries)
+	}
+}
