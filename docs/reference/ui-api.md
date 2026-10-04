@@ -90,7 +90,7 @@ Success, `200`. `token` is the contract; `next` is additive (the validated path,
 
 Sessions are kept in memory in v0, so a server restart means pairing again, and a client that gets `401 unauthenticated` with a stored token should discard it and ask the user to run `sidecar api open`. Persisting sessions is a later decision.
 
-`sidecar api pair --revoke-sessions` signs out browser sessions without a restart (`DELETE /api/v0/pairing/sessions`, Local only). With `--origin URL` (`?origin=URL`) it revokes only the sessions bound to that origin. A revoked token gets `401 unauthenticated` on its next request, tickets it issued and has not redeemed stop working, and every terminal it opened, directly or through a ticket, closes at once with `4401`. Paired origins are not sessions: their tokens survive, and `--revoke URL` manages them.
+`sidecar api pair --revoke-sessions` signs out browser sessions without a restart (`DELETE /api/v0/pairing/sessions`, Local only). With `--origin URL` (`?origin=URL`) it revokes only the sessions bound to that origin. A revoked token gets `401 unauthenticated` on its next request, tickets it issued and has not redeemed stop working, and every terminal it opened, directly or through a ticket, closes at once with `4401`, including streams whose session token was evicted from the bounded in-memory session store. `revoked` counts stored session tokens; `terminals_closed` also includes those older streams. Paired origins are not sessions: their tokens survive, and `--revoke URL` manages them.
 
 ### Another origin (an embedding app)
 

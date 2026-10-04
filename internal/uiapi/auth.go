@@ -140,7 +140,7 @@ func (a *authStore) revokeSessions(origin string) map[string]bool {
 		}
 	}
 	for key, g := range a.tickets {
-		if revoked[g.client] {
+		if strings.HasPrefix(g.client, "session:") && (origin == "" || g.origin == origin) {
 			delete(a.tickets, key)
 		}
 	}

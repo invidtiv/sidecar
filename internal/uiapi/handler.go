@@ -579,7 +579,7 @@ func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request, _ 
 	s.credentialMu.Lock()
 	defer s.credentialMu.Unlock()
 	revoked := s.auth.revokeSessions(origin)
-	closed := s.clients.revoke(revoked)
+	closed := s.clients.revoke(s.clients.sessionKeys(origin))
 	writeJSON(w, http.StatusOK, SessionRevocation{Origin: origin, Revoked: len(revoked), TerminalsClosed: closed})
 }
 

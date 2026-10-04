@@ -606,3 +606,36 @@ func TestOriginRevocationClosesTerminalsAndInvalidatesTickets(t *testing.T) {
 		t.Fatalf("old authorization issued a new ticket: %d %s", w.Code, w.Body.String())
 	}
 }
+
+func TestSessionRevocationClosesAnEvictedSessionsTerminal(t *testing.T) {
+	h := newHarness(t)
+	token := h.pairBrowser()
+	conn, err := h.dialBrowser(t, "", http.Header{"Authorization": {"Bearer " + token}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.CloseNow() }()
+	writeText(t, conn, `{"ready":true}`)
+	readText(t, conn)
+	// The bounded session store evicts its oldest token but its established
+	// stream still exists. Sign-out must cover that stream as well.
+	h.s.auth.mu.Lock()
+	oldest := h.s.auth.sessions[hashToken(token)]
+	oldest.created = h.s.opts.Now().Add(-time.Hour)
+	h.s.auth.sessions[hashToken(token)] = oldest
+	h.s.auth.mu.Unlock()
+	for i := 0; i < maxSessions; i++ {
+		if _, err := h.s.auth.newSession(h.ownOrigin()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, live := h.s.auth.lookupSession(token); live {
+		t.Fatal("test did not evict the old session")
+	}
+	if result := h.revokeSessions("?origin=" + url.QueryEscape(h.ownOrigin())); result.TerminalsClosed != 1 {
+		t.Fatalf("evicted session terminal was missed: %+v", result)
+	}
+	if code, _ := closeStatus(t, conn); code != CloseUnauthenticated {
+		t.Fatalf("evicted session close = %d, want 4401", code)
+	}
+}

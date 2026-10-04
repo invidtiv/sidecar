@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -120,6 +121,20 @@ func (r *clientRegistry) remove(client *trackedClient) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.clients, client.info.ID)
+}
+
+// sessionKeys includes established streams whose session token was evicted
+// from the bounded auth store. They still belong in an explicit sign-out.
+func (r *clientRegistry) sessionKeys(origin string) map[string]bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	keys := map[string]bool{}
+	for _, client := range r.clients {
+		if strings.HasPrefix(client.key, "session:") && (origin == "" || client.info.Origin == origin) {
+			keys[client.key] = true
+		}
+	}
+	return keys
 }
 
 func (r *clientRegistry) snapshot() ([]ClientInfo, []TerminalInfo) {
