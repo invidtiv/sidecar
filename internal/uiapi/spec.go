@@ -105,8 +105,10 @@ func Spec() ([]byte, error) {
 	add("/api/v0/pairing/codes", "post", "PairingCodeRequest", "PairingCode", local, false)
 	add("/api/v0/pairing/sessions", "delete", "", "SessionRevocation", local, false)
 	sessionRevoke := paths["/api/v0/pairing/sessions"].(map[string]any)["delete"].(map[string]any)
+	sessionRevoke["description"] = "Durably purges browser sessions before success; invalidates unused tickets and closes their streams. Revoked credentials remain invalid after restart."
 	sessionRevoke["parameters"] = append(sessionRevoke["parameters"].([]any), map[string]any{"name": "origin", "in": "query", "schema": map[string]any{"type": "string"}, "description": "Omit to revoke every browser session; supply an origin to revoke only its sessions."})
 	add("/api/v0/pairing/exchange", "post", "PairingExchangeRequest", "PairingExchange", []string{"browser"}, true)
+	paths["/api/v0/pairing/exchange"].(map[string]any)["post"].(map[string]any)["description"] = "Issues an independent exact-origin browser token. Hash-only sessions persist across restarts, with 30-day sliding expiry and a 180-day absolute cap. Pairing again preserves existing tabs."
 	add("/api/v0/origins", "get", "", "OriginList", local, false)
 	add("/api/v0/origins", "post", "OriginRequest", "OriginRegistration", local, false)
 	add("/api/v0/origins", "delete", "", "OriginRevocation", local, false)
@@ -126,13 +128,14 @@ func Spec() ([]byte, error) {
 	}
 	paths["/api/v0/sessions"].(map[string]any)["get"].(map[string]any)["parameters"] = params
 	revocation := paths["/api/v0/origins"].(map[string]any)["delete"].(map[string]any)
+	revocation["description"] = "Revokes the paired origin and browser sessions bound to that exact origin, including unused tickets and open streams. Revocations survive restart."
 	revocation["parameters"] = append(revocation["parameters"].([]any), map[string]any{"name": "origin", "in": "query", "required": true, "schema": map[string]any{"type": "string"}})
 	paths[terminalPath] = streamOperation("terminal", all)
 	paths[eventsPath] = streamOperation("events", all)
 	events := paths[eventsPath].(map[string]any)["get"].(map[string]any)
 	events["parameters"] = append(events["parameters"].([]any), params...)
 	paths["/pair"] = map[string]any{"get": map[string]any{"operationId": "pair_page", "security": []any{}, "x-listeners": []string{"browser"}, "responses": map[string]any{"200": map[string]any{"description": "Pairing page, consumes no code", "content": map[string]any{"text/html": map[string]any{"schema": map[string]any{"type": "string"}}}}}}}
-	paths["/{path}"] = map[string]any{"get": map[string]any{"operationId": "ui_files", "x-listeners": remote, "description": "Static UI files with SPA fallback. Browser listener public; Tailnet requires allowed login. API paths never fall back.", "parameters": []any{map[string]any{"name": "path", "in": "path", "required": true, "schema": map[string]any{"type": "string"}}}, "responses": map[string]any{"200": map[string]any{"description": "UI file or index.html"}}}}
+	paths["/{path}"] = map[string]any{"get": map[string]any{"operationId": "ui_files", "x-listeners": remote, "description": "Static UI files with SPA fallback. Browser listener public; Tailnet requires allowed login. API paths never fall back. Each request resolves a fresh confined root, so rebuilt directories are served without restart and symlink escapes remain refused.", "parameters": []any{map[string]any{"name": "path", "in": "path", "required": true, "schema": map[string]any{"type": "string"}}}, "responses": map[string]any{"200": map[string]any{"description": "UI file or index.html"}, "503": map[string]any{"description": "UI directory temporarily unavailable during rebuild; retry shortly."}}}}
 	// dispatch maps HEAD to GET, and static files also support HEAD. A
 	// WebSocket handshake remains GET-only. HEAD responses have no body.
 	for path, value := range paths {

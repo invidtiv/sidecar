@@ -573,7 +573,11 @@ func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request, _ 
 	}
 	s.credentialMu.Lock()
 	defer s.credentialMu.Unlock()
-	revoked := s.auth.revokeSessions(origin)
+	revoked, err := s.auth.revokeSessions(origin)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, CodeBackend, fmt.Sprintf("Could not save browser session revocation: %v.", err))
+		return
+	}
 	closed := s.clients.revoke(s.clients.sessionKeys(origin))
 	writeJSON(w, http.StatusOK, SessionRevocation{Origin: origin, Revoked: len(revoked), TerminalsClosed: closed})
 }
@@ -615,6 +619,18 @@ func (s *Server) handleRevokeOrigin(w http.ResponseWriter, r *http.Request, _ ca
 	}
 	s.credentialMu.Lock()
 	defer s.credentialMu.Unlock()
+	if !s.origins.has(origin) {
+		writeError(w, http.StatusNotFound, CodeOriginNotFound, fmt.Sprintf("%s is not paired; list registrations with `sidecar api pair --list`.", origin))
+		return
+	}
+	// Purge matching browser credentials too, before acknowledging revocation.
+	if _, err := s.auth.revokeSessions(origin); err != nil {
+		writeError(w, http.StatusInternalServerError, CodeBackend, fmt.Sprintf("Could not save browser session revocation: %v.", err))
+		return
+	}
+	// Even if saving the origin registry fails, streams belonging to browser
+	// credentials already purged above must close.
+	s.clients.revoke(s.clients.sessionKeys(origin))
 	revoked, err := s.origins.revoke(origin)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, CodeBackend, fmt.Sprintf("Could not save the paired origins: %v.", err))
@@ -624,7 +640,8 @@ func (s *Server) handleRevokeOrigin(w http.ResponseWriter, r *http.Request, _ ca
 		writeError(w, http.StatusNotFound, CodeOriginNotFound, fmt.Sprintf("%s is not paired; list registrations with `sidecar api pair --list`.", origin))
 		return
 	}
-	keys := map[string]bool{"origin:" + origin: true}
+	keys := s.clients.sessionKeys(origin)
+	keys["origin:"+origin] = true
 	s.auth.revokeTickets(keys)
 	s.clients.revoke(keys)
 	writeJSON(w, http.StatusOK, OriginRevocation{Origin: origin, Revoked: true})

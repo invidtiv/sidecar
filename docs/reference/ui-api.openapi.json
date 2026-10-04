@@ -1635,6 +1635,7 @@
     },
     "/api/v0/origins": {
       "delete": {
+        "description": "Revokes the paired origin and browser sessions bound to that exact origin, including unused tickets and open streams. Revocations survive restart.",
         "operationId": "origins_delete",
         "parameters": [
           {
@@ -1849,6 +1850,7 @@
     },
     "/api/v0/pairing/exchange": {
       "post": {
+        "description": "Issues an independent exact-origin browser token. Hash-only sessions persist across restarts, with 30-day sliding expiry and a 180-day absolute cap. Pairing again preserves existing tabs.",
         "operationId": "pairing_exchange_post",
         "parameters": [
           {
@@ -1902,6 +1904,7 @@
     },
     "/api/v0/pairing/sessions": {
       "delete": {
+        "description": "Durably purges browser sessions before success; invalidates unused tickets and closes their streams. Revoked credentials remain invalid after restart.",
         "operationId": "pairing_sessions_delete",
         "parameters": [
           {
@@ -2387,7 +2390,7 @@
     },
     "/{path}": {
       "get": {
-        "description": "Static UI files with SPA fallback. Browser listener public; Tailnet requires allowed login. API paths never fall back.",
+        "description": "Static UI files with SPA fallback. Browser listener public; Tailnet requires allowed login. API paths never fall back. Each request resolves a fresh confined root, so rebuilt directories are served without restart and symlink escapes remain refused.",
         "operationId": "ui_files",
         "parameters": [
           {
@@ -2402,6 +2405,9 @@
         "responses": {
           "200": {
             "description": "UI file or index.html"
+          },
+          "503": {
+            "description": "UI directory temporarily unavailable during rebuild; retry shortly."
           }
         },
         "x-listeners": [
@@ -2410,7 +2416,7 @@
         ]
       },
       "head": {
-        "description": "Static UI files with SPA fallback. Browser listener public; Tailnet requires allowed login. API paths never fall back.",
+        "description": "Static UI files with SPA fallback. Browser listener public; Tailnet requires allowed login. API paths never fall back. Each request resolves a fresh confined root, so rebuilt directories are served without restart and symlink escapes remain refused.",
         "operationId": "ui_files_head",
         "parameters": [
           {
@@ -2425,6 +2431,9 @@
         "responses": {
           "200": {
             "description": "UI file or index.html"
+          },
+          "503": {
+            "description": "UI directory temporarily unavailable during rebuild; retry shortly."
           }
         },
         "x-listeners": [

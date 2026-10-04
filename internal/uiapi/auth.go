@@ -34,18 +34,21 @@ type grant struct {
 // session is a browser session minted by a pairing exchange. Its token is a
 // bearer credential bound to the origin that exchanged the code.
 type session struct {
-	origin  string
-	created time.Time
+	Origin     string    `json:"origin"`
+	CreatedAt  time.Time `json:"created_at"`
+	LastUsedAt time.Time `json:"last_used_at"`
+	ExpiresAt  time.Time `json:"expires_at"`
 }
 
-// authStore holds the in-memory credentials: single-use pairing codes, browser
-// sessions and WebSocket tickets. Nothing here survives a restart (v0).
+// authStore holds ephemeral codes/tickets and durable hash-only sessions.
 type authStore struct {
-	mu       sync.Mutex
-	now      func() time.Time
-	codes    map[string]time.Time // code hash -> expiry
-	sessions map[string]session   // token hash -> session
-	tickets  map[string]grant     // ticket hash -> grant
+	sessionPath string
+	logf        func(string, ...any)
+	mu          sync.Mutex
+	now         func() time.Time
+	codes       map[string]time.Time // code hash -> expiry
+	sessions    map[string]session   // token hash -> session
+	tickets     map[string]grant     // ticket hash -> grant
 }
 
 func newAuthStore(now func() time.Time) *authStore {
@@ -90,19 +93,31 @@ func (a *authStore) newSession(origin string) (string, error) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if len(a.sessions) >= maxSessions {
-		// Evict the oldest: a browser that paired a thousand sessions ago
-		// re-pairs with `sidecar api open`.
-		var oldestKey string
-		var oldest time.Time
-		for key, s := range a.sessions {
-			if oldestKey == "" || s.created.Before(oldest) {
-				oldestKey, oldest = key, s.created
+	err = a.withSessionsLocked(func(sessions map[string]session) bool {
+		now := a.now().UTC()
+		for key, s := range sessions {
+			if !now.Before(s.ExpiresAt) {
+				delete(sessions, key)
 			}
 		}
-		delete(a.sessions, oldestKey)
+		if len(sessions) >= maxSessions {
+			var oldestKey string
+			var oldest time.Time
+			for key, s := range sessions {
+				if oldestKey == "" || s.CreatedAt.Before(oldest) || (s.CreatedAt.Equal(oldest) && key < oldestKey) {
+					oldestKey, oldest = key, s.CreatedAt
+				}
+			}
+			delete(sessions, oldestKey)
+		}
+		s := session{Origin: origin, CreatedAt: now, LastUsedAt: now}
+		s.ExpiresAt = sessionExpiry(s)
+		sessions[hashToken(token)] = s
+		return true
+	})
+	if err != nil {
+		return "", err
 	}
-	a.sessions[hashToken(token)] = session{origin: origin, created: a.now()}
 	return token, nil
 }
 
@@ -115,11 +130,29 @@ func (a *authStore) lookupSession(token string) (origin, client string, ok bool)
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	key := hashToken(token)
-	s, ok := a.sessions[key]
-	if !ok {
+	err := a.withSessionsLocked(func(sessions map[string]session) bool {
+		s, found := sessions[key]
+		now := a.now().UTC()
+		if !found || !now.Before(s.ExpiresAt) {
+			delete(sessions, key)
+			return found
+		}
+		changed := now.After(s.LastUsedAt)
+		if changed {
+			s.LastUsedAt = now
+		}
+		s.ExpiresAt = sessionExpiry(s)
+		sessions[key] = s
+		origin, client, ok = s.Origin, sessionClient(key), true
+		return changed
+	})
+	if err != nil {
+		if a.logf != nil {
+			a.logf("browser session authentication refused: %v", err)
+		}
 		return "", "", false
 	}
-	return s.origin, sessionClient(key), true
+	return origin, client, ok
 }
 
 // sessionClient is the client key a session's requests, tickets and
@@ -129,22 +162,27 @@ func sessionClient(key string) string { return "session:" + key[:16] }
 // revokeSessions drops every browser session, or only those bound to origin
 // when it is not empty, together with the tickets they issued. It returns the
 // client keys it revoked, so their open terminals can be closed.
-func (a *authStore) revokeSessions(origin string) map[string]bool {
+func (a *authStore) revokeSessions(origin string) (map[string]bool, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	revoked := map[string]bool{}
-	for key, s := range a.sessions {
-		if origin == "" || s.origin == origin {
-			delete(a.sessions, key)
-			revoked[sessionClient(key)] = true
+	if err := a.withSessionsLocked(func(sessions map[string]session) bool {
+		for key, s := range sessions {
+			if origin == "" || s.Origin == origin {
+				delete(sessions, key)
+				revoked[sessionClient(key)] = true
+			}
 		}
+		return true
+	}); err != nil {
+		return nil, err
 	}
 	for key, g := range a.tickets {
 		if strings.HasPrefix(g.client, "session:") && (origin == "" || g.origin == origin) {
 			delete(a.tickets, key)
 		}
 	}
-	return revoked
+	return revoked, nil
 }
 
 func (a *authStore) revokeTickets(keys map[string]bool) {
@@ -165,12 +203,20 @@ func (a *authStore) sessionClientLive(client string) bool {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	for key := range a.sessions {
-		if sessionClient(key) == client {
-			return true
+	live := false
+	err := a.withSessionsLocked(func(sessions map[string]session) bool {
+		for key, s := range sessions {
+			if sessionClient(key) == client && a.now().Before(s.ExpiresAt) {
+				live = true
+				break
+			}
 		}
+		return false
+	})
+	if err != nil && a.logf != nil {
+		a.logf("browser session admission refused: %v", err)
 	}
-	return false
+	return err == nil && live
 }
 
 func (a *authStore) issueTicket(g grant) (string, time.Time, error) {

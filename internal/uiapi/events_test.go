@@ -508,7 +508,9 @@ func TestEventsTicketRevokedBetweenAuthorizationAndAdmission(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	h.s.auth.revokeSessions("")
+	if _, err := h.s.auth.revokeSessions(""); err != nil {
+		t.Fatal(err)
+	}
 	h.s.clients.revoke(h.s.clients.sessionKeys(""))
 	h.s.credentialMu.Unlock()
 	locked = false
