@@ -46,19 +46,19 @@ Recorded on aerie on 2026-10-03: the standalone Tailscale build 1.102.4 (`io.tai
 ### Guards on the Browser and Tailnet listeners
 
 - **Host:** the `Host` header must exactly match an allowed value. For Browser that is `127.0.0.1:<port>` and `localhost:<port>`. For Tailnet it is the node's MagicDNS name (from `tailscale status --json`), bare or with `:443` or `:80`. Any other value gets `421 host_refused`, on every route including the terminal upgrade. This defeats DNS rebinding.
-- **Origin:** a WebSocket upgrade must carry an allowed `Origin`, and so must any request that is not `GET` or `HEAD`. Allowed origins are the listener's own origins plus paired origins. A listener's own origins are `http://127.0.0.1:<port>` and `http://localhost:<port>` for Browser, and `https://<magicdns>` and `http://<magicdns>` for Tailnet. Any request that carries an `Origin` outside that set, including a `GET`, gets `403 origin_refused`. A `GET` or `HEAD` without an `Origin` goes on to authentication.
+- **Origin:** a WebSocket upgrade must carry an allowed `Origin`, and so must any request that is not `GET` or `HEAD`, with one exception on the Browser listener: a request or upgrade that carries `Authorization: Bearer` may omit `Origin` (see Authentication). Allowed origins are the listener's own origins plus paired origins. A listener's own origins are `http://127.0.0.1:<port>` and `http://localhost:<port>` for Browser, and `https://<magicdns>` and `http://<magicdns>` for Tailnet. Any request that carries an `Origin` outside that set, including a `GET`, gets `403 origin_refused`. A `GET` or `HEAD` without an `Origin` goes on to authentication.
 - **Mutations:** a non-GET request must be `Content-Type: application/json` and must carry `X-Sidecar-Request: 1`. A browser cannot send either cross-site without a CORS preflight, and the server refuses unpaired preflights.
 - **CORS:** only paired origins get CORS headers: the exact `Access-Control-Allow-Origin` with `Vary: Origin`, and on a preflight `Access-Control-Allow-Methods: GET, POST, DELETE`, allowed headers `Authorization, Content-Type, X-Sidecar-Request`, and `Access-Control-Max-Age: 600`. There are no credentials. A preflight from any other origin gets `403 origin_refused`.
 
 ### Authentication on each listener
 
 - **Local:** every request is trusted.
-- **Browser:** `/api/` routes need `Authorization: Bearer <token>`, where the token is either a browser session token (see Pairing) or a paired origin's token. There is no cookie, so nothing ambient travels with a request: every browser client, same-origin or paired, takes this one path. Each token is bound to one origin. A session token is bound to the exact origin that exchanged its pairing code (for example `http://127.0.0.1:7861`, not also `http://localhost:7861`), and a paired origin's token to that origin. A request that carries any other `Origin` gets `403 origin_refused`; a request with no `Origin` (a same-origin `GET`, or curl) is accepted. Static UI files, `GET /pair` and `POST /api/v0/pairing/exchange` need no credential. An API route without one gets `401 unauthenticated`.
+- **Browser:** `/api/` routes need `Authorization: Bearer <token>`, where the token is either a browser session token (see Pairing) or a paired origin's token. Nothing ambient travels with a request: every client, same-origin, paired or non-browser, takes this one path. Each token is bound to one origin. A session token is bound to the exact origin that exchanged its pairing code (for example `http://127.0.0.1:7861`, not also `http://localhost:7861`), and a paired origin's token to that origin. A request that carries any other `Origin` gets `403 origin_refused`. A request with no `Origin` is accepted with a valid bearer token, for any method and on the terminal upgrade, because the Origin guard exists to stop a page from using a credential the browser attaches by itself, and a bearer token is never attached by itself. That covers a same-origin `GET`, curl, Node (whose `WebSocket` sends no `Origin`) and native clients. Without a bearer token, a mutation or upgrade with no `Origin` is still refused, and so is a ticket presented with no `Origin`, because a ticket is bound to its origin. The Tailnet listener keeps requiring `Origin`: its login header is added by `tailscale serve` to every request from the device, so it is ambient. Static UI files, `GET /pair` and `POST /api/v0/pairing/exchange` need no credential. An API route without one gets `401 unauthenticated`.
 - **Tailnet:** every route, static files included, needs a `Tailscale-User-Login` header that names an allowed login. A missing login gets `401 unauthenticated`, and a login that is not allowed gets `403 tailnet_login_refused`. Bearer tokens are not accepted here, and the header is ignored on every other listener.
 
 ### Per-client limits
 
-A client is one credential holder: a browser session, a paired origin, or a tailnet login. Each may hold at most 16 open terminal WebSockets (the 17th closes with `1013`) and 16 unredeemed tickets (the 17th request gets `429 too_many_outstanding`). Redeeming or expiring a ticket frees its slot. Across all clients there are at most 256 unredeemed tickets and 64 unused pairing codes. Local callers are trusted like the tmux socket and have no terminal limit.
+A client is one credential holder: a browser session, a paired origin, or a tailnet login. Each may hold at most 16 open terminal WebSockets (the 17th closes with `4429` and a reason) and 16 unredeemed tickets (the 17th request gets `429 too_many_outstanding`). Redeeming or expiring a ticket frees its slot. Across all clients there are at most 256 unredeemed tickets and 64 unused pairing codes. Local callers are trusted like the tmux socket and have no terminal limit.
 
 ## Pairing
 
@@ -74,16 +74,16 @@ A client is one credential holder: a browser session, a paired origin, or a tail
 
 `POST /api/v0/pairing/exchange` is served only on the Browser listener. It needs no credential, because the code is one, but it is guarded like any mutation (`Content-Type: application/json`, `X-Sidecar-Request: 1`), and its `Origin` must be one of the listener's own origins. A paired origin gets `403 origin_refused`; it has its own token.
 
-Request:
+Request. `code` is required; `next` is optional:
 
 ```json
-{"code": "<code from the fragment>", "next": "/optional/path"}
+{"code": "<code from the fragment>"}
 ```
 
-Success, `200`:
+Success, `200`. `token` is the contract; `next` is additive (the validated path, `/` when the request gave none), and clients may ignore it and use the `next` from the fragment:
 
 ```json
-{"token": "<session token>", "next": "/optional/path"}
+{"token": "<session token>", "next": "/"}
 ```
 
 `next` defaults to `/`. It must be a same-origin path: it starts with exactly one `/`, and has no scheme, host, backslash or control character. A bad `next` gets `400 invalid_request` and does not consume the code. An unknown, used or expired code gets `401 pairing_code_invalid`. The session token is bound to the request's `Origin`.
@@ -96,7 +96,7 @@ Sessions are kept in memory in v0, so a server restart means pairing again, and 
 
 The only v0 scope is `full`. Narrower scopes arrive with the routes they protect.
 
-HTTP calls from a paired origin send `Authorization: Bearer <token>`. Pairing an origin again rotates its token. Browsers cannot set headers on a WebSocket, so a paired origin first gets a ticket with `POST /api/v0/ws-tickets` (bearer-authenticated, single-use, 30-second expiry). It then connects with `?ticket=<ticket>`. A ticket is bound to the listener and the origin it was issued to. The same-origin UI does the same with its session token. A non-browser client may instead send `Authorization: Bearer <token>` on the upgrade itself, and it must then send an `Origin` equal to the origin that token is bound to: the paired origin, or for a session token the origin that exchanged it.
+HTTP calls from a paired origin send `Authorization: Bearer <token>`. Pairing an origin again rotates its token. Browsers cannot set headers on a WebSocket, so a paired origin first gets a ticket with `POST /api/v0/ws-tickets` (bearer-authenticated, single-use, 30-second expiry). It then connects with `?ticket=<ticket>`. A ticket is bound to the listener and the origin it was issued to. The same-origin UI does the same with its session token. A non-browser client may instead send `Authorization: Bearer <token>` on the upgrade itself. It either sends no `Origin` or sends the origin that token is bound to (the paired origin, or for a session token the origin that exchanged it); any other `Origin` closes with `4403`.
 
 ## HTTP routes
 
@@ -145,9 +145,9 @@ All JSON, encoded exactly as the CLI's `--json` output: one object and a trailin
   - `1000`: the protocol stream ended normally.
   - `4400`: protocol violation. This includes a stream the service ends right after an `invalid_request`, `protocol_mismatch` or `handshake_required` error, which is delivered before the close.
   - `4401`: unauthenticated: no usable ticket, bearer token or tailnet login, or a used or expired ticket.
-  - `4403`: origin refused: no `Origin`, an origin that is not allowed, or a ticket or token used from another origin.
+  - `4403`: origin refused: no `Origin` without a bearer token (a ticket alone needs its `Origin`), an origin that is not allowed, or a ticket or token used from another origin.
   - `4409`: the server is shutting down.
-  - `1013`: try again later: this client already holds 16 open terminals (the WebSocket form of `too_many_outstanding`).
+  - `4429`: too many terminals: this client already holds 16 open terminal WebSockets (the WebSocket form of `too_many_outstanding`). Close one and retry.
   - `1011`: internal error.
 
   The close reason is one human sentence of at most 123 bytes.

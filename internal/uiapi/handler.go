@@ -112,8 +112,8 @@ func (h *listenerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		if origin == "" {
-			writeError(w, http.StatusForbidden, CodeOriginRefused, "Requests that change state must carry an allowed Origin header.")
+		if origin == "" && !h.bearerWithoutOrigin(r) {
+			writeError(w, http.StatusForbidden, CodeOriginRefused, "Requests that change state must carry an allowed Origin header, or a bearer token.")
 			return
 		}
 		if !isJSONContentType(r.Header.Get("Content-Type")) || r.Header.Get(mutationHeader) != "1" {
@@ -255,6 +255,21 @@ func (h *listenerHandler) tailnetLogin(r *http.Request) (login, code, message st
 		return "", CodeLoginRefused, fmt.Sprintf("Tailnet login %q is not allowed; add it to api.tailnetLogins in the Sidecar config.", login)
 	}
 	return login, "", ""
+}
+
+// bearerWithoutOrigin reports whether a request with no Origin may proceed
+// on the strength of an Authorization: Bearer header. Origin guards protect
+// ambient credentials, and on the Browser listener there are none: a bearer
+// token has to be presented deliberately, which a cross-site page cannot do
+// without a preflight. Node, curl and native clients send no Origin. The token
+// itself is still validated, and an Origin that is present must match it. On
+// the Tailnet listener the login header is ambient, so Origin stays required.
+func (h *listenerHandler) bearerWithoutOrigin(r *http.Request) bool {
+	if h.kind != ListenerBrowser {
+		return false
+	}
+	_, present := bearerToken(r)
+	return present
 }
 
 func (h *listenerHandler) hostAllowed(host string) bool {

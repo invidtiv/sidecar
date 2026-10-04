@@ -106,8 +106,9 @@ func TestTerminalCrossSiteHijackingIsRefused(t *testing.T) {
 		header http.Header
 		code   websocket.StatusCode
 	}{
-		// A non-browser client that omits Origin is refused, token or not.
-		"no origin": {http.Header{"Authorization": {session}}, CloseOriginRefused},
+		// Omitting Origin is allowed only with a bearer token (see
+		// TestBearerClientsMayOmitOrigin); without one it is refused.
+		"no origin, no token": {http.Header{}, CloseOriginRefused},
 		// Sandboxed iframes and file: pages send Origin: null.
 		"null origin": {http.Header{"Authorization": {session}, "Origin": {"null"}}, CloseOriginRefused},
 		// Another port on the same host is same-site; with no cookie there is

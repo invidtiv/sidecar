@@ -24,7 +24,7 @@ const (
 	CloseOriginRefused     websocket.StatusCode = 4403
 	CloseShuttingDown      websocket.StatusCode = 4409
 	// CloseTooManyTerminals is the WebSocket form of too_many_outstanding.
-	CloseTooManyTerminals = websocket.StatusTryAgainLater
+	CloseTooManyTerminals websocket.StatusCode = 4429
 )
 
 const (
@@ -111,7 +111,11 @@ func (h *listenerHandler) authorizeTerminal(r *http.Request) (caller, websocket.
 		return c, 0, ""
 	}
 	origin := r.Header.Get("Origin")
-	if !h.originAllowed(origin) {
+	// A non-browser client (Node, a native app) sends no Origin; it may still
+	// connect with a bearer token, which is not ambient. A ticket alone is
+	// origin-bound, so it still needs its Origin.
+	bearerOnly := origin == "" && h.bearerWithoutOrigin(r) && r.URL.Query().Get("ticket") == ""
+	if !bearerOnly && !h.originAllowed(origin) {
 		return c, CloseOriginRefused, "This origin may not open terminals; pair it with sidecar api pair --origin URL."
 	}
 	c.origin = origin

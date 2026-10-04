@@ -340,13 +340,71 @@ func TestOriginGuard(t *testing.T) {
 	if response.Header.Get("Access-Control-Allow-Origin") != "" {
 		t.Fatal("refused origin received CORS headers")
 	}
-	// A mutation must name an origin at all.
-	headers := mutationHeaders("", auth)
+	// A mutation with no Origin needs a bearer token: nothing ambient can
+	// carry it, so Node, curl and native clients may omit Origin.
+	headers := mutationHeaders("", nil)
 	delete(headers, "Origin")
 	response, data = h.browserDo(req{method: http.MethodPost, path: "/api/v0/ws-tickets", body: "{}", header: headers})
 	expect(t, response, data, http.StatusForbidden, CodeOriginRefused)
+	headers = mutationHeaders("", auth)
+	delete(headers, "Origin")
+	response, data = h.browserDo(req{method: http.MethodPost, path: "/api/v0/ws-tickets", body: "{}", header: headers})
+	expect(t, response, data, http.StatusOK, "")
+	// The token is still validated; an invalid one gets no further.
+	headers = mutationHeaders("", map[string]string{"Authorization": "Bearer forged"})
+	delete(headers, "Origin")
+	response, data = h.browserDo(req{method: http.MethodPost, path: "/api/v0/ws-tickets", body: "{}", header: headers})
+	expect(t, response, data, http.StatusUnauthorized, CodeUnauthenticated)
 	response, data = h.browserDo(req{method: http.MethodPost, path: "/api/v0/ws-tickets", body: "{}", header: mutationHeaders(h.ownOrigin(), auth)})
 	expect(t, response, data, http.StatusOK, "")
+	// The pairing exchange has no bearer token, so it always needs its Origin.
+	code := h.pairingCode("/")
+	headers = mutationHeaders("", nil)
+	delete(headers, "Origin")
+	response, data = h.browserDo(req{method: http.MethodPost, path: "/api/v0/pairing/exchange", body: `{"code":"` + code.Code + `"}`, header: headers})
+	expect(t, response, data, http.StatusForbidden, CodeOriginRefused)
+}
+
+// Node's WebSocket and other non-browser clients send no Origin. With a
+// bearer token that is fine in both HTTP and on the upgrade; a ticket alone is
+// origin-bound and still needs one, and a present Origin must still match.
+func TestBearerClientsMayOmitOrigin(t *testing.T) {
+	h := newHarness(t)
+	const app = "http://app.example:5173"
+	token := h.pairOrigin(app)
+	session := h.pairBrowser()
+	for name, bearer := range map[string]string{"paired origin token": token, "session token": session} {
+		response, data := h.browserDo(req{path: "/api/v0/status", header: map[string]string{"Authorization": "Bearer " + bearer}})
+		expect(t, response, data, http.StatusOK, "")
+		conn, err := h.dialBrowser(t, "", http.Header{"Authorization": {"Bearer " + bearer}})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		writeText(t, conn, `{"node":true}`)
+		if got := readText(t, conn); got != `{"node":true}` {
+			t.Fatalf("%s: echo = %q", name, got)
+		}
+		_ = conn.Close(websocket.StatusNormalClosure, "")
+	}
+	waitForClients(t, h, 0)
+	h.expectBrowserClose(t, "no origin, forged token", "", http.Header{"Authorization": {"Bearer forged"}}, CloseUnauthenticated)
+	h.expectBrowserClose(t, "present origin that does not match", "", http.Header{"Authorization": {"Bearer " + token}, "Origin": {"http://evil.example"}}, CloseOriginRefused)
+	response, data := h.browserDo(req{method: http.MethodPost, path: "/api/v0/ws-tickets", body: "{}", header: mutationHeaders(app, map[string]string{"Authorization": "Bearer " + token})})
+	expect(t, response, data, http.StatusOK, "")
+	var issued TicketResponse
+	_ = json.Unmarshal(data, &issued)
+	h.expectBrowserClose(t, "ticket without origin", "?ticket="+issued.Ticket, nil, CloseOriginRefused)
+	h.expectBrowserClose(t, "ticket and bearer without origin", "?ticket="+issued.Ticket, http.Header{"Authorization": {"Bearer " + token}}, CloseOriginRefused)
+	// The Tailnet login is ambient, so the relaxation does not reach it.
+	login := map[string]string{tailscaleLoginHead: testTailnetLogin, "Authorization": "Bearer " + token}
+	headers := mutationHeaders("", login)
+	delete(headers, "Origin")
+	response, data = h.tailnetDo(req{method: http.MethodPost, path: "/api/v0/ws-tickets", body: "{}", header: headers})
+	expect(t, response, data, http.StatusForbidden, CodeOriginRefused)
+	conn := h.dialTailnet(t, http.Header{tailscaleLoginHead: {testTailnetLogin}, "Authorization": {"Bearer " + token}})
+	if got, _ := closeStatus(t, conn); got != CloseOriginRefused {
+		t.Fatalf("tailnet upgrade without origin closed %d", got)
+	}
 }
 
 func TestMutationGuardRequiresJSONAndHeader(t *testing.T) {

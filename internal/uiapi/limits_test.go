@@ -73,7 +73,7 @@ func TestTerminalsPerClientAreCapped(t *testing.T) {
 		open = append(open, conn)
 	}
 	waitForClients(t, h, maxTerminalsPerClient)
-	h.expectBrowserClose(t, "one terminal too many", "", header, CloseTooManyTerminals)
+	h.expectBrowserClose(t, "one terminal too many", "", header, websocket.StatusCode(4429))
 	// Another client is not affected, and neither is Local.
 	other := "http://second.example"
 	otherToken := h.pairOrigin(other)
