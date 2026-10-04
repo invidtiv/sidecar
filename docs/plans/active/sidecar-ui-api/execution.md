@@ -34,6 +34,7 @@ These are not negotiable. Every lane prompt points here.
 - No `tailscale serve` and no `tailscale funnel`. Never install a real launchd agent or systemd unit; use test labels and fake managers.
 - Every load generator is wrapped in `timeout`. Stop every dev server, preview server and test server you start. Never touch port 7871 or anything else Marcus started.
 - Work in your lane's worktree, commit as you go, and do not push the Sidecar repo. Commit messages end with `Co-Authored-By:` naming the model that wrote them.
+- Until td-ac892f is fixed, never run a Sidecar command that defaults to "the current shell" or "the current project" without an explicit `--target` or `--project`. That includes `shell rename`, `shell name`, `open`, `layout`, and `agent` verbs with no target. Codex agents share one app-server daemon environment, so the default resolves to some other agent's shell. Always set `COMMS_SESSION` for comms.
 - Do not edit this execution file. The orchestrator owns it. Put your status in td and comms.
 - Track work in td under your lane's task (`td -w ~/code/sidecar`): `start`, `log`, then at the end `handoff` and `review`. Never approve your own lane.
 - If you find a Sidecar bug, or friction in the `sidecar agent`, `create` or `comms` commands while working, file a td issue (label `ui-api-friction` or `bug`) with the exact command and output, and mention it in your report. Do not work around it silently.
@@ -49,7 +50,7 @@ The status values are `queued`, `running`, `review`, `fixing`, `merged` and `blo
 | U0-b SDK/element | td-83cce9 | sidecar-ui | Claude | — | merged (sidecar-ui 2c0f521) |
 | U0-a follow-ups | td-552e24 | sidecar | Claude, reviewed by Codex | U0-a | merged (e3ca48c2) |
 | U0-c proof and measurements | td-d8fcb0 | both | Claude, plus Marcus for the live half | U0-a, U0-b | automatable half done (0b1476b2, a0dfb694); live half with Marcus pending |
-| U1-a events stream | td-aa8756 | sidecar | Codex | U0-a | running (Codex, worktree ~/code/sidecar-ui-u1a-events, branch ui-u1a-events) |
+| U1-a events stream | td-aa8756 | sidecar | Codex | U0-a | review (Codex reviewer, shell "rev U1-a"; branch ui-u1a-events @c385d44c); spec integration after U1-b merges |
 | U1-b schemas, spec, fixtures | td-5ae805 | sidecar | Codex | U0-a | review (Codex reviewer, shell "rev U1-b"; branch u1b-spec @5c90a707) |
 | U1-c service install | td-d7869b | sidecar | Codex, reviewed by Codex | U0-a | merged |
 | U1-d presence and v1 frames | td-713745 | sidecar | Codex | td-552e24 merged | running (Codex, ~/code/sidecar-u1d-presence, branch u1d-presence) |
@@ -199,3 +200,5 @@ Each one is a td issue with the exact command and output. Fixes run as their own
 | td-eeb7e8 | P1: a stale ShellCreatedMsg arriving after a project switch writes the next project's shells manifest. Fix after U2-a merges, because it touches the same code | queued |
 | td-8e99af | A worktree-prune safety test sometimes judges a moved active worktree an orphan; checking whether production prune can do the same (friction lane, first priority) | running |
 | td-87ef7e, td-d77e97, td-cce9f6, td-5e7e28, td-9339ae, td-6db2ce | Load-dependent test flakes found under parallel lane gates (friction lane) | running |
+| td-ac892f | P1 root cause of several items above: Codex sessions share one `codex app-server` daemon env, so "current shell/project" defaults resolve to another agent (a reviewer renamed U1-d's shell). Friction lane | running |
+| td-090b9d | A lane's direct comms send to @ui-api-orch never surfaced in the orchestrator's wait or inbox | open |
