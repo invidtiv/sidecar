@@ -50,7 +50,7 @@ The status values are `queued`, `running`, `review`, `fixing`, `merged` and `blo
 | U0-a follow-ups | td-552e24 | sidecar | Claude, reviewed by Codex | U0-a | merged (e3ca48c2) |
 | U0-c proof and measurements | td-d8fcb0 | both | Claude, plus Marcus for the live half | U0-a, U0-b | automatable half done (0b1476b2, a0dfb694); live half with Marcus pending |
 | U1-a events stream | td-aa8756 | sidecar | Codex | U0-a | running (Codex, worktree ~/code/sidecar-ui-u1a-events, branch ui-u1a-events) |
-| U1-b schemas, spec, fixtures | td-5ae805 | sidecar | Codex | U0-a | running (Codex, ~/code/sidecar-u1b-spec, branch u1b-spec) |
+| U1-b schemas, spec, fixtures | td-5ae805 | sidecar | Codex | U0-a | review (Codex reviewer, shell "rev U1-b"; branch u1b-spec @5c90a707) |
 | U1-c service install | td-d7869b | sidecar | Codex, reviewed by Codex | U0-a | merged |
 | U1-d presence and v1 frames | td-713745 | sidecar | Codex | td-552e24 merged | running (Codex, ~/code/sidecar-u1d-presence, branch u1d-presence) |
 | U1-e web app shell and Sessions | td-57a73e | sidecar-ui | Codex | U0-b | running (Codex, ~/code/sidecar-ui-u1e-app, branch u1e-app; restarted after a lost prompt, td-11138b) |
@@ -58,7 +58,7 @@ The status values are `queued`, `running`, `review`, `fixing`, `merged` and `blo
 | U1-g iOS adopts presence and events | td-fde8cf | sidecar-mobile | Codex | U1-a, U1-d | queued |
 | U1-i persist browser sessions | td-165353 | sidecar | Codex | U1-a, U1-b merged (both touch internal/uiapi) | queued |
 | U1-h security review and three-viewer proof | td-295605 | all | Claude, then Codex | U1-a, U1-d, U1-f | queued |
-| U2-a core extraction | td-c709a9 | sidecar | Codex | U0-a | running (Codex, ~/code/sidecar-u2a-core, branch u2a-core) |
+| U2-a core extraction | td-c709a9 | sidecar | Codex | U0-a | review (Codex reviewer, shell "rev U2-a"; branch u2a-core @34eac688) |
 
 U2-b onward (workspace resources, operations, `<sidecar-workspace>`), U3 and U4 are briefed once U2-a and U1 settle.
 
@@ -196,3 +196,6 @@ Each one is a td issue with the exact command and output. Fixes run as their own
 | (sidecar) | `sidecar create worktree --json` printed two JSON documents once, breaking a strict parser | to verify |
 | td-e930bb | Friction lane (Codex, ~/code/sidecar-friction-1) covering td-0fd8fb, td-0502f3, td-836fca and the comms identity collision | running |
 | td-11138b | `sidecar agent prompt` reported `working`, but the Codex session later showed no conversation and the lane never ran. Orchestrator now confirms every lane on screen after prompting | open |
+| td-eeb7e8 | P1: a stale ShellCreatedMsg arriving after a project switch writes the next project's shells manifest. Fix after U2-a merges, because it touches the same code | queued |
+| td-8e99af | A worktree-prune safety test sometimes judges a moved active worktree an orphan; checking whether production prune can do the same (friction lane, first priority) | running |
+| td-87ef7e, td-d77e97, td-cce9f6, td-5e7e28, td-9339ae, td-6db2ce | Load-dependent test flakes found under parallel lane gates (friction lane) | running |
