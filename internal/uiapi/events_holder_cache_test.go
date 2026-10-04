@@ -132,7 +132,7 @@ func TestLegacyHolderCacheSharesInFlightAndSurvivesCallerCancellation(t *testing
 	b := &blockedHolderBackend{fakeBackend: newFakeBackend(), started: make(chan context.Context, 20), release: make(chan struct{})}
 	t.Cleanup(func() { close(b.release) })
 	var cache legacyHolderCache
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := holderCacheTestContext(t)
 	defer cancel()
 	firstCtx, firstCancel := context.WithCancel(ctx)
 	first := make(chan *GeometryHolder, 1)
@@ -186,7 +186,7 @@ func TestLegacyHolderCacheBoundsConcurrentReads(t *testing.T) {
 	b := &blockedHolderBackend{fakeBackend: newFakeBackend(), started: make(chan context.Context, 20), release: make(chan struct{})}
 	t.Cleanup(func() { close(b.release) })
 	var cache legacyHolderCache
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := holderCacheTestContext(t)
 	defer cancel()
 	results := make(chan *GeometryHolder, maxLegacyHolderReads)
 	for i := range maxLegacyHolderReads {
@@ -274,7 +274,7 @@ func TestLegacyHolderCacheShutdownCancelsSharedObservation(t *testing.T) {
 	var cache legacyHolderCache
 	lifetime, stop := context.WithCancel(context.Background())
 	defer stop()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := holderCacheTestContext(t)
 	defer cancel()
 	result := make(chan *GeometryHolder, 1)
 	go func() { result <- cache.get(ctx, lifetime, time.Now, b, TerminalInfo{Session: "one"}) }()
@@ -298,4 +298,15 @@ func TestLegacyHolderCacheShutdownCancelsSharedObservation(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("shutdown did not release events waiter")
 	}
+}
+
+// Bound dependency failures by the enclosing test budget, without imposing a
+// scheduling performance target on concurrent cache assertions.
+func holderCacheTestContext(t *testing.T) (context.Context, context.CancelFunc) {
+	t.Helper()
+	deadline, ok := t.Deadline()
+	if !ok {
+		return context.WithCancel(t.Context())
+	}
+	return context.WithDeadline(t.Context(), deadline.Add(-2*time.Second))
 }
