@@ -60,7 +60,7 @@ The status values are `queued`, `running`, `review`, `fixing`, `merged` and `blo
 | U1-i persist browser sessions | td-165353 | sidecar | Codex | U1-a, U1-b merged (both touch internal/uiapi) | merged: server 7f2ce809, SDK sidecar-ui 4a16fbf (the review fixed a P1 infinite reconnect on unknown event kinds) |
 | U1-e2 web app polish | td-71e0e5 | sidecar-ui | Codex | U1-e | merged (sidecar-ui 5e0ecb2) |
 | U1-c2 socket activation | td-11f799 | sidecar | Codex | U1-c | merged (7f684dc4). Review fixed an IPv4-mapped IPv6 and socket-type masquerade. The fake-supervisor proof refused 827 competing binds across a restart |
-| U1-g2 native follow-ups | td-468816 | sidecar-mobile | Codex | U1-g | review (Codex reviewer, shell "rev U1-g2"); branch u1g2-native |
+| U1-g2 native follow-ups | td-468816 | sidecar-mobile | Codex | U1-g | merged into sidecar-mobile main locally (bba67db, not pushed). Review fixed banner accessibility and an events-fallback recovery gap. Device checks are Marcus's |
 | U1-h security review and three-viewer proof | td-295605 | all | Claude, then Codex | U1-a, U1-d, U1-f | done. Security 6176110f; proof 23b5302d; integrated re-run against sidecar-ui 0f9cb5f passes with 0 browser page errors and a fully rendered terminal (u1h-evidence/integrated-*) |
 | U2-a core extraction | td-c709a9 | sidecar | Codex | U0-a | merged (d95b66f5) |
 | U2-b workspace resources and operations API | td-eb3d80 | sidecar | Codex | U2-a | merged (da497063) |
