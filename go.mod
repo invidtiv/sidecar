@@ -16,6 +16,7 @@ require (
 	github.com/charmbracelet/x/cellbuf v0.0.15
 	github.com/charmbracelet/x/vt v0.0.0-20260803091719-3755ebad01b1
 	github.com/coder/websocket v1.8.15
+	github.com/ebitengine/purego v0.11.1
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/invopop/jsonschema v0.13.0
 	github.com/marcus/tasks v1.18.0

@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/marcus/sidecar/internal/apiservice"
 	"github.com/marcus/sidecar/internal/buildinfo"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/uiapi"
@@ -211,6 +212,15 @@ func runAPIServe(env Env, args []string) int {
 	if explicit, ok := flags.values["--ui"]; ok {
 		uiDir = explicit
 	}
+	inherited, err := apiservice.Activate()
+	if err != nil {
+		cliErrln(env.Stderr, err)
+		return 1
+	}
+	defer apiservice.CloseActivated(inherited)
+	if inherited == nil {
+		inherited = []apiservice.ActivatedListener{}
+	}
 	executable, err := apiExecutablePath()
 	if err != nil {
 		cliErrln(env.Stderr, err)
@@ -244,7 +254,7 @@ func runAPIServe(env Env, args []string) int {
 		backend = live
 	}
 	server, err := uiapi.Start(uiapi.Options{StateDir: env.StateDir, Port: port, UIDir: uiDir, Tailnet: tailnet,
-		Backend: backend, Version: buildinfo.Version(), FixtureStatus: fixtureStatus})
+		Backend: backend, Version: buildinfo.Version(), FixtureStatus: fixtureStatus, Inherited: inherited})
 	if err != nil {
 		cliErrln(env.Stderr, err)
 		return 1

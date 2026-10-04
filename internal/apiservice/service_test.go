@@ -27,9 +27,12 @@ func (f *fakeRunner) run(_ context.Context, command string, args ...string) ([]b
 		if !f.loaded {
 			return []byte("Could not find service com.haplab.sidecar.api in domain for user gui: 501"), errors.New("exit 113")
 		}
-		return []byte("state = running\n pid = 42\n last exit code = 7\n"), nil
+		return []byte("state = running\n pid = 42\n last exit code = 7\n sockets = {\n browser = {\n passive = 1\n }\n }\n"), nil
 	}
 	if strings.Contains(call, " show ") {
+		if strings.Contains(call, SocketUnit) && f.loaded {
+			return []byte("LoadState=loaded\nActiveState=active\nSubState=running\n"), nil
+		}
 		if !f.loaded {
 			return []byte("LoadState=not-found\nActiveState=inactive\nMainPID=0\nExecMainCode=0\nExecMainStatus=0\n"), errors.New("exit 1")
 		}
@@ -45,7 +48,11 @@ func (f *fakeRunner) run(_ context.Context, command string, args ...string) ([]b
 }
 func testManager(t *testing.T, platform string) (*Native, *fakeRunner) {
 	t.Helper()
-	root := t.TempDir()
+	root, err := os.MkdirTemp("/tmp", "sc-svc-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
 	f := &fakeRunner{os: platform}
 	manager, err := New(Options{OS: platform, Home: root, ConfigHome: filepath.Join(root, "xdg"), StateDir: filepath.Join(root, "state", "sidecar"), ConfigPath: filepath.Join(root, "config & quotes", "config.json"), Executable: filepath.Join(root, "stable link", "sidecar"), UID: 501, Path: "/opt/homebrew/bin:/usr/bin:/bin", Run: f.run})
 	if err != nil {
@@ -84,7 +91,7 @@ func TestServiceManagerLifecycle(t *testing.T) {
 				t.Fatalf("file mode: %v %v", info, err)
 			}
 			status, err = m.Status(ctx)
-			if err != nil || !status.Installed || !status.Loaded || !status.Running || status.PID != 42 || status.LastExit == nil || status.LastExit.Code != 7 {
+			if err != nil || !status.Installed || !status.Loaded || !status.Running || status.PID != 42 || status.LastExit == nil || status.LastExit.Code != 7 || !status.Socket.Installed || !status.Socket.Listening {
 				t.Fatalf("running = %+v %v", status, err)
 			}
 			f.calls = nil
@@ -94,8 +101,8 @@ func TestServiceManagerLifecycle(t *testing.T) {
 			unload := "launchctl bootout gui/501/" + Label
 			load := "launchctl bootstrap gui/501 " + m.file
 			if platform == "linux" {
-				unload = "systemctl --user disable --now " + Unit
-				load = "systemctl --user enable --now " + Unit
+				unload = "systemctl --user disable --now " + SocketUnit + " " + Unit
+				load = "systemctl --user enable --now " + SocketUnit + " " + Unit
 			}
 			if strings.Index(strings.Join(f.calls, "\n"), unload) >= strings.Index(strings.Join(f.calls, "\n"), load) {
 				t.Fatalf("reinstall must unload first: %v", f.calls)
