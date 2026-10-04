@@ -2,6 +2,7 @@ package uiapi
 
 import (
 	"context"
+	"crypto/elliptic"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -28,11 +29,15 @@ func TestUIAPIFixtureCorpus(t *testing.T) {
 	row := mobileproto.CatalogRow{ID: "fixture-shell", OwnerHostID: identity.OwnerHostID, ProjectID: "fixture-project", ProjectName: "Fixture project", WorkspaceID: identity.WorkspaceID, WorkspaceKind: "shell", DisplayName: "Echo terminal", Path: "/workspace/fixture", Provider: "codex", Status: "working", Group: "Working", Session: identity.Session, Pane: identity.Pane, Target: identity.Session, ExpectedTarget: &identity, AttachState: "ready", ObservedAt: now.Format(time.RFC3339), ChangedAt: now.Format(time.RFC3339), Live: true, SemanticStatus: true, AttachmentReady: true}
 	catalog := mobileproto.CatalogSnapshot{Generation: "fixture-generation", ObservedAt: row.ObservedAt, HubID: identity.HubID, OwnerHostID: identity.OwnerHostID, OwnerConfigGeneration: identity.OwnerConfigGeneration, Query: mobileproto.CatalogQuery{Sort: "project"}, Hosts: []mobileproto.CatalogHost{{ID: identity.OwnerHostID, Name: "Fixture host", State: "online", Local: true}}, Sections: []mobileproto.CatalogSection{{Key: "fixture-project", Title: "Fixture project", Rows: []mobileproto.CatalogRow{row}}}, Failures: []mobileproto.CatalogFailure{}, Total: 1}
 	values := map[string]any{
+		"session-proof.json": []any{
+			map[string]any{"method": "POST", "path": "/api/v0/pairing/session-proof", "listener": "browser", "origin": "http://127.0.0.1:7861", "request": SessionProofChallengeRequest{RegistrationID: browserRegistrationID("http://127.0.0.1:7861", fixtureBrowserPublicKey())}, "response": SessionProofChallenge{Nonce: "synthetic-nonce", Timestamp: now.UnixMilli(), ExpiresAt: now.Add(pairingCodeTTL)}},
+			map[string]any{"method": "POST", "path": "/api/v0/pairing/session-proof/verify", "listener": "browser", "origin": "http://127.0.0.1:7861", "request": SessionProofRequest{RegistrationID: browserRegistrationID("http://127.0.0.1:7861", fixtureBrowserPublicKey()), Nonce: "synthetic-nonce", Timestamp: now.UnixMilli(), Signature: fixtureBrowserSignature}, "response": SessionToken{Token: "synthetic-memory-token", ExpiresAt: now.Add(browserBearerTTL)}},
+		},
 		"hello.json":    Hello{APIVersion: 0, APIInstance: "api_fixture", ServerVersion: "fixture", Capabilities: []string{"sessions", "status", "terminal", "ws_tickets", "events"}, Terminal: TerminalProtocol{Protocol: "mobile", Version: 0}},
 		"sessions.json": catalog,
 		"status.json":   Status{APIVersion: 0, APIInstance: "api_fixture", ServerVersion: "fixture", PID: 4242, StartedAt: now, Listeners: []ListenerInfo{{Name: ListenerLocal, Network: "unix", Address: "/tmp/fixture/api.sock"}, {Name: ListenerBrowser, Network: "tcp", Address: "127.0.0.1:7861"}}, Clients: []ClientInfo{}, Terminals: []TerminalInfo{}},
 		"error.json":    ErrorBody{Error: ErrorDetail{Code: CodeUnauthenticated, Message: "Pair this browser with sidecar api open."}},
-		"pairing.json":  []any{map[string]any{"method": "POST", "path": "/api/v0/pairing/codes", "listener": "local", "request": PairingCodeRequest{Next: "/s/fixture"}, "response": PairingCode{Code: "synthetic-code", URL: "http://127.0.0.1:7861/pair#code=synthetic-code&next=%2Fs%2Ffixture", ExpiresAt: now.Add(time.Minute)}}, map[string]any{"method": "POST", "path": "/api/v0/pairing/exchange", "listener": "browser", "origin": "http://127.0.0.1:7861", "request": PairingExchangeRequest{Code: "synthetic-code", Next: "/s/fixture"}, "response": PairingExchange{Token: "synthetic-token", Next: "/s/fixture"}}},
+		"pairing.json":  []any{map[string]any{"method": "POST", "path": "/api/v0/pairing/codes", "listener": "local", "request": PairingCodeRequest{Next: "/s/fixture"}, "response": PairingCode{Code: "synthetic-code", URL: "http://127.0.0.1:7861/pair#code=synthetic-code&next=%2Fs%2Ffixture", ExpiresAt: now.Add(time.Minute)}}, map[string]any{"method": "POST", "path": "/api/v0/pairing/exchange", "listener": "browser", "origin": "http://127.0.0.1:7861", "request": PairingExchangeRequest{Code: "synthetic-code", Next: "/s/fixture", PublicKey: fixtureBrowserPublicKey()}, "response": PairingExchange{RegistrationID: browserRegistrationID("http://127.0.0.1:7861", fixtureBrowserPublicKey()), Token: "synthetic-memory-token", ExpiresAt: now.Add(browserBearerTTL), Next: "/s/fixture"}}},
 	}
 	if os.Getenv("UPDATE_UI_API_FIXTURES") == "1" {
 		if err := os.MkdirAll(dir, 0755); err != nil {
@@ -339,3 +344,12 @@ func TestFixtureLoaderRejectsDocumentBeyondByteBound(t *testing.T) {
 		t.Fatal("oversized fixture with hidden second JSON document accepted")
 	}
 }
+
+func fixtureBrowserPublicKey() BrowserPublicKey {
+	curve := elliptic.P256().Params()
+	return BrowserPublicKey{Kty: "EC", Crv: "P-256", X: base64.RawURLEncoding.EncodeToString(curve.Gx.FillBytes(make([]byte, 32))), Y: base64.RawURLEncoding.EncodeToString(curve.Gy.FillBytes(make([]byte, 32)))}
+}
+
+// Fixed valid P-256 vector for the synthetic generator-point public key and
+// the fixed nonce/timestamp above. This is example material, never a credential.
+const fixtureBrowserSignature = "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpYaO0QJAFWXamzPiK7epCFH5TubNJwuXLt-rtW_T7JfBw"

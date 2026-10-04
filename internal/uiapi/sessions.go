@@ -2,7 +2,6 @@ package uiapi
 
 import (
 	"bytes"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,17 +12,28 @@ import (
 )
 
 const (
-	sessionsFileName   = "sessions.json"
-	sessionIdleTTL     = 30 * 24 * time.Hour
-	sessionAbsoluteTTL = 180 * 24 * time.Hour
+	sessionsFileName     = "sessions.json"
+	sessionIdleTTL       = 30 * 24 * time.Hour
+	sessionAbsoluteTTL   = 180 * 24 * time.Hour
+	sessionTouchInterval = time.Minute
+	browserBearerTTL     = 15 * time.Minute
 )
 
-// Session persistence is separate from short-lived codes and tickets. The
-// token stays stable until expiry/revocation, so pairing another tab does not
-// rotate a credential out from under an already-open tab.
-type sessionsFile struct {
-	Sessions map[string]session `json:"sessions"`
+// session is a durable public-key registration, never a bearer credential.
+type session struct {
+	PublicKey  BrowserPublicKey `json:"public_key"`
+	Origin     string           `json:"origin"`
+	CreatedAt  time.Time        `json:"created_at"`
+	LastUsedAt time.Time        `json:"last_used_at"`
+	ExpiresAt  time.Time        `json:"expires_at"`
 }
+
+type sessionsFile struct {
+	Version       int                `json:"version"`
+	Registrations map[string]session `json:"registrations"`
+}
+
+var errLegacySessions = errors.New("legacy browser bearer store")
 
 func sessionExpiry(s session) time.Time {
 	expires := s.LastUsedAt.Add(sessionIdleTTL)
@@ -33,66 +43,120 @@ func sessionExpiry(s session) time.Time {
 	return expires
 }
 
-// withSessionsLocked reloads before every operation. The separate lock inode
-// survives atomic replacement, and prevents stale snapshots (including a
-// concurrent local CLI caller) from resurrecting revoked tokens. a.mu must
-// be held by the caller. Nothing is published in memory until a save succeeds.
+// Writers reload while holding an independent lock inode, then atomically
+// replace the store. The CLI uses this same store through the Local socket.
+// a.mu is held, except during startup before the auth store is published.
 func (a *authStore) withSessionsLocked(change func(map[string]session) bool) error {
-	if a.sessionPath == "" { // ephemeral store used by focused auth tests
+	if a.sessionPath == "" {
 		change(a.sessions)
 		return nil
 	}
-	lock, err := os.OpenFile(a.sessionPath+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	lock, err := os.OpenFile(a.sessionPath+".lock", os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = lock.Close() }()
-	if err := lock.Chmod(0o600); err != nil {
+	if err := lock.Chmod(0600); err != nil {
 		return err
 	}
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
 		return err
 	}
 	defer func() { _ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) }()
-	next, err := readSessions(a.sessionPath)
+	next, info, err := readSessionSnapshot(a.sessionPath)
+	legacy := errors.Is(err, errLegacySessions)
+	if legacy {
+		next = map[string]session{}
+		err = nil
+	}
 	if err != nil {
+		a.storeErr = err
 		return err
 	}
-	if change(next) {
-		data, err := json.MarshalIndent(sessionsFile{Sessions: next}, "", "  ")
+	changed := change(next)
+	if changed || legacy {
+		data, err := json.MarshalIndent(sessionsFile{Version: 1, Registrations: next}, "", "  ")
 		if err != nil {
 			return err
 		}
 		if err := writePrivateFile(a.sessionPath, append(data, '\n')); err != nil {
 			return err
 		}
+		info, err = os.Stat(a.sessionPath)
+		if err != nil {
+			return err
+		}
 	}
-	a.sessions = next
+	a.sessions, a.sessionInfo, a.storeErr = next, info, nil
+	if legacy && a.logf != nil {
+		a.logf("discarded legacy persisted browser bearer hashes; pair browsers again with `sidecar api open`")
+	}
+	return nil
+}
+
+// Requests use the cached registration index. A changed inode, mtime or size
+// reloads the file without acquiring the writer lock: replacement is atomic.
+func (a *authStore) reloadSessionsLocked() error {
+	if a.sessionPath == "" {
+		return nil
+	}
+	info, err := os.Stat(a.sessionPath)
+	if errors.Is(err, os.ErrNotExist) {
+		a.sessions = map[string]session{}
+		a.sessionInfo = nil
+		a.storeErr = nil
+		return nil
+	}
+	if err != nil {
+		a.storeErr = err
+		return err
+	}
+	if a.storeErr == nil && a.sessionInfo != nil && os.SameFile(info, a.sessionInfo) && info.ModTime().Equal(a.sessionInfo.ModTime()) && info.Size() == a.sessionInfo.Size() && info.Mode() == a.sessionInfo.Mode() {
+		return nil
+	}
+	next, info, err := readSessionSnapshot(a.sessionPath)
+	if err != nil {
+		a.storeErr = err
+		return err
+	}
+	a.sessions, a.sessionInfo, a.storeErr = next, info, nil
 	return nil
 }
 
 func readSessions(path string) (map[string]session, error) {
+	records, _, err := readSessionSnapshot(path)
+	return records, err
+}
+
+func readSessionSnapshot(path string) (map[string]session, os.FileInfo, error) {
 	file, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return map[string]session{}, nil
+		return map[string]session{}, nil, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer func() { _ = file.Close() }()
-	if err := file.Chmod(0o600); err != nil {
-		return nil, err
+	if err := file.Chmod(0600); err != nil {
+		return nil, nil, err
 	}
-	// Bound reads even for a corrupt or hand-edited file.
+	info, err := file.Stat()
+	if err != nil {
+		return nil, nil, err
+	}
 	data, err := io.ReadAll(io.LimitReader(file, 1<<20+1))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	corrupt := func(reason any) (map[string]session, error) {
-		return nil, fmt.Errorf("browser session store %s is corrupt (%v); access is refused; move this file aside and pair browsers again with `sidecar api open`", path, reason)
+	corrupt := func(reason any) (map[string]session, os.FileInfo, error) {
+		return nil, nil, fmt.Errorf("browser public-key store %s is corrupt (%v); access is refused; move this file aside, restart and pair browsers again with `sidecar api open`", path, reason)
 	}
 	if len(data) > 1<<20 {
 		return corrupt("file exceeds 1 MiB")
+	}
+	var legacy map[string]json.RawMessage
+	if json.Unmarshal(data, &legacy) == nil && legacy["sessions"] != nil && legacy["version"] == nil {
+		return nil, info, errLegacySessions
 	}
 	var stored sessionsFile
 	dec := json.NewDecoder(bytes.NewReader(data))
@@ -103,21 +167,15 @@ func readSessions(path string) (map[string]session, error) {
 	if err := dec.Decode(new(any)); !errors.Is(err, io.EOF) {
 		return corrupt("trailing JSON")
 	}
-	if stored.Sessions == nil || len(stored.Sessions) > maxSessions {
-		return corrupt("missing or oversized sessions map")
+	if stored.Version != 1 || stored.Registrations == nil || len(stored.Registrations) > maxSessions {
+		return corrupt("unsupported version or missing/oversized registration map")
 	}
-	for hash, s := range stored.Sessions {
-		decoded, err := hex.DecodeString(hash)
-		origin, originErr := NormalizeOrigin(s.Origin)
-		if err != nil || len(decoded) != 32 || hash != hashTokenLower(hash) || originErr != nil || origin != s.Origin || s.CreatedAt.IsZero() || s.LastUsedAt.Before(s.CreatedAt) || !s.ExpiresAt.Equal(sessionExpiry(s)) {
-			return corrupt("invalid hash, origin or session timestamps")
+	for id, s := range stored.Registrations {
+		origin, err := NormalizeOrigin(s.Origin)
+		_, keyErr := s.PublicKey.ecdsaKey()
+		if err != nil || origin != s.Origin || keyErr != nil || id != browserRegistrationID(s.Origin, s.PublicKey) || s.CreatedAt.IsZero() || s.LastUsedAt.Before(s.CreatedAt) || !s.ExpiresAt.Equal(sessionExpiry(s)) {
+			return corrupt("invalid public key, origin or registration timestamps")
 		}
 	}
-	return stored.Sessions, nil
-}
-
-func hashTokenLower(hash string) string {
-	// Re-encoding validates the canonical lowercase SHA-256 representation.
-	decoded, _ := hex.DecodeString(hash)
-	return hex.EncodeToString(decoded)
+	return stored.Registrations, info, nil
 }

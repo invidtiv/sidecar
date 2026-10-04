@@ -234,7 +234,9 @@ func TestTicketIsBoundToItsListener(t *testing.T) {
 func TestPairingCodeRedeemsOnceUnderConcurrency(t *testing.T) {
 	h := newHarness(t)
 	code := h.pairingCode("/")
-	body := `{"code":"` + code.Code + `"}`
+	_, public := browserTestKey(t)
+	encoded, _ := json.Marshal(PairingExchangeRequest{Code: code.Code, PublicKey: public})
+	body := string(encoded)
 	const attempts = 24
 	var wg sync.WaitGroup
 	statuses := make(chan int, attempts)
@@ -626,7 +628,7 @@ func TestSessionRevocationClosesAnEvictedSessionsTerminal(t *testing.T) {
 	readText(t, conn)
 	// The bounded session store evicts its oldest token but its established
 	// stream still exists. Sign-out must cover that stream as well.
-	h.clock.Advance(time.Hour)
+	h.clock.Advance(time.Minute)
 	for i := 0; i < maxSessions; i++ {
 		if _, err := h.s.auth.newSession(h.ownOrigin()); err != nil {
 			t.Fatal(err)

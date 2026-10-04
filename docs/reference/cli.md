@@ -919,7 +919,7 @@ sidecar api events --stdio --sort activity --show-idle-sessions false
 
 Pair this machine's browser and open the UI
 
-Ask the running server for a single-use pairing link (valid for 60 seconds) and open it in the default browser. The code rides in the link's fragment, so it never appears in a request line; the pairing page exchanges it for a session token, keeps the token in that origin's localStorage (sidecar.session), and goes to --path. Session hashes persist across API restarts, with a 30-day sliding expiry and a 180-day absolute cap. Pairing again leaves other tabs valid. --print writes the link instead of opening it.
+Ask the running server for a single-use pairing link (valid for 60 seconds) and open it in the default browser. The code rides in the link's fragment, so it never appears in a request line; the pairing page registers a non-extractable WebCrypto key in that origin's IndexedDB and goes to --path. Only the public key persists on the server, with a 30-day sliding expiry and a 180-day absolute cap. The browser signs a fresh nonce after each restart to obtain a 15-minute memory-only bearer; legacy localStorage tokens are cleared. Pairing again leaves other tabs valid. --print writes the link instead of opening it.
 
 ```
 Usage: sidecar api open [--print] [--path P]

@@ -62,8 +62,10 @@ func (s *Server) routeTable() map[string]*route {
 		"/api/v0/pairing/sessions": {methods: map[string]routeFunc{http.MethodDelete: s.handleRevokeSessions}, listeners: local},
 		"/api/v0/origins": {methods: map[string]routeFunc{http.MethodGet: s.handleListOrigins, http.MethodPost: s.handlePairOrigin,
 			http.MethodDelete: s.handleRevokeOrigin}, listeners: local},
-		"/api/v0/pairing/exchange": {methods: map[string]routeFunc{http.MethodPost: s.handlePairingExchange}, listeners: []Listener{ListenerBrowser}, public: true},
-		"/pair":                    {methods: map[string]routeFunc{http.MethodGet: s.handlePair}, listeners: []Listener{ListenerBrowser}, public: true},
+		"/api/v0/pairing/session-proof":        {methods: map[string]routeFunc{http.MethodPost: s.handleSessionProofChallenge}, listeners: []Listener{ListenerBrowser}, public: true},
+		"/api/v0/pairing/session-proof/verify": {methods: map[string]routeFunc{http.MethodPost: s.handleSessionProofVerify}, listeners: []Listener{ListenerBrowser}, public: true},
+		"/api/v0/pairing/exchange":             {methods: map[string]routeFunc{http.MethodPost: s.handlePairingExchange}, listeners: []Listener{ListenerBrowser}, public: true},
+		"/pair":                                {methods: map[string]routeFunc{http.MethodGet: s.handlePair}, listeners: []Listener{ListenerBrowser}, public: true},
 	}
 }
 
@@ -256,7 +258,7 @@ func (s *Server) resolveBearer(token, origin string) (caller, bearerResult) {
 		if origin != "" && origin != bound {
 			return caller{}, bearerWrongOrigin
 		}
-		return caller{auth: "session", origin: bound, client: client}, bearerOK
+		return caller{auth: "session", origin: bound, client: client, credential: hashToken(token)}, bearerOK
 	}
 	return caller{}, bearerUnknown
 }
@@ -266,7 +268,7 @@ func (s *Server) callerLive(c caller) bool {
 	if strings.HasPrefix(c.client, "origin:") {
 		return s.origins.credentialLive(strings.TrimPrefix(c.client, "origin:"), c.credential)
 	}
-	return s.auth.sessionClientLive(c.client)
+	return s.auth.browserCredentialLive(c.client, c.credential)
 }
 
 func (h *listenerHandler) tailnetLogin(r *http.Request) (login, code, message string) {
@@ -487,11 +489,13 @@ func (s *Server) handlePairingCode(w http.ResponseWriter, r *http.Request, _ cal
 // PairingExchange is POST /api/v0/pairing/exchange: a browser session token
 // for the same-origin UI, and the validated path to land on.
 type PairingExchange struct {
-	Token string `json:"token"`
-	Next  string `json:"next"`
+	RegistrationID string    `json:"registration_id"`
+	ExpiresAt      time.Time `json:"expires_at"`
+	Token          string    `json:"token"`
+	Next           string    `json:"next"`
 }
 
-// handlePairingExchange trades a pairing code for a session token. It needs no
+// handlePairingExchange registers a browser public key using a pairing code. It needs no
 // credential (the code is one), but it is a mutation like any other, and only
 // the listener's own origin may make it: a paired origin has its own token.
 func (s *Server) handlePairingExchange(w http.ResponseWriter, r *http.Request, c caller) {
@@ -508,16 +512,27 @@ func (s *Server) handlePairingExchange(w http.ResponseWriter, r *http.Request, c
 		writeError(w, http.StatusBadRequest, CodeInvalidRequest, err.Error())
 		return
 	}
+	if _, err := body.PublicKey.ecdsaKey(); err != nil {
+		writeError(w, http.StatusBadRequest, CodeInvalidRequest, err.Error())
+		return
+	}
+	s.credentialMu.Lock()
+	defer s.credentialMu.Unlock()
 	if !s.auth.redeemCode(body.Code) {
 		writeError(w, http.StatusUnauthorized, CodePairingInvalid, "This pairing link expired or was already used; run `sidecar api open` again.")
 		return
 	}
-	token, err := s.auth.newSession(c.origin)
+	id, token, expires, err := s.auth.registerBrowser(c.origin, body.PublicKey)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, CodeBackend, "Could not create a session; try `sidecar api open` again.")
+		if errors.Is(err, errTooManyOutstanding) {
+			writeBrowserProofError(w, err)
+		} else {
+			s.auth.logStoreError(err)
+			writeError(w, http.StatusServiceUnavailable, CodeBackend, err.Error())
+		}
 		return
 	}
-	writeJSON(w, http.StatusOK, PairingExchange{Token: token, Next: next})
+	writeJSON(w, http.StatusOK, PairingExchange{RegistrationID: id, Token: token, ExpiresAt: expires, Next: next})
 }
 
 // handlePair serves the pairing page. It reads nothing from the request and

@@ -18,6 +18,8 @@ func Spec() ([]byte, error) {
 		"TicketRequest": TicketRequest{}, "TicketResponse": TicketResponse{},
 		"PairingCodeRequest": PairingCodeRequest{}, "PairingCode": PairingCode{},
 		"PairingExchangeRequest": PairingExchangeRequest{}, "PairingExchange": PairingExchange{},
+		"SessionProofChallengeRequest": SessionProofChallengeRequest{}, "SessionProofChallenge": SessionProofChallenge{},
+		"SessionProofRequest": SessionProofRequest{}, "SessionToken": SessionToken{},
 		"OriginRequest": OriginRequest{}, "OriginRegistration": OriginRegistration{},
 		"OriginList": OriginList{}, "OriginRevocation": OriginRevocation{}, "SessionRevocation": SessionRevocation{},
 		"CatalogSnapshot": mobileproto.CatalogSnapshot{}, "TerminalRequest": mobileproto.Request{},
@@ -108,7 +110,11 @@ func Spec() ([]byte, error) {
 	sessionRevoke["description"] = "Durably purges browser sessions before success; invalidates unused tickets and closes their streams. Revoked credentials remain invalid after restart."
 	sessionRevoke["parameters"] = append(sessionRevoke["parameters"].([]any), map[string]any{"name": "origin", "in": "query", "schema": map[string]any{"type": "string"}, "description": "Omit to revoke every browser session; supply an origin to revoke only its sessions."})
 	add("/api/v0/pairing/exchange", "post", "PairingExchangeRequest", "PairingExchange", []string{"browser"}, true)
-	paths["/api/v0/pairing/exchange"].(map[string]any)["post"].(map[string]any)["description"] = "Issues an independent exact-origin browser token. Hash-only sessions persist across restarts, with 30-day sliding expiry and a 180-day absolute cap. Pairing again preserves existing tabs."
+	paths["/api/v0/pairing/exchange"].(map[string]any)["post"].(map[string]any)["description"] = "Registers an exact-origin ECDSA P-256 public key and returns a 15-minute memory-only bearer. Public registrations persist with 30-day sliding expiry and a 180-day absolute cap. The client stores a non-extractable private CryptoKey in IndexedDB; never persist a bearer."
+	add("/api/v0/pairing/session-proof", "post", "SessionProofChallengeRequest", "SessionProofChallenge", []string{"browser"}, true)
+	paths["/api/v0/pairing/session-proof"].(map[string]any)["post"].(map[string]any)["description"] = "Issues an exact-origin, registration-bound single-use nonce and server timestamp, valid for 60 seconds. Requires the Browser listener's own Origin and mutation guards."
+	add("/api/v0/pairing/session-proof/verify", "post", "SessionProofRequest", "SessionToken", []string{"browser"}, true)
+	paths["/api/v0/pairing/session-proof/verify"].(map[string]any)["post"].(map[string]any)["description"] = "Consumes the nonce attempt and verifies ECDSA P-256/SHA-256 over the domain-separated origin/registration/nonce/timestamp message. Signature is base64url raw 64-byte r||s. Returns a 15-minute bearer kept only in client memory. See ui-api.md for exact bytes."
 	add("/api/v0/origins", "get", "", "OriginList", local, false)
 	add("/api/v0/origins", "post", "OriginRequest", "OriginRegistration", local, false)
 	add("/api/v0/origins", "delete", "", "OriginRevocation", local, false)
