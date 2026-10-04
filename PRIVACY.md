@@ -157,13 +157,23 @@ When terminal resource providers are enabled (see above), the provider executabl
 
 Sidecar opens URLs in your system browser (`open` on macOS, `xdg-open` on Linux, `cmd /c start` on Windows) when you choose to view a commit, PR, or file location on GitHub, or reveal a file in your system file manager. No data is sent by sidecar itself — your browser handles the request.
 
+## Local UI API
+
+`sidecar api serve` runs only when you start it. It lets browser UIs and local tools use your sessions, and it listens only on this machine:
+
+- Unix sockets in Sidecar's state directory, readable only by you.
+- A loopback TCP port (`127.0.0.1`). It never binds a network-facing address.
+- An optional tailnet socket. It is exposed to your tailnet only if you run the `tailscale serve` command it prints.
+
+Pairing a browser stores one session token in that browser's `localStorage` (`sidecar.session`), scoped to the exact origin that paired. The server keeps sessions in memory only. Paired origins are recorded in `origins.json` in the state directory, readable only by you, which stores a SHA-256 hash of each token and never the token itself. The API sends nothing anywhere: it only answers requests made to it.
+
 ## What Sidecar Does NOT Do
 
 - No telemetry, analytics, or usage tracking
 - No crash reporting
 - No data transmitted to any server other than the GitHub API calls listed above
 - No account or login required
-- No cookies, local storage, or browser fingerprinting
+- No cookies or browser fingerprinting. The only thing Sidecar stores in a browser is the pairing token described under "Local UI API".
 - No reading of SSH keys, credentials, or secrets
 - No access to contacts, email, camera, microphone, or system processes
 
