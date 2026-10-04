@@ -309,7 +309,7 @@ model {
 
   api = subsystem 'UI API Host (sidecar api serve)' {
     summary 'Headless HTTP and WebSocket API for UIs that are not the TUI'
-    description 'One long-running headless process per user exposing Sessions and live terminals over HTTP and WebSocket. It owns transport, trust and the HTTP/WebSocket mapping only: what a Sessions row says and what a terminal stream means belong to the terminal protocol services behind its Backend seam. It never starts, stops or restarts tmux. Untagged children are implemented U0, U1-a events and U1-b responsibilities; #proposed children remain planned work from the UI API plan.'
+    description 'One long-running headless process per user exposing Sessions and live terminals over HTTP and WebSocket. It owns transport, trust and the HTTP/WebSocket mapping only: what a Sessions row says and what a terminal stream means belong to the terminal protocol services behind its Backend seam. It never starts, stops or restarts tmux. Untagged children include the implemented server, events, persistent browser pairing, schemas, fixtures, workspaces, content and layouts; #proposed children remain planned work from the UI API plan.'
     metadata { uid 'api' fractalColor '#7F9FC4' evidence ['internal/uiapi/server.go', 'internal/cli/api.go', 'docs/reference/ui-api.md', 'docs/plans/active/sidecar-ui-api.md'] }
 
     local = component 'Local Listener' {
@@ -340,14 +340,14 @@ model {
     }
 
     pairing = component 'Pairing, Sessions & Tickets' {
-      summary 'Pairing codes, origin-bound session tokens, WebSocket tickets'
-      description 'Mints single-use 60-second pairing codes (Local only), exchanges a code for a browser session token bound to the exchanging origin, issues single-use 30-second WebSocket tickets, and registers, lists or revokes paired origins. Session tokens and tickets live in memory, so a server restart means pairing again.'
-      metadata { uid 'api.pairing' fractalColor '#7F9FC4' evidence ['internal/uiapi/auth.go', 'internal/uiapi/origins.go', 'internal/uiapi/pairpage.go'] }
+      summary 'Public-key browser registrations, memory bearers and WebSocket tickets'
+      description 'Mints single-use 60-second pairing codes (Local only), exchanges a code and browser public key for an origin-bound registration, issues single-use 30-second WebSocket tickets, and registers, lists or revokes paired origins. Public-key registrations persist in sessions.json with sliding and absolute expiries; a non-extractable IndexedDB key signs a fresh nonce after restart to obtain a 15-minute memory-only bearer. Revocations persist across restarts.'
+      metadata { uid 'api.pairing' fractalColor '#7F9FC4' evidence ['internal/uiapi/auth.go', 'internal/uiapi/browserauth.go', 'internal/uiapi/sessions.go', 'internal/uiapi/origins.go', 'internal/uiapi/pairpage.go'] }
     }
 
     origins = store 'Paired Origins (origins.json)' {
       summary 'Mode-0600 registry of paired origin token hashes'
-      description 'Persists paired embedding origins in $STATE/api/origins.json, mode 0600, as origin, token_sha256, scopes and created_at. Only the token hash is kept; full implies every scope; content:read grants content and per-viewer layout preferences without granting terminals.'
+      description 'Persists paired embedding origins in $STATE/api/origins.json, mode 0600, as origin, token_sha256, scopes and created_at. Only the token hash is kept; full implies every scope; workspace:write grants workspace resources, guarded operations and invalidations; content:read grants content and per-viewer layout preferences without granting terminals.'
       metadata { uid 'api.origins' fractalColor '#7F9FC4' evidence ['internal/uiapi/origins.go'] }
     }
 
@@ -358,8 +358,8 @@ model {
     }
 
     routes = component 'Route Mux (/api/v0)' {
-      summary 'hello, sessions, status, tickets, pairing, origins, streams, static UI'
-      description 'Versioned routes served identically on all three listeners: hello, sessions (the same code path as sidecar mobile sessions --json), status (byte for byte what sidecar api status --json prints), ws-tickets, pairing, origins and terminal/events upgrades, plus the --ui static bundle with SPA fallback. Errors reuse the CLI refusal vocabulary.'
+      summary 'Catalog, workspace, content, layout, pairing and stream routes'
+      description 'Versioned routes served identically on all three listeners: hello, sessions (the same code path as sidecar mobile sessions --json), status (byte for byte what sidecar api status --json prints), project workspaces and guarded operations, content and conditional viewer layouts, ws-tickets, pairing, origins and terminal/events upgrades, plus the --ui static bundle with SPA fallback. Each static request resolves a fresh confined root after directory replacement. Errors reuse the CLI refusal vocabulary.'
       metadata { uid 'api.routes' fractalColor '#7F9FC4' evidence ['internal/uiapi/handler.go', 'internal/uiapi/static.go', 'internal/uiapi/errors.go'] }
     }
 
@@ -372,8 +372,8 @@ model {
 
     events = component 'Events Stream' {
       summary 'Authenticated catalog, attention, workspace, attachment and open-content push'
-      description 'GET /api/v0/events uses the terminal trust model on every listener and emits hello, generation-numbered catalog snapshots, needs-input or finished attention, workspace, attachment and holder snapshots, workspace resource invalidations, and orderly shutdown. A single hostserve observer reuses manifest watches and desktop agent status collection; remote invalidations come from registry snapshots and diffs. State coalesces in bounded per-client buffers. sidecar api events --stdio bridges the Local socket to JSONL for SSH consumers; Open content panes subscribe through bounded content references and receive livewatch invalidations; watchers are released with each socket. Native adoption remains separate.'
-      metadata { uid 'api.events' fractalColor '#7F9FC4' evidence ['internal/uiapi/events.go', 'internal/cli/api_events_source.go', 'internal/cli/api_events.go', 'scripts/ui-api-proof.sh', 'docs/reference/ui-api.md'] }
+      description 'GET /api/v0/events uses the terminal trust model on every listener and emits hello, generation-numbered catalog snapshots, needs-input or finished attention, attachment and holder snapshots, workspace resource invalidations, and orderly shutdown. A single hostserve observer reuses manifest watches and desktop agent status collection; remote invalidations come from registry snapshots and diffs. State coalesces in bounded per-client buffers. sidecar api events --stdio bridges the Local socket to JSONL for SSH consumers; Open content panes subscribe through bounded content references and receive livewatch invalidations; watchers are released with each socket. Scope checks isolate catalog and terminals, workspace invalidations and subscribed content. Legacy holder observations share a bounded cache. Native adoption remains separate.'
+      metadata { uid 'api.events' fractalColor '#7F9FC4' evidence ['internal/uiapi/events.go', 'internal/uiapi/content_events.go', 'internal/uiapi/holder_cache.go', 'internal/cli/api_events_source.go', 'internal/cli/api_events.go', 'scripts/ui-api-proof.sh', 'docs/reference/ui-api.md'] }
     }
 
     spec = component 'Contract Spec & Schemas' {
