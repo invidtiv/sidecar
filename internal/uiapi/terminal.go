@@ -152,18 +152,19 @@ func (h *listenerHandler) serveTerminal(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	defer h.s.streams.Done()
+	h.s.credentialMu.Lock()
+	if !h.s.auth.sessionClientLive(c.client) {
+		h.s.credentialMu.Unlock()
+		_ = conn.Close(CloseUnauthenticated, revokedSessionReason)
+		return
+	}
 	client, ok := h.s.clients.add("terminal", c)
+	h.s.credentialMu.Unlock()
 	if !ok {
 		_ = conn.Close(CloseTooManyTerminals, closeReason(fmt.Sprintf("This client already has %d open terminals; close one first.", maxTerminalsPerClient)))
 		return
 	}
 	defer h.s.clients.remove(client)
-	// A revocation that ran between authorizing and registering missed this
-	// client; it removed the session first, so the session is gone here.
-	if !h.s.auth.sessionClientLive(c.client) {
-		_ = conn.Close(CloseUnauthenticated, revokedSessionReason)
-		return
-	}
 	h.s.runTerminal(conn, client)
 }
 

@@ -412,6 +412,12 @@ func (s *Server) handleTicket(w http.ResponseWriter, r *http.Request, c caller) 
 	if !decodeBody(w, r, &body) {
 		return
 	}
+	s.credentialMu.Lock()
+	defer s.credentialMu.Unlock()
+	if !s.auth.sessionClientLive(c.client) {
+		writeError(w, http.StatusUnauthorized, CodeUnauthenticated, revokedSessionReason)
+		return
+	}
 	ticket, expires, err := s.auth.issueTicket(grant{listener: c.listener, auth: c.auth, origin: c.origin, login: c.login, client: c.client})
 	if err != nil {
 		writeError(w, http.StatusTooManyRequests, CodeTooMany, fmt.Sprintf("Too many unredeemed tickets (at most %d per client); open the WebSocket with one you already have, or wait 30 seconds.", maxTicketsPerClient))
@@ -562,6 +568,8 @@ func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request, _ 
 			return
 		}
 	}
+	s.credentialMu.Lock()
+	defer s.credentialMu.Unlock()
 	revoked := s.auth.revokeSessions(origin)
 	closed := s.clients.revoke(revoked)
 	writeJSON(w, http.StatusOK, SessionRevocation{Origin: origin, Revoked: len(revoked), TerminalsClosed: closed})

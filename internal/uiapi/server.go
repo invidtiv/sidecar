@@ -90,6 +90,9 @@ type Server struct {
 	origins   *originStore
 	clients   *clientRegistry
 	static    http.Handler
+	// credentialMu orders credential changes with ticket issuance and stream
+	// registration. Authorization alone is a snapshot, not admission authority.
+	credentialMu sync.Mutex
 
 	browserPort    int
 	browserHosts   map[string]bool

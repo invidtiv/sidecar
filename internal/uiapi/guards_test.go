@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -514,5 +515,29 @@ func TestRevokedSessionCannotRegisterATerminal(t *testing.T) {
 	}
 	if !h.s.auth.sessionClientLive("origin:http://app.example") || !h.s.auth.sessionClientLive("local") {
 		t.Fatal("non-session clients must always be live")
+	}
+}
+
+// Authorization can finish before revocation while the request body has not
+// arrived yet. Ticket issuance must recheck that credential atomically.
+func TestRevocationWinsOverAnAuthorizedTicketRequest(t *testing.T) {
+	h := newHarness(t)
+	token := h.pairBrowser()
+	c, result := h.s.resolveBearer(token, h.ownOrigin())
+	if result != bearerOK {
+		t.Fatal("session authorization failed")
+	}
+	c.listener = ListenerBrowser
+	h.revokeSessions("")
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v0/ws-tickets", strings.NewReader("{}"))
+	h.s.handleTicket(w, r, c)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("ticket issued after revocation: %d %s", w.Code, w.Body.String())
+	}
+	h.s.auth.mu.Lock()
+	defer h.s.auth.mu.Unlock()
+	if len(h.s.auth.tickets) != 0 {
+		t.Fatal("revoked session retained an unused ticket")
 	}
 }
