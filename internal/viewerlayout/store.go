@@ -9,6 +9,10 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+	"unicode"
+	"unicode/utf8"
+
+	"github.com/marcus/sidecar/internal/mobileproto"
 
 	"github.com/marcus/sidecar/internal/panecodec"
 	"github.com/marcus/sidecar/internal/panelayout"
@@ -31,6 +35,14 @@ func validateLayout(n *state.PaneLayoutJSON, depth int, count *int) error {
 	}
 	if n.Root != "" || n.Surface != "" || n.HostID != "" || n.ProjectKey != "" || n.ProjectRoot != "" || n.WorkspaceID != "" || n.WorkspaceKind != "" || n.WorkspaceKey != "" || n.Open || n.Issue != "" {
 		return fmt.Errorf("layout contains host-only or legacy fields")
+	}
+	if n.Attachment != nil {
+		if n.Split != nil || (n.Kind != panecodec.KindTerminal && n.Kind != panecodec.KindShell) || n.Session == "" {
+			return fmt.Errorf("attachment is only valid on a terminal/shell leaf with a session")
+		}
+		if err := validateAttachment(n.Attachment); err != nil {
+			return err
+		}
 	}
 	tabs := len(n.Tabs) + len(n.IssueTabs) + len(n.NoteTabs) + len(n.DiffTabs) + len(n.ResourceTabs)
 	if n.Split != nil {
@@ -173,4 +185,32 @@ func Validate(doc Document) error {
 		return fmt.Errorf("%w: %v", ErrInvalid, err)
 	}
 	return nil
+}
+
+// MaxAttachmentBytes bounds the compact JSON encoding of one untrusted hint.
+const MaxAttachmentBytes = 8192
+
+func validateAttachment(a *state.PaneAttachmentJSON) error {
+	data, err := json.Marshal(a)
+	if err != nil || len(data) > MaxAttachmentBytes {
+		return fmt.Errorf("attachment exceeds %d JSON bytes", MaxAttachmentBytes)
+	}
+	if len(a.Selector) == 0 || len(a.Selector) > mobileproto.MaxTargetBytes {
+		return fmt.Errorf("attachment selector needs 1..%d UTF-8 bytes", mobileproto.MaxTargetBytes)
+	}
+	t := a.ExpectedTarget
+	for _, value := range []string{a.Selector, t.HubID, t.OwnerHostID, t.OwnerConfigGeneration, t.WorkspaceID, t.WorkspaceKind, t.Session, t.Pane, t.ServerIncarnation, t.TargetGeneration} {
+		if value == "" || !utf8.ValidString(value) || stringsControl(value) {
+			return fmt.Errorf("attachment needs complete UTF-8 identity fields without control characters")
+		}
+	}
+	return nil
+}
+func stringsControl(value string) bool {
+	for _, r := range value {
+		if unicode.IsControl(r) {
+			return true
+		}
+	}
+	return false
 }

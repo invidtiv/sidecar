@@ -2051,6 +2051,9 @@
           "active": {
             "type": "integer"
           },
+          "attachment": {
+            "$ref": "#/components/schemas/PaneAttachmentJSON"
+          },
           "box": {
             "$ref": "#/components/schemas/Box"
           },
@@ -2089,6 +2092,22 @@
           "cell",
           "kind",
           "pane"
+        ],
+        "type": "object"
+      },
+      "PaneAttachmentJSON": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_target": {
+            "$ref": "#/components/schemas/TargetIdentity"
+          },
+          "selector": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "selector",
+          "expected_target"
         ],
         "type": "object"
       },
@@ -2163,6 +2182,9 @@
         "properties": {
           "active": {
             "type": "integer"
+          },
+          "attachment": {
+            "$ref": "#/components/schemas/PaneAttachmentJSON"
           },
           "diffTabs": {
             "items": {
@@ -3316,6 +3338,9 @@
           "id": {
             "type": "string"
           },
+          "origin_pane": {
+            "type": "integer"
+          },
           "project": {
             "type": "string"
           },
@@ -3368,6 +3393,9 @@
             "type": "boolean"
           },
           "sessionsRow": {
+            "type": "string"
+          },
+          "tmuxPane": {
             "type": "string"
           },
           "tmuxSession": {

@@ -51,12 +51,13 @@ type Pane struct {
 	// Collection and Query are the active tab's plugin collection, when the
 	// Resource pane is showing one. They round-trip: a get → edit → apply of
 	// this report reopens the same list, searched the same way.
-	Collection string   `json:"collection,omitempty"`
-	Query      string   `json:"query,omitempty"`
-	Session    string   `json:"session,omitempty"`
-	Tabs       []string `json:"tabs,omitempty"`
-	Active     int      `json:"active,omitempty"`
-	Box        *Box     `json:"box,omitempty"`
+	Collection string                    `json:"collection,omitempty"`
+	Query      string                    `json:"query,omitempty"`
+	Session    string                    `json:"session,omitempty"`
+	Attachment *state.PaneAttachmentJSON `json:"attachment,omitempty"`
+	Tabs       []string                  `json:"tabs,omitempty"`
+	Active     int                       `json:"active,omitempty"`
+	Box        *Box                      `json:"box,omitempty"`
 }
 
 type Box struct {
@@ -142,6 +143,9 @@ func cellPanes(col int, cells []*panelayout.Node, layout *state.PaneLayoutJSON, 
 		leafLayout := layout
 		if saved := leafLayouts[leaf.ID]; saved != nil {
 			leafLayout = saved
+		}
+		if saved := firstLayoutLeaf(leafLayout, persistKind(leaf.Kind)); saved != nil {
+			cell.Attachment = saved.Attachment
 		}
 		cell.Tabs, cell.Active, cell.Provider, cell.Collection, cell.Query, cell.Session = leafInfo(leafLayout, leaf.Kind)
 		if box, ok := boxes[leaf.ID]; ok {

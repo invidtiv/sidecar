@@ -484,10 +484,12 @@ const (
 // Origin identifies the calling process and its owning Sidecar project shell.
 type Origin struct {
 	TmuxSession string `json:"tmuxSession"`
-	Namespace   string `json:"namespace"`
-	ProjectKey  string `json:"projectKey"`
-	WorkDir     string `json:"workDir"`
-	PID         int    `json:"pid"`
+	// TmuxPane is optional live caller identity, never a persisted selector.
+	TmuxPane   string `json:"tmuxPane,omitempty"`
+	Namespace  string `json:"namespace"`
+	ProjectKey string `json:"projectKey"`
+	WorkDir    string `json:"workDir"`
+	PID        int    `json:"pid"`
 	// Sessions is true when the request addresses the running instance's
 	// global Sessions surface rather than a project workspace. The project
 	// plugin ignores these; the overview answers them.

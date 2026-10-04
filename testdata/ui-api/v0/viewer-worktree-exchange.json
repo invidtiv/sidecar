@@ -54,6 +54,7 @@
         "ttlMs": 15000,
         "origin": {
           "tmuxSession": "fixture-echo",
+          "tmuxPane": "%1",
           "namespace": "",
           "projectKey": "",
           "workDir": "/workspace/feature",
@@ -67,6 +68,7 @@
         },
         "options": {}
       },
+      "origin_pane": 1,
       "document": {
         "layout": {
           "split": {
@@ -74,7 +76,21 @@
             "ratio": 50,
             "a": {
               "kind": "terminal",
-              "session": "fixture-echo"
+              "session": "fixture-echo",
+              "attachment": {
+                "selector": "opaque-fixture-selector",
+                "expected_target": {
+                  "hub_id": "fixture",
+                  "owner_host_id": "local:fixture",
+                  "owner_config_generation": "fixture-config",
+                  "workspace_id": "fixture-project",
+                  "workspace_kind": "shell",
+                  "session": "fixture-echo",
+                  "pane": "%1",
+                  "server_incarnation": "pid=42",
+                  "target_generation": "7ec58660b39f129cfa46756f156eab44"
+                }
+              }
             },
             "b": {
               "kind": "doc",

@@ -141,7 +141,7 @@ step "Worktree API viewer: public scoped layout, real CLI open/layout and isolat
 git -C "$root/project" worktree add -qb viewer-worktree "$root/worktree"
 worktree_created=$(cd "$root/worktree" && sc create shell --project "$root/project" --cwd "$root/worktree" --name "Worktree viewer proof" --json --wait 0)
 worktree_session=$(printf '%s' "$worktree_created" | python3 -c 'import json,sys; print(json.load(sys.stdin)["shell"]["session"])')
-timeout 50 "$root/uiviewerproof" -url "$base" -socket "$api_sock" -root "$root/worktree" -project-root "$root/project" -workspace "$root/project:worktree:$root/worktree" -project proof -sidecar "$root/sidecar" -config "$config" -session "$worktree_session"
+timeout 50 "$root/uiviewerproof" -url "$base" -socket "$api_sock" -root "$root/worktree" -project-root "$root/project" -workspace "$root/project:worktree:$root/worktree" -project proof -sidecar "$root/sidecar" -config "$config" -session "$worktree_session" -tmux-socket "$socket"
 
 step "Browser listener guards"
 code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: evil.example' "$base/api/v0/hello")

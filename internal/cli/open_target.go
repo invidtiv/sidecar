@@ -251,7 +251,18 @@ func registeredProjectForCreate(stateDir string, dest openDestination) (register
 	return registeredProject{}, &destError{code: 2, msg: unregisteredCreateProject}
 }
 
-func resolveOpenDestination(ctx context.Context, stateDir, shellFlag, projectFlag string, register projectRegistration) (openDestination, error) {
+func resolveOpenDestination(ctx context.Context, stateDir, shellFlag, projectFlag string, register projectRegistration) (dest openDestination, err error) {
+	// Carry only independently checked caller evidence matching the resolved
+	// session/socket. Explicit targeting of another shell has no pane identity.
+	defer func() {
+		if err != nil || dest.Origin.TmuxSession == "" {
+			return
+		}
+		identity, identityErr := currentPaneIdentity(ctx)
+		if identityErr == nil && identity.session == dest.Origin.TmuxSession && (dest.Origin.Namespace == "" || canonicalOpenPath(dest.Origin.Namespace) == identity.socket) {
+			dest.Origin.TmuxPane = identity.pane
+		}
+	}()
 	if shellFlag != "" || projectFlag != "" {
 		return resolveExplicitDestination(stateDir, shellFlag, projectFlag, register)
 	}
