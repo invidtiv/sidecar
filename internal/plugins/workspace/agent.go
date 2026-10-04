@@ -622,14 +622,19 @@ func (p *Plugin) StartAgentWithOptions(wt *Worktree, agentType AgentType, skipPe
 	if mainRoot == "" {
 		mainRoot = p.ctx.WorkDir
 	}
-	envOverrides := workspaceops.BuildEnvOverrides(mainRoot)
-	agentCmd := p.buildAgentCommand(agentType, wt, skipPerms)
-	launchArgv, argvErr := p.agentLaunchArgv(agentType, wt, skipPerms, agentCmd)
+	runner := p.agentLaunchSnapshot()
+	worktree := *wt
+	operationCtx := p.operationCtx
 	return func() tea.Msg {
+		// Capability selection and launcher preparation belong to execution,
+		// not the key handler. Keep the target captured before selection moves.
+		envOverrides := workspaceops.BuildEnvOverrides(mainRoot)
+		agentCmd := runner.buildAgentCommand(agentType, &worktree, skipPerms)
+		launchArgv, argvErr := runner.agentLaunchArgv(agentType, &worktree, skipPerms, agentCmd)
 		if argvErr != nil {
 			return AgentStartedMsg{Epoch: epoch, Err: argvErr}
 		}
-		ctx := p.operationCtx
+		ctx := operationCtx
 		if ctx == nil {
 			ctx = context.Background()
 		}
@@ -675,12 +680,36 @@ func (p *Plugin) StartAgentWithOptions(wt *Worktree, agentType AgentType, skipPe
 	}
 }
 
+// agentLaunchSnapshot keeps a later selection or settings edit from changing
+// the provider inputs a command captured before leaving the update loop.
+func (p *Plugin) agentLaunchSnapshot() Plugin {
+	runner := *p
+	if p.ctx == nil {
+		return runner
+	}
+	ctxCopy := *p.ctx
+	if ctxCopy.Config != nil {
+		configuration := *ctxCopy.Config
+		commands := make(map[string]string, len(configuration.Plugins.Workspace.AgentStart))
+		for key, command := range configuration.Plugins.Workspace.AgentStart {
+			commands[key] = command
+		}
+		configuration.Plugins.Workspace.AgentStart = commands
+		ctxCopy.Config = &configuration
+	}
+	runner.ctx = &ctxCopy
+	return runner
+}
+
 func (p *Plugin) agentLaunchArgv(agentType AgentType, wt *Worktree, skipPerms bool, resolvedCommand string) ([]string, error) {
-	structured, err := agentcatalog.BuildLaunch(string(agentType), nil, skipPerms)
+	if p.hasAgentLaunchOverride(wt.Path, agentType) {
+		return agentcatalog.OpaqueLaunchArgv(resolvedCommand)
+	}
+	structured, err := agentcatalog.BuildLaunchInDir(wt.Path, string(agentType), nil, skipPerms)
 	if err != nil {
 		return nil, fmt.Errorf("build agent launch: %w", err)
 	}
-	if !p.hasAgentLaunchOverride(wt.Path, agentType) && strings.TrimSpace(resolvedCommand) == strings.Join(structured, " ") {
+	if strings.TrimSpace(resolvedCommand) == agentcatalog.DisplayCommand(structured) {
 		return structured, nil
 	}
 

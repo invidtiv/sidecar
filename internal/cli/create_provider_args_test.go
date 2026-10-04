@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"github.com/marcus/sidecar/internal/testenv"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -46,6 +47,7 @@ func worktreeAgentRecord(t *testing.T, stateDir, repo, worktreePath string) stri
 // arguments to the catalog command, the way `agent start -- ARGS` does, and
 // the family is on the worktree's record.
 func TestCreateWorktreeStartsTheFamilyWithProviderArguments(t *testing.T) {
+	testenv.ProviderHelp(t, "codex", "usage: codex (older standalone CLI)")
 	idleScreen := codexIdleFixture(t)
 	stateDir, repo := createRepoProject(t)
 	terminal := &cliAgentTerminal{screen: idleScreen}
@@ -151,6 +153,7 @@ func TestCreateUsageRefusalsAreJSONEnvelopes(t *testing.T) {
 // on create shell, and the same refusal when nothing here would perform the
 // launch the arguments describe.
 func TestCreateShellStartsTheFamilyWithProviderArguments(t *testing.T) {
+	testenv.ProviderHelp(t, "codex", "usage: codex (older standalone CLI)")
 	idleScreen := codexIdleFixture(t)
 	targetProject(t)
 	terminal := &cliAgentTerminal{screen: idleScreen}

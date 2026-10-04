@@ -42,6 +42,13 @@ type Family struct {
 	// that subcommand. It is empty for every provider whose command is already
 	// the agent, which is all but one of them.
 	LaunchArgs []string
+	// HelpSupportedArgs are global arguments added to local launch and resume
+	// only when the installed command advertises them in --help. This lets a
+	// provider acquire process isolation without dropping older installations.
+	HelpSupportedArgs []string
+	// HelpArgConflicts suppresses an optional argument when the caller already
+	// selected an incompatible provider mode, such as an explicit remote server.
+	HelpArgConflicts map[string][]string
 	// SkipPermissionsArg is appended as one argv entry when the caller
 	// explicitly requests the provider's unsafe/auto-approve mode.
 	SkipPermissionsArg string
@@ -164,10 +171,20 @@ func LegacyFamilies() []Family {
 // belongs to the terminal adapter, at the one boundary where argv becomes a
 // command line; callers must not concatenate these values themselves.
 func (f Family) LaunchArgv(extra []string, skipPermissions bool) ([]string, error) {
+	return f.LaunchArgvInDir("", extra, skipPermissions)
+}
+
+// LaunchArgvInDir probes the executable in the working directory it will launch in.
+func (f Family) LaunchArgvInDir(workDir string, extra []string, skipPermissions bool) ([]string, error) {
 	if strings.TrimSpace(f.ID) == "" || strings.TrimSpace(f.Command) == "" {
 		return nil, fmt.Errorf("provider has no launch capability")
 	}
+	supported, err := f.supportedHelpArgs(workDir, append(append([]string(nil), f.LaunchArgs...), extra...))
+	if err != nil {
+		return nil, err
+	}
 	argv := []string{f.Command}
+	argv = append(argv, supported...)
 	argv = append(argv, f.LaunchArgs...)
 	if skipPermissions && f.SkipPermissionsArg != "" {
 		argv = append(argv, f.SkipPermissionsArg)
@@ -253,6 +270,26 @@ func (f Family) ResumesKind(kind string) bool {
 // line no test has ever run. A caller that wants an auto-approving resume
 // launches the provider and resumes from inside it.
 func (f Family) ResumeArgv(kind, value string, extra []string) ([]string, error) {
+	return f.ResumeArgvInDir("", kind, value, extra)
+}
+
+// ResumeArgvInDir resolves installed capabilities in the eventual resume directory.
+func (f Family) ResumeArgvInDir(workDir, kind, value string, extra []string) ([]string, error) {
+	argv, err := f.ResumePreviewArgv(kind, value, extra)
+	if err != nil {
+		return nil, err
+	}
+	supported, err := f.supportedHelpArgs(workDir, append(append([]string(nil), f.ResumeArgs...), extra...))
+	if err != nil {
+		return nil, err
+	}
+	return append(append(append([]string(nil), argv[:1]...), supported...), argv[1:]...), nil
+}
+
+// ResumePreviewArgv validates and describes the provider's resume without
+// consulting the installed executable. Rendering and eligibility checks use
+// this pure projection; execution and copied commands use ResumeArgv instead.
+func (f Family) ResumePreviewArgv(kind, value string, extra []string) ([]string, error) {
 	if strings.TrimSpace(f.ID) == "" || strings.TrimSpace(f.Command) == "" {
 		return nil, fmt.Errorf("provider has no launch capability")
 	}
@@ -306,14 +343,42 @@ func (f Family) ResumePickerArgv() ([]string, error) {
 	}
 }
 
+// ResumePickerArgvInDir resolves a provider picker for an actual prefill.
+func (f Family) ResumePickerArgvInDir(workDir string) ([]string, error) {
+	argv, err := f.ResumePickerArgv()
+	if err != nil {
+		return nil, err
+	}
+	supported, err := f.supportedHelpArgs(workDir, argv[1:])
+	if err != nil {
+		return nil, err
+	}
+	out := append([]string{argv[0]}, supported...)
+	return append(out, argv[1:]...), nil
+}
+
 // BuildResume resolves a catalog id — canonical, alias, or legacy — and builds
 // its structured resume argv.
 func BuildResume(id, kind, value string, extra []string) ([]string, error) {
+	return BuildResumeInDir("", id, kind, value, extra)
+}
+
+// BuildResumeInDir builds a resume using the owning shell's working directory.
+func BuildResumeInDir(workDir, id, kind, value string, extra []string) ([]string, error) {
 	family, ok := Lookup(id)
 	if !ok {
 		return nil, fmt.Errorf("unknown agent kind %q", id)
 	}
-	return family.ResumeArgv(kind, value, extra)
+	return family.ResumeArgvInDir(workDir, kind, value, extra)
+}
+
+// BuildResumePreview is BuildResume's pure presentation and validation path.
+func BuildResumePreview(id, kind, value string, extra []string) ([]string, error) {
+	family, ok := Lookup(id)
+	if !ok {
+		return nil, fmt.Errorf("unknown agent kind %q", id)
+	}
+	return family.ResumePreviewArgv(kind, value, extra)
 }
 
 // Lookup resolves any identifier that names a family: its canonical id, one of
@@ -342,11 +407,16 @@ func Lookup(id string) (Family, bool) {
 
 // BuildLaunch resolves a catalog id and builds its structured launch argv.
 func BuildLaunch(id string, extra []string, skipPermissions bool) ([]string, error) {
+	return BuildLaunchInDir("", id, extra, skipPermissions)
+}
+
+// BuildLaunchInDir builds a launch using the owning shell's working directory.
+func BuildLaunchInDir(workDir, id string, extra []string, skipPermissions bool) ([]string, error) {
 	family, ok := FindLaunch(strings.TrimSpace(id))
 	if !ok {
 		return nil, fmt.Errorf("unknown agent kind %q", id)
 	}
-	return family.LaunchArgv(extra, skipPermissions)
+	return family.LaunchArgvInDir(workDir, extra, skipPermissions)
 }
 
 // FindLaunch resolves selectable and explicitly supported legacy launch

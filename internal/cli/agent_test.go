@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/marcus/sidecar/internal/testenv"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -180,6 +181,7 @@ func TestAgentFeatureGateHonorsConfigAndLeadingOverrides(t *testing.T) {
 }
 
 func TestAgentListGetAndStartUseStableJSONAndPinnedTarget(t *testing.T) {
+	testenv.ProviderHelp(t, "codex", "usage: codex (older standalone CLI)")
 	idleScreen := codexIdleFixture(t)
 	stateDir, _ := targetProject(t)
 	terminal := &cliAgentTerminal{launched: true, screen: idleScreen}

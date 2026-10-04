@@ -62,6 +62,7 @@ func renderCatalog(t *testing.T) string {
 
 func writeFamily(t *testing.T, b *strings.Builder, family Family) {
 	t.Helper()
+	family.HelpSupportedArgs = nil // installed-provider capability has its own fixture proof
 	fmt.Fprintf(b, "  %s\n", family.ID)
 	fmt.Fprintf(b, "    name        %s\n", family.Name)
 	fmt.Fprintf(b, "    short       %s\n", family.Short)

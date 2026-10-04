@@ -37,6 +37,11 @@ func TestMain(m *testing.M) {
 	defaultTestConfigPath = filepath.Join(dir, "config", "config.json")
 	config.SetConfigPath(defaultTestConfigPath)
 
+	// A detached harness can inherit another live shell identity. Tests opt in
+	// to those cues explicitly; never carry the developer's into a fixture.
+	for _, key := range []string{"SIDECAR_SHELL", "SIDECAR_MANAGED_SHELL", "SIDECAR_SHELL_NAME", "SIDECAR_TMUX_SERVER", "SIDECAR_HOST"} {
+		_ = os.Unsetenv(key)
+	}
 	code := testenv.Main(m)
 	_ = os.RemoveAll(dir)
 	os.Exit(code)

@@ -29,18 +29,20 @@ var bundledFamilies embed.FS
 // field names happen to be, and so `order` and `legacy` -- which are catalog
 // bookkeeping, not properties of a provider -- stay off the type consumers read.
 type familyFile struct {
-	ID                 string   `toml:"id"`
-	Order              *int     `toml:"order"`
-	Legacy             bool     `toml:"legacy"`
-	Name               string   `toml:"name"`
-	Short              string   `toml:"short"`
-	Command            string   `toml:"command"`
-	LaunchArgs         []string `toml:"launch_args"`
-	SkipPermissionsArg string   `toml:"skip_permissions_arg"`
-	Aliases            []string `toml:"aliases"`
-	AdapterID          string   `toml:"adapter_id"`
-	ResumeArgs         []string `toml:"resume_args"`
-	ResumeKinds        []string `toml:"resume_kinds"`
+	ID                 string              `toml:"id"`
+	Order              *int                `toml:"order"`
+	Legacy             bool                `toml:"legacy"`
+	Name               string              `toml:"name"`
+	Short              string              `toml:"short"`
+	Command            string              `toml:"command"`
+	LaunchArgs         []string            `toml:"launch_args"`
+	HelpSupportedArgs  []string            `toml:"help_supported_args"`
+	HelpArgConflicts   map[string][]string `toml:"help_arg_conflicts"`
+	SkipPermissionsArg string              `toml:"skip_permissions_arg"`
+	Aliases            []string            `toml:"aliases"`
+	AdapterID          string              `toml:"adapter_id"`
+	ResumeArgs         []string            `toml:"resume_args"`
+	ResumeKinds        []string            `toml:"resume_kinds"`
 }
 
 func (f familyFile) family() Family {
@@ -50,6 +52,8 @@ func (f familyFile) family() Family {
 		Short:              f.Short,
 		Command:            f.Command,
 		LaunchArgs:         f.LaunchArgs,
+		HelpSupportedArgs:  f.HelpSupportedArgs,
+		HelpArgConflicts:   f.HelpArgConflicts,
 		SkipPermissionsArg: f.SkipPermissionsArg,
 		Aliases:            f.Aliases,
 		ResumeArgs:         f.ResumeArgs,

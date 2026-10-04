@@ -689,18 +689,29 @@ func (p *Plugin) recreateOrphanedShell(idx int) tea.Cmd {
 // startAgentInShell sends an agent command to an existing shell's tmux session.
 // td-21a2d8: Called after shell is created when an agent was selected.
 func (p *Plugin) startAgentInShell(tmuxName string, agentType AgentType, skipPerms bool) tea.Cmd {
-	return func() tea.Msg {
-		workDir := ""
-		if p.ctx != nil {
-			workDir = p.ctx.WorkDir
+	runner := p.agentLaunchSnapshot()
+	workDir, projectRoot := "", ""
+	if runner.ctx != nil {
+		workDir = runner.ctx.WorkDir
+		projectRoot = runner.ctx.ProjectRoot
+	}
+	if strings.TrimSpace(projectRoot) == "" {
+		projectRoot = workDir
+	}
+	name := ""
+	for _, shell := range p.shells {
+		if shell != nil && shell.TmuxName == tmuxName {
+			name = shell.Name
+			break
 		}
-
+	}
+	return func() tea.Msg {
 		// Get the base command for this agent family, allowing workspace-level override.
 		// Note: shell sessions pass p.ctx.WorkDir (the main workspace directory) as the
 		// search path for .sidecar-agent-start, unlike worktree sessions which pass wt.Path
 		// (the worktree-specific directory). This means .sidecar-agent-start in a worktree
 		// does NOT affect shell session agent commands — only the workspace root file does.
-		baseCmd := p.resolveAgentBaseCommand(workDir, agentType)
+		baseCmd := runner.resolveAgentBaseCommand(workDir, agentType)
 		if strings.TrimSpace(baseCmd) == "" {
 			return ShellAgentErrorMsg{
 				TmuxName: tmuxName,
@@ -719,29 +730,18 @@ func (p *Plugin) startAgentInShell(tmuxName string, agentType AgentType, skipPer
 		if launchErr != nil {
 			return ShellAgentErrorMsg{TmuxName: tmuxName, Err: fmt.Errorf("build agent launch: %w", launchErr)}
 		}
-		if !p.hasAgentLaunchOverride(workDir, agentType) {
+		if !runner.hasAgentLaunchOverride(workDir, agentType) {
 			extra := []string(nil)
 			if flag := SystemPromptAppendFlags[agentType]; flag != "" {
 				extra = []string{flag, shellstate.NamingInstruction}
 			}
 			var err error
-			launchArgv, err = agentcatalog.BuildLaunch(string(agentType), extra, skipPerms)
+			launchArgv, err = agentcatalog.BuildLaunchInDir(workDir, string(agentType), extra, skipPerms)
 			if err != nil {
 				return ShellAgentErrorMsg{TmuxName: tmuxName, Err: fmt.Errorf("build agent launch: %w", err)}
 			}
 		}
 
-		name := ""
-		for _, shell := range p.shells {
-			if shell != nil && shell.TmuxName == tmuxName {
-				name = shell.Name
-				break
-			}
-		}
-		projectRoot := workDir
-		if p.ctx != nil && strings.TrimSpace(p.ctx.ProjectRoot) != "" {
-			projectRoot = p.ctx.ProjectRoot
-		}
 		target := agentcontrol.Target{Host: "local", Project: workspaceinventory.CanonicalPath(projectRoot), Session: tmuxName, Name: name}
 		if _, err := waitWorkspaceShellReady(context.Background(), target, agentStartTimeout); err != nil {
 			return ShellAgentErrorMsg{TmuxName: tmuxName, Err: fmt.Errorf("prepare agent shell: %w", err)}
@@ -1172,12 +1172,28 @@ func (p *Plugin) handleResumeConversation(msg ResumeConversationMsg) (*Plugin, t
 	}
 	switch msg.Type {
 	case "shell":
-		return p, p.createShellWithResume(msg.ResumeArgv)
+		if p.remoteBound() {
+			return p, p.refuseRemoteCreate("shell")
+		}
+		_, scope := p.newLifecycleScope(nil)
+		workDir := p.ctx.WorkDir
+		return p, func() tea.Msg {
+			argv, err := agentcatalog.BuildResumeInDir(workDir, msg.AdapterID, "id", msg.SessionID, nil)
+			return shellResumeResolvedMsg{OperationScope: scope, ResumeArgv: argv, Err: err}
+		}
 	case "worktree":
 		return p, p.createWorktreeWithResume(msg)
 	default:
 		return p, nil
 	}
+}
+
+// shellResumeResolvedMsg returns provider selection to the update loop before
+// it arms a prefill or creates a shell. A changed project discards the result.
+type shellResumeResolvedMsg struct {
+	OperationScope
+	ResumeArgv []string
+	Err        error
 }
 
 // createShellWithResume creates a new shell and injects the resume command.
@@ -1236,6 +1252,8 @@ type worktreeResumeCreatedMsg struct {
 	OperationScope
 	Worktree   *Worktree
 	ResumeArgv []string
+	AdapterID  string
+	SessionID  string
 	AgentType  AgentType
 	SkipPerms  bool
 	Err        error
@@ -1249,6 +1267,7 @@ func (p *Plugin) createWorktreeWithResume(msg ResumeConversationMsg) tea.Cmd {
 	agentType := msg.AgentType
 	skipPerms := msg.SkipPerms
 	resumeArgv := msg.ResumeArgv
+	adapterID, sessionID := msg.AdapterID, msg.SessionID
 
 	if name == "" {
 		return func() tea.Msg {
@@ -1270,6 +1289,8 @@ func (p *Plugin) createWorktreeWithResume(msg ResumeConversationMsg) tea.Cmd {
 			OperationScope: scope,
 			Worktree:       wt,
 			ResumeArgv:     resumeArgv,
+			AdapterID:      adapterID,
+			SessionID:      sessionID,
 			AgentType:      agentType,
 			SkipPerms:      skipPerms,
 		}
@@ -1279,16 +1300,22 @@ func (p *Plugin) createWorktreeWithResume(msg ResumeConversationMsg) tea.Cmd {
 // startAgentWithResumeCmd starts an agent in a worktree with a resume command
 // instead of normal startup. The structured argv is rendered once here, where a
 // tmux command line is unavoidable.
-func (p *Plugin) startAgentWithResumeCmd(wt *Worktree, agentType AgentType, skipPerms bool, resumeArgv []string) tea.Cmd {
+func (p *Plugin) startAgentWithResumeCmd(wt *Worktree, agentType AgentType, skipPerms bool, resumeArgv []string, adapterID, sessionID string) tea.Cmd {
 	if len(resumeArgv) == 0 {
 		return nil
 	}
-	resumeCmd := agentcatalog.DisplayCommand(resumeArgv)
 	epoch := p.ctx.Epoch // Capture epoch for stale detection
 	workDir := p.ctx.WorkDir
 	name, path := wt.Name, wt.Path
 	sessionName := worktreeTmuxSession(wt)
 	return func() tea.Msg {
+		// The worktree did not exist when the conversation was selected. Probe
+		// its provider now, in the directory the resume will actually run in.
+		resolved, err := agentcatalog.BuildResumeInDir(path, adapterID, "id", sessionID, nil)
+		if err != nil {
+			return AgentStartedMsg{Epoch: epoch, WorkspaceName: name, Err: fmt.Errorf("build agent resume: %w", err)}
+		}
+		resumeCmd := agentcatalog.DisplayCommand(resolved)
 
 		// Check if session already exists
 		checkCmd := exec.Command("tmux", "has-session", "-t", sessionName)
@@ -1313,7 +1340,7 @@ func (p *Plugin) startAgentWithResumeCmd(wt *Worktree, agentType AgentType, skip
 			"-c", path, // Working directory
 		}
 
-		if err := tty.NewSession(args...); err != nil {
+		if err := newShellSession(args, sessionName, name); err != nil {
 			return AgentStartedMsg{Epoch: epoch, Err: fmt.Errorf("create session: %w", err)}
 		}
 

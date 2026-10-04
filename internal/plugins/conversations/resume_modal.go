@@ -252,7 +252,7 @@ func (p *Plugin) openResumeModal() tea.Cmd {
 	}
 
 	// Check if adapter supports resume
-	if _, ok := resumeArgv(session); !ok {
+	if resumeCommand(session) == "" {
 		return func() tea.Msg {
 			return app.ToastMsg{Message: "Resume not supported for " + session.AdapterName, IsError: true}
 		}
@@ -308,8 +308,7 @@ func (p *Plugin) executeResume() tea.Cmd {
 	// Build the resume as structured arguments. The workspace plugin renders
 	// them at the one boundary that needs a command line; nothing between here
 	// and there interpolates the session id into a string.
-	argv, ok := resumeArgv(session)
-	if !ok {
+	if resumeCommand(session) == "" {
 		return func() tea.Msg {
 			return app.ToastMsg{Message: "Resume not supported for " + session.AdapterName, IsError: true}
 		}
@@ -317,9 +316,8 @@ func (p *Plugin) executeResume() tea.Cmd {
 
 	// Build message based on type
 	msg := workspace.ResumeConversationMsg{
-		SessionID:  session.ID,
-		AdapterID:  session.AdapterID,
-		ResumeArgv: argv,
+		SessionID: session.ID,
+		AdapterID: session.AdapterID,
 	}
 
 	if p.resumeType == resumeTypeShell {
@@ -338,11 +336,19 @@ func (p *Plugin) executeResume() tea.Cmd {
 	}
 
 	// Close modal and send message
+	selected := *session
 	p.resetResumeModal()
-	return tea.Batch(
-		app.FocusPlugin("workspace-manager"),
-		func() tea.Msg { return msg },
-	)
+	return func() tea.Msg {
+		argv, err := agentcatalog.BuildResumePreview(selected.AdapterID, "id", selected.ID, nil)
+		if err != nil {
+			return app.ToastMsg{Message: "Could not resolve resume command for " + selected.AdapterName, IsError: true}
+		}
+		msg.ResumeArgv = argv
+		return tea.Batch(
+			app.FocusPlugin("workspace-manager"),
+			func() tea.Msg { return msg },
+		)()
+	}
 }
 
 // getSessionForResume returns the session to resume, checking both selectedSession ID and cursor.

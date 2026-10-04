@@ -15,6 +15,7 @@ import (
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/testenv"
 	"github.com/marcus/sidecar/internal/workspacecreate"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 	"github.com/marcus/sidecar/internal/workspacelist"
@@ -353,10 +354,12 @@ func TestGlobalShellCreateLaunchesConfiguredAgent(t *testing.T) {
 }
 
 func TestGlobalCatalogLaunchesUseStructuredAgentControlAcrossShellAndWorktree(t *testing.T) {
+	testenv.ProviderHelp(t, "codex", "Usage: codex [OPTIONS]\n  --no-daemon\n")
 	stubGlobalAgentShellReady(t)
 	_ = state.SetLastCreateAgent("")
 	m := catalogModel(t)
 	m.config = &config.Config{Plugins: config.PluginsConfig{Workspace: config.WorkspacePluginConfig{DefaultAgentType: "codex"}}}
+	m.projects[0].Path = t.TempDir()
 	project := m.projects[0]
 
 	originalCreate, originalLaunch, originalStart := createManagedShell, launchGlobalSession, startGlobalAgent
@@ -393,7 +396,7 @@ func TestGlobalCatalogLaunchesUseStructuredAgentControlAcrossShellAndWorktree(t 
 		t.Fatalf("agentcontrol requests = %d, want shell and worktree: %+v", len(requests), requests)
 	}
 	for i, request := range requests {
-		if request.Kind != "codex" || len(request.Argv) != 1 || request.Argv[0] != "codex" || request.Target.Project != projectKey(project) || request.Timeout != globalAgentStartTimeout {
+		if request.Kind != "codex" || len(request.Argv) != 2 || request.Argv[0] != "codex" || request.Argv[1] != "--no-daemon" || request.Target.Project != projectKey(project) || request.Timeout != globalAgentStartTimeout {
 			t.Fatalf("request[%d] = %+v", i, request)
 		}
 	}

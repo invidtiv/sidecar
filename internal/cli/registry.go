@@ -17,6 +17,10 @@ func RootCommand() *Command {
 		Name:    "sidecar",
 		Summary: "A TUI dashboard for AI coding agents. When run without a command, starts the interactive TUI.",
 		Usage:   "sidecar <command> [options]",
+		Long: "Commands that use the current shell or project validate inherited shell identity\n" +
+			"against the live pane and caller directory. Conflicting context refuses the command\n" +
+			"before it acts; use an explicit TARGET, --target, --shell, or --project as supported\n" +
+			"by that command. A deliberate cd keeps the shell's original project ownership.",
 	}
 
 	helpCmd := &Command{

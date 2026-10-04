@@ -3,6 +3,7 @@ package overview
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -845,16 +846,9 @@ func (m *Model) launchCreatedWorktree(project Project, plan *workspaceops.Worktr
 	}
 	configured := map[string]string(nil)
 	if m.config != nil {
-		configured = m.config.Plugins.Workspace.AgentStart
+		configured = maps.Clone(m.config.Plugins.Workspace.AgentStart)
 	}
 	startAgent := plan.AgentType != ""
-	command := ""
-	var launchArgv []string
-	var launchErr error
-	if startAgent {
-		command = resolveGlobalAgentCmd(record.Path, plan.AgentType, configured, plan.SkipPerms)
-		launchArgv, launchErr = globalAgentLaunchArgv(plan.AgentType, plan.SkipPerms, command, nil)
-	}
 	spec := workspaceops.AgentLaunchSpec{
 		SessionName: workspaceops.WorktreeSessionName(record.Path, record.Name), WorkDir: record.Path,
 		DisplayName: record.Name, AgentType: plan.AgentType,
@@ -863,8 +857,14 @@ func (m *Model) launchCreatedWorktree(project Project, plan *workspaceops.Worktr
 	m.createBusy = true
 	m.createModal = nil
 	return func() tea.Msg {
-		if launchErr != nil {
-			return globalWorkspaceLaunchedMsg{Project: project, Plan: plan, Record: record, Err: launchErr}
+		var launchArgv []string
+		if startAgent {
+			command := resolveGlobalAgentCmd(record.Path, plan.AgentType, configured, plan.SkipPerms)
+			var launchErr error
+			launchArgv, launchErr = globalAgentLaunchArgvInDir(record.Path, plan.AgentType, configured, plan.SkipPerms, command, nil)
+			if launchErr != nil {
+				return globalWorkspaceLaunchedMsg{Project: project, Plan: plan, Record: record, Err: launchErr}
+			}
 		}
 		result, err := launchGlobalSession(context.Background(), spec)
 		if err == nil && startAgent {
@@ -976,7 +976,7 @@ func (m *Model) submitCreateShell() tea.Cmd {
 			command = withGlobalShellNaming(command, agent)
 			extra := globalShellNamingArgv(agent)
 			var launchArgv []string
-			launchArgv, err = globalAgentLaunchArgv(agent, skip, command, extra)
+			launchArgv, err = globalAgentLaunchArgvInDir(project.Path, agent, configured, skip, command, extra)
 			if err == nil {
 				target := agentcontrol.Target{Host: "local", Project: projectKey(project), Session: session, Name: display}
 				_, err = waitGlobalShellReady(context.Background(), target, globalAgentStartTimeout)
@@ -993,26 +993,23 @@ func (m *Model) submitCreateShell() tea.Cmd {
 	}
 }
 
-func globalAgentLaunchArgv(agent string, skip bool, resolvedCommand string, extra []string) ([]string, error) {
-	base, err := agentcatalog.BuildLaunch(agent, nil, skip)
+func globalAgentLaunchArgvInDir(workDir, agent string, configured map[string]string, skip bool, resolvedCommand string, extra []string) ([]string, error) {
+	base, opaque, err := workspaceops.ResolveAgentLaunchArgv(workDir, agent, configured, skip, nil)
 	if err != nil {
 		return nil, fmt.Errorf("build agent launch: %w", err)
 	}
-	structured, err := agentcatalog.BuildLaunch(agent, extra, skip)
-	if err != nil {
-		return nil, fmt.Errorf("build agent launch: %w", err)
+	if opaque {
+		return agentcatalog.OpaqueLaunchArgv(resolvedCommand)
 	}
-	defaultCommand := strings.Join(base, " ")
+	defaultCommand := agentcatalog.DisplayCommand(base)
 	if len(extra) > 0 {
 		defaultCommand = withGlobalShellNaming(defaultCommand, agent)
 	}
 	if strings.TrimSpace(resolvedCommand) == defaultCommand {
-		return structured, nil
+		return append(base, extra...), nil
 	}
-	// User configuration and .sidecar-agent-start are opaque shell snippets.
-	// The wrapper preserves their behavior while agentcontrol still verifies
-	// the expected live provider and readiness. These argv are not safe launch
-	// metadata and must not be persisted or replayed as catalog launches.
+	// Task-specific command rewrites remain opaque and cannot be replayed as
+	// catalog launches. Config and checkout overrides bypass capability probes.
 	return agentcatalog.OpaqueLaunchArgv(resolvedCommand)
 }
 
