@@ -1,7 +1,7 @@
 // Authored architecture for Sidecar. Evidence paths are relative to the repository root.
 // Status: Fractal's #proposed tag marks planned work and shows only in proposed scenes;
 // untagged elements are current. For the UI API (api, termproto, uiclients, cli.api_*),
-// current means U0 as implemented on main at 2f0dc1e7, and #proposed means U1 to U4 in
+// current includes U0, U1-b schema/fixtures and the reviewed U1-c service adapter; #proposed means remaining work in
 // docs/plans/active/sidecar-ui-api.md. Each proposed description names its milestone.
 specification {
   element subsystem
@@ -309,7 +309,7 @@ model {
 
   api = subsystem 'UI API Host (sidecar api serve)' {
     summary 'Headless HTTP and WebSocket API for UIs that are not the TUI'
-    description 'One long-running headless process per user exposing Sessions and live terminals over HTTP and WebSocket. It owns transport, trust and the HTTP/WebSocket mapping only: what a Sessions row says and what a terminal stream means belong to the terminal protocol services behind its Backend seam. It never starts, stops or restarts tmux. Untagged children are U0, implemented on main at 2f0dc1e7; #proposed children are U1 to U4 work from the UI API plan.'
+    description 'One long-running headless process per user exposing Sessions and live terminals over HTTP and WebSocket. It owns transport, trust and the HTTP/WebSocket mapping only: what a Sessions row says and what a terminal stream means belong to the terminal protocol services behind its Backend seam. It never starts, stops or restarts tmux. Untagged children are implemented U0 and U1-b responsibilities; #proposed children remain planned work from the UI API plan.'
     metadata { uid 'api' fractalColor '#7F9FC4' evidence ['internal/uiapi/server.go', 'internal/cli/api.go', 'docs/reference/ui-api.md', 'docs/plans/active/sidecar-ui-api.md'] }
 
     local = component 'Local Listener' {
@@ -378,17 +378,15 @@ model {
     }
 
     spec = component 'Contract Spec & Schemas' {
-      #proposed
-      summary 'sidecar api spec: OpenAPI plus stream schemas (U1)'
-      description 'Planned for U1: request and response types in one Go package, JSON Schemas generated from them, and sidecar api spec printing the OpenAPI document plus the stream schemas, so an agent can read the whole contract in one command.'
-      metadata { uid 'api.spec' fractalColor '#7F9FC4' evidence ['docs/plans/active/sidecar-ui-api.md'] }
+      summary 'sidecar api spec: generated OpenAPI 3.1 and stream schemas'
+      description 'The spec command reflects the HTTP wire types and mobileproto envelopes into JSON Schema 2020-12, emits OpenAPI 3.1 with x-streams, and checks the committed document for drift. CLI resource JSON uses the same Go types as HTTP.'
+      metadata { uid 'api.spec' fractalColor '#7F9FC4' evidence ['internal/uiapi/spec.go', 'internal/uiapi/wire.go', 'internal/cli/api_spec.go', 'internal/uiapi/spec_test.go', 'docs/reference/ui-api.openapi.json'] }
     }
 
     fixtures = adapter 'Fixture Backend' {
-      #proposed
-      summary 'api serve --fixtures: recorded sessions, no tmux (U1)'
-      description 'Planned for U1: a Backend that serves recorded sessions and terminal streams with no tmux, for UI development, SDK CI, end-to-end proofs and demo.sh.'
-      metadata { uid 'api.fixtures' fractalColor '#7F9FC4' evidence ['docs/plans/active/sidecar-ui-api.md'] }
+      summary 'api serve --fixtures: recorded resources and deterministic echo'
+      description 'An opt-in Backend serves a recorded Sessions catalog through shared query projection and recorded status metadata. Terminals use the real mobile Service with a synthetic capture/geometry adapter, so validation, resets, ordering and reconnect remain real without tmux. Listener authentication, pairing and routing remain unchanged. History is unavailable in the echo adapter.'
+      metadata { uid 'api.fixtures' fractalColor '#7F9FC4' evidence ['internal/uiapi/fixtures.go', 'internal/mobile/fixture.go', 'internal/mobile/service.go', 'testdata/ui-api/v0/SHA256SUMS', 'scripts/ui-api-fixture-proof.sh'] }
     }
 
     workspace_routes = component 'Workspace Resources & Operations' {
@@ -617,8 +615,8 @@ model {
   cli.api_cmd .calls api.spec 'sidecar api spec' { metadata { uid 'apicmd-spec' } }
   uiclients.scripts .reads api.spec 'Reads the whole contract' { metadata { uid 'scripts-spec' } }
   api.fixtures .supplies api.routes 'Recorded sessions, no tmux' { metadata { uid 'fixtures-routes' } }
-  api.fixtures .supplies api.terminal 'Recorded terminal streams' { metadata { uid 'fixtures-terminal' } }
-    termproto.service .calls termproto.presence 'Presence and heartbeats per attachment' { metadata { uid 'service-presence' } }
+  api.fixtures .supplies api.terminal 'Real protocol, synthetic captures' { metadata { uid 'fixtures-terminal' } }
+  termproto.service .calls termproto.presence 'Presence and heartbeats per attachment' { metadata { uid 'service-presence' } }
   termproto.presence .calls terminal.control 'Claims or releases @sidecar-owner' { metadata { uid 'presence-control' } }
   termproto.service .calls termproto.frames 'Reset-free, coalesced frames' { metadata { uid 'service-frames' } }
   termproto.frames .reads terminal.control 'Byte-fed screenmodel, no capture loop' { metadata { uid 'frames-control' } }

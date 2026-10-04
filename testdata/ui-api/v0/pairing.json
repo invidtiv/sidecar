@@ -1,0 +1,29 @@
+[
+  {
+    "listener": "local",
+    "method": "POST",
+    "path": "/api/v0/pairing/codes",
+    "request": {
+      "next": "/s/fixture"
+    },
+    "response": {
+      "code": "synthetic-code",
+      "url": "http://127.0.0.1:7861/pair#code=synthetic-code\u0026next=%2Fs%2Ffixture",
+      "expires_at": "2026-10-03T00:01:00Z"
+    }
+  },
+  {
+    "listener": "browser",
+    "method": "POST",
+    "origin": "http://127.0.0.1:7861",
+    "path": "/api/v0/pairing/exchange",
+    "request": {
+      "code": "synthetic-code",
+      "next": "/s/fixture"
+    },
+    "response": {
+      "token": "synthetic-token",
+      "next": "/s/fixture"
+    }
+  }
+]
