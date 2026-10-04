@@ -953,6 +953,7 @@ func (m *Model) submitCreateShell() tea.Cmd {
 	spec := workspaceops.ManagedShellSpec{
 		ShellSpec:   workspaceops.ShellSpec{WorkDir: project.Path, SessionName: session, DisplayName: display, Cols: cols, Rows: rows},
 		ProjectRoot: project.Path,
+		Allocate:    true,
 		AgentType:   agent,
 		SkipPerms:   skip,
 	}
@@ -963,12 +964,9 @@ func (m *Model) submitCreateShell() tea.Cmd {
 	m.createTargetHost = target.HostID
 	m.pendingCreatedHost = target.HostID
 	m.pendingCreatedPath = ""
-	m.pendingCreatedTmux = session
-	if target.Remote() {
-		// The host names the session from its own manifest, so there is nothing
-		// to pend on until it answers.
-		m.pendingCreatedTmux = ""
-	}
+	// Allocation decides the identity on the owning host, including locally.
+	// A preview may be claimed by another writer before this operation completes.
+	m.pendingCreatedTmux = ""
 	_ = saveLastGlobalCreateProject(lastCreateProjectValue(target))
 	if m.createForm != nil {
 		m.createForm.PersistLastAgent()
@@ -980,8 +978,17 @@ func (m *Model) submitCreateShell() tea.Cmd {
 	if m.config != nil {
 		configured = maps.Clone(m.config.Plugins.Workspace.AgentStart)
 	}
+	if custom == "" {
+		spec.DisplayName = ""
+	}
 	return func() tea.Msg {
-		_, err := createManagedShell(spec)
+		result, err := createManagedShell(spec)
+		if result.SessionName != "" {
+			session = result.SessionName
+		}
+		if result.DisplayName != "" {
+			display = result.DisplayName
+		}
 		if err == nil && agent != "" {
 			command := resolveGlobalAgentCmd(project.Path, agent, configured, skip)
 			command = withGlobalShellNaming(command, agent)

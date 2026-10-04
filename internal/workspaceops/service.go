@@ -141,6 +141,9 @@ func (s Service) LaunchWorktree(ctx context.Context, spec AgentLaunchSpec) (Agen
 }
 
 func (s Service) CreateShell(spec ManagedShellSpec) (ShellResult, error) {
+	if spec.Allocate {
+		return s.createAllocatedShell(spec)
+	}
 	if s.Shells != nil {
 		return createManagedShell(spec, s.Shells.AddShell)
 	}

@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -21,35 +20,57 @@ import (
 // HistoryLimit is the minimum scrollback retained for sidecar-managed panes.
 const HistoryLimit = 10000
 
-var tmuxSessionMu sync.Mutex
+// A channel permits a bounded allocation to cancel while another create is
+// preparing the server. No caller holds this gate while entering shellstate.
+var tmuxSessionGate = make(chan struct{}, 1)
+
+func lockSession(ctx context.Context) error {
+	select {
+	case tmuxSessionGate <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func sessionCommand(ctx context.Context, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "tmux", args...)
+	// A child retaining stdout must not extend the allocation deadline.
+	if _, bounded := ctx.Deadline(); bounded {
+		cmd.WaitDelay = 100 * time.Millisecond
+	}
+	return cmd
+}
 
 // PrepareServer configures tmux before any sidecar session is created. Raising
 // the global default before new-session is the only behavior that works on
 // older tmux releases where history-limit changes do not affect existing panes.
 // Existing user settings above the sidecar minimum are preserved.
 func PrepareServer() error {
-	tmuxSessionMu.Lock()
-	defer tmuxSessionMu.Unlock()
-	return prepareServer()
+	if err := lockSession(context.Background()); err != nil {
+		return err
+	}
+	defer func() { <-tmuxSessionGate }()
+	return prepareServer(context.Background())
 }
 
-func prepareServer() error {
+func prepareServer(ctx context.Context) error {
 	// Keep the server alive between session creations and configure both
 	// options in the same invocation so an empty new server cannot exit in
 	// the gap between commands.
-	if err := exec.Command("tmux",
+	if err := sessionCommand(ctx,
 		"start-server", ";",
 		"set-option", "-s", "exit-empty", "off",
 	).Run(); err != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		inspectCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
-		if status, _ := tmuxserver.Inspect(ctx); status.State == tmuxserver.StateExitPending {
+		if status, _ := tmuxserver.Inspect(inspectCtx); status.State == tmuxserver.StateExitPending {
 			return fmt.Errorf("tmux server is shutting down behind attached Sidecar control clients; run sidecar session status to inspect them and sidecar session restore to clear verified orphans")
 		}
 		return fmt.Errorf("prepare tmux server: %w", err)
 	}
 
-	output, err := exec.Command("tmux", "show-options", "-gv", "history-limit").Output()
+	output, err := sessionCommand(ctx, "show-options", "-gv", "history-limit").Output()
 	if err != nil {
 		return fmt.Errorf("read tmux history-limit: %w", err)
 	}
@@ -58,11 +79,11 @@ func prepareServer() error {
 		return fmt.Errorf("parse tmux history-limit: %w", err)
 	}
 	if current < HistoryLimit {
-		if err := exec.Command("tmux", "set-option", "-g", "history-limit", strconv.Itoa(HistoryLimit)).Run(); err != nil {
+		if err := sessionCommand(ctx, "set-option", "-g", "history-limit", strconv.Itoa(HistoryLimit)).Run(); err != nil {
 			return fmt.Errorf("set tmux history-limit: %w", err)
 		}
 	}
-	advertiseTruecolor()
+	advertiseTruecolorContext(ctx)
 	return nil
 }
 
@@ -87,7 +108,7 @@ func prepareServer() error {
 // Nothing here is fatal. This is a color hint reached on the way to opening a
 // shell, and refusing to open the shell because a hint could not be set would
 // be a far worse failure than 256 colors. Errors are logged and abandoned.
-func advertiseTruecolor() {
+func advertiseTruecolorContext(ctx context.Context) {
 	if strings.TrimSpace(os.Getenv("COLORTERM")) == "" {
 		// No claim from the terminal, so sidecar makes none either.
 		return
@@ -103,7 +124,7 @@ func advertiseTruecolor() {
 	// a server option through -gv is what made an errored read fall through to
 	// the append below on every NewSession, growing the list without bound.
 	entry := term + ":Tc"
-	out, err := exec.Command("tmux", "show-options", "-sv", "terminal-overrides").Output()
+	out, err := sessionCommand(ctx, "show-options", "-sv", "terminal-overrides").Output()
 	if err != nil {
 		slog.Debug("tmux terminal-overrides unreadable; leaving color alone", "err", err)
 		return
@@ -123,21 +144,30 @@ func advertiseTruecolor() {
 			return
 		}
 	}
-	if err := exec.Command("tmux", "set-option", "-sa", "terminal-overrides", ","+entry).Run(); err != nil {
+	if err := sessionCommand(ctx, "set-option", "-sa", "terminal-overrides", ","+entry).Run(); err != nil {
 		slog.Debug("could not advertise truecolor to tmux", "term", term, "err", err)
 	}
 }
 
 // NewSession creates a tmux session only after the server-wide history default
-// is known to be configured. The mutex keeps every sidecar new-session path
+// is known to be configured. The preparation gate keeps every sidecar new-session path
 // ordered behind preparation and makes a failed preparation retryable.
-func NewSession(args ...string) error {
-	tmuxSessionMu.Lock()
-	defer tmuxSessionMu.Unlock()
-	if err := prepareServer(); err != nil {
+func NewSession(args ...string) error { return NewSessionContext(context.Background(), args...) }
+
+// NewSessionContext bounds both waiting for preparation and every tmux call.
+func NewSessionContext(ctx context.Context, args ...string) error {
+	if err := lockSession(ctx); err != nil {
 		return err
 	}
-	return exec.Command("tmux", args...).Run()
+	defer func() { <-tmuxSessionGate }()
+	if err := prepareServer(ctx); err != nil {
+		return err
+	}
+	output, err := sessionCommand(ctx, args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("tmux new-session: %s: %w", strings.TrimSpace(string(output)), err)
+	}
+	return nil
 }
 
 // SetSessionEnv sets one variable in a tmux session's environment. Panes

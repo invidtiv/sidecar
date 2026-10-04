@@ -1,7 +1,9 @@
 package workspaceops
 
 import (
+	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -23,18 +25,16 @@ import (
 // directory, a session name, a display name, and a pane size, it makes a
 // detached tmux session and reports what it made.
 //
-// The caller supplies the names. Both are project-scoped decisions — the next
-// free "Shell N", a session name that does not collide — and the plugin and a
-// global host resolve them from different places. Passing them in is what lets
-// one implementation serve both.
+// Fresh managed shells allocate names in the locked manifest transaction.
+// Explicit-session callers (retry and restore) supply the identity to reuse.
 
 // ShellSpec is everything creating a shell needs. Every field is resolved by
 // the caller; nothing here is discovered.
 type ShellSpec struct {
 	// WorkDir is the directory the session starts in.
 	WorkDir string
-	// SessionName is the tmux session identity, already checked for collisions
-	// by whoever owns the naming scheme.
+	// SessionName is the exact tmux identity for restore/reconnect, or an
+	// advisory preview when ManagedShellSpec.Allocate is set.
 	SessionName string
 	// DisplayName is what a human sees. It is published to the session
 	// environment as a cue; the manifest remains the authority.
@@ -48,14 +48,18 @@ type ShellSpec struct {
 	// until the cold-restore executor has made its prefill decision. Ordinary
 	// creation leaves this false and starts a fresh observed lifetime.
 	PreserveRecoveryEvidence bool
+	// RequireNew refuses an occupied session instead of reconnecting.
+	RequireNew bool
 }
 
 // ShellResult reports what was created. PaneID is empty when tmux created the
 // session but did not report a pane, which is survivable: the session exists
 // and the pane can be resolved again later.
 type ShellResult struct {
-	SessionName string
-	PaneID      string
+	SessionName     string
+	PaneID          string
+	DisplayName     string
+	allocationToken string // private ownership proof for an interrupted fresh create
 }
 
 // ManagedShellSpec adds the durable project identity that turns a tmux
@@ -63,6 +67,9 @@ type ShellResult struct {
 // own; the caller explicitly chooses the owning project and agent metadata.
 type ManagedShellSpec struct {
 	ShellSpec
+	// Allocate requests a fresh identity under the manifest lock. SessionName
+	// is only a caller preview; DisplayName empty requests a generated label.
+	Allocate    bool
 	ProjectRoot string
 	AgentType   string
 	SkipPerms   bool
@@ -72,7 +79,7 @@ type ManagedShellSpec struct {
 // owning project's manifest. A newly-created session is rolled back if the
 // durable identity cannot be written; a pre-existing retry is never killed.
 func CreateManagedShell(spec ManagedShellSpec) (ShellResult, error) {
-	return createManagedShell(spec, nil)
+	return (Service{}).CreateShell(spec)
 }
 
 func createManagedShell(spec ManagedShellSpec, record func(shellstate.Definition) error) (ShellResult, error) {
@@ -378,6 +385,9 @@ func CreateShell(spec ShellSpec) (ShellResult, error) {
 		return result, fmt.Errorf("shell session name is required")
 	}
 	if SessionExists(spec.SessionName) {
+		if spec.RequireNew {
+			return result, errShellSessionCollision
+		}
 		result.PaneID = PaneID(spec.SessionName)
 		return result, nil
 	}
@@ -392,6 +402,13 @@ func CreateShell(spec ShellSpec) (ShellResult, error) {
 		args = append(args, "-x", strconv.Itoa(spec.Cols), "-y", strconv.Itoa(spec.Rows))
 	}
 	if err := NewSessionWithIdentity(args, spec.SessionName, spec.DisplayName); err != nil {
+		if errors.Is(err, errShellSessionCollision) || strings.Contains(err.Error(), "duplicate session") {
+			if !spec.RequireNew && SessionExists(spec.SessionName) {
+				result.PaneID = PaneID(spec.SessionName)
+				return result, nil
+			}
+			return result, errShellSessionCollision
+		}
 		return result, fmt.Errorf("create shell session: %w", err)
 	}
 	if strings.HasPrefix(spec.SessionName, WorktreeSessionPrefix) || strings.HasPrefix(spec.SessionName, "sidecar-tp-") {
@@ -416,6 +433,8 @@ func NewSessionWithIdentity(args []string, sessionName, displayName string) erro
 	withEnv := append(append([]string(nil), args...), ShellEnvArgs(sessionName, displayName)...)
 	if err := tty.NewSession(withEnv...); err == nil {
 		return nil
+	} else if strings.Contains(err.Error(), "duplicate session") {
+		return errors.Join(errShellSessionCollision, err)
 	}
 	if err := tty.NewSession(args...); err != nil {
 		return err
@@ -475,6 +494,10 @@ func SetShellEnv(sessionName, displayName string) {
 // `-e` flags and for set-environment, but means callers must not depend on
 // argument order.
 func managedShellEnv(sessionName string) map[string]string {
+	return managedShellEnvContext(context.Background(), sessionName)
+}
+
+func managedShellEnvContext(ctx context.Context, sessionName string) map[string]string {
 	env := map[string]string{
 		shellstate.ManagedEnv: "1",
 	}
@@ -492,7 +515,7 @@ func managedShellEnv(sessionName string) map[string]string {
 	if sessionName != "" {
 		env["COMMS_SESSION"] = CommsSessionID(sessionName)
 	}
-	if pid := ServerPID(); pid > 0 {
+	if pid := serverPIDContext(ctx); pid > 0 {
 		env[shellstate.ServerEnv] = strconv.Itoa(pid)
 	}
 	// os.Executable resolves the running binary rather than searching PATH, so
@@ -521,8 +544,10 @@ func CommsSessionID(sessionName string) string {
 
 // ServerPID returns the PID of the tmux server on the current socket, or 0 when
 // there is none or it cannot be read.
-func ServerPID() int {
-	out, err := exec.Command("tmux", "display-message", "-p", "#{pid}").Output()
+func ServerPID() int { return serverPIDContext(context.Background()) }
+
+func serverPIDContext(ctx context.Context) int {
+	out, err := allocationCommand(ctx, "display-message", "-p", "#{pid}").Output()
 	if err != nil {
 		return 0
 	}
