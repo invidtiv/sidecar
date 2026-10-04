@@ -68,10 +68,22 @@ func Spec() ([]byte, error) {
 		operation := map[string]any{"operationId": strings.ReplaceAll(strings.TrimPrefix(path, "/api/v0/"), "/", "_") + "_" + method,
 			"responses": map[string]any{"200": map[string]any{"description": "Success", "content": jsonContent(response)},
 				"default": map[string]any{"description": "Named refusal; see ui-api.md for status codes and remedies", "content": jsonContent("ErrorBody")}},
-			"x-listeners": listeners, "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there.", "security": []any{map[string]any{"bearerAuth": []string{}}, map[string]any{"tailnetLogin": []string{}}, map[string]any{}}}
-		if public {
-			operation["security"] = []any{}
+			"x-listeners": listeners}
+		security := []any{}
+		if !public {
+			for _, listener := range listeners {
+				switch Listener(listener) {
+				case ListenerLocal:
+					security = append(security, map[string]any{})
+					operation["x-local-auth"] = "No credential on the mode-0600 Unix socket; the empty security alternative applies only there."
+				case ListenerBrowser:
+					security = append(security, map[string]any{"bearerAuth": []string{}})
+				case ListenerTailnet:
+					security = append(security, map[string]any{"tailnetLogin": []string{}})
+				}
+			}
 		}
+		operation["security"] = security
 		if request != "" {
 			operation["requestBody"] = map[string]any{"required": false, "content": jsonContent(request)}
 		}

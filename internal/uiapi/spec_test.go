@@ -95,6 +95,33 @@ func TestSpecDocumentsHeadMethodsServedByHandlers(t *testing.T) {
 		t.Error("static HEAD route absent from spec")
 	}
 }
+
+func TestSpecRequiresAuthForRemoteOnlyTicketIssuance(t *testing.T) {
+	h := newHarness(t)
+	response, data := h.browserDo(req{method: http.MethodPost, path: "/api/v0/ws-tickets", body: "{}", header: mutationHeaders(h.ownOrigin(), nil)})
+	expect(t, response, data, http.StatusUnauthorized, CodeUnauthenticated)
+	data, err := Spec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Paths map[string]map[string]struct {
+			Security []map[string]any `json:"security"`
+		} `json:"paths"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	security := doc.Paths["/api/v0/ws-tickets"]["post"].Security
+	if len(security) != 2 {
+		t.Errorf("tickets need Browser/Tailnet credentials, got %v", security)
+	}
+	for _, alternative := range security {
+		if len(alternative) == 0 {
+			t.Fatal("spec permits anonymous tickets although neither served listener allows them")
+		}
+	}
+}
 func walkSpecRefs(t *testing.T, value any, schemas map[string]any) {
 	t.Helper()
 	switch v := value.(type) {

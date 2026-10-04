@@ -1313,13 +1313,13 @@
           }
         },
         "security": [
+          {},
           {
             "bearerAuth": []
           },
           {
             "tailnetLogin": []
-          },
-          {}
+          }
         ],
         "x-listeners": [
           "local",
@@ -1339,13 +1339,13 @@
           }
         },
         "security": [
+          {},
           {
             "bearerAuth": []
           },
           {
             "tailnetLogin": []
-          },
-          {}
+          }
         ],
         "x-listeners": [
           "local",
@@ -1401,12 +1401,6 @@
           }
         },
         "security": [
-          {
-            "bearerAuth": []
-          },
-          {
-            "tailnetLogin": []
-          },
           {}
         ],
         "x-listeners": [
@@ -1439,12 +1433,6 @@
           }
         },
         "security": [
-          {
-            "bearerAuth": []
-          },
-          {
-            "tailnetLogin": []
-          },
           {}
         ],
         "x-listeners": [
@@ -1463,12 +1451,6 @@
           }
         },
         "security": [
-          {
-            "bearerAuth": []
-          },
-          {
-            "tailnetLogin": []
-          },
           {}
         ],
         "x-listeners": [
@@ -1523,12 +1505,6 @@
           }
         },
         "security": [
-          {
-            "bearerAuth": []
-          },
-          {
-            "tailnetLogin": []
-          },
           {}
         ],
         "x-listeners": [
@@ -1585,12 +1561,6 @@
           }
         },
         "security": [
-          {
-            "bearerAuth": []
-          },
-          {
-            "tailnetLogin": []
-          },
           {}
         ],
         "x-listeners": [
@@ -1649,8 +1619,7 @@
         "security": [],
         "x-listeners": [
           "browser"
-        ],
-        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there."
+        ]
       }
     },
     "/api/v0/pairing/sessions": {
@@ -1699,12 +1668,6 @@
           }
         },
         "security": [
-          {
-            "bearerAuth": []
-          },
-          {
-            "tailnetLogin": []
-          },
           {}
         ],
         "x-listeners": [
@@ -1813,13 +1776,13 @@
           }
         },
         "security": [
+          {},
           {
             "bearerAuth": []
           },
           {
             "tailnetLogin": []
-          },
-          {}
+          }
         ],
         "x-listeners": [
           "local",
@@ -1913,13 +1876,13 @@
           }
         },
         "security": [
+          {},
           {
             "bearerAuth": []
           },
           {
             "tailnetLogin": []
-          },
-          {}
+          }
         ],
         "x-listeners": [
           "local",
@@ -1955,13 +1918,13 @@
           }
         },
         "security": [
+          {},
           {
             "bearerAuth": []
           },
           {
             "tailnetLogin": []
-          },
-          {}
+          }
         ],
         "x-listeners": [
           "local",
@@ -1981,13 +1944,13 @@
           }
         },
         "security": [
+          {},
           {
             "bearerAuth": []
           },
           {
             "tailnetLogin": []
-          },
-          {}
+          }
         ],
         "x-listeners": [
           "local",
@@ -2103,14 +2066,12 @@
           },
           {
             "tailnetLogin": []
-          },
-          {}
+          }
         ],
         "x-listeners": [
           "browser",
           "tailnet"
-        ],
-        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there."
+        ]
       }
     },
     "/pair": {
