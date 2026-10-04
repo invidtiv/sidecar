@@ -496,6 +496,9 @@ func RootCommand() *Command {
 		Long: "Show a file, a td issue, a td note, a git diff, an external resource, or a plugin collection to the user as a\n" +
 			"split pane in a Sidecar workspace. From a Sidecar shell this targets that shell.\n" +
 			"Otherwise it targets the unique running instance, or a specific --shell / --project.\n" +
+			"An existing relative file resolves from the caller's directory first; otherwise it\n" +
+			"resolves from the destination workspace. --shell / --project use workspace-relative paths.\n" +
+			"File resolution does not change the destination shell or its project ownership.\n" +
 			"--sessions addresses the global Sessions surface of a running instance.\n" +
 			"Pass --sessions=ROW for a durable inventory ID or display name; a following\n" +
 			"bare word is the open target, not the row. Mutually exclusive with --shell\n" +
@@ -518,7 +521,7 @@ func RootCommand() *Command {
 			"row is not on the viewer's screen, or the lease holder cannot receive pane requests\n" +
 			"(disconnected, too old, or presence expired), the command declines (exit 4).",
 		Targets: []TargetDoc{
-			{Target: "path", Summary: "A file inside the target workspace, optionally \"path:line\""},
+			{Target: "path", Summary: "A caller-relative or workspace-relative file, optionally \"path:line\""},
 			{Target: "td-xxxxxx", Summary: "A td issue id"},
 			{Target: "sidecar://note/nt-xxxx", Summary: "A td note, opened as a read-only pane"},
 			{Target: "--diff", Summary: "Working-tree diff (wt); add a spec for a commit or range"},

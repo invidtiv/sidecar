@@ -2348,6 +2348,9 @@ Show a file, a td issue, a note, a git diff, a plugin resource, or a plugin coll
 Show a file, a td issue, a td note, a git diff, an external resource, or a plugin collection to the user as a
 split pane in a Sidecar workspace. From a Sidecar shell this targets that shell.
 Otherwise it targets the unique running instance, or a specific --shell / --project.
+An existing relative file resolves from the caller's directory first; otherwise it
+resolves from the destination workspace. --shell / --project use workspace-relative paths.
+File resolution does not change the destination shell or its project ownership.
 --sessions addresses the global Sessions surface of a running instance.
 Pass --sessions=ROW for a durable inventory ID or display name; a following
 bare word is the open target, not the row. Mutually exclusive with --shell
@@ -2377,7 +2380,7 @@ Usage: sidecar open [options] [<target>]
 
 **Targets:**
 
-- `path`: A file inside the target workspace, optionally "path:line"
+- `path`: A caller-relative or workspace-relative file, optionally "path:line"
 - `td-xxxxxx`: A td issue id
 - `sidecar://note/nt-xxxx`: A td note, opened as a read-only pane
 - `--diff`: Working-tree diff (wt); add a spec for a commit or range
