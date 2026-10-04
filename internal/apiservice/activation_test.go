@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestActivationProtocolChild(t *testing.T) {
@@ -86,6 +88,53 @@ func TestActivationProtocol(t *testing.T) {
 			if scenario == "regular-file" {
 				cmd.ExtraFiles = []*os.File{regular}
 			}
+			if output, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("%s: %v\n%s", scenario, err, output)
+			}
+		})
+	}
+}
+
+func TestActivationRejectsUnsupportedSockets(t *testing.T) {
+	for _, scenario := range []string{"ipv6-mapped", "seqpacket"} {
+		t.Run(scenario, func(t *testing.T) {
+			family, socketType := unix.AF_INET6, unix.SOCK_STREAM
+			if scenario == "seqpacket" {
+				family, socketType = unix.AF_UNIX, unix.SOCK_SEQPACKET
+			}
+			fd, err := unix.Socket(family, socketType, 0)
+			if err != nil {
+				if errors.Is(err, unix.EPROTONOSUPPORT) || errors.Is(err, unix.EAFNOSUPPORT) {
+					t.Skipf("socket unavailable: %v", err)
+				}
+				t.Fatal(err)
+			}
+			file := os.NewFile(uintptr(fd), scenario)
+			defer func() { _ = file.Close() }()
+			if scenario == "ipv6-mapped" {
+				if err := unix.SetsockoptInt(fd, unix.IPPROTO_IPV6, unix.IPV6_V6ONLY, 0); err != nil {
+					t.Fatal(err)
+				}
+				address := &unix.SockaddrInet6{}
+				copy(address.Addr[:], net.ParseIP("::ffff:127.0.0.1").To16())
+				err = unix.Bind(fd, address)
+			} else {
+				root, mkdirErr := os.MkdirTemp("/tmp", "sc-seq-*")
+				if mkdirErr != nil {
+					t.Fatal(mkdirErr)
+				}
+				defer func() { _ = os.RemoveAll(root) }()
+				err = unix.Bind(fd, &unix.SockaddrUnix{Name: root + "/socket"})
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := unix.Listen(fd, 1); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command(os.Args[0], "-test.run=^TestActivationProtocolChild$", "-test.timeout=5s")
+			cmd.Env = append(os.Environ(), "SC_FD_CHILD="+scenario, "LISTEN_FDS=1", "LISTEN_FDNAMES=browser")
+			cmd.ExtraFiles = []*os.File{file}
 			if output, err := cmd.CombinedOutput(); err != nil {
 				t.Fatalf("%s: %v\n%s", scenario, err, output)
 			}

@@ -100,13 +100,28 @@ func systemdListeners() (listeners []ActivatedListener, err error) {
 }
 
 func listenerFromFile(file *os.File) (net.Listener, error) {
+	fd := int(file.Fd())
+	socketType, err := unix.GetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_TYPE)
+	if err != nil || socketType != unix.SOCK_STREAM {
+		return nil, fmt.Errorf("socket activation: fd %d must be a stream socket (%v)", fd, err)
+	}
+	address, err := unix.Getsockname(fd)
+	if err != nil {
+		return nil, fmt.Errorf("socket activation: fd %d address: %w", fd, err)
+	}
+	// IP.Equal collapses IPv4-mapped IPv6 addresses to IPv4. Pin the kernel
+	// family before Go normalizes it, matching the manager's IPv4 definition.
+	switch address.(type) {
+	case *unix.SockaddrInet4, *unix.SockaddrUnix:
+	default:
+		return nil, fmt.Errorf("socket activation: fd %d must use IPv4 or Unix family", fd)
+	}
 	accepting, err := unix.GetsockoptInt(int(file.Fd()), unix.SOL_SOCKET, unix.SO_ACCEPTCONN)
 	if runtime.GOOS == "darwin" && errors.Is(err, unix.ENOPROTOOPT) {
 		// Darwin defines SO_ACCEPTCONN but does not implement getsockopt for it.
 		// Require an unconnected stream; launchd's SockPassive creates the listener.
-		socketType, typeErr := unix.GetsockoptInt(int(file.Fd()), unix.SOL_SOCKET, unix.SO_TYPE)
 		_, peerErr := unix.Getpeername(int(file.Fd()))
-		if typeErr == nil && socketType == unix.SOCK_STREAM && errors.Is(peerErr, unix.ENOTCONN) {
+		if errors.Is(peerErr, unix.ENOTCONN) {
 			accepting, err = 1, nil
 		}
 	}
