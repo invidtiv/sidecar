@@ -48,15 +48,15 @@ The status values are `queued`, `running`, `review`, `fixing`, `merged` and `blo
 | U0-b SDK/element | td-83cce9 | sidecar-ui | Claude | — | merged (sidecar-ui 2c0f521) |
 | U0-a follow-ups | td-552e24 | sidecar | Claude | U0-a | running |
 | U0-c proof and measurements | td-d8fcb0 | both | Claude, plus Marcus for the live half | U0-a, U0-b | running (automatable half) |
-| U1-a events stream | td-aa8756 | sidecar | Codex | U0-a | queued |
-| U1-b schemas, spec, fixtures | td-5ae805 | sidecar | Codex | U0-a | queued |
-| U1-c service install | td-d7869b | sidecar | Codex | U0-a | queued |
+| U1-a events stream | td-aa8756 | sidecar | Codex | U0-a | running (Codex, worktree ~/code/sidecar-ui-u1a-events, branch ui-u1a-events) |
+| U1-b schemas, spec, fixtures | td-5ae805 | sidecar | Codex | U0-a | running (Codex, ~/code/sidecar-u1b-spec, branch u1b-spec) |
+| U1-c service install | td-d7869b | sidecar | Codex | U0-a | running (Codex, ~/code/sidecar-u1c-service, branch u1c-service) |
 | U1-d presence and v1 frames | td-713745 | sidecar | Codex | td-552e24 merged | blocked on td-552e24 |
-| U1-e web app shell and Sessions | td-57a73e | sidecar-ui | Codex | U0-b | queued |
+| U1-e web app shell and Sessions | td-57a73e | sidecar-ui | Codex | U0-b | running (Codex, ~/code/sidecar-ui-u1e-app, branch u1e-app) |
 | U1-f SDK adopts v1 | td-820df7 | sidecar-ui | Codex | U1-a, U1-d | queued |
 | U1-g iOS adopts presence and events | td-fde8cf | sidecar-mobile | Codex | U1-a, U1-d | queued |
 | U1-h security review and three-viewer proof | td-295605 | all | Claude, then Codex | U1-a, U1-d, U1-f | queued |
-| U2-a core extraction | td-c709a9 | sidecar | Codex | U0-a | queued |
+| U2-a core extraction | td-c709a9 | sidecar | Codex | U0-a | running (Codex, ~/code/sidecar-u2a-core, branch u2a-core) |
 
 U2-b onward (workspace resources, operations, `<sidecar-workspace>`), U3 and U4 are briefed once U2-a and U1 settle.
 
