@@ -30,6 +30,7 @@ type (
 	// shellDeathSuspectedMsg says a capture just failed in a way that names one
 	// missing session. It is suspicion only; the probe decides.
 	shellDeathSuspectedMsg struct {
+		OperationScope
 		TmuxName   string
 		Generation int
 	}
@@ -39,6 +40,7 @@ type (
 	// it was taken under. Incarnation is the name-life (td-6a4100);
 	// Server is the tmux server (td-388929). They are not the same identity.
 	shellDeathProbedMsg struct {
+		OperationScope
 		TmuxName    string
 		Generation  int
 		Incarnation uint64
@@ -144,16 +146,20 @@ func (p *Plugin) markShellRestoreEligible(tmuxName string) {
 // chain — an embedded terminal that reported its pane gone, a send that was
 // refused. Generation 0 marks it as belonging to no poll owner.
 func (p *Plugin) suspectShellDeath(tmuxName string) tea.Cmd {
+	completionScope := p.completionScope()
+
 	if tmuxName == "" || p.findShellByName(tmuxName) == nil {
 		return nil
 	}
-	return func() tea.Msg { return shellDeathSuspectedMsg{TmuxName: tmuxName} }
+	return func() tea.Msg { return shellDeathSuspectedMsg{OperationScope: completionScope, TmuxName: tmuxName} }
 }
 
 // handleShellDeathSuspected turns a suspicious capture failure into at most one
 // tmux probe. A shell this surface never saw running has nothing to close, and
 // a shell probed moments ago waits rather than spawning tmux again.
 func (p *Plugin) handleShellDeathSuspected(msg shellDeathSuspectedMsg) tea.Cmd {
+	completionScope := p.completionScope()
+
 	if msg.Generation != 0 && !p.pollScheduler.IsCurrent(shellPollKey(msg.TmuxName), msg.Generation) {
 		return nil
 	}
@@ -181,7 +187,7 @@ func (p *Plugin) handleShellDeathSuspected(msg shellDeathSuspectedMsg) tea.Cmd {
 	incarnation := p.shellLivenessTracker().Incarnation(tmuxName)
 	server := p.shellLivenessTracker().Server()
 	return func() tea.Msg {
-		return shellDeathProbedMsg{
+		return shellDeathProbedMsg{OperationScope: completionScope,
 			TmuxName:    tmuxName,
 			Generation:  generation,
 			Incarnation: incarnation,
@@ -194,6 +200,8 @@ func (p *Plugin) handleShellDeathSuspected(msg shellDeathSuspectedMsg) tea.Cmd {
 // handleShellDeathProbed closes the shell only on a confirmed Gone verdict.
 // Anything else resumes polling: an unreachable tmux is not a dead shell.
 func (p *Plugin) handleShellDeathProbed(msg shellDeathProbedMsg) tea.Cmd {
+	completionScope := p.completionScope()
+
 	if msg.Generation != 0 && !p.pollScheduler.IsCurrent(shellPollKey(msg.TmuxName), msg.Generation) {
 		return nil
 	}
@@ -202,7 +210,7 @@ func (p *Plugin) handleShellDeathProbed(msg shellDeathProbedMsg) tea.Cmd {
 		tmuxName := msg.TmuxName
 		// Generation 0 marks a non-poll lifecycle close, which the dead-shell
 		// handler accepts without a generation check.
-		return func() tea.Msg { return ShellSessionDeadMsg{TmuxName: tmuxName} }
+		return func() tea.Msg { return ShellSessionDeadMsg{OperationScope: completionScope, TmuxName: tmuxName} }
 	}
 	return p.scheduleShellPollByName(msg.TmuxName, pollIntervalIdle)
 }

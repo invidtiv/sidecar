@@ -20,7 +20,6 @@ import (
 	"github.com/marcus/sidecar/internal/agentcontrol"
 	"github.com/marcus/sidecar/internal/agentresolve"
 	"github.com/marcus/sidecar/internal/features"
-	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/shellliveness"
 	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/tmuxenv"
@@ -133,6 +132,7 @@ func getTmuxInstallInstructions() string {
 type (
 	// ShellCreatedMsg signals shell session was created
 	ShellCreatedMsg struct {
+		OperationScope
 		SessionName string    // tmux session name
 		DisplayName string    // Display name (e.g., "Shell 1")
 		PaneID      string    // tmux pane ID (e.g., "%12") for interactive mode
@@ -143,21 +143,26 @@ type (
 		// selecting the new shell. Set for shells created without the user
 		// explicitly asking for one (auto-create on first focus).
 		KeepSelection bool
+		PrefillCmd    string // Captured from this request, never from a later project.
 	}
 
 	// ShellDetachedMsg signals user detached from shell session
 	ShellDetachedMsg struct {
+		OperationScope
 		Err error
 	}
 
 	// ShellKilledMsg signals shell session was terminated
 	ShellKilledMsg struct {
+		OperationScope
 		SessionName string // tmux session name that was killed
+		Err         error
 	}
 
 	// ShellSessionDeadMsg signals shell session was externally terminated
 	// (e.g., user typed 'exit' in the shell)
 	ShellSessionDeadMsg struct {
+		OperationScope
 		TmuxName   string // Session name for cleanup (stable identifier)
 		Generation int    // Poll owner; zero for non-poll lifecycle checks
 	}
@@ -165,6 +170,7 @@ type (
 	// ShellAgentStartedMsg signals agent was started in a shell session.
 	// td-21a2d8: Sent after agent command is sent to tmux.
 	ShellAgentStartedMsg struct {
+		OperationScope
 		TmuxName  string    // Shell's tmux session name
 		AgentType AgentType // Agent type that was started
 		SkipPerms bool      // Whether skip permissions was enabled
@@ -173,6 +179,7 @@ type (
 	// ShellAgentErrorMsg signals agent failed to start in a shell session.
 	// td-21a2d8: Sent when agent command fails to execute.
 	ShellAgentErrorMsg struct {
+		OperationScope
 		TmuxName string // Shell's tmux session name
 		Err      error  // Error that occurred
 	}
@@ -208,6 +215,7 @@ type (
 
 	// RenameShellDoneMsg signals shell rename operation completed
 	RenameShellDoneMsg struct {
+		OperationScope
 		TmuxName string // Session name (stable identifier)
 		NewName  string // New display name
 		Err      error  // Non-nil if rename failed
@@ -215,6 +223,7 @@ type (
 
 	// RenameWorktreeDoneMsg signals worktree display-name persist completed.
 	RenameWorktreeDoneMsg struct {
+		OperationScope
 		Path    string
 		NewName string
 		Err     error
@@ -229,11 +238,13 @@ type (
 
 	// shellAttachAfterCreateMsg triggers attachment after shell creation
 	shellAttachAfterCreateMsg struct {
+		OperationScope
 		Index int // Index of the shell to attach to
 	}
 
 	// shellAttachByNameMsg attaches to a session by TmuxName after recreate.
 	shellAttachByNameMsg struct {
+		OperationScope
 		TmuxName string
 	}
 )
@@ -542,12 +553,14 @@ func (p *Plugin) shellOperationService() workspaceops.Service {
 // createShell creates a durable detached shell; the update handler projects
 // its outcome into selection and polling state.
 func (p *Plugin) createShell(opts shellCreateOpts) tea.Cmd {
+	completionScope := p.completionScope()
+
 	if p.remoteBound() {
 		return p.refuseRemoteCreate("shell")
 	}
 	if !isTmuxInstalled() {
 		return func() tea.Msg {
-			return ShellCreatedMsg{Err: fmt.Errorf("tmux not installed: %s", getTmuxInstallInstructions())}
+			return ShellCreatedMsg{OperationScope: completionScope, Err: fmt.Errorf("tmux not installed: %s", getTmuxInstallInstructions())}
 		}
 	}
 
@@ -575,12 +588,13 @@ func (p *Plugin) createShell(opts shellCreateOpts) tea.Cmd {
 	}
 
 	svc := p.shellOperationService()
-	created := ShellCreatedMsg{
+	created := ShellCreatedMsg{OperationScope: completionScope,
 		SessionName:   spec.SessionName,
 		DisplayName:   spec.DisplayName,
 		AgentType:     opts.AgentType,
 		SkipPerms:     opts.SkipPerms,
 		KeepSelection: opts.KeepSelection,
+		PrefillCmd:    p.pendingPrefillCmd,
 	}
 
 	// Everything above resolves this project's answers; the creation itself is
@@ -661,6 +675,8 @@ func (p *Plugin) createDefaultShell(keepSelection bool) tea.Cmd {
 // recreateOrphanedShell recreates a tmux session for an orphaned shell.
 // td-f88fdd: Called when user tries to attach/interact with an orphaned shell.
 func (p *Plugin) recreateOrphanedShell(idx int) tea.Cmd {
+	completionScope := p.completionScope()
+
 	if idx < 0 || idx >= len(p.shells) {
 		return nil
 	}
@@ -681,7 +697,7 @@ func (p *Plugin) recreateOrphanedShell(idx int) tea.Cmd {
 			args = append(args, "-x", strconv.Itoa(previewWidth), "-y", strconv.Itoa(previewHeight))
 		}
 		if err := newShellSession(args, sessionName, shell.Name); err != nil {
-			return ShellCreatedMsg{
+			return ShellCreatedMsg{OperationScope: completionScope,
 				SessionName: sessionName,
 				DisplayName: shell.Name,
 				Err:         fmt.Errorf("recreate shell session: %w", err),
@@ -693,7 +709,7 @@ func (p *Plugin) recreateOrphanedShell(idx int) tea.Cmd {
 		// Capture pane ID
 		paneID := getPaneID(sessionName)
 
-		return ShellCreatedMsg{
+		return ShellCreatedMsg{OperationScope: completionScope,
 			SessionName: sessionName,
 			DisplayName: shell.Name,
 			PaneID:      paneID,
@@ -706,20 +722,39 @@ func (p *Plugin) recreateOrphanedShell(idx int) tea.Cmd {
 // startAgentInShell sends an agent command to an existing shell's tmux session.
 // td-21a2d8: Called after shell is created when an agent was selected.
 func (p *Plugin) startAgentInShell(tmuxName string, agentType AgentType, skipPerms bool) tea.Cmd {
-	return func() tea.Msg {
-		workDir := ""
-		if p.ctx != nil {
-			workDir = p.ctx.WorkDir
-		}
+	completionScope := p.completionScope()
 
+	runner := *p
+	if p.ctx != nil {
+		ctxCopy := *p.ctx
+		runner.ctx = &ctxCopy
+	}
+	workDir := ""
+	if p.ctx != nil {
+		workDir = p.ctx.WorkDir
+	}
+
+	name := ""
+	for _, shell := range p.shells {
+		if shell != nil && shell.TmuxName == tmuxName {
+			name = shell.Name
+			break
+		}
+	}
+	projectRoot := workDir
+	if p.ctx != nil && strings.TrimSpace(p.ctx.ProjectRoot) != "" {
+		projectRoot = p.ctx.ProjectRoot
+	}
+	target := agentcontrol.Target{Host: "local", Project: workspaceinventory.CanonicalPath(projectRoot), Session: tmuxName, Name: name}
+	return func() tea.Msg {
 		// Get the base command for this agent family, allowing workspace-level override.
 		// Note: shell sessions pass p.ctx.WorkDir (the main workspace directory) as the
 		// search path for .sidecar-agent-start, unlike worktree sessions which pass wt.Path
 		// (the worktree-specific directory). This means .sidecar-agent-start in a worktree
 		// does NOT affect shell session agent commands — only the workspace root file does.
-		baseCmd := p.resolveAgentBaseCommand(workDir, agentType)
+		baseCmd := runner.resolveAgentBaseCommand(workDir, agentType)
 		if strings.TrimSpace(baseCmd) == "" {
-			return ShellAgentErrorMsg{
+			return ShellAgentErrorMsg{OperationScope: completionScope,
 				TmuxName: tmuxName,
 				Err:      fmt.Errorf("empty agent command for type: %s", agentType),
 			}
@@ -734,9 +769,9 @@ func (p *Plugin) startAgentInShell(tmuxName string, agentType AgentType, skipPer
 		baseCmd = withShellNamingInstruction(baseCmd, agentType)
 		launchArgv, launchErr := agentcatalog.OpaqueLaunchArgv(baseCmd)
 		if launchErr != nil {
-			return ShellAgentErrorMsg{TmuxName: tmuxName, Err: fmt.Errorf("build agent launch: %w", launchErr)}
+			return ShellAgentErrorMsg{OperationScope: completionScope, TmuxName: tmuxName, Err: fmt.Errorf("build agent launch: %w", launchErr)}
 		}
-		if !p.hasAgentLaunchOverride(workDir, agentType) {
+		if !runner.hasAgentLaunchOverride(workDir, agentType) {
 			extra := []string(nil)
 			if flag := SystemPromptAppendFlags[agentType]; flag != "" {
 				extra = []string{flag, shellstate.NamingInstruction}
@@ -744,37 +779,25 @@ func (p *Plugin) startAgentInShell(tmuxName string, agentType AgentType, skipPer
 			var err error
 			launchArgv, err = agentcatalog.BuildLaunch(string(agentType), extra, skipPerms)
 			if err != nil {
-				return ShellAgentErrorMsg{TmuxName: tmuxName, Err: fmt.Errorf("build agent launch: %w", err)}
+				return ShellAgentErrorMsg{OperationScope: completionScope, TmuxName: tmuxName, Err: fmt.Errorf("build agent launch: %w", err)}
 			}
 		}
 
-		name := ""
-		for _, shell := range p.shells {
-			if shell != nil && shell.TmuxName == tmuxName {
-				name = shell.Name
-				break
-			}
-		}
-		projectRoot := workDir
-		if p.ctx != nil && strings.TrimSpace(p.ctx.ProjectRoot) != "" {
-			projectRoot = p.ctx.ProjectRoot
-		}
-		target := agentcontrol.Target{Host: "local", Project: workspaceinventory.CanonicalPath(projectRoot), Session: tmuxName, Name: name}
 		_, stage, err := (workspaceops.AgentLauncher{Wait: waitWorkspaceShellReady, StartAgent: startWorkspaceAgent}).Start(context.Background(), agentcontrol.StartRequest{
 			Target: target,
 			Kind:   string(agentType), Argv: launchArgv, Timeout: agentStartTimeout,
 		}, true, false)
 		if err != nil {
 			if stage == workspaceops.AgentWaitReady {
-				return ShellAgentErrorMsg{TmuxName: tmuxName, Err: fmt.Errorf("prepare agent shell: %w", err)}
+				return ShellAgentErrorMsg{OperationScope: completionScope, TmuxName: tmuxName, Err: fmt.Errorf("prepare agent shell: %w", err)}
 			}
-			return ShellAgentErrorMsg{
+			return ShellAgentErrorMsg{OperationScope: completionScope,
 				TmuxName: tmuxName,
 				Err:      fmt.Errorf("failed to start agent: %w", err),
 			}
 		}
 
-		return ShellAgentStartedMsg{
+		return ShellAgentStartedMsg{OperationScope: completionScope,
 			TmuxName:  tmuxName,
 			AgentType: agentType,
 			SkipPerms: skipPerms,
@@ -804,6 +827,8 @@ func (p *Plugin) attachToShellByIndex(idx int) tea.Cmd {
 }
 
 func (p *Plugin) attachToShellSession(shell *ShellSession) tea.Cmd {
+	completionScope := p.completionScope()
+
 	if !fullTmuxAttachEnabled() || shell == nil || shell.TmuxName == "" {
 		return nil
 	}
@@ -816,7 +841,7 @@ func (p *Plugin) attachToShellSession(shell *ShellSession) tea.Cmd {
 		target = shell.Agent.TmuxPane
 	}
 	return p.attachWithResize(target, sessionName, shell.Name, func(err error) tea.Msg {
-		return ShellDetachedMsg{Err: err}
+		return ShellDetachedMsg{OperationScope: completionScope, Err: err}
 	})
 }
 
@@ -829,6 +854,8 @@ func (p *Plugin) ensureShellAndAttachByIndex(idx int) tea.Cmd {
 }
 
 func (p *Plugin) ensureShellAndAttach(shell *ShellSession) tea.Cmd {
+	completionScope := p.completionScope()
+
 	if !fullTmuxAttachEnabled() || shell == nil || shell.TmuxName == "" {
 		return nil
 	}
@@ -852,7 +879,7 @@ func (p *Plugin) ensureShellAndAttach(shell *ShellSession) tea.Cmd {
 				args = append(args, "-x", strconv.Itoa(previewWidth), "-y", strconv.Itoa(previewHeight))
 			}
 			if err := newShellSession(args, sessionName, shell.Name); err != nil {
-				return ShellCreatedMsg{
+				return ShellCreatedMsg{OperationScope: completionScope,
 					SessionName: sessionName,
 					DisplayName: shell.Name,
 					Err:         fmt.Errorf("recreate shell session: %w", err),
@@ -860,17 +887,17 @@ func (p *Plugin) ensureShellAndAttach(shell *ShellSession) tea.Cmd {
 			}
 			tty.SetWindowSizeManual(sessionName)
 			paneID := getPaneID(sessionName)
-			return ShellCreatedMsg{SessionName: sessionName, DisplayName: shell.Name, PaneID: paneID}
+			return ShellCreatedMsg{OperationScope: completionScope, SessionName: sessionName, DisplayName: shell.Name, PaneID: paneID}
 		},
 		func() tea.Msg {
 			if !waitForSession(sessionName) {
-				return ShellCreatedMsg{
+				return ShellCreatedMsg{OperationScope: completionScope,
 					SessionName: sessionName,
 					DisplayName: shell.Name,
 					Err:         fmt.Errorf("shell session failed to become ready"),
 				}
 			}
-			return shellAttachByNameMsg{TmuxName: sessionName}
+			return shellAttachByNameMsg{OperationScope: completionScope, TmuxName: sessionName}
 		},
 	)
 }
@@ -896,6 +923,8 @@ func waitForSession(sessionName string) bool {
 
 // killShellSessionByName terminates a specific shell tmux session.
 func (p *Plugin) killShellSessionByName(sessionName string) tea.Cmd {
+	completionScope := p.completionScope()
+
 	if sessionName == "" {
 		return nil
 	}
@@ -908,12 +937,12 @@ func (p *Plugin) killShellSessionByName(sessionName string) tea.Cmd {
 	svc, namespace := p.shellOperationService(), tmuxenv.Namespace()
 	return func() tea.Msg {
 		if err := svc.DeleteShell(projectRoot, sessionName, namespace); err != nil {
-			return appmsg.ToastMsg{Message: err.Error(), Duration: 5 * time.Second, IsError: true}
+			return ShellKilledMsg{OperationScope: completionScope, SessionName: sessionName, Err: err}
 		}
 		// Clean up pane cache
 		globalPaneCache.remove(sessionName)
 
-		return ShellKilledMsg{SessionName: sessionName}
+		return ShellKilledMsg{OperationScope: completionScope, SessionName: sessionName}
 	}
 }
 
@@ -949,6 +978,8 @@ func (p *Plugin) pollAllShellStatusesNow() tea.Cmd {
 }
 
 func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.Cmd {
+	completionScope := p.completionScope()
+
 	ownership := p.currentTerminalOwnership()
 	if ownership == 0 {
 		return nil
@@ -1021,7 +1052,7 @@ func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.
 				// without this branch a shell that exited under an owned
 				// terminal stayed on the list forever (td-6a4100).
 				if shellliveness.SuspectsDeathErr(err) {
-					return shellDeathSuspectedMsg{TmuxName: tmuxName, Generation: generation}
+					return shellDeathSuspectedMsg{OperationScope: completionScope, TmuxName: tmuxName, Generation: generation}
 				}
 				return ShellOutputMsg{TmuxName: tmuxName, Generation: generation, Err: err}
 			}
@@ -1076,7 +1107,7 @@ func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.
 			// Avoid a synchronous sessionExists() call, which would block
 			// (td-c2961e) — the probe runs in its own command.
 			if shellliveness.SuspectsDeathErr(err) {
-				return shellDeathSuspectedMsg{TmuxName: tmuxName, Generation: generation}
+				return shellDeathSuspectedMsg{OperationScope: completionScope, TmuxName: tmuxName, Generation: generation}
 			}
 			// Other errors (timeout, etc.) - return empty output and schedule retry
 			return ShellOutputMsg{TmuxName: tmuxName, Generation: generation, Err: err}
@@ -1231,25 +1262,29 @@ func (p *Plugin) createShellWithPrefilledCommand(command string) tea.Cmd {
 // sendResumeCommandToShell injects a command line into the shell without
 // executing it.
 func (p *Plugin) sendResumeCommandToShell(tmuxSession string, resumeCmd string) tea.Cmd {
+	completionScope := p.completionScope()
+
 	if !isTmuxInstalled() || resumeCmd == "" {
 		return nil
 	}
 
 	return func() tea.Msg {
 		if err := workspaceops.TypeInShell(context.Background(), tmuxSession, resumeCmd); err != nil {
-			return shellResumeErrorMsg{Err: err}
+			return shellResumeErrorMsg{OperationScope: completionScope, Err: err}
 		}
-		return shellResumeInjectedMsg{TmuxSession: tmuxSession}
+		return shellResumeInjectedMsg{OperationScope: completionScope, TmuxSession: tmuxSession}
 	}
 }
 
 // shellResumeInjectedMsg signals that resume command was injected into shell.
 type shellResumeInjectedMsg struct {
+	OperationScope
 	TmuxSession string
 }
 
 // shellResumeErrorMsg signals an error injecting resume command.
 type shellResumeErrorMsg struct {
+	OperationScope
 	Err error
 }
 

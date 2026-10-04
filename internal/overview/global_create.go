@@ -68,6 +68,7 @@ type remoteReply struct {
 }
 
 type globalShellCreatedMsg struct {
+	completionScope
 	remoteReply
 	Project Project
 	Tmux    string
@@ -75,6 +76,7 @@ type globalShellCreatedMsg struct {
 }
 
 type globalWorktreePlannedMsg struct {
+	completionScope
 	remoteReply
 	Project Project
 	Plan    *workspaceops.WorktreePlan
@@ -82,6 +84,7 @@ type globalWorktreePlannedMsg struct {
 }
 
 type globalWorktreeCreatedMsg struct {
+	completionScope
 	remoteReply
 	Project  Project
 	Plan     *workspaceops.WorktreePlan
@@ -97,11 +100,13 @@ type globalWorktreeCreatedMsg struct {
 }
 
 type globalWorktreeDeletedMsg struct {
+	completionScope
 	Project Project
 	Err     error
 }
 
 type globalWorkspaceLaunchedMsg struct {
+	completionScope
 	Project Project
 	Plan    *workspaceops.WorktreePlan
 	Record  *workspaceops.WorktreeRecord
@@ -110,6 +115,7 @@ type globalWorkspaceLaunchedMsg struct {
 }
 
 type projectMutationRefreshMsg struct {
+	completionScope
 	Project Project
 	Result  workspaceinventory.ProjectResult
 	Err     error
@@ -124,6 +130,7 @@ type projectMutationRefreshMsg struct {
 }
 
 type globalCreateBranchesMsg struct {
+	completionScope
 	ProjectKey string
 	Branches   []string
 	Current    string
@@ -162,6 +169,7 @@ func (m *Model) openCreate(projectKey string, kind workspacecreate.Kind, focusKi
 	if m.PreviewInteractive() || len(projectItems) == 0 {
 		return nil
 	}
+	m.createGeneration++
 	m.closeViewFlyout()
 	m.closeRenameShell()
 	key := m.normalizedCreateProjectKey(projectKey)
@@ -366,6 +374,8 @@ func (m *Model) setCreateError(msg string) {
 }
 
 func (m *Model) loadCreateBranches() tea.Cmd {
+	scope := m.createCompletionScope()
+
 	target, ok := m.selectedCreateTarget()
 	if !ok {
 		return nil
@@ -397,7 +407,7 @@ func (m *Model) loadCreateBranches() tea.Cmd {
 		if current == "HEAD" {
 			current = ""
 		}
-		return globalCreateBranchesMsg{ProjectKey: key, Branches: branches, Current: current}
+		return globalCreateBranchesMsg{completionScope: scope, ProjectKey: key, Branches: branches, Current: current}
 	}
 }
 
@@ -665,6 +675,8 @@ func (m *Model) applyCreateAction(action string) tea.Cmd {
 }
 
 func (m *Model) planCreateWorktree() tea.Cmd {
+	scope := m.createCompletionScope()
+
 	target, ok := m.selectedCreateTarget()
 	if !ok {
 		// The user did choose a project; what vanished is the host it lived on.
@@ -717,7 +729,7 @@ func (m *Model) planCreateWorktree() tea.Cmd {
 			plan.AgentType = agent
 			plan.SkipPerms = skip
 		}
-		return globalWorktreePlannedMsg{Project: project, Plan: plan, Err: err}
+		return globalWorktreePlannedMsg{completionScope: scope, Project: project, Plan: plan, Err: err}
 	}
 }
 
@@ -729,6 +741,8 @@ func globalOperationService() workspaceops.Service {
 }
 
 func (m *Model) executeCreateWorktree() tea.Cmd {
+	scope := m.createCompletionScope()
+
 	if m.createPlan == nil {
 		return nil
 	}
@@ -783,7 +797,7 @@ func (m *Model) executeCreateWorktree() tea.Cmd {
 		if creation.Record != nil && creation.Err == nil {
 			creation.Outcomes = append(creation.Outcomes, globalOperationService().SetupWorktree(context.Background(), plan, false)...)
 		}
-		return globalWorktreeCreatedMsg{Project: project, Plan: plan, Record: creation.Record, Outcomes: creation.Outcomes, Err: creation.Err}
+		return globalWorktreeCreatedMsg{completionScope: scope, Project: project, Plan: plan, Record: creation.Record, Outcomes: creation.Outcomes, Err: creation.Err}
 	}
 }
 
@@ -800,6 +814,8 @@ func summarizeCreateOutcomes(outcomes []workspaceops.SetupOutcome) string {
 }
 
 func (m *Model) retryCreateSetup() tea.Cmd {
+	scope := m.createCompletionScope()
+
 	if m.createPlan == nil || m.createRecord == nil {
 		return nil
 	}
@@ -813,7 +829,7 @@ func (m *Model) retryCreateSetup() tea.Cmd {
 	m.createModal = nil
 	return func() tea.Msg {
 		outcomes := globalOperationService().SetupWorktree(context.Background(), plan, false)
-		return globalWorktreeCreatedMsg{Project: project, Plan: plan, Record: record, Outcomes: outcomes}
+		return globalWorktreeCreatedMsg{completionScope: scope, Project: project, Plan: plan, Record: record, Outcomes: outcomes}
 	}
 }
 
@@ -832,6 +848,8 @@ func (m *Model) openCreatedWorktreeAnyway() tea.Cmd {
 }
 
 func (m *Model) launchCreatedWorktree(project Project, plan *workspaceops.WorktreePlan, record *workspaceops.WorktreeRecord) tea.Cmd {
+	scope := m.createCompletionScope()
+
 	if plan == nil || record == nil {
 		return nil
 	}
@@ -856,7 +874,7 @@ func (m *Model) launchCreatedWorktree(project Project, plan *workspaceops.Worktr
 	m.createModal = nil
 	return func() tea.Msg {
 		if launchErr != nil {
-			return globalWorkspaceLaunchedMsg{Project: project, Plan: plan, Record: record, Err: launchErr}
+			return globalWorkspaceLaunchedMsg{completionScope: scope, Project: project, Plan: plan, Record: record, Err: launchErr}
 		}
 		result, err := globalOperationService().LaunchWorktree(context.Background(), spec)
 		if err == nil && startAgent {
@@ -867,18 +885,20 @@ func (m *Model) launchCreatedWorktree(project Project, plan *workspaceops.Worktr
 			}, !result.Reconnected, false)
 			if startErr != nil {
 				if stage == workspaceops.AgentWaitReady {
-					return globalWorkspaceLaunchedMsg{Project: project, Plan: plan, Record: record, Result: result, Err: fmt.Errorf("prepare agent shell: %w", startErr)}
+					return globalWorkspaceLaunchedMsg{completionScope: scope, Project: project, Plan: plan, Record: record, Result: result, Err: fmt.Errorf("prepare agent shell: %w", startErr)}
 				}
 				err = fmt.Errorf("start agent: %w", startErr)
 			} else if started.Target.PaneID != "" {
 				result.PaneID = started.Target.PaneID
 			}
 		}
-		return globalWorkspaceLaunchedMsg{Project: project, Plan: plan, Record: record, Result: result, Err: err}
+		return globalWorkspaceLaunchedMsg{completionScope: scope, Project: project, Plan: plan, Record: record, Result: result, Err: err}
 	}
 }
 
 func (m *Model) deleteCreatedWorktree() tea.Cmd {
+	scope := m.createCompletionScope()
+
 	project, ok := m.selectedCreateProject()
 	if !ok || m.createPlan == nil || m.createRecord == nil {
 		return nil
@@ -891,11 +911,13 @@ func (m *Model) deleteCreatedWorktree() tea.Cmd {
 		if err == nil {
 			_ = globalOperationService().FinalizeWorktree(plan)
 		}
-		return globalWorktreeDeletedMsg{Project: project, Err: err}
+		return globalWorktreeDeletedMsg{completionScope: scope, Project: project, Err: err}
 	}
 }
 
 func (m *Model) submitCreateShell() tea.Cmd {
+	scope := m.createCompletionScope()
+
 	target, ok := m.selectedCreateTarget()
 	if !ok {
 		// See planCreateWorktree: the project was chosen; its host went away.
@@ -974,11 +996,11 @@ func (m *Model) submitCreateShell() tea.Cmd {
 					Kind:   agent, Argv: launchArgv, Timeout: globalAgentStartTimeout,
 				}, true, false)
 				if err != nil && stage == workspaceops.AgentWaitReady {
-					return globalShellCreatedMsg{Project: project, Tmux: session, Err: fmt.Errorf("prepare agent shell: %w", err)}
+					return globalShellCreatedMsg{completionScope: scope, Project: project, Tmux: session, Err: fmt.Errorf("prepare agent shell: %w", err)}
 				}
 			}
 		}
-		return globalShellCreatedMsg{Project: project, Tmux: session, Err: err}
+		return globalShellCreatedMsg{completionScope: scope, Project: project, Tmux: session, Err: err}
 	}
 }
 
@@ -1096,6 +1118,8 @@ func (m *Model) refreshOneProject(project Project, background bool) tea.Cmd {
 // before it. A caller holding panes from a just-completed cycle passes them
 // instead, saving a subprocess spawn per project.
 func (m *Model) refreshOneProjectWithPanes(project Project, background bool, panes []workspaceinventory.Pane) tea.Cmd {
+	scope := m.completionScope()
+
 	// A host-scoped key names a project on another machine (hosts.ScopedKey),
 	// and everything below answers a question about THIS one: it stats a path,
 	// runs git in it, asks the local tmux server about it, and folds the answer
@@ -1128,19 +1152,19 @@ func (m *Model) refreshOneProjectWithPanes(project Project, background bool, pan
 		ctx := context.Background()
 		inventory := collector.CollectProjectInventory(ctx, project.Name, project.Path)
 		if inventory.Err != nil {
-			return projectMutationRefreshMsg{Project: project, Result: inventory, Err: inventory.Err, Background: background, DispatchedAt: dispatchedAt}
+			return projectMutationRefreshMsg{completionScope: scope, Project: project, Result: inventory, Err: inventory.Err, Background: background, DispatchedAt: dispatchedAt}
 		}
 		claimsInputs := append(others, inventory)
 		collector = collector.WithShellClaims(workspaceinventory.BuildShellClaims(claimsInputs))
 		if panes == nil {
 			collected, err := collector.ListPanes(ctx)
 			if err != nil {
-				return projectMutationRefreshMsg{Project: project, Result: inventory, Err: err, Background: background, DispatchedAt: dispatchedAt}
+				return projectMutationRefreshMsg{completionScope: scope, Project: project, Result: inventory, Err: err, Background: background, DispatchedAt: dispatchedAt}
 			}
 			panes = collected
 		}
 		result := collector.RefreshProjectStatus(ctx, inventory, roots, panes)
-		return projectMutationRefreshMsg{Project: project, Result: withProjectIdentity(result, project), Err: result.Err, Background: background, DispatchedAt: dispatchedAt}
+		return projectMutationRefreshMsg{completionScope: scope, Project: project, Result: withProjectIdentity(result, project), Err: result.Err, Background: background, DispatchedAt: dispatchedAt}
 	}
 }
 

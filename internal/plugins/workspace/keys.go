@@ -198,6 +198,8 @@ func (p *Plugin) handleAgentConfigKeys(msg tea.KeyPressMsg) tea.Cmd {
 
 // executeAgentConfig executes the agent config modal action (start or restart).
 func (p *Plugin) executeAgentConfig() tea.Cmd {
+	completionScope := p.completionScope()
+
 	wt := p.agentConfigWorktree
 	agentType := p.agentConfigAgentType
 	skipPerms := p.agentConfigSkipPerms
@@ -217,7 +219,7 @@ func (p *Plugin) executeAgentConfig() tea.Cmd {
 		return tea.Sequence(
 			p.StopAgent(wt),
 			func() tea.Msg {
-				return restartAgentWithOptionsMsg{
+				return restartAgentWithOptionsMsg{OperationScope: completionScope,
 					worktree:  wt,
 					agentType: agentType,
 					skipPerms: skipPerms,
@@ -1496,6 +1498,8 @@ func (p *Plugin) handleRenameShellKeys(msg tea.KeyPressMsg) tea.Cmd {
 
 // executeRenameShell performs the rename operation.
 func (p *Plugin) executeRenameShell() tea.Cmd {
+	completionScope := p.completionScope()
+
 	// A modal opened from a pane title names the leaf, not a manifest shell.
 	if p.renameShellLeafTarget() != nil {
 		return p.executeRenameShellLeaf()
@@ -1511,13 +1515,15 @@ func (p *Plugin) executeRenameShell() tea.Cmd {
 
 	shell := p.renameShellSession
 	tmuxName := shell.TmuxName
+	manifest := p.shellManifest
+	namespace := shellToDefinition(shell).Namespace
 
 	return func() tea.Msg {
-		if p.shellManifest == nil {
-			return RenameShellDoneMsg{TmuxName: tmuxName, NewName: newName, Err: fmt.Errorf("shell manifest is unavailable")}
+		if manifest == nil {
+			return RenameShellDoneMsg{OperationScope: completionScope, TmuxName: tmuxName, NewName: newName, Err: fmt.Errorf("shell manifest is unavailable")}
 		}
-		result, err := p.shellManifest.RenameShell(tmuxName, shellToDefinition(shell).Namespace, newName)
-		return RenameShellDoneMsg{
+		result, err := manifest.RenameShell(tmuxName, namespace, newName)
+		return RenameShellDoneMsg{OperationScope: completionScope,
 			TmuxName: tmuxName,
 			NewName:  result.Name,
 			Err:      err,
@@ -1576,6 +1582,8 @@ func (p *Plugin) handleRenameWorktreeKeys(msg tea.KeyPressMsg) tea.Cmd {
 // executeRenameWorktree persists a display name. It does not rename the git
 // branch, move the directory, or rewrite shells.json.
 func (p *Plugin) executeRenameWorktree() tea.Cmd {
+	completionScope := p.completionScope()
+
 	newName, err := shellstate.NormalizeName(p.renameWorktreeInput.Value())
 	if err != nil {
 		p.renameWorktreeError = err.Error()
@@ -1598,7 +1606,7 @@ func (p *Plugin) executeRenameWorktree() tea.Cmd {
 	path := wt.Path
 	return func() tea.Msg {
 		err := saveDisplayName(projectRoot, path, newName)
-		return RenameWorktreeDoneMsg{Path: path, NewName: newName, Err: err}
+		return RenameWorktreeDoneMsg{OperationScope: completionScope, Path: path, NewName: newName, Err: err}
 	}
 }
 

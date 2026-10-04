@@ -30,6 +30,7 @@ const (
 
 // renameShellDoneMsg is the async persist result. The modal stays open on error.
 type renameShellDoneMsg struct {
+	completionScope
 	remoteReply
 	ID      string
 	NewName string
@@ -70,6 +71,7 @@ func (m *Model) OpenRenameTerminalLeaf(leafID int) tea.Cmd {
 	}
 	m.closeViewFlyout()
 	m.renameTerminalLeafID = leafID
+	m.renameGeneration++
 	m.renameOpen = true
 	m.renameBusy = false
 	m.renameWorkspace = workspaceinventory.Workspace{Kind: workspaceinventory.KindShell, Name: leaf.Name}
@@ -115,6 +117,7 @@ func (m *Model) openRename(kind workspaceinventory.Kind) tea.Cmd {
 		return appmsg.Blocked(reason)
 	}
 	m.closeViewFlyout()
+	m.renameGeneration++
 	m.renameOpen = true
 	m.renameBusy = false
 	m.renameWorkspace = workspace
@@ -346,6 +349,8 @@ func (m *Model) executeRemoteRename() tea.Cmd {
 }
 
 func (m *Model) executeRenameWorktree() tea.Cmd {
+	scope := m.renameCompletionScope()
+
 	newName, err := shellstate.NormalizeName(m.renameInput.Value())
 	if err != nil {
 		m.renameError = err.Error()
@@ -362,7 +367,7 @@ func (m *Model) executeRenameWorktree() tea.Cmd {
 	m.renameBusy = true
 	return func() tea.Msg {
 		err := persistWorktreeDisplayName(root, path, newName)
-		return renameShellDoneMsg{ID: id, NewName: newName, Err: err}
+		return renameShellDoneMsg{completionScope: scope, ID: id, NewName: newName, Err: err}
 	}
 }
 
@@ -375,6 +380,8 @@ func persistWorktreeDisplayName(projectRoot, worktreePath, name string) error {
 }
 
 func (m *Model) executeRenameShell() tea.Cmd {
+	scope := m.renameCompletionScope()
+
 	newName, err := shellstate.NormalizeName(m.renameInput.Value())
 	if err != nil {
 		m.renameError = err.Error()
@@ -403,7 +410,7 @@ func (m *Model) executeRenameShell() tea.Cmd {
 		if result.Name != "" {
 			name = result.Name
 		}
-		return renameShellDoneMsg{ID: id, NewName: name, Err: err}
+		return renameShellDoneMsg{completionScope: scope, ID: id, NewName: name, Err: err}
 	}
 }
 

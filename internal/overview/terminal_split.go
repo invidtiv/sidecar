@@ -136,6 +136,7 @@ func (m *Model) resolveCreateSplitWorkspace(req uirequest.Request) (workspaceinv
 }
 
 type previewTerminalSplitCreatedMsg struct {
+	completionScope
 	WorkspaceID string
 	LeafID      int
 	Session     string
@@ -189,6 +190,8 @@ func (m *Model) createPreviewTerminalSplit() tea.Cmd {
 // fit-tested. Layout apply reuses it so a CLI split and a modal split cannot
 // disagree about the tree.
 func (m *Model) openPreviewTerminalSplit(name string, plan panelayout.OpenPlan) tea.Cmd {
+	scope := m.createCompletionScope()
+
 	workspace, ok := m.SelectedWorkspace()
 	if !ok || workspace.ID == "" || workspace.TmuxName == "" {
 		return nil
@@ -223,7 +226,7 @@ func (m *Model) openPreviewTerminalSplit(name string, plan panelayout.OpenPlan) 
 	ctx := m.hostContext()
 	return func() tea.Msg {
 		paneID, err := ensureSplitSession(ctx, registry, hostID, session, workDir)
-		return previewTerminalSplitCreatedMsg{WorkspaceID: workspaceID, LeafID: leafID, Session: session, PaneID: paneID, Err: err}
+		return previewTerminalSplitCreatedMsg{completionScope: scope, WorkspaceID: workspaceID, LeafID: leafID, Session: session, PaneID: paneID, Err: err}
 	}
 }
 
@@ -235,10 +238,6 @@ func ensureSplitSession(ctx context.Context, registry *hosts.Registry, hostID, s
 }
 
 func (m *Model) applyPreviewTerminalSplitCreated(msg previewTerminalSplitCreatedMsg) tea.Cmd {
-	m.createBusy = false
-	if msg.Err != nil {
-		m.pendingSplitSeed = nil
-	}
 	leaf := m.preview.terminalPanes.Leaf(msg.LeafID)
 	current := msg.WorkspaceID == m.preview.workspaceID && leaf != nil && leaf.Session == msg.Session
 	if !current {
@@ -258,10 +257,11 @@ func (m *Model) applyPreviewTerminalSplitCreated(msg previewTerminalSplitCreated
 		}
 		leaf.PaneID = msg.PaneID
 		leaf.Target.Session, leaf.Target.Pane = msg.Session, msg.PaneID
-		m.closeCreateShell()
 		return nil
 	}
+	m.createBusy = false
 	if msg.Err != nil {
+		m.pendingSplitSeed = nil
 		m.preview.paneRoot, m.preview.paneFocus = panelayout.Close(m.preview.paneRoot, msg.LeafID)
 		m.preview.terminalPanes.Release(msg.LeafID)
 		m.createModal = nil
@@ -277,6 +277,8 @@ func (m *Model) applyPreviewTerminalSplitCreated(msg previewTerminalSplitCreated
 }
 
 func (m *Model) applyPendingSplitSeed(session string) tea.Cmd {
+	scope := m.createCompletionScope()
+
 	seed := m.pendingSplitSeed
 	if seed == nil || seed.session == "" || seed.session != session {
 		return nil
@@ -295,13 +297,16 @@ func (m *Model) applyPendingSplitSeed(session string) tea.Cmd {
 			err = workspaceops.TypeInShell(ctx, session, typeCmd)
 		}
 		if err != nil {
-			return previewSplitSeedFailedMsg{Err: err}
+			return previewSplitSeedFailedMsg{completionScope: scope, Err: err}
 		}
 		return nil
 	}
 }
 
-type previewSplitSeedFailedMsg struct{ Err error }
+type previewSplitSeedFailedMsg struct {
+	completionScope
+	Err error
+}
 
 func (m *Model) syncTerminalLeaf(id int) tea.Cmd {
 	leaf := m.terminalLeaf(id)

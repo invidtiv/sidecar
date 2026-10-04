@@ -43,12 +43,14 @@ type (
 	// suspicion was formed under — travels with it, so nothing about the fence
 	// is re-derived on delivery.
 	shellProbedMsg struct {
+		completionScope
 		Probe   shellliveness.ReapProbe
 		Verdict shellliveness.Verdict
 	}
 
 	// shellForgottenMsg reports the manifest write for a confirmed dead shell.
 	shellForgottenMsg struct {
+		completionScope
 		ProjectKey string
 		TmuxName   string
 		// Resurrected says the write was skipped because the session was back
@@ -131,6 +133,8 @@ func (m *Model) markShellsRestoreEligible(obs shellliveness.ReapObservation) {
 }
 
 func (m *Model) reapDeadShells() tea.Cmd {
+	scope := m.completionScope()
+
 	obs := shellliveness.ReapObservation{
 		// Socket-stat is how a Sidecar running outside tmux notices a restart
 		// on this inventory pass. PlanReap records it before its own guards, so
@@ -184,7 +188,7 @@ func (m *Model) reapDeadShells() tea.Cmd {
 	cmds := make([]tea.Cmd, 0, len(plan.Probes))
 	for _, probe := range plan.Probes {
 		cmds = append(cmds, func() tea.Msg {
-			return shellProbedMsg{Probe: probe, Verdict: shellLivenessProbe(probe.TmuxName)}
+			return shellProbedMsg{completionScope: scope, Probe: probe, Verdict: shellLivenessProbe(probe.TmuxName)}
 		})
 	}
 	return tea.Batch(cmds...)
@@ -199,6 +203,8 @@ func (m *Model) reapDeadShells() tea.Cmd {
 // incarnation fence in ConfirmReap, the fresh re-probe in ReapShell — and are
 // described there. What this surface adds is dropping the row between them.
 func (m *Model) applyShellProbe(msg shellProbedMsg) tea.Cmd {
+	scope := m.completionScope()
+
 	// One source for the server identity, here as well as in PlanReap. The
 	// fence compares the identity the verdict is being applied under against
 	// the one the suspicion was formed under, so feeding it a bare socket stat
@@ -225,7 +231,7 @@ func (m *Model) applyShellProbe(msg shellProbedMsg) tea.Cmd {
 		resurrected, err := shellliveness.ReapShell(shellLivenessProbe, forgetShell, probe, probe.Server)
 		// A resurrected shell leaves the manifest alone; the next refresh
 		// re-reads shells.json and restores the row.
-		return shellForgottenMsg{
+		return shellForgottenMsg{completionScope: scope,
 			ProjectKey:  probe.ProjectKey,
 			TmuxName:    probe.TmuxName,
 			Resurrected: resurrected,

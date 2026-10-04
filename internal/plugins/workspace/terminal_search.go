@@ -41,6 +41,7 @@ func (s *terminalSearchState) Query() string { return s.field.Query() }
 func (s *terminalSearchState) SetQuery(query string) { s.field.SetQuery(query) }
 
 type terminalSearchHistoryLoadedMsg struct {
+	OperationScope
 	Source     terminalHistorySource
 	Capture    tty.CaptureRange
 	RequestGen uint64
@@ -110,6 +111,8 @@ func (p *Plugin) handleTerminalSearchKey(msg tea.KeyPressMsg, interactive bool) 
 }
 
 func (p *Plugin) beginTerminalSearch() tea.Cmd {
+	completionScope := p.completionScope()
+
 	termPanel := p.shellLeafVisible() && p.shellLeafFocused()
 	if p.viewMode == ViewModeInteractive && p.interactiveState != nil {
 		termPanel = p.terminalPaneIsPanel(p.interactiveState.LeafID)
@@ -152,7 +155,7 @@ func (p *Plugin) beginTerminalSearch() tea.Cmd {
 	return func() tea.Msg {
 		return p.withTerminalOwnership(ownership, func() tea.Msg {
 			capture, err := workspaceCapturePaneRange(source.Target, request.Start, request.End)
-			return terminalSearchHistoryLoadedMsg{
+			return terminalSearchHistoryLoadedMsg{OperationScope: completionScope,
 				Source:     source,
 				Capture:    capture,
 				RequestGen: request.Generation,

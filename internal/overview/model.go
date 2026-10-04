@@ -267,6 +267,13 @@ type Model struct {
 	mouse              *mouse.Handler
 	workspaces         workspacelist.Model
 	workspacesMouse    *mouse.Handler
+
+	// Mutation authority is independent of inventory poll generations.
+	configurationGeneration uint64
+	createGeneration        uint64
+	renameGeneration        uint64
+	deleteGeneration        uint64
+
 	// wsBar is the Sessions list's interactive scrollbar: the bar's last
 	// render snapshot, where its track sits on screen, whether the pointer
 	// hovers it, and any drag gesture in flight.
@@ -662,6 +669,9 @@ func (m *Model) SetProjects(projects []Project) tea.Cmd {
 }
 
 func (m *Model) start(projects []Project, reason string) tea.Cmd {
+	if !sameConfiguredProjects(m.configuredPaths, projects) {
+		m.configurationGeneration++
+	}
 	if m.cancel != nil {
 		if m.pollScheduled {
 			m.tracef("cycle generation=%d poll_cancel_requested", m.generation)
@@ -807,6 +817,9 @@ func (m *Model) Validate(msg NavigateMsg) tea.Cmd {
 // a refresh, a filter keystroke, scrolling, opening the tab — re-checks the
 // clock instead of leaving the row frozen until the next refresh.
 func (m *Model) Update(msg tea.Msg) tea.Cmd {
+	if scoped, ok := msg.(interface{ getCompletionScope() completionScope }); ok && !m.completionCurrent(scoped.getCompletionScope()) {
+		return nil
+	}
 	// Live-refresh messages are handled instead of the product update — a
 	// watcher signal is not a gesture and must not be interpreted as one — but
 	// they still fall through to the tail below, so queued pane geometry and the
@@ -864,6 +877,9 @@ func (m *Model) pulseCmd() tea.Cmd {
 }
 
 func (m *Model) update(msg tea.Msg) tea.Cmd {
+	if scoped, ok := msg.(interface{ getCompletionScope() completionScope }); ok && !m.completionCurrent(scoped.getCompletionScope()) {
+		return nil
+	}
 	switch msg := msg.(type) {
 	case broadcastmodal.PlannedMsg:
 		m.applyBroadcastPlan(msg)
@@ -1023,6 +1039,9 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		m.applyCreateBranches(msg)
 		return nil
 	case createPickerDataMsg:
+		if msg.Root != "" && msg.Root != m.localCreatePickerRoot() {
+			return nil
+		}
 		applyPickerData(m.createForm, msg)
 		return nil
 	case createHostCatalogMsg:

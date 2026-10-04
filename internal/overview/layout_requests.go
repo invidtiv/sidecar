@@ -355,6 +355,8 @@ func (h overviewLayoutHost) RestoreSpec(layout *state.PaneLayoutJSON) tea.Cmd {
 	return h.m.restoreSpecPreviewLayout(layout)
 }
 func (h overviewLayoutHost) AdoptSpecShell(spec uirequest.LayoutPane) (string, string, tea.Cmd) {
+	scope := h.m.completionScope()
+
 	ws, ok := h.m.SelectedWorkspace()
 	if !ok {
 		return uirequest.ItemVerdictDeclined, layoutapply.SpecOriginRequired, nil
@@ -384,7 +386,7 @@ func (h overviewLayoutHost) AdoptSpecShell(spec uirequest.LayoutPane) (string, s
 	ctx := h.m.hostContext()
 	return uirequest.ItemVerdictOpened, "", func() tea.Msg {
 		paneID, err := ensureSplitSession(ctx, registry, hostID, session, workDir)
-		return previewTerminalSplitCreatedMsg{WorkspaceID: workspaceID, LeafID: leafID, Session: session, PaneID: paneID, Err: err}
+		return previewTerminalSplitCreatedMsg{completionScope: scope, WorkspaceID: workspaceID, LeafID: leafID, Session: session, PaneID: paneID, Err: err}
 	}
 }
 func (h overviewLayoutHost) AfterSpecCommit() { h.m.persistSessionsLayout() }

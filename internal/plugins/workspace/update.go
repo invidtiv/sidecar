@@ -993,7 +993,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	case ShellCreatedMsg:
 		if msg.Err != nil {
 			// Creation failed, show error toast
-			p.pendingPrefillCmd = "" // Clear pending resume
+			if p.pendingPrefillCmd == msg.PrefillCmd {
+				p.pendingPrefillCmd = ""
+			}
 			return p, func() tea.Msg {
 				return app.ToastMsg{Message: msg.Err.Error(), Duration: 5 * time.Second, IsError: true}
 			}
@@ -1108,12 +1110,12 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		cmds = append(cmds, p.scheduleShellPollByName(msg.SessionName, 500*time.Millisecond))
 
 		// If there's a pending resume command, inject it and enter interactive mode (td-aa4136)
-		if p.pendingPrefillCmd != "" {
-			resumeCmd := p.pendingPrefillCmd
-			p.pendingPrefillCmd = "" // Clear pending command
+		if msg.PrefillCmd != "" {
+			resumeCmd := msg.PrefillCmd
+			if p.pendingPrefillCmd == msg.PrefillCmd {
+				p.pendingPrefillCmd = ""
+			}
 			cmds = append(cmds, p.sendResumeCommandToShell(msg.SessionName, resumeCmd))
-			// Enter interactive mode after command is injected
-			cmds = append(cmds, func() tea.Msg { return shellResumeInjectedMsg{TmuxSession: msg.SessionName} })
 		} else if msg.AgentType != AgentNone && msg.AgentType != "" {
 			// td-2ba8a3: Start agent if one was selected (not AgentNone)
 			cmds = append(cmds, p.startAgentInShell(msg.SessionName, msg.AgentType, msg.SkipPerms))
@@ -1207,7 +1209,10 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, p.attachToShellSession(p.findShellByName(msg.TmuxName))
 
 	case shellResumeInjectedMsg:
-		// Resume command was injected into shell - enter interactive mode (td-aa4136)
+		// Resume command was injected into the shell still selected.
+		if shell := p.getSelectedShell(); shell == nil || shell.TmuxName != msg.TmuxSession {
+			return p, nil
+		}
 		p.activePane = PaneSidebar
 		return p, p.enterInteractiveMode()
 
@@ -1239,6 +1244,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, p.startAgentWithResumeCmd(msg.Worktree, msg.AgentType, msg.SkipPerms, msg.ResumeArgv)
 
 	case ShellKilledMsg:
+		if msg.Err != nil {
+			return p, appmsg.ShowToast(msg.Err.Error(), 5*time.Second)
+		}
 		p.shellManifest.NoteExternalMutation()
 		// Timer leak prevention (td-83dc22): increment generation to invalidate pending timers
 		p.pollScheduler.Invalidate(shellPollKey(msg.SessionName))
@@ -2154,6 +2162,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, p.handleShellLeafCloseProbe(msg)
 
 	case TermPanelSessionCreatedMsg:
+		if msg.SessionName != p.requireShellTermPane().Session {
+			return p, nil
+		}
 		if p.ctx != nil && p.ctx.Logger != nil {
 			p.ctx.Logger.Debug("termPanel: SessionCreatedMsg", "session", msg.SessionName, "pane", msg.PaneID, "err", msg.Err, "current", p.requireShellTermPane().Session)
 		}
