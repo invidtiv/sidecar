@@ -368,3 +368,86 @@ func TestExplicitLabelledClaimPublishesDeclaredViewer(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestFocusedAttachmentsDoNotPingPongAndPasteCannotInjectCommands(t *testing.T) {
+	srv := startPasteTmux(t)
+	t.Setenv("TMUX", "")
+	t.Setenv("TMUX_PANE", "")
+	output := srv.startSink("peers", true)
+	run := func(args ...string) string { return strings.TrimSpace(srv.run(args...)) }
+	pane := run("display-message", "-p", "-t", "peers", "#{pane_id}")
+	identity, err := parseHeadlessTargetIdentity(run("display-message", "-p", "-t", pane, headlessTargetFormat), "peers", pane)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := newControlManager(func(session string) (controlChannel, error) {
+		return newProcessControlChannelForSocket(srv.sock, session)
+	}, 5*time.Millisecond)
+	t.Cleanup(manager.Stop)
+	sub, err := manager.Subscribe(ControlRequest{Session: identity.Session, Pane: pane, Visible: true, Focused: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(sub.Close)
+	waitFor(t, sub.UsingControl)
+	host, pid := hostAndPID()
+	now := time.Now()
+	newViewer := func(discriminator, kind, label string) *HeadlessGeometry {
+		t.Helper()
+		g, e := NewHeadlessGeometry(manager, identity, fmt.Sprintf("%s-mobile-%s-%d", host, discriminator, pid))
+		if e != nil {
+			t.Fatal(e)
+		}
+		g.now = func() time.Time { return now }
+		if e = g.SetHolderLabel(kind, label); e != nil {
+			t.Fatal(e)
+		}
+		return g
+	}
+	a := newViewer("012345abcdef", "browser", "Browser")
+	b := newViewer("abcdef012345", "ios", "iPhone")
+	if owned, e := a.Presence(true, true, 0, 100, 30, false); e != nil || !owned {
+		t.Fatalf("first viewer claim: %v %v", owned, e)
+	}
+	// Both attachments share a process but must retain separate lease identities.
+	// Advance beyond the stale budget while the owner keeps heartbeating.
+	for i := 0; i < 15; i++ {
+		idle := time.Duration(i) * 5 * time.Second
+		if owned, e := a.Presence(true, true, idle, 100, 30, false); e != nil || !owned {
+			t.Fatalf("owner heartbeat %d: %v %v", i, owned, e)
+		}
+		if owned, e := b.Presence(true, true, idle, 80, 24, false); e != nil || owned {
+			t.Fatalf("competing heartbeat %d: %v %v", i, owned, e)
+		}
+		if got := run("display-message", "-p", "-t", pane, "#{pane_width}x#{pane_height}"); got != "100x30" {
+			t.Fatalf("focused peers changed geometry: %s", got)
+		}
+		now = now.Add(5 * time.Second)
+	}
+	payload := "\"; set-option -g @sidecar-review-injected yes ; '#{pid}"
+	if err = b.ClaimInput([]byte(payload), 80, 24, true); err != nil {
+		t.Fatal(err)
+	}
+	waitForPasteContent(t, output, "\x1b[200~"+payload+"\x1b[201~")
+	if got := run("show-options", "-gqv", "@sidecar-review-injected"); got != "" {
+		t.Fatalf("paste injected a tmux command: %q", got)
+	}
+	if buffers := run("list-buffers", "-F", "#{buffer_name}"); buffers != "" {
+		t.Fatalf("paste leaked buffers: %q", buffers)
+	}
+	if _, err = a.Presence(false, true, 0, 100, 30, false); err != nil {
+		t.Fatal(err)
+	}
+	if owner := leaseOwner(run("show-options", "-qv", "-t", "peers", leaseOptionName)); owner != b.ownerID {
+		t.Fatalf("losing viewer blur cleared winner's lease: %q", owner)
+	}
+	if kind, label, e := a.Holder(); e != nil || kind != "ios" || label != "iPhone" {
+		t.Fatalf("holder must expose only the winner's label: %q %q %v", kind, label, e)
+	}
+	if _, err = b.Presence(false, true, 0, 80, 24, false); err != nil {
+		t.Fatal(err)
+	}
+	if owner := run("show-options", "-qv", "-t", "peers", leaseOptionName); owner != "" {
+		t.Fatalf("winning viewer blur retained ownership: %q", owner)
+	}
+}
