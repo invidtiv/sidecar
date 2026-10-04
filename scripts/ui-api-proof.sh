@@ -122,18 +122,36 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$base/api/v0/pairing/code
 [ "$code" = 403 ] || fail "pairing route on TCP answered $code"
 echo "guards ok: 421 host, 403 origin, 401 unpaired, 403 local-only"
 
-step "pair this browser (sidecar api open --print)"
+step "pair this browser (sidecar api open --print), doing what the pairing page does"
 link=$(sc api open --print)
-headers=$(curl -s -o /dev/null -D - "$link")
-printf '%s' "$headers" | grep -qi '^HTTP/1.1 303' || fail "pair link did not redirect: $headers"
-cookie=$(printf '%s' "$headers" | sed -n 's/^[Ss]et-[Cc]ookie: \([^;]*\);.*/\1/p' | tr -d '\r')
-printf '%s' "$headers" | grep -i '^set-cookie' | grep -qi 'httponly' || fail "cookie not HttpOnly"
-printf '%s' "$headers" | grep -i '^set-cookie' | grep -qi 'samesite=strict' || fail "cookie not SameSite=Strict"
-code=$(curl -s -o /dev/null -w '%{http_code}' -H "Cookie: $cookie" "$base/api/v0/hello")
-[ "$code" = 200 ] || fail "paired cookie answered $code"
-code=$(curl -s -o /dev/null -w '%{http_code}' "$link")
-[ "$code" = 401 ] || fail "reused pairing link answered $code"
-echo "browser pairing ok: single-use link, HttpOnly SameSite=Strict cookie"
+case "$link" in "$base/pair#code="*) ;; *) fail "pairing link does not carry the code in the fragment: $link" ;; esac
+pair_code=$(python3 -c 'import sys, urllib.parse as u; print(u.parse_qs(u.urlparse(sys.argv[1]).fragment)["code"][0])' "$link")
+pair_next=$(python3 -c 'import sys, urllib.parse as u; print(u.parse_qs(u.urlparse(sys.argv[1]).fragment)["next"][0])' "$link")
+# What the browser requests: /pair with no fragment. It must set nothing.
+headers=$(curl -s -o "$root/pair.html" -D - "$base/pair")
+printf '%s' "$headers" | grep -qi '^HTTP/1.1 200' || fail "pair page: $headers"
+if printf '%s' "$headers" | grep -qi '^set-cookie'; then fail "pair page set a cookie"; fi
+printf '%s' "$headers" | grep -i '^content-security-policy' | grep -q "default-src 'none'" || fail "pair page CSP missing"
+grep -q '/api/v0/pairing/exchange' "$root/pair.html" || fail "pair page does not exchange the code"
+grep -q 'sidecar.session' "$root/pair.html" || fail "pair page does not store sidecar.session"
+exchange() {
+	curl -s -o "$root/exchange.json" -w '%{http_code}' -X POST -H "Origin: $1" -H 'Content-Type: application/json' -H 'X-Sidecar-Request: 1' \
+		-d "{\"code\":\"$pair_code\",\"next\":\"$pair_next\"}" "$base/api/v0/pairing/exchange"
+}
+code=$(exchange http://proof-other.example)
+[ "$code" = 403 ] || fail "exchange from a foreign origin answered $code"
+code=$(exchange "$base")
+[ "$code" = 200 ] || fail "exchange answered $code: $(cat "$root/exchange.json")"
+browser_token=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["next"]=="/", d; print(d["token"])' "$root/exchange.json")
+code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $browser_token" "$base/api/v0/hello")
+[ "$code" = 200 ] || fail "session token answered $code"
+code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $browser_token" -H 'Origin: http://localhost:3000' "$base/api/v0/hello")
+[ "$code" = 403 ] || fail "session token from another origin answered $code"
+code=$(exchange "$base")
+[ "$code" = 401 ] || fail "reused pairing code answered $code"
+session_ticket=$(curl -fsS -X POST -H "Origin: $base" -H "Authorization: Bearer $browser_token" -H 'Content-Type: application/json' -H 'X-Sidecar-Request: 1' -d '{}' "$base/api/v0/ws-tickets" |
+	python3 -c 'import json,sys; print(json.load(sys.stdin)["ticket"])')
+echo "browser pairing ok: fragment link, no cookie, single-use exchange, origin-bound session token"
 
 step "pair an origin and take a WebSocket ticket"
 app=http://proof.example
@@ -151,6 +169,9 @@ step "terminal round-trip over the WebSocket (Browser listener, ticket)"
 owner=$(env -u TMUX -u TMUX_PANE "$tmux_bin" -S "$socket" show-options -v -t "$session" @sidecar-owner 2>/dev/null || true)
 [ -z "$owner" ] || fail "@sidecar-owner remained after release: $owner"
 "$root/uiapiproof" -url "ws://$tcp/api/v0/terminal?ticket=$ticket" -origin "$app" -target "$session" > /dev/null 2>&1 && fail "a used ticket opened a second terminal"
+
+step "terminal round-trip over the WebSocket (same-origin UI, session ticket)"
+"$root/uiapiproof" -url "ws://$tcp/api/v0/terminal?ticket=$session_ticket" -origin "$base" -target "$session" -marker UIAPI_SESSION_PROOF > /dev/null
 
 step "terminal round-trip over the Local socket"
 "$root/uiapiproof" -socket "$api_sock" -url "ws://sidecar/api/v0/terminal" -target "$session" -marker UIAPI_LOCAL_PROOF > /dev/null
