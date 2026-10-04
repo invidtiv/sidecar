@@ -87,6 +87,24 @@ func TestServeWritesViewerPresence(t *testing.T) {
 	}
 }
 
+func TestServeObservationOnlyDoesNotRegisterInheritedViewer(t *testing.T) {
+	var out strings.Builder
+	runner := &fakeRunner{}
+	project := liveProject(t, runner)
+	t.Setenv(tty.ViewerInstanceEnv, "inherited-99")
+	opts := baseOptions(&out, runner, time.Now)
+	opts.Projects = []Project{project}
+	opts.Cycles = 1
+	opts.ObservationOnly = true
+	if err := Serve(context.Background(), opts); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(config.StateDir(), "viewers", "inherited-99.json")
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("catalog observer wrote viewer presence: %v", err)
+	}
+}
+
 func TestLookupLiveViewerExpiresAndRequiresCapability(t *testing.T) {
 	state := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", state)

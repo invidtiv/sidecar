@@ -60,7 +60,7 @@ func (b *mobileBackend) WatchCatalog(ctx context.Context) (<-chan struct{}, erro
 			go func(done chan struct{}, observed []hostserve.Project, runCtx context.Context) {
 				defer close(done)
 				var previous [32]byte
-				err := hostserve.Serve(runCtx, hostserve.Options{Out: io.Discard, Projects: observed, OnSnapshot: func(snapshot hostproto.Snapshot) {
+				err := hostserve.Serve(runCtx, hostserve.Options{ObservationOnly: true, Out: io.Discard, Projects: observed, OnSnapshot: func(snapshot hostproto.Snapshot) {
 					current := catalogObservationDigest(snapshot)
 					if current != previous {
 						previous = current

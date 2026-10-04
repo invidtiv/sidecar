@@ -120,6 +120,9 @@ type Project struct {
 // injectable ones exist so tests can drive the whole loop with no tmux, no
 // filesystem, and a fake clock.
 type Options struct {
+	// ObservationOnly keeps in-process catalog observers out of shell reaping
+	// and viewer registration. Collection and manifest watching stay shared.
+	ObservationOnly bool
 	// OnSnapshot observes each completed inventory/status cycle in-process.
 	// Consumers may invalidate a catalog without starting another inventory loop.
 	// It must return promptly and must not mutate the snapshot.
@@ -344,6 +347,9 @@ func Serve(ctx context.Context, opts Options) error {
 	defer watch.stop()
 
 	viewerInstance := strings.TrimSpace(os.Getenv(tty.ViewerInstanceEnv))
+	if opts.ObservationOnly {
+		viewerInstance = ""
+	}
 	var reqWatch *requestWatch
 	if viewerInstance != "" {
 		reqWatch = startRequestWatch()
@@ -479,9 +485,11 @@ func Serve(ctx context.Context, opts Options) error {
 		// pending at the tail select below, the next cycle re-reads durable
 		// state, and the row leaves within about a second rather than on the
 		// next inventory tick. A1 is what makes A2 observable.
-		for _, reapErr := range reapPass(liveness, opts, opts.Namespace(), incarnation, panes, paneErr, refreshed) {
-			if err := encoder.Encode(hostproto.Message{Kind: hostproto.KindError, Error: &reapErr}); err != nil {
-				return err
+		if !opts.ObservationOnly {
+			for _, reapErr := range reapPass(liveness, opts, opts.Namespace(), incarnation, panes, paneErr, refreshed) {
+				if err := encoder.Encode(hostproto.Message{Kind: hostproto.KindError, Error: &reapErr}); err != nil {
+					return err
+				}
 			}
 		}
 
