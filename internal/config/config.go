@@ -54,6 +54,8 @@ type Config struct {
 
 // APIConfig configures the UI API server (docs/reference/ui-api.md).
 type APIConfig struct {
+	// UIDir is a separately built UI bundle. --ui overrides it.
+	UIDir string `json:"uiDir,omitempty"`
 	// TailnetLogins are the Tailscale logins trusted on the Tailnet listener.
 	// Empty means the login that owns the local Tailscale node.
 	TailnetLogins []string `json:"tailnetLogins,omitempty"`

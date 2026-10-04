@@ -958,7 +958,7 @@ Usage: sidecar api serve [--port N] [--ui DIR] [--tailnet] [--tailnet-port N] [-
 **Options:**
 
 - `--port N`: Browser listener port on 127.0.0.1 (default 7861; 0 picks a free port)
-- `--ui DIR`: Serve a built UI from DIR, with index.html as the fallback for app routes
+- `--ui DIR`: Serve a built UI from DIR (overrides config api.uiDir), with index.html as the fallback for app routes
 - `--tailnet`: Also serve the tailnet listener for tailscale serve
 - `--tailnet-port N`: Serve the tailnet listener on this loopback port instead of a Unix socket
 - `--json`: Write the endpoint object as one JSON line once listening
@@ -976,6 +976,91 @@ Usage: sidecar api serve [--port N] [--ui DIR] [--tailnet] [--tailnet-port N] [-
 sidecar api serve
 sidecar api serve --ui ~/code/sidecar-ui/apps/sidecar-ui/build
 sidecar api serve --tailnet
+```
+
+### `sidecar api service`
+
+Manage the per-user UI API service
+
+Use launchd on macOS or a systemd user unit on Linux. install starts the API at login, uninstall stops only the API service and removes its definition. No command changes tmux. The server reads api.uiDir from config on every start. Use either this command or brew services to manage the service, not both.
+
+```
+Usage: sidecar api service <install|uninstall|status> [--json]
+```
+
+#### `sidecar api service install`
+
+Install and start the API service
+
+```
+Usage: sidecar api service install [--json]
+```
+
+**Options:**
+
+- `--json`: Write installed, loaded, running, PID, version and last exit as JSON
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: success (status succeeds even when not installed or stopped)
+- `1`: manager or service operation failed; follow the message
+- `2`: usage error
+
+**Examples:**
+
+```bash
+sidecar api service install --json
+```
+
+#### `sidecar api service uninstall`
+
+Stop and remove the API service
+
+```
+Usage: sidecar api service uninstall [--json]
+```
+
+**Options:**
+
+- `--json`: Write installed, loaded, running, PID, version and last exit as JSON
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: success (status succeeds even when not installed or stopped)
+- `1`: manager or service operation failed; follow the message
+- `2`: usage error
+
+**Examples:**
+
+```bash
+sidecar api service uninstall --json
+```
+
+#### `sidecar api service status`
+
+Inspect the API service manager
+
+```
+Usage: sidecar api service status [--json]
+```
+
+**Options:**
+
+- `--json`: Write installed, loaded, running, PID, version and last exit as JSON
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: success (status succeeds even when not installed or stopped)
+- `1`: manager or service operation failed; follow the message
+- `2`: usage error
+
+**Examples:**
+
+```bash
+sidecar api service status --json
 ```
 
 ### `sidecar api status`

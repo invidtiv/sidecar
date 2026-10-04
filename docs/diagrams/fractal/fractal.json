@@ -3,7 +3,7 @@
   "id": "sidecar",
   "title": "Sidecar",
   "description": "The terminal-centric workspace for AI coding agents.",
-  "provenance": "Authored 2026-09-10 from the Sidecar codebase and documentation. Reviewed against internal implementation files and controlling docs. This model represents verified architecture and boundaries, not an exhaustive AST scan. Extended 2026-10-03 with the UI API host (sidecar api serve), the headless terminal protocol services, UI API clients and their trust boundaries, from internal/uiapi, internal/cli/api.go, internal/mobile, internal/mobilehub, docs/reference/ui-api.md and docs/plans/active/sidecar-ui-api.md. UI API elements without #proposed are U0 as implemented on main at 2f0dc1e7; #proposed elements are U1 to U4 plan work. The sidecar-ui repository has no model of its own, so its packages are modeled here from the plan and wire contract rather than its source.",
+  "provenance": "Authored 2026-09-10 from the Sidecar codebase and documentation. Reviewed against internal implementation files and controlling docs. This model represents verified architecture and boundaries, not an exhaustive AST scan. Extended 2026-10-03 with the UI API host (sidecar api serve), the headless terminal protocol services, UI API clients and their trust boundaries, from internal/uiapi, internal/cli/api.go, internal/mobile, internal/mobilehub, docs/reference/ui-api.md and docs/plans/active/sidecar-ui-api.md. UI API elements without #proposed are U0 as implemented on main at 2f0dc1e7, plus cli.api_service implemented in the u1c-service branch awaiting review (internal/apiservice, internal/cli/api_service.go and internal/uiapi/executable.go). Remaining #proposed elements are U1 to U4 plan work. The sidecar-ui repository has no model of its own, so its packages are modeled here from the plan and wire contract rather than its source.",
   "boundaries": [
     {
       "id": "ui-boundary",
@@ -178,9 +178,18 @@
       "edges": "summary"
     },
     {
+      "id": "api-service",
+      "title": "Always-on UI API",
+      "description": "The per-user manager keeps api serve available and restarts it after executable replacement. tmux remains independent. Implemented in U1-c, awaiting review.",
+      "scope": "cli.api_service",
+      "expanded": [],
+      "proposed": false,
+      "lens": "structure"
+    },
+    {
       "id": "ui-api-roadmap",
       "title": "UI API Roadmap: U1 to U4",
-      "description": "Planned work on top of U0: events stream, contract spec, fixtures, always-on service, presence geometry, v1 frames, workspace operations, per-viewer layouts and the viewer relay.",
+      "description": "Planned work on top of U0: events stream, contract spec, fixtures, presence geometry, v1 frames, workspace operations, per-viewer layouts and the viewer relay.",
       "expanded": ["api", "termproto", "cli"],
       "hide": ["tui", "plugins", "notifications", "remoting", "external", "uiclients", "user", "cli.agent_cmd", "cli.notify_cmd", "cli.dispatch", "cli.mobile_cmd", "api.local", "api.browser", "api.tailnet", "api.guards", "api.pairing", "api.origins", "api.endpoint", "termproto.hub"],
       "proposed": true,
