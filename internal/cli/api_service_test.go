@@ -3,6 +3,8 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"strings"
 	"testing"
 
@@ -100,6 +102,9 @@ func TestAPIServiceRefusesForegroundServerAndReportsManagedVersion(t *testing.T)
 	if code, out, stderr := runAPICLI(t, "api", "service", "status", "--json"); code != 0 || !strings.Contains(out, `"version":"managed-test"`) {
 		t.Fatalf("version: %d %s %s", code, out, stderr)
 	}
+	if code, _, stderr := runAPICLI(t, "api", "service", "install"); code != 0 {
+		t.Fatalf("managed reinstall refused: %d %s", code, stderr)
+	}
 	fake.status.PID++
 	if code, out, _ := runAPICLI(t, "api", "service", "status", "--json"); code != 0 || !strings.Contains(out, `"version":""`) {
 		t.Fatalf("wrong PID version: %d %s", code, out)
@@ -109,5 +114,54 @@ func TestAPIServiceIsolatedProofCannotReachRealManager(t *testing.T) {
 	apiStateTree(t, t.TempDir())
 	if code, _, stderr := runAPICLI(t, "api", "service", "install"); code != 1 || !strings.Contains(stderr, "disabled for isolated proofs") {
 		t.Fatalf("isolation: %d %s", code, stderr)
+	}
+}
+
+func TestAPIServiceRefusesForegroundWithUnavailableDiscovery(t *testing.T) {
+	for _, discovery := range []string{"missing", "corrupt", "stale"} {
+		t.Run(discovery, func(t *testing.T) {
+			state := apiStateTree(t, t.TempDir())
+			fake := fakeAPIService(t)
+			server, err := uiapi.Start(uiapi.Options{StateDir: state, Port: 0, Backend: staticAPIBackend{}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = server.Shutdown(context.Background()) })
+			path := uiapi.EndpointPath(state)
+			switch discovery {
+			case "missing":
+				err = os.Remove(path)
+			case "corrupt":
+				err = os.WriteFile(path, []byte("{"), 0o600)
+			case "stale":
+				err = os.WriteFile(path, []byte(`{"pid":-1}`), 0o600)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if code, _, stderr := runAPICLI(t, "api", "service", "install"); code != 1 || !strings.Contains(stderr, "stop that API process") {
+				t.Fatalf("install with %s discovery: %d %s", discovery, code, stderr)
+			}
+			for _, call := range fake.calls {
+				if call == "install" {
+					t.Fatal("started manager beside foreground server holding serve.lock")
+				}
+			}
+		})
+	}
+}
+
+func TestAPIServiceIgnoresUnlockedStaleDiscovery(t *testing.T) {
+	state := apiStateTree(t, t.TempDir())
+	fakeAPIService(t)
+	if err := os.MkdirAll(uiapi.Dir(state), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// PID reuse after a crash does not turn old discovery into a running server.
+	if err := os.WriteFile(uiapi.EndpointPath(state), []byte(fmt.Sprintf(`{"pid":%d}`, os.Getpid())), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, stderr := runAPICLI(t, "api", "service", "install"); code != 0 {
+		t.Fatalf("stale endpoint refused: %d %s", code, stderr)
 	}
 }

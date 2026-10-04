@@ -60,6 +60,9 @@ grep -q 'executable changed' "$root/serve.err" || fail 'replacement not logged'
 [ ! -e "$root/state/sidecar/api/api.sock" ] || fail 'socket survived exit'
 echo '== replacement restarts against same state; explicit --ui overrides config'
 start --ui "$root/override"
+# A fresh watcher must baseline the replacement rather than exit again.
+sleep 2.2
+kill -0 "$server_pid" 2>/dev/null || fail 'replacement entered a restart loop'
 curl -fsS "http://$tcp/" | grep -q OVERRIDE_UI_PROOF || fail '--ui did not override config'
 kill -TERM "$server_pid"
 wait "$server_pid" || fail 'shutdown failed'

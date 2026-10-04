@@ -90,8 +90,12 @@ func runAPIService(env Env, args []string) int {
 			cliErrln(env.Stderr, statusErr)
 			return 1
 		}
-		if endpoint, endpointErr := uiapi.ReadEndpoint(env.StateDir); endpointErr == nil && (!status.Running || status.PID != endpoint.PID) {
-			cliErrf(env.Stderr, "API server pid %d is already running outside this service; stop that API process, then retry `sidecar api service install`\n", endpoint.PID)
+		managedPID := 0
+		if status.Running {
+			managedPID = status.PID
+		}
+		if err := uiapi.CheckServiceInstall(env.StateDir, managedPID); err != nil {
+			cliErrln(env.Stderr, err)
 			return 1
 		}
 		err = manager.Install(ctx)
