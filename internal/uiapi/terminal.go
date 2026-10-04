@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -36,7 +37,13 @@ const (
 // misses the deadline. A half-open socket (a laptop that slept, a proxy that
 // lost the peer) then ends as EOF and releases its lease, instead of holding
 // a terminal until the next write happens to fail.
-func (s *Server) keepalive(ctx context.Context, conn *websocket.Conn) {
+//
+// A pong is only seen while pumpRequests is reading the socket. When the
+// pump is blocked handing a request to a backend that has stopped reading,
+// a missed pong is the server's stall, not the peer's, so it is excused. A
+// peer may disappear after causing that stall, so the exemption is bounded
+// from the last successful pong (or connection start).
+func (s *Server) keepalive(ctx context.Context, conn *websocket.Conn, inbound *inboundGate) {
 	interval, timeout := s.opts.KeepaliveInterval, s.opts.KeepaliveTimeout
 	if interval <= 0 {
 		interval = defaultKeepaliveInterval
@@ -44,6 +51,11 @@ func (s *Server) keepalive(ctx context.Context, conn *websocket.Conn) {
 	if timeout <= 0 {
 		timeout = defaultKeepaliveTimeout
 	}
+	stallTimeout := s.opts.KeepaliveStallTimeout
+	if stallTimeout <= 0 {
+		stallTimeout = time.Minute
+	}
+	responsive := inbound.now()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -51,19 +63,63 @@ func (s *Server) keepalive(ctx context.Context, conn *websocket.Conn) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			if inbound.blocked() {
+				if inbound.now()-responsive >= stallTimeout {
+					_ = conn.CloseNow()
+					return
+				}
+				// Nothing is reading the socket, so no pong could be seen.
+				continue
+			}
+			sent := inbound.now()
 			// Not derived from ctx: canceling a write context closes the socket,
 			// which would pre-empt the 4409 close on shutdown.
 			pingCtx, cancel := context.WithTimeout(context.Background(), timeout)
 			err := conn.Ping(pingCtx)
 			cancel()
 			if err != nil {
-				if ctx.Err() == nil {
-					_ = conn.CloseNow()
+				if ctx.Err() != nil {
+					return
 				}
+				if errors.Is(err, context.DeadlineExceeded) && inbound.blockedSince(sent) && inbound.now()-responsive < stallTimeout {
+					continue
+				}
+				_ = conn.CloseNow()
 				return
 			}
+			responsive = inbound.now()
 		}
 	}
+}
+
+// inboundGate records when pumpRequests is blocked writing a request to the
+// backend. The backend handles requests one at a time, so a slow one can
+// stop it reading for longer than the pong deadline.
+type inboundGate struct {
+	origin   time.Time
+	writing  atomic.Bool
+	finished atomic.Int64 // when the last write finished, as an offset from origin
+}
+
+func newInboundGate() *inboundGate { return &inboundGate{origin: time.Now()} }
+
+// now is a monotonic offset from the gate's creation.
+func (g *inboundGate) now() time.Duration { return time.Since(g.origin) }
+
+func (g *inboundGate) begin() { g.writing.Store(true) }
+
+func (g *inboundGate) end() {
+	g.finished.Store(int64(g.now()))
+	g.writing.Store(false)
+}
+
+func (g *inboundGate) blocked() bool { return g.writing.Load() }
+
+// blockedSince reports whether the pump was blocked at any point since t: it
+// is blocked now, or a write that held it finished after t, so a pong may
+// have waited unread behind it.
+func (g *inboundGate) blockedSince(t time.Duration) bool {
+	return g.writing.Load() || time.Duration(g.finished.Load()) >= t
 }
 
 const (
@@ -71,6 +127,7 @@ const (
 	terminalDrainTimeout = 2 * time.Second
 	terminalStopTimeout  = 10 * time.Second
 	maxCloseReasonBytes  = 123
+	revokedSessionReason = "This credential was revoked; pair again with sidecar api open or sidecar api pair --origin URL."
 )
 
 // serveTerminal upgrades first and refuses with a close code, because a
@@ -95,7 +152,14 @@ func (h *listenerHandler) serveTerminal(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	defer h.s.streams.Done()
+	h.s.credentialMu.Lock()
+	if !h.s.callerLive(c) {
+		h.s.credentialMu.Unlock()
+		_ = conn.Close(CloseUnauthenticated, revokedSessionReason)
+		return
+	}
 	client, ok := h.s.clients.add("terminal", c)
+	h.s.credentialMu.Unlock()
 	if !ok {
 		_ = conn.Close(CloseTooManyTerminals, closeReason(fmt.Sprintf("This client already has %d open terminals; close one first.", maxTerminalsPerClient)))
 		return
@@ -135,7 +199,7 @@ func (h *listenerHandler) authorizeTerminal(r *http.Request) (caller, websocket.
 		if g.origin != origin {
 			return c, CloseOriginRefused, "This ticket was issued to another origin."
 		}
-		c.auth, c.client = "ticket", g.client
+		c.auth, c.client, c.credential = "ticket", g.client, g.credential
 		return c, 0, ""
 	}
 	// Non-browser clients may send their bearer token on the upgrade. The
@@ -168,7 +232,12 @@ func (s *Server) runTerminal(conn *websocket.Conn, client *trackedClient) {
 
 	ctx, cancel := context.WithCancel(s.ctx)
 	defer cancel()
-	go s.keepalive(ctx, conn)
+	inbound := newInboundGate()
+	keepaliveDone := make(chan struct{})
+	go func() {
+		s.keepalive(ctx, conn, inbound)
+		close(keepaliveDone)
+	}()
 	requests, requestWriter := io.Pipe()
 	responseReader, responses := io.Pipe()
 
@@ -182,7 +251,7 @@ func (s *Server) runTerminal(conn *websocket.Conn, client *trackedClient) {
 	writerDone := make(chan error, 1)
 	go func() { writerDone <- pumpResponses(conn, responseReader, client) }()
 	readerDone := make(chan inboundResult, 1)
-	go func() { readerDone <- pumpRequests(conn, requestWriter) }()
+	go func() { readerDone <- pumpRequests(conn, requestWriter, inbound) }()
 
 	waitBackend := func() (error, bool) {
 		timer := time.NewTimer(terminalStopTimeout)
@@ -197,12 +266,32 @@ func (s *Server) runTerminal(conn *websocket.Conn, client *trackedClient) {
 	}
 
 	select {
+	case <-keepaliveDone:
+		// The socket can close while the reader is stuck writing to the
+		// backend. Break that write and cancel the backend directly.
+		_ = requestWriter.Close()
+		if s.ctx.Err() != nil {
+			_ = conn.Close(CloseShuttingDown, "The Sidecar API server is shutting down; reconnect when it is back.")
+		} else {
+			_ = conn.CloseNow()
+		}
+		cancel()
+		if _, ok := waitBackend(); !ok {
+			<-backendDone
+		}
 	case result := <-readerDone:
 		// End of stream: EOF on the request pipe, exactly like stdin EOF.
 		_ = requestWriter.Close()
 		if result.violation != "" {
 			_ = conn.Close(CloseProtocolViolation, closeReason(result.violation))
 		}
+		if _, ok := waitBackend(); !ok {
+			<-backendDone
+		}
+		_ = conn.CloseNow()
+	case <-client.revoked:
+		_ = requestWriter.Close()
+		_ = conn.Close(CloseUnauthenticated, revokedSessionReason)
 		if _, ok := waitBackend(); !ok {
 			<-backendDone
 		}
@@ -256,7 +345,7 @@ func closeReason(reason string) string {
 // pumpRequests forwards each text message as one request line. It reads
 // without a context: canceling a read context would close the socket before
 // the close code could be sent.
-func pumpRequests(conn *websocket.Conn, requests *io.PipeWriter) inboundResult {
+func pumpRequests(conn *websocket.Conn, requests *io.PipeWriter, inbound *inboundGate) inboundResult {
 	for {
 		kind, data, err := conn.Read(context.Background())
 		if err != nil {
@@ -268,7 +357,10 @@ func pumpRequests(conn *websocket.Conn, requests *io.PipeWriter) inboundResult {
 		if len(data) == 0 || bytes.ContainsAny(data, "\r\n") {
 			return inboundResult{violation: "Send exactly one JSON envelope per text message, without newlines."}
 		}
-		if _, err := requests.Write(append(data, '\n')); err != nil {
+		inbound.begin()
+		_, err = requests.Write(append(data, '\n'))
+		inbound.end()
+		if err != nil {
 			return inboundResult{err: err}
 		}
 	}

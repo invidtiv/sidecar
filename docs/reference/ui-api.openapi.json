@@ -1009,6 +1009,25 @@
         ],
         "type": "object"
       },
+      "SessionRevocation": {
+        "additionalProperties": false,
+        "properties": {
+          "origin": {
+            "type": "string"
+          },
+          "revoked": {
+            "type": "integer"
+          },
+          "terminals_closed": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revoked",
+          "terminals_closed"
+        ],
+        "type": "object"
+      },
       "Status": {
         "additionalProperties": false,
         "properties": {
@@ -1580,6 +1599,66 @@
         "security": [],
         "x-listeners": [
           "browser"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there."
+      }
+    },
+    "/api/v0/pairing/sessions": {
+      "delete": {
+        "operationId": "pairing_sessions_delete",
+        "parameters": [
+          {
+            "description": "Required on Browser and Tailnet; not on Local.",
+            "in": "header",
+            "name": "X-Sidecar-Request",
+            "required": false,
+            "schema": {
+              "const": "1",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Omit to revoke every browser session; supply an origin to revoke only its sessions.",
+            "in": "query",
+            "name": "origin",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionRevocation"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          },
+          {}
+        ],
+        "x-listeners": [
+          "local"
         ],
         "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there."
       }

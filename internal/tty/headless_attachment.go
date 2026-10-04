@@ -1,12 +1,17 @@
 package tty
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/marcus/sidecar/internal/tmuxenv"
+	"github.com/marcus/sidecar/internal/tmuxformat"
 )
 
 const (
@@ -263,7 +268,12 @@ func (g *HeadlessGeometry) releaseLocked() error {
 	}
 	_, err := g.conditionalClear(g.token)
 	if err != nil {
-		return err
+		// The capture connection may have died before teardown. Only lease
+		// release gets this independent path: it cannot resize or send input,
+		// and tmux compares the exact token and session/server incarnation.
+		if fallbackErr := g.clearDetached(g.token); fallbackErr != nil {
+			return errors.Join(err, fallbackErr)
+		}
 	}
 	g.token = ""
 	return nil
@@ -271,12 +281,11 @@ func (g *HeadlessGeometry) releaseLocked() error {
 
 func (g *HeadlessGeometry) conditionalClear(token string) (bool, error) {
 	condition := "#{==:#{" + leaseOptionName + "}," + token + "}"
-	trueCommands := []string{
-		"set-option -u -t " + controlQuote(g.expected.Session) + " " + leaseOptionName,
-		"display-message -p " + controlQuote(headlessOwnerSuccess),
+	args := headlessClearArgs(g.expected.Pane, g.expected.Session, condition)
+	for index := range args {
+		args[index] = controlQuote(args[index])
 	}
-	command := "if-shell -F -t " + controlQuote(g.expected.Pane) + " " + controlQuote(condition) + " " +
-		controlQuote(strings.Join(trueCommands, " ; ")) + " " + controlQuote("display-message -p "+controlQuote(headlessOwnerMismatch))
+	command := strings.Join(args, " ")
 	responses, err := g.manager.requestControlTransaction(g.expected.Session, command)
 	if err != nil {
 		return false, err
@@ -288,6 +297,36 @@ func (g *HeadlessGeometry) conditionalClear(token string) (bool, error) {
 		return false, nil
 	}
 	return false, fmt.Errorf("tmux control: release completion missing")
+}
+
+func headlessClearArgs(target, session, condition string) []string {
+	trueCommands := []string{
+		"set-option -u -t " + controlQuote(session) + " " + leaseOptionName,
+		"display-message -p " + controlQuote(headlessOwnerSuccess),
+	}
+	return []string{"if-shell", "-F", "-t", target, condition,
+		strings.Join(trueCommands, " ; "), "display-message -p " + controlQuote(headlessOwnerMismatch)}
+}
+
+func (g *HeadlessGeometry) clearDetached(token string) error {
+	if g.expected.SessionID == "" || g.expected.SessionCreated == "" {
+		return fmt.Errorf("tmux control: detached release requires a bound session incarnation")
+	}
+	observed := "#{pid}|#{session_id}|#{session_created}|#{" + leaseOptionName + "}"
+	expected := strconv.Itoa(g.expected.ServerPID) + "|" + g.expected.SessionID + "|" + g.expected.SessionCreated + "|" + token
+	condition := "#{==:" + observed + "," + expected + "}"
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	args := tmuxformat.ClientArgs(append([]string{"-S", tmuxenv.SocketPath()}, headlessClearArgs(g.expected.SessionID, g.expected.SessionID, condition)...)...)
+	output, err := exec.CommandContext(ctx, "tmux", args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("tmux control: detached release: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	result := strings.TrimSpace(string(output))
+	if result != headlessOwnerSuccess && result != headlessOwnerMismatch {
+		return fmt.Errorf("tmux control: detached release completion missing")
+	}
+	return nil
 }
 
 func (g *HeadlessGeometry) cleanupAttempted(token string, operationErr error) error {

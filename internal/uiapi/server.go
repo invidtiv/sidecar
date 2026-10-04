@@ -75,6 +75,9 @@ type Options struct {
 	// zero means 30s and 15s.
 	KeepaliveInterval time.Duration
 	KeepaliveTimeout  time.Duration
+	// KeepaliveStallTimeout bounds how long a blocked inbound pump may excuse
+	// missing pongs. Zero means one minute.
+	KeepaliveStallTimeout time.Duration
 }
 
 // Server is one running API process.
@@ -88,6 +91,9 @@ type Server struct {
 	origins   *originStore
 	clients   *clientRegistry
 	static    http.Handler
+	// credentialMu orders credential changes with ticket issuance and stream
+	// registration. Authorization alone is a snapshot, not admission authority.
+	credentialMu sync.Mutex
 
 	browserPort    int
 	browserHosts   map[string]bool

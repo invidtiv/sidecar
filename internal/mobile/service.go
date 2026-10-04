@@ -50,10 +50,13 @@ type OwnerConfigGenerationProvider func(context.Context) (string, error)
 type CatalogQuerier func(context.Context, mobileproto.CatalogQuery) (mobileproto.CatalogSnapshot, error)
 
 type Config struct {
-	Input                                     io.Reader
-	Output                                    io.Writer
-	Resolver                                  Resolver
-	Revalidator                               TargetRevalidator
+	Input       io.Reader
+	Output      io.Writer
+	Resolver    Resolver
+	Revalidator TargetRevalidator
+	// CaptureRevalidator uses independent read-only evidence after a capture
+	// transport fails. Nil uses Revalidator.
+	CaptureRevalidator                        TargetRevalidator
 	Catalog                                   CatalogProvider
 	CatalogQuery                              CatalogQuerier
 	HistoryCapturer                           HistoryCapturer
@@ -68,6 +71,7 @@ type Service struct {
 	out                                            *safeEncoder
 	resolve                                        Resolver
 	revalidateTarget                               TargetRevalidator
+	captureRevalidateTarget                        TargetRevalidator
 	catalog                                        CatalogProvider
 	catalogQuery                                   CatalogQuerier
 	historyCapture                                 HistoryCapturer
@@ -167,7 +171,7 @@ func New(config Config) (*Service, error) {
 		historyCapture = tty.CapturePaneRangeBounded
 	}
 	s := &Service{
-		in: config.Input, out: newSafeEncoder(config.Output), resolve: config.Resolver, revalidateTarget: config.Revalidator, catalog: config.Catalog, catalogQuery: config.CatalogQuery,
+		in: config.Input, out: newSafeEncoder(config.Output), resolve: config.Resolver, revalidateTarget: config.Revalidator, captureRevalidateTarget: config.CaptureRevalidator, catalog: config.Catalog, catalogQuery: config.CatalogQuery,
 		historyCapture:        historyCapture,
 		ownerConfigGeneration: config.OwnerConfigGenerationProvider,
 		manager:               config.Manager, terminalBackend: config.Terminal, instance: instance, hubID: config.HubID,
@@ -483,6 +487,10 @@ func (s *Service) revalidate(ctx context.Context, target targetState) error {
 }
 
 func (s *Service) revalidatedTarget(ctx context.Context, target targetState) (ResolvedTarget, error) {
+	return s.revalidatedTargetWith(ctx, target, s.revalidateTarget)
+}
+
+func (s *Service) revalidatedTargetWith(ctx context.Context, target targetState, revalidate TargetRevalidator) (ResolvedTarget, error) {
 	expectedConfig := target.wire.OwnerConfigGeneration
 	if expectedConfig == "" {
 		expectedConfig = s.configGeneration
@@ -492,8 +500,8 @@ func (s *Service) revalidatedTarget(ctx context.Context, target targetState) (Re
 	}
 	var current ResolvedTarget
 	var err error
-	if s.revalidateTarget != nil {
-		current, err = s.revalidateTarget(ctx, target.resolved)
+	if revalidate != nil {
+		current, err = revalidate(ctx, target.resolved)
 	} else {
 		selector := target.resolved.Selector
 		if selector == "" {
@@ -774,7 +782,7 @@ func (s *Service) control(ctx context.Context, request mobileproto.Request) {
 		a.resetGeneration++
 		reset = a.resetGeneration
 		a.firstOutputForReset = 0
-		a.expectedColumns, a.expectedRows = request.Columns, request.Rows
+		a.awaitGeometryLocked(request.Columns, request.Rows)
 	}
 	a.mu.Unlock()
 	if err := s.out.write(mobileproto.Response{Version: mobileproto.Version, Type: mobileproto.ResponseControl, RequestID: request.RequestID,
@@ -786,7 +794,7 @@ func (s *Service) control(ctx context.Context, request mobileproto.Request) {
 	}
 	if resized {
 		s.emit(mobileproto.Response{Version: mobileproto.Version, Type: mobileproto.ResponseReset,
-			AttachmentHandle: a.handle, AttachmentGeneration: a.generation, ResetGeneration: reset, Reason: "resize"})
+			AttachmentHandle: a.handle, AttachmentGeneration: a.generation, ResetGeneration: reset, Reason: mobileproto.ResetResize})
 		a.requestSnapshot()
 	}
 }
@@ -840,7 +848,7 @@ func (s *Service) resize(ctx context.Context, request mobileproto.Request) {
 	a.resetGeneration++
 	reset := a.resetGeneration
 	a.firstOutputForReset = 0
-	a.expectedColumns, a.expectedRows = request.Columns, request.Rows
+	a.awaitGeometryLocked(request.Columns, request.Rows)
 	a.mu.Unlock()
 	if err := s.out.write(mobileproto.Response{Version: mobileproto.Version, Type: mobileproto.ResponseResized, RequestID: request.RequestID,
 		AttachmentHandle: a.handle, AttachmentGeneration: a.generation, Control: true, OperationSequence: request.OperationSequence,
@@ -850,7 +858,7 @@ func (s *Service) resize(ctx context.Context, request mobileproto.Request) {
 		return
 	}
 	s.emit(mobileproto.Response{Version: mobileproto.Version, Type: mobileproto.ResponseReset,
-		AttachmentHandle: a.handle, AttachmentGeneration: a.generation, ResetGeneration: reset, Reason: "resize"})
+		AttachmentHandle: a.handle, AttachmentGeneration: a.generation, ResetGeneration: reset, Reason: mobileproto.ResetResize})
 	a.requestSnapshot()
 }
 
@@ -1086,6 +1094,10 @@ type attachment struct {
 	operationSequence, outputSequence, resetGeneration uint64
 	firstOutputForReset                                uint64
 	expectedColumns, expectedRows                      int
+	// priorColumns and priorRows are the geometry a pending resize replaced.
+	// A capture at that size may have been in flight when tmux acknowledged
+	// the resize; staleCaptures is how many more such captures are excused.
+	priorColumns, priorRows, staleCaptures int
 	// reseedDelay is the backoff before the next replacement capture after a
 	// capture failure; zero means the initial delay.
 	reseedDelay time.Duration
@@ -1107,6 +1119,12 @@ type LeaseGeometry interface {
 	Release() error
 }
 
+// maxStaleGeometryCaptures bounds how many captures at the pre-resize size an
+// attachment discards while it waits for its own resize to show. Captures
+// requested after tmux acknowledged the resize show the new size unless
+// someone else changed it, so a few cover any capture already in flight.
+const maxStaleGeometryCaptures = 2
+
 const (
 	reseedInitialDelay = 250 * time.Millisecond
 	reseedMaxDelay     = 5 * time.Second
@@ -1123,6 +1141,14 @@ type queuedSnapshot struct {
 	snapshot        tty.ControlSnapshot
 	resetGeneration uint64
 	discontinuity   string
+}
+
+// awaitGeometryLocked records a resize this attachment just made, so the
+// publisher waits for a capture at that size. Callers hold a.mu.
+func (a *attachment) awaitGeometryLocked(columns, rows int) {
+	a.expectedColumns, a.expectedRows = columns, rows
+	a.priorColumns, a.priorRows = a.latest.PaneWidth, a.latest.PaneHeight
+	a.staleCaptures = maxStaleGeometryCaptures
 }
 
 func (a *attachment) offerSnapshot(snapshot tty.ControlSnapshot) {
@@ -1155,22 +1181,22 @@ func (a *attachment) skippedDiscontinuity(dropped, replacement queuedSnapshot) s
 	expectedColumns, expectedRows := a.expectedColumns, a.expectedRows
 	a.mu.Unlock()
 	if captureIdentityChanged(dropped.snapshot, a.target.resolved) {
-		reason = strongerDiscontinuity(reason, "identity_changed")
+		reason = strongerDiscontinuity(reason, mobileproto.ResetIdentityChanged)
 	}
 	hadLatest := latest.Pane != ""
 	if hadLatest && (dropped.snapshot.AltScreen != latest.AltScreen || dropped.snapshot.AltScreen != replacement.snapshot.AltScreen) {
-		reason = strongerDiscontinuity(reason, "alternate_screen")
+		reason = strongerDiscontinuity(reason, mobileproto.ResetAlternateScreen)
 	}
 	if expectedColumns > 0 && expectedRows > 0 {
 		droppedWasExpected := dropped.snapshot.PaneWidth == expectedColumns && dropped.snapshot.PaneHeight == expectedRows
 		replacementIsExpected := replacement.snapshot.PaneWidth == expectedColumns && replacement.snapshot.PaneHeight == expectedRows
 		if droppedWasExpected && !replacementIsExpected {
-			reason = strongerDiscontinuity(reason, "geometry_changed")
+			reason = strongerDiscontinuity(reason, mobileproto.ResetGeometryChanged)
 		}
 		return reason
 	}
 	if hadLatest && (snapshotGeometryChanged(latest, dropped.snapshot) || snapshotGeometryChanged(dropped.snapshot, replacement.snapshot)) {
-		reason = strongerDiscontinuity(reason, "geometry_changed")
+		reason = strongerDiscontinuity(reason, mobileproto.ResetGeometryChanged)
 	}
 	return reason
 }
@@ -1178,11 +1204,11 @@ func (a *attachment) skippedDiscontinuity(dropped, replacement queuedSnapshot) s
 func strongerDiscontinuity(current, candidate string) string {
 	priority := func(reason string) int {
 		switch reason {
-		case "identity_changed":
+		case mobileproto.ResetIdentityChanged:
 			return 3
-		case "alternate_screen":
+		case mobileproto.ResetAlternateScreen:
 			return 2
-		case "geometry_changed":
+		case mobileproto.ResetGeometryChanged:
 			return 1
 		default:
 			return 0
@@ -1215,7 +1241,12 @@ func (a *attachment) run() {
 		case <-a.stop:
 			return
 		case err := <-a.failures:
-			a.captureFailed(err)
+			if a.captureFailed(err) {
+				// The target is gone: this attachment is over. Stopping waits
+				// for this loop, so it cannot run here.
+				go a.stopAttachment()
+				return
+			}
 		case snapshot := <-a.snapshots:
 			a.publishQueued(snapshot)
 		case <-ticker.C:
@@ -1249,20 +1280,20 @@ func (a *attachment) publishQueued(observed queuedSnapshot) {
 	}
 	snapshot := observed.snapshot
 	want := a.target.resolved
-	if captureIdentityChanged(snapshot, want) || observed.discontinuity == "identity_changed" {
-		a.advanceResetLocked("identity_changed", true)
+	if captureIdentityChanged(snapshot, want) || observed.discontinuity == mobileproto.ResetIdentityChanged {
+		a.advanceResetLocked(mobileproto.ResetIdentityChanged, true)
 		a.service.writeError("", mobileproto.ErrorIdentityChanged, "capture target identity changed", false)
 		a.requestSnapshot()
 		return
 	}
 	vt, modes, err := normalizedFullFrame(snapshot)
 	if err != nil {
-		a.failLocked("capture_invalid", err)
+		a.failLocked(mobileproto.ResetCaptureInvalid, err)
 		return
 	}
 	encoded := base64.StdEncoding.EncodeToString(vt)
 	if len(encoded) > mobileproto.MaxLineBytes-(64<<10) {
-		a.failLocked("frame_too_large", fmt.Errorf("normalized frame exceeds line bound"))
+		a.failLocked(mobileproto.ResetFrameTooLarge, fmt.Errorf("normalized frame exceeds line bound"))
 		return
 	}
 	a.mu.Lock()
@@ -1274,8 +1305,22 @@ func (a *attachment) publishQueued(observed queuedSnapshot) {
 		a.expectedColumns, a.expectedRows = 0, 0
 	}
 	altChanged := hadLatest && a.latest.AltScreen != snapshot.AltScreen
+	// A capture at neither the requested size nor the size it replaced, or
+	// more pre-resize captures than could have been in flight, means another
+	// lease holder changed the pane after this resize. The awaited geometry
+	// will never be captured, so the wait ends here.
+	foreignGeometry := false
+	if awaitingGeometry && !expectedGeometry && observed.discontinuity == "" {
+		atPrior := snapshot.PaneWidth == a.priorColumns && snapshot.PaneHeight == a.priorRows
+		if atPrior && a.staleCaptures > 0 {
+			a.staleCaptures--
+		} else {
+			foreignGeometry = true
+			a.expectedColumns, a.expectedRows = 0, 0
+		}
+	}
 	a.mu.Unlock()
-	if awaitingGeometry && !expectedGeometry {
+	if awaitingGeometry && !expectedGeometry && !foreignGeometry {
 		// A capture already in flight when tmux acknowledged the resize still
 		// describes the old grid. Never relabel it as the first frame of the new
 		// reset generation; ask the ordered actor for a post-resize capture.
@@ -1289,11 +1334,16 @@ func (a *attachment) publishQueued(observed queuedSnapshot) {
 		return
 	}
 	reason := observed.discontinuity
+	if foreignGeometry {
+		// Publish this capture at the size the pane really has, after a
+		// geometry_changed reset that revokes control.
+		reason = strongerDiscontinuity(reason, mobileproto.ResetGeometryChanged)
+	}
 	if altChanged {
-		reason = strongerDiscontinuity(reason, "alternate_screen")
+		reason = strongerDiscontinuity(reason, mobileproto.ResetAlternateScreen)
 	}
 	if geometryChanged && !expectedGeometry {
-		reason = strongerDiscontinuity(reason, "geometry_changed")
+		reason = strongerDiscontinuity(reason, mobileproto.ResetGeometryChanged)
 	}
 	if reason != "" {
 		a.advanceResetLocked(reason, true)
@@ -1318,7 +1368,7 @@ func (a *attachment) publishQueued(observed queuedSnapshot) {
 		a.mu.Unlock()
 	} else if err != nil {
 		a.service.abort(err)
-		a.advanceResetLocked("output_unavailable", true)
+		a.advanceResetLocked(mobileproto.ResetOutputUnavailable, true)
 	}
 }
 
@@ -1330,13 +1380,27 @@ func snapshotGeometryChanged(first, second tty.ControlSnapshot) bool {
 	return first.PaneWidth != second.PaneWidth || first.PaneHeight != second.PaneHeight
 }
 
-// captureFailed resets the attachment after its capture source died, then
-// asks for a replacement capture, so a full frame always follows the reset even
-// on an idle pane. The request is delayed with a capped backoff: a source that
-// keeps failing produces one reset per attempt, never a tight loop of them.
-func (a *attachment) captureFailed(err error) {
+// captureFailed handles a dead capture source. It first asks whether the
+// target itself is still there, using the same narrow current-source check
+// every operation uses. A target that is gone or replaced ends the attachment:
+// one asynchronous refusal, no reset, and no further captures, because no
+// capture of that target can ever succeed again. It reports true then, and the
+// caller stops the attachment.
+//
+// Otherwise the failure is transient: it resets the attachment and asks for a
+// replacement capture, so a full frame always follows the reset even on an
+// idle pane. The request is delayed with a capped backoff: a source that keeps
+// failing produces one reset per attempt, never a tight loop of them.
+func (a *attachment) captureFailed(err error) bool {
 	a.opMu.Lock()
-	a.failLocked("capture_failed", err)
+	if refusal := a.targetRefusal(); refusal != nil {
+		a.loseControlLocked()
+		a.service.removeAttachment(a.handle)
+		a.service.writeError("", refusal.Code, "capture target is gone: "+refusal.Message, false)
+		a.opMu.Unlock()
+		return true
+	}
+	a.failLocked(mobileproto.ResetCaptureFailed, err)
 	a.opMu.Unlock()
 	a.mu.Lock()
 	delay := a.reseedDelay
@@ -1346,6 +1410,32 @@ func (a *attachment) captureFailed(err error) {
 	a.reseedDelay = min(delay*2, reseedMaxDelay)
 	a.mu.Unlock()
 	time.AfterFunc(delay, a.requestSnapshot)
+	return false
+}
+
+// captureRevalidateTimeout bounds the target check after a capture failure. A
+// check that runs out of time is not proof the target is gone.
+const captureRevalidateTimeout = 10 * time.Second
+
+// targetRefusal revalidates the attachment's target and returns the refusal
+// when it is gone or changed. Any other failure (a timeout, an unreadable
+// state file) is not evidence about the target and returns nil.
+func (a *attachment) targetRefusal() *ResolveError {
+	ctx, cancel := context.WithTimeout(context.Background(), captureRevalidateTimeout)
+	defer cancel()
+	revalidate := a.service.captureRevalidateTarget
+	if revalidate == nil {
+		revalidate = a.service.revalidateTarget
+	}
+	_, err := a.service.revalidatedTargetWith(ctx, a.target, revalidate)
+	if ctx.Err() != nil || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return nil
+	}
+	var refusal *ResolveError
+	if err != nil && errors.As(err, &refusal) {
+		return refusal
+	}
+	return nil
 }
 
 func (a *attachment) failLocked(reason string, err error) {
@@ -1377,7 +1467,7 @@ func (a *attachment) expirePresence() {
 	}
 	expired, err := geometry.ExpirePresence()
 	if err != nil {
-		a.failLocked("presence_release_failed", err)
+		a.failLocked(mobileproto.ResetPresenceReleaseFailed, err)
 		return
 	}
 	if !expired {
@@ -1387,7 +1477,7 @@ func (a *attachment) expirePresence() {
 	a.geometry = nil
 	a.control = false
 	a.mu.Unlock()
-	a.advanceResetLocked("presence_timeout", false)
+	a.advanceResetLocked(mobileproto.ResetPresenceTimeout, false)
 	// The pane may be completely idle. Explicitly request the replacement
 	// frame that lets the client acknowledge this reset and take control again.
 	a.requestSnapshot()

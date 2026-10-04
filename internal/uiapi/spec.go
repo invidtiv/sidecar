@@ -19,7 +19,7 @@ func Spec() ([]byte, error) {
 		"PairingCodeRequest": PairingCodeRequest{}, "PairingCode": PairingCode{},
 		"PairingExchangeRequest": PairingExchangeRequest{}, "PairingExchange": PairingExchange{},
 		"OriginRequest": OriginRequest{}, "OriginRegistration": OriginRegistration{},
-		"OriginList": OriginList{}, "OriginRevocation": OriginRevocation{},
+		"OriginList": OriginList{}, "OriginRevocation": OriginRevocation{}, "SessionRevocation": SessionRevocation{},
 		"CatalogSnapshot": mobileproto.CatalogSnapshot{}, "TerminalRequest": mobileproto.Request{},
 		"TerminalResponse": mobileproto.Response{},
 	}
@@ -91,6 +91,9 @@ func Spec() ([]byte, error) {
 	add("/api/v0/status", "get", "", "Status", all, false)
 	add("/api/v0/ws-tickets", "post", "TicketRequest", "TicketResponse", remote, false)
 	add("/api/v0/pairing/codes", "post", "PairingCodeRequest", "PairingCode", local, false)
+	add("/api/v0/pairing/sessions", "delete", "", "SessionRevocation", local, false)
+	sessionRevoke := paths["/api/v0/pairing/sessions"].(map[string]any)["delete"].(map[string]any)
+	sessionRevoke["parameters"] = append(sessionRevoke["parameters"].([]any), map[string]any{"name": "origin", "in": "query", "schema": map[string]any{"type": "string"}, "description": "Omit to revoke every browser session; supply an origin to revoke only its sessions."})
 	add("/api/v0/pairing/exchange", "post", "PairingExchangeRequest", "PairingExchange", []string{"browser"}, true)
 	add("/api/v0/origins", "get", "", "OriginList", local, false)
 	add("/api/v0/origins", "post", "OriginRequest", "OriginRegistration", local, false)

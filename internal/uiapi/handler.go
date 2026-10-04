@@ -54,11 +54,12 @@ func (s *Server) routeTable() map[string]*route {
 	local := []Listener{ListenerLocal}
 	remote := []Listener{ListenerBrowser, ListenerTailnet}
 	return map[string]*route{
-		"/api/v0/hello":         {methods: map[string]routeFunc{http.MethodGet: s.handleHello}},
-		"/api/v0/sessions":      {methods: map[string]routeFunc{http.MethodGet: s.handleSessions}},
-		"/api/v0/status":        {methods: map[string]routeFunc{http.MethodGet: s.handleStatus}},
-		"/api/v0/ws-tickets":    {methods: map[string]routeFunc{http.MethodPost: s.handleTicket}, listeners: remote},
-		"/api/v0/pairing/codes": {methods: map[string]routeFunc{http.MethodPost: s.handlePairingCode}, listeners: local},
+		"/api/v0/hello":            {methods: map[string]routeFunc{http.MethodGet: s.handleHello}},
+		"/api/v0/sessions":         {methods: map[string]routeFunc{http.MethodGet: s.handleSessions}},
+		"/api/v0/status":           {methods: map[string]routeFunc{http.MethodGet: s.handleStatus}},
+		"/api/v0/ws-tickets":       {methods: map[string]routeFunc{http.MethodPost: s.handleTicket}, listeners: remote},
+		"/api/v0/pairing/codes":    {methods: map[string]routeFunc{http.MethodPost: s.handlePairingCode}, listeners: local},
+		"/api/v0/pairing/sessions": {methods: map[string]routeFunc{http.MethodDelete: s.handleRevokeSessions}, listeners: local},
 		"/api/v0/origins": {methods: map[string]routeFunc{http.MethodGet: s.handleListOrigins, http.MethodPost: s.handlePairOrigin,
 			http.MethodDelete: s.handleRevokeOrigin}, listeners: local},
 		"/api/v0/pairing/exchange": {methods: map[string]routeFunc{http.MethodPost: s.handlePairingExchange}, listeners: []Listener{ListenerBrowser}, public: true},
@@ -235,7 +236,7 @@ func (s *Server) resolveBearer(token, origin string) (caller, bearerResult) {
 		if origin != "" && origin != record.Origin {
 			return caller{}, bearerWrongOrigin
 		}
-		return caller{auth: "bearer", origin: record.Origin, client: "origin:" + record.Origin}, bearerOK
+		return caller{auth: "bearer", origin: record.Origin, client: "origin:" + record.Origin, credential: record.TokenSHA256}, bearerOK
 	}
 	if bound, client, ok := s.auth.lookupSession(token); ok {
 		if origin != "" && origin != bound {
@@ -244,6 +245,14 @@ func (s *Server) resolveBearer(token, origin string) (caller, bearerResult) {
 		return caller{auth: "session", origin: bound, client: client}, bearerOK
 	}
 	return caller{}, bearerUnknown
+}
+
+// callerLive is checked under credentialMu at ticket/terminal admission.
+func (s *Server) callerLive(c caller) bool {
+	if strings.HasPrefix(c.client, "origin:") {
+		return s.origins.credentialLive(strings.TrimPrefix(c.client, "origin:"), c.credential)
+	}
+	return s.auth.sessionClientLive(c.client)
 }
 
 func (h *listenerHandler) tailnetLogin(r *http.Request) (login, code, message string) {
@@ -264,12 +273,14 @@ func (h *listenerHandler) tailnetLogin(r *http.Request) (login, code, message st
 // without a preflight. Node, curl and native clients send no Origin. The token
 // itself is still validated, and an Origin that is present must match it. On
 // the Tailnet listener the login header is ambient, so Origin stays required.
+// Only the Bearer scheme with a non-empty token qualifies: Basic and other
+// schemes can be attached by a browser on its own, so they are not deliberate.
 func (h *listenerHandler) bearerWithoutOrigin(r *http.Request) bool {
 	if h.kind != ListenerBrowser {
 		return false
 	}
-	_, present := bearerToken(r)
-	return present
+	token, _ := bearerToken(r)
+	return token != ""
 }
 
 func (h *listenerHandler) hostAllowed(host string) bool {
@@ -409,7 +420,13 @@ func (s *Server) handleTicket(w http.ResponseWriter, r *http.Request, c caller) 
 	if !decodeBody(w, r, &body) {
 		return
 	}
-	ticket, expires, err := s.auth.issueTicket(grant{listener: c.listener, auth: c.auth, origin: c.origin, login: c.login, client: c.client})
+	s.credentialMu.Lock()
+	defer s.credentialMu.Unlock()
+	if !s.callerLive(c) {
+		writeError(w, http.StatusUnauthorized, CodeUnauthenticated, revokedSessionReason)
+		return
+	}
+	ticket, expires, err := s.auth.issueTicket(grant{listener: c.listener, auth: c.auth, origin: c.origin, login: c.login, client: c.client, credential: c.credential})
 	if err != nil {
 		writeError(w, http.StatusTooManyRequests, CodeTooMany, fmt.Sprintf("Too many unredeemed tickets (at most %d per client); open the WebSocket with one you already have, or wait 30 seconds.", maxTicketsPerClient))
 		return
@@ -528,6 +545,39 @@ type OriginRevocation struct {
 	Revoked bool   `json:"revoked"`
 }
 
+// SessionRevocation is DELETE /api/v0/pairing/sessions.
+type SessionRevocation struct {
+	Origin          string `json:"origin,omitempty"`
+	Revoked         int    `json:"revoked"`
+	TerminalsClosed int    `json:"terminals_closed"`
+}
+
+// handleRevokeSessions drops browser sessions, all of them or one origin's,
+// without a restart. Their tokens get 401 on the next request, their unused
+// tickets stop working, and their open terminals close with 4401.
+func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request, _ caller) {
+	var origin string
+	if r.URL.Query().Has("origin") {
+		normalized, err := NormalizeOrigin(r.URL.Query().Get("origin"))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, CodeInvalidRequest, err.Error())
+			return
+		}
+		origin = normalized
+	}
+	for key := range r.URL.Query() {
+		if key != "origin" {
+			writeError(w, http.StatusBadRequest, CodeInvalidRequest, fmt.Sprintf("unknown query parameter %q; only origin narrows a session revocation", key))
+			return
+		}
+	}
+	s.credentialMu.Lock()
+	defer s.credentialMu.Unlock()
+	revoked := s.auth.revokeSessions(origin)
+	closed := s.clients.revoke(s.clients.sessionKeys(origin))
+	writeJSON(w, http.StatusOK, SessionRevocation{Origin: origin, Revoked: len(revoked), TerminalsClosed: closed})
+}
+
 func (s *Server) handlePairOrigin(w http.ResponseWriter, r *http.Request, _ caller) {
 	var body OriginRequest
 	if !decodeBody(w, r, &body) {
@@ -543,6 +593,8 @@ func (s *Server) handlePairOrigin(w http.ResponseWriter, r *http.Request, _ call
 		writeError(w, http.StatusBadRequest, CodeInvalidRequest, err.Error())
 		return
 	}
+	s.credentialMu.Lock()
+	defer s.credentialMu.Unlock()
 	token, record, err := s.origins.pair(origin, scopes, s.opts.Now())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, CodeBackend, fmt.Sprintf("Could not save the paired origin: %v.", err))
@@ -561,6 +613,8 @@ func (s *Server) handleRevokeOrigin(w http.ResponseWriter, r *http.Request, _ ca
 		writeError(w, http.StatusBadRequest, CodeInvalidRequest, err.Error())
 		return
 	}
+	s.credentialMu.Lock()
+	defer s.credentialMu.Unlock()
 	revoked, err := s.origins.revoke(origin)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, CodeBackend, fmt.Sprintf("Could not save the paired origins: %v.", err))
@@ -570,5 +624,8 @@ func (s *Server) handleRevokeOrigin(w http.ResponseWriter, r *http.Request, _ ca
 		writeError(w, http.StatusNotFound, CodeOriginNotFound, fmt.Sprintf("%s is not paired; list registrations with `sidecar api pair --list`.", origin))
 		return
 	}
+	keys := map[string]bool{"origin:" + origin: true}
+	s.auth.revokeTickets(keys)
+	s.clients.revoke(keys)
 	writeJSON(w, http.StatusOK, OriginRevocation{Origin: origin, Revoked: true})
 }

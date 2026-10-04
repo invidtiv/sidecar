@@ -117,6 +117,18 @@ func (c *LocalClient) ListOrigins(ctx context.Context) (OriginList, error) {
 	return list, err
 }
 
+// RevokeSessions drops every browser session, or only origin's when origin
+// is not empty.
+func (c *LocalClient) RevokeSessions(ctx context.Context, origin string) (SessionRevocation, error) {
+	path := "/api/v0/pairing/sessions"
+	if origin != "" {
+		path += "?" + url.Values{"origin": {origin}}.Encode()
+	}
+	var revocation SessionRevocation
+	err := c.Do(ctx, http.MethodDelete, path, nil, &revocation)
+	return revocation, err
+}
+
 // RevokeOrigin removes one paired origin.
 func (c *LocalClient) RevokeOrigin(ctx context.Context, origin string) (OriginRevocation, error) {
 	var revocation OriginRevocation

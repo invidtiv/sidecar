@@ -67,12 +67,15 @@ func apiCommand() *Command {
 		Run:       runAPIOpen,
 	}
 	pair := &Command{
-		Name: "pair", Summary: "Manage origins allowed to embed Sidecar", Usage: "sidecar api pair --origin URL | --list | --revoke URL [--json]",
-		Long:      "Register another web origin (an app embedding Sidecar components) and print its bearer token, which is shown only once and stored only as a hash in $STATE/api/origins.json. Pairing an origin again rotates its token. --list shows registrations without tokens; --revoke removes one.",
-		Flags:     []Flag{{Name: "--origin", Arg: "URL", Summary: "Pair this origin (scheme://host[:port])"}, {Name: "--list", Summary: "List paired origins", Bool: true}, {Name: "--revoke", Arg: "URL", Summary: "Revoke a paired origin"}, jsonFlag, help},
+		Name: "pair", Summary: "Manage paired origins and browser sessions", Usage: "sidecar api pair --origin URL | --list | --revoke URL | --revoke-sessions [--origin URL] [--json]",
+		Long: "Register another web origin (an app embedding Sidecar components) and print its bearer token, which is shown only once and stored only as a hash in $STATE/api/origins.json. Pairing an origin again rotates its token. --list shows registrations without tokens; --revoke removes one. " +
+			"--revoke-sessions signs out every browser paired with `sidecar api open` without restarting the server: their session tokens get 401 from then on and their open terminals close with 4401. With --origin it signs out only the browsers on that origin. Paired origins keep their tokens.",
+		Flags: []Flag{{Name: "--origin", Arg: "URL", Summary: "Pair this origin (scheme://host[:port]); with --revoke-sessions, the origin to sign out"}, {Name: "--list", Summary: "List paired origins", Bool: true}, {Name: "--revoke", Arg: "URL", Summary: "Revoke a paired origin"},
+			{Name: "--revoke-sessions", Summary: "Sign out browser sessions from `sidecar api open`", Bool: true}, jsonFlag, help},
 		ExitCodes: []ExitCode{{Code: 0, Summary: "success"}, {Code: 1, Summary: "no server running or the server refused"}, {Code: 2, Summary: "usage error"}},
-		Examples:  []Example{{Command: "sidecar api pair --origin http://localhost:5173"}, {Command: "sidecar api pair --list --json"}, {Command: "sidecar api pair --revoke http://localhost:5173"}},
-		Mutates:   true, Run: runAPIPair,
+		Examples: []Example{{Command: "sidecar api pair --origin http://localhost:5173"}, {Command: "sidecar api pair --list --json"}, {Command: "sidecar api pair --revoke http://localhost:5173"},
+			{Command: "sidecar api pair --revoke-sessions"}, {Command: "sidecar api pair --revoke-sessions --origin http://127.0.0.1:7861 --json"}},
+		Mutates: true, Run: runAPIPair,
 	}
 	status := &Command{
 		Name: "status", Summary: "Report the running UI API server", Usage: "sidecar api status [--json]",
@@ -347,21 +350,25 @@ func runAPIPair(env Env, args []string) int {
 		_, _ = fmt.Fprint(env.Stdout, RenderHelp(cmd))
 		return 0
 	}
-	flags, err := parseAPIFlags(args, []string{"--list", "--json"}, []string{"--origin", "--revoke"})
+	flags, err := parseAPIFlags(args, []string{"--list", "--json", "--revoke-sessions"}, []string{"--origin", "--revoke"})
 	if err != nil {
 		cliErrf(env.Stderr, "%v\n\n%s", err, RenderHelp(cmd))
 		return 2
 	}
+	// With --revoke-sessions, --origin narrows the revocation instead of
+	// pairing an origin.
+	revokingSessions := flags.bools["--revoke-sessions"]
 	_, pairing := flags.values["--origin"]
+	pairing = pairing && !revokingSessions
 	_, revoking := flags.values["--revoke"]
 	modes := 0
-	for _, on := range []bool{pairing, revoking, flags.bools["--list"]} {
+	for _, on := range []bool{pairing, revoking, flags.bools["--list"], revokingSessions} {
 		if on {
 			modes++
 		}
 	}
 	if modes != 1 {
-		cliErrf(env.Stderr, "give exactly one of --origin, --list or --revoke\n\n%s", RenderHelp(cmd))
+		cliErrf(env.Stderr, "give exactly one of --origin, --list, --revoke or --revoke-sessions\n\n%s", RenderHelp(cmd))
 		return 2
 	}
 	client, code := apiLocalClient(env)
@@ -372,6 +379,21 @@ func runAPIPair(env Env, args []string) int {
 	defer cancel()
 	asJSON := flags.bools["--json"]
 	switch {
+	case revokingSessions:
+		revocation, err := client.RevokeSessions(ctx, flags.values["--origin"])
+		if err != nil {
+			cliErrln(env.Stderr, err)
+			return 1
+		}
+		if asJSON {
+			return writeCLIJSON(env, revocation)
+		}
+		scope := "every origin"
+		if revocation.Origin != "" {
+			scope = revocation.Origin
+		}
+		_, _ = fmt.Fprintf(env.Stdout, "Signed out %d browser session(s) on %s and closed %d terminal(s). Pair again with `sidecar api open`.\n",
+			revocation.Revoked, scope, revocation.TerminalsClosed)
 	case pairing:
 		registration, err := client.PairOrigin(ctx, flags.values["--origin"])
 		if err != nil {
