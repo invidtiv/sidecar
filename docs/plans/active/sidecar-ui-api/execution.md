@@ -116,7 +116,8 @@ This starts after td-552e24 merges to main. Implement the plan section "Geometry
   - Reset-free frames: home the cursor and repaint, with no `ESC c`.
   - Coalesce frames before the outbound queue, so a slow peer gets the latest frame rather than an abort.
   - Add a server-side `paste` operation using `load-buffer` and `paste-buffer -p`.
-- **Changed-row frames from the screen model.** These are conditional on the U0 measurements in `u0-measurements.md`.
+- **Compression.** Turn on `permessage-deflate` on the terminal WebSocket, which is `CompressionDisabled` today. [U0 measurements](u0-measurements.md) show four busy terminals sending about 2 MB/s raw, against about 43 KB/s estimated with deflate. Measure the server CPU it adds with `scripts/ui-api-measure.sh`.
+- **Screen-model frames are deferred to U3** by the U0 measurements: four busy agents cost about 17% of one core in Sidecar and 5% in tmux, and echo stays at 13-14 ms p50 under load. Changed-row frames may still land here if they can be built from captures; otherwise they move with the screen model.
 
 Negotiate everything through capabilities, so v0 clients, including today's iOS build, keep working. Update `mobile-protocol.md` and the fixtures.
 
