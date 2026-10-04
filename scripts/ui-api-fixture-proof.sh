@@ -36,7 +36,18 @@ done
 socket=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["unix_socket"])' "$root/start.json")
 tcp=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["tcp"])' "$root/start.json")
 curl -fsS --unix-socket "$socket" http://sidecar/api/v0/sessions > "$root/sessions.json"
-python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));assert d["total"]==1 and d["sections"][0]["rows"][0]["target"]=="fixture-echo" and d["sections"][0]["rows"][0]["path"]=="/workspace/fixture"' "$root/sessions.json"
+python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));rows=[r for s in d["sections"] for r in s["rows"]];assert d["total"]==3;root=next(r for r in rows if r.get("target")=="fixture-echo");assert root["path"]=="/workspace/fixture" and not root.get("content_workspace_id");linked=[r for r in rows if r.get("content_workspace_id")];assert len(linked)==2 and linked[0]["content_workspace_id"]==linked[1]["content_workspace_id"];assert all(c["content_workspace_id"]==r["content_workspace_id"] for r in linked for c in r.get("candidates",[]))' "$root/sessions.json"
+linked=$(python3 -c 'import json,sys,urllib.parse;d=json.load(open(sys.argv[1]));print(urllib.parse.quote(next(r["content_workspace_id"] for s in d["sections"] for r in s["rows"] if r.get("content_workspace_id")),safe=""))' "$root/sessions.json")
+for workspace in "" "$linked"; do
+	curl -fsS --unix-socket "$socket" "http://sidecar/api/v0/projects/fixture-project/content?kind=file&target=README.md&workspace=$workspace" > "$root/content.json"
+	python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));assert d["content"].startswith("# Fixture project");assert d["path"]==("/workspace/feature" if sys.argv[2] else "/workspace/fixture")+"/README.md"' "$root/content.json" "$workspace"
+	curl -fsS --unix-socket "$socket" "http://sidecar/api/v0/projects/fixture-project/tree?workspace=$workspace" > /dev/null
+	curl -fsS --unix-socket "$socket" -D "$root/layout.headers" "http://sidecar/api/v0/projects/fixture-project/layout?workspace=$workspace" > /dev/null
+	etag=$(python3 -c 'import sys;print(next(line.split(":",1)[1].strip() for line in open(sys.argv[1]) if line.lower().startswith("etag:")))' "$root/layout.headers")
+	curl -fsS --unix-socket "$socket" -X PUT -H 'Content-Type: application/json' -H "If-Match: $etag" -d '{"layout":{"kind":"terminal","session":"fixture-echo"}}' "http://sidecar/api/v0/projects/fixture-project/layout?workspace=$workspace" > /dev/null
+done
+curl -fsS --unix-socket "$socket" 'http://sidecar/api/v0/projects/fixture-project/layout?workspace=fixture-shell' > "$root/legacy-layout.json"
+python3 -c 'import json,sys;assert json.load(open(sys.argv[1]))["layout"]["session"]=="fixture-echo"' "$root/legacy-layout.json"
 sc api status --json > "$root/status.json"
 python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));assert d["server_version"]=="fixture" and d["terminals"]==[]' "$root/status.json"
 # Workspace fixtures retain recoverable records and never fall through to

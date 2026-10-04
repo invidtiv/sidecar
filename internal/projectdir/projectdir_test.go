@@ -504,13 +504,49 @@ func TestLookupEquivalentReturnsEverySpelling(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, spelling := range []string{link, resolvedReal} {
-		if _, err := Resolve(spelling); err != nil {
+	// Model legacy split state directly. New registrations reuse one root.
+	for i, spelling := range []string{link, resolvedReal} {
+		dir := filepath.Join(os.Getenv("XDG_STATE_HOME"), "sidecar", "projects", fmt.Sprintf("legacy-%d", i))
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		data, _ := json.Marshal(projectMeta{Path: spelling})
+		if err := os.WriteFile(filepath.Join(dir, "meta.json"), data, 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if got := LookupEquivalent(link); len(got) != 2 {
 		t.Fatalf("LookupEquivalent = %+v, want both registry entries", got)
+	}
+}
+
+func TestResolveAndLookupShareRegisteredAlias(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	root := t.TempDir()
+	canonical, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(t.TempDir(), "alias")
+	if err = os.Symlink(root, alias); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := Resolve(alias)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{root, canonical, alias} {
+		got, err := Resolve(path)
+		if err != nil || got != dir {
+			t.Fatalf("Resolve(%q) split alias registry: %q, want %q: %v", path, got, dir, err)
+		}
+		if got, ok := Lookup(path); !ok || got != dir {
+			t.Fatalf("Lookup(%q): %q %v, want %q", path, got, ok, dir)
+		}
+	}
+	meta, err := readMeta(dir)
+	if err != nil || meta.Path != alias || len(LookupEquivalent(root)) != 1 {
+		t.Fatalf("registration spelling changed or split: %+v %v", meta, err)
 	}
 }
 

@@ -23,6 +23,11 @@ func TestWorkspaceCandidatesAreDeterministicAndMembershipBound(t *testing.T) {
 	if generation == "" || len(candidates) != 2 || candidates[0].Session != "one" || !IsCandidateSelector(candidates[0].Selector) {
 		t.Fatalf("candidates = generation %q %+v", generation, candidates)
 	}
+	for _, candidate := range candidates {
+		if candidate.ContentWorkspaceID != "/demo:worktree:/demo/worktree" {
+			t.Fatalf("candidate needs its public owning-root selector: %+v", candidate)
+		}
+	}
 	workspace.TerminalCandidates[0], workspace.TerminalCandidates[1] = workspace.TerminalCandidates[1], workspace.TerminalCandidates[0]
 	reorderedGeneration, reordered, err := WorkspaceCandidates(workspace, "local:hub")
 	if err != nil {

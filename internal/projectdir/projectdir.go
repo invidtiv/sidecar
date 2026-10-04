@@ -530,6 +530,8 @@ func findByMeta(projectsDir, projectRoot string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
+	want := resolvedPath(projectRoot)
+	equivalent := ""
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -542,8 +544,13 @@ func findByMeta(projectsDir, projectRoot string) (string, bool) {
 		if meta.Path == projectRoot {
 			return dir, true
 		}
+		if equivalent == "" && want != "" && resolvedPath(meta.Path) == want {
+			equivalent = dir
+		}
 	}
-	return "", false
+	// Keep the exact spelling's priority for old split registrations, but
+	// never allocate another manifest for an alias of a registered root.
+	return equivalent, equivalent != ""
 }
 
 // readMeta reads and parses the meta.json in the given directory.

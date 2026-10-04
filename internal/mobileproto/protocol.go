@@ -177,7 +177,10 @@ type CatalogRow struct {
 	WorkspaceKind string `json:"workspace_kind"`
 	DisplayName   string `json:"display_name"`
 	// Path is presentation metadata on the owning host, never a scoped selector.
-	Path                string             `json:"path,omitempty"`
+	Path string `json:"path,omitempty"`
+	// ContentWorkspaceID selects the owning root on project content, tree,
+	// layout and viewer-presence routes. Empty selects the configured root.
+	ContentWorkspaceID  string             `json:"content_workspace_id,omitempty" jsonschema_description:"Selector for project content, tree, layout and viewer-presence routes. Empty or omitted selects the configured root; nonempty names the owning linked worktree. Omitted on hub-remapped remote rows. Independent of terminal expected_target."`
 	Branch              string             `json:"branch,omitempty"`
 	Task                string             `json:"task,omitempty"`
 	Provider            string             `json:"provider,omitempty"`
@@ -207,14 +210,15 @@ type CatalogRow struct {
 // ExpectedTarget. It remains deterministic across API processes while the
 // complete source candidate set and selected terminal identity are unchanged.
 type CatalogCandidate struct {
-	Selector       string         `json:"selector"`
-	DisplayName    string         `json:"display_name"`
-	OwnerHostID    string         `json:"owner_host_id"`
-	WorkspaceID    string         `json:"workspace_id"`
-	WorkspaceKind  string         `json:"workspace_kind"`
-	Session        string         `json:"session"`
-	Pane           string         `json:"pane"`
-	ExpectedTarget TargetIdentity `json:"expected_target"`
+	ContentWorkspaceID string         `json:"content_workspace_id,omitempty" jsonschema_description:"Same project content selector as the owning row. Pass unchanged as workspace; never derive it from opaque selectors or terminal identity."`
+	Selector           string         `json:"selector"`
+	DisplayName        string         `json:"display_name"`
+	OwnerHostID        string         `json:"owner_host_id"`
+	WorkspaceID        string         `json:"workspace_id"`
+	WorkspaceKind      string         `json:"workspace_kind"`
+	Session            string         `json:"session"`
+	Pane               string         `json:"pane"`
+	ExpectedTarget     TargetIdentity `json:"expected_target"`
 }
 
 type CatalogSection struct {

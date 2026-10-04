@@ -61,13 +61,31 @@ func (b *FixtureBackend) LookupProject(_ context.Context, project, workspace str
 	if project != "fixture-project" {
 		return contentservice.Workspace{}, contentservice.Rejected("no fixture project %q", project)
 	}
-	if workspace != "" && workspace != "fixture-project" {
-		return contentservice.Workspace{}, contentservice.Rejected("no fixture workspace %q", workspace)
+	root := "/workspace/fixture"
+	if b.workspace != nil {
+		root = b.workspace.Project.Path
 	}
-	return contentservice.Workspace{ID: "fixture-project", Root: "/workspace/fixture"}, nil
+	if workspace == "" || workspace == "fixture-project" {
+		return contentservice.Workspace{ID: "fixture-project", Root: root}, nil
+	}
+	for _, section := range b.catalog.Sections {
+		for _, row := range section.Rows {
+			if row.ProjectID != project || (workspace != row.ContentWorkspaceID && workspace != row.ID && workspace != row.WorkspaceID) {
+				continue
+			}
+			if row.ContentWorkspaceID == "" {
+				// The legacy fixture shell belongs to the configured root,
+				// independently of its synthetic terminal workspace identity.
+				return contentservice.Workspace{ID: "fixture-project", Root: root}, nil
+			}
+			return contentservice.Workspace{ID: row.ContentWorkspaceID, Root: row.Path}, nil
+		}
+	}
+	return contentservice.Workspace{}, contentservice.Rejected("no fixture workspace %q", workspace)
 }
 func (b *FixtureBackend) ReadProject(ctx context.Context, project, workspace string, p contentservice.ReadParams) (contentservice.ReadResult, error) {
-	if _, err := b.LookupProject(ctx, project, workspace); err != nil {
+	ws, err := b.LookupProject(ctx, project, workspace)
+	if err != nil {
 		return contentservice.ReadResult{}, err
 	}
 	doc, ok := b.content[p.Kind]
@@ -84,10 +102,15 @@ func (b *FixtureBackend) ReadProject(ctx context.Context, project, workspace str
 	if p.IfRevision == doc.Revision {
 		return contentservice.ReadResult{Kind: doc.Kind, Revision: doc.Revision, NotModified: true}, nil
 	}
+	doc.Workspace = ws.ID
+	if doc.Path != "" {
+		doc.Path = filepath.Join(ws.Root, doc.Display)
+	}
 	return doc, nil
 }
 func (b *FixtureBackend) TreeProject(ctx context.Context, project, workspace string, paths []string) (contentservice.TreeResult, error) {
-	if _, err := b.LookupProject(ctx, project, workspace); err != nil {
+	ws, err := b.LookupProject(ctx, project, workspace)
+	if err != nil {
 		return contentservice.TreeResult{}, err
 	}
 	if len(paths) > contentservice.MaxTreePaths {
@@ -96,7 +119,7 @@ func (b *FixtureBackend) TreeProject(ctx context.Context, project, workspace str
 	if len(paths) == 0 {
 		paths = []string{""}
 	}
-	result := contentservice.TreeResult{Kind: "tree", Workspace: "fixture-project", Dirs: []contentservice.TreeDir{}}
+	result := contentservice.TreeResult{Kind: "tree", Workspace: ws.ID, Dirs: []contentservice.TreeDir{}}
 	for _, path := range paths {
 		if err := contentservice.StrictRelative(path); err != nil {
 			return contentservice.TreeResult{}, err
