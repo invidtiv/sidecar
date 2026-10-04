@@ -1,0 +1,113 @@
+{
+  "sidecar_ui_commit": "0f9cb5fd50824b00b8c92db9d605cfed7ce2fbce",
+  "handoffs": [
+    {
+      "to": "ios",
+      "ms": 7,
+      "geometry": "73x19"
+    },
+    {
+      "to": "tui",
+      "ms": 106,
+      "geometry": "91x39"
+    },
+    {
+      "to": "browser",
+      "ms": 120,
+      "bytes": 3,
+      "geometry": "121x41"
+    },
+    {
+      "to": "ios",
+      "ms": 29,
+      "bytes": 3,
+      "geometry": "73x19"
+    },
+    {
+      "to": "tui",
+      "ms": 133,
+      "bytes": 3,
+      "geometry": "91x39"
+    },
+    {
+      "to": "browser",
+      "ms": 315,
+      "bytes": 3,
+      "geometry": "121x41"
+    },
+    {
+      "to": "ios",
+      "ms": 172,
+      "bytes": 3,
+      "geometry": "73x19"
+    },
+    {
+      "to": "tui",
+      "ms": 232,
+      "bytes": 3,
+      "geometry": "91x39"
+    },
+    {
+      "to": "browser",
+      "ms": 271,
+      "bytes": 3,
+      "geometry": "121x41"
+    },
+    {
+      "to": "ios",
+      "ms": 39,
+      "bytes": 3,
+      "geometry": "73x19"
+    },
+    {
+      "to": "tui",
+      "ms": 172,
+      "bytes": 3,
+      "geometry": "91x39"
+    },
+    {
+      "to": "browser",
+      "ms": 90,
+      "bytes": 3,
+      "geometry": "121x41"
+    },
+    {
+      "to": "ios",
+      "ms": 30,
+      "bytes": 3,
+      "geometry": "73x19"
+    },
+    {
+      "to": "tui",
+      "ms": 131,
+      "bytes": 3,
+      "geometry": "91x39"
+    }
+  ],
+  "quiet_windows": [
+    {
+      "ms": 6660,
+      "resize_window_calls": 0
+    }
+  ],
+  "holder_checks": 18,
+  "tui_geometry": "91x39",
+  "browser_geometry": "121x41",
+  "browser_blur_ms": 7,
+  "ios_blur_ms": 7,
+  "expected_bytes": 40,
+  "received_bytes": 40,
+  "input_exact": true,
+  "idle_preemption": {
+    "abandoned_ms": 8009,
+    "active_to_holder_ms": 182,
+    "browser_label": "Browser"
+  },
+  "browser_hint_checks": 1,
+  "focused_input_takeovers": {
+    "count": 2,
+    "ms": 1768
+  },
+  "resize_hook_positive_control": true,
+  "browser_pageerrors": []
+}
