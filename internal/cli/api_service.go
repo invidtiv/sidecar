@@ -42,11 +42,11 @@ func apiExecutablePath() (string, error) {
 
 func apiServiceCommand() *Command {
 	command := &Command{Name: "service", Summary: "Manage the per-user UI API service", Usage: "sidecar api service <install|uninstall|status> [--json]",
-		Long: "Use launchd on macOS or a systemd user unit on Linux. install starts the API at login, uninstall stops only the API service and removes its definition. No command changes tmux. The server reads api.uiDir from config on every start. Use either this command or brew services to manage the service, not both.", Run: runAPIService}
+		Long: "Use launchd on macOS or a systemd user service/socket pair on Linux. install starts the API at login, uninstall stops only the API service and removes its definition. The manager holds the browser port across binary upgrades. No command changes tmux. The server reads api.uiDir from config on every start. On Linux use this command; Homebrew cannot generate socket units. On macOS use either this command or brew services to manage the service, not both.", Run: runAPIService}
 	for _, name := range []string{"install", "uninstall", "status"} {
 		summary := map[string]string{"install": "Install and start the API service", "uninstall": "Stop and remove the API service", "status": "Inspect the API service manager"}[name]
 		command.Sub = append(command.Sub, &Command{Name: name, Summary: summary, Usage: "sidecar api service " + name + " [--json]",
-			Flags:     []Flag{{Name: "--json", Summary: "Write installed, loaded, running, PID, version and last exit as JSON", Bool: true}, {Name: "--help", Short: "-h", Summary: "Show this help", Bool: true}},
+			Flags:     []Flag{{Name: "--json", Summary: "Write service and socket state, PID, version and last exit as JSON", Bool: true}, {Name: "--help", Short: "-h", Summary: "Show this help", Bool: true}},
 			ExitCodes: []ExitCode{{Code: 0, Summary: "success (status succeeds even when not installed or stopped)"}, {Code: 1, Summary: "manager or service operation failed; follow the message"}, {Code: 2, Summary: "usage error"}},
 			Examples:  []Example{{Command: "sidecar api service " + name + " --json"}},
 			Agent:     AgentDoc{Invocation: "sidecar api service " + name + " --json", Summary: summary}, Mutates: name != "status"})
@@ -116,6 +116,7 @@ func runAPIService(env Env, args []string) int {
 		return writeCLIJSON(env, status)
 	}
 	_, _ = fmt.Fprintf(env.Stdout, "%s\n%s: installed=%t loaded=%t running=%t pid=%d version=%s\n", status.Message, status.Manager, status.Installed, status.Loaded, status.Running, status.PID, status.Version)
+	_, _ = fmt.Fprintf(env.Stdout, "Browser socket: installed=%t loaded=%t listening=%t\n", status.Socket.Installed, status.Socket.Loaded, status.Socket.Listening)
 	if status.LastExit != nil {
 		_, _ = fmt.Fprintf(env.Stdout, "Last exit: code=%d signal=%s\n", status.LastExit.Code, status.LastExit.Signal)
 	}

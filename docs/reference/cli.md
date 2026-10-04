@@ -1021,7 +1021,7 @@ sidecar api serve --tailnet
 
 Manage the per-user UI API service
 
-Use launchd on macOS or a systemd user unit on Linux. install starts the API at login, uninstall stops only the API service and removes its definition. No command changes tmux. The server reads api.uiDir from config on every start. Use either this command or brew services to manage the service, not both.
+Use launchd on macOS or a systemd user service/socket pair on Linux. install starts the API at login, uninstall stops only the API service and removes its definition. The manager holds the browser port across binary upgrades. No command changes tmux. The server reads api.uiDir from config on every start. On Linux use this command; Homebrew cannot generate socket units. On macOS use either this command or brew services to manage the service, not both.
 
 ```
 Usage: sidecar api service <install|uninstall|status> [--json]
@@ -1037,7 +1037,7 @@ Usage: sidecar api service install [--json]
 
 **Options:**
 
-- `--json`: Write installed, loaded, running, PID, version and last exit as JSON
+- `--json`: Write service and socket state, PID, version and last exit as JSON
 - `-h, --help`: Show this help
 
 **Exit codes:**
@@ -1062,7 +1062,7 @@ Usage: sidecar api service uninstall [--json]
 
 **Options:**
 
-- `--json`: Write installed, loaded, running, PID, version and last exit as JSON
+- `--json`: Write service and socket state, PID, version and last exit as JSON
 - `-h, --help`: Show this help
 
 **Exit codes:**
@@ -1087,7 +1087,7 @@ Usage: sidecar api service status [--json]
 
 **Options:**
 
-- `--json`: Write installed, loaded, running, PID, version and last exit as JSON
+- `--json`: Write service and socket state, PID, version and last exit as JSON
 - `-h, --help`: Show this help
 
 **Exit codes:**
