@@ -3,7 +3,7 @@
   "id": "sidecar",
   "title": "Sidecar",
   "description": "The terminal-centric workspace for AI coding agents.",
-  "provenance": "Authored 2026-09-10 from the Sidecar codebase and documentation. Reviewed against internal implementation files and controlling docs. This model represents verified architecture and boundaries, not an exhaustive AST scan.",
+  "provenance": "Authored 2026-09-10 from the Sidecar codebase and documentation. Reviewed against internal implementation files and controlling docs. This model represents verified architecture and boundaries, not an exhaustive AST scan. Extended 2026-10-03 with the UI API host (sidecar api serve), the headless terminal protocol services, UI API clients and their trust boundaries, from internal/uiapi, internal/cli/api.go, internal/mobile, internal/mobilehub, docs/reference/ui-api.md and docs/plans/active/sidecar-ui-api.md. UI API elements without #proposed are U0 as implemented on main at 2f0dc1e7; #proposed elements are U1 to U4 plan work. The sidecar-ui repository has no model of its own, so its packages are modeled here from the plan and wire contract rather than its source.",
   "boundaries": [
     {
       "id": "ui-boundary",
@@ -48,10 +48,42 @@
     {
       "id": "remoting-network",
       "title": "Host Remoting & Protocols",
-      "description": "Encrypted SSH channels for remote host orchestration and WebSocket streaming for companions.",
+      "description": "Encrypted SSH channels for remote host orchestration and for the mobile companion's terminal protocol over stdio.",
       "kind": "network",
       "members": ["remoting.client", "remoting.daemon", "remoting.stream", "external.mobile"],
       "color": "#C48282"
+    },
+    {
+      "id": "api-unix-socket",
+      "title": "Your Unix-Socket Boundary",
+      "description": "Mode-0600 sockets and files under $STATE/api that only processes running as the user can open. Callers here are trusted like the tmux socket, with no auth, and only here can pairing codes be minted or origins paired.",
+      "kind": "permission",
+      "members": ["api.local", "api.endpoint", "api.origins", "cli.api_cmd", "uiclients.scripts"],
+      "color": "#4C8CBF"
+    },
+    {
+      "id": "api-loopback-browser",
+      "title": "Loopback Browser Boundary",
+      "description": "127.0.0.1:7861 is reachable by every page in every browser and by every local user and process. Host, Origin and mutation guards plus origin-bound bearer tokens and tickets are what separate the owner's paired browser and paired origins from everything else that can reach the port.",
+      "kind": "network",
+      "members": ["api.browser", "api.guards", "api.pairing", "uiclients.app", "uiclients.elements", "uiclients.sdk", "uiclients.embedder", "external.untrusted"],
+      "color": "#D08770"
+    },
+    {
+      "id": "api-tailnet",
+      "title": "Tailnet Boundary",
+      "description": "tailscaled terminates HTTPS and is the only process that can reach the 0600 tailnet socket, so its Tailscale-User-Login header is trusted there and nowhere else. The --tailnet-port loopback fallback drops that guarantee.",
+      "kind": "network",
+      "members": ["api.tailnet", "api.guards", "external.tailscale"],
+      "color": "#E0B84E"
+    },
+    {
+      "id": "ssh-stdio",
+      "title": "SSH Boundary",
+      "description": "SSH authenticates the caller as the user before any protocol byte flows: the native app runs sidecar mobile serve --stdio, and the hub reaches remote owners with mobile serve --owner-only over validated host routes.",
+      "kind": "network",
+      "members": ["external.mobile", "cli.mobile_cmd", "termproto.hub", "remoting.client", "remoting.daemon"],
+      "color": "#B48EAD"
     }
   ],
   "scenes": [
@@ -61,7 +93,8 @@
       "description": "One unified terminal workspace integrating split panes, coding agents, and Git workflows.",
       "expanded": [],
       "proposed": false,
-      "lens": "structure"
+      "lens": "structure",
+      "edges": "summary"
     },
     {
       "id": "panes-and-terminals",
@@ -114,6 +147,45 @@
       "expanded": ["remoting", "external"],
       "proposed": true,
       "lens": "structure"
+    },
+    {
+      "id": "ui-api",
+      "title": "Inside sidecar api serve",
+      "description": "Three listeners, one route set: how the UI API host admits a caller and hands each terminal WebSocket to the shared terminal protocol (U0, on main).",
+      "expanded": ["api"],
+      "proposed": false,
+      "lens": "structure",
+      "scope": "api"
+    },
+    {
+      "id": "ui-api-chain",
+      "title": "From a Web Page to a tmux Pane",
+      "description": "The client chain today: the reference app, embedding apps, scripts and the phone each reach the same terminal protocol services, over the UI API or over SSH (U0, on main).",
+      "proposed": false,
+      "lens": "structure",
+      "expanded": ["uiclients", "termproto", "external"],
+      "hide": ["tui", "panes", "plugins", "notifications", "workspaces", "agents", "user", "external.agents", "external.providers", "external.untrusted"],
+      "edges": "summary"
+    },
+    {
+      "id": "ui-api-trust",
+      "title": "Who the UI API Trusts",
+      "description": "Four boundaries decide trust: your Unix socket, the loopback port every page can reach, the tailnet behind tailscaled, and SSH for the phone and remote owners.",
+      "expanded": ["api", "uiclients", "external", "cli", "termproto"],
+      "hide": ["tui", "panes", "plugins", "notifications", "workspaces", "agents", "terminal", "user", "external.agents", "external.providers", "external.tmux", "cli.layout_cmd", "cli.agent_cmd", "cli.open_cmd", "cli.notify_cmd", "cli.dispatch", "termproto.catalog", "termproto.service"],
+      "proposed": false,
+      "lens": "trust",
+      "edges": "summary"
+    },
+    {
+      "id": "ui-api-roadmap",
+      "title": "UI API Roadmap: U1 to U4",
+      "description": "Planned work on top of U0: events stream, contract spec, fixtures, always-on service, presence geometry, v1 frames, workspace operations, per-viewer layouts and the viewer relay.",
+      "expanded": ["api", "termproto", "cli"],
+      "hide": ["tui", "plugins", "notifications", "remoting", "external", "uiclients", "user", "cli.agent_cmd", "cli.notify_cmd", "cli.dispatch", "cli.mobile_cmd", "api.local", "api.browser", "api.tailnet", "api.guards", "api.pairing", "api.origins", "api.endpoint", "termproto.hub"],
+      "proposed": true,
+      "lens": "structure",
+      "edges": "summary"
     }
   ]
 }

@@ -46,17 +46,17 @@ The status values are `queued`, `running`, `review`, `fixing`, `merged` and `blo
 | --- | --- | --- | --- | --- | --- |
 | U0-a server | td-ba925d | sidecar | Claude | — | merged (2f0dc1e7) |
 | U0-b SDK/element | td-83cce9 | sidecar-ui | Claude | — | merged (sidecar-ui 2c0f521) |
-| U0-a follow-ups | td-552e24 | sidecar | Claude | U0-a | running |
-| U0-c proof and measurements | td-d8fcb0 | both | Claude, plus Marcus for the live half | U0-a, U0-b | running (automatable half) |
-| U1-a events stream | td-aa8756 | sidecar | Codex | U0-a | queued |
-| U1-b schemas, spec, fixtures | td-5ae805 | sidecar | Codex | U0-a | queued |
-| U1-c service install | td-d7869b | sidecar | Codex | U0-a | queued |
+| U0-a follow-ups | td-552e24 | sidecar | Claude | U0-a | review (Codex, shell "rev td-552e24") |
+| U0-c proof and measurements | td-d8fcb0 | both | Claude, plus Marcus for the live half | U0-a, U0-b | automatable half done (0b1476b2, a0dfb694); live half with Marcus pending |
+| U1-a events stream | td-aa8756 | sidecar | Codex | U0-a | running (Codex, worktree ~/code/sidecar-ui-u1a-events, branch ui-u1a-events) |
+| U1-b schemas, spec, fixtures | td-5ae805 | sidecar | Codex | U0-a | running (Codex, ~/code/sidecar-u1b-spec, branch u1b-spec) |
+| U1-c service install | td-d7869b | sidecar | Codex | U0-a | running (Codex, ~/code/sidecar-u1c-service, branch u1c-service) |
 | U1-d presence and v1 frames | td-713745 | sidecar | Codex | td-552e24 merged | blocked on td-552e24 |
-| U1-e web app shell and Sessions | td-57a73e | sidecar-ui | Codex | U0-b | queued |
+| U1-e web app shell and Sessions | td-57a73e | sidecar-ui | Codex | U0-b | running (Codex, ~/code/sidecar-ui-u1e-app, branch u1e-app) |
 | U1-f SDK adopts v1 | td-820df7 | sidecar-ui | Codex | U1-a, U1-d | queued |
 | U1-g iOS adopts presence and events | td-fde8cf | sidecar-mobile | Codex | U1-a, U1-d | queued |
 | U1-h security review and three-viewer proof | td-295605 | all | Claude, then Codex | U1-a, U1-d, U1-f | queued |
-| U2-a core extraction | td-c709a9 | sidecar | Codex | U0-a | queued |
+| U2-a core extraction | td-c709a9 | sidecar | Codex | U0-a | running (Codex, ~/code/sidecar-u2a-core, branch u2a-core) |
 
 U2-b onward (workspace resources, operations, `<sidecar-workspace>`), U3 and U4 are briefed once U2-a and U1 settle.
 
@@ -116,7 +116,8 @@ This starts after td-552e24 merges to main. Implement the plan section "Geometry
   - Reset-free frames: home the cursor and repaint, with no `ESC c`.
   - Coalesce frames before the outbound queue, so a slow peer gets the latest frame rather than an abort.
   - Add a server-side `paste` operation using `load-buffer` and `paste-buffer -p`.
-- **Changed-row frames from the screen model.** These are conditional on the U0 measurements in `u0-measurements.md`.
+- **Compression.** Turn on `permessage-deflate` on the terminal WebSocket, which is `CompressionDisabled` today. [U0 measurements](u0-measurements.md) show four busy terminals sending about 2 MB/s raw, against about 43 KB/s estimated with deflate. Measure the server CPU it adds with `scripts/ui-api-measure.sh`.
+- **Screen-model frames are deferred to U3** by the U0 measurements: four busy agents cost about 17% of one core in Sidecar and 5% in tmux, and echo stays at 13-14 ms p50 under load. Changed-row frames may still land here if they can be built from captures; otherwise they move with the screen model.
 
 Negotiate everything through capabilities, so v0 clients, including today's iOS build, keep working. Update `mobile-protocol.md` and the fixtures.
 
@@ -152,7 +153,7 @@ The repo is `~/code/sidecar-ui`. Build the reference app into something that fee
 
 ### U1-f: SDK and element adopt v1
 
-Replace the U0 client-side focus approximation with the server's `presence` operation. Adopt the events stream (`Session.events`), reset-free and changed-row frames, server-side paste, the holder label for the "sized for …" hint, and the fixtures from U1-b. Swap the hand-written types for the generated schemas. Wire app notifications to attention events.
+Replace the U0 client-side focus approximation with the server's `presence` operation. Adopt the events stream (`Session.events`), reset-free and changed-row frames, server-side paste, the holder label for the "sized for …" hint, and the fixtures from U1-b. Swap the hand-written types for the generated schemas. Wire app notifications to attention events. Also close two gaps from the U0 shadow-DOM checks. First, forward mouse-tracking reports (clicks and drags, not only the wheel) when the frame says the app has mouse reporting on. Second, keep a selection the user started from being wiped by the redraw when the terminal takes the size.
 
 ### U1-g: native app adopts presence and events
 
