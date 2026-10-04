@@ -38,6 +38,11 @@ func (gi *GitIgnore) LoadFile(path string) error {
 		return err
 	}
 
+	return gi.LoadBytes(data)
+}
+
+// LoadBytes parses patterns supplied by a caller with its own file boundary.
+func (gi *GitIgnore) LoadBytes(data []byte) error {
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {

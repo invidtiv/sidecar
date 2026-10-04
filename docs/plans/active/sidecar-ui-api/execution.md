@@ -57,14 +57,15 @@ The status values are `queued`, `running`, `review`, `fixing`, `merged` and `blo
 | U1-e web app shell and Sessions | td-57a73e | sidecar-ui | Codex | U0-b | merged (sidecar-ui 8d183fc); Claude review fixed 6 UX defects |
 | U1-f SDK adopts v1 | td-820df7 | sidecar-ui | Codex | U1-a, U1-d | merged (sidecar-ui fdad866); Claude review fixed the paste-marker strip |
 | U1-g iOS adopts presence and events | td-fde8cf | sidecar-mobile | Codex | U1-a, U1-d | running (Codex, ~/code/sidecar-mobile-u1g-presence, branch u1g-presence); presence first against the u1d branch, events after U1-a |
-| U1-i persist browser sessions | td-165353 | sidecar | Codex | U1-a, U1-b merged (both touch internal/uiapi) | redesign running: non-extractable WebCrypto key with signed nonces and short-lived in-memory bearers, so nothing stealable is at rest (security finding 4). SDK side follows U1-f |
+| U1-i persist browser sessions | td-165353 | sidecar | Codex | U1-a, U1-b merged (both touch internal/uiapi) | review MERGE-READY (Claude); integrating main (conflicts with U3-a and friction-2), then merge. SDK adoption lane follows. The preview stays on its current build until then |
 | U1-e2 web app polish | td-71e0e5 | sidecar-ui | Codex | U1-e | merged (sidecar-ui 5e0ecb2) |
+| U1-c2 socket activation | td-11f799 | sidecar | Codex | U1-c | running (Codex, ~/code/sidecar-u1c2-socket-activation): launchd Sockets / systemd .socket so the port is never free during restarts |
 | U1-h security review and three-viewer proof | td-295605 | all | Claude, then Codex | U1-a, U1-d, U1-f | security merged (6176110f); three-viewer proof running (Codex, ~/code/sidecar-u1h-three-viewer) |
 | U2-a core extraction | td-c709a9 | sidecar | Codex | U0-a | merged (d95b66f5) |
-| U2-b workspace resources and operations API | td-eb3d80 | sidecar | Codex | U2-a | running |
+| U2-b workspace resources and operations API | td-eb3d80 | sidecar | Codex | U2-a | review (Codex reviewer, shell "rev U2-b"); branch u2b-workspace-api @3423e767, which also carries the agent `--` terminator fix td-66d7e3 |
 | U2-c workspace UI | td-37a00e | sidecar-ui | Codex | U2-b | queued |
-| U3-a content and layouts API | td-f8784a | sidecar | Codex | U1-a | review (Claude security reviewer); branch u3a-content-api @cd4978c2 |
-| U3-b pane tree UI | td-cf59cd | sidecar-ui | Codex | U3-a, U1-f | queued until U3-a lands (U1-f merged) |
+| U3-a content and layouts API | td-f8784a | sidecar | Codex | U1-a | merged (05dd383b). Claude review fixed a HIGH arbitrary file write through the diff parent parameter (git --output), a watch fd-exhaustion cap, and an existence oracle through symlinks |
+| U3-b pane tree UI | td-cf59cd | sidecar-ui | Codex | U3-a, U1-f | running (Codex, ~/code/sidecar-ui-u3b-panes, branch u3b-panes) |
 | U4 viewers agents can target | td-799dd6 | both | Codex | U3 | queued |
 
 U2-b onward are briefed below.
@@ -242,7 +243,8 @@ A project page with worktrees and shells, and native, keyboard-first create, ren
 - `--tailnet-port` lets any local process act as the owner on the tailnet listener. It is documented, and warned at start.
 - A paired origin trusts everything served from that origin, including whatever serves that port next.
 - The static UI has no script CSP. sidecar-ui must render every server and agent string as text. Reviews have confirmed it does.
-- Each events stream polls `tmux` once a second for each older-protocol terminal, bounded by the per-credential caps (LOW).
+- `content:read` can read everything under a project root, including `.git/config` and `.env`. Whether to refuse `.git/` internals is an open follow-up, with diff memory bounds (td-0e9748).
+- Saved layouts hold client-supplied paths. Every consumer must treat them as untrusted and re-validate them through the API.
 
 ## Bugs and friction found along the way
 
@@ -266,5 +268,7 @@ Each one is a td issue with the exact command and output. Fixes run as their own
 | td-eeb7e8 lane | Codex bug lane (~/code/sidecar-bug-eeb7e8) with a completion fence for stale async messages across workspace and overview | merged (7d9b53f7) |
 | td-ae18e4, td-87dd09 | `comms publish` refused with "author does not follow topic" and no recovery hint (comms) | open |
 | td-6153d0 | `create worktree --agent codex` sometimes leaves the shell without Codex and reports success; under load. Recovered with `agent start --kind codex` | open |
-| td-ab3af0 | Friction lane 2 (Codex, ~/code/sidecar-friction-2): notes test hang td-aa4fb7, loopback/tmux-drive load flakes td-d881e2, silent Codex start failure td-6153d0, project reorder must not cancel operations, shared events holder polling | running |
+| td-275a14 | Friction lane 3 (Codex, ~/code/sidecar-friction-3): remaining load flakes, diff memory bound td-0e9748, refuse .git internals over content:read | running |
+| td-ab3af0 | Friction lane 2 (Codex, ~/code/sidecar-friction-2): notes test hang td-aa4fb7, loopback/tmux-drive load flakes td-d881e2, silent Codex start failure td-6153d0, project reorder must not cancel operations, shared events holder polling, server paste-marker strip | merged (c3ac2418) |
 | td-58caeb | `comms send @ui-u2b` returned agent-not-found from another lane; peer handles are not reliably discoverable | open |
+| td-07f7b1 | Eight simultaneous valid `create shell` calls gave 1 success and 7 generic exit-1 errors (allocation race). Fixed on bug-07f7b1 @d375077a with atomic allocation under the shellstate lock | review (Codex reviewer, shell "rev 07f7b1") |

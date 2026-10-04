@@ -408,10 +408,11 @@ func runCreateShellWorkspace(env Env, dest openDestination, flags createCommonFl
 			Session:     session,
 			WorkDir:     workDir,
 		},
-		Project:   proj.Key,
-		Acked:     len(acks) > 0,
-		Surface:   createAckSurface(acks),
-		Placement: createPlacementWorkspace,
+		Project:    proj.Key,
+		Acked:      len(acks) > 0,
+		Surface:    createAckSurface(acks),
+		Placement:  createPlacementWorkspace,
+		AgentStart: createdAgentStart(agentKind, startAgent, seedErr),
 	}
 
 	if flags.jsonOutput {

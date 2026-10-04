@@ -10,7 +10,9 @@
     "events",
     "projects",
     "workspace",
-    "workspace_operations"
+    "workspace_operations",
+    "content",
+    "layouts"
   ],
   "terminal": {
     "protocol": "mobile",

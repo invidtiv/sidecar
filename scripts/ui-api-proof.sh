@@ -60,13 +60,16 @@ printf '{"projects":{"list":[{"name":"proof","path":"%s"}]}}\n' "$root/project" 
 mkdir -p "$root/state/sidecar/projects/proof"
 printf '{"path":"%s"}\n' "$root/project" > "$root/state/sidecar/projects/proof/meta.json"
 git init -q "$root/project"
-git -C "$root/project" -c user.name=Proof -c user.email=proof@example.invalid commit -q --allow-empty -m "proof seed"
+printf "# Content proof\n" > "$root/project/README.md"
+git -C "$root/project" add README.md
+git -C "$root/project" -c user.name=Proof -c user.email=proof@example.invalid commit -qm "Initial proof"
 
 step "build"
 go build -o "$root/sidecar" ./cmd/sidecar
 go build -o "$root/uiapiproof" ./internal/tools/uiapiproof
 go build -o "$root/uieventsproof" ./internal/tools/uieventsproof
 go build -o "$root/uiworkspaceproof" ./internal/tools/uiworkspaceproof
+go build -o "$root/uicontentproof" ./internal/tools/uicontentproof
 sc() { "$root/sidecar" -config "$config" "$@"; }
 
 step "create a managed shell on the private tmux server"
@@ -126,6 +129,8 @@ sc api status > /dev/null || fail "sidecar api status failed"
 
 step "Workspace resources, writes, confirmations and event push"
 timeout 100 "$root/uiworkspaceproof" -state "$root/state/sidecar" -project proof -sidecar "$root/sidecar" -config "$config"
+step "Content, layouts and open-pane invalidation"
+timeout 40 "$root/uicontentproof" -socket "$api_sock" -root "$root/project"
 
 step "Browser listener guards"
 code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: evil.example' "$base/api/v0/hello")

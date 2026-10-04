@@ -241,3 +241,79 @@ func TestWaitShellReadyRefusesCopyModeAndTimesOutBusySetup(t *testing.T) {
 		t.Fatalf("timeout err = %T %v", err, err)
 	}
 }
+
+// Sending input acknowledges tmux, not the shell consuming it. An idle shell
+// before any provider evidence is a pending launch even after the old grace.
+func TestStartWaitsForDelayedLaunchWithoutInferringExitFromTime(t *testing.T) {
+	terminal := &sequenceTerminal{snapshots: []Snapshot{pinnedSnapshot(""), pinnedSnapshot(""), pinnedSnapshot(""), pinnedSnapshot("working"), pinnedSnapshot("idle")}}
+	ticks := 0
+	svc := Service{Terminal: terminal, Poll: time.Millisecond, Detect: func(s Snapshot, tracker *agentactivity.Tracker) AgentState {
+		if s.ShellReady {
+			return AgentState{}
+		}
+		return fakeDetect(s, tracker)
+	}, Now: func() time.Time {
+		ticks++
+		return time.Unix(int64(ticks), 0)
+	}}
+	got, err := svc.Start(context.Background(), StartRequest{Target: Target{Session: "s"}, Kind: "fake", Argv: []string{"fake"}, Timeout: time.Second})
+	if err != nil || got.Agent.Status != StatusIdle {
+		t.Fatalf("delayed launch = %+v, %v", got, err)
+	}
+}
+
+// A terminal can acknowledge a launch that never becomes observable. Cancel
+// that pending start without interpreting an idle observation as an exit or
+// sending the launch a second time.
+func TestStartUnobservedLaunchHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	terminal := &sequenceTerminal{snapshots: []Snapshot{pinnedSnapshot(""), pinnedSnapshot("")}}
+	svc := Service{Terminal: terminal, Poll: time.Millisecond, Detect: func(Snapshot, *agentactivity.Tracker) AgentState {
+		cancel()
+		return AgentState{}
+	}}
+	_, err := svc.Start(ctx, StartRequest{Target: Target{Session: "s"}, Kind: "fake", Argv: []string{"fake"}, Timeout: time.Second})
+	var typed *Error
+	if !AsError(err, &typed) || typed.Code != ErrTransport || !errors.Is(err, context.Canceled) || len(terminal.launched) != 1 {
+		t.Fatalf("pending start = %v, launches=%v", err, terminal.launched)
+	}
+}
+
+type completedLaunchTerminal struct {
+	sequenceTerminal
+	id string
+}
+
+func (t *completedLaunchTerminal) Launch(ctx context.Context, snap Snapshot, argv []string) error {
+	t.id = snap.LaunchID
+	return t.sequenceTerminal.Launch(ctx, snap, argv)
+}
+
+func (t *completedLaunchTerminal) Inspect(ctx context.Context, target Target) (Snapshot, error) {
+	snap, err := t.sequenceTerminal.Inspect(ctx, target)
+	if t.id != "" {
+		snap.LaunchID = t.id
+	}
+	return snap, err
+}
+
+func TestStartReportsCompletedLaunchWithoutObservingProvider(t *testing.T) {
+	terminal := &completedLaunchTerminal{sequenceTerminal: sequenceTerminal{snapshots: []Snapshot{pinnedSnapshot("")}}}
+	_, err := (Service{Terminal: terminal, Poll: time.Millisecond}).Start(context.Background(), StartRequest{Target: Target{Session: "s"}, Kind: "codex", Argv: []string{"codex"}, Timeout: 20 * time.Millisecond})
+	var typed *Error
+	if !AsError(err, &typed) || typed.Code != ErrStartFailed {
+		t.Fatalf("unobserved completed launch = %v, want %s", err, ErrStartFailed)
+	}
+}
+
+func TestStartIgnoresCompletionOfPreviousLaunch(t *testing.T) {
+	shell := pinnedSnapshot("")
+	shell.LaunchID = "previous-launch"
+	terminal := &sequenceTerminal{snapshots: []Snapshot{shell}}
+	_, err := (Service{Terminal: terminal, Poll: time.Millisecond}).Start(context.Background(), StartRequest{Target: Target{Session: "s"}, Kind: "codex", Argv: []string{"codex"}, Timeout: 20 * time.Millisecond})
+	var typed *Error
+	if !AsError(err, &typed) || typed.Code != ErrTimeout {
+		t.Fatalf("stale completion = %v, want pending launch timeout", err)
+	}
+}

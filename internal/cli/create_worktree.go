@@ -282,13 +282,14 @@ func runCreateWorktree(env Env, args []string) int {
 			Session:     session,
 			WorkDir:     record.Path,
 		},
-		Project:   proj.Key,
-		Path:      record.Path,
-		Branch:    record.Branch,
-		Setup:     encodeSetupOutcomes(outcomes),
-		Acked:     len(acks) > 0,
-		Surface:   createAckSurface(acks),
-		Placement: createPlacementWorkspace,
+		Project:    proj.Key,
+		Path:       record.Path,
+		Branch:     record.Branch,
+		Setup:      encodeSetupOutcomes(outcomes),
+		Acked:      len(acks) > 0,
+		Surface:    createAckSurface(acks),
+		Placement:  createPlacementWorkspace,
+		AgentStart: createdAgentStart(agent, startProvider && len(requiredFailed) == 0, launchErr),
 	}
 
 	failed := requiredFailed

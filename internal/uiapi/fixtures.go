@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/marcus/sidecar/internal/contentservice"
 	"github.com/marcus/sidecar/internal/mobile"
 	"github.com/marcus/sidecar/internal/mobileproto"
 	"github.com/marcus/sidecar/internal/tty"
@@ -23,6 +24,8 @@ type FixtureBackend struct {
 	Status    Status
 	targets   map[string]mobileproto.TargetIdentity
 	terminal  mobile.EchoTerminal
+	content   map[string]contentservice.ReadResult
+	tree      contentservice.TreeResult
 }
 
 // LoadFixtures requires a project-ordered sessions.json and status.json. Files
@@ -85,6 +88,9 @@ func LoadFixtures(dir string) (*FixtureBackend, error) {
 	}
 	if _, err := backend.Sessions(context.Background(), backend.catalog.Query); err != nil {
 		return nil, fmt.Errorf("validate sessions.json: %w", err)
+	}
+	if err := backend.loadContent(dir); err != nil {
+		return nil, err
 	}
 	return backend, nil
 }

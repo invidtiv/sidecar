@@ -4,6 +4,7 @@ package workspacewire
 import (
 	"time"
 
+	"github.com/marcus/sidecar/internal/agentcontrol"
 	"github.com/marcus/sidecar/internal/mobileproto"
 	"github.com/marcus/sidecar/internal/workspaceops"
 )
@@ -32,7 +33,8 @@ type ShellInfo struct {
 	WorkDir     string `json:"workDir"`
 }
 type ShellCreated struct {
-	Shell ShellInfo `json:"shell"`
+	AgentStart *AgentStartResult `json:"agent_start,omitempty"`
+	Shell      ShellInfo         `json:"shell"`
 	// Project is the registered project slug the shell belongs to: the value
 	// `--project` on every other verb accepts, so a caller holding this result
 	// can address what it created without guessing the selector.
@@ -48,7 +50,8 @@ type SetupOutcome struct {
 	Error    string `json:"error,omitempty"`
 }
 type WorktreeCreated struct {
-	Shell ShellInfo `json:"shell"`
+	AgentStart *AgentStartResult `json:"agent_start,omitempty"`
+	Shell      ShellInfo         `json:"shell"`
 	// Project is the registered project slug the worktree was created under.
 	// It is the selector the agent verbs' --project accepts, put in the result
 	// because none of path, branch, or displayName was one before --project
@@ -138,4 +141,11 @@ type WorktreeDeleted struct {
 func (r Projects) ValidRemoteResult() bool { return r.Projects != nil }
 func (r Workspace) ValidRemoteResult() bool {
 	return r.Project.Key != "" && r.Catalog.HubID != "" && r.Shells != nil
+}
+
+// AgentStartResult distinguishes durable creation from provider startup.
+type AgentStartResult struct {
+	Kind   string              `json:"kind"`
+	Status string              `json:"status"`
+	Error  *agentcontrol.Error `json:"error,omitempty"`
 }

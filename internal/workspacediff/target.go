@@ -2,6 +2,7 @@ package workspacediff
 
 import (
 	"context"
+	"fmt"
 	"os/exec"
 	"strings"
 	"unicode"
@@ -214,6 +215,10 @@ func ResolveSpec(ctx context.Context, workdir string, t Target) (Target, error) 
 }
 
 func revParseCommit(ctx context.Context, workdir, rev string) (string, error) {
+	// A revision never starts with "-"; anything that does is an option.
+	if strings.HasPrefix(rev, "-") {
+		return "", fmt.Errorf("revision %q looks like an option", rev)
+	}
 	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--verify", "--quiet", rev+"^{commit}")
 	cmd.Dir = workdir
 	out, err := cmd.Output()

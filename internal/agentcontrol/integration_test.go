@@ -26,19 +26,10 @@ func TestIsolatedTmuxFakeProviderSteelThread(t *testing.T) {
 	terminal := NewLocalTerminal()
 	t.Cleanup(terminal.Close)
 	target := Target{Host: "local", Project: "fixture", Session: session, Namespace: tmuxenv.Namespace()}
-	// Do not identify the provider until its first marker appears. Claiming
-	// Kind=fake while the launch line is only echoed makes Start interpret the
-	// next shell snapshot as a provider that exited, bypassing StartGrace.
+	// Do not identify the provider until its first marker appears. Input being
+	// queued in the shell is not evidence that the provider ran or exited.
 	detect := fakeProviderDetect
-	// This fake provider runs as `sh`, so its pane keeps reporting an
-	// interactive shell for the agent's whole life — the one shape shellReady
-	// cannot distinguish from a pane where nothing started. With the default
-	// grace the test would then be racing tmux to paint FAKE_IDLE within 500ms
-	// of launch, which a loaded machine loses. A grace beyond this Start's own
-	// timeout removes the race; the provider-exit path it would otherwise
-	// exercise is covered deterministically by
-	// TestStartReportsProviderExitInsteadOfTimingOut.
-	svc := Service{Terminal: terminal, Poll: 20 * time.Millisecond, Detect: detect, ShellInitGrace: 10 * time.Second, StartGrace: time.Minute}
+	svc := Service{Terminal: terminal, Poll: 20 * time.Millisecond, Detect: detect, ShellInitGrace: 10 * time.Second}
 	// Markers are built from $m so the echoed launch line does not itself read
 	// as a finished agent; see fakeProviderScript for why that matters.
 	script := `m=FAKE; printf '%s_IDLE\n' "$m"; while IFS= read -r line; do printf '%s_WORKING:%s\n' "$m" "$line"; sleep 0.2; if [ "$line" = block ]; then printf '%s_BLOCKED\n' "$m"; else printf '%s_DONE\n' "$m"; fi; done`
@@ -104,6 +95,40 @@ func TestIsolatedTmuxFakeProviderSteelThread(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("fake provider never reached blocked/read state")
+}
+
+func TestStartObservesFastExitAgainstPrivateTmux(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux unavailable")
+	}
+	session := fmt.Sprintf("fast-exit-%d", time.Now().UnixNano())
+	if out, err := exec.Command("tmux", "new-session", "-d", "-s", session, "/bin/bash", "--noprofile", "--norc", "-i").CombinedOutput(); err != nil {
+		t.Fatalf("private session: %v: %s", err, out)
+	}
+	t.Cleanup(func() { _ = exec.Command("tmux", "kill-session", "-t", session).Run() })
+	terminal := NewLocalTerminal()
+	t.Cleanup(terminal.Close)
+	svc := Service{Terminal: terminal, Poll: 20 * time.Millisecond, Detect: func(Snapshot, *agentactivity.Tracker) AgentState {
+		// Deliberately miss the process: the shell's execution receipt must
+		// prove this exit independently of foreground observations.
+		return AgentState{}
+	}}
+	ready, err := svc.WaitShellReady(t.Context(), Target{Session: session, Namespace: tmuxenv.Namespace()}, 10*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// After reproducing the old deadline failure, use the enclosing test's
+	// deadlock budget: the regression asserts exit evidence, not scheduling
+	// within two seconds on a loaded machine.
+	timeout := time.Minute
+	if deadline, ok := t.Deadline(); ok {
+		timeout = time.Until(deadline.Add(-2 * time.Second))
+	}
+	_, err = svc.Start(t.Context(), StartRequest{Target: ready.Target, Kind: "codex", Argv: []string{"/bin/false"}, Timeout: timeout})
+	var typed *Error
+	if !AsError(err, &typed) || typed.Code != ErrStartFailed {
+		t.Fatalf("fast exit = %v, want %s", err, ErrStartFailed)
+	}
 }
 
 // The package TestMain owns a private server, and none of these fixtures runs

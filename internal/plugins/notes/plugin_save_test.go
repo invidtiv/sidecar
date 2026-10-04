@@ -1,10 +1,12 @@
 package notes
 
 import (
+	"context"
 	"errors"
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -42,7 +44,7 @@ func TestLeaveBeforeDebounceStartsNonblockingSave(t *testing.T) {
 
 func TestNavigateWaitsForSaveWithoutBlockingUpdate(t *testing.T) {
 	p, a, b := newTwoNoteSavePlugin(t)
-	blocked := newBlockingStore(p.store)
+	blocked := newBlockingStore(t, p.store)
 	p.store = blocked
 	p.editorNote = a
 	p.editorTextarea.SetValue("from-A")
@@ -68,7 +70,7 @@ func TestNavigateWaitsForSaveWithoutBlockingUpdate(t *testing.T) {
 		t.Fatal("Bubble Tea Update blocked behind slow note save")
 	}
 
-	close(blocked.release)
+	blocked.unblock()
 	drainNotesMsg(t, p, <-result)
 	if p.editorNote == nil || p.editorNote.ID != b.ID {
 		t.Fatalf("editor note = %+v, want B after save", p.editorNote)
@@ -105,7 +107,7 @@ func TestAutosaveOverlapKeepsNewTypingDirty(t *testing.T) {
 
 func TestNavigationQueuesLatestBufferBehindInflightSave(t *testing.T) {
 	p, a, b := newTwoNoteSavePlugin(t)
-	blocked := newBlockingStore(p.store)
+	blocked := newBlockingStore(t, p.store)
 	p.store = blocked
 	p.editorNote = a
 	p.editorTextarea.SetValue("first")
@@ -127,7 +129,7 @@ func TestNavigationQueuesLatestBufferBehindInflightSave(t *testing.T) {
 		t.Fatal("latest buffer was not queued behind in-flight save")
 	}
 
-	close(blocked.release)
+	blocked.unblock()
 	msg := <-firstResult
 	_, next := p.Update(msg)
 	if next == nil || !p.saveInFlight {
@@ -142,7 +144,7 @@ func TestNavigationQueuesLatestBufferBehindInflightSave(t *testing.T) {
 
 func TestPendingNavigationCanReturnToCurrentNote(t *testing.T) {
 	p, a, _ := newTwoNoteSavePlugin(t)
-	blocked := newBlockingStore(p.store)
+	blocked := newBlockingStore(t, p.store)
 	p.store = blocked
 	p.editorNote = a
 	p.editorTextarea.SetValue("dirty")
@@ -156,7 +158,7 @@ func TestPendingNavigationCanReturnToCurrentNote(t *testing.T) {
 	if cmd := p.loadNoteIntoEditor(); cmd != nil {
 		t.Fatal("returning to the current note launched another save")
 	}
-	close(blocked.release)
+	blocked.unblock()
 	drainNotesMsg(t, p, <-result)
 	if p.editorNote == nil || p.editorNote.ID != a.ID {
 		t.Fatalf("stale pending navigation won: editor=%+v", p.editorNote)
@@ -237,7 +239,7 @@ func TestContentSaveUpdatesCacheWithoutListReload(t *testing.T) {
 
 func TestSlowInitialLoadDoesNotBlockUpdate(t *testing.T) {
 	p, _, _ := newTwoNoteSavePlugin(t)
-	blocked := newBlockingStore(p.store)
+	blocked := newBlockingStore(t, p.store)
 	blocked.blockList = true
 	p.store = blocked
 	p.notes = nil
@@ -256,7 +258,7 @@ func TestSlowInitialLoadDoesNotBlockUpdate(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("Bubble Tea Update blocked behind slow note load")
 	}
-	close(blocked.release)
+	blocked.unblock()
 	drainNotesMsg(t, p, <-result)
 }
 
@@ -330,7 +332,7 @@ func TestStopPersistsDirtyNote(t *testing.T) {
 
 func TestStopReusesMatchingInflightWrite(t *testing.T) {
 	p, a, _ := newTwoNoteSavePlugin(t)
-	blocked := newBlockingStore(p.store)
+	blocked := newBlockingStore(t, p.store)
 	p.store = blocked
 	p.editorNote = a
 	p.editorTextarea.SetValue("already-in-flight")
@@ -339,12 +341,8 @@ func TestStopReusesMatchingInflightWrite(t *testing.T) {
 	result := make(chan tea.Msg, 1)
 	go func() { result <- cmd() }()
 	<-blocked.started
-	startedStop := time.Now()
-	p.Stop()
-	if elapsed := time.Since(startedStop); elapsed > 100*time.Millisecond {
-		t.Fatalf("Stop waited %s for td instead of checkpointing", elapsed)
-	}
-	close(blocked.release)
+	stopWhileStoreBlocked(t, p)
+	blocked.unblock()
 	saved := (<-result).(NoteContentSavedMsg)
 	<-blocked.closed
 	if blocked.saveCalls != 1 {
@@ -355,6 +353,40 @@ func TestStopReusesMatchingInflightWrite(t *testing.T) {
 	}
 	if saved.Err != nil || saved.Note == nil || saved.Note.Content != "already-in-flight" {
 		t.Fatalf("in-flight result = %+v", saved)
+	}
+}
+
+// Exercise testing.T's actual fatal/cleanup path in a subprocess: a failed
+// assertion must not strand a save that owns process-wide persistence ordering.
+func TestBlockingStoreFatalReleasesPersistence(t *testing.T) {
+	const childEnv = "SIDECAR_NOTES_FATAL_CLEANUP_CHILD"
+	const reached = "following persistence operation completed"
+	if os.Getenv(childEnv) == "1" {
+		t.Run("fatal-before-explicit-release", func(t *testing.T) {
+			p, a, _ := newTwoNoteSavePlugin(t)
+			blocked := newBlockingStore(t, p.store)
+			p.store = blocked
+			p.editorNote = a
+			p.editorTextarea.SetValue("in-flight")
+			p.editorDirty = true
+			cmd := p.saveEditorContent()
+			go func() { _ = cmd() }()
+			<-blocked.started
+			t.Fatal("deliberate assertion failure with persistence blocked")
+		})
+		TestStopFailureRetainsRecoverableDraft(t)
+		_, _ = os.Stdout.WriteString(reached + "\n")
+		return
+	}
+	ctx, cancel := notesDeadlockContext(t)
+	defer cancel()
+	deadline, _ := ctx.Deadline()
+	childBudget := time.Until(deadline) - time.Second
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestBlockingStoreFatalReleasesPersistence$", "-test.timeout="+childBudget.String())
+	cmd.Env = append(os.Environ(), childEnv+"=1")
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() != nil || err == nil || !strings.Contains(string(out), reached) {
+		t.Fatalf("fatal cleanup did not allow the next persistence operation: %v\n%s", err, out)
 	}
 }
 
@@ -395,7 +427,7 @@ func TestStopPreservesUndoAgainstOlderInflightSave(t *testing.T) {
 	p.lastSavedContent = "body-a"
 	p.editorTextarea.SetValue("intermediate")
 	p.editorDirty = true
-	blocked := newBlockingStore(p.store)
+	blocked := newBlockingStore(t, p.store)
 	p.store = blocked
 	cmd := p.saveEditorContent()
 	result := make(chan tea.Msg, 1)
@@ -407,12 +439,8 @@ func TestStopPreservesUndoAgainstOlderInflightSave(t *testing.T) {
 	if !p.editorDirty {
 		t.Fatal("undo matched the old durable value but ignored the conflicting in-flight write")
 	}
-	started := time.Now()
-	p.Stop()
-	if time.Since(started) > 100*time.Millisecond {
-		t.Fatal("Stop blocked on the in-flight save")
-	}
-	close(blocked.release)
+	stopWhileStoreBlocked(t, p)
+	blocked.unblock()
 	<-result
 	<-blocked.closed
 
@@ -430,7 +458,7 @@ func TestOlderInflightCompletionCannotRetireNewerCheckpoint(t *testing.T) {
 	p.lastSavedContent = "body-a"
 	p.editorTextarea.SetValue("intermediate")
 	p.editorDirty = true
-	blocked := newBlockingStore(p.store)
+	blocked := newBlockingStore(t, p.store)
 	p.store = blocked
 	cmd := p.saveEditorContent()
 	result := make(chan tea.Msg, 1)
@@ -442,7 +470,7 @@ func TestOlderInflightCompletionCannotRetireNewerCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	close(blocked.release)
+	blocked.unblock()
 	<-result
 	if _, err := os.Stat(path); err != nil {
 		t.Fatal("older successful save retired a checkpoint written after it began")
@@ -577,7 +605,7 @@ func TestQueuedSaveDoesNotToastUntilLatestContentIsDurable(t *testing.T) {
 	p.lastSavedContent = "body-a"
 	p.editorTextarea.SetValue("first")
 	p.editorDirty = true
-	blocked := newBlockingStore(p.store)
+	blocked := newBlockingStore(t, p.store)
 	p.store = blocked
 	first := p.saveEditorContent()
 	result := make(chan tea.Msg, 1)
@@ -588,7 +616,7 @@ func TestQueuedSaveDoesNotToastUntilLatestContentIsDurable(t *testing.T) {
 	if cmd := p.saveEditorContent(); cmd != nil {
 		t.Fatal("overlap started a second concurrent write")
 	}
-	close(blocked.release)
+	blocked.unblock()
 	_, next := p.Update(<-result)
 	if next == nil {
 		t.Fatal("latest content was not queued after the first write")
@@ -610,27 +638,14 @@ func TestStopUsesFallbackDraftWithoutBlockingTd(t *testing.T) {
 	p.editorTextarea.SetValue("fallback-final")
 	p.editorDirty = true
 	failing := &alwaysFailStore{noteStore: p.store, err: errors.New("td blocked"), closed: make(chan struct{})}
-	blocked := newBlockingStore(failing)
+	blocked := newBlockingStore(t, failing)
 	p.store = blocked
-	var releaseOnce sync.Once
-	release := func() { releaseOnce.Do(func() { close(blocked.release) }) }
+	release := blocked.unblock
 	t.Cleanup(func() {
 		release()
 		<-blocked.closed
 	})
-	stopped := make(chan struct{})
-	go func() {
-		p.Stop()
-		close(stopped)
-	}()
-	// Measure the dependency, not the duration of local fsyncs: Stop must
-	// finish while the td write is held indefinitely. The timeout is only a
-	// deadlock guard; passing requires completion before releasing the store.
-	select {
-	case <-stopped:
-	case <-time.After(5 * time.Second):
-		t.Fatal("Stop waited for the blocked td write after the primary checkpoint failed")
-	}
+	stopWhileStoreBlocked(t, p)
 	path, err := fallbackDraftPath(badRoot, a.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -657,7 +672,7 @@ func TestOlderInlineAutosaveCannotOverwriteFinalExitSave(t *testing.T) {
 	if err := os.WriteFile(path, []byte("autosave-A1"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	blocked := newBlockingStore(p.store)
+	blocked := newBlockingStore(t, p.store)
 	p.store = blocked
 	p.edit.Active = true
 	p.inlineEditNoteID = a.ID
@@ -680,7 +695,7 @@ func TestOlderInlineAutosaveCannotOverwriteFinalExitSave(t *testing.T) {
 	}
 	finalResult := make(chan tea.Msg, 1)
 	go func() { finalResult <- finalSave() }()
-	close(blocked.release)
+	blocked.unblock()
 	<-autoResult
 	drainNotesMsg(t, p, <-finalResult)
 	assertStoredContent(t, p.store, a.ID, "final-exit-A2")
@@ -696,7 +711,7 @@ func TestSecondRetainedExportQueuesBehindFirst(t *testing.T) {
 	if err := os.WriteFile(secondPath, []byte("export-A2"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	blocked := newBlockingStore(p.store)
+	blocked := newBlockingStore(t, p.store)
 	p.store = blocked
 	first := p.saveRetainedExport(a.ID, firstPath, 0)
 	firstResult := make(chan tea.Msg, 1)
@@ -709,7 +724,7 @@ func TestSecondRetainedExportQueuesBehindFirst(t *testing.T) {
 	if len(p.exportQueue) != 1 || p.exportQueue[0].Path != secondPath {
 		t.Fatalf("second export is unowned: queue=%+v", p.exportQueue)
 	}
-	close(blocked.release)
+	blocked.unblock()
 	_, next := p.Update(<-firstResult)
 	if next == nil {
 		t.Fatal("first completion did not start the queued final export")
@@ -913,7 +928,7 @@ func TestNewExternalPreparationPreservesFailedActiveExport(t *testing.T) {
 
 func TestSlowRetainedExportShowsNoSavingFooter(t *testing.T) {
 	p, a, _ := newTwoNoteSavePlugin(t)
-	blocked := newBlockingStore(p.store)
+	blocked := newBlockingStore(t, p.store)
 	p.store = blocked
 	path := filepath.Join(t.TempDir(), "slow-export.md")
 	if err := os.WriteFile(path, []byte("slow-final"), 0o600); err != nil {
@@ -930,19 +945,20 @@ func TestSlowRetainedExportShowsNoSavingFooter(t *testing.T) {
 	if status, isErr := p.FooterStatus(); status != "" || isErr {
 		t.Fatalf("slow export footer = %q error=%v, want empty", status, isErr)
 	}
-	close(blocked.release)
+	blocked.unblock()
 	drainNotesMsg(t, p, <-result)
 }
 
 type blockingStore struct {
 	noteStore
-	started   chan struct{}
-	release   chan struct{}
-	startOnce sync.Once
-	blockList bool
-	saveCalls int
-	closed    chan struct{}
-	closeOnce sync.Once
+	started     chan struct{}
+	release     chan struct{}
+	startOnce   sync.Once
+	releaseOnce sync.Once
+	blockList   bool
+	saveCalls   int
+	closed      chan struct{}
+	closeOnce   sync.Once
 }
 
 type snapshotBlockingStore struct {
@@ -973,8 +989,45 @@ func (s *failOnceSaveStore) SaveContent(id, content string) (*Note, error) {
 	return s.noteStore.SaveContent(id, content)
 }
 
-func newBlockingStore(store noteStore) *blockingStore {
-	return &blockingStore{noteStore: store, started: make(chan struct{}), release: make(chan struct{}), closed: make(chan struct{})}
+// Every test that blocks persistence owns releasing it, including fatal paths.
+// Otherwise an abandoned worker retains the shared persistence lock and hangs
+// unrelated tests that follow it.
+func newBlockingStore(t *testing.T, store noteStore) *blockingStore {
+	t.Helper()
+	s := &blockingStore{noteStore: store, started: make(chan struct{}), release: make(chan struct{}), closed: make(chan struct{})}
+	t.Cleanup(s.unblock)
+	return s
+}
+
+func (s *blockingStore) unblock() {
+	s.releaseOnce.Do(func() { close(s.release) })
+}
+
+func notesDeadlockContext(t *testing.T) (context.Context, context.CancelFunc) {
+	t.Helper()
+	deadline, ok := t.Deadline()
+	if !ok {
+		deadline = time.Now().Add(2 * time.Minute)
+	}
+	return context.WithDeadline(t.Context(), deadline.Add(-2*time.Second))
+}
+
+func stopWhileStoreBlocked(t *testing.T, p *Plugin) {
+	t.Helper()
+	ctx, cancel := notesDeadlockContext(t)
+	defer cancel()
+	stopped := make(chan struct{})
+	go func() {
+		p.Stop()
+		close(stopped)
+	}()
+	// The store has not been released. Completion proves Stop checkpoints
+	// independently of td; the timeout only bounds a genuine dependency bug.
+	select {
+	case <-stopped:
+	case <-ctx.Done():
+		t.Fatal("Stop waited for the blocked td write instead of checkpointing")
+	}
 }
 
 func (s *blockingStore) wait() {

@@ -20,6 +20,8 @@ func workspaceSpec(schemas, paths map[string]any, add func(string, string, strin
 	add("/api/v0/projects/{project}/workspace", "get", "", "Workspace", all, false)
 	projectParam := map[string]any{"name": "project", "in": "path", "required": true, "schema": map[string]any{"type": "string"}, "description": "Configured owning project key or root path, encoded as one path segment; never a hub-scoped catalog project_id."}
 	hostParam := map[string]any{"name": "host", "in": "query", "schema": map[string]any{"type": "string"}, "description": "Registered owning host; omit or use local for this machine."}
+	paths["/api/v0/projects"].(map[string]any)["get"].(map[string]any)["x-required-scope"] = ScopeWorkspaceWrite
+	paths["/api/v0/projects/{project}/workspace"].(map[string]any)["get"].(map[string]any)["x-required-scope"] = ScopeWorkspaceWrite
 	paths["/api/v0/projects"].(map[string]any)["get"].(map[string]any)["parameters"] = []any{hostParam}
 	query := paths["/api/v0/sessions"].(map[string]any)["get"].(map[string]any)["parameters"].([]any)
 	params := []any{projectParam}
@@ -63,6 +65,7 @@ func workspaceSpec(schemas, paths map[string]any, add func(string, string, strin
 		operation := paths[path].(map[string]any)["post"].(map[string]any)
 		operation["parameters"] = append(operation["parameters"].([]any), projectParam)
 		operation["x-scope"] = ScopeWorkspaceWrite
+		operation["x-required-scope"] = ScopeWorkspaceWrite
 		refs := []any{map[string]any{"$ref": "#/components/schemas/ErrorBody"}}
 		if strings.HasPrefix(op, "agents/") {
 			refs = append(refs, map[string]any{"$ref": "#/components/schemas/AgentError"})

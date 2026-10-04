@@ -10,6 +10,7 @@ import (
 	"github.com/marcus/sidecar/internal/agentcontrol"
 	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/uirequest"
+	"github.com/marcus/sidecar/internal/workspacewire"
 )
 
 const createWaitDefault = 1200 * time.Millisecond
@@ -252,4 +253,26 @@ func existingShellDefinitions(proj registeredProject) []shellstate.Definition {
 		return proj.Shells
 	}
 	return listed
+}
+
+// createAgentStartResult distinguishes creating durable identity from starting
+// a provider. A failure keeps the new shell/worktree available for recovery.
+type createAgentStartResult = workspacewire.AgentStartResult
+
+func createdAgentStart(kind string, requested bool, err error) *createAgentStartResult {
+	if kind == "" {
+		return nil
+	}
+	result := &createAgentStartResult{Kind: kind, Status: "not_started"}
+	if !requested {
+		return result
+	}
+	result.Status = "ready"
+	if err != nil {
+		result.Status = "failed"
+		if !agentcontrol.AsError(err, &result.Error) {
+			result.Error = &agentcontrol.Error{Code: agentcontrol.ErrTransport, Message: err.Error(), Err: err}
+		}
+	}
+	return result
 }

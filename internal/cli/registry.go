@@ -370,7 +370,9 @@ func RootCommand() *Command {
 			"case the start is refused and names the command to put them in.\n\n" +
 			"Usage refusals with --json are `{\"error\":{\"code\":\"usage\",...}}` on stderr,\n" +
 			"like the agent verbs; without --json they are the reason and the help text.\n" +
-			"The result carries `project`, the slug every other verb's --project accepts.",
+			"The result carries `project`, the slug every other verb's --project accepts.\n" +
+			"With --agent, `agent_start` reports kind and status: ready, failed, or not_started.\n" +
+			"A failed start includes its named error, retains the created shell, and exits 1.",
 		Flags: []Flag{
 			{Name: "--name", Arg: "NAME", Summary: "Display name (default: the next Shell N)"},
 			{Name: "--cwd", Arg: "PATH", Summary: "Start in PATH without changing project ownership"},
@@ -445,7 +447,9 @@ func RootCommand() *Command {
 			"confirmation passes the plan's sourceOid back here, and gets the same\n" +
 			"source-moved guard the TUI's confirmation gets from executing its stored plan.\n\n" +
 			"The result carries `project`, the slug the agent verbs' --project accepts, and\n" +
-			"those verbs also accept the worktree's path or basename as --project. Usage\n" +
+			"those verbs also accept the worktree's path or basename as --project. With --agent,\n" +
+			"`agent_start` reports kind and status: ready, failed, or not_started. A failed\n" +
+			"start includes its named error, retains the worktree and shell, and exits 1. Usage\n" +
 			"refusals with --json are `{\"error\":{\"code\":\"usage\",...}}` on stderr, like\n" +
 			"the agent verbs; without --json they are the reason and the help text.",
 		Flags: []Flag{

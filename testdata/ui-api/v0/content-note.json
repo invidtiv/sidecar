@@ -1,0 +1,12 @@
+{
+  "kind": "note",
+  "operation": "note",
+  "workspace": "fixture-project",
+  "target": "nt-123456",
+  "revision": "fixture-note-v1",
+  "note": {
+    "id": "nt-123456",
+    "title": "Fixture note",
+    "content": "A note pane."
+  }
+}

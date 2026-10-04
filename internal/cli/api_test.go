@@ -179,3 +179,54 @@ func TestTailnetHintWarnsOnlyForTheLoopbackPort(t *testing.T) {
 		t.Fatalf("socket hint = %q", out.String())
 	}
 }
+
+func TestAPIPairContentScopeCLI(t *testing.T) {
+	stateDir := apiStateTree(t, t.TempDir())
+	server, err := uiapi.Start(uiapi.Options{StateDir: stateDir, Port: 0, Backend: staticAPIBackend{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = server.Shutdown(context.Background()) })
+	code, stdout, stderr := runAPICLI(t, "api", "pair", "--origin", "http://content.example", "--scopes", "content:read", "--json")
+	if code != 0 {
+		t.Fatalf("scoped pairing: %d %s", code, stderr)
+	}
+	var registration uiapi.OriginRegistration
+	if err = json.Unmarshal([]byte(stdout), &registration); err != nil {
+		t.Fatal(err)
+	}
+	if len(registration.Scopes) != 1 || registration.Scopes[0] != uiapi.ScopeContentRead {
+		t.Fatalf("scopes: %+v", registration.Scopes)
+	}
+	code, _, _ = runAPICLI(t, "api", "pair", "--list", "--scopes", "content:read")
+	if code != 2 {
+		t.Fatalf("scopes accepted without pairing: %d", code)
+	}
+}
+
+func TestAPIPairCombinedScopeSpellings(t *testing.T) {
+	stateDir := apiStateTree(t, t.TempDir())
+	server, err := uiapi.Start(uiapi.Options{StateDir: stateDir, Port: 0, Backend: staticAPIBackend{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = server.Shutdown(context.Background()) })
+	for _, flags := range [][]string{
+		{"--scope", "workspace:write", "--scope", "content:read"},
+		{"--scopes", "workspace:write, content:read"},
+		{"--scope", "workspace:write", "--scopes", "content:read,workspace:write"},
+	} {
+		args := append([]string{"api", "pair", "--origin", "http://combined.example", "--json"}, flags...)
+		code, stdout, stderr := runAPICLI(t, args...)
+		if code != 0 {
+			t.Fatalf("pair %v: %d %s", flags, code, stderr)
+		}
+		var registration uiapi.OriginRegistration
+		if err := json.Unmarshal([]byte(stdout), &registration); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Join(registration.Scopes, ",") != "content:read,workspace:write" {
+			t.Fatalf("scopes: %+v", registration.Scopes)
+		}
+	}
+}
