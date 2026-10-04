@@ -166,6 +166,35 @@ func TestCaptureFailureWithAnInconclusiveCheckStillReseeds(t *testing.T) {
 	}
 }
 
+// A failed control connection cannot establish that its target is gone.
+// Recovery must use independent read-only evidence, while operations continue
+// to fail closed on the owning control connection.
+func TestCaptureFailureDoesNotMistakeADeadTransportForAGoneTarget(t *testing.T) {
+	var output bytes.Buffer
+	s := testService(&output)
+	s.revalidateTarget = func(context.Context, ResolvedTarget) (ResolvedTarget, error) {
+		return ResolvedTarget{}, &ResolveError{Code: mobileproto.ErrorIdentityChanged, Message: "owning control connection is unavailable"}
+	}
+	s.captureRevalidateTarget = func(context.Context, ResolvedTarget) (ResolvedTarget, error) {
+		return testTarget().resolved, nil
+	}
+	sub := &recordingSubscription{requests: make(chan struct{}, 4)}
+	a := &attachment{service: s, handle: "attachment", generation: 1, target: testTarget(), resetGeneration: 1, subscription: sub}
+	s.attachments[a.handle] = a
+	if a.captureFailed(errors.New("control pipe closed")) {
+		t.Fatal("a healthy target ended because its capture transport died")
+	}
+	responses := decodeResponses(t, &output)
+	if len(responses) != 2 || responses[0].Reason != mobileproto.ResetCaptureFailed || responses[1].Error == nil || !responses[1].Error.Retry {
+		t.Fatalf("transient capture failure = %#v", responses)
+	}
+	select {
+	case <-sub.requests:
+	case <-time.After(2 * time.Second):
+		t.Fatal("healthy target was not reseeded")
+	}
+}
+
 type acceptingGeometry struct{}
 
 func (acceptingGeometry) Resize(int, int) error         { return nil }

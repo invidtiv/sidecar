@@ -46,10 +46,13 @@ type HistoryCapturer func(target string, start, end, maxBytes int) (tty.CaptureR
 type OwnerConfigGenerationProvider func(context.Context) (string, error)
 
 type Config struct {
-	Input                                     io.Reader
-	Output                                    io.Writer
-	Resolver                                  Resolver
-	Revalidator                               TargetRevalidator
+	Input       io.Reader
+	Output      io.Writer
+	Resolver    Resolver
+	Revalidator TargetRevalidator
+	// CaptureRevalidator uses independent read-only evidence after a capture
+	// transport fails. Nil uses Revalidator.
+	CaptureRevalidator                        TargetRevalidator
 	Catalog                                   CatalogProvider
 	HistoryCapturer                           HistoryCapturer
 	OwnerConfigGenerationProvider             OwnerConfigGenerationProvider
@@ -62,6 +65,7 @@ type Service struct {
 	out                                            *safeEncoder
 	resolve                                        Resolver
 	revalidateTarget                               TargetRevalidator
+	captureRevalidateTarget                        TargetRevalidator
 	catalog                                        CatalogProvider
 	historyCapture                                 HistoryCapturer
 	ownerConfigGeneration                          OwnerConfigGenerationProvider
@@ -159,7 +163,7 @@ func New(config Config) (*Service, error) {
 		historyCapture = tty.CapturePaneRangeBounded
 	}
 	s := &Service{
-		in: config.Input, out: newSafeEncoder(config.Output), resolve: config.Resolver, revalidateTarget: config.Revalidator, catalog: config.Catalog,
+		in: config.Input, out: newSafeEncoder(config.Output), resolve: config.Resolver, revalidateTarget: config.Revalidator, captureRevalidateTarget: config.CaptureRevalidator, catalog: config.Catalog,
 		historyCapture:        historyCapture,
 		ownerConfigGeneration: config.OwnerConfigGenerationProvider,
 		manager:               config.Manager, instance: instance, hubID: config.HubID,
@@ -470,6 +474,10 @@ func (s *Service) revalidate(ctx context.Context, target targetState) error {
 }
 
 func (s *Service) revalidatedTarget(ctx context.Context, target targetState) (ResolvedTarget, error) {
+	return s.revalidatedTargetWith(ctx, target, s.revalidateTarget)
+}
+
+func (s *Service) revalidatedTargetWith(ctx context.Context, target targetState, revalidate TargetRevalidator) (ResolvedTarget, error) {
 	expectedConfig := target.wire.OwnerConfigGeneration
 	if expectedConfig == "" {
 		expectedConfig = s.configGeneration
@@ -479,8 +487,8 @@ func (s *Service) revalidatedTarget(ctx context.Context, target targetState) (Re
 	}
 	var current ResolvedTarget
 	var err error
-	if s.revalidateTarget != nil {
-		current, err = s.revalidateTarget(ctx, target.resolved)
+	if revalidate != nil {
+		current, err = revalidate(ctx, target.resolved)
 	} else {
 		selector := target.resolved.Selector
 		if selector == "" {
@@ -1390,8 +1398,16 @@ const captureRevalidateTimeout = 10 * time.Second
 func (a *attachment) targetRefusal() *ResolveError {
 	ctx, cancel := context.WithTimeout(context.Background(), captureRevalidateTimeout)
 	defer cancel()
+	revalidate := a.service.captureRevalidateTarget
+	if revalidate == nil {
+		revalidate = a.service.revalidateTarget
+	}
+	_, err := a.service.revalidatedTargetWith(ctx, a.target, revalidate)
+	if ctx.Err() != nil || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return nil
+	}
 	var refusal *ResolveError
-	if err := a.service.revalidate(ctx, a.target); err != nil && errors.As(err, &refusal) {
+	if err != nil && errors.As(err, &refusal) {
 		return refusal
 	}
 	return nil
