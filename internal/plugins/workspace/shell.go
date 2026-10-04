@@ -565,9 +565,6 @@ func (p *Plugin) createShell(opts shellCreateOpts) tea.Cmd {
 	}
 
 	displayName := strings.TrimSpace(opts.CustomName)
-	if displayName == "" {
-		displayName = p.nextShellDisplayName()
-	}
 	// Size the pane at creation. Without -x/-y tmux uses default-size (80x24),
 	// and anything the user starts before the follow-up resize lands — an editor
 	// especially — lays itself out for 24 rows (td-9b181e). The shell is not
@@ -584,7 +581,7 @@ func (p *Plugin) createShell(opts shellCreateOpts) tea.Cmd {
 		DisplayName: displayName,
 		Cols:        previewWidth,
 		Rows:        previewHeight,
-	}, ProjectRoot: projectRoot, AgentType: string(opts.AgentType), SkipPerms: opts.SkipPerms,
+	}, ProjectRoot: projectRoot, Allocate: true, AgentType: string(opts.AgentType), SkipPerms: opts.SkipPerms,
 	}
 
 	svc := p.shellOperationService()
@@ -603,12 +600,13 @@ func (p *Plugin) createShell(opts shellCreateOpts) tea.Cmd {
 	return func() tea.Msg {
 		result, err := svc.CreateShell(spec)
 		created.PaneID = result.PaneID
+		created.SessionName, created.DisplayName = result.SessionName, result.DisplayName
 		created.Err = err
 		if result.PaneID != "" {
 			// Seed the cache with the pane we just made. This is the one moment
 			// the value is certainly fresh, and skipping it would cost a
 			// tmux list-panes on the very next poll of a brand-new shell.
-			globalPaneIDCache.set(spec.SessionName, result.PaneID)
+			globalPaneIDCache.set(result.SessionName, result.PaneID)
 		}
 		return created
 	}

@@ -919,7 +919,7 @@ sidecar api events --stdio --sort activity --show-idle-sessions false
 
 Pair this machine's browser and open the UI
 
-Ask the running server for a single-use pairing link (valid for 60 seconds) and open it in the default browser. The code rides in the link's fragment, so it never appears in a request line; the pairing page exchanges it for a session token, keeps the token in that origin's localStorage (sidecar.session), and goes to --path. --print writes the link instead of opening it.
+Ask the running server for a single-use pairing link (valid for 60 seconds) and open it in the default browser. The code rides in the link's fragment, so it never appears in a request line; the pairing page registers a non-extractable WebCrypto key in that origin's IndexedDB and goes to --path. Only the public key persists on the server, with a 30-day sliding expiry and a 180-day absolute cap. The browser signs a fresh nonce after each restart to obtain a 15-minute memory-only bearer; legacy localStorage tokens are cleared. Pairing again leaves other tabs valid. --print writes the link instead of opening it.
 
 ```
 Usage: sidecar api open [--print] [--path P]
@@ -948,7 +948,7 @@ sidecar api open --print
 
 Manage paired origins and browser sessions
 
-Register another web origin (an app embedding Sidecar components) and print its bearer token, which is shown only once and stored only as a hash in $STATE/api/origins.json. Pairing an origin again rotates its token and closes the terminals and event streams the old token opened. --scopes takes a comma-separated list, full by default; content:read restricts access to content and layout preferences. --list shows registrations without tokens; --revoke removes one. --revoke-sessions signs out every browser paired with `sidecar api open` without restarting the server: their session tokens get 401 from then on and their open terminals close with 4401. With --origin it signs out only the browsers on that origin. Paired origins keep their tokens.
+Register another web origin (an app embedding Sidecar components) and print its bearer token, which is shown only once and stored only as a hash in $STATE/api/origins.json. Pairing an origin again rotates its token and closes the terminals and event streams the old token opened. --scopes takes a comma-separated list, full by default; content:read restricts access to content and layout preferences. --list shows registrations without tokens; --revoke removes one. --revoke-sessions signs out every browser paired with `sidecar api open` without restarting the server: their session tokens get 401 from then on and their open terminals close with 4401. With --origin it signs out only the browsers on that origin. Revocation persists across API restarts. Paired origins keep their tokens; --revoke URL also revokes browser sessions bound to that exact origin.
 
 ```
 Usage: sidecar api pair --origin URL [--scopes LIST] | --list | --revoke URL | --revoke-sessions [--origin URL] [--json]
@@ -1449,6 +1449,10 @@ The result carries `project`, the slug every other verb's --project accepts.
 With --agent, `agent_start` reports kind and status: ready, failed, or not_started.
 A failed start includes its named error, retains the created shell, and exits 1.
 
+Distinct valid workspace-shell requests can run concurrently across CLI, TUI, API, and agent processes. The shared core allocates and records each identity under the shell manifest lock. The returned session is authoritative; generated numbers skip retained restore identities and occupied sessions. Fresh creates never adopt a running session.
+
+Create refusals are named: shell_name_in_use asks for another display name, shell_name_invalid asks for a valid name, shell_create_failed includes tmux diagnostics, and shell_state asks the caller to check project state or manifest permissions. These refusals exit 5; --json writes {error: {code, message}} to stderr. Run ./scripts/concurrent-shell-create-proof.sh for an isolated, bounded eight-process proof.
+
 ```
 Usage: sidecar create shell [options]
 ```
@@ -1473,11 +1477,11 @@ Usage: sidecar create shell [options]
 **Exit codes:**
 
 - `0`: created (missing ack is non-fatal in workspace-shell mode)
-- `1`: state or tmux failure
+- `1`: request delivery, output, or post-create launch failure
 - `2`: usage error, or this directory is not in a registered project
 - `3`: no running instance (split mode)
 - `4`: instance declined (cap, too small, or feature off)
-- `5`: a value was rejected: --name, --cwd, --agent, an unknown --project / --shell, or provider arguments with agent_control off
+- `5`: named create refusal, or a value was rejected: --name, --cwd, --agent, an unknown --project / --shell, or provider arguments with agent_control off
 
 **Examples:**
 

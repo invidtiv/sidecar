@@ -467,3 +467,20 @@ func definitionToAgentType(s string) AgentType {
 	}
 	return AgentType(s)
 }
+
+// EditShells executes allocation against the authoritative state under its file
+// lock, then updates this projection and its stale-refresh revision fence.
+func (m *ShellManifest) EditShells(apply func(*shellstate.Snapshot) (bool, error)) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	fallback := shellstate.Snapshot{Version: manifestVersion, Shells: m.Shells, Tombstones: m.Tombstones}
+	snapshot, changed, err := shellstate.EditAtPath(m.path, &fallback, false, apply)
+	if err != nil {
+		return err
+	}
+	m.Version, m.Shells, m.Tombstones = snapshot.Version, snapshot.Shells, snapshot.Tombstones
+	if changed {
+		m.revision++
+	}
+	return nil
+}

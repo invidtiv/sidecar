@@ -234,7 +234,9 @@ func TestTicketIsBoundToItsListener(t *testing.T) {
 func TestPairingCodeRedeemsOnceUnderConcurrency(t *testing.T) {
 	h := newHarness(t)
 	code := h.pairingCode("/")
-	body := `{"code":"` + code.Code + `"}`
+	_, public := browserTestKey(t)
+	encoded, _ := json.Marshal(PairingExchangeRequest{Code: code.Code, PublicKey: public})
+	body := string(encoded)
 	const attempts = 24
 	var wg sync.WaitGroup
 	statuses := make(chan int, attempts)
@@ -514,7 +516,9 @@ func TestRevokedSessionCannotRegisterATerminal(t *testing.T) {
 	if !ok || !h.s.auth.sessionClientLive(client) {
 		t.Fatal("fresh session is not live")
 	}
-	h.s.auth.revokeSessions("")
+	if _, err := h.s.auth.revokeSessions(""); err != nil {
+		t.Fatal(err)
+	}
 	if h.s.auth.sessionClientLive(client) {
 		t.Fatal("revoked session still live")
 	}
@@ -613,7 +617,12 @@ func TestOriginRevocationClosesTerminalsAndInvalidatesTickets(t *testing.T) {
 }
 
 func TestSessionRevocationClosesAnEvictedSessionsTerminal(t *testing.T) {
-	h := newHarness(t)
+	// Forcing eviction creates maxSessions registrations, each a real flock +
+	// atomic store write. Under -race that loop can outrun the default 30s
+	// keepalive window while this idle test connection sends no pong, dropping
+	// the terminal before revocation and hiding the behavior under test. This
+	// test exercises revocation, not keepalive, so hold the ping off.
+	h := newHarness(t, func(o *Options) { o.KeepaliveInterval = time.Hour })
 	token := h.pairBrowser()
 	conn, err := h.dialBrowser(t, "", http.Header{"Authorization": {"Bearer " + token}})
 	if err != nil {
@@ -624,11 +633,7 @@ func TestSessionRevocationClosesAnEvictedSessionsTerminal(t *testing.T) {
 	readText(t, conn)
 	// The bounded session store evicts its oldest token but its established
 	// stream still exists. Sign-out must cover that stream as well.
-	h.s.auth.mu.Lock()
-	oldest := h.s.auth.sessions[hashToken(token)]
-	oldest.created = h.s.opts.Now().Add(-time.Hour)
-	h.s.auth.sessions[hashToken(token)] = oldest
-	h.s.auth.mu.Unlock()
+	h.clock.Advance(time.Minute)
 	for i := 0; i < maxSessions; i++ {
 		if _, err := h.s.auth.newSession(h.ownOrigin()); err != nil {
 			t.Fatal(err)

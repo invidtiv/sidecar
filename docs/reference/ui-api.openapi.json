@@ -30,6 +30,42 @@
         ],
         "type": "object"
       },
+      "BrowserPublicKey": {
+        "additionalProperties": false,
+        "properties": {
+          "crv": {
+            "type": "string"
+          },
+          "ext": {
+            "type": "boolean"
+          },
+          "key_ops": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "kty": {
+            "type": "string"
+          },
+          "x": {
+            "type": "string"
+          },
+          "y": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kty",
+          "crv",
+          "x",
+          "y"
+        ],
+        "type": "object"
+      },
       "Capabilities": {
         "additionalProperties": false,
         "properties": {
@@ -1565,7 +1601,14 @@
       "PairingExchange": {
         "additionalProperties": false,
         "properties": {
+          "expires_at": {
+            "format": "date-time",
+            "type": "string"
+          },
           "next": {
+            "type": "string"
+          },
+          "registration_id": {
             "type": "string"
           },
           "token": {
@@ -1573,6 +1616,8 @@
           }
         },
         "required": [
+          "registration_id",
+          "expires_at",
           "token",
           "next"
         ],
@@ -1586,9 +1631,13 @@
           },
           "next": {
             "type": "string"
+          },
+          "public_key": {
+            "$ref": "#/components/schemas/BrowserPublicKey"
           }
         },
         "required": [
+          "public_key",
           "code"
         ],
         "type": "object"
@@ -2104,6 +2153,63 @@
         ],
         "type": "object"
       },
+      "SessionProofChallenge": {
+        "additionalProperties": false,
+        "properties": {
+          "expires_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "nonce": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "nonce",
+          "timestamp",
+          "expires_at"
+        ],
+        "type": "object"
+      },
+      "SessionProofChallengeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "registration_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "registration_id"
+        ],
+        "type": "object"
+      },
+      "SessionProofRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "nonce": {
+            "type": "string"
+          },
+          "registration_id": {
+            "type": "string"
+          },
+          "signature": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "registration_id",
+          "nonce",
+          "timestamp",
+          "signature"
+        ],
+        "type": "object"
+      },
       "SessionRevocation": {
         "additionalProperties": false,
         "properties": {
@@ -2120,6 +2226,23 @@
         "required": [
           "revoked",
           "terminals_closed"
+        ],
+        "type": "object"
+      },
+      "SessionToken": {
+        "additionalProperties": false,
+        "properties": {
+          "expires_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "expires_at"
         ],
         "type": "object"
       },
@@ -2937,6 +3060,7 @@
     },
     "/api/v0/origins": {
       "delete": {
+        "description": "Revokes the paired origin and browser sessions bound to that exact origin, including unused tickets and open streams. Revocations survive restart.",
         "operationId": "origins_delete",
         "parameters": [
           {
@@ -3151,6 +3275,7 @@
     },
     "/api/v0/pairing/exchange": {
       "post": {
+        "description": "Registers an exact-origin ECDSA P-256 public key and returns a 15-minute memory-only bearer. Public registrations persist with 30-day sliding expiry and a 180-day absolute cap. The client stores a non-extractable private CryptoKey in IndexedDB; never persist a bearer.",
         "operationId": "pairing_exchange_post",
         "parameters": [
           {
@@ -3202,8 +3327,117 @@
         ]
       }
     },
+    "/api/v0/pairing/session-proof": {
+      "post": {
+        "description": "Issues an exact-origin, registration-bound single-use nonce and server timestamp, valid for 60 seconds. Requires the Browser listener's own Origin and mutation guards.",
+        "operationId": "pairing_session-proof_post",
+        "parameters": [
+          {
+            "description": "Required on Browser and Tailnet; not on Local.",
+            "in": "header",
+            "name": "X-Sidecar-Request",
+            "required": false,
+            "schema": {
+              "const": "1",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionProofChallengeRequest"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionProofChallenge"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [],
+        "x-listeners": [
+          "browser"
+        ]
+      }
+    },
+    "/api/v0/pairing/session-proof/verify": {
+      "post": {
+        "description": "Consumes the nonce attempt and verifies ECDSA P-256/SHA-256 over the domain-separated origin/registration/nonce/timestamp message. Signature is base64url raw 64-byte r||s. Returns a 15-minute bearer kept only in client memory. See ui-api.md for exact bytes.",
+        "operationId": "pairing_session-proof_verify_post",
+        "parameters": [
+          {
+            "description": "Required on Browser and Tailnet; not on Local.",
+            "in": "header",
+            "name": "X-Sidecar-Request",
+            "required": false,
+            "schema": {
+              "const": "1",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionProofRequest"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionToken"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [],
+        "x-listeners": [
+          "browser"
+        ]
+      }
+    },
     "/api/v0/pairing/sessions": {
       "delete": {
+        "description": "Durably purges browser sessions before success; invalidates unused tickets and closes their streams. Revoked credentials remain invalid after restart.",
         "operationId": "pairing_sessions_delete",
         "parameters": [
           {
@@ -4329,7 +4563,7 @@
     },
     "/{path}": {
       "get": {
-        "description": "Static UI files with SPA fallback. Browser listener public; Tailnet requires allowed login. API paths never fall back.",
+        "description": "Static UI files with SPA fallback. Browser listener public; Tailnet requires allowed login. API paths never fall back. Each request resolves a fresh confined root, so rebuilt directories are served without restart and symlink escapes remain refused.",
         "operationId": "ui_files",
         "parameters": [
           {
@@ -4344,6 +4578,9 @@
         "responses": {
           "200": {
             "description": "UI file or index.html"
+          },
+          "503": {
+            "description": "UI directory temporarily unavailable during rebuild; retry shortly."
           }
         },
         "x-listeners": [
@@ -4352,7 +4589,7 @@
         ]
       },
       "head": {
-        "description": "Static UI files with SPA fallback. Browser listener public; Tailnet requires allowed login. API paths never fall back.",
+        "description": "Static UI files with SPA fallback. Browser listener public; Tailnet requires allowed login. API paths never fall back. Each request resolves a fresh confined root, so rebuilt directories are served without restart and symlink escapes remain refused.",
         "operationId": "ui_files_head",
         "parameters": [
           {
@@ -4367,6 +4604,9 @@
         "responses": {
           "200": {
             "description": "UI file or index.html"
+          },
+          "503": {
+            "description": "UI directory temporarily unavailable during rebuild; retry shortly."
           }
         },
         "x-listeners": [

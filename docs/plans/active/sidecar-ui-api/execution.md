@@ -56,15 +56,16 @@ The status values are `queued`, `running`, `review`, `fixing`, `merged` and `blo
 | U1-d presence and v1 frames | td-713745 | sidecar | Codex | td-552e24 merged | merged (c75857ac) |
 | U1-e web app shell and Sessions | td-57a73e | sidecar-ui | Codex | U0-b | merged (sidecar-ui 8d183fc); Claude review fixed 6 UX defects |
 | U1-f SDK adopts v1 | td-820df7 | sidecar-ui | Codex | U1-a, U1-d | merged (sidecar-ui fdad866); Claude review fixed the paste-marker strip |
-| U1-g iOS adopts presence and events | td-fde8cf | sidecar-mobile | Codex | U1-a, U1-d | running (Codex, ~/code/sidecar-mobile-u1g-presence, branch u1g-presence); presence first against the u1d branch, events after U1-a |
-| U1-i persist browser sessions | td-165353 | sidecar | Codex | U1-a, U1-b merged (both touch internal/uiapi) | review (Claude security reviewer); branch u1i-sessions @c9960a97. Proof-of-possession sessions and a per-request static root. The SDK adopts it in a follow-up lane after merge |
+| U1-g iOS adopts presence and events | td-fde8cf | sidecar-mobile | Codex | U1-a, U1-d | review (Claude reviewer); branch u1g-presence @c408f9f. Simulator and legacy-server proofs pass; device proof is Marcus's |
+| U1-i persist browser sessions | td-165353 | sidecar | Codex | U1-a, U1-b merged (both touch internal/uiapi) | merged (7f2ce809). SDK adoption running (td-3ac23b, ~/code/sidecar-ui-u1i-sdk) |
 | U1-e2 web app polish | td-71e0e5 | sidecar-ui | Codex | U1-e | merged (sidecar-ui 5e0ecb2) |
-| U1-h security review and three-viewer proof | td-295605 | all | Claude, then Codex | U1-a, U1-d, U1-f | security merged (6176110f); three-viewer proof running (Codex, ~/code/sidecar-u1h-three-viewer) |
+| U1-c2 socket activation | td-11f799 | sidecar | Codex | U1-c | review (Codex reviewer, shell "rev U1-c2"); branch @9006be74, adds the purego dependency |
+| U1-h security review and three-viewer proof | td-295605 | all | Claude, then Codex | U1-a, U1-d, U1-f | security merged (6176110f). Three-viewer proof passes on transport (40/40 bytes, 14 handoffs, zero ping-pong); in Codex review (branch u1h-three-viewer, which also carries TUI geometry fixes) |
 | U2-a core extraction | td-c709a9 | sidecar | Codex | U0-a | merged (d95b66f5) |
-| U2-b workspace resources and operations API | td-eb3d80 | sidecar | Codex | U2-a | review (Codex reviewer, shell "rev U2-b"); branch u2b-workspace-api @3423e767, which also carries the agent `--` terminator fix td-66d7e3 |
+| U2-b workspace resources and operations API | td-eb3d80 | sidecar | Codex | U2-a | review MERGE-READY (Codex; fixed 5 P1 delete and remote data-loss bugs); integrating main, then merge. U2-c must send expect_delete_state |
 | U2-c workspace UI | td-37a00e | sidecar-ui | Codex | U2-b | queued |
 | U3-a content and layouts API | td-f8784a | sidecar | Codex | U1-a | merged (05dd383b). Claude review fixed a HIGH arbitrary file write through the diff parent parameter (git --output), a watch fd-exhaustion cap, and an existence oracle through symlinks |
-| U3-b pane tree UI | td-cf59cd | sidecar-ui | Codex | U3-a, U1-f | running (Codex, ~/code/sidecar-ui-u3b-panes, branch u3b-panes) |
+| U3-b pane tree UI | td-cf59cd | sidecar-ui | Codex | U3-a, U1-f | review (Claude: security, XSS in markdown, and UX); branch u3b-panes @9556d32 |
 | U4 viewers agents can target | td-799dd6 | both | Codex | U3 | queued |
 
 U2-b onward are briefed below.
@@ -267,6 +268,8 @@ Each one is a td issue with the exact command and output. Fixes run as their own
 | td-eeb7e8 lane | Codex bug lane (~/code/sidecar-bug-eeb7e8) with a completion fence for stale async messages across workspace and overview | merged (7d9b53f7) |
 | td-ae18e4, td-87dd09 | `comms publish` refused with "author does not follow topic" and no recovery hint (comms) | open |
 | td-6153d0 | `create worktree --agent codex` sometimes leaves the shell without Codex and reports success; under load. Recovered with `agent start --kind codex` | open |
-| td-ab3af0 | Friction lane 2 (Codex, ~/code/sidecar-friction-2): notes test hang td-aa4fb7, loopback/tmux-drive load flakes td-d881e2, silent Codex start failure td-6153d0, project reorder must not cancel operations, shared events holder polling, server paste-marker strip | review (Codex reviewer, shell "rev friction-2") |
+| td-275a14 | Friction lane 3 (Codex, ~/code/sidecar-friction-3): remaining load flakes, diff memory bound td-0e9748, refuse .git internals over content:read | running |
+| td-ab3af0 | Friction lane 2 (Codex, ~/code/sidecar-friction-2): notes test hang td-aa4fb7, loopback/tmux-drive load flakes td-d881e2, silent Codex start failure td-6153d0, project reorder must not cancel operations, shared events holder polling, server paste-marker strip | merged (c3ac2418) |
 | td-58caeb | `comms send @ui-u2b` returned agent-not-found from another lane; peer handles are not reliably discoverable | open |
-| td-07f7b1 | Eight simultaneous valid `create shell` calls gave 1 success and 7 generic exit-1 errors (allocation race). Fixed on bug-07f7b1 @d375077a with atomic allocation under the shellstate lock | review (Codex reviewer, shell "rev 07f7b1") |
+| td-07f7b1 | Eight simultaneous valid `create shell` calls gave 1 success and 7 generic exit-1 errors (allocation race). Fixed on bug-07f7b1 @d375077a with atomic allocation under the shellstate lock | merged (94f34653); review added a 2 s tmux budget under the lock |
+| td-945516 | P1: after geometry handoffs xterm throws cell exceptions and the browser terminal goes blank (sidecar-ui). Codex bug lane ~/code/sidecar-ui-bug-945516 | running |
