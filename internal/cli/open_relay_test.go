@@ -287,3 +287,34 @@ func writeLiveViewerPresence(t *testing.T, stateDir, instance string) {
 		t.Fatal(err)
 	}
 }
+
+// A background browser tab (an unfocused API viewer) is not the screen. It
+// must not refuse a request that a connected remote viewer holding the shell's
+// lease can receive.
+func TestOpenUnfocusedAPIViewerKeepsRemoteLeaseRelay(t *testing.T) {
+	_, stateDir := setupIsolatedCLI(t)
+	workDir := t.TempDir()
+	writeProjectMeta(t, stateDir, "sidecar", workDir)
+	writeProjectShell(t, stateDir, "sidecar", shellstate.Definition{
+		TmuxName: "sidecar-sh-sidecar-1", DisplayName: "active task", Namespace: "/tmp/sock", WorkDir: workDir,
+	})
+	if err := os.WriteFile(filepath.Join(workDir, "README.md"), []byte("x\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	writeLiveViewerPresence(t, stateDir, "laptop-99")
+	if err := uirequest.WriteAPIViewer(stateDir, uirequest.APIViewer{Instance: "api-viewer-background", PID: os.Getpid(), Focused: false, Capabilities: []string{uirequest.APIViewerRelay}, ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	original := sessionLeaseOwner
+	t.Cleanup(func() { sessionLeaseOwner = original })
+	sessionLeaseOwner = func(string) string { return "laptop-99" }
+
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"open", "--shell", "active task", "--wait", "0", "README.md"}, &out, &errOut)
+	if !handled || code != 0 {
+		t.Fatalf("unfocused API viewer blocked the lease relay: handled %v code %d stderr %q", handled, code, errOut.String())
+	}
+	if req := readWrittenRequest(t, stateDir); req.Viewer != "" {
+		t.Fatalf("request pinned to an unfocused API viewer: %+v", req)
+	}
+}
