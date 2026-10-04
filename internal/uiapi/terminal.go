@@ -63,11 +63,11 @@ func (s *Server) keepalive(ctx context.Context, conn *websocket.Conn, inbound *i
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if inbound.now()-responsive >= stallTimeout {
-				_ = conn.CloseNow()
-				return
-			}
 			if inbound.blocked() {
+				if inbound.now()-responsive >= stallTimeout {
+					_ = conn.CloseNow()
+					return
+				}
 				// Nothing is reading the socket, so no pong could be seen.
 				continue
 			}
@@ -81,7 +81,7 @@ func (s *Server) keepalive(ctx context.Context, conn *websocket.Conn, inbound *i
 				if ctx.Err() != nil {
 					return
 				}
-				if errors.Is(err, context.DeadlineExceeded) && inbound.blockedSince(sent) {
+				if errors.Is(err, context.DeadlineExceeded) && inbound.blockedSince(sent) && inbound.now()-responsive < stallTimeout {
 					continue
 				}
 				_ = conn.CloseNow()
@@ -270,6 +270,11 @@ func (s *Server) runTerminal(conn *websocket.Conn, client *trackedClient) {
 		// The socket can close while the reader is stuck writing to the
 		// backend. Break that write and cancel the backend directly.
 		_ = requestWriter.Close()
+		if s.ctx.Err() != nil {
+			_ = conn.Close(CloseShuttingDown, "The Sidecar API server is shutting down; reconnect when it is back.")
+		} else {
+			_ = conn.CloseNow()
+		}
 		cancel()
 		if _, ok := waitBackend(); !ok {
 			<-backendDone
