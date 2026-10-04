@@ -67,6 +67,9 @@ func TestCreateWorktreeStartsTheFamilyWithProviderArguments(t *testing.T) {
 	if !terminal.launched || strings.Join(terminal.argv, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("launch = launched=%v argv=%#v, want %#v", terminal.launched, terminal.argv, want)
 	}
+	if result.AgentStart == nil || result.AgentStart.Status != "ready" || result.AgentStart.Kind != "codex" || result.AgentStart.Error != nil {
+		t.Fatalf("agent_start = %+v, want ready codex", result.AgentStart)
+	}
 	if result.Project != "demo" {
 		t.Fatalf("result.project = %q, want the selector --project accepts", result.Project)
 	}
@@ -172,6 +175,9 @@ func TestCreateShellStartsTheFamilyWithProviderArguments(t *testing.T) {
 	want := []string{"codex", "--model", "space value"}
 	if !terminal.launched || strings.Join(terminal.argv, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("launch = launched=%v argv=%#v, want %#v", terminal.launched, terminal.argv, want)
+	}
+	if result.AgentStart == nil || result.AgentStart.Status != "ready" || result.AgentStart.Kind != "codex" || result.AgentStart.Error != nil {
+		t.Fatalf("agent_start = %+v, want ready codex", result.AgentStart)
 	}
 	if result.Project != "demo" {
 		t.Fatalf("result.project = %q", result.Project)

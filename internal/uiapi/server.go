@@ -117,6 +117,7 @@ type Server struct {
 	eventOnce     sync.Once
 	eventErr      error
 	catalogEvents eventSignals
+	holderCache   legacyHolderCache
 }
 
 // ListenerInfo describes one bound listener in status.

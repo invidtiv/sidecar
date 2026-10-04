@@ -1445,6 +1445,8 @@ case the start is refused and names the command to put them in.
 Usage refusals with --json are `{"error":{"code":"usage",...}}` on stderr,
 like the agent verbs; without --json they are the reason and the help text.
 The result carries `project`, the slug every other verb's --project accepts.
+With --agent, `agent_start` reports kind and status: ready, failed, or not_started.
+A failed start includes its named error, retains the created shell, and exits 1.
 
 ```
 Usage: sidecar create shell [options]
@@ -1528,7 +1530,9 @@ confirmation passes the plan's sourceOid back here, and gets the same
 source-moved guard the TUI's confirmation gets from executing its stored plan.
 
 The result carries `project`, the slug the agent verbs' --project accepts, and
-those verbs also accept the worktree's path or basename as --project. Usage
+those verbs also accept the worktree's path or basename as --project. With --agent,
+`agent_start` reports kind and status: ready, failed, or not_started. A failed
+start includes its named error, retains the worktree and shell, and exits 1. Usage
 refusals with --json are `{"error":{"code":"usage",...}}` on stderr, like
 the agent verbs; without --json they are the reason and the help text.
 

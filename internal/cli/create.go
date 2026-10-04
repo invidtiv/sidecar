@@ -253,3 +253,29 @@ func existingShellDefinitions(proj registeredProject) []shellstate.Definition {
 	}
 	return listed
 }
+
+// createAgentStartResult distinguishes creating durable identity from starting
+// a provider. A failure keeps the new shell/worktree available for recovery.
+type createAgentStartResult struct {
+	Kind   string              `json:"kind"`
+	Status string              `json:"status"`
+	Error  *agentcontrol.Error `json:"error,omitempty"`
+}
+
+func createdAgentStart(kind string, requested bool, err error) *createAgentStartResult {
+	if kind == "" {
+		return nil
+	}
+	result := &createAgentStartResult{Kind: kind, Status: "not_started"}
+	if !requested {
+		return result
+	}
+	result.Status = "ready"
+	if err != nil {
+		result.Status = "failed"
+		if !agentcontrol.AsError(err, &result.Error) {
+			result.Error = &agentcontrol.Error{Code: agentcontrol.ErrTransport, Message: err.Error(), Err: err}
+		}
+	}
+	return result
+}

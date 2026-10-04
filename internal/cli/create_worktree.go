@@ -281,13 +281,14 @@ func runCreateWorktree(env Env, args []string) int {
 			Session:     session,
 			WorkDir:     record.Path,
 		},
-		Project:   proj.Key,
-		Path:      record.Path,
-		Branch:    record.Branch,
-		Setup:     encodeSetupOutcomes(outcomes),
-		Acked:     len(acks) > 0,
-		Surface:   createAckSurface(acks),
-		Placement: createPlacementWorkspace,
+		Project:    proj.Key,
+		Path:       record.Path,
+		Branch:     record.Branch,
+		Setup:      encodeSetupOutcomes(outcomes),
+		Acked:      len(acks) > 0,
+		Surface:    createAckSurface(acks),
+		Placement:  createPlacementWorkspace,
+		AgentStart: createdAgentStart(agent, startProvider && len(requiredFailed) == 0, launchErr),
 	}
 
 	failed := requiredFailed
@@ -370,7 +371,8 @@ type createSetupOutcome struct {
 }
 
 type createWorktreeResult struct {
-	Shell createShellInfo `json:"shell"`
+	AgentStart *createAgentStartResult `json:"agent_start,omitempty"`
+	Shell      createShellInfo         `json:"shell"`
 	// Project is the registered project slug the worktree was created under.
 	// It is the selector the agent verbs' --project accepts, put in the result
 	// because none of path, branch, or displayName was one before --project

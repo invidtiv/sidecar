@@ -241,3 +241,41 @@ func TestWaitShellReadyRefusesCopyModeAndTimesOutBusySetup(t *testing.T) {
 		t.Fatalf("timeout err = %T %v", err, err)
 	}
 }
+
+// Sending input acknowledges tmux, not the shell consuming it. An idle shell
+// before any provider evidence is a pending launch even after the old grace.
+func TestStartWaitsForDelayedLaunchWithoutInferringExitFromTime(t *testing.T) {
+	terminal := &sequenceTerminal{snapshots: []Snapshot{pinnedSnapshot(""), pinnedSnapshot(""), pinnedSnapshot(""), pinnedSnapshot("working"), pinnedSnapshot("idle")}}
+	ticks := 0
+	svc := Service{Terminal: terminal, Poll: time.Millisecond, Detect: func(s Snapshot, tracker *agentactivity.Tracker) AgentState {
+		if s.ShellReady {
+			return AgentState{}
+		}
+		return fakeDetect(s, tracker)
+	}, Now: func() time.Time {
+		ticks++
+		return time.Unix(int64(ticks), 0)
+	}}
+	got, err := svc.Start(context.Background(), StartRequest{Target: Target{Session: "s"}, Kind: "fake", Argv: []string{"fake"}, Timeout: time.Second})
+	if err != nil || got.Agent.Status != StatusIdle {
+		t.Fatalf("delayed launch = %+v, %v", got, err)
+	}
+}
+
+// A terminal can acknowledge a launch that never becomes observable. Cancel
+// that pending start without interpreting an idle observation as an exit or
+// sending the launch a second time.
+func TestStartUnobservedLaunchHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	terminal := &sequenceTerminal{snapshots: []Snapshot{pinnedSnapshot(""), pinnedSnapshot("")}}
+	svc := Service{Terminal: terminal, Poll: time.Millisecond, Detect: func(Snapshot, *agentactivity.Tracker) AgentState {
+		cancel()
+		return AgentState{}
+	}}
+	_, err := svc.Start(ctx, StartRequest{Target: Target{Session: "s"}, Kind: "fake", Argv: []string{"fake"}, Timeout: time.Second})
+	var typed *Error
+	if !AsError(err, &typed) || typed.Code != ErrTransport || !errors.Is(err, context.Canceled) || len(terminal.launched) != 1 {
+		t.Fatalf("pending start = %v, launches=%v", err, terminal.launched)
+	}
+}
