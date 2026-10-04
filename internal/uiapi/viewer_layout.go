@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/contentservice"
@@ -209,6 +210,9 @@ func (h *viewerLayoutHost) validateSaved(n *state.PaneLayoutJSON) error {
 			return err
 		}
 		return h.validateSaved(n.Split.B)
+	}
+	if leafHasControl(n) {
+		return fmt.Errorf("the saved layout contains control characters; save it again without them")
 	}
 	var spec uirequest.LayoutPane
 	switch n.Kind {
@@ -423,6 +427,32 @@ func (h *viewerLayoutHost) Ack(_ uirequest.Request, status uirequest.Status, rea
 }
 func (h *viewerLayoutHost) report() json.RawMessage {
 	return layoutreport.Build(layoutreport.Source{Surface: "browser", Root: h.v.ws.Root, Tree: h.tree, Layout: h.encode(h.tree), LeafLayouts: h.leaves, CSSViewport: &h.v.presence.Viewport, FloorsUnit: "css_pixels", Floors: h.Floors()})
+}
+
+// leafHasControl reports a saved leaf string the CLI would print verbatim.
+// Saved layouts are client-supplied, and a credential limited to ui:control
+// must not be able to put terminal escape sequences in front of an agent or a
+// human through layout get or an acknowledgement.
+func leafHasControl(n *state.PaneLayoutJSON) bool {
+	values := []string{n.Kind, n.Session, n.Name, n.FocusKind}
+	for _, t := range n.Tabs {
+		values = append(values, t.Path, t.Mode)
+	}
+	for _, t := range n.IssueTabs {
+		values = append(values, t.Issue, t.OwnerName, t.OwnerRoot)
+	}
+	for _, t := range n.NoteTabs {
+		values = append(values, t.Note)
+	}
+	for _, t := range n.DiffTabs {
+		values = append(values, t.Spec, t.Path, t.Scope, t.Mode)
+	}
+	for _, value := range values {
+		if strings.IndexFunc(value, unicode.IsControl) >= 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func savedLeaves(j *state.PaneLayoutJSON) []*state.PaneLayoutJSON {

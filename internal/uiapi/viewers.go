@@ -6,8 +6,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/marcus/sidecar/internal/contentservice"
 	"github.com/marcus/sidecar/internal/layoutreport"
@@ -211,6 +214,11 @@ func (s *Server) handleViewerPresence(w http.ResponseWriter, r *http.Request, c 
 		writeError(w, 409, "viewer_unavailable", "Open a capable events stream before reporting presence.")
 		return
 	}
+	// The same credential holder renews short-lived browser bearers while the
+	// events stream stays open; adopt the credential this request proved so
+	// delivery and acknowledgement are checked against a live one. Revocation
+	// still closes the stream, which removes the viewer.
+	v.caller = c
 	if p.Focused && p.Visible && (!v.presence.Focused || !v.presence.Visible || v.updated.IsZero() || time.Since(v.updated) >= viewerTTL) {
 		s.viewer.serial++
 		v.focusedAt = s.viewer.serial
@@ -230,6 +238,31 @@ func (s *Server) handleViewerPresence(w http.ResponseWriter, r *http.Request, c 
 func (s *Server) declineViewer(req uirequest.Request, reason string) {
 	_ = uirequest.WriteAck(s.opts.StateDir, req.ID, req.Action, uirequest.Ack{Instance: req.Viewer, Host: uirequest.HostName(), PID: os.Getpid(), Status: uirequest.StatusDeclined, Reason: reason, Surface: "browser"})
 }
+
+// clientReason bounds a viewer's free-text decline reason before the CLI
+// prints it to an agent or a terminal: control characters (escape sequences,
+// OSC 52 clipboard writes) are dropped and the text is capped.
+func clientReason(reason string) string {
+	reason = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, reason)
+	const maxReason = 512
+	if len(reason) > maxReason {
+		cut := maxReason
+		for cut > 0 && !utf8.RuneStart(reason[cut]) {
+			cut--
+		}
+		reason = reason[:cut]
+	}
+	if strings.TrimSpace(reason) == "" {
+		return "the API viewer declined the pane request"
+	}
+	return "the API viewer declined: " + reason
+}
+
 func (s *Server) relayUIRequest(req uirequest.Request) {
 	if req.Viewer == "" || (req.Action != uirequest.ActionOpen && req.Action != uirequest.ActionLayout) {
 		return
@@ -241,6 +274,10 @@ func (s *Server) relayUIRequest(req uirequest.Request) {
 	v := s.viewer.screens[req.Viewer]
 	if v == nil || s.holderLocked() != v || !s.callerLive(v.caller) {
 		s.declineViewer(req, "the API viewer is not focused and visible; pane requests are never queued")
+		return
+	}
+	if req.Origin.Sessions {
+		s.declineViewer(req, "the focused API viewer has no Sessions surface; pane requests are never queued")
 		return
 	}
 	originRoot, _ := filepath.EvalSymlinks(req.Origin.WorkDir)
@@ -289,10 +326,11 @@ func (s *Server) handleViewerAck(w http.ResponseWriter, r *http.Request, c calle
 	s.viewer.mu.Lock()
 	defer s.viewer.mu.Unlock()
 	v := s.viewer.screens[a.ViewerID]
-	if v == nil || v.caller.client != c.client || !s.callerLive(v.caller) {
+	if v == nil || v.caller.client != c.client || !s.callerLive(c) {
 		writeError(w, 409, "viewer_unavailable", "The viewer disconnected; reconnect without replaying the request.")
 		return
 	}
+	v.caller = c
 	plan := v.pending[a.ID]
 	if plan == nil {
 		writeError(w, 409, "request_unavailable", "The request is unknown or already acknowledged; do not replay it.")
@@ -305,7 +343,7 @@ func (s *Server) handleViewerAck(w http.ResponseWriter, r *http.Request, c calle
 		return
 	}
 	if a.Status == uirequest.StatusDeclined {
-		s.declineViewer(plan.event.Request, a.Reason)
+		s.declineViewer(plan.event.Request, clientReason(a.Reason))
 		writeJSON(w, 200, ViewerAckResponse{Document: plan.event.Document, ETag: plan.event.ETag})
 		return
 	}
