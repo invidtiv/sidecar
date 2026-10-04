@@ -313,7 +313,19 @@ func (s *Server) runEvents(conn *websocket.Conn, client *trackedClient, c caller
 	terminalChanges, unwatch := s.clients.changes.subscribe()
 	defer unwatch()
 	ctx, cancel := context.WithCancel(s.ctx)
-	defer cancel()
+	// Revocation must not wait behind a blocked data write or an attention
+	// batch. Close independently; its control-write deadline also bounds the
+	// lifetime of a revoked socket whose peer no longer reads.
+	revocationDone := make(chan struct{})
+	go func() {
+		defer close(revocationDone)
+		select {
+		case <-client.revoked:
+			_ = conn.Close(CloseUnauthenticated, revokedSessionReason)
+		case <-ctx.Done():
+		}
+	}()
+	defer func() { cancel(); <-revocationDone }()
 	conn.SetReadLimit(1024)
 	// The stream is server-to-client; still read to process pongs and EOF.
 	readDone := make(chan error, 1)
@@ -321,6 +333,12 @@ func (s *Server) runEvents(conn *websocket.Conn, client *trackedClient, c caller
 	go s.keepalive(ctx, conn, newInboundGate())
 	seq := uint64(0)
 	write := func(m EventMessage) error {
+		select {
+		case <-client.revoked:
+			_ = conn.Close(CloseUnauthenticated, revokedSessionReason)
+			return fmt.Errorf("events credential revoked")
+		default:
+		}
 		seq++
 		m.Seq = seq
 		data, err := json.Marshal(m)
