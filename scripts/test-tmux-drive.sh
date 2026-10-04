@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-unset TMUX
+unset TMUX TMUX_PANE
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DRIVER="$SCRIPT_DIR/tmux-drive.sh"
@@ -115,18 +115,37 @@ if SIDECAR_DRIVE_RUN_DIR="$RUN_DIR" SIDECAR_DRIVE_OUT="$RUN_DIR/../outside" \
     exit 1
 fi
 
+# Accelerate the old fixture lifetime without slowing this regression down.
+# Pacing sleeps retain their real clock; a reintroduced `sleep 30` expires at
+# once, proving panes must live until the driver explicitly stops them.
+export SIDECAR_TEST_REAL_SLEEP="$(command -v sleep)"
+mkdir -p "$TEST_ROOT/timing"
+cat >"$TEST_ROOT/timing/sleep" <<'SHIM'
+#!/bin/bash
+[ "${1-}" != "30" ] || exit 0
+exec "$SIDECAR_TEST_REAL_SLEEP" "$@"
+SHIM
+chmod +x "$TEST_ROOT/timing/sleep"
+export PATH="$TEST_ROOT/timing:$PATH"
+
 FAKE_SIDECAR="$TEST_ROOT/fake-sidecar"
 cat >"$FAKE_SIDECAR" <<'SHIM'
 #!/bin/bash
 pwd >"$SIDECAR_TEST_PWD_FILE"
 printf '%s\n' "$@" >"$SIDECAR_TEST_ARGS_FILE"
 printf '%s\n' "${TMUX-}" >"$SIDECAR_TEST_LAUNCH_TMUX_FILE"
-unset TMUX
+unset TMUX TMUX_PANE
+# The fixture's lifetime belongs to driver stop, not elapsed wall time. FIFO
+# readers stay alive under arbitrarily slow build/proof load and tmux cleanup
+# terminates only these private panes.
+real_lifetime="$SIDECAR_TEST_PWD_FILE.real-lifetime.fifo"
+decoy_lifetime="$SIDECAR_TEST_PWD_FILE.decoy-lifetime.fifo"
+mkfifo "$real_lifetime" "$decoy_lifetime"
 tmux -S "$SIDECAR_TEST_INNER_SOCKET" new-session -d -s proof \
-    "read line; printf '%s' \"\$line\" > '$SIDECAR_TEST_INNER_INPUT_FILE'; sleep 30"
+    "read line; printf '%s' \"\$line\" > '$SIDECAR_TEST_INNER_INPUT_FILE'; read held < '$real_lifetime'"
 mkdir -p "$(dirname "$SIDECAR_TEST_DECOY_SOCKET")"
 chmod 700 "$(dirname "$SIDECAR_TEST_DECOY_SOCKET")"
-tmux -S "$SIDECAR_TEST_DECOY_SOCKET" new-session -d -s proof 'sleep 30'
+tmux -S "$SIDECAR_TEST_DECOY_SOCKET" new-session -d -s proof "read held < '$decoy_lifetime'"
 real_fifo="$SIDECAR_TEST_PWD_FILE.real.fifo"
 decoy_fifo="$SIDECAR_TEST_PWD_FILE.decoy.fifo"
 mkfifo "$real_fifo" "$decoy_fifo"

@@ -511,7 +511,7 @@ func (s *Server) eventTerminals(ctx context.Context, c caller) []EventTerminal {
 				holder = &GeometryHolder{Kind: term.Holder.Kind, Label: term.Holder.Label}
 			}
 		} else if source != nil {
-			holder = source.GeometryHolder(ctx, term)
+			holder = s.legacyHolder(ctx, source, term)
 		}
 		out = append(out, EventTerminal{ClientID: term.ClientID, OwnerHostID: term.OwnerHostID, Session: term.Session, Pane: term.Pane, DisplayName: term.DisplayName, Holder: holder})
 	}

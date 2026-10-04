@@ -82,7 +82,7 @@ func startFakeAgent(t *testing.T, name string) (Service, *LocalTerminal, Target)
 	// that has not finished initializing inside the default grace, and a pane
 	// that still reads as a bare shell because the provider *is* one. Give both
 	// room here rather than letting machine load decide the result.
-	svc := Service{Terminal: terminal, Poll: 20 * time.Millisecond, Observe: 20 * time.Millisecond, Verify: 200 * time.Millisecond, ShellStableFor: 100 * time.Millisecond, Detect: fakeProviderDetect, ShellInitGrace: 10 * time.Second, StartGrace: time.Minute}
+	svc := Service{Terminal: terminal, Poll: 20 * time.Millisecond, Observe: 20 * time.Millisecond, Verify: 200 * time.Millisecond, ShellStableFor: 100 * time.Millisecond, Detect: fakeProviderDetect, ShellInitGrace: 10 * time.Second}
 	target := Target{Host: "local", Project: "fixture", Session: session, Name: name, Namespace: tmuxenv.Namespace()}
 	ready, err := svc.WaitShellReady(context.Background(), target, 5*time.Second)
 	if err != nil {

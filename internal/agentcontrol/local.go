@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -159,7 +160,7 @@ func (t *LocalTerminal) Signal(ctx context.Context, snap Snapshot) (<-chan Signa
 	return signals, stop, nil
 }
 
-var paneFormat = tmuxformat.Fields("pane_id", "pane_pid", "pane_dead", "pane_in_mode", "pane_current_command", "pane_title", "pid", "pane_height")
+var paneFormat = tmuxformat.Fields("pane_id", "pane_pid", "pane_dead", "pane_in_mode", "pane_current_command", "pane_title", "pid", "pane_height", "@sidecar-agent-launch-done")
 
 func (t *LocalTerminal) Inspect(ctx context.Context, target Target) (Snapshot, error) {
 	if t == nil {
@@ -181,7 +182,7 @@ func (t *LocalTerminal) Inspect(ctx context.Context, target Target) (Snapshot, e
 		return Snapshot{Target: target, PaneCount: len(lines)}, nil
 	}
 	parts := tmuxformat.Split(lines[0])
-	if len(parts) != 8 {
+	if len(parts) != 9 {
 		return Snapshot{}, fmt.Errorf("unexpected tmux pane metadata")
 	}
 	pid, _ := strconv.Atoi(parts[1])
@@ -208,7 +209,7 @@ func (t *LocalTerminal) Inspect(ctx context.Context, target Target) (Snapshot, e
 		processIdentity = agentactivity.ResolveForegroundProcess(pid)
 		shellReady = agentactivity.ForegroundShellReady(pid, parts[4])
 	}
-	return Snapshot{Target: target, Dead: parts[2] == "1", CopyMode: parts[3] != "0", PaneCount: 1, CurrentCommand: parts[4], ProcessIdentity: processIdentity, ShellReady: shellReady, Title: parts[5], Screen: string(screenOut), PaneHeight: paneHeight, CapturedAt: now}, nil
+	return Snapshot{Target: target, Dead: parts[2] == "1", CopyMode: parts[3] != "0", PaneCount: 1, CurrentCommand: parts[4], ProcessIdentity: processIdentity, ShellReady: shellReady, Title: parts[5], Screen: string(screenOut), PaneHeight: paneHeight, CapturedAt: now, LaunchID: parts[8]}, nil
 }
 
 func (t *LocalTerminal) Launch(ctx context.Context, snap Snapshot, argv []string) error {
@@ -225,7 +226,24 @@ func (t *LocalTerminal) Launch(ctx context.Context, snap Snapshot, argv []string
 	if err := shellReady(current); err != nil {
 		return err
 	}
-	return t.apply(current, tty.PromptSteps(quoteArgv(argv)))
+	command := quoteArgv(argv)
+	if snap.LaunchID != "" {
+		// A foreground process can finish between two inspections. The shell
+		// records completion of this exact attempt after running it, on the
+		// pinned server/pane. Old receipts cannot satisfy a subsequent launch.
+		// One pane option replaces itself; no worker or temporary file survives
+		// a start timeout. Use the explicit socket even inside a managed shell.
+		tmuxPath, err := exec.LookPath("tmux")
+		if err != nil {
+			return err
+		}
+		tmuxPath, err = filepath.Abs(tmuxPath)
+		if err != nil {
+			return err
+		}
+		command += "; " + quoteArgv([]string{tmuxPath, "-S", tmuxenv.SocketPath(), "set-option", "-p", "-q", "-t", snap.PaneID, "@sidecar-agent-launch-done", snap.LaunchID})
+	}
+	return t.apply(current, tty.PromptSteps(command))
 }
 
 // Submit is the shared ordered text sender: revalidate the pinned pane, pass

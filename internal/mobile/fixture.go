@@ -209,6 +209,9 @@ func (g *echoGeometry) ClaimInput(data []byte, cols, rows int, paste bool) error
 	if err := fixtureGeometryBounds(cols, rows); err != nil {
 		return err
 	}
+	if paste {
+		data = tty.NormalizeHeadlessPaste(data)
+	}
 	if len(data) == 0 {
 		return fmt.Errorf("fixture empty input")
 	}
@@ -219,7 +222,13 @@ func (g *echoGeometry) ClaimInput(data []byte, cols, rows int, paste bool) error
 	g.pane.publish()
 	return nil
 }
-func (g *echoGeometry) Paste(data []byte) error { return g.SendLiteral(data) }
+func (g *echoGeometry) Paste(data []byte) error {
+	data = tty.NormalizeHeadlessPaste(data)
+	if len(data) == 0 {
+		return fmt.Errorf("fixture empty paste")
+	}
+	return g.SendLiteral(data)
+}
 func (g *echoGeometry) releaseLocked() {
 	if g.pane.owner == g.owner {
 		g.pane.owner, g.pane.kind, g.pane.label = "", "", ""
