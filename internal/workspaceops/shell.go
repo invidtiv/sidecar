@@ -71,6 +71,10 @@ type ManagedShellSpec struct {
 // owning project's manifest. A newly-created session is rolled back if the
 // durable identity cannot be written; a pre-existing retry is never killed.
 func CreateManagedShell(spec ManagedShellSpec) (ShellResult, error) {
+	return createManagedShell(spec, nil)
+}
+
+func createManagedShell(spec ManagedShellSpec, record func(shellstate.Definition) error) (ShellResult, error) {
 	existed := SessionExists(spec.SessionName)
 	result, err := CreateShell(spec.ShellSpec)
 	if err != nil {
@@ -96,7 +100,11 @@ func CreateManagedShell(spec ManagedShellSpec) (ShellResult, error) {
 				LastSeenAliveAt: time.Now().UTC(),
 			}
 		}
-		err = shellstate.AddAtPath(filepath.Join(projectDir, "shells.json"), definition)
+		if record != nil {
+			err = record(definition)
+		} else {
+			err = shellstate.AddAtPath(filepath.Join(projectDir, "shells.json"), definition)
+		}
 	}
 	if err != nil {
 		if !existed {
@@ -110,11 +118,20 @@ func CreateManagedShell(spec ManagedShellSpec) (ShellResult, error) {
 // DeleteManagedShell removes the durable identity and then closes the exact
 // tmux session. If tmux has already exited, the requested state is achieved.
 func DeleteManagedShell(projectRoot, sessionName, namespace string) error {
+	return deleteManagedShell(projectRoot, sessionName, namespace, nil)
+}
+
+func deleteManagedShell(projectRoot, sessionName, namespace string, forget func(string) error) error {
 	projectDir, err := projectdir.Resolve(projectRoot)
 	if err != nil {
 		return err
 	}
-	if err := shellstate.RemoveAtPath(filepath.Join(projectDir, "shells.json"), shellstate.Identity{TmuxName: sessionName, Namespace: namespace}); err != nil {
+	if forget == nil {
+		forget = func(string) error {
+			return shellstate.RemoveAtPath(filepath.Join(projectDir, "shells.json"), shellstate.Identity{TmuxName: sessionName, Namespace: namespace})
+		}
+	}
+	if err := forget(sessionName); err != nil {
 		return err
 	}
 	// `=` matches the name exactly. Without it tmux resolves a missing

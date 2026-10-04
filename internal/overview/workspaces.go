@@ -169,9 +169,6 @@ func (m *Model) idleWorktreeRevealed(ws workspaceinventory.Workspace) bool {
 }
 
 func (m *Model) hideIdleWorkspace(item workspacelist.Item, ws workspaceinventory.Workspace) bool {
-	if m.idleWorktreeRevealed(ws) {
-		return false
-	}
 	// A remote main checkout with no agent is the host's project home, not a
 	// session. The project plugin already refuses that row locally. Globally it
 	// usually hid behind the idle-worktrees toggle — until a pane whose cwd is
@@ -179,10 +176,11 @@ func (m *Model) hideIdleWorkspace(item workspacelist.Item, ws workspaceinventory
 	// Managed shells are already their own rows. Keep the row when an agent is
 	// actually running on main; a leftover zsh sitting in the checkout is not
 	// a reason for a remote viewer to attach.
-	if ws.Remote() && ws.Kind == workspaceinventory.KindWorktree && ws.IsMain && !ws.HasAgent() {
-		return true
-	}
-	return !m.showIdleWorktrees && item.Group == workspacelist.GroupNoSession
+	return workspacelist.Hidden(item.Group, workspacelist.Visibility{
+		ShowIdleWorktrees:      m.showIdleWorktrees,
+		Revealed:               m.idleWorktreeRevealed(ws),
+		RemoteMainWithoutAgent: ws.Remote() && ws.Kind == workspaceinventory.KindWorktree && ws.IsMain && !ws.HasAgent(),
+	})
 }
 
 func (m *Model) syncCreateActions() {
@@ -203,16 +201,8 @@ func (m *Model) pruneGonePins() {
 	if len(ids) == 0 {
 		return
 	}
-	kept := make([]string, 0, len(ids))
-	dropped := false
-	for _, id := range ids {
-		if _, ok := m.catalog[id]; ok {
-			kept = append(kept, id)
-			continue
-		}
-		dropped = true
-	}
-	if !dropped {
+	kept := workspacelist.RetainPins(ids, m.knownWorkspaceIDs())
+	if len(kept) == len(ids) {
 		return
 	}
 	m.workspaces.SetPinned(kept)
@@ -1106,13 +1096,15 @@ func (m *Model) knownPinnedIDs(ids []string) []string {
 	if len(m.catalog) == 0 {
 		return ids
 	}
-	kept := make([]string, 0, len(ids))
-	for _, id := range ids {
-		if _, ok := m.catalog[id]; ok {
-			kept = append(kept, id)
-		}
+	return workspacelist.RetainPins(ids, m.knownWorkspaceIDs())
+}
+
+func (m *Model) knownWorkspaceIDs() []string {
+	ids := make([]string, 0, len(m.catalog))
+	for id := range m.catalog {
+		ids = append(ids, id)
 	}
-	return kept
+	return ids
 }
 
 // toggleWorkspaceSidebar shows or hides the list. It is a layout toggle only:

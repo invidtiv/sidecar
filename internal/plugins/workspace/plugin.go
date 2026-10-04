@@ -1612,7 +1612,7 @@ func (p *Plugin) dropNestedShell(tmuxName string, observedServer ...shellstate.S
 func (p *Plugin) rebuildNestedShellsFromState() {
 	var defs []ShellDefinition
 	if p.shellManifest != nil {
-		defs = p.shellManifest.Shells
+		defs = p.shellManifest.Snapshot().Shells
 	}
 	p.rebuildNestedShells(defs, nil)
 }
@@ -1626,7 +1626,7 @@ func (p *Plugin) backfillWorkDirsCmd() tea.Cmd {
 	paths := p.worktreePaths()
 	var defs []ShellDefinition
 	if p.shellManifest != nil {
-		defs = p.shellManifest.Shells
+		defs = p.shellManifest.Snapshot().Shells
 	}
 	for _, def := range defs {
 		if strings.TrimSpace(def.WorkDir) != "" {

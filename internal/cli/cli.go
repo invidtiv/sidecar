@@ -525,7 +525,7 @@ func lookupCurrentShellName(ctx context.Context, stateDir string, identity shell
 
 func renameCurrentShell(ctx context.Context, stateDir string, identity shellIdentity, name string) (shellstate.RenameResult, error) {
 	if strings.HasPrefix(identity.session, "sidecar-sh-") {
-		result, err := shellstate.RenameCurrent(stateDir, shellstate.RenameRequest{TmuxName: identity.session, Namespace: identity.socket, Name: name})
+		result, err := (workspaceops.Service{}).RenameCurrentShell(stateDir, shellstate.RenameRequest{TmuxName: identity.session, Namespace: identity.socket, Name: name})
 		if err != nil {
 			return shellstate.RenameResult{}, err
 		}
@@ -549,7 +549,7 @@ func renameCurrentShell(ctx context.Context, stateDir string, identity shellIden
 	if err != nil {
 		return shellstate.RenameResult{}, err
 	}
-	result, err := workspaceops.RenameWorktreeDisplayName(ctx, stateDir, projectRoot, worktreeRoot, name)
+	result, err := (workspaceops.Service{}).RenameWorktree(ctx, stateDir, projectRoot, worktreeRoot, name)
 	if err != nil {
 		return shellstate.RenameResult{}, err
 	}

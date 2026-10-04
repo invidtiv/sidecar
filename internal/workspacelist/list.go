@@ -368,6 +368,14 @@ func GroupedAt(items []Item, mode Sort, now time.Time, pinnedIDs []string) []Sec
 	if now.IsZero() {
 		now = time.Now()
 	}
+	return SectionsAt(items, mode, now, pinnedIDs)
+}
+
+// SectionsAt is the state-free grouping rule with an explicit observation
+// time. Unlike GroupedAt's legacy zero-clock convenience, it never reads the
+// wall clock: the same inputs produce the same sections for a headless caller.
+// Items must already be sorted; pinned rows are separated exactly once.
+func SectionsAt(items []Item, mode Sort, now time.Time, pinnedIDs []string) []Section {
 	pinned, rest := splitPinned(items, pinnedIDs)
 	var sections []Section
 	switch mode {

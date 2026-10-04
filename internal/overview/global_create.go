@@ -32,14 +32,14 @@ const (
 )
 
 var (
-	createManagedShell    = workspaceops.CreateManagedShell
-	resolveGlobalWorktree = workspaceops.ResolveWorktreePlan
+	createManagedShell    = (workspaceops.Service{}).CreateShell
+	resolveGlobalWorktree = (workspaceops.Service{}).PlanWorktree
 	executeGlobalWorktree = workspaceops.ExecuteWorktree
 	persistGlobalJournal  = workspaceops.PersistPendingCreation
 	persistGlobalIdentity = workspaceops.PersistWorktreeIdentity
 	runGlobalSetup        = workspaceops.RunConfiguredSetup
 	removeGlobalJournal   = workspaceops.RemovePendingCreation
-	deleteGlobalWorktree  = workspaceops.DeleteCreatedWorktree
+	deleteGlobalWorktree  = (workspaceops.Service{}).DeleteCreatedWorktree
 	launchGlobalSession   = workspaceops.LaunchWorktreeSession
 	waitGlobalShellReady  = func(ctx context.Context, target agentcontrol.Target, timeout time.Duration) (agentcontrol.Snapshot, error) {
 		return (agentcontrol.Service{Terminal: agentcontrol.NewLocalTerminal()}).WaitShellReady(ctx, target, timeout)
@@ -721,6 +721,13 @@ func (m *Model) planCreateWorktree() tea.Cmd {
 	}
 }
 
+// globalOperationService binds the existing local adapters; remote requests
+// run the same service on their owning host through the CLI.
+func globalOperationService() workspaceops.Service {
+	return workspaceops.Service{Execute: executeGlobalWorktree, Journal: persistGlobalJournal,
+		Identity: persistGlobalIdentity, Setup: runGlobalSetup, Finalize: removeGlobalJournal, Launch: launchGlobalSession}
+}
+
 func (m *Model) executeCreateWorktree() tea.Cmd {
 	if m.createPlan == nil {
 		return nil
@@ -772,31 +779,16 @@ func (m *Model) executeCreateWorktree() tea.Cmd {
 			m.createForm.Agent(), plan.SourceOID, m.createForm.SkipPerms())
 	}
 	return func() tea.Msg {
-		record, err := executeGlobalWorktree(context.Background(), projectKey(project), plan)
-		if record == nil {
-			return globalWorktreeCreatedMsg{Project: project, Plan: plan, Err: err}
+		creation := globalOperationService().BeginWorktree(context.Background(), plan)
+		if creation.Record != nil && creation.Err == nil {
+			creation.Outcomes = append(creation.Outcomes, globalOperationService().SetupWorktree(context.Background(), plan, false)...)
 		}
-		outcomes := make([]workspaceops.SetupOutcome, 0)
-		if journalErr := persistGlobalJournal(context.Background(), plan, record); journalErr != nil {
-			outcomes = append(outcomes, workspaceops.SetupOutcome{Kind: "journal", Action: "persist recovery", Required: true, Err: journalErr})
-		}
-		if err != nil {
-			return globalWorktreeCreatedMsg{Project: project, Plan: plan, Record: record, Outcomes: outcomes, Err: err}
-		}
-		outcomes = append(outcomes, persistGlobalIdentity(context.Background(), plan)...)
-		outcomes = append(outcomes, runGlobalSetup(context.Background(), plan)...)
-		return globalWorktreeCreatedMsg{Project: project, Plan: plan, Record: record, Outcomes: outcomes, Err: err}
+		return globalWorktreeCreatedMsg{Project: project, Plan: plan, Record: creation.Record, Outcomes: creation.Outcomes, Err: creation.Err}
 	}
 }
 
 func failedCreateOutcomes(outcomes []workspaceops.SetupOutcome, requiredOnly bool) []workspaceops.SetupOutcome {
-	var failed []workspaceops.SetupOutcome
-	for _, outcome := range outcomes {
-		if outcome.Err != nil && (!requiredOnly || outcome.Required) {
-			failed = append(failed, outcome)
-		}
-	}
-	return failed
+	return workspaceops.FailedSetupOutcomes(outcomes, requiredOnly)
 }
 
 func summarizeCreateOutcomes(outcomes []workspaceops.SetupOutcome) string {
@@ -820,7 +812,7 @@ func (m *Model) retryCreateSetup() tea.Cmd {
 	m.createError, m.createWarning = "", ""
 	m.createModal = nil
 	return func() tea.Msg {
-		outcomes := append(persistGlobalIdentity(context.Background(), plan), runGlobalSetup(context.Background(), plan)...)
+		outcomes := globalOperationService().SetupWorktree(context.Background(), plan, false)
 		return globalWorktreeCreatedMsg{Project: project, Plan: plan, Record: record, Outcomes: outcomes}
 	}
 }
@@ -830,7 +822,7 @@ func (m *Model) openCreatedWorktreeAnyway() tea.Cmd {
 	if !ok || m.createPlan == nil || m.createRecord == nil {
 		return nil
 	}
-	if err := removeGlobalJournal(m.createPlan); err != nil {
+	if err := globalOperationService().FinalizeWorktree(m.createPlan); err != nil {
 		m.createError = "finalize pending creation journal before opening: " + err.Error()
 		m.createModal = nil
 		m.setCreateError(m.createError)
@@ -866,20 +858,17 @@ func (m *Model) launchCreatedWorktree(project Project, plan *workspaceops.Worktr
 		if launchErr != nil {
 			return globalWorkspaceLaunchedMsg{Project: project, Plan: plan, Record: record, Err: launchErr}
 		}
-		result, err := launchGlobalSession(context.Background(), spec)
+		result, err := globalOperationService().LaunchWorktree(context.Background(), spec)
 		if err == nil && startAgent {
 			target := agentcontrol.Target{Host: "local", Project: projectKey(project), Session: spec.SessionName, Name: record.Name}
-			if !result.Reconnected {
-				_, err = waitGlobalShellReady(context.Background(), target, globalAgentStartTimeout)
-			}
-			if err != nil {
-				return globalWorkspaceLaunchedMsg{Project: project, Plan: plan, Record: record, Result: result, Err: fmt.Errorf("prepare agent shell: %w", err)}
-			}
-			started, startErr := startGlobalAgent(context.Background(), agentcontrol.StartRequest{
+			started, stage, startErr := (workspaceops.AgentLauncher{Wait: waitGlobalShellReady, StartAgent: startGlobalAgent}).Start(context.Background(), agentcontrol.StartRequest{
 				Target: target,
 				Kind:   plan.AgentType, Argv: launchArgv, Timeout: globalAgentStartTimeout,
-			})
+			}, !result.Reconnected, false)
 			if startErr != nil {
+				if stage == workspaceops.AgentWaitReady {
+					return globalWorkspaceLaunchedMsg{Project: project, Plan: plan, Record: record, Result: result, Err: fmt.Errorf("prepare agent shell: %w", startErr)}
+				}
 				err = fmt.Errorf("start agent: %w", startErr)
 			} else if started.Target.PaneID != "" {
 				result.PaneID = started.Target.PaneID
@@ -900,7 +889,7 @@ func (m *Model) deleteCreatedWorktree() tea.Cmd {
 	return func() tea.Msg {
 		err := deleteGlobalWorktree(context.Background(), plan, record)
 		if err == nil {
-			_ = removeGlobalJournal(plan)
+			_ = globalOperationService().FinalizeWorktree(plan)
 		}
 		return globalWorktreeDeletedMsg{Project: project, Err: err}
 	}
@@ -979,14 +968,14 @@ func (m *Model) submitCreateShell() tea.Cmd {
 			launchArgv, err = globalAgentLaunchArgv(agent, skip, command, extra)
 			if err == nil {
 				target := agentcontrol.Target{Host: "local", Project: projectKey(project), Session: session, Name: display}
-				_, err = waitGlobalShellReady(context.Background(), target, globalAgentStartTimeout)
-				if err != nil {
-					return globalShellCreatedMsg{Project: project, Tmux: session, Err: fmt.Errorf("prepare agent shell: %w", err)}
-				}
-				_, err = startGlobalAgent(context.Background(), agentcontrol.StartRequest{
+				var stage workspaceops.AgentStartStage
+				_, stage, err = (workspaceops.AgentLauncher{Wait: waitGlobalShellReady, StartAgent: startGlobalAgent}).Start(context.Background(), agentcontrol.StartRequest{
 					Target: target,
 					Kind:   agent, Argv: launchArgv, Timeout: globalAgentStartTimeout,
-				})
+				}, true, false)
+				if err != nil && stage == workspaceops.AgentWaitReady {
+					return globalShellCreatedMsg{Project: project, Tmux: session, Err: fmt.Errorf("prepare agent shell: %w", err)}
+				}
 			}
 		}
 		return globalShellCreatedMsg{Project: project, Tmux: session, Err: err}

@@ -20,8 +20,10 @@ import (
 	"github.com/marcus/sidecar/internal/agentcontrol"
 	"github.com/marcus/sidecar/internal/agentresolve"
 	"github.com/marcus/sidecar/internal/features"
+	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/shellliveness"
 	"github.com/marcus/sidecar/internal/shellstate"
+	"github.com/marcus/sidecar/internal/tmuxenv"
 	"github.com/marcus/sidecar/internal/tmuxserver"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
@@ -390,18 +392,19 @@ func (p *Plugin) applyManifestSync(sync shellManifestSyncMsg) tea.Cmd {
 		}
 	}
 
+	manifestSnapshot := p.shellManifest.Snapshot()
 	result := mergeShellState(shellMergeInput{
 		Existing:  p.shells,
-		Manifest:  p.shellManifest.Shells,
+		Manifest:  manifestSnapshot.Shells,
 		Running:   sync.Running,
-		Forgotten: tombstoneTmuxNames(p.shellManifest.Tombstones),
+		Forgotten: tombstoneTmuxNames(manifestSnapshot.Tombstones),
 		PaneID:    func(name string) string { return sync.PaneIDs[name] },
 		WorkDir:   p.ctx.WorkDir,
 		Namespace: sync.Namespace,
 	})
 
 	p.shells = result.Shells
-	p.rebuildNestedShells(p.shellManifest.Shells, func(name string) string { return sync.PaneIDs[name] })
+	p.rebuildNestedShells(manifestSnapshot.Shells, func(name string) string { return sync.PaneIDs[name] })
 
 	// Only shells that vanished from the live manifest *and* are not running
 	// here — or that were explicitly forgotten — reach Dropped.
@@ -527,9 +530,17 @@ type shellCreateOpts struct {
 	KeepSelection bool      // Leave the sidebar selection alone (see ShellCreatedMsg)
 }
 
-// createShell creates a new detached tmux session for a shell. The returned
-// command reports the outcome as a ShellCreatedMsg; the update handler owns all
-// state bookkeeping (manifest, selection, polling).
+// shellOperationService binds the durable adapter for the current project.
+func (p *Plugin) shellOperationService() workspaceops.Service {
+	svc := workspaceops.Service{}
+	if p.shellManifest != nil {
+		svc.Shells = p.shellManifest
+	}
+	return svc
+}
+
+// createShell creates a durable detached shell; the update handler projects
+// its outcome into selection and polling state.
 func (p *Plugin) createShell(opts shellCreateOpts) tea.Cmd {
 	if p.remoteBound() {
 		return p.refuseRemoteCreate("shell")
@@ -550,14 +561,20 @@ func (p *Plugin) createShell(opts shellCreateOpts) tea.Cmd {
 	// selected yet, which no longer matters: every terminal surface reserves the
 	// same single header row, so the preview size does not depend on the kind.
 	previewWidth, previewHeight := p.calculatePreviewDimensions()
-	spec := workspaceops.ShellSpec{
+	projectRoot := p.ctx.ProjectRoot
+	if projectRoot == "" {
+		projectRoot = p.ctx.WorkDir
+	}
+	spec := workspaceops.ManagedShellSpec{ShellSpec: workspaceops.ShellSpec{
 		WorkDir:     p.ctx.WorkDir,
 		SessionName: p.generateShellSessionName(),
 		DisplayName: displayName,
 		Cols:        previewWidth,
 		Rows:        previewHeight,
+	}, ProjectRoot: projectRoot, AgentType: string(opts.AgentType), SkipPerms: opts.SkipPerms,
 	}
 
+	svc := p.shellOperationService()
 	created := ShellCreatedMsg{
 		SessionName:   spec.SessionName,
 		DisplayName:   spec.DisplayName,
@@ -570,7 +587,7 @@ func (p *Plugin) createShell(opts shellCreateOpts) tea.Cmd {
 	// the shared operation, so a global caller runs the same code with its own
 	// project's answers rather than a second copy of this.
 	return func() tea.Msg {
-		result, err := workspaceops.CreateShell(spec)
+		result, err := svc.CreateShell(spec)
 		created.PaneID = result.PaneID
 		created.Err = err
 		if result.PaneID != "" {
@@ -743,14 +760,14 @@ func (p *Plugin) startAgentInShell(tmuxName string, agentType AgentType, skipPer
 			projectRoot = p.ctx.ProjectRoot
 		}
 		target := agentcontrol.Target{Host: "local", Project: workspaceinventory.CanonicalPath(projectRoot), Session: tmuxName, Name: name}
-		if _, err := waitWorkspaceShellReady(context.Background(), target, agentStartTimeout); err != nil {
-			return ShellAgentErrorMsg{TmuxName: tmuxName, Err: fmt.Errorf("prepare agent shell: %w", err)}
-		}
-		_, err := startWorkspaceAgent(context.Background(), agentcontrol.StartRequest{
+		_, stage, err := (workspaceops.AgentLauncher{Wait: waitWorkspaceShellReady, StartAgent: startWorkspaceAgent}).Start(context.Background(), agentcontrol.StartRequest{
 			Target: target,
 			Kind:   string(agentType), Argv: launchArgv, Timeout: agentStartTimeout,
-		})
+		}, true, false)
 		if err != nil {
+			if stage == workspaceops.AgentWaitReady {
+				return ShellAgentErrorMsg{TmuxName: tmuxName, Err: fmt.Errorf("prepare agent shell: %w", err)}
+			}
 			return ShellAgentErrorMsg{
 				TmuxName: tmuxName,
 				Err:      fmt.Errorf("failed to start agent: %w", err),
@@ -883,11 +900,16 @@ func (p *Plugin) killShellSessionByName(sessionName string) tea.Cmd {
 		return nil
 	}
 
-	return func() tea.Msg {
-		// Kill the session
-		cmd := exec.Command("tmux", "kill-session", "-t", sessionName)
-		_ = cmd.Run() // Ignore errors (session may already be dead)
+	projectRoot := p.ctx.ProjectRoot
+	if projectRoot == "" {
+		projectRoot = p.ctx.WorkDir
+	}
 
+	svc, namespace := p.shellOperationService(), tmuxenv.Namespace()
+	return func() tea.Msg {
+		if err := svc.DeleteShell(projectRoot, sessionName, namespace); err != nil {
+			return appmsg.ToastMsg{Message: err.Error(), Duration: 5 * time.Second, IsError: true}
+		}
 		// Clean up pane cache
 		globalPaneCache.remove(sessionName)
 

@@ -110,7 +110,7 @@ model {
 
     state = store 'Durable Shell Records' {
       description 'Persists shell and session metadata in shells.json across process lifetimes.'
-      metadata { uid 'workspaces.state' fractalColor '#89A579' evidence ['internal/shellstate/shellstate.go', 'internal/shellstate/session.go'] }
+      metadata { uid 'workspaces.state' fractalColor '#89A579' evidence ['internal/shellstate/shellstate.go', 'internal/shellstate/snapshot.go', 'internal/shellstate/session.go'] }
     }
 
     restore = component 'Cold Session Restore' {
@@ -119,8 +119,8 @@ model {
     }
 
     git_ops = component 'Worktree & Branch Ops' {
-      description 'Creates isolated git worktrees, manages branches, and handles merge workflows.'
-      metadata { uid 'workspaces.git_ops' fractalColor '#89A579' evidence ['internal/workspaceops/worktree.go', 'internal/workspacecreate/form.go'] }
+      description 'One state-free workspace operation service sequences confirmed creation, recovery journals, setup and launch, plus shell and worktree mutations, for CLI and both TUI surfaces.'
+      metadata { uid 'workspaces.git_ops' fractalColor '#89A579' evidence ['internal/workspaceops/service.go', 'internal/workspaceops/worktree.go', 'internal/workspacecreate/form.go'] }
     }
   }
 
@@ -511,6 +511,9 @@ model {
 
   workspaces.surface .calls panes.layout 'Applies pane split mutations' { metadata { uid 'ws-layout' } }
   workspaces.surface .calls workspaces.git_ops 'Creates branch worktrees' { metadata { uid 'ws-gitops' } }
+  cli.dispatch .calls workspaces.git_ops 'Runs shared workspace mutations' { metadata { uid 'cli-workspaceops' evidence ['internal/cli/create_worktree.go', 'internal/cli/create_shell.go'] } }
+  tui.overview .calls workspaces.git_ops 'Runs the same workspace mutations' { metadata { uid 'overview-workspaceops' evidence ['internal/overview/global_create.go', 'internal/overview/global_actions.go'] } }
+  workspaces.git_ops .writes workspaces.state 'Persists through shared shellstate writer' { metadata { uid 'workspaceops-shellstate' evidence ['internal/workspaceops/shell.go', 'internal/shellstate/snapshot.go'] } }
   workspaces.surface .writes workspaces.state 'Records live shell identities' { metadata { uid 'ws-state' } }
   workspaces.surface .renders terminal.preview 'Paints terminal pane rows' { metadata { uid 'ws-preview' } }
 

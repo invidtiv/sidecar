@@ -174,7 +174,7 @@ func runCreateWorktree(env Env, args []string) int {
 		workDir = dest.Origin.WorkDir
 	}
 
-	plan, err := workspaceops.ResolveWorktreePlan(ctx, workDir, proj.Path, positional[0], base, dirPrefix, setup)
+	plan, err := (workspaceops.Service{}).PlanWorktree(ctx, workDir, proj.Path, positional[0], base, dirPrefix, setup)
 	if err != nil {
 		cliErrln(env.Stderr, err)
 		// 5, not 2: an existing branch, an occupied path, a base ref this
@@ -222,29 +222,13 @@ func runCreateWorktree(env Env, args []string) int {
 	}
 	plan.OperationID = fmt.Sprintf("cli-%d", time.Now().UnixNano())
 
-	record, err := workspaceops.ExecuteWorktree(ctx, plan.RepoKey, plan)
-	if record == nil {
-		cliErrln(env.Stderr, err)
+	creation := (workspaceops.Service{}).CreateWorktree(ctx, plan, false)
+	record, outcomes := creation.Record, creation.Outcomes
+	if record == nil || creation.Err != nil {
+		cliErrln(env.Stderr, workspaceops.CreationError(creation))
 		return 1
 	}
-	outcomes := make([]workspaceops.SetupOutcome, 0)
-	if journalErr := workspaceops.PersistPendingCreation(ctx, plan, record); journalErr != nil {
-		outcomes = append(outcomes, workspaceops.SetupOutcome{Kind: "journal", Action: "persist recovery", Required: true, Err: journalErr})
-	}
-	if err != nil {
-		cliErrln(env.Stderr, err)
-		return 1
-	}
-	outcomes = append(outcomes, workspaceops.PersistWorktreeIdentity(ctx, plan)...)
-	outcomes = append(outcomes, workspaceops.RunConfiguredSetup(ctx, plan)...)
-
-	requiredFailed := setupOutcomesFailed(outcomes, true)
-	if len(requiredFailed) == 0 {
-		if journalErr := workspaceops.RemovePendingCreation(plan); journalErr != nil {
-			outcomes = append(outcomes, workspaceops.SetupOutcome{Kind: "journal", Action: "finalize pending creation", Required: true, Err: journalErr})
-			requiredFailed = setupOutcomesFailed(outcomes, true)
-		}
-	}
+	requiredFailed := workspaceops.FailedSetupOutcomes(outcomes, true)
 
 	session := workspaceops.WorktreeSessionName(record.Path, record.Name)
 	var launchErr error
@@ -254,7 +238,7 @@ func runCreateWorktree(env Env, args []string) int {
 		if runCmd != "" {
 			command = runCmd
 		}
-		_, launchErr = workspaceops.LaunchWorktreeSession(ctx, workspaceops.AgentLaunchSpec{
+		_, launchErr = (workspaceops.Service{}).LaunchWorktree(ctx, workspaceops.AgentLaunchSpec{
 			SessionName:  session,
 			WorkDir:      record.Path,
 			DisplayName:  record.Name,
@@ -410,16 +394,6 @@ func encodeSetupOutcomes(outcomes []workspaceops.SetupOutcome) []createSetupOutc
 		out = append(out, item)
 	}
 	return out
-}
-
-func setupOutcomesFailed(outcomes []workspaceops.SetupOutcome, requiredOnly bool) []workspaceops.SetupOutcome {
-	var failed []workspaceops.SetupOutcome
-	for _, outcome := range outcomes {
-		if outcome.Err != nil && (!requiredOnly || outcome.Required) {
-			failed = append(failed, outcome)
-		}
-	}
-	return failed
 }
 
 func summarizeSetupOutcomes(outcomes []workspaceops.SetupOutcome) string {
