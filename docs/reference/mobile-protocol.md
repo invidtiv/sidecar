@@ -46,3 +46,7 @@ Reconnect after backgrounding starts a fresh SSH exec and API process. It does n
 Outbound responses use a bounded queue. If the peer stops reading or the writer fails, the service enters a terminal state, revokes attachments, and exits; it does not accept later mutations after a missing acknowledgment.
 
 The canonical synthetic terminal transcript and catalog query/response corpus, with their SHA-256 manifest, live under `testdata/mobile-protocol/v0`. `scripts/mobile-service-proof.sh` builds a temporary binary, creates a private tmux socket and isolated Sidecar state/config, and exercises the terminal stream locally or through `ssh -T aerie.local` without changing the installed Sidecar binary or default tmux server.
+
+## Catalog and attention events over SSH
+
+Native clients can open a separate SSH exec without a PTY running `sidecar api events --stdio`. It bridges the running API service's Local events socket and writes the same `api_version`, `type` and `seq` envelopes as [the UI API events stream](ui-api.md#events-stream), one per JSONL line. It requires the always-on API service on that host and reports how to start it when unavailable. It does not change the terminal v0 handshake, envelopes, operation sequences or attachment lifecycle. Each reconnect starts a new event sequence and catalog baseline; no old attention is replayed. Catalog filters match `sidecar mobile sessions --json`.

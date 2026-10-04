@@ -100,13 +100,16 @@ type Server struct {
 	bound     []boundListener
 	failed    chan error
 
-	ctx      context.Context
-	cancel   context.CancelFunc
-	streamMu sync.Mutex
-	closing  bool
-	streams  sync.WaitGroup
-	endpoint Endpoint
-	shutdown sync.Once
+	ctx           context.Context
+	cancel        context.CancelFunc
+	streamMu      sync.Mutex
+	closing       bool
+	streams       sync.WaitGroup
+	endpoint      Endpoint
+	shutdown      sync.Once
+	eventOnce     sync.Once
+	eventErr      error
+	catalogEvents eventSignals
 }
 
 // ListenerInfo describes one bound listener in status.
@@ -360,7 +363,7 @@ func (s *Server) hello() map[string]any {
 		"api_version":    APIVersion,
 		"api_instance":   s.instance,
 		"server_version": s.opts.Version,
-		"capabilities":   []string{"sessions", "status", "terminal", "ws_tickets"},
+		"capabilities":   []string{"sessions", "status", "terminal", "ws_tickets", "events"},
 		"terminal":       map[string]any{"protocol": "mobile", "version": mobileproto.Version},
 	}
 }

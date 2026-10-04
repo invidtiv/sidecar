@@ -2,7 +2,7 @@
 
 `sidecar api serve` exposes Sidecar's Sessions and terminals to UIs that are not the TUI: the reference web UI in `~/code/sidecar-ui`, embedded components in other apps, and agents and scripts. This document is the wire contract. The plan and the reasoning behind it are in [the Sidecar UI API plan](../plans/active/sidecar-ui-api.md).
 
-v0 is the U0 steel thread. It serves the Sessions catalog and the existing terminal protocol over HTTP and WebSocket, with the transports, guards and pairing that every later version keeps. Later versions add the events stream, workspaces, operations and content. v0 changes in place while the API is private, and fixtures and clients move with it.
+v0 is the U0 steel thread. It serves the Sessions catalog and the existing terminal protocol over HTTP and WebSocket, with the transports, guards and pairing that every later version keeps. U1 adds catalog and attention events. Later versions add workspaces, operations and content. v0 changes in place while the API is private, and fixtures and clients move with it.
 
 ## Process and discovery
 
@@ -58,7 +58,7 @@ Recorded on aerie on 2026-10-03: the standalone Tailscale build 1.102.4 (`io.tai
 
 ### Per-client limits
 
-A client is one credential holder: a browser session, a paired origin, or a tailnet login. Each may hold at most 16 open terminal WebSockets (the 17th closes with `4429` and a reason) and 16 unredeemed tickets (the 17th request gets `429 too_many_outstanding`). Redeeming or expiring a ticket frees its slot. Across all clients there are at most 256 unredeemed tickets and 64 unused pairing codes. Local callers are trusted like the tmux socket and have no terminal limit.
+A client is one credential holder: a browser session, a paired origin, or a tailnet login. Each may hold at most 16 open events WebSockets and, separately, 16 open terminal WebSockets (the 17th closes with `4429` and a reason) and 16 unredeemed tickets (the 17th request gets `429 too_many_outstanding`). Redeeming or expiring a ticket frees its slot. Across all clients there are at most 256 unredeemed tickets and 64 unused pairing codes. Local callers are trusted like the tmux socket and have no terminal limit.
 
 ## Pairing
 
@@ -70,7 +70,7 @@ A client is one credential holder: a browser session, a paired origin, or a tail
 4. The page's script reads `code` and `next` from the fragment, removes them from the address bar and history, and sends `POST /api/v0/pairing/exchange`.
 5. The exchange returns a session token. The page stores it in `localStorage` under the key `sidecar.session` and navigates to `next`, after checking that `new URL(next, location.origin)` is still on this origin.
 
-`localStorage` is scoped to scheme, host and port, so a page served on any other port of `127.0.0.1`, including another local user's, cannot read the token. A UI served by `serve` reads `localStorage.getItem("sidecar.session")` and sends it as `Authorization: Bearer` on HTTP calls, and spends it on a ticket for each terminal WebSocket.
+`localStorage` is scoped to scheme, host and port, so a page served on any other port of `127.0.0.1`, including another local user's, cannot read the token. A UI served by `serve` reads `localStorage.getItem("sidecar.session")` and sends it as `Authorization: Bearer` on HTTP calls, and spends it on a ticket for each terminal or events WebSocket.
 
 `POST /api/v0/pairing/exchange` is served only on the Browser listener. It needs no credential, because the code is one, but it is guarded like any mutation (`Content-Type: application/json`, `X-Sidecar-Request: 1`), and its `Origin` must be one of the listener's own origins. A paired origin gets `403 origin_refused`; it has its own token.
 
@@ -117,14 +117,15 @@ All JSON, encoded exactly as the CLI's `--json` output: one object and a trailin
 | `pairing_code_invalid` | 401 | An unknown, used or expired pairing code. |
 | `origin_not_found` | 404 | Revoking an origin that is not paired. |
 | `too_many_outstanding` | 429 | Over a limit: 64 unused pairing codes, 256 unredeemed tickets, or 16 unredeemed tickets for this client. |
-| `upgrade_required` | 426 | `GET /api/v0/terminal` without a WebSocket upgrade. |
+| `upgrade_required` | 426 | `GET /api/v0/terminal` or `GET /api/v0/events` without a WebSocket upgrade. |
 | `backend` | 503 | The catalog failed. Other catalog refusals keep their protocol code, such as `overflow`. |
 
 | Route | Listener | Returns |
 | --- | --- | --- |
-| `GET /api/v0/hello` | any | `{api_version, api_instance, server_version, capabilities: ["sessions", "status", "terminal", "ws_tickets"], terminal: {protocol: "mobile", version: 0}}` |
+| `GET /api/v0/hello` | any | `{api_version, api_instance, server_version, capabilities: ["sessions", "status", "terminal", "ws_tickets", "events"], terminal: {protocol: "mobile", version: 0}}` |
 | `GET /api/v0/sessions` | any | The Sessions catalog: the same `mobileproto.CatalogSnapshot` JSON as `sidecar mobile sessions --json`. Query parameters map to `catalog_query`: `sort`, `search`, repeatable `host`, `provider`, `state`, and `show_idle_sessions=true\|false`. It is served by the same code path as the CLI. Any other parameter, or a repeated `sort`, `search` or `show_idle_sessions`, gets `400 invalid_request`. |
-| `GET /api/v0/status` | any | `{api_version, api_instance, server_version, pid, started_at, listeners: [{name, network, address, host?}], clients: [{id, kind, listener, auth, origin?, login?, since}], terminals: [{client_id, owner_host_id?, workspace_id?, session?, pane?, display_name?, control}]}`. A client is one open terminal WebSocket, and `auth` is `local`, `session`, `bearer`, `ticket` or `tailnet`. `terminals` lists the clients with an open attachment, and `control` is observed from the stream's own responses. `sidecar api status --json` prints this document byte for byte. |
+| `GET /api/v0/events` | any | The events WebSocket described below; query parameters match `sessions`, plus a single optional `ticket`. |
+| `GET /api/v0/status` | any | `{api_version, api_instance, server_version, pid, started_at, listeners: [{name, network, address, host?}], clients: [{id, kind, listener, auth, origin?, login?, since}], terminals: [{client_id, owner_host_id?, workspace_id?, session?, pane?, display_name?, control}]}`. A client is one open terminal or events WebSocket, and `auth` is `local`, `session`, `bearer`, `ticket` or `tailnet`. `terminals` lists the clients with an open attachment, and `control` is observed from the stream's own responses. `sidecar api status --json` prints this document byte for byte. |
 | `POST /api/v0/ws-tickets` | Browser, Tailnet | Body `{}` or empty. Returns `{ticket, expires_at}`. At most 16 unredeemed per client. |
 | `POST /api/v0/pairing/codes` | Local only | Body `{next?}`, default `/`. Returns `{code, url, expires_at}`, where `url` is `http://127.0.0.1:<port>/pair#code=…&next=…`. |
 | `POST /api/v0/origins` | Local only | Body `{origin, scopes?}`. The origin is normalized (lowercase, default port dropped) and must be only `scheme://host[:port]`. Returns `{origin, token, scopes}`. The token is shown only once. |
@@ -155,6 +156,31 @@ All JSON, encoded exactly as the CLI's `--json` output: one object and a trailin
 
 v0 inherits the mobile service's bounded outbound queue, so a peer that stops reading ends the stream. U0 measures this, and v1 coalesces frames before the queue.
 
+## Events stream
+
+`GET /api/v0/events` upgrades to a server-to-client WebSocket on every listener. Authentication, Host and Origin guards, tickets, keepalive and close codes are the same as the terminal stream. A browser spends a fresh ticket for this socket; tickets remain single-use across both stream routes. A non-browser client can send a bearer token without Origin. Tailnet upgrades still require the allowed Origin and login. This route accepts only GET. After authentication, an invalid query closes with `4400`. Client data messages are refused with `4400`; clients only read and answer WebSocket pings.
+
+Every text frame is one `uiapi.EventMessage` JSON object with `api_version: 0`, `type`, and `seq`. `hello` is first at sequence 1. Sequence increases contiguously on delivery within this connection and starts again on reconnect. There is no replay cursor: reconnect establishes a fresh catalog and terminal baseline, without replaying old attention.
+
+| Type | Payload | When |
+| --- | --- | --- |
+| `hello` | `api_instance`, `server_version`, `capabilities: ["catalog", "attention", "terminals", "shutdown"]` | First message. |
+| `catalog` | `catalog: CatalogSnapshot` | Once on connection, then when the full authorized catalog generation changes. Its `query` and rows use the same path as `sessions`. |
+| `attention` | `attention: {kind: "needs_input"\|"finished", catalog_id, title, time}` | A previously observed live row gains attention, or changes from `working` to `done`. `time` is the server's UTC observation time; `title` is the human session name. Initial, newly appearing and stale rows do not replay alerts. Alerts use the connection's catalog query. |
+| `terminals` | `terminals: [{client_id, owner_host_id?, session, pane, display_name?, holder: {kind, label}\|null}]` | Initial baseline, attachment open/close/disconnect, or an observed holder change. Empty is `[]`. Only attachments belonging to the same credential holder are included; Local connections share the trusted local credential. |
+| `error` | `error: {code, message}` | Catalog collection failure (`backend`), or attention pending-bound overflow (`overflow`). The connection stays open; clients can reconcile through `sessions` and reconnect. |
+| `shutdown` | `reason` | Before orderly close `4409` when the server stops. Delivery to an unresponsive peer is best-effort, bounded by the socket write deadline. |
+
+Holder kinds in v0 are `tui` (for example `TUI on aerie`), `api` (`API terminal`), and `mobile` (`Mobile app`). A missing or unreadable holder is null. No lease token, control epoch, attachment handle or holder instance id appears here. v0 cannot identify which device or browser tab owns an API lease; presence can add those labels later through the same holder adapter.
+
+One in-process hostserve observer supplies local invalidations, reusing its shells.json watchers and the same agent activity/status collector desktop Sessions uses. Remote changes come from the existing host registry's snapshot/diff updates, including health and incarnation changes. Observation clocks and terminal preview bytes do not invalidate the catalog. Configuration changes refresh the observer's project set. Catalog invalidations coalesce over 250 ms; unchanged generations are never resent. Agent transitions retain hostserve's adaptive 5/10/30-second status cadence, and worktree inventory and degraded watches retain its 60-second reconciliation. There is no fast full-catalog polling loop. Holder observation checks only open attachment leases once per second and after attachment changes; it never captures terminal output or collects a catalog.
+
+Each connection has bounded pending state: latest catalog, latest terminal snapshot, one error, and at most 4,096 attention keys (catalog row id plus attention kind), with a 1 MiB total encoded attention bound. Repeated alerts for a key retain the latest observation. Catalog and terminal snapshots coalesce while a socket is slow; they do not abort on queue overflow. A changing row population that exceeds the attention bound emits an explicit `overflow` error, never silently discards an alert. Sequence is assigned at delivery, so coalescing creates no sequence gaps. A peer whose network write exceeds 15 seconds is disconnected.
+
+`sidecar api events --stdio` bridges this exact Local event stream to JSONL for agents and native SSH clients. The API service must already be running on the SSH target. Run it without a PTY; ending the SSH exec or closing stdout ends only this event connection. Terminal SSH streams remain separate.
+
+The typed transcript is `testdata/ui-api/v0/events-stream.jsonl`; the U1 schema/fixture lane includes it in the full fixture manifest.
+
 ## CLI
 
 | Command | Does |
@@ -162,6 +188,7 @@ v0 inherits the mobile service's bounded outbound queue, so a peer that stops re
 | `sidecar api serve [--port N] [--ui DIR] [--tailnet] [--tailnet-port N] [--json]` | Runs the server in the foreground until SIGINT or SIGTERM. `--json` writes the endpoint object as one line once every listener is bound. |
 | `sidecar api open [--print] [--path P]` | Pairs this machine's browser and opens the UI, or prints the `/pair#code=…` URL. |
 | `sidecar api pair --origin URL` / `--list` / `--revoke URL` | Manages paired origins. `--json` gives structured output. |
+| `sidecar api events --stdio [--sort MODE] [--search TEXT] [--host ID] [--provider ID] [--state STATE] [--show-idle-sessions true\|false]` | Streams events as JSONL over the Local socket until disconnect or shutdown. Repeat host, provider and state filters. |
 | `sidecar api status [--json]` | Reads the status route over the Local socket. Exits non-zero with a clear message when no server is running. |
 
 `sidecar api spec` and `sidecar api service install|uninstall|status` arrive in U1.
@@ -170,4 +197,4 @@ v0 inherits the mobile service's bounded outbound queue, so a peer that stops re
 
 Live proofs follow the `scripts/tmux-drive.sh` isolation rules: a private tmux socket, `unset TMUX TMUX_PANE`, an isolated `XDG_STATE_HOME`, a `-config` temp path, and `SIDECAR_ISOLATED_STATE=1`. The Unix sockets and `endpoint.json` live under the isolated state tree, so a proof can never reach the user's real server. Unix socket paths are limited to 103 bytes, so a proof keeps its state tree short, under `/tmp`.
 
-`scripts/ui-api-proof.sh` is the v0 proof. It builds a temporary binary, creates one managed shell on a private tmux server, runs `sidecar api serve`, and checks the Local routes with `curl --unix-socket`, the Browser guards, `sidecar api open` pairing, origin pairing with a ticket, and one terminal round trip over the WebSocket through `internal/tools/uiapiproof`. `TestAPITerminalRoundTripAgainstLocalOwner` in `internal/cli` covers the same terminal sequence in process.
+`scripts/ui-api-proof.sh` is the v0 proof. It builds a temporary binary, creates one managed shell on a private tmux server, runs `sidecar api serve`, and checks the Local routes with `curl --unix-socket`, the Browser guards, `sidecar api open` pairing, origin pairing with a ticket, and terminal round trips over the WebSocket through `internal/tools/uiapiproof`. It also runs `internal/tools/uieventsproof`: a paired-origin events ticket, hello and catalog ordering, a CLI shell rename pushed through the manifest watch, attachment and holder changes during terminal proofs, and shutdown before close 4409. The Local JSONL bridge is checked separately. `TestAPITerminalRoundTripAgainstLocalOwner` in `internal/cli` covers the same terminal sequence in process.

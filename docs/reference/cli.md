@@ -881,6 +881,40 @@ The UI API exposes Sessions and live terminals over HTTP and WebSocket so a web 
 Usage: sidecar api <command>
 ```
 
+### `sidecar api events`
+
+Stream Sessions and attention as JSONL
+
+Stream the running UI API's events over its Local socket. One JSON object per line, with hello first, then catalog, attention, terminal attachment changes and shutdown. Use SSH without a PTY for native clients. The API server must already be running; this command never starts a service or tmux.
+
+```
+Usage: sidecar api events --stdio [--sort MODE] [--search TEXT] [--host ID] [--provider ID] [--state STATE] [--show-idle-sessions true|false]
+```
+
+**Options:**
+
+- `--stdio`: Write the event stream as JSONL until disconnect or shutdown
+- `--sort MODE`: activity, project, recent or name
+- `--search TEXT`: Search Sessions
+- `--host ID`: Filter host (repeatable)
+- `--provider ID`: Filter provider (repeatable)
+- `--state STATE`: Filter state (repeatable)
+- `--show-idle-sessions BOOL`: Include No Session rows
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: stream stopped normally
+- `1`: API unavailable or stream failed
+- `2`: usage error
+
+**Examples:**
+
+```bash
+sidecar api events --stdio
+sidecar api events --stdio --sort activity --show-idle-sessions false
+```
+
 ### `sidecar api open`
 
 Pair this machine's browser and open the UI

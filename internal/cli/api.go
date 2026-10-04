@@ -84,7 +84,7 @@ func apiCommand() *Command {
 	}
 	return &Command{Name: "api", Summary: "Serve Sidecar's UI API for web and embedded clients", Usage: "sidecar api <command>",
 		Long: "The UI API exposes Sessions and live terminals over HTTP and WebSocket so a web UI, an embedding app, or an agent can use them. The wire contract is docs/reference/ui-api.md.",
-		Sub:  []*Command{open, pair, serve, status}, Run: runAPIRoot}
+		Sub:  []*Command{apiEventsCommand(), open, pair, serve, status}, Run: runAPIRoot}
 }
 
 func runAPIRoot(env Env, args []string) int {

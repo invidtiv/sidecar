@@ -305,6 +305,12 @@ func catalogResolveState(err error) (string, string) {
 	return state, code
 }
 
+// ValidateCatalogQuery checks a query without collecting a catalog.
+func ValidateCatalogQuery(query mobileproto.CatalogQuery) error {
+	_, _, err := normalizeCatalogQuery(query)
+	return err
+}
+
 func normalizeCatalogQuery(query mobileproto.CatalogQuery) (mobileproto.CatalogQuery, workspacelist.Sort, error) {
 	if len(query.Hosts) > mobileproto.MaxCatalogFilters || len(query.Providers) > mobileproto.MaxCatalogFilters || len(query.States) > mobileproto.MaxCatalogFilters {
 		return query, 0, &ResolveError{Code: mobileproto.ErrorInvalidRequest, Message: "catalog query exceeds protocol bounds"}

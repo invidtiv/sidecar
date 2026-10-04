@@ -74,8 +74,8 @@ type listenerHandler struct {
 
 func (h *listenerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h.kind == ListenerLocal {
-		if r.URL.Path == terminalPath {
-			h.serveTerminal(w, r)
+		if r.URL.Path == terminalPath || r.URL.Path == eventsPath {
+			h.serveStream(w, r)
 			return
 		}
 		h.dispatch(w, r, caller{listener: ListenerLocal, auth: "local"})
@@ -85,8 +85,8 @@ func (h *listenerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMisdirectedRequest, CodeHostRefused, fmt.Sprintf("This server does not answer to host %q; use %s.", r.Host, h.canonicalBase()))
 		return
 	}
-	if r.URL.Path == terminalPath {
-		h.serveTerminal(w, r)
+	if r.URL.Path == terminalPath || r.URL.Path == eventsPath {
+		h.serveStream(w, r)
 		return
 	}
 	origin := r.Header.Get("Origin")

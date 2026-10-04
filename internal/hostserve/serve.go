@@ -120,6 +120,10 @@ type Project struct {
 // injectable ones exist so tests can drive the whole loop with no tmux, no
 // filesystem, and a fake clock.
 type Options struct {
+	// OnSnapshot observes each completed inventory/status cycle in-process.
+	// Consumers may invalidate a catalog without starting another inventory loop.
+	// It must return promptly and must not mutate the snapshot.
+	OnSnapshot func(hostproto.Snapshot)
 	// Out receives the JSONL stream. In production this is os.Stdout, which is
 	// the ssh pipe.
 	Out io.Writer
@@ -464,6 +468,9 @@ func Serve(ctx context.Context, opts Options) error {
 			snapshot.Projects = append(snapshot.Projects, projectMessage(result, opts.HostID, previews, &previewBudget))
 		}
 		refresh.CommitTrackers()
+		if opts.OnSnapshot != nil {
+			opts.OnSnapshot(snapshot)
+		}
 
 		// The reap runs on this cycle's evidence but changes nothing in this
 		// cycle's snapshot. That is deliberate: what the viewer sees is what the
