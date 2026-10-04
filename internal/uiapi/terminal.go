@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -36,7 +37,13 @@ const (
 // misses the deadline. A half-open socket (a laptop that slept, a proxy that
 // lost the peer) then ends as EOF and releases its lease, instead of holding
 // a terminal until the next write happens to fail.
-func (s *Server) keepalive(ctx context.Context, conn *websocket.Conn) {
+//
+// A pong is only seen while pumpRequests is reading the socket. When the
+// pump is blocked handing a request to a backend that has stopped reading,
+// a missed pong is the server's stall, not the peer's, so it is excused. A
+// half-open peer sends nothing, so it never blocks the pump and never earns
+// the excuse.
+func (s *Server) keepalive(ctx context.Context, conn *websocket.Conn, inbound *inboundGate) {
 	interval, timeout := s.opts.KeepaliveInterval, s.opts.KeepaliveTimeout
 	if interval <= 0 {
 		interval = defaultKeepaliveInterval
@@ -51,19 +58,58 @@ func (s *Server) keepalive(ctx context.Context, conn *websocket.Conn) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			if inbound.blocked() {
+				// Nothing is reading the socket, so no pong could be seen.
+				continue
+			}
+			sent := inbound.now()
 			// Not derived from ctx: canceling a write context closes the socket,
 			// which would pre-empt the 4409 close on shutdown.
 			pingCtx, cancel := context.WithTimeout(context.Background(), timeout)
 			err := conn.Ping(pingCtx)
 			cancel()
 			if err != nil {
-				if ctx.Err() == nil {
-					_ = conn.CloseNow()
+				if ctx.Err() != nil {
+					return
 				}
+				if errors.Is(err, context.DeadlineExceeded) && inbound.blockedSince(sent) {
+					continue
+				}
+				_ = conn.CloseNow()
 				return
 			}
 		}
 	}
+}
+
+// inboundGate records when pumpRequests is blocked writing a request to the
+// backend. The backend handles requests one at a time, so a slow one can
+// stop it reading for longer than the pong deadline.
+type inboundGate struct {
+	origin   time.Time
+	writing  atomic.Bool
+	finished atomic.Int64 // when the last write finished, as an offset from origin
+}
+
+func newInboundGate() *inboundGate { return &inboundGate{origin: time.Now()} }
+
+// now is a monotonic offset from the gate's creation.
+func (g *inboundGate) now() time.Duration { return time.Since(g.origin) }
+
+func (g *inboundGate) begin() { g.writing.Store(true) }
+
+func (g *inboundGate) end() {
+	g.finished.Store(int64(g.now()))
+	g.writing.Store(false)
+}
+
+func (g *inboundGate) blocked() bool { return g.writing.Load() }
+
+// blockedSince reports whether the pump was blocked at any point since t: it
+// is blocked now, or a write that held it finished after t, so a pong may
+// have waited unread behind it.
+func (g *inboundGate) blockedSince(t time.Duration) bool {
+	return g.writing.Load() || time.Duration(g.finished.Load()) >= t
 }
 
 const (
@@ -168,7 +214,8 @@ func (s *Server) runTerminal(conn *websocket.Conn, client *trackedClient) {
 
 	ctx, cancel := context.WithCancel(s.ctx)
 	defer cancel()
-	go s.keepalive(ctx, conn)
+	inbound := newInboundGate()
+	go s.keepalive(ctx, conn, inbound)
 	requests, requestWriter := io.Pipe()
 	responseReader, responses := io.Pipe()
 
@@ -182,7 +229,7 @@ func (s *Server) runTerminal(conn *websocket.Conn, client *trackedClient) {
 	writerDone := make(chan error, 1)
 	go func() { writerDone <- pumpResponses(conn, responseReader, client) }()
 	readerDone := make(chan inboundResult, 1)
-	go func() { readerDone <- pumpRequests(conn, requestWriter) }()
+	go func() { readerDone <- pumpRequests(conn, requestWriter, inbound) }()
 
 	waitBackend := func() (error, bool) {
 		timer := time.NewTimer(terminalStopTimeout)
@@ -256,7 +303,7 @@ func closeReason(reason string) string {
 // pumpRequests forwards each text message as one request line. It reads
 // without a context: canceling a read context would close the socket before
 // the close code could be sent.
-func pumpRequests(conn *websocket.Conn, requests *io.PipeWriter) inboundResult {
+func pumpRequests(conn *websocket.Conn, requests *io.PipeWriter, inbound *inboundGate) inboundResult {
 	for {
 		kind, data, err := conn.Read(context.Background())
 		if err != nil {
@@ -268,7 +315,10 @@ func pumpRequests(conn *websocket.Conn, requests *io.PipeWriter) inboundResult {
 		if len(data) == 0 || bytes.ContainsAny(data, "\r\n") {
 			return inboundResult{violation: "Send exactly one JSON envelope per text message, without newlines."}
 		}
-		if _, err := requests.Write(append(data, '\n')); err != nil {
+		inbound.begin()
+		_, err = requests.Write(append(data, '\n'))
+		inbound.end()
+		if err != nil {
 			return inboundResult{err: err}
 		}
 	}

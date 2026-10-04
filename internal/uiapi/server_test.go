@@ -55,11 +55,13 @@ type fakeBackend struct {
 	err       error
 	eof       chan struct{}
 	ctxEnded  chan struct{}
+	stalled   chan struct{} // a stall request has stopped the backend reading
+	release   chan struct{} // closing it ends every stall
 	terminals int
 }
 
 func newFakeBackend() *fakeBackend {
-	return &fakeBackend{eof: make(chan struct{}, 8), ctxEnded: make(chan struct{}, 8),
+	return &fakeBackend{eof: make(chan struct{}, 8), ctxEnded: make(chan struct{}, 8), stalled: make(chan struct{}, 8), release: make(chan struct{}),
 		snapshot: mobileproto.CatalogSnapshot{HubID: "hub-<test>&", Generation: "g1"}}
 }
 
@@ -95,6 +97,16 @@ func (b *fakeBackend) ServeTerminal(ctx context.Context, input io.Reader, output
 			switch line {
 			case `{"cmd":"end"}`:
 				return nil
+			case `{"cmd":"stall"}`:
+				// Stop reading requests, as a service busy with one does.
+				notify(b.stalled)
+				select {
+				case <-b.release:
+				case <-ctx.Done():
+					notify(b.ctxEnded)
+					return ctx.Err()
+				}
+				continue
 			case `{"cmd":"fail"}`:
 				return errors.New("backend exploded")
 			case `{"cmd":"protocol"}`:

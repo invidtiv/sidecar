@@ -152,3 +152,94 @@ func TestTicketsPerClientAreCapped(t *testing.T) {
 	response, data = take(app, token)
 	expect(t, response, data, http.StatusOK, "")
 }
+
+// stallPump makes the backend stop reading, then queues two more requests:
+// the first fills the fake backend's reader, and the second blocks
+// pumpRequests on the pipe write, so nothing reads the socket.
+func stallPump(t *testing.T, h *harness, conn *websocket.Conn) {
+	t.Helper()
+	writeText(t, conn, `{"cmd":"stall"}`)
+	select {
+	case <-h.backend.stalled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("backend never stalled")
+	}
+	writeText(t, conn, `{"queued":1}`)
+	writeText(t, conn, `{"queued":2}`)
+}
+
+// A backend that stops reading blocks the inbound pump, and with it every
+// pong. A peer that is answering must not be dropped for the server's stall.
+func TestKeepaliveExcusesAPumpBlockedOnTheBackend(t *testing.T) {
+	h := newHarness(t, func(o *Options) {
+		o.KeepaliveInterval = 40 * time.Millisecond
+		o.KeepaliveTimeout = 80 * time.Millisecond
+	})
+	conn := h.dialLocal(t)
+	defer func() { _ = conn.CloseNow() }()
+	messages := make(chan string, 8)
+	go func() {
+		for {
+			_, data, err := conn.Read(context.Background())
+			if err != nil {
+				close(messages)
+				return
+			}
+			messages <- string(data)
+		}
+	}()
+	stallPump(t, h, conn)
+	time.Sleep(600 * time.Millisecond) // many intervals and pong deadlines
+	select {
+	case <-h.backend.eof:
+		t.Fatal("a peer answering pings was dropped while the backend stalled")
+	default:
+	}
+	close(h.backend.release)
+	for _, want := range []string{`{"queued":1}`, `{"queued":2}`} {
+		select {
+		case got, ok := <-messages:
+			if !ok || got != want {
+				t.Fatalf("after the stall got %q (%v), want %q", got, ok, want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("no %s after the stall", want)
+		}
+	}
+	time.Sleep(200 * time.Millisecond) // pings resume and are answered
+	writeText(t, conn, `{"alive":true}`)
+	select {
+	case got, ok := <-messages:
+		if !ok || got != `{"alive":true}` {
+			t.Fatalf("echo after stall = %q, %v", got, ok)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no echo after the stall")
+	}
+}
+
+// The excuse lasts only while the pump is blocked. A half-open peer whose
+// requests happened to stall the backend is still dropped once it clears.
+func TestKeepaliveStillDropsAHalfOpenPeerAfterAStall(t *testing.T) {
+	h := newHarness(t, func(o *Options) {
+		o.KeepaliveInterval = 40 * time.Millisecond
+		o.KeepaliveTimeout = 80 * time.Millisecond
+	})
+	silent := h.dialLocal(t) // never reads, so never answers a ping
+	defer func() { _ = silent.CloseNow() }()
+	stallPump(t, h, silent)
+	time.Sleep(300 * time.Millisecond)
+	select {
+	case <-h.backend.eof:
+		t.Fatal("dropped while the pump was blocked; the stall should be excused")
+	default:
+	}
+	close(h.backend.release)
+	deadline := time.Now().Add(5 * time.Second)
+	for len(h.s.status().Clients) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("a half-open peer kept its stream after the stall cleared")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}

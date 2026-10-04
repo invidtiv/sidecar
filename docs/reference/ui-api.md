@@ -139,7 +139,7 @@ All JSON, encoded exactly as the CLI's `--json` output: one object and a trailin
 
 - Each WebSocket **text** message carries exactly one protocol JSON envelope, with no trailing newline. The 8 MiB line bound applies per message. A binary message, an empty message, or one that contains a CR or LF closes the connection with code `4400`. A message over the bound closes with `1009`.
 - Closing the socket is end-of-stream. The server releases that stream's lease exactly as it does on stdin EOF.
-- The server pings every 30 seconds. A peer whose pong does not arrive within 15 seconds is dropped, which is end-of-stream too, so a half-open socket (a laptop that slept, a proxy that lost the peer) cannot hold a terminal or its lease. Browsers answer pings automatically; other clients must keep reading.
+- The server pings every 30 seconds. A peer whose pong does not arrive within 15 seconds is dropped, which is end-of-stream too, so a half-open socket (a laptop that slept, a proxy that lost the peer) cannot hold a terminal or its lease. Browsers answer pings automatically; other clients must keep reading. The server reads a pong only while it is reading the socket, and the protocol service handles requests one at a time, so while the server's own inbound side is blocked handing a request to a busy service it skips the ping and excuses a missed pong. A half-open peer sends nothing, so it never blocks that side and is still dropped at the next missed pong.
 - The `Host` guard answers `421` before the upgrade. Every other refusal happens after the upgrade, as a close code, because a browser cannot read the status of a failed handshake.
 - Close codes:
   - `1000`: the protocol stream ended normally.
