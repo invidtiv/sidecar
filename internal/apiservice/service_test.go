@@ -25,7 +25,7 @@ func (f *fakeRunner) run(_ context.Context, command string, args ...string) ([]b
 	}
 	if len(args) > 0 && args[0] == "print" {
 		if !f.loaded {
-			return []byte("Could not find service com.marcus.sidecar.api in domain for user gui: 501"), errors.New("exit 113")
+			return []byte("Could not find service com.haplab.sidecar.api in domain for user gui: 501"), errors.New("exit 113")
 		}
 		return []byte("state = running\n pid = 42\n last exit code = 7\n"), nil
 	}

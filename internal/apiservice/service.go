@@ -12,7 +12,7 @@ import (
 	"strings"
 )
 
-const Label = "com.marcus.sidecar.api"
+const Label = "com.haplab.sidecar.api"
 const Unit = "sidecar-api.service"
 
 // Exit is the last termination reported by the manager. Nil means unknown.

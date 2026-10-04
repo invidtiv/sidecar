@@ -14,7 +14,7 @@ class Sidecar < Formula
   end
 
   service do
-    name macos: "com.marcus.sidecar.api", linux: "sidecar-api"
+    name macos: "com.haplab.sidecar.api", linux: "sidecar-api"
     # Follow the same stable link that managed local/worktree installs activate.
     run [HOMEBREW_PREFIX/"bin/sidecar", "api", "serve"]
     keep_alive true

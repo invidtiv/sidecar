@@ -34,6 +34,7 @@ These are not negotiable. Every lane prompt points here.
 - No `tailscale serve` and no `tailscale funnel`. Never install a real launchd agent or systemd unit; use test labels and fake managers.
 - Every load generator is wrapped in `timeout`. Stop every dev server, preview server and test server you start. Never touch port 7871 or anything else Marcus started.
 - Work in your lane's worktree, commit as you go, and do not push the Sidecar repo. Commit messages end with `Co-Authored-By:` naming the model that wrote them.
+- Do not edit this execution file. The orchestrator owns it. Put your status in td and comms.
 - Track work in td under your lane's task (`td -w ~/code/sidecar`): `start`, `log`, then at the end `handoff` and `review`. Never approve your own lane.
 - If you find a Sidecar bug, or friction in the `sidecar agent`, `create` or `comms` commands while working, file a td issue (label `ui-api-friction` or `bug`) with the exact command and output, and mention it in your report. Do not work around it silently.
 - Product direction for every user-facing surface: each platform should feel native. Use the terminal look only where the user is actually in a terminal. Show no internal machinery (lease tokens, generations, protocol states, ids). Useful detail belongs in context, such as hover, inspector or detail views, not in chrome.
