@@ -54,6 +54,8 @@ func (s *Server) routeTable() map[string]*route {
 	local := []Listener{ListenerLocal}
 	remote := []Listener{ListenerBrowser, ListenerTailnet}
 	routes := map[string]*route{
+		viewerPresencePath:         {methods: map[string]routeFunc{http.MethodPost: s.handleViewerPresence}},
+		viewerAckPath:              {methods: map[string]routeFunc{http.MethodPost: s.handleViewerAck}},
 		contentRoute:               {methods: map[string]routeFunc{http.MethodGet: s.handleContent}},
 		treeRoute:                  {methods: map[string]routeFunc{http.MethodGet: s.handleTree}},
 		layoutRoute:                {methods: map[string]routeFunc{http.MethodGet: s.handleLayout, http.MethodPut: s.handleLayout}},
@@ -197,6 +199,9 @@ func (h *listenerHandler) dispatch(w http.ResponseWriter, r *http.Request, c cal
 	if !rt.public && r.URL.Path != "/api/v0/hello" && r.URL.Path != "/api/v0/ws-tickets" {
 		if template, _ := projectContentRoute(r.URL.Path); template == "" {
 			scope := ScopeFull
+			if r.URL.Path == viewerPresencePath || r.URL.Path == viewerAckPath {
+				scope = ScopeUIControl
+			}
 			if workspace, _ := workspaceRoute(r.URL.EscapedPath()); workspace != "" || r.URL.Path == "/api/v0/projects" {
 				scope = ScopeWorkspaceWrite
 			}

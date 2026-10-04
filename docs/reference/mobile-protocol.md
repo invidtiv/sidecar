@@ -130,3 +130,7 @@ The shared synthetic v1 transcript and SHA-256 manifest live in `testdata/ui-api
 Both legacy and negotiated terminal encoder queues have a 16 MiB byte budget, counting the serialized JSONL response including its newline until the writer completes it. This includes an in-flight response. The existing item/control bounds also apply. Coalescing replaces a pending frame only if the replacement fits the byte budget; overflow terminates the stream rather than retaining unbounded terminal data.
 
 Fixture terminal streams implement the same hello negotiation, presence arbitration, holder events, v1 frame flags, input takeover and paste acknowledgment through the terminal backend interface. They echo normalized server-paste bytes and unmodified ordinary input bytes and launch no process; tmux's final newline translation and bracketed-paste boundaries belong to the live backend. Run `./scripts/ui-api-fixture-proof.sh` to exercise both legacy and negotiated clients without tmux.
+
+## Screen requests over the UI API
+
+API clients can separately register their events connection with `uiRequestRelayV1` to receive agent open/layout requests through focused-window presence and an HTTP acknowledgement. This does not add mobile terminal envelope fields or change terminal presence, lease identity, geometry units or operation sequences. Screen viewports are CSS pixels and terminal viewports remain cells. SSH `api events --stdio` stays read-only and does not register a screen viewer. See [focused API viewers](ui-api.md#focused-api-viewers-and-agent-pane-requests).

@@ -8,6 +8,7 @@ import (
 
 	"github.com/invopop/jsonschema"
 	"github.com/marcus/sidecar/internal/contentservice"
+	"github.com/marcus/sidecar/internal/layoutreport"
 	"github.com/marcus/sidecar/internal/mobileproto"
 )
 
@@ -17,6 +18,7 @@ func Spec() ([]byte, error) {
 	schemas := map[string]any{}
 	values := map[string]any{
 		"ContentReadResult": contentservice.ReadResult{}, "ContentTreeResult": contentservice.TreeResult{}, "ContentRef": ContentRef{}, "LayoutDocument": LayoutDocument{},
+		"ViewerLayoutReport": layoutreport.Report{}, "ViewerPresenceRequest": ViewerPresenceRequest{}, "ViewerPresenceResponse": ViewerPresenceResponse{}, "ViewerAckRequest": ViewerAckRequest{}, "ViewerAckResponse": ViewerAckResponse{},
 		"Hello": Hello{}, "Status": Status{}, "Endpoint": Endpoint{}, "ErrorBody": ErrorBody{},
 		"TicketRequest": TicketRequest{}, "TicketResponse": TicketResponse{},
 		"PairingCodeRequest": PairingCodeRequest{}, "PairingCode": PairingCode{},
@@ -112,6 +114,16 @@ func Spec() ([]byte, error) {
 	add(layoutRoute, "get", "", "LayoutDocument", all, false)
 	add(layoutRoute, "put", "LayoutDocument", "LayoutDocument", all, false)
 	addContentSpec(paths)
+	for _, method := range []string{"get", "put"} {
+		op := paths[layoutRoute].(map[string]any)[method].(map[string]any)
+		delete(op, "x-required-scope")
+		op["x-required-scopes-any-of"] = []string{ScopeContentRead, ScopeUIControl}
+	}
+	add(viewerPresencePath, "post", "ViewerPresenceRequest", "ViewerPresenceResponse", all, false)
+	add(viewerAckPath, "post", "ViewerAckRequest", "ViewerAckResponse", all, false)
+	for _, path := range []string{viewerPresencePath, viewerAckPath} {
+		paths[path].(map[string]any)["post"].(map[string]any)["x-required-scope"] = ScopeUIControl
+	}
 
 	add("/api/v0/ws-tickets", "post", "TicketRequest", "TicketResponse", remote, false)
 	add("/api/v0/pairing/codes", "post", "PairingCodeRequest", "PairingCode", local, false)
@@ -150,6 +162,7 @@ func Spec() ([]byte, error) {
 	paths[eventsPath] = streamOperation("events", all)
 	events := paths[eventsPath].(map[string]any)["get"].(map[string]any)
 	events["parameters"] = append(events["parameters"].([]any), params...)
+	events["parameters"] = append(events["parameters"].([]any), map[string]any{"name": "viewer", "in": "query", "schema": map[string]any{"type": "string", "enum": []string{"uiRequestRelayV1"}}, "description": "Register this events connection as a screen viewer; requires full or ui:control. Receive viewer identity, report focused/visible presence, acknowledge each ui_request via HTTP. No reconnect replay."})
 	events["parameters"] = append(events["parameters"].([]any), map[string]any{"name": "content", "in": "query", "schema": map[string]any{"type": "array", "items": map[string]any{"type": "string", "contentMediaType": "application/json", "contentSchema": schemaRef("ContentRef")}, "maxItems": 32}, "style": "form", "explode": true, "description": "JSON reference for each open content pane; reconnect to change the set. Requires content:read."})
 	paths["/pair"] = map[string]any{"get": map[string]any{"operationId": "pair_page", "security": []any{}, "x-listeners": []string{"browser"}, "responses": map[string]any{"200": map[string]any{"description": "Pairing page, consumes no code", "content": map[string]any{"text/html": map[string]any{"schema": map[string]any{"type": "string"}}}}}}}
 	paths["/{path}"] = map[string]any{"get": map[string]any{"operationId": "ui_files", "x-listeners": remote, "description": "Static UI files with SPA fallback. Browser listener public; Tailnet requires allowed login. API paths never fall back. Each request resolves a fresh confined root, so rebuilt directories are served without restart and symlink escapes remain refused.", "parameters": []any{map[string]any{"name": "path", "in": "path", "required": true, "schema": map[string]any{"type": "string"}}}, "responses": map[string]any{"200": map[string]any{"description": "UI file or index.html"}, "503": map[string]any{"description": "UI directory temporarily unavailable during rebuild; retry shortly."}}}}
@@ -237,6 +250,9 @@ func streamOperation(name string, listeners []string) map[string]any {
 // Agent control and mobile both define Target and Error. Package identity is
 // part of their schema name so map iteration cannot overwrite either contract.
 func workspaceSchemaName(t reflect.Type) string {
+	if strings.HasSuffix(t.PkgPath(), "/uirequest") {
+		return "UIRequest" + t.Name()
+	}
 	if strings.HasSuffix(t.PkgPath(), "/agentcontrol") {
 		return "AgentControl" + t.Name()
 	}

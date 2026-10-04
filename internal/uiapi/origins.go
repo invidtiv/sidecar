@@ -219,7 +219,7 @@ func normalizeScopes(scopes []string) ([]string, error) {
 	out := []string{}
 	for _, scope := range scopes {
 		switch scope {
-		case ScopeFull, ScopeWorkspaceWrite, ScopeContentRead:
+		case ScopeFull, ScopeWorkspaceWrite, ScopeContentRead, ScopeUIControl:
 		default:
 			return nil, fmt.Errorf("scope %q is not available", scope)
 		}

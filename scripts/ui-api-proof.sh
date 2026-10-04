@@ -71,6 +71,7 @@ go build -o "$root/uiapiproof" ./internal/tools/uiapiproof
 go build -o "$root/uieventsproof" ./internal/tools/uieventsproof
 go build -o "$root/uiworkspaceproof" ./internal/tools/uiworkspaceproof
 go build -o "$root/uicontentproof" ./internal/tools/uicontentproof
+go build -o "$root/uiviewerproof" ./internal/tools/uiviewerproof
 sc() { "$root/sidecar" -config "$config" "$@"; }
 
 step "create a managed shell on the private tmux server"
@@ -132,6 +133,9 @@ step "Workspace resources, writes, confirmations and event push"
 timeout 100 "$root/uiworkspaceproof" -state "$root/state/sidecar" -project proof -sidecar "$root/sidecar" -config "$config"
 step "Content, layouts and open-pane invalidation"
 timeout 40 "$root/uicontentproof" -socket "$api_sock" -root "$root/project"
+
+step "Focused API viewer: real CLI open/layout, scoped delivery and acknowledgements"
+timeout 50 "$root/uiviewerproof" -url "$base" -socket "$api_sock" -root "$root/project" -project proof -sidecar "$root/sidecar" -config "$config" -session "$session"
 
 step "Browser listener guards"
 code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: evil.example' "$base/api/v0/hello")
@@ -216,8 +220,9 @@ timeout 2 "$root/sidecar" -config "$config" api events --stdio --sort name > "$r
 python3 - "$root/events.cli.out" <<'PY'
 import json,sys
 rows=[json.loads(line) for line in open(sys.argv[1])]
-assert [r["type"] for r in rows[:3]]==["hello","catalog","terminals"],rows
-assert [r["seq"] for r in rows[:3]]==[1,2,3],rows
+assert rows[0]["type"]=="hello",rows
+assert "catalog" in [r["type"] for r in rows] and "terminals" in [r["type"] for r in rows],rows
+assert [r["seq"] for r in rows]==list(range(1,len(rows)+1)),rows
 print("events CLI ok: hello, catalog, terminals as JSONL")
 PY
 

@@ -16,7 +16,7 @@ import (
 type LayoutDocument = viewerlayout.Document
 
 func (s *Server) handleLayout(w http.ResponseWriter, r *http.Request, c caller) {
-	if !s.requireScope(w, c, ScopeContentRead) {
+	if !s.hasScope(c, ScopeContentRead) && !s.requireScope(w, c, ScopeUIControl) {
 		return
 	}
 	_, project := projectContentRoute(r.URL.Path)

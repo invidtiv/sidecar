@@ -218,7 +218,9 @@ Splits holding several terminals and content panes, from `contentservice`. Live 
 
 ### U4: Clients as targets for agents
 
-An API client that holds the screen announces itself on the `uirequest` bus as a viewer with `uiRequestRelayV1`. `sidecar open` and `sidecar layout apply/move` then reach it, with the same decline-don't-queue rules. An agent says "open this diff", and the diff appears in whichever UI Marcus is using. The `build-sidecar-ui` skill is finished, with clara-home as its first outside consumer.
+An API client that holds the screen announces itself on the `uirequest` bus as a viewer with `uiRequestRelayV1`. `sidecar open` and `sidecar layout get/apply/move` then reach it, with the same decline-don't-queue rules. An agent says "open this diff", and the diff appears in whichever UI Marcus is using. The `build-sidecar-ui` skill is finished, with clara-home as its first outside consumer.
+
+The server half registers one events connection per API window, selects the most recent focused-and-visible transition without heartbeat stealing, and delivers typed proposals with scoped HTTP acknowledgements. Layout changes reuse `layoutapply` and the U3 store with CSS-pixel viewports. Only `full` or `ui:control` can receive requests; content root checks run before delivery and again at acknowledgement. The server proof drives real open/layout CLI commands against an isolated fixture client; browser rendering follows in U4-b. Resource panes and new shell command descriptors decline until their owning API capabilities are available; workspace operations remain the shell creation path. See [focused API viewers](../../reference/ui-api.md#focused-api-viewers-and-agent-pane-requests).
 
 The Fractal model in `docs/diagrams/fractal/` includes the API host, its three listeners, the terminal protocol services, the external clients and their trust boundaries as of U0 (scenes `ui-api`, `ui-api-chain`, `ui-api-trust`, `ui-api-roadmap`; journeys `browser-pairing`, `terminal-attach-ws`), with U1 to U4 work tagged `#proposed`. It is kept current after that.
 

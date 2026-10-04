@@ -39,6 +39,9 @@ func hostInstanceID() string {
 }
 
 func (m *Model) handleUIRequest(req uirequest.Request) tea.Cmd {
+	if req.Viewer != "" {
+		return nil
+	}
 	if req.Action == uirequest.ActionRenameWorktree {
 		m.applyWorktreeRenameRequest(req)
 		return nil

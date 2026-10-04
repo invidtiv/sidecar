@@ -950,7 +950,7 @@ sidecar api open --print
 
 Manage paired origins and browser sessions
 
-Register another web origin (an app embedding Sidecar components) and print its bearer token, which is shown only once and stored only as a hash in $STATE/api/origins.json. Pairing an origin again rotates its token and closes the terminals and event streams the old token opened. --scope selects a paired origin scope, repeatable; --scopes accepts a comma-separated list. Both accept full, workspace:write and content:read and may be combined. Full is the default. --list shows registrations without tokens; --revoke removes one. --revoke-sessions signs out every browser paired with `sidecar api open` without restarting the server: their session tokens get 401 from then on and their open terminals close with 4401. With --origin it signs out only the browsers on that origin. Revocation persists across API restarts. Paired origins keep their tokens; --revoke URL also revokes browser sessions bound to that exact origin.
+Register another web origin (an app embedding Sidecar components) and print its bearer token, which is shown only once and stored only as a hash in $STATE/api/origins.json. Pairing an origin again rotates its token and closes the terminals and event streams the old token opened. --scope selects a paired origin scope, repeatable; --scopes accepts a comma-separated list. Both accept full, workspace:write, content:read and ui:control and may be combined. Full is the default. --list shows registrations without tokens; --revoke removes one. --revoke-sessions signs out every browser paired with `sidecar api open` without restarting the server: their session tokens get 401 from then on and their open terminals close with 4401. With --origin it signs out only the browsers on that origin. Revocation persists across API restarts. Paired origins keep their tokens; --revoke URL also revokes browser sessions bound to that exact origin.
 
 ```
 Usage: sidecar api pair --origin URL [--scope SCOPE] [--scopes LIST] | --list | --revoke URL | --revoke-sessions [--origin URL] [--json]
@@ -960,7 +960,7 @@ Usage: sidecar api pair --origin URL [--scope SCOPE] [--scopes LIST] | --list | 
 
 - `--origin URL`: Pair this origin (scheme://host[:port]); with --revoke-sessions, the origin to sign out
 - `--scope SCOPE`: Paired origin scope, repeatable (default full)
-- `--scopes LIST`: Comma-separated scopes (full, workspace:write or content:read)
+- `--scopes LIST`: Comma-separated scopes (full, workspace:write, content:read or ui:control)
 - `--list`: List paired origins
 - `--revoke URL`: Revoke a paired origin
 - `--revoke-sessions`: Sign out browser sessions from `sidecar api open`
@@ -2011,6 +2011,7 @@ worse than a refusal.
 
 From a Sidecar-managed pane on a host you are viewing, the JSON is that
 viewer's grid for the matching Sessions row.
+A focused, visible API viewer with uiRequestRelayV1 receives these requests; its viewport uses CSS pixels.
 
 ```
 Usage: sidecar layout get [--json] [--sessions [ROW]]
@@ -2532,6 +2533,7 @@ rather than land elsewhere (--split expresses a preference; --at, a demand).
 
 From a Sidecar-managed pane whose geometry lease is held by a connected viewer,
 the open lands on that viewer's screen — not on a host TUI that may not be running.
+A focused, visible API viewer with uiRequestRelayV1 receives open on its browser screen.
 There is no --host flag: routing is the lease. A relayed open never queues: if that
 row is not on the viewer's screen, or the lease holder cannot receive pane requests
 (disconnected, too old, or presence expired), the command declines (exit 4).

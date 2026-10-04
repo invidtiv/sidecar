@@ -22,6 +22,20 @@ func readCLISessionOwner(session string) string {
 }
 
 func refuseRelayIfUnavailable(stateDir string, origin uirequest.Origin) error {
+	if v, ok := uirequest.ReadAPIViewer(stateDir, time.Now()); ok && origin.HostID == "" {
+		if !v.Focused {
+			if instances, err := uirequest.ListInstances(stateDir); err == nil && len(instances) > 0 {
+				return nil
+			}
+			return &destError{code: 4, msg: "the API viewer is not focused and visible; pane requests are never queued"}
+		}
+		for _, capability := range v.Capabilities {
+			if capability == uirequest.APIViewerRelay {
+				return nil
+			}
+		}
+		return &destError{code: 4, msg: "the API viewer cannot receive pane requests (uiRequestRelayV1 is required)"}
+	}
 	if origin.TmuxSession == "" {
 		return nil
 	}

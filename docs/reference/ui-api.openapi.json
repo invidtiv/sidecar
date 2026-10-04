@@ -299,6 +299,30 @@
         ],
         "type": "object"
       },
+      "Box": {
+        "additionalProperties": false,
+        "properties": {
+          "H": {
+            "type": "integer"
+          },
+          "W": {
+            "type": "integer"
+          },
+          "X": {
+            "type": "integer"
+          },
+          "Y": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "X",
+          "Y",
+          "W",
+          "H"
+        ],
+        "type": "object"
+      },
       "BrowserPublicKey": {
         "additionalProperties": false,
         "properties": {
@@ -332,6 +356,22 @@
           "crv",
           "x",
           "y"
+        ],
+        "type": "object"
+      },
+      "CSSViewport": {
+        "additionalProperties": false,
+        "properties": {
+          "height": {
+            "type": "integer"
+          },
+          "width": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "width",
+          "height"
         ],
         "type": "object"
       },
@@ -415,6 +455,26 @@
           "maximum_history_bytes",
           "heartbeat_interval_ms",
           "presence_timeout_ms"
+        ],
+        "type": "object"
+      },
+      "Caps": {
+        "additionalProperties": false,
+        "properties": {
+          "liveLeaves": {
+            "type": "integer"
+          },
+          "maxColumns": {
+            "type": "integer"
+          },
+          "maxRows": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "maxColumns",
+          "maxRows",
+          "liveLeaves"
         ],
         "type": "object"
       },
@@ -820,6 +880,28 @@
           "listener",
           "auth",
           "since"
+        ],
+        "type": "object"
+      },
+      "Column": {
+        "additionalProperties": false,
+        "properties": {
+          "column": {
+            "type": "integer"
+          },
+          "panes": {
+            "items": {
+              "$ref": "#/components/schemas/Pane"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "column",
+          "panes"
         ],
         "type": "object"
       },
@@ -1308,10 +1390,18 @@
               "terminals",
               "workspace",
               "content",
+              "viewer",
+              "ui_request",
               "error",
               "shutdown"
             ],
             "type": "string"
+          },
+          "ui_request": {
+            "$ref": "#/components/schemas/UIRequestEvent"
+          },
+          "viewer": {
+            "$ref": "#/components/schemas/ViewerIdentity"
           },
           "workspace": {
             "$ref": "#/components/schemas/WorkspaceEvent"
@@ -1361,6 +1451,28 @@
         ],
         "type": "object"
       },
+      "Floor": {
+        "additionalProperties": false,
+        "properties": {
+          "height": {
+            "type": "integer"
+          },
+          "width": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "width",
+          "height"
+        ],
+        "type": "object"
+      },
+      "Floors": {
+        "additionalProperties": {
+          "$ref": "#/components/schemas/Floor"
+        },
+        "type": "object"
+      },
       "Geometry": {
         "additionalProperties": false,
         "properties": {
@@ -1390,6 +1502,24 @@
         "required": [
           "kind",
           "label"
+        ],
+        "type": "object"
+      },
+      "Grid": {
+        "additionalProperties": false,
+        "properties": {
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/Column"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "columns"
         ],
         "type": "object"
       },
@@ -1915,6 +2045,53 @@
         ],
         "type": "object"
       },
+      "Pane": {
+        "additionalProperties": false,
+        "properties": {
+          "active": {
+            "type": "integer"
+          },
+          "box": {
+            "$ref": "#/components/schemas/Box"
+          },
+          "cell": {
+            "type": "string"
+          },
+          "collection": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "pane": {
+            "type": "integer"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "query": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          },
+          "tabs": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "cell",
+          "kind",
+          "pane"
+        ],
+        "type": "object"
+      },
       "PaneDiffTabJSON": {
         "additionalProperties": false,
         "properties": {
@@ -2354,6 +2531,46 @@
           "oldName",
           "name",
           "changed"
+        ],
+        "type": "object"
+      },
+      "Report": {
+        "additionalProperties": false,
+        "properties": {
+          "caps": {
+            "$ref": "#/components/schemas/Caps"
+          },
+          "floors": {
+            "$ref": "#/components/schemas/Floors"
+          },
+          "floors_unit": {
+            "type": "string"
+          },
+          "grid": {
+            "$ref": "#/components/schemas/Grid"
+          },
+          "root": {
+            "type": "string"
+          },
+          "surface": {
+            "type": "string"
+          },
+          "tree": true,
+          "version": {
+            "type": "integer"
+          },
+          "viewport": {
+            "$ref": "#/components/schemas/Box"
+          },
+          "viewport_css_pixels": {
+            "$ref": "#/components/schemas/CSSViewport"
+          }
+        },
+        "required": [
+          "version",
+          "grid",
+          "caps",
+          "floors"
         ],
         "type": "object"
       },
@@ -3080,6 +3297,177 @@
         ],
         "type": "object"
       },
+      "UIRequestEvent": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "document": {
+            "$ref": "#/components/schemas/Document"
+          },
+          "etag": {
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "project": {
+            "type": "string"
+          },
+          "request": {
+            "$ref": "#/components/schemas/UIRequestRequest"
+          },
+          "workspace": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "action",
+          "project",
+          "request",
+          "document",
+          "etag",
+          "expires_at"
+        ],
+        "type": "object"
+      },
+      "UIRequestOptions": {
+        "additionalProperties": false,
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "split": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "UIRequestOrigin": {
+        "additionalProperties": false,
+        "properties": {
+          "hostId": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "pid": {
+            "type": "integer"
+          },
+          "projectKey": {
+            "type": "string"
+          },
+          "sessions": {
+            "type": "boolean"
+          },
+          "sessionsRow": {
+            "type": "string"
+          },
+          "tmuxSession": {
+            "type": "string"
+          },
+          "workDir": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "tmuxSession",
+          "namespace",
+          "projectKey",
+          "workDir",
+          "pid"
+        ],
+        "type": "object"
+      },
+      "UIRequestRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "options": {
+            "$ref": "#/components/schemas/UIRequestOptions"
+          },
+          "origin": {
+            "$ref": "#/components/schemas/UIRequestOrigin"
+          },
+          "payload": true,
+          "target": {
+            "$ref": "#/components/schemas/UIRequestTarget"
+          },
+          "ttlMs": {
+            "type": "integer"
+          },
+          "version": {
+            "type": "integer"
+          },
+          "viewer": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "id",
+          "createdAt",
+          "ttlMs",
+          "origin",
+          "action",
+          "target"
+        ],
+        "type": "object"
+      },
+      "UIRequestTarget": {
+        "additionalProperties": false,
+        "properties": {
+          "collection": {
+            "type": "string"
+          },
+          "filters": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "line": {
+            "type": "integer"
+          },
+          "matcher": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "query": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "value",
+          "line"
+        ],
+        "type": "object"
+      },
       "Viewer": {
         "additionalProperties": false,
         "properties": {
@@ -3093,6 +3481,113 @@
         "required": [
           "kind",
           "label"
+        ],
+        "type": "object"
+      },
+      "ViewerAckRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "viewer_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "viewer_id",
+          "id",
+          "status"
+        ],
+        "type": "object"
+      },
+      "ViewerAckResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "document": {
+            "$ref": "#/components/schemas/Document"
+          },
+          "etag": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "document",
+          "etag"
+        ],
+        "type": "object"
+      },
+      "ViewerIdentity": {
+        "additionalProperties": false,
+        "properties": {
+          "capability": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "capability"
+        ],
+        "type": "object"
+      },
+      "ViewerLayoutReport": {
+        "$ref": "#/components/schemas/Report"
+      },
+      "ViewerPresenceRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "focused": {
+            "type": "boolean"
+          },
+          "focused_pane": {
+            "type": "integer"
+          },
+          "project": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          },
+          "viewer_id": {
+            "type": "string"
+          },
+          "viewport": {
+            "$ref": "#/components/schemas/CSSViewport"
+          },
+          "visible": {
+            "type": "boolean"
+          },
+          "workspace": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "viewer_id",
+          "focused",
+          "visible",
+          "project",
+          "viewport"
+        ],
+        "type": "object"
+      },
+      "ViewerPresenceResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "holder": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "holder"
         ],
         "type": "object"
       },
@@ -4047,6 +4542,17 @@
               "type": "boolean"
             },
             "style": "form"
+          },
+          {
+            "description": "Register this events connection as a screen viewer; requires full or ui:control. Receive viewer identity, report focused/visible presence, acknowledge each ui_request via HTTP. No reconnect replay.",
+            "in": "query",
+            "name": "viewer",
+            "schema": {
+              "enum": [
+                "uiRequestRelayV1"
+              ],
+              "type": "string"
+            }
           },
           {
             "description": "JSON reference for each open content pane; reconnect to change the set. Requires content:read.",
@@ -5197,7 +5703,10 @@
           "tailnet"
         ],
         "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there.",
-        "x-required-scope": "content:read"
+        "x-required-scopes-any-of": [
+          "content:read",
+          "ui:control"
+        ]
       },
       "head": {
         "operationId": "projects_{project}_layout_get_head",
@@ -5254,7 +5763,10 @@
           "tailnet"
         ],
         "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there.",
-        "x-required-scope": "content:read"
+        "x-required-scopes-any-of": [
+          "content:read",
+          "ui:control"
+        ]
       },
       "put": {
         "operationId": "projects_{project}_layout_put",
@@ -5362,7 +5874,10 @@
           "tailnet"
         ],
         "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there.",
-        "x-required-scope": "content:read"
+        "x-required-scopes-any-of": [
+          "content:read",
+          "ui:control"
+        ]
       }
     },
     "/api/v0/projects/{project}/shells/create": {
@@ -6928,6 +7443,136 @@
           "browser",
           "tailnet"
         ]
+      }
+    },
+    "/api/v0/viewers/ack": {
+      "post": {
+        "operationId": "viewers_ack_post",
+        "parameters": [
+          {
+            "description": "Required on Browser and Tailnet; not on Local.",
+            "in": "header",
+            "name": "X-Sidecar-Request",
+            "required": false,
+            "schema": {
+              "const": "1",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ViewerAckRequest"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ViewerAckResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there.",
+        "x-required-scope": "ui:control"
+      }
+    },
+    "/api/v0/viewers/presence": {
+      "post": {
+        "operationId": "viewers_presence_post",
+        "parameters": [
+          {
+            "description": "Required on Browser and Tailnet; not on Local.",
+            "in": "header",
+            "name": "X-Sidecar-Request",
+            "required": false,
+            "schema": {
+              "const": "1",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ViewerPresenceRequest"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ViewerPresenceResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there.",
+        "x-required-scope": "ui:control"
       }
     },
     "/api/v0/ws-tickets": {

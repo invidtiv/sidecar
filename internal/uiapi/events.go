@@ -16,6 +16,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/marcus/sidecar/internal/mobile"
 	"github.com/marcus/sidecar/internal/mobileproto"
+	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspacewire"
 )
 
@@ -60,7 +61,9 @@ type AttentionEvent struct {
 // EventMessage is one text frame (or one JSONL line on the CLI bridge).
 // Seq starts at 1 with hello, increases on delivery, and resets on reconnect.
 type EventMessage struct {
-	Type          string                        `json:"type" jsonschema:"enum=hello,enum=catalog,enum=attention,enum=terminals,enum=workspace,enum=content,enum=error,enum=shutdown"`
+	Viewer        *ViewerIdentity               `json:"viewer,omitempty"`
+	UIRequest     *UIRequestEvent               `json:"ui_request,omitempty"`
+	Type          string                        `json:"type" jsonschema:"enum=hello,enum=catalog,enum=attention,enum=terminals,enum=workspace,enum=content,enum=viewer,enum=ui_request,enum=error,enum=shutdown"`
 	Seq           uint64                        `json:"seq" jsonschema:"minimum=1"`
 	APIVersion    int                           `json:"api_version" jsonschema:"enum=0"`
 	APIInstance   string                        `json:"api_instance,omitempty"`
@@ -139,6 +142,10 @@ func eventQuery(values url.Values) (mobileproto.CatalogQuery, error) {
 	}
 	copy.Del("ticket")
 	copy.Del("content")
+	copy.Del("viewer")
+	if len(values["viewer"]) > 1 || values.Has("viewer") && values.Get("viewer") != uirequest.APIViewerRelay {
+		return mobileproto.CatalogQuery{}, fmt.Errorf("viewer must be uiRequestRelayV1")
+	}
 	if len(values["ticket"]) > 1 {
 		return mobileproto.CatalogQuery{}, fmt.Errorf("ticket takes one value")
 	}
@@ -209,7 +216,7 @@ func (h *listenerHandler) serveEvents(w http.ResponseWriter, r *http.Request) {
 		_ = conn.Close(CloseOriginRefused, "This credential needs content:read to watch content.")
 		return
 	}
-	h.s.runEvents(conn, client, c, query, refs)
+	h.s.runEvents(conn, client, c, query, refs, r.URL.Query().Has("viewer"))
 }
 
 // eventPending separates collection from socket writes. State is latest-wins;
@@ -349,7 +356,7 @@ func attentionChanges(before, after *mobileproto.CatalogSnapshot, now time.Time)
 	return out
 }
 
-func (s *Server) runEvents(conn *websocket.Conn, client *trackedClient, c caller, query mobileproto.CatalogQuery, refs []ContentRef) {
+func (s *Server) runEvents(conn *websocket.Conn, client *trackedClient, c caller, query mobileproto.CatalogQuery, refs []ContentRef, viewer bool) {
 	s.startCatalogEvents()
 	catalogChanges, unsubscribe := s.catalogEvents.subscribe()
 	defer unsubscribe()
@@ -403,13 +410,26 @@ func (s *Server) runEvents(conn *websocket.Conn, client *trackedClient, c caller
 		return
 	}
 	defer stop()
-	if err := write(EventMessage{Type: "hello", APIInstance: s.instance, ServerVersion: s.opts.Version, Capabilities: []string{"catalog", "attention", "terminals", "workspace", "content", "shutdown"}}); err != nil {
+	if err := write(EventMessage{Type: "hello", APIInstance: s.instance, ServerVersion: s.opts.Version, Capabilities: []string{"catalog", "attention", "terminals", "workspace", "content", "uiRequestRelayV1", "shutdown"}}); err != nil {
 		return
 	}
 	if s.eventErr != nil {
 		_ = write(EventMessage{Type: "error", Error: &ErrorDetail{Code: CodeBackend, Message: s.eventErr.Error()}})
 		_ = conn.Close(websocket.StatusInternalError, "The catalog watcher could not start; restart sidecar api serve.")
 		return
+	}
+	var viewerEvents <-chan EventMessage
+	if viewer {
+		v, err := s.registerViewer(c)
+		if err != nil {
+			_ = conn.Close(CloseOriginRefused, closeReason(err.Error()))
+			return
+		}
+		defer s.removeViewer(v)
+		viewerEvents = v.out
+		if write(EventMessage{Type: "viewer", Viewer: &ViewerIdentity{ID: v.id, Capability: uirequest.APIViewerRelay}}) != nil {
+			return
+		}
 	}
 	producerDone := make(chan struct{})
 	go func() {
@@ -431,6 +451,10 @@ func (s *Server) runEvents(conn *websocket.Conn, client *trackedClient, c caller
 				_ = conn.Close(CloseProtocolViolation, "The events stream accepts no client messages.")
 			}
 			return
+		case m := <-viewerEvents:
+			if write(m) != nil {
+				return
+			}
 		case <-pending.wake:
 			for _, m := range pending.take() {
 				if write(m) != nil {

@@ -23,6 +23,7 @@ import (
 	"github.com/marcus/sidecar/internal/mobileproto"
 	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspaceops"
 	"github.com/marcus/sidecar/internal/workspacewire"
 )
@@ -35,11 +36,19 @@ func TestUIAPIFixtureCorpus(t *testing.T) {
 	row := mobileproto.CatalogRow{ID: "fixture-shell", OwnerHostID: identity.OwnerHostID, ProjectID: "fixture-project", ProjectName: "Fixture project", WorkspaceID: identity.WorkspaceID, WorkspaceKind: "shell", DisplayName: "Echo terminal", Path: "/workspace/fixture", Provider: "codex", Status: "working", Group: "Working", Session: identity.Session, Pane: identity.Pane, Target: identity.Session, ExpectedTarget: &identity, AttachState: "ready", ObservedAt: now.Format(time.RFC3339), ChangedAt: now.Format(time.RFC3339), Live: true, SemanticStatus: true, AttachmentReady: true}
 	catalog := mobileproto.CatalogSnapshot{Generation: "fixture-generation", ObservedAt: row.ObservedAt, HubID: identity.HubID, OwnerHostID: identity.OwnerHostID, OwnerConfigGeneration: identity.OwnerConfigGeneration, Query: mobileproto.CatalogQuery{Sort: "project"}, Hosts: []mobileproto.CatalogHost{{ID: identity.OwnerHostID, Name: "Fixture host", State: "online", Local: true}}, Sections: []mobileproto.CatalogSection{{Key: "fixture-project", Title: "Fixture project", Rows: []mobileproto.CatalogRow{row}}}, Failures: []mobileproto.CatalogFailure{}, Total: 1}
 	values := map[string]any{
+		"viewer-exchange.json": []any{
+			EventMessage{Type: "hello", Seq: 1, APIInstance: "api_fixture", ServerVersion: "fixture", Capabilities: []string{"catalog", "attention", "terminals", "workspace", "content", "uiRequestRelayV1", "shutdown"}},
+			EventMessage{Type: "viewer", Seq: 2, Viewer: &ViewerIdentity{ID: "api-viewer-fixture", Capability: "uiRequestRelayV1"}},
+			ViewerPresenceRequest{ViewerID: "api-viewer-fixture", Focused: true, Visible: true, Project: "fixture-project", Session: "fixture-echo", Viewport: Viewport{Width: 1200, Height: 800}, FocusedPane: 1},
+			ViewerPresenceResponse{Holder: true},
+			EventMessage{Type: "ui_request", Seq: 3, UIRequest: &UIRequestEvent{ID: "fixture-request", Action: uirequest.ActionOpen, Project: "fixture-project", Request: uirequest.Request{Viewer: "api-viewer-fixture", Version: 1, ID: "fixture-request", CreatedAt: now, TTLMs: 15000, Action: uirequest.ActionOpen, Origin: uirequest.Origin{WorkDir: "/workspace/fixture", TmuxSession: "fixture-echo"}, Target: uirequest.Target{Kind: "file", Value: "README.md"}}, Document: LayoutDocument{Layout: &state.PaneLayoutJSON{Split: &state.PaneSplitJSON{Axis: "cols", Ratio: 50, A: &state.PaneLayoutJSON{Kind: "terminal", Session: "fixture-echo"}, B: &state.PaneLayoutJSON{Kind: "doc", Tabs: []state.PaneDocTabJSON{{Path: "README.md"}}}}}}, ETag: `"synthetic-layout-revision"`, ExpiresAt: now.Add(15 * time.Second)}},
+			ViewerAckRequest{ViewerID: "api-viewer-fixture", ID: "fixture-request", Status: uirequest.StatusOpened},
+		},
 		"session-proof.json": []any{
 			map[string]any{"method": "POST", "path": "/api/v0/pairing/session-proof", "listener": "browser", "origin": "http://127.0.0.1:7861", "request": SessionProofChallengeRequest{RegistrationID: browserRegistrationID("http://127.0.0.1:7861", fixtureBrowserPublicKey())}, "response": SessionProofChallenge{Nonce: "synthetic-nonce", Timestamp: now.UnixMilli(), ExpiresAt: now.Add(pairingCodeTTL)}},
 			map[string]any{"method": "POST", "path": "/api/v0/pairing/session-proof/verify", "listener": "browser", "origin": "http://127.0.0.1:7861", "request": SessionProofRequest{RegistrationID: browserRegistrationID("http://127.0.0.1:7861", fixtureBrowserPublicKey()), Nonce: "synthetic-nonce", Timestamp: now.UnixMilli(), Signature: fixtureBrowserSignature}, "response": SessionToken{Token: "synthetic-memory-token", ExpiresAt: now.Add(browserBearerTTL)}},
 		},
-		"hello.json":         Hello{APIVersion: 0, APIInstance: "api_fixture", ServerVersion: "fixture", Capabilities: []string{"sessions", "status", "terminal", "ws_tickets", "events", "projects", "workspace", "workspace_operations", "content", "layouts"}, Terminal: TerminalProtocol{Protocol: "mobile", Version: 0}},
+		"hello.json":         Hello{APIVersion: 0, APIInstance: "api_fixture", ServerVersion: "fixture", Capabilities: []string{"sessions", "status", "terminal", "ws_tickets", "events", "projects", "workspace", "workspace_operations", "content", "layouts", "uiRequestRelayV1"}, Terminal: TerminalProtocol{Protocol: "mobile", Version: 0}},
 		"sessions.json":      catalog,
 		"content-file.json":  contentservice.ReadResult{Kind: "file", Operation: "document", Workspace: "fixture-project", Display: "README.md", Path: "/workspace/fixture/README.md", Revision: "fixture-file-v1", Content: "# Fixture project\n\nA Markdown pane.\n"},
 		"content-issue.json": contentservice.ReadResult{Kind: "issue", Operation: "card", Workspace: "fixture-project", Target: "td-123456", Revision: "fixture-issue-v1", Issue: &contentservice.IssueDTO{ID: "td-123456", Title: "Fixture issue", Status: "open"}},
