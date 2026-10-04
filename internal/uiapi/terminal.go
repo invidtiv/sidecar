@@ -41,8 +41,8 @@ const (
 // A pong is only seen while pumpRequests is reading the socket. When the
 // pump is blocked handing a request to a backend that has stopped reading,
 // a missed pong is the server's stall, not the peer's, so it is excused. A
-// half-open peer sends nothing, so it never blocks the pump and never earns
-// the excuse.
+// peer may disappear after causing that stall, so the exemption is bounded
+// from the last successful pong (or connection start).
 func (s *Server) keepalive(ctx context.Context, conn *websocket.Conn, inbound *inboundGate) {
 	interval, timeout := s.opts.KeepaliveInterval, s.opts.KeepaliveTimeout
 	if interval <= 0 {
@@ -51,6 +51,11 @@ func (s *Server) keepalive(ctx context.Context, conn *websocket.Conn, inbound *i
 	if timeout <= 0 {
 		timeout = defaultKeepaliveTimeout
 	}
+	stallTimeout := s.opts.KeepaliveStallTimeout
+	if stallTimeout <= 0 {
+		stallTimeout = time.Minute
+	}
+	responsive := inbound.now()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -58,6 +63,10 @@ func (s *Server) keepalive(ctx context.Context, conn *websocket.Conn, inbound *i
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			if inbound.now()-responsive >= stallTimeout {
+				_ = conn.CloseNow()
+				return
+			}
 			if inbound.blocked() {
 				// Nothing is reading the socket, so no pong could be seen.
 				continue
@@ -78,6 +87,7 @@ func (s *Server) keepalive(ctx context.Context, conn *websocket.Conn, inbound *i
 				_ = conn.CloseNow()
 				return
 			}
+			responsive = inbound.now()
 		}
 	}
 }
@@ -222,7 +232,11 @@ func (s *Server) runTerminal(conn *websocket.Conn, client *trackedClient) {
 	ctx, cancel := context.WithCancel(s.ctx)
 	defer cancel()
 	inbound := newInboundGate()
-	go s.keepalive(ctx, conn, inbound)
+	keepaliveDone := make(chan struct{})
+	go func() {
+		s.keepalive(ctx, conn, inbound)
+		close(keepaliveDone)
+	}()
 	requests, requestWriter := io.Pipe()
 	responseReader, responses := io.Pipe()
 
@@ -251,6 +265,14 @@ func (s *Server) runTerminal(conn *websocket.Conn, client *trackedClient) {
 	}
 
 	select {
+	case <-keepaliveDone:
+		// The socket can close while the reader is stuck writing to the
+		// backend. Break that write and cancel the backend directly.
+		_ = requestWriter.Close()
+		cancel()
+		if _, ok := waitBackend(); !ok {
+			<-backendDone
+		}
 	case result := <-readerDone:
 		// End of stream: EOF on the request pipe, exactly like stdin EOF.
 		_ = requestWriter.Close()

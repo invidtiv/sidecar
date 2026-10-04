@@ -243,3 +243,30 @@ func TestKeepaliveStillDropsAHalfOpenPeerAfterAStall(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+// A peer can disappear after it sent the requests that blocked the pump.
+// Neither a permanent backend stall nor repeated excuses may retain it forever.
+func TestKeepaliveBoundsAStalledPump(t *testing.T) {
+	h := newHarness(t, func(o *Options) {
+		o.KeepaliveInterval = 20 * time.Millisecond
+		o.KeepaliveTimeout = 40 * time.Millisecond
+		o.KeepaliveStallTimeout = 200 * time.Millisecond
+	})
+	conn := h.dialLocal(t)
+	defer func() { _ = conn.CloseNow() }()
+	stallPump(t, h, conn)
+	// Leave the backend stalled. Socket closure must also break the pipe
+	// write and cancel the backend rather than waiting for another read.
+	deadline := time.Now().Add(2 * time.Second)
+	for len(h.s.status().Clients) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("a stalled pump kept a dead peer and its backend registered")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	select {
+	case <-h.backend.ctxEnded:
+	default:
+		t.Fatal("the stalled backend was not cancelled")
+	}
+}
