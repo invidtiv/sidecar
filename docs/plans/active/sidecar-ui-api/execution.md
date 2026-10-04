@@ -46,12 +46,12 @@ The status values are `queued`, `running`, `review`, `fixing`, `merged` and `blo
 | --- | --- | --- | --- | --- | --- |
 | U0-a server | td-ba925d | sidecar | Claude | — | merged (2f0dc1e7) |
 | U0-b SDK/element | td-83cce9 | sidecar-ui | Claude | — | merged (sidecar-ui 2c0f521) |
-| U0-a follow-ups | td-552e24 | sidecar | Claude | U0-a | review (Codex, shell "rev td-552e24") |
+| U0-a follow-ups | td-552e24 | sidecar | Claude, reviewed by Codex | U0-a | merged (e3ca48c2) |
 | U0-c proof and measurements | td-d8fcb0 | both | Claude, plus Marcus for the live half | U0-a, U0-b | automatable half done (0b1476b2, a0dfb694); live half with Marcus pending |
 | U1-a events stream | td-aa8756 | sidecar | Codex | U0-a | running (Codex, worktree ~/code/sidecar-ui-u1a-events, branch ui-u1a-events) |
 | U1-b schemas, spec, fixtures | td-5ae805 | sidecar | Codex | U0-a | running (Codex, ~/code/sidecar-u1b-spec, branch u1b-spec) |
 | U1-c service install | td-d7869b | sidecar | Codex | U0-a | review (Codex reviewer, shell "rev U1-c"; branch u1c-service @0516328a) |
-| U1-d presence and v1 frames | td-713745 | sidecar | Codex | td-552e24 merged | blocked on td-552e24 |
+| U1-d presence and v1 frames | td-713745 | sidecar | Codex | td-552e24 merged | running (Codex, ~/code/sidecar-u1d-presence, branch u1d-presence) |
 | U1-e web app shell and Sessions | td-57a73e | sidecar-ui | Codex | U0-b | running (Codex, ~/code/sidecar-ui-u1e-app, branch u1e-app) |
 | U1-f SDK adopts v1 | td-820df7 | sidecar-ui | Codex | U1-a, U1-d | queued |
 | U1-g iOS adopts presence and events | td-fde8cf | sidecar-mobile | Codex | U1-a, U1-d | queued |
@@ -190,3 +190,6 @@ Each one is a td issue with the exact command and output. Fixes run as their own
 | td-836fca | `TestPrefillInputEmptyRealShells` readiness flake under a full-suite run | open |
 | td-0502f3 | golangci-lint global lock contention across parallel worktree gates and pre-commit | open |
 | (comms) | Two Codex lanes collided on comms identity at join; worked around with COMMS_SESSION. Codex shell commands apparently do not carry the pane identity comms relies on | to file |
+| td-303037, td-2a7c8a | lint lock held by a parallel lane; shell-readiness flakes under concurrent full suites (folded into the friction lane) | open |
+| (sidecar) | `sidecar create worktree --json` printed two JSON documents once, breaking a strict parser | to verify |
+| td-e930bb | Friction lane (Codex, ~/code/sidecar-friction-1) covering td-0fd8fb, td-0502f3, td-836fca and the comms identity collision | running |
