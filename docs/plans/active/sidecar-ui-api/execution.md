@@ -68,7 +68,7 @@ The status values are `queued`, `running`, `review`, `fixing`, `merged` and `blo
 | U3-a content and layouts API | td-f8784a | sidecar | Codex | U1-a | merged (05dd383b). Claude review fixed a HIGH arbitrary file write through the diff parent parameter (git --output), a watch fd-exhaustion cap, and an existence oracle through symlinks |
 | U3-b pane tree UI | td-cf59cd | sidecar-ui | Codex | U3-a, U1-f | merged (sidecar-ui 13bd63a); 70 e2e tests pass on merged main |
 | U3-c pane and content polish | td-c53032 | both | Codex | U3-b | merged (sidecar-ui 1edaf25, Sidecar c67cc04f). Review fixed two key-stealing bugs |
-| U4 viewers agents can target | td-799dd6 | both | Codex | U3 | U4-a merged (53c2d9b2); U4-b merged (sidecar-ui, review fixed reconnect starvation and workspace-match adoption). U4-c server merged (d07ac257; review fixed foreign-socket pane hints, legacy workDir and malformed UTF-8). U4-c client (td-32cbbb) running; waiting on U4-c server 2 (CatalogRow.content_workspace_id public selector, plus td-cfc0ab; branch u4c-selector) |
+| U4 viewers agents can target | td-799dd6 | both | Codex | U3 | U4-a merged (53c2d9b2); U4-b merged (sidecar-ui, review fixed reconnect starvation and workspace-match adoption). U4-c server merged (d07ac257; review fixed foreign-socket pane hints, legacy workDir and malformed UTF-8). U4-c client (td-32cbbb) running; U4-c server 2 merged (7ce51b37; review fixed a P1 retargeted-alias manifest inheritance and case-alias split); client running |
 
 U2-b onward are briefed below.
 
