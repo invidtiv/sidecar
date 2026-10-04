@@ -595,10 +595,19 @@ func (s *Server) handlePairOrigin(w http.ResponseWriter, r *http.Request, _ call
 	}
 	s.credentialMu.Lock()
 	defer s.credentialMu.Unlock()
+	rotating := s.origins.has(origin)
 	token, record, err := s.origins.pair(origin, scopes, s.opts.Now())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, CodeBackend, fmt.Sprintf("Could not save the paired origin: %v.", err))
 		return
+	}
+	if rotating {
+		// Rotation replaces a token the owner may believe leaked. Every stream
+		// and ticket that exists now was authorized with the old token (the new
+		// one has not been returned yet), so end them as revocation does.
+		keys := map[string]bool{"origin:" + origin: true}
+		s.auth.revokeTickets(keys)
+		s.clients.revoke(keys)
 	}
 	writeJSON(w, http.StatusOK, OriginRegistration{Origin: record.Origin, Token: token, Scopes: record.Scopes})
 }
