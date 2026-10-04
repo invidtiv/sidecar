@@ -86,17 +86,40 @@ func TestIntegratedWorkspaceContentScopesAndEvents(t *testing.T) {
 				}
 				conn := dialEvents(t, h, "?"+query.Encode(), wsHeaders, false)
 				var seq uint64 = 1
-				if tc.full {
-					initialEvents(t, conn)
-					seq = 3
-				} else if got := readEvent(t, conn); got.Type != "hello" || got.Seq != 1 {
+				if got := readEvent(t, conn); got.Type != "hello" || got.Seq != seq {
 					t.Fatalf("hello: %+v", got)
 				}
+				// Pending batches may drain between baseline producers. Require
+				// every granted baseline exactly once with contiguous sequences,
+				// without inventing an order between workspace and terminals.
+				baselines := make(map[string]bool)
+				if tc.full {
+					baselines["catalog"], baselines["terminals"] = true, true
+				}
 				if tc.workspace {
+					baselines["workspace"] = true
+				}
+				for len(baselines) > 0 {
 					seq++
-					if got := readEvent(t, conn); got.Type != "workspace" || got.Seq != seq || got.Workspace == nil {
-						t.Fatalf("workspace baseline: %+v", got)
+					got := readEvent(t, conn)
+					if !baselines[got.Type] || got.Seq != seq {
+						t.Fatalf("unexpected or duplicate scoped baseline: %+v", got)
 					}
+					switch got.Type {
+					case "catalog":
+						if got.Catalog == nil {
+							t.Fatalf("missing catalog baseline: %+v", got)
+						}
+					case "terminals":
+						if got.Terminals == nil || len(*got.Terminals) != 0 {
+							t.Fatalf("empty terminals must be []: %+v", got)
+						}
+					case "workspace":
+						if got.Workspace == nil {
+							t.Fatalf("missing workspace baseline: %+v", got)
+						}
+					}
+					delete(baselines, got.Type)
 				}
 				if tc.content {
 					seq++
