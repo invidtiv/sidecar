@@ -749,7 +749,7 @@ func (s *Service) control(ctx context.Context, request mobileproto.Request) {
 		a.resetGeneration++
 		reset = a.resetGeneration
 		a.firstOutputForReset = 0
-		a.expectedColumns, a.expectedRows = request.Columns, request.Rows
+		a.awaitGeometryLocked(request.Columns, request.Rows)
 	}
 	a.mu.Unlock()
 	if err := s.out.write(mobileproto.Response{Version: mobileproto.Version, Type: mobileproto.ResponseControl, RequestID: request.RequestID,
@@ -815,7 +815,7 @@ func (s *Service) resize(ctx context.Context, request mobileproto.Request) {
 	a.resetGeneration++
 	reset := a.resetGeneration
 	a.firstOutputForReset = 0
-	a.expectedColumns, a.expectedRows = request.Columns, request.Rows
+	a.awaitGeometryLocked(request.Columns, request.Rows)
 	a.mu.Unlock()
 	if err := s.out.write(mobileproto.Response{Version: mobileproto.Version, Type: mobileproto.ResponseResized, RequestID: request.RequestID,
 		AttachmentHandle: a.handle, AttachmentGeneration: a.generation, Control: true, OperationSequence: request.OperationSequence,
@@ -1061,6 +1061,10 @@ type attachment struct {
 	operationSequence, outputSequence, resetGeneration uint64
 	firstOutputForReset                                uint64
 	expectedColumns, expectedRows                      int
+	// priorColumns and priorRows are the geometry a pending resize replaced.
+	// A capture at that size may have been in flight when tmux acknowledged
+	// the resize; staleCaptures is how many more such captures are excused.
+	priorColumns, priorRows, staleCaptures int
 	// reseedDelay is the backoff before the next replacement capture after a
 	// capture failure; zero means the initial delay.
 	reseedDelay time.Duration
@@ -1082,6 +1086,12 @@ type leaseGeometry interface {
 	Release() error
 }
 
+// maxStaleGeometryCaptures bounds how many captures at the pre-resize size an
+// attachment discards while it waits for its own resize to show. Captures
+// requested after tmux acknowledged the resize show the new size unless
+// someone else changed it, so a few cover any capture already in flight.
+const maxStaleGeometryCaptures = 2
+
 const (
 	reseedInitialDelay = 250 * time.Millisecond
 	reseedMaxDelay     = 5 * time.Second
@@ -1098,6 +1108,14 @@ type queuedSnapshot struct {
 	snapshot        tty.ControlSnapshot
 	resetGeneration uint64
 	discontinuity   string
+}
+
+// awaitGeometryLocked records a resize this attachment just made, so the
+// publisher waits for a capture at that size. Callers hold a.mu.
+func (a *attachment) awaitGeometryLocked(columns, rows int) {
+	a.expectedColumns, a.expectedRows = columns, rows
+	a.priorColumns, a.priorRows = a.latest.PaneWidth, a.latest.PaneHeight
+	a.staleCaptures = maxStaleGeometryCaptures
 }
 
 func (a *attachment) offerSnapshot(snapshot tty.ControlSnapshot) {
@@ -1254,8 +1272,22 @@ func (a *attachment) publishQueued(observed queuedSnapshot) {
 		a.expectedColumns, a.expectedRows = 0, 0
 	}
 	altChanged := hadLatest && a.latest.AltScreen != snapshot.AltScreen
+	// A capture at neither the requested size nor the size it replaced, or
+	// more pre-resize captures than could have been in flight, means another
+	// lease holder changed the pane after this resize. The awaited geometry
+	// will never be captured, so the wait ends here.
+	foreignGeometry := false
+	if awaitingGeometry && !expectedGeometry && observed.discontinuity == "" {
+		atPrior := snapshot.PaneWidth == a.priorColumns && snapshot.PaneHeight == a.priorRows
+		if atPrior && a.staleCaptures > 0 {
+			a.staleCaptures--
+		} else {
+			foreignGeometry = true
+			a.expectedColumns, a.expectedRows = 0, 0
+		}
+	}
 	a.mu.Unlock()
-	if awaitingGeometry && !expectedGeometry {
+	if awaitingGeometry && !expectedGeometry && !foreignGeometry {
 		// A capture already in flight when tmux acknowledged the resize still
 		// describes the old grid. Never relabel it as the first frame of the new
 		// reset generation; ask the ordered actor for a post-resize capture.
@@ -1269,6 +1301,11 @@ func (a *attachment) publishQueued(observed queuedSnapshot) {
 		return
 	}
 	reason := observed.discontinuity
+	if foreignGeometry {
+		// Publish this capture at the size the pane really has, after a
+		// geometry_changed reset that revokes control.
+		reason = strongerDiscontinuity(reason, mobileproto.ResetGeometryChanged)
+	}
 	if altChanged {
 		reason = strongerDiscontinuity(reason, mobileproto.ResetAlternateScreen)
 	}

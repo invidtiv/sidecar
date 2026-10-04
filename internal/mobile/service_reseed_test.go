@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -162,5 +163,101 @@ func TestCaptureFailureWithAnInconclusiveCheckStillReseeds(t *testing.T) {
 	case <-sub.requests:
 	case <-time.After(2 * time.Second):
 		t.Fatal("transient capture failure was not reseeded")
+	}
+}
+
+type acceptingGeometry struct{}
+
+func (acceptingGeometry) Resize(int, int) error         { return nil }
+func (acceptingGeometry) Heartbeat() error              { return nil }
+func (acceptingGeometry) SendLiteral([]byte) error      { return nil }
+func (acceptingGeometry) ExpirePresence() (bool, error) { return false, nil }
+func (acceptingGeometry) Release() error                { return nil }
+
+// A resize is acknowledged, and before the attachment captures its expected
+// geometry another lease holder resizes the pane. Every capture from then on
+// shows the foreign size. The attachment must stop waiting for a geometry that
+// will never come: revoke control with a geometry_changed reset and publish
+// the frame at the size the pane really has, instead of requesting snapshots
+// forever while the client sits on a stale screen.
+func TestForeignResizeWhileAwaitingExpectedGeometryEndsTheWait(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		columns, rows int
+	}{
+		{name: "a third size", columns: 6, rows: 3},
+		{name: "back to the size before the claim", columns: 4, rows: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var output bytes.Buffer
+			s := testService(&output)
+			sub := &recordingSubscription{requests: make(chan struct{}, 64)}
+			a := &attachment{service: s, handle: "attachment", generation: 1, target: testTarget(), control: true, geometry: acceptingGeometry{},
+				operationSequence: 1, resetGeneration: 1, outputSequence: 1, firstOutputForReset: 1,
+				latest: testSnapshot("A   \n    ", false, 4, 2), snapshots: make(chan queuedSnapshot, 1), subscription: sub}
+			s.attachments[a.handle] = a
+			s.resize(context.Background(), mobileproto.Request{RequestID: "resize", AttachmentHandle: a.handle, OperationSequence: 2,
+				LastResetGeneration: 1, LastOutputSequence: 1, Columns: 5, Rows: 3})
+			ack := decodeResponses(t, &output)
+			if len(ack) != 2 || ack[0].Type != mobileproto.ResponseResized || ack[1].Reason != mobileproto.ResetResize {
+				t.Fatalf("resize responses = %#v", ack)
+			}
+			// The foreign resize lands first, so every capture the attachment
+			// asks for shows it.
+			lines := make([]string, tc.rows)
+			for index := range lines {
+				lines[index] = strings.Repeat("F", tc.columns)
+			}
+			foreign := testSnapshot(strings.Join(lines, "\n"), false, tc.columns, tc.rows)
+			var responses []mobileproto.Response
+			for capture := 0; capture < 8; capture++ {
+				a.offerSnapshot(foreign)
+				a.publishQueued(<-a.snapshots)
+				responses = append(responses, decodeResponses(t, &output)...)
+				if len(responses) > 0 && responses[len(responses)-1].Type == mobileproto.ResponseFrame {
+					break
+				}
+			}
+			if len(responses) != 2 || responses[0].Type != mobileproto.ResponseReset || responses[0].Reason != mobileproto.ResetGeometryChanged ||
+				responses[1].Type != mobileproto.ResponseFrame || responses[1].ResetGeneration != responses[0].ResetGeneration ||
+				responses[1].Geometry == nil || responses[1].Geometry.Columns != tc.columns || responses[1].Geometry.Rows != tc.rows {
+				t.Fatalf("after a foreign resize the attachment emitted %#v (snapshot requests: %d)", responses, len(sub.requests))
+			}
+			if a.control || a.geometry != nil || a.expectedColumns != 0 || a.expectedRows != 0 || a.firstOutputForReset == 0 {
+				t.Fatalf("wait did not end cleanly: control=%t expected=%dx%d first=%d", a.control, a.expectedColumns, a.expectedRows, a.firstOutputForReset)
+			}
+		})
+	}
+}
+
+// The wait for an expected geometry exists for a capture that was already in
+// flight when tmux acknowledged the resize. Ending the wait on a foreign
+// resize must not end it on that capture: it is dropped, control is kept, and
+// the frame at the requested size follows in the resize's reset generation.
+func TestInFlightPreResizeCaptureStillWaitsForTheExpectedGeometry(t *testing.T) {
+	var output bytes.Buffer
+	s := testService(&output)
+	sub := &recordingSubscription{requests: make(chan struct{}, 64)}
+	a := &attachment{service: s, handle: "attachment", generation: 1, target: testTarget(), control: true, geometry: acceptingGeometry{},
+		operationSequence: 1, resetGeneration: 1, outputSequence: 1, firstOutputForReset: 1,
+		latest: testSnapshot("A   \n    ", false, 4, 2), snapshots: make(chan queuedSnapshot, 1), subscription: sub}
+	s.attachments[a.handle] = a
+	s.resize(context.Background(), mobileproto.Request{RequestID: "resize", AttachmentHandle: a.handle, OperationSequence: 2,
+		LastResetGeneration: 1, LastOutputSequence: 1, Columns: 5, Rows: 3})
+	_ = decodeResponses(t, &output)
+	a.offerSnapshot(testSnapshot("B   \n    ", false, 4, 2)) // captured before tmux applied the resize
+	a.publishQueued(<-a.snapshots)
+	if responses := decodeResponses(t, &output); len(responses) != 0 {
+		t.Fatalf("in-flight pre-resize capture published %#v", responses)
+	}
+	a.offerSnapshot(testSnapshot("CCCCC\nCCCCC\nCCCCC", false, 5, 3))
+	a.publishQueued(<-a.snapshots)
+	responses := decodeResponses(t, &output)
+	if len(responses) != 1 || responses[0].Type != mobileproto.ResponseFrame || responses[0].ResetGeneration != 2 ||
+		responses[0].Geometry == nil || responses[0].Geometry.Columns != 5 || responses[0].Geometry.Rows != 3 {
+		t.Fatalf("responses = %#v", responses)
+	}
+	if !a.control || a.expectedColumns != 0 {
+		t.Fatalf("expected resize lost control or stayed pending: control=%t expected=%d", a.control, a.expectedColumns)
 	}
 }
