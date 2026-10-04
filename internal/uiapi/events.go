@@ -182,13 +182,20 @@ func (h *listenerHandler) serveEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer h.s.streams.Done()
+	h.s.credentialMu.Lock()
+	if !h.s.callerLive(c) {
+		h.s.credentialMu.Unlock()
+		_ = conn.Close(CloseUnauthenticated, revokedSessionReason)
+		return
+	}
 	client, ok := h.s.clients.add("events", c)
+	h.s.credentialMu.Unlock()
 	if !ok {
 		_ = conn.Close(CloseTooManyTerminals, "This client has 16 events streams; close one first.")
 		return
 	}
 	defer h.s.clients.remove(client)
-	h.s.runEvents(conn, c, query)
+	h.s.runEvents(conn, client, c, query)
 }
 
 // eventPending separates collection from socket writes. State is latest-wins;
@@ -299,7 +306,7 @@ func attentionChanges(before, after *mobileproto.CatalogSnapshot, now time.Time)
 	return out
 }
 
-func (s *Server) runEvents(conn *websocket.Conn, c caller, query mobileproto.CatalogQuery) {
+func (s *Server) runEvents(conn *websocket.Conn, client *trackedClient, c caller, query mobileproto.CatalogQuery) {
 	s.startCatalogEvents()
 	catalogChanges, unsubscribe := s.catalogEvents.subscribe()
 	defer unsubscribe()
@@ -341,6 +348,9 @@ func (s *Server) runEvents(conn *websocket.Conn, c caller, query mobileproto.Cat
 	defer func() { cancel(); <-producerDone }()
 	for {
 		select {
+		case <-client.revoked:
+			_ = conn.Close(CloseUnauthenticated, revokedSessionReason)
+			return
 		case <-s.ctx.Done():
 			_ = write(EventMessage{Type: "shutdown", Reason: "The Sidecar API is restarting or stopping; reconnect when it is back."})
 			_ = conn.Close(CloseShuttingDown, "The Sidecar API is shutting down; reconnect when it is back.")

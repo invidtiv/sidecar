@@ -106,7 +106,8 @@ func (r *clientRegistry) add(kind string, c caller) (*trackedClient, bool) {
 	return client, true
 }
 
-// revoke signals every client whose key is in keys and returns how many.
+// revoke signals every stream whose key is in keys and returns the terminal
+// count for SessionRevocation. Events do not count as terminal attachments.
 func (r *clientRegistry) revoke(keys map[string]bool) int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -114,7 +115,9 @@ func (r *clientRegistry) revoke(keys map[string]bool) int {
 	for _, client := range r.clients {
 		if keys[client.key] {
 			client.revokeOnce.Do(func() { close(client.revoked) })
-			count++
+			if client.info.Kind == "terminal" {
+				count++
+			}
 		}
 	}
 	return count

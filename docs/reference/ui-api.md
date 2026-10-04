@@ -161,6 +161,8 @@ v0 inherits the mobile service's bounded outbound queue, so a peer that stops re
 
 ## Events stream
 
+Credential revocation closes event sockets with `4401`, including sockets opened through a ticket or with a browser session that has since been evicted from the auth store. Admission rechecks the credential under the same lock as revocation, so an already-authorized upgrade cannot connect after sign-out. `terminals_closed` in a session-revocation response counts terminal sockets only; event sockets close too.
+
 `GET /api/v0/events` upgrades to a server-to-client WebSocket on every listener. Authentication, Host and Origin guards, tickets, keepalive and close codes are the same as the terminal stream. A browser spends a fresh ticket for this socket; tickets remain single-use across both stream routes. A non-browser client can send a bearer token without Origin. Tailnet upgrades still require the allowed Origin and login. This route accepts only GET. After authentication, an invalid query closes with `4400`. Client data messages are refused with `4400`; clients only read and answer WebSocket pings.
 
 Every text frame is one `uiapi.EventMessage` JSON object with `api_version: 0`, `type`, and `seq`. `hello` is first at sequence 1. Sequence increases contiguously on delivery within this connection and starts again on reconnect. There is no replay cursor: reconnect establishes a fresh catalog and terminal baseline, without replaying old attention.

@@ -410,3 +410,93 @@ func TestPendingAttentionByteBoundAndReplacementAccounting(t *testing.T) {
 		t.Fatal("replacements accumulated a byte budget")
 	}
 }
+
+func TestEventsRevocationClosesOnlyRevokedCredential(t *testing.T) {
+	for _, kind := range []string{"session", "origin"} {
+		t.Run(kind, func(t *testing.T) {
+			h, b := eventsHarness(t)
+			token := h.pairBrowser()
+			if kind == "origin" {
+				token = h.pairOrigin("http://events.example")
+			}
+			c := dialEvents(t, h, "", http.Header{"Authorization": {"Bearer " + token}}, false)
+			initialEvents(t, c)
+			otherToken := h.pairOrigin("http://other-events.example")
+			other := dialEvents(t, h, "", http.Header{"Authorization": {"Bearer " + otherToken}}, false)
+			initialEvents(t, other)
+			terminal, err := h.dialBrowser(t, "", http.Header{"Authorization": {"Bearer " + token}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = terminal.CloseNow() }()
+			writeText(t, terminal, `{"ready":true}`)
+			readText(t, terminal)
+			if kind == "session" {
+				if result := h.revokeSessions(""); result.Revoked != 1 || result.TerminalsClosed != 1 {
+					t.Fatalf("event stream counted as a terminal: %+v", result)
+				}
+			} else {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				if _, err := NewLocalClientForSocket(h.s.Endpoint()).RevokeOrigin(ctx, "http://events.example"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, conn := range []*websocket.Conn{c, terminal} {
+				if code, _ := closeStatus(t, conn); code != CloseUnauthenticated {
+					t.Fatalf("revoked %s stream close = %d, want 4401", kind, code)
+				}
+			}
+			waitForClients(t, h, 1)
+			b.set(snapshotRow("after-revocation", "working", false))
+			if e := readEvent(t, other); e.Type != "catalog" || e.Catalog.Generation != "after-revocation" {
+				t.Fatalf("other credential affected: %+v", e)
+			}
+		})
+	}
+}
+
+func TestEventsTicketRevokedBetweenAuthorizationAndAdmission(t *testing.T) {
+	h, b := eventsHarness(t)
+	token := h.pairBrowser()
+	response, data := h.browserDo(req{method: http.MethodPost, path: "/api/v0/ws-tickets", body: "{}", header: mutationHeaders(h.ownOrigin(), map[string]string{"Authorization": "Bearer " + token})})
+	expect(t, response, data, http.StatusOK, "")
+	var ticket TicketResponse
+	if err := json.Unmarshal(data, &ticket); err != nil {
+		t.Fatal(err)
+	}
+	// Hold admission after authorization redeems the ticket. Sign-out wins
+	// under that same lock; the stale grant must not register or collect rows.
+	h.s.credentialMu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			h.s.credentialMu.Unlock()
+		}
+	}()
+	c := dialEvents(t, h, "?ticket="+ticket.Ticket, http.Header{"Origin": {h.ownOrigin()}}, false)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		h.s.auth.mu.Lock()
+		remaining := len(h.s.auth.tickets)
+		h.s.auth.mu.Unlock()
+		if remaining == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("authorization did not redeem the ticket")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	h.s.auth.revokeSessions("")
+	h.s.clients.revoke(h.s.clients.sessionKeys(""))
+	h.s.credentialMu.Unlock()
+	locked = false
+	if code, _ := closeStatus(t, c); code != CloseUnauthenticated {
+		t.Fatalf("stale admission close = %d, want 4401", code)
+	}
+	if b.count() != 0 {
+		t.Fatal("revoked grant collected catalog data")
+	}
+	waitForClients(t, h, 0)
+}
