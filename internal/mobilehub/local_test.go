@@ -43,10 +43,25 @@ func TestLocalOwnerUsesTheSameHelloValidatedBoundedLineSeam(t *testing.T) {
 }
 
 func TestLocalOwnerRejectsMultilineAndOversizedRequests(t *testing.T) {
-	stream := &localStream{input: &io.PipeWriter{}, cancel: func() {}, lines: make(chan []byte), done: make(chan struct{})}
+	stream := &localStream{input: &io.PipeWriter{}, cancel: func() {}, lines: newOwnerLineQueue(context.Background()), done: make(chan struct{})}
 	for _, line := range [][]byte{nil, []byte("one\ntwo"), []byte("one\rtwo"), make([]byte, mobileproto.MaxLineBytes+1)} {
 		if err := stream.WriteLine(line); err == nil {
 			t.Fatalf("invalid local owner request of %d bytes accepted", len(line))
 		}
+	}
+}
+
+func TestLocalOwnerNegotiatesCapabilitiesOnItsFirstHello(t *testing.T) {
+	factory := func(input io.Reader, output io.Writer) (*mobile.Service, error) {
+		return mobile.New(mobile.Config{Input: input, Output: output, HubID: "local", OwnerHostID: "local:hub", OwnerConfigGeneration: "cfg", Resolver: func(context.Context, string) (mobile.ResolvedTarget, error) { return mobile.ResolvedTarget{}, nil }})
+	}
+	ctx := withOwnerHello(context.Background(), &mobileproto.ClientCapabilities{Presence: true, ResetFreeFrames: true, CoalescedFrames: true, HolderLabels: true}, &mobileproto.Viewer{Kind: "ios", Label: "iPad"})
+	stream, hello, err := StartLocal(ctx, factory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	if hello.Capabilities == nil || *hello.Capabilities != mobileproto.SupportedCapabilities() {
+		t.Fatalf("first local hello did not negotiate: %+v", hello.Capabilities)
 	}
 }
