@@ -785,3 +785,15 @@ func TestCallerFilePreservesIssueAndRejectsInvalidTwins(t *testing.T) {
 		})
 	}
 }
+
+func TestCallerFileWithoutDestinationRootKeepsAbsoluteIdentity(t *testing.T) {
+	caller := t.TempDir()
+	if err := os.WriteFile(filepath.Join(caller, "lane.md"), []byte("caller"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(caller)
+	target, handled, err := resolveCallerFile("", "lane.md", 0)
+	if err != nil || !handled || !filepath.IsAbs(target.Value) {
+		t.Fatalf("unrooted destination file = %+v, %v, %v", target, handled, err)
+	}
+}

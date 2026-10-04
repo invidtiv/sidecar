@@ -522,7 +522,7 @@ func resolveCallerFile(workDir, raw string, line int) (uirequest.Target, bool, e
 		return uirequest.Target{}, true, err
 	}
 	absolute := canonicalOpenPath(filepath.Join(cwd, filepath.FromSlash(target.Value)))
-	if rel, err := filepath.Rel(canonicalOpenPath(workDir), absolute); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	if rel, err := filepath.Rel(canonicalOpenPath(workDir), absolute); workDir != "" && err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		target.Value = filepath.ToSlash(rel)
 	} else {
 		target.Value = absolute
