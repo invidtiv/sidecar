@@ -196,3 +196,5 @@ Live proofs follow the `scripts/tmux-drive.sh` isolation rules: a private tmux s
 `scripts/ui-api-proof.sh` is the v0 proof. It builds a temporary binary, creates one managed shell on a private tmux server, runs `sidecar api serve`, and checks the Local routes with `curl --unix-socket`, the Browser guards, `sidecar api open` pairing, origin pairing with a ticket, and one terminal round trip over the WebSocket through `internal/tools/uiapiproof`. `TestAPITerminalRoundTripAgainstLocalOwner` in `internal/cli` covers the same terminal sequence in process.
 
 `scripts/ui-api-service-proof.sh` covers fake launchd/systemd and CLI lifecycles, config-driven UI serving, explicit UI override, replacement of the stable launch link, clean exit/discovery cleanup, and restart against the same isolated state tree. It makes no service-manager or tmux changes.
+
+`scripts/ui-api-measure.sh` uses the same isolation to measure the terminal stream under agent-like load: frames, wire bytes, captures, CPU and keystroke-to-echo latency, through `internal/tools/uiapimeasure`. Results are in [U0 measurements](../plans/active/sidecar-ui-api/u0-measurements.md).
