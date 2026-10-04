@@ -55,16 +55,16 @@ The status values are `queued`, `running`, `review`, `fixing`, `merged` and `blo
 | U1-c service install | td-d7869b | sidecar | Codex, reviewed by Codex | U0-a | merged |
 | U1-d presence and v1 frames | td-713745 | sidecar | Codex | td-552e24 merged | merged (c75857ac) |
 | U1-e web app shell and Sessions | td-57a73e | sidecar-ui | Codex | U0-b | merged (sidecar-ui 8d183fc); Claude review fixed 6 UX defects |
-| U1-f SDK adopts v1 | td-820df7 | sidecar-ui | Codex | U1-a, U1-d | review (Claude reviewer); branch u1f-sdk @3669641 |
+| U1-f SDK adopts v1 | td-820df7 | sidecar-ui | Codex | U1-a, U1-d | merged (sidecar-ui fdad866); Claude review fixed the paste-marker strip |
 | U1-g iOS adopts presence and events | td-fde8cf | sidecar-mobile | Codex | U1-a, U1-d | running (Codex, ~/code/sidecar-mobile-u1g-presence, branch u1g-presence); presence first against the u1d branch, events after U1-a |
 | U1-i persist browser sessions | td-165353 | sidecar | Codex | U1-a, U1-b merged (both touch internal/uiapi) | redesign running: non-extractable WebCrypto key with signed nonces and short-lived in-memory bearers, so nothing stealable is at rest (security finding 4). SDK side follows U1-f |
 | U1-e2 web app polish | td-71e0e5 | sidecar-ui | Codex | U1-e | merged (sidecar-ui 5e0ecb2) |
-| U1-h security review and three-viewer proof | td-295605 | all | Claude, then Codex | U1-a, U1-d, U1-f | security review merged (6176110f): tailnet paired-origin tokens, re-pair closes streams, owner-only service PATH. Three-viewer proof after U1-f |
+| U1-h security review and three-viewer proof | td-295605 | all | Claude, then Codex | U1-a, U1-d, U1-f | security merged (6176110f); three-viewer proof running (Codex, ~/code/sidecar-u1h-three-viewer) |
 | U2-a core extraction | td-c709a9 | sidecar | Codex | U0-a | merged (d95b66f5) |
-| U2-b workspace resources and operations API | td-eb3d80 | sidecar | Codex | U2-a | running |
+| U2-b workspace resources and operations API | td-eb3d80 | sidecar | Codex | U2-a | review (Codex reviewer, shell "rev U2-b"); branch u2b-workspace-api @3423e767, which also carries the agent `--` terminator fix td-66d7e3 |
 | U2-c workspace UI | td-37a00e | sidecar-ui | Codex | U2-b | queued |
-| U3-a content and layouts API | td-f8784a | sidecar | Codex | U1-a | running |
-| U3-b pane tree UI | td-cf59cd | sidecar-ui | Codex | U3-a, U1-f | queued |
+| U3-a content and layouts API | td-f8784a | sidecar | Codex | U1-a | review (Claude security reviewer); branch u3a-content-api @cd4978c2 |
+| U3-b pane tree UI | td-cf59cd | sidecar-ui | Codex | U3-a, U1-f | queued until U3-a lands (U1-f merged) |
 | U4 viewers agents can target | td-799dd6 | both | Codex | U3 | queued |
 
 U2-b onward are briefed below.
@@ -258,11 +258,14 @@ Each one is a td issue with the exact command and output. Fixes run as their own
 | (sidecar) | `sidecar create worktree --json` printed two JSON documents once, breaking a strict parser | to verify |
 | td-e930bb | Friction lane: flakes, lint lock, prune safety (td-8e99af, td-cd833a, td-60fb5c were real production risks), Codex `--no-daemon` launch, implicit-caller identity guard, per-shell COMMS_SESSION | merged (70eaa52e); takes effect for Codex agents started by a Sidecar built from main |
 | td-11138b | `sidecar agent prompt` reported `working`, but the Codex session later showed no conversation and the lane never ran. Orchestrator now confirms every lane on screen after prompting | open |
-| td-eeb7e8 | P1: a stale ShellCreatedMsg arriving after a project switch writes the next project's shells manifest | running (bug lane) |
+| td-eeb7e8 | P1: a stale ShellCreatedMsg arriving after a project switch writes the next project's shells manifest | merged (7d9b53f7), with completion fences across workspace and Sessions |
 | td-8e99af | A worktree-prune safety test sometimes judges a moved active worktree an orphan; checking whether production prune can do the same (friction lane, first priority) | running |
 | td-87ef7e, td-d77e97, td-cce9f6, td-5e7e28, td-9339ae, td-6db2ce | Load-dependent test flakes found under parallel lane gates (friction lane) | running |
 | td-ac892f | Fixed in 70eaa52e for newly launched agents. P1 root cause of several items above: Codex sessions share one `codex app-server` daemon env, so "current shell/project" defaults resolve to another agent (a reviewer renamed U1-d's shell). Friction lane | running |
 | td-090b9d | Not a comms bug. The orchestrator's watcher script crashed on an untitled message and skipped reports. Fixed in the watcher | invalid |
-| td-eeb7e8 lane | Codex bug lane (~/code/sidecar-bug-eeb7e8) with a completion fence for stale async messages across workspace and overview | review (Codex reviewer, shell "rev eeb7e8"; branch bug-eeb7e8 @5d7cef2d) |
+| td-eeb7e8 lane | Codex bug lane (~/code/sidecar-bug-eeb7e8) with a completion fence for stale async messages across workspace and overview | merged (7d9b53f7) |
 | td-ae18e4, td-87dd09 | `comms publish` refused with "author does not follow topic" and no recovery hint (comms) | open |
 | td-6153d0 | `create worktree --agent codex` sometimes leaves the shell without Codex and reports success; under load. Recovered with `agent start --kind codex` | open |
+| td-ab3af0 | Friction lane 2 (Codex, ~/code/sidecar-friction-2): notes test hang td-aa4fb7, loopback/tmux-drive load flakes td-d881e2, silent Codex start failure td-6153d0, project reorder must not cancel operations, shared events holder polling | running |
+| td-58caeb | `comms send @ui-u2b` returned agent-not-found from another lane; peer handles are not reliably discoverable | open |
+| td-07f7b1 | Eight simultaneous valid `create shell` calls gave 1 success and 7 generic exit-1 errors (allocation race). Codex bug lane ~/code/sidecar-bug-07f7b1 | running |
