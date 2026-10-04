@@ -46,8 +46,8 @@ The status values are `queued`, `running`, `review`, `fixing`, `merged` and `blo
 | --- | --- | --- | --- | --- | --- |
 | U0-a server | td-ba925d | sidecar | Claude | — | merged (2f0dc1e7) |
 | U0-b SDK/element | td-83cce9 | sidecar-ui | Claude | — | merged (sidecar-ui 2c0f521) |
-| U0-a follow-ups | td-552e24 | sidecar | Claude | U0-a | running |
-| U0-c proof and measurements | td-d8fcb0 | both | Claude, plus Marcus for the live half | U0-a, U0-b | running (automatable half) |
+| U0-a follow-ups | td-552e24 | sidecar | Claude | U0-a | review (Codex, shell "rev td-552e24") |
+| U0-c proof and measurements | td-d8fcb0 | both | Claude, plus Marcus for the live half | U0-a, U0-b | automatable half done (0b1476b2, a0dfb694); live half with Marcus pending |
 | U1-a events stream | td-aa8756 | sidecar | Codex | U0-a | running (Codex, worktree ~/code/sidecar-ui-u1a-events, branch ui-u1a-events) |
 | U1-b schemas, spec, fixtures | td-5ae805 | sidecar | Codex | U0-a | running (Codex, ~/code/sidecar-u1b-spec, branch u1b-spec) |
 | U1-c service install | td-d7869b | sidecar | Codex | U0-a | running (Codex, ~/code/sidecar-u1c-service, branch u1c-service) |
@@ -153,7 +153,7 @@ The repo is `~/code/sidecar-ui`. Build the reference app into something that fee
 
 ### U1-f: SDK and element adopt v1
 
-Replace the U0 client-side focus approximation with the server's `presence` operation. Adopt the events stream (`Session.events`), reset-free and changed-row frames, server-side paste, the holder label for the "sized for …" hint, and the fixtures from U1-b. Swap the hand-written types for the generated schemas. Wire app notifications to attention events.
+Replace the U0 client-side focus approximation with the server's `presence` operation. Adopt the events stream (`Session.events`), reset-free and changed-row frames, server-side paste, the holder label for the "sized for …" hint, and the fixtures from U1-b. Swap the hand-written types for the generated schemas. Wire app notifications to attention events. Also close two gaps from the U0 shadow-DOM checks. First, forward mouse-tracking reports (clicks and drags, not only the wheel) when the frame says the app has mouse reporting on. Second, keep a selection the user started from being wiped by the redraw when the terminal takes the size.
 
 ### U1-g: native app adopts presence and events
 
