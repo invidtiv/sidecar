@@ -1,0 +1,112 @@
+package contentservice
+
+import (
+	"context"
+	"github.com/marcus/sidecar/internal/config"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+// LookupProject resolves an explicitly configured project and an optional
+// durable workspace belonging to it. No ambient current-project fallback.
+func (s *Service) LookupProject(ctx context.Context, project, workspace string) (Workspace, error) {
+	projects, err := s.projects()
+	if err != nil {
+		return Workspace{}, err
+	}
+	var root string
+	for _, p := range projects {
+		if p.Name == project || canonical(config.ExpandPath(p.Path)) == project {
+			if root != "" {
+				return Workspace{}, Rejected("project %q is ambiguous", project)
+			}
+			root = canonical(config.ExpandPath(p.Path))
+		}
+	}
+	if root == "" {
+		return Workspace{}, Rejected("project %q is not configured", project)
+	}
+	if workspace == "" {
+		return Workspace{ID: root + ":worktree:" + root, Kind: kindWorktree, Root: root, Key: root}, nil
+	}
+	_, projectKey, _, ok := parseWorkspaceID(workspace)
+	if !ok || canonical(projectKey) != root {
+		return Workspace{}, Rejected("workspace does not belong to project %q", project)
+	}
+	return s.LookupWorkspace(ctx, workspace)
+}
+
+// ReadProject applies the HTTP project's path boundary before the ordinary
+// typed content read. Markdown is a file document, rendered by the client.
+func (s *Service) ReadProject(ctx context.Context, project, workspace string, params ReadParams) (ReadResult, error) {
+	ws, err := s.LookupProject(ctx, project, workspace)
+	if err != nil {
+		return ReadResult{}, err
+	}
+	if err := requireKind(params.Kind); err != nil {
+		return ReadResult{}, err
+	}
+	if err := requireOperation(params.Kind, params.Operation); err != nil {
+		return ReadResult{}, err
+	}
+	if params.Kind == KindResource {
+		return ReadResult{}, UnknownKind(params.Kind)
+	}
+	if params.Kind == KindFile {
+		if err := StrictRelative(params.Target); err != nil {
+			return ReadResult{}, err
+		}
+		rel, _, err := ContainedRelative(ws.Root, params.Target)
+		if err != nil {
+			return ReadResult{}, err
+		}
+		doc, err := readContainedFile(ctx, ws.Root, rel, params.IfRevision)
+		if err != nil {
+			return ReadResult{}, err
+		}
+		return readResultFrom(ws.ID, doc), nil
+	}
+	if params.Kind == KindDiff && params.Path != "" {
+		if err := StrictRelative(params.Path); err != nil {
+			return ReadResult{}, err
+		}
+		if _, _, err := ContainedRelative(ws.Root, params.Path); err != nil {
+			return ReadResult{}, err
+		}
+	}
+	return s.readWorkspace(ctx, ws, params)
+}
+
+// TreeProject lists only explicitly requested directories of this project.
+func (s *Service) TreeProject(ctx context.Context, project, workspace string, paths []string) (TreeResult, error) {
+	ws, err := s.LookupProject(ctx, project, workspace)
+	if err != nil {
+		return TreeResult{}, err
+	}
+	for _, path := range paths {
+		if err := StrictRelative(path); err != nil {
+			return TreeResult{}, err
+		}
+	}
+	dir, err := os.OpenRoot(ws.Root)
+	if err != nil {
+		return TreeResult{}, Rejected("project root is not readable: %v", err)
+	}
+	defer func() { _ = dir.Close() }()
+	return s.treeWorkspaceRead(ctx, ws, paths, dir)
+}
+
+// StrictRelative rejects traversal components even when cleaning would leave
+// the final path inside the root. It is shared by API reads and subscriptions.
+func StrictRelative(raw string) error {
+	if filepath.IsAbs(raw) || isHomeToken(raw) {
+		return Rejected("path must be relative to the project root")
+	}
+	for _, part := range strings.Split(filepath.ToSlash(raw), "/") {
+		if part == ".." {
+			return Rejected("path traversal is refused")
+		}
+	}
+	return nil
+}

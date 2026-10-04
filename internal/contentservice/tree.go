@@ -2,11 +2,13 @@ package contentservice
 
 import (
 	"context"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/marcus/sidecar/internal/filefind"
@@ -88,6 +90,14 @@ func (s *Service) Tree(ctx context.Context, workspaceID string, paths []string) 
 	if err != nil {
 		return TreeResult{}, err
 	}
+	return s.treeWorkspace(ctx, ws, paths)
+}
+
+func (s *Service) treeWorkspace(ctx context.Context, ws Workspace, paths []string) (TreeResult, error) {
+	return s.treeWorkspaceRead(ctx, ws, paths, nil)
+}
+
+func (s *Service) treeWorkspaceRead(ctx context.Context, ws Workspace, paths []string, root *os.Root) (TreeResult, error) {
 	if len(paths) == 0 {
 		paths = []string{""}
 	}
@@ -96,7 +106,19 @@ func (s *Service) Tree(ctx context.Context, workspaceID string, paths []string) 
 	}
 
 	ignore := filefind.NewGitIgnore()
-	_ = ignore.LoadFile(filepath.Join(ws.Root, ".gitignore"))
+	if root == nil {
+		_ = ignore.LoadFile(filepath.Join(ws.Root, ".gitignore"))
+	} else {
+		file, err := root.OpenFile(".gitignore", os.O_RDONLY|syscall.O_NONBLOCK, 0)
+		if err == nil {
+			info, err := file.Stat()
+			if err == nil && info.Mode().IsRegular() {
+				data, _ := io.ReadAll(io.LimitReader(file, MaxEncodedBytes))
+				_ = ignore.LoadBytes(data)
+			}
+			_ = file.Close()
+		}
+	}
 
 	result := TreeResult{Kind: KindTree, Workspace: ws.ID, Dirs: make([]TreeDir, 0, len(paths))}
 	for _, raw := range paths {
@@ -110,7 +132,21 @@ func (s *Service) Tree(ctx context.Context, workspaceID string, paths []string) 
 			// would let a caller probe the filesystem one refusal at a time.
 			return TreeResult{}, err
 		}
-		result.Dirs = append(result.Dirs, listTreeDir(rel, abs, ignore))
+		if root == nil {
+			result.Dirs = append(result.Dirs, listTreeDir(rel, abs, ignore))
+		} else {
+			path := rel
+			if path == "" {
+				path = "."
+			}
+			file, err := root.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+			if err != nil {
+				return TreeResult{}, Rejected("directory %q is not readable within the project: %v", rel, err)
+			}
+			entries, err := file.ReadDir(-1)
+			_ = file.Close()
+			result.Dirs = append(result.Dirs, listTreeEntries(rel, entries, err, ignore))
+		}
 	}
 	return result, nil
 }
@@ -150,8 +186,12 @@ func ContainedRelative(root, raw string) (rel, abs string, err error) {
 }
 
 func listTreeDir(rel, abs string, ignore *filefind.GitIgnore) TreeDir {
-	dir := TreeDir{Path: rel}
 	entries, err := os.ReadDir(abs)
+	return listTreeEntries(rel, entries, err, ignore)
+}
+
+func listTreeEntries(rel string, entries []os.DirEntry, err error, ignore *filefind.GitIgnore) TreeDir {
+	dir := TreeDir{Path: rel}
 	if err != nil {
 		dir.Err = readDirReason(rel, err)
 		return dir

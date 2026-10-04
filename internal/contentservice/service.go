@@ -143,6 +143,10 @@ func (s *Service) ReadParams(ctx context.Context, params ReadParams) (ReadResult
 	if err != nil {
 		return ReadResult{}, err
 	}
+	return s.readWorkspace(ctx, ws, params)
+}
+
+func (s *Service) readWorkspace(ctx context.Context, ws Workspace, params ReadParams) (ReadResult, error) {
 	switch params.Kind {
 	case KindIssue:
 		doc, err := s.readIssueAt(ctx, ws.Root, params.Target, params.IfRevision, s.issueFallbacks())

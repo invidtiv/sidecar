@@ -471,7 +471,12 @@ func readWorktreeFileBounded(root, path string) (string, error) {
 	if info.Size() > workspacediff.MaxUntrackedFileSize {
 		return "", nil
 	}
-	f, err := os.Open(full)
+	dir, err := os.OpenRoot(root)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = dir.Close() }()
+	f, err := dir.Open(filepath.FromSlash(path))
 	if err != nil {
 		return "", err
 	}
