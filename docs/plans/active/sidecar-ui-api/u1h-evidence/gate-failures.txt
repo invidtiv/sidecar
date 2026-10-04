@@ -1,0 +1,25 @@
+Initial post-merge command: timeout 900 go test ./...
+Exit: 1
+
+--- FAIL: TestNothingAboutARemoteAgentIsWrittenIntoTheViewersOwnState (20.90s)
+    agent_remote_loopback_test.go:1101: remote [agent prompt sidecar-sh-lb-agent hello --wait --timeout 30s --json]: exit 5
+        {"error":{"code":"agent_prompt_stalled","message":"prompt was written but codex did not leave idle within 5s; read the target before sending more input","target":{"host":"loopback","project":"lb","session":"sidecar-sh-lb-agent","name":"lb agent","namespace":"/var/folders/9z/_hxsyhcx59d_cbrbhxfk9j000000gn/T/lbtmux3946688458/tmux-501/default","paneId":"%0","panePid":2032,"serverPid":2018,"serverIncarnation":"present inode=352486083 ctime=1791114644776325677 pid=2018"},"receipt":{"submission":"submitted","wait":"stalled","target":{"host":"loopback","project":"lb","session":"sidecar-sh-lb-agent","name":"lb agent","namespace":"/var/folders/9z/_hxsyhcx59d_cbrbhxfk9j000000gn/T/lbtmux3946688458/tmux-501/default","paneId":"%0","panePid":2032,"serverPid":2018,"serverIncarnation":"present inode=352486083 ctime=1791114644776325677 pid=2018"}}}}
+--- FAIL: TestServiceRemoveCancelsSoundBeforeBlockedNativeLedger (0.16s)
+    delivery_test.go:302: sound receipt={Provider:fake Delivered:true Reason: At:2026-10-04 11:48:44.409651 +0000 UTC} played=[attention]
+2026/10/04 04:48:45 WARN notifydelivery: custom sound playback failed; using the built-in cue channel=sound cue=attention
+
+Focused retries exited 0:
+ok  	github.com/marcus/sidecar/internal/notifydelivery	1.484s
+ok  	github.com/marcus/sidecar/internal/cli	7.249s
+
+Pre-fix serial package command: GOFLAGS=-p=1 timeout 900 go test ./...
+--- FAIL: TestServiceRemoveCancelsSoundBeforeBlockedNativeLedger (0.27s)
+    delivery_test.go:302: sound receipt={Provider:fake Delivered:true Reason: At:2026-10-04 12:03:42.351574 +0000 UTC} played=[attention]
+2026/10/04 05:03:42 WARN notifydelivery: custom sound playback failed; using the built-in cue channel=sound cue=attention
+
+After manual-clock test fix:25 focused repeats exited 0
+ok  	github.com/marcus/sidecar/internal/notifydelivery	1.264s
+
+Full run on86205ffe with GOFLAGS=-p=1 timeout 900: exit 124 after tty passed28.524s; no test failure reported before process deadline. Retrying unchanged tree with timeout 1800 and identical package coverage.
+
+Final unchanged-source full retry: GOFLAGS=-p=1 timeout 1800 go test ./... exited 0. All five required gates green on86205ffe.
