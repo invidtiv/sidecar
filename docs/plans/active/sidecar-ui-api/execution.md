@@ -61,8 +61,13 @@ The status values are `queued`, `running`, `review`, `fixing`, `merged` and `blo
 | U1-e2 web app polish | td-71e0e5 | sidecar-ui | Codex | U1-e | running (Codex, ~/code/sidecar-ui-u1e2-polish, branch u1e2-polish): terminal-safe chords, needs-input, palette, phone header |
 | U1-h security review and three-viewer proof | td-295605 | all | Claude, then Codex | U1-a, U1-d, U1-f | security review running (Claude) on main c75857ac; three-viewer proof after U1-f |
 | U2-a core extraction | td-c709a9 | sidecar | Codex | U0-a | merged (d95b66f5) |
+| U2-b workspace resources and operations API | td-eb3d80 | sidecar | Codex | U2-a | running |
+| U2-c workspace UI | td-37a00e | sidecar-ui | Codex | U2-b | queued |
+| U3-a content and layouts API | td-f8784a | sidecar | Codex | U1-a | running |
+| U3-b pane tree UI | td-cf59cd | sidecar-ui | Codex | U3-a, U1-f | queued |
+| U4 viewers agents can target | td-799dd6 | both | Codex | U3 | queued |
 
-U2-b onward (workspace resources, operations, `<sidecar-workspace>`), U3 and U4 are briefed once U2-a and U1 settle.
+U2-b onward are briefed below.
 
 ## Lane briefs
 
@@ -183,6 +188,52 @@ Make one state-free workspace-operation service for creating, renaming, deleting
 - Run the full suite and the TUI proof scripts.
 
 This is a large refactor in shared code, so keep commits small and reviewable.
+
+### U2-b: workspace resources and operations over the API
+
+This builds on U2-a's `workspaceops.Service`, `agentresolve` and the pure `workspacelist` rules.
+
+- **Read routes.**
+  - `GET /api/v0/projects` lists the configured projects.
+  - `GET /api/v0/projects/{project}/workspace` returns that project's worktrees and shells, with agent state, ordered and grouped by the same pure rules the TUI uses.
+  - Push changes for both through the events stream (`workspace` messages), driven by the existing watchers.
+- **Operations.** Add `POST` routes for shell create, rename, delete and restore; worktree create (plan, then confirmed execute, with the `--expect-source-oid` guard), rename and delete (the dirty probe comes first and is refused unless confirmed); and agent start and prompt.
+  - Each calls the same service the CLI calls.
+  - Each returns the CLI's `--json` shape and refusal codes.
+  - Each needs a new `workspace:write` scope. `full` implies it.
+- **Remote hosts.** Mutations on a remote host go through the owning host's CLI, exactly as Sessions does today.
+- **Contract.** Regenerate the spec and fixtures. Add tests, including concurrent-writer tests against the TUI watcher, and extend the live proof.
+
+### U2-c: `<sidecar-workspace>` and project workspaces in sidecar-ui
+
+A project page with worktrees and shells, and native, keyboard-first create, rename and delete flows.
+
+- Destructive actions confirm in context. Worktree delete shows exactly what the dirty probe found.
+- Agent start and prompt are available from a shell.
+- The `<sidecar-workspace>` element is embeddable like the others.
+- The same no-internals rule and phone layout apply.
+- This starts after U2-b's contract lands on main.
+
+### U3-a: content panes and layouts over the API
+
+- **Content routes.** Read routes over `contentservice` cover file previews, markdown docs, diffs, issues, notes and the project file tree. They return the existing DTOs, and they check paths against project roots: no traversal, and symlink escapes refused.
+- **Live refresh.** Content invalidation goes on the events stream (`content` messages), from `livewatch` path watchers scoped to the panes that clients have open.
+- **Layouts.** A locked, per-viewer layout store under `$STATE/api/layouts/` uses the shared `panelayout` and `panecodec` tree format, with no cell geometry. `GET` and `PUT` it per project and per viewer, with conditional writes (ETag/If-Match). Viewers are the browser session and the paired origin.
+- **Scopes.** Add `content:read`; `full` implies it.
+- **Contract.** Regenerate the spec and fixtures, and extend the proof.
+
+### U3-b: pane tree and content panes in sidecar-ui
+
+- **Pane tree.** Splits, holding several terminals and content panes, built from the layout store. Panes can be dragged between splits, and tabs can be moved.
+- **Content panes.** Rendered natively: markdown as typography, diffs with syntax highlighting side by side, issues as cards, and a file tree.
+- **Platform.** Pop-out windows, live refresh from content events, and keyboard navigation between panes.
+- This starts after U3-a lands. Screen-model frames are measured again here, only if several visible terminals show cost.
+
+### U4: API clients as viewers that agents can target
+
+- **Server (U4-a).** An API client that holds the screen announces itself on the `uirequest` bus as a viewer with `uiRequestRelayV1`. `sidecar open` and `sidecar layout get/apply/move` then reach it, with the same decline-don't-queue rules and exit codes.
+- **Client (U4-b).** The browser receives those requests over the events stream, applies them to its pane tree, and acknowledges.
+- **Result.** An agent says "open this diff" and it appears in whichever UI Marcus is using.
 
 ## Bugs and friction found along the way
 
