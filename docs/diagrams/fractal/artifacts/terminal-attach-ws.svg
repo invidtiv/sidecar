@@ -1,0 +1,168 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" role="img" aria-labelledby="sequence-title sequence-description" data-theme="graphite" data-theme-appearance="light">
+  <title id="sequence-title">Attach to a Terminal over WebSocket</title><desc id="sequence-description">What &lt;sidecar-terminal&gt; and the SDK do on one terminal WebSocket in U0: handshake, resolve and open a target, approximate focus-wins on the v0 control operations, type, and leave cleanly.</desc><metadata>{&quot;journeyId&quot;:&quot;terminal-attach-ws&quot;,&quot;provenance&quot;:&quot;Authored 2026-10-03 from docs/reference/ui-api.md (Terminal stream), docs/reference/mobile-protocol.md, docs/plans/active/sidecar-ui-api.md (U0 SDK behavior), internal/uiapi/terminal.go and internal/mobile/service.go. Shows the local-owner path without remote hosts. An authored scenario, not a captured trace; heartbeats and pings repeat but are shown once.&quot;,&quot;hiddenLanes&quot;:[],&quot;rows&quot;:[{&quot;id&quot;:&quot;handshake&quot;,&quot;type&quot;:&quot;phase&quot;,&quot;messageIds&quot;:[&quot;connect&quot;,&quot;hello&quot;,&quot;hello_forward&quot;,&quot;hello_reply&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;element&quot;,&quot;sdk&quot;,&quot;bridge&quot;,&quot;service&quot;]},{&quot;id&quot;:&quot;connect&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;connect&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;element&quot;,&quot;sdk&quot;]},{&quot;id&quot;:&quot;hello&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;hello&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;sdk&quot;,&quot;bridge&quot;]},{&quot;id&quot;:&quot;hello_forward&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;hello_forward&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;bridge&quot;,&quot;service&quot;]},{&quot;id&quot;:&quot;hello_reply&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;hello_reply&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;service&quot;,&quot;sdk&quot;]},{&quot;id&quot;:&quot;open&quot;,&quot;type&quot;:&quot;phase&quot;,&quot;messageIds&quot;:[&quot;resolve&quot;,&quot;resolved&quot;,&quot;open_target&quot;,&quot;subscribe&quot;,&quot;control_mode&quot;,&quot;opened&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;sdk&quot;,&quot;service&quot;,&quot;control&quot;,&quot;tmux&quot;]},{&quot;id&quot;:&quot;resolve&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;resolve&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;sdk&quot;,&quot;service&quot;]},{&quot;id&quot;:&quot;resolved&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;resolved&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;service&quot;,&quot;sdk&quot;]},{&quot;id&quot;:&quot;open_target&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;open_target&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;sdk&quot;,&quot;service&quot;]},{&quot;id&quot;:&quot;subscribe&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;subscribe&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;service&quot;,&quot;control&quot;]},{&quot;id&quot;:&quot;control_mode&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;control_mode&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;control&quot;,&quot;tmux&quot;]},{&quot;id&quot;:&quot;opened&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;opened&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;service&quot;,&quot;sdk&quot;]},{&quot;id&quot;:&quot;interact&quot;,&quot;type&quot;:&quot;phase&quot;,&quot;messageIds&quot;:[&quot;claim&quot;,&quot;lease&quot;,&quot;resized&quot;,&quot;type&quot;,&quot;input&quot;,&quot;send_keys&quot;,&quot;frame&quot;,&quot;heartbeat&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;sdk&quot;,&quot;service&quot;,&quot;control&quot;,&quot;element&quot;]},{&quot;id&quot;:&quot;claim&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;claim&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;sdk&quot;,&quot;service&quot;]},{&quot;id&quot;:&quot;lease&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;lease&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;service&quot;,&quot;control&quot;]},{&quot;id&quot;:&quot;resized&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;resized&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;service&quot;,&quot;sdk&quot;]},{&quot;id&quot;:&quot;type&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;type&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;element&quot;,&quot;sdk&quot;]},{&quot;id&quot;:&quot;input&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;input&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;sdk&quot;,&quot;service&quot;]},{&quot;id&quot;:&quot;send_keys&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;send_keys&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;service&quot;,&quot;control&quot;]},{&quot;id&quot;:&quot;frame&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;frame&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;service&quot;,&quot;sdk&quot;]},{&quot;id&quot;:&quot;heartbeat&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;heartbeat&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;sdk&quot;,&quot;service&quot;]},{&quot;id&quot;:&quot;leave&quot;,&quot;type&quot;:&quot;phase&quot;,&quot;messageIds&quot;:[&quot;blur&quot;,&quot;released&quot;,&quot;close_socket&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;sdk&quot;,&quot;service&quot;,&quot;bridge&quot;]},{&quot;id&quot;:&quot;blur&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;blur&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;sdk&quot;,&quot;service&quot;]},{&quot;id&quot;:&quot;released&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;released&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;service&quot;,&quot;sdk&quot;]},{&quot;id&quot;:&quot;close_socket&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;close_socket&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;sdk&quot;,&quot;bridge&quot;]}]}</metadata>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#85857f"/></marker>
+    <marker id="arrow-open" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10" fill="none" stroke="#85857f" stroke-width="1.5"/></marker>
+  </defs>
+  <rect width="1920" height="1080" fill="#f8f8f6"/>
+  <g font-family="Arial, Helvetica, sans-serif" data-export-layer="title">
+    <text x="70" y="43" font-size="11" letter-spacing="2.5" fill="#626b6f">FRACTAL / SEQUENCE JOURNEY</text>
+    <text x="70" y="88" text-anchor="start" font-size="34" fill="#292927"><tspan x="70" dy="0">Attach to a Terminal over WebSocket</tspan></text>
+    <text x="70" y="126" text-anchor="start" font-size="15" fill="#74746f"><tspan x="70" dy="0">What &lt;sidecar-terminal&gt; and the SDK do on one terminal WebSocket in U0: handshake, resolve and open a target, approximate focus-wins on the v0 control operations, type, and leave cleanly.</tspan></text>
+  </g>
+  <g font-family="Arial, Helvetica, sans-serif" transform="translate(566.0186710598573 190) scale(0.4173531026908292)"><g data-column="element" data-members="element" data-elements="uiclients.elements">
+    <rect x="102" y="32" width="244" height="44" rx="12" fill="#ffffff" stroke="#6FA6A0" stroke-width="2"/>
+    <text x="224" y="59" text-anchor="middle" font-size="15" fill="#292927"><tspan x="224" dy="0">&lt;sidecar-terminal&gt;</tspan></text>
+    <path d="M224 76V1751" stroke="#ddddda" stroke-width="1.2" stroke-dasharray="5 7"/>
+  </g><g data-column="sdk" data-members="sdk" data-elements="uiclients.sdk">
+    <rect x="390" y="32" width="244" height="44" rx="12" fill="#ffffff" stroke="#6FA6A0" stroke-width="2"/>
+    <text x="512" y="59" text-anchor="middle" font-size="15" fill="#292927"><tspan x="512" dy="0">SDK Terminal</tspan></text>
+    <path d="M512 76V1751" stroke="#ddddda" stroke-width="1.2" stroke-dasharray="5 7"/>
+  </g><g data-column="bridge" data-members="bridge" data-elements="api.terminal">
+    <rect x="678" y="32" width="244" height="44" rx="12" fill="#ffffff" stroke="#7F9FC4" stroke-width="2"/>
+    <text x="800" y="59" text-anchor="middle" font-size="15" fill="#292927"><tspan x="800" dy="0">Terminal Bridge</tspan></text>
+    <path d="M800 76V1751" stroke="#ddddda" stroke-width="1.2" stroke-dasharray="5 7"/>
+  </g><g data-column="service" data-members="service" data-elements="termproto.service">
+    <rect x="966" y="32" width="244" height="44" rx="12" fill="#ffffff" stroke="#C9A06B" stroke-width="2"/>
+    <text x="1088" y="59" text-anchor="middle" font-size="15" fill="#292927"><tspan x="1088" dy="0">Owner Terminal Service</tspan></text>
+    <path d="M1088 76V1751" stroke="#ddddda" stroke-width="1.2" stroke-dasharray="5 7"/>
+  </g><g data-column="control" data-members="control" data-elements="terminal.control">
+    <rect x="1254" y="32" width="244" height="44" rx="12" fill="#ffffff" stroke="#B59669" stroke-width="2"/>
+    <text x="1376" y="59" text-anchor="middle" font-size="15" fill="#292927"><tspan x="1376" dy="0">tmux Control Connection</tspan></text>
+    <path d="M1376 76V1751" stroke="#ddddda" stroke-width="1.2" stroke-dasharray="5 7"/>
+  </g><g data-column="tmux" data-members="tmux" data-elements="external.tmux">
+    <rect x="1542" y="32" width="244" height="44" rx="12" fill="#ffffff" stroke="#B59669" stroke-width="2"/>
+    <text x="1664" y="59" text-anchor="middle" font-size="15" fill="#292927"><tspan x="1664" dy="0">tmux Server</tspan></text>
+    <path d="M1664 76V1751" stroke="#ddddda" stroke-width="1.2" stroke-dasharray="5 7"/>
+  </g><g data-row-id="handshake" data-message-ids="connect,hello,hello_forward,hello_reply" data-participant-ids="element,sdk,bridge,service" data-row-type="phase" data-phase-depth="0" data-collapsed="false">
+        <rect x="58" y="118" width="1772" height="35" rx="10" fill="#eeeeeb" stroke="#d5d5d0"/>
+        <text x="78" y="141" text-anchor="start" font-size="15" fill="#292927"><tspan x="78" dy="0">1. Handshake</tspan></text>
+        <text x="196.93999999999997" y="141" text-anchor="start" font-size="11" fill="#7d7d77"><tspan x="196.93999999999997" dy="0">Each WebSocket text message is one protocol envelope.</tspan></text>
+        <text x="1788" y="139.5" text-anchor="end" font-size="11" fill="#7d7d77">4 interactions</text>
+      </g><g data-row-id="connect" data-message-ids="connect" data-participant-ids="element,sdk" data-row-type="message" data-kind="call">
+      <rect x="188" y="167" width="360" height="34" rx="7" fill="#f8f8f6"/>
+      <text x="368" y="190" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="368" dy="0">Connect target with fitted columns and rows</tspan></text>
+      
+      <path d="M224 206H504" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow)"/>
+    </g><g data-row-id="hello" data-message-ids="hello" data-participant-ids="sdk,bridge" data-row-type="message" data-kind="call">
+      <rect x="476" y="231" width="360" height="34" rx="7" fill="#f8f8f6"/>
+      <text x="656" y="254" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="656" dy="0">hello</tspan></text>
+      
+      <path d="M512 270H792" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow)"/>
+    </g><g data-row-id="hello_forward" data-message-ids="hello_forward" data-participant-ids="bridge,service" data-row-type="message" data-kind="async">
+      <rect x="764" y="295" width="360" height="34" rx="7" fill="#f8f8f6"/>
+      <text x="944" y="318" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="944" dy="0">Forward envelope</tspan></text>
+      
+      <path d="M800 334H1080" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow-open)"/>
+    </g><g data-row-id="hello_reply" data-message-ids="hello_reply" data-participant-ids="service,sdk" data-row-type="message" data-kind="return">
+      <rect x="620" y="359" width="360" height="34" rx="7" fill="#f8f8f6"/>
+      <text x="800" y="382" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="800" dy="0">hello: version and capabilities</tspan></text>
+      
+      <path d="M1088 398H520" fill="none" stroke="#85857f" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#arrow)"/>
+    </g><g data-row-id="open" data-message-ids="resolve,resolved,open_target,subscribe,control_mode,opened" data-participant-ids="sdk,service,control,tmux" data-row-type="phase" data-phase-depth="0" data-collapsed="false">
+        <rect x="58" y="423" width="1772" height="35" rx="10" fill="#eeeeeb" stroke="#d5d5d0"/>
+        <text x="78" y="446" text-anchor="start" font-size="15" fill="#292927"><tspan x="78" dy="0">2. Resolve and open the target</tspan></text>
+        <text x="346.92500000000007" y="446" text-anchor="start" font-size="11" fill="#7d7d77"><tspan x="346.92500000000007" dy="0">The server resolves the selector again and refuses a changed identity rather than falling back.</tspan></text>
+        <text x="1788" y="444.5" text-anchor="end" font-size="11" fill="#7d7d77">6 interactions</text>
+      </g><g data-row-id="resolve" data-message-ids="resolve" data-participant-ids="sdk,service" data-row-type="message" data-kind="call">
+      <rect x="620" y="472" width="360" height="51" rx="7" fill="#f8f8f6"/>
+      <text x="800" y="495" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="800" dy="0">resolve {target}</tspan></text>
+      <text x="800" y="517" text-anchor="middle" font-size="11" fill="#7d7d77"><tspan x="800" dy="0">Carried through the bridge like every envelope.</tspan></text>
+      <path d="M512 528H1080" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow)"/>
+    </g><g data-row-id="resolved" data-message-ids="resolved" data-participant-ids="service,sdk" data-row-type="message" data-kind="return">
+      <rect x="620" y="553" width="360" height="34" rx="7" fill="#f8f8f6"/>
+      <text x="800" y="576" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="800" dy="0">resolved: opaque target handle</tspan></text>
+      
+      <path d="M1088 592H520" fill="none" stroke="#85857f" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#arrow)"/>
+    </g><g data-row-id="open_target" data-message-ids="open_target" data-participant-ids="sdk,service" data-row-type="message" data-kind="call">
+      <rect x="620" y="617" width="360" height="34" rx="7" fill="#f8f8f6"/>
+      <text x="800" y="640" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="800" dy="0">open {target_handle, attachment_id}</tspan></text>
+      
+      <path d="M512 656H1080" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow)"/>
+    </g><g data-row-id="subscribe" data-message-ids="subscribe" data-participant-ids="service,control" data-row-type="message" data-kind="call">
+      <rect x="1052" y="681" width="360" height="34" rx="7" fill="#f8f8f6"/>
+      <text x="1232" y="704" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="1232" dy="0">Subscribe to the pane</tspan></text>
+      
+      <path d="M1088 720H1368" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow)"/>
+    </g><g data-row-id="control_mode" data-message-ids="control_mode" data-participant-ids="control,tmux" data-row-type="message" data-kind="async">
+      <rect x="1340" y="745" width="360" height="34" rx="7" fill="#f8f8f6"/>
+      <text x="1520" y="768" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="1520" dy="0">tmux control mode</tspan></text>
+      
+      <path d="M1376 784H1656" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow-open)"/>
+    </g><g data-row-id="opened" data-message-ids="opened" data-participant-ids="service,sdk" data-row-type="message" data-kind="return">
+      <rect x="620" y="809" width="360" height="34" rx="7" fill="#f8f8f6"/>
+      <text x="800" y="832" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="800" dy="0">opened, then the first frame</tspan></text>
+      
+      <path d="M1088 848H520" fill="none" stroke="#85857f" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#arrow)"/>
+    </g><g data-row-id="interact" data-message-ids="claim,lease,resized,type,input,send_keys,frame,heartbeat" data-participant-ids="sdk,service,control,element" data-row-type="phase" data-phase-depth="0" data-collapsed="false">
+        <rect x="58" y="873" width="1772" height="35" rx="10" fill="#eeeeeb" stroke="#d5d5d0"/>
+        <text x="78" y="896" text-anchor="start" font-size="15" fill="#292927"><tspan x="78" dy="0">3. Claim, type and keep alive</tspan></text>
+        <text x="321.0200000000001" y="896" text-anchor="start" font-size="11" fill="#7d7d77"><tspan x="321.0200000000001" dy="0">U0 approximates focus-wins in the SDK: claim on display while focused, claim on input, release on blur. U1 moves this rule into the server as presence.</tspan></text>
+        <text x="1788" y="894.5" text-anchor="end" font-size="11" fill="#7d7d77">8 interactions</text>
+      </g><g data-row-id="claim" data-message-ids="claim" data-participant-ids="sdk,service" data-row-type="message" data-kind="call">
+      <rect x="620" y="922" width="360" height="34" rx="7" fill="#f8f8f6"/>
+      <text x="800" y="945" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="800" dy="0">control (window focused, terminal shown)</tspan></text>
+      
+      <path d="M512 961H1080" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow)"/>
+    </g><g data-row-id="lease" data-message-ids="lease" data-participant-ids="service,control" data-row-type="message" data-kind="call">
+      <rect x="1052" y="986" width="360" height="34" rx="7" fill="#f8f8f6"/>
+      <text x="1232" y="1009" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="1232" dy="0">Take the @sidecar-owner geometry lease</tspan></text>
+      
+      <path d="M1088 1025H1368" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow)"/>
+    </g><g data-row-id="resized" data-message-ids="resized" data-participant-ids="service,sdk" data-row-type="message" data-kind="return">
+      <rect x="620" y="1050" width="360" height="34" rx="7" fill="#f8f8f6"/>
+      <text x="800" y="1073" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="800" dy="0">control granted; frames at this size</tspan></text>
+      
+      <path d="M1088 1089H520" fill="none" stroke="#85857f" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#arrow)"/>
+    </g><g data-row-id="type" data-message-ids="type" data-participant-ids="element,sdk" data-row-type="message" data-kind="call">
+      <rect x="188" y="1114" width="360" height="34" rx="7" fill="#f8f8f6"/>
+      <text x="368" y="1137" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="368" dy="0">Keystrokes</tspan></text>
+      
+      <path d="M224 1153H504" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow)"/>
+    </g><g data-row-id="input" data-message-ids="input" data-participant-ids="sdk,service" data-row-type="message" data-kind="call">
+      <rect x="620" y="1178" width="360" height="34" rx="7" fill="#f8f8f6"/>
+      <text x="800" y="1201" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="800" dy="0">input</tspan></text>
+      
+      <path d="M512 1217H1080" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow)"/>
+    </g><g data-row-id="send_keys" data-message-ids="send_keys" data-participant-ids="service,control" data-row-type="message" data-kind="async">
+      <rect x="1052" y="1242" width="360" height="34" rx="7" fill="#f8f8f6"/>
+      <text x="1232" y="1265" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="1232" dy="0">Send input to the pane</tspan></text>
+      
+      <path d="M1088 1281H1368" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow-open)"/>
+    </g><g data-row-id="frame" data-message-ids="frame" data-participant-ids="service,sdk" data-row-type="message" data-kind="return">
+      <rect x="620" y="1306" width="360" height="66" rx="7" fill="#f8f8f6"/>
+      <text x="800" y="1329" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="800" dy="0">frame (capture-pane render, ESC c first)</tspan></text>
+      <text x="800" y="1351" text-anchor="middle" font-size="11" fill="#7d7d77"><tspan x="800" dy="0">v1 replaces this with reset-free frames from the screen</tspan><tspan x="800" dy="15">model.</tspan></text>
+      <path d="M1088 1377H520" fill="none" stroke="#85857f" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#arrow)"/>
+    </g><g data-row-id="heartbeat" data-message-ids="heartbeat" data-participant-ids="sdk,service" data-row-type="message" data-kind="call">
+      <rect x="620" y="1402" width="360" height="66" rx="7" fill="#f8f8f6"/>
+      <text x="800" y="1425" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="800" dy="0">heartbeat</tspan></text>
+      <text x="800" y="1447" text-anchor="middle" font-size="11" fill="#7d7d77"><tspan x="800" dy="0">The bridge also pings every 30 seconds and drops a peer</tspan><tspan x="800" dy="15">whose pong is 15 seconds late.</tspan></text>
+      <path d="M512 1473H1080" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow)"/>
+    </g><g data-row-id="leave" data-message-ids="blur,released,close_socket" data-participant-ids="sdk,service,bridge" data-row-type="phase" data-phase-depth="0" data-collapsed="false">
+        <rect x="58" y="1498" width="1772" height="35" rx="10" fill="#eeeeeb" stroke="#d5d5d0"/>
+        <text x="78" y="1521" text-anchor="start" font-size="15" fill="#292927"><tspan x="78" dy="0">4. Release and close</tspan></text>
+        <text x="256.34" y="1521" text-anchor="start" font-size="11" fill="#7d7d77"><tspan x="256.34" dy="0">Leaving never affects the tmux session or other viewers.</tspan></text>
+        <text x="1788" y="1519.5" text-anchor="end" font-size="11" fill="#7d7d77">3 interactions</text>
+      </g><g data-row-id="blur" data-message-ids="blur" data-participant-ids="sdk,service" data-row-type="message" data-kind="call">
+      <rect x="620" y="1547" width="360" height="34" rx="7" fill="#f8f8f6"/>
+      <text x="800" y="1570" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="800" dy="0">release (window blurred)</tspan></text>
+      
+      <path d="M512 1586H1080" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow)"/>
+    </g><g data-row-id="released" data-message-ids="released" data-participant-ids="service,sdk" data-row-type="message" data-kind="return">
+      <rect x="620" y="1611" width="360" height="34" rx="7" fill="#f8f8f6"/>
+      <text x="800" y="1634" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="800" dy="0">released</tspan></text>
+      
+      <path d="M1088 1650H520" fill="none" stroke="#85857f" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#arrow)"/>
+    </g><g data-row-id="close_socket" data-message-ids="close_socket" data-participant-ids="sdk,bridge" data-row-type="message" data-kind="async">
+      <rect x="476" y="1675" width="360" height="66" rx="7" fill="#f8f8f6"/>
+      <text x="656" y="1698" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="656" dy="0">Close the WebSocket</tspan></text>
+      <text x="656" y="1720" text-anchor="middle" font-size="11" fill="#7d7d77"><tspan x="656" dy="0">Close is end-of-stream: the server releases this stream&apos;s</tspan><tspan x="656" dy="15">lease exactly as on stdin EOF.</tspan></text>
+      <path d="M512 1746H792" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow-open)"/>
+    </g></g>
+  <g font-family="Arial, Helvetica, sans-serif" data-export-layer="footer">
+    <path d="M70 992H1850" stroke="#ddddda"/>
+    <text x="70" y="1027" font-size="12" font-weight="600" letter-spacing="1" fill="#626b6f">CURRENT · 21 INTERACTIONS</text>
+    <text x="620" y="1027" font-size="11" fill="#7d7d77">SOURCE · Authored 2026-10-03 from docs/reference/ui-api.md (Terminal stream), docs/reference/mobile-protocol.md, docs/plans/active/sidecar-ui-api.md (U0 SDK behavior), internal/uiapi/terminal.go and internal/mobile/service…</text>
+  </g>
+  </svg>

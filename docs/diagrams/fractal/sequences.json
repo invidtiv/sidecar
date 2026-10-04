@@ -262,6 +262,511 @@
           ]
         }
       ]
+    },
+    {
+      "id": "browser-pairing",
+      "title": "Pair a Browser and Open a Terminal",
+      "description": "How the owner's browser goes from sidecar api open to a live terminal WebSocket on the loopback Browser listener, without a token ever appearing in a URL that is sent.",
+      "status": "current",
+      "provenance": "Authored 2026-10-03 from docs/reference/ui-api.md (Pairing, Terminal stream) and internal/uiapi (auth.go, pairpage.go, terminal.go) and internal/cli/api.go, as implemented for U0 on main at 2f0dc1e7. An authored scenario, not a captured trace; the browser's own page logic is summarized in descriptions.",
+      "participants": [
+        {
+          "id": "owner",
+          "title": "Owner",
+          "description": "The user at a shell on this machine.",
+          "color": "#759EB5"
+        },
+        {
+          "id": "browser",
+          "title": "Browser",
+          "description": "The default browser: first the built-in /pair page, then the UI served on the same origin.",
+          "color": "#6FA6A0"
+        },
+        {
+          "id": "api_cmd",
+          "element": "cli.api_cmd",
+          "title": "sidecar api open"
+        },
+        {
+          "id": "local",
+          "element": "api.local",
+          "title": "Local Listener"
+        },
+        {
+          "id": "browser_listener",
+          "element": "api.browser",
+          "title": "Browser Listener"
+        },
+        {
+          "id": "guards",
+          "element": "api.guards",
+          "title": "Guards & Auth"
+        },
+        {
+          "id": "pairing",
+          "element": "api.pairing",
+          "title": "Pairing & Tickets"
+        },
+        {
+          "id": "bridge",
+          "element": "api.terminal",
+          "title": "Terminal Bridge"
+        },
+        {
+          "id": "owner_service",
+          "element": "termproto.service",
+          "title": "Owner Terminal Service"
+        }
+      ],
+      "groups": [
+        {
+          "id": "api_host",
+          "title": "sidecar api serve",
+          "participants": ["local", "browser_listener", "guards", "pairing", "bridge"]
+        }
+      ],
+      "steps": [
+        {
+          "type": "phase",
+          "id": "mint",
+          "title": "1. Mint a one-time code",
+          "description": "Only a process that can open the 0600 Local socket can start pairing.",
+          "steps": [
+            {
+              "type": "message",
+              "id": "run_open",
+              "from": "owner",
+              "to": "api_cmd",
+              "title": "sidecar api open",
+              "kind": "call"
+            },
+            {
+              "type": "message",
+              "id": "request_code",
+              "from": "api_cmd",
+              "to": "local",
+              "title": "POST /api/v0/pairing/codes",
+              "kind": "call",
+              "description": "The command finds the socket through $STATE/api/endpoint.json."
+            },
+            {
+              "type": "message",
+              "id": "mint_code",
+              "from": "local",
+              "to": "pairing",
+              "title": "Mint a single-use 60-second code",
+              "kind": "call"
+            },
+            {
+              "type": "message",
+              "id": "code_returned",
+              "from": "local",
+              "to": "api_cmd",
+              "title": "{code, url, expires_at}",
+              "kind": "return"
+            },
+            {
+              "type": "message",
+              "id": "open_browser",
+              "from": "api_cmd",
+              "to": "browser",
+              "title": "Open /pair#code=...&next=...",
+              "kind": "async",
+              "description": "The code rides in the URL fragment, which a browser never sends, so it stays out of request lines, proxy logs and Referer."
+            }
+          ]
+        },
+        {
+          "type": "phase",
+          "id": "exchange",
+          "title": "2. Exchange the code for a session token",
+          "description": "The pair page reads the fragment, clears it from history, and spends the code once.",
+          "steps": [
+            {
+              "type": "message",
+              "id": "get_pair",
+              "from": "browser",
+              "to": "browser_listener",
+              "title": "GET /pair",
+              "kind": "call"
+            },
+            {
+              "type": "message",
+              "id": "pair_page",
+              "from": "browser_listener",
+              "to": "browser",
+              "title": "Locked-down pair page",
+              "kind": "return",
+              "description": "Hashed-script CSP, no framing, no-store, no-referrer. Loading it consumes nothing."
+            },
+            {
+              "type": "message",
+              "id": "post_exchange",
+              "from": "browser",
+              "to": "browser_listener",
+              "title": "POST /api/v0/pairing/exchange {code}",
+              "kind": "call",
+              "description": "JSON body plus X-Sidecar-Request: 1, from the listener's own Origin."
+            },
+            {
+              "type": "message",
+              "id": "guard_exchange",
+              "from": "browser_listener",
+              "to": "guards",
+              "title": "Host, own Origin, mutation guard",
+              "kind": "call"
+            },
+            {
+              "type": "message",
+              "id": "redeem_code",
+              "from": "guards",
+              "to": "pairing",
+              "title": "Redeem code; bind token to this Origin",
+              "kind": "call"
+            },
+            {
+              "type": "message",
+              "id": "token_returned",
+              "from": "browser_listener",
+              "to": "browser",
+              "title": "{token, next}",
+              "kind": "return",
+              "description": "The page stores the token in localStorage as sidecar.session and navigates to next on the same origin."
+            }
+          ]
+        },
+        {
+          "type": "phase",
+          "id": "attach",
+          "title": "3. Open a terminal WebSocket",
+          "description": "Browsers cannot set headers on a WebSocket, so the bearer token buys a short-lived ticket.",
+          "steps": [
+            {
+              "type": "message",
+              "id": "request_ticket",
+              "from": "browser",
+              "to": "browser_listener",
+              "title": "POST /api/v0/ws-tickets (Bearer)",
+              "kind": "call"
+            },
+            {
+              "type": "message",
+              "id": "check_bearer",
+              "from": "browser_listener",
+              "to": "guards",
+              "title": "Bearer bound to this Origin; per-client limits",
+              "kind": "call"
+            },
+            {
+              "type": "message",
+              "id": "issue_ticket",
+              "from": "guards",
+              "to": "pairing",
+              "title": "Issue a single-use 30-second ticket",
+              "kind": "call"
+            },
+            {
+              "type": "message",
+              "id": "ticket_returned",
+              "from": "browser_listener",
+              "to": "browser",
+              "title": "{ticket, expires_at}",
+              "kind": "return"
+            },
+            {
+              "type": "message",
+              "id": "upgrade",
+              "from": "browser",
+              "to": "browser_listener",
+              "title": "GET /api/v0/terminal?ticket=... (upgrade)",
+              "kind": "call"
+            },
+            {
+              "type": "message",
+              "id": "check_upgrade",
+              "from": "browser_listener",
+              "to": "guards",
+              "title": "Host before upgrade; ticket and Origin after",
+              "kind": "call",
+              "description": "A Host refusal is a 421 before the upgrade; every other refusal is a 44xx close code, since a browser cannot read a failed handshake."
+            },
+            {
+              "type": "message",
+              "id": "admit_stream",
+              "from": "guards",
+              "to": "bridge",
+              "title": "Admit the stream",
+              "kind": "call"
+            },
+            {
+              "type": "message",
+              "id": "start_stream",
+              "from": "bridge",
+              "to": "owner_service",
+              "title": "One v0 protocol stream, hello first",
+              "kind": "async",
+              "description": "Without remote hosts the local owner service runs in-process; with them a per-stream broker routes to the owning Sidecar."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "terminal-attach-ws",
+      "title": "Attach to a Terminal over WebSocket",
+      "description": "What <sidecar-terminal> and the SDK do on one terminal WebSocket in U0: handshake, resolve and open a target, approximate focus-wins on the v0 control operations, type, and leave cleanly.",
+      "status": "current",
+      "provenance": "Authored 2026-10-03 from docs/reference/ui-api.md (Terminal stream), docs/reference/mobile-protocol.md, docs/plans/active/sidecar-ui-api.md (U0 SDK behavior), internal/uiapi/terminal.go and internal/mobile/service.go. Shows the local-owner path without remote hosts. An authored scenario, not a captured trace; heartbeats and pings repeat but are shown once.",
+      "participants": [
+        {
+          "id": "element",
+          "element": "uiclients.elements",
+          "title": "<sidecar-terminal>"
+        },
+        {
+          "id": "sdk",
+          "element": "uiclients.sdk",
+          "title": "SDK Terminal"
+        },
+        {
+          "id": "bridge",
+          "element": "api.terminal",
+          "title": "Terminal Bridge"
+        },
+        {
+          "id": "service",
+          "element": "termproto.service",
+          "title": "Owner Terminal Service"
+        },
+        {
+          "id": "control",
+          "element": "terminal.control",
+          "title": "tmux Control Connection"
+        },
+        {
+          "id": "tmux",
+          "element": "external.tmux",
+          "title": "tmux Server"
+        }
+      ],
+      "groups": [
+        {
+          "id": "browser_side",
+          "title": "In the page",
+          "participants": ["element", "sdk"]
+        },
+        {
+          "id": "sidecar_side",
+          "title": "sidecar api serve",
+          "participants": ["bridge", "service", "control"]
+        }
+      ],
+      "steps": [
+        {
+          "type": "phase",
+          "id": "handshake",
+          "title": "1. Handshake",
+          "description": "Each WebSocket text message is one protocol envelope.",
+          "steps": [
+            {
+              "type": "message",
+              "id": "connect",
+              "from": "element",
+              "to": "sdk",
+              "title": "Connect target with fitted columns and rows",
+              "kind": "call"
+            },
+            {
+              "type": "message",
+              "id": "hello",
+              "from": "sdk",
+              "to": "bridge",
+              "title": "hello",
+              "kind": "call"
+            },
+            {
+              "type": "message",
+              "id": "hello_forward",
+              "from": "bridge",
+              "to": "service",
+              "title": "Forward envelope",
+              "kind": "async"
+            },
+            {
+              "type": "message",
+              "id": "hello_reply",
+              "from": "service",
+              "to": "sdk",
+              "title": "hello: version and capabilities",
+              "kind": "return"
+            }
+          ]
+        },
+        {
+          "type": "phase",
+          "id": "open",
+          "title": "2. Resolve and open the target",
+          "description": "The server resolves the selector again and refuses a changed identity rather than falling back.",
+          "steps": [
+            {
+              "type": "message",
+              "id": "resolve",
+              "from": "sdk",
+              "to": "service",
+              "title": "resolve {target}",
+              "kind": "call",
+              "description": "Carried through the bridge like every envelope."
+            },
+            {
+              "type": "message",
+              "id": "resolved",
+              "from": "service",
+              "to": "sdk",
+              "title": "resolved: opaque target handle",
+              "kind": "return"
+            },
+            {
+              "type": "message",
+              "id": "open_target",
+              "from": "sdk",
+              "to": "service",
+              "title": "open {target_handle, attachment_id}",
+              "kind": "call"
+            },
+            {
+              "type": "message",
+              "id": "subscribe",
+              "from": "service",
+              "to": "control",
+              "title": "Subscribe to the pane",
+              "kind": "call"
+            },
+            {
+              "type": "message",
+              "id": "control_mode",
+              "from": "control",
+              "to": "tmux",
+              "title": "tmux control mode",
+              "kind": "async"
+            },
+            {
+              "type": "message",
+              "id": "opened",
+              "from": "service",
+              "to": "sdk",
+              "title": "opened, then the first frame",
+              "kind": "return"
+            }
+          ]
+        },
+        {
+          "type": "phase",
+          "id": "interact",
+          "title": "3. Claim, type and keep alive",
+          "description": "U0 approximates focus-wins in the SDK: claim on display while focused, claim on input, release on blur. U1 moves this rule into the server as presence.",
+          "steps": [
+            {
+              "type": "message",
+              "id": "claim",
+              "from": "sdk",
+              "to": "service",
+              "title": "control (window focused, terminal shown)",
+              "kind": "call"
+            },
+            {
+              "type": "message",
+              "id": "lease",
+              "from": "service",
+              "to": "control",
+              "title": "Take the @sidecar-owner geometry lease",
+              "kind": "call"
+            },
+            {
+              "type": "message",
+              "id": "resized",
+              "from": "service",
+              "to": "sdk",
+              "title": "control granted; frames at this size",
+              "kind": "return"
+            },
+            {
+              "type": "message",
+              "id": "type",
+              "from": "element",
+              "to": "sdk",
+              "title": "Keystrokes",
+              "kind": "call"
+            },
+            {
+              "type": "message",
+              "id": "input",
+              "from": "sdk",
+              "to": "service",
+              "title": "input",
+              "kind": "call"
+            },
+            {
+              "type": "message",
+              "id": "send_keys",
+              "from": "service",
+              "to": "control",
+              "title": "Send input to the pane",
+              "kind": "async"
+            },
+            {
+              "type": "message",
+              "id": "frame",
+              "from": "service",
+              "to": "sdk",
+              "title": "frame (capture-pane render, ESC c first)",
+              "kind": "return",
+              "description": "v1 replaces this with reset-free frames from the screen model."
+            },
+            {
+              "type": "message",
+              "id": "heartbeat",
+              "from": "sdk",
+              "to": "service",
+              "title": "heartbeat",
+              "kind": "call",
+              "description": "The bridge also pings every 30 seconds and drops a peer whose pong is 15 seconds late."
+            }
+          ]
+        },
+        {
+          "type": "phase",
+          "id": "leave",
+          "title": "4. Release and close",
+          "description": "Leaving never affects the tmux session or other viewers.",
+          "steps": [
+            {
+              "type": "message",
+              "id": "blur",
+              "from": "sdk",
+              "to": "service",
+              "title": "release (window blurred)",
+              "kind": "call"
+            },
+            {
+              "type": "message",
+              "id": "released",
+              "from": "service",
+              "to": "sdk",
+              "title": "released",
+              "kind": "return"
+            },
+            {
+              "type": "message",
+              "id": "close_socket",
+              "from": "sdk",
+              "to": "bridge",
+              "title": "Close the WebSocket",
+              "kind": "async",
+              "description": "Close is end-of-stream: the server releases this stream's lease exactly as on stdin EOF."
+            }
+          ]
+        }
+      ]
     }
   ]
 }

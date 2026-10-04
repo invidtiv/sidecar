@@ -1,4 +1,8 @@
 // Authored architecture for Sidecar. Evidence paths are relative to the repository root.
+// Status: Fractal's #proposed tag marks planned work and shows only in proposed scenes;
+// untagged elements are current. For the UI API (api, termproto, uiclients, cli.api_*),
+// current means U0 as implemented on main at 2f0dc1e7, and #proposed means U1 to U4 in
+// docs/plans/active/sidecar-ui-api.md. Each proposed description names its milestone.
 specification {
   element subsystem
   element component
@@ -193,6 +197,25 @@ model {
       description 'sidecar notify post, list, and dismiss verbs with deep-link jump targets.'
       metadata { uid 'cli.notify_cmd' fractalColor '#82A6B6' evidence ['internal/cli/notify.go', 'internal/notifydelivery/delivery.go'] }
     }
+
+    api_cmd = component 'API Commands' {
+      summary 'sidecar api serve, open, pair and status'
+      description 'sidecar api serve runs the UI API host in the foreground; api open, api pair and api status discover it from endpoint.json and talk to it over the Local socket.'
+      metadata { uid 'cli.api_cmd' fractalColor '#82A6B6' evidence ['internal/cli/api.go'] }
+    }
+
+    mobile_cmd = component 'Mobile Commands' {
+      summary 'sidecar mobile serve --stdio and mobile sessions'
+      description 'sidecar mobile serve --stdio serves one terminal protocol stream on stdin and stdout, through the hub or the local owner service (--owner-only when a hub forwards to this machine); sidecar mobile sessions --json prints the catalog.'
+      metadata { uid 'cli.mobile_cmd' fractalColor '#82A6B6' evidence ['internal/cli/mobile.go', 'internal/cli/mobile_router.go'] }
+    }
+
+    api_service = adapter 'API Service Adapter' {
+      #proposed
+      summary 'sidecar api service install: launchd or systemd (U1)'
+      description 'Planned for U1: sidecar api service install, uninstall and status behind a service-manager adapter, a launchd user agent on macOS by default and a systemd user unit on Linux. The service restarts when its binary changes and never starts, stops or restarts the tmux server.'
+      metadata { uid 'cli.api_service' fractalColor '#82A6B6' evidence ['docs/plans/active/sidecar-ui-api.md'] }
+    }
   }
 
   plugins = subsystem 'Domain Plugins' {
@@ -266,9 +289,205 @@ model {
     }
 
     mobile = service 'Mobile Companion Client' {
+      summary 'Native iPhone and iPad Sessions app over SSH stdio'
+      description 'Native iPhone and iPad Sessions app (the sidecar-mobile repository). It connects over SSH and runs sidecar mobile serve --stdio for the Sessions catalog and one terminal protocol stream per connection; SSH stdio stays its default transport. Push alerts and the events stream are planned (mobile M2, UI API U1), as is moving it from explicit control to presence-based geometry.'
+      metadata { uid 'external.mobile' fractalColor '#C48282' evidence ['docs/plans/active/sidecar-mobile.md', 'internal/cli/mobile.go', 'docs/reference/mobile-protocol.md'] }
+    }
+
+    tailscale = service 'tailscale serve (tailscaled)' {
+      summary 'Tailnet HTTPS proxy that adds the verified login'
+      description 'Terminates HTTPS for tailnet devices and proxies to the UI API Tailnet listener, adding the Tailscale-User-Login header. The user runs the tailscale serve command that sidecar api serve --tailnet prints; Sidecar never changes Tailscale configuration.'
+      technology 'tailscale serve unix:$STATE/api/tailnet.sock'
+      metadata { uid 'external.tailscale' fractalColor '#B59669' evidence ['internal/uiapi/tailnet.go', 'internal/cli/api.go', 'docs/reference/ui-api.md'] }
+    }
+
+    untrusted = actor 'Other Origins & Local Users' {
+      summary 'Untrusted code that can reach a loopback port'
+      description 'Any website open in a browser (cross-site requests, WebSockets without CORS, DNS rebinding) and any other local user or process. All of them can reach a loopback port; the Host, Origin and mutation guards and origin-bound credentials exist to refuse them.'
+      metadata { uid 'external.untrusted' fractalColor '#A0A0A0' evidence ['internal/uiapi/guards_test.go', 'docs/reference/ui-api.md'] }
+    }
+  }
+
+  api = subsystem 'UI API Host (sidecar api serve)' {
+    summary 'Headless HTTP and WebSocket API for UIs that are not the TUI'
+    description 'One long-running headless process per user exposing Sessions and live terminals over HTTP and WebSocket. It owns transport, trust and the HTTP/WebSocket mapping only: what a Sessions row says and what a terminal stream means belong to the terminal protocol services behind its Backend seam. It never starts, stops or restarts tmux. Untagged children are U0, implemented on main at 2f0dc1e7; #proposed children are U1 to U4 work from the UI API plan.'
+    metadata { uid 'api' fractalColor '#7F9FC4' evidence ['internal/uiapi/server.go', 'internal/cli/api.go', 'docs/reference/ui-api.md', 'docs/plans/active/sidecar-ui-api.md'] }
+
+    local = component 'Local Listener' {
+      summary 'Trusted 0600 Unix socket; pairing and origins only here'
+      description 'Unix socket at $STATE/api/api.sock, mode 0600. File permissions limit it to the user, the same trust as the tmux socket, so every request is admitted without auth and without a terminal limit. Pairing codes and origin registration are served only here.'
+      technology 'Unix socket, mode 0600'
+      metadata { uid 'api.local' fractalColor '#7F9FC4' evidence ['internal/uiapi/server.go', 'internal/uiapi/handler.go'] }
+    }
+
+    browser = component 'Browser Listener' {
+      summary 'Loopback TCP 127.0.0.1:7861 for browsers on this machine'
+      description 'TCP on 127.0.0.1, default port 7861 (--port 0 picks a free one); never a non-loopback address in v0. Admits a bearer token (browser session or paired origin) or a single-use ticket, each bound to one origin, and serves /pair, the pairing exchange and the optional --ui static bundle.'
+      technology 'TCP 127.0.0.1:7861'
+      metadata { uid 'api.browser' fractalColor '#7F9FC4' evidence ['internal/uiapi/server.go', 'internal/uiapi/auth.go', 'internal/uiapi/pairpage.go', 'internal/uiapi/static.go'] }
+    }
+
+    tailnet = component 'Tailnet Listener' {
+      summary '0600 Unix socket behind tailscale serve'
+      description 'Created only with --tailnet: Unix socket $STATE/api/tailnet.sock, mode 0600, proxied by tailscale serve. It trusts Tailscale-User-Login because only tailscaled can reach that socket; allowed logins come from api.tailnetLogins or the local node owner. The --tailnet-port N loopback fallback is weaker, since any local process can forge the header there, and serve warns when it is used.'
+      technology 'Unix socket, mode 0600; --tailnet-port loopback fallback'
+      metadata { uid 'api.tailnet' fractalColor '#7F9FC4' evidence ['internal/uiapi/tailnet.go', 'internal/cli/api.go'] }
+    }
+
+    guards = component 'Request Guards & Auth' {
+      summary 'Host, Origin and mutation guards, then bearer, ticket or tailnet login'
+      description 'Always on for Browser and Tailnet and invisible to the owner: exact Host allowlist (421, defeats DNS rebinding), exact Origin allowlist on upgrades and mutations (403), JSON plus X-Sidecar-Request on every mutation, CORS only for paired origins. Then bearer, ticket or tailnet-login authentication and per-client limits of 16 terminals and 16 tickets.'
+      metadata { uid 'api.guards' fractalColor '#7F9FC4' evidence ['internal/uiapi/auth.go', 'internal/uiapi/handler.go', 'internal/uiapi/clients.go', 'internal/uiapi/guards_test.go', 'internal/uiapi/limits_test.go'] }
+    }
+
+    pairing = component 'Pairing, Sessions & Tickets' {
+      summary 'Pairing codes, origin-bound session tokens, WebSocket tickets'
+      description 'Mints single-use 60-second pairing codes (Local only), exchanges a code for a browser session token bound to the exchanging origin, issues single-use 30-second WebSocket tickets, and registers, lists or revokes paired origins. Session tokens and tickets live in memory, so a server restart means pairing again.'
+      metadata { uid 'api.pairing' fractalColor '#7F9FC4' evidence ['internal/uiapi/auth.go', 'internal/uiapi/origins.go', 'internal/uiapi/pairpage.go'] }
+    }
+
+    origins = store 'Paired Origins (origins.json)' {
+      summary 'Mode-0600 registry of paired origin token hashes'
+      description 'Persists paired embedding origins in $STATE/api/origins.json, mode 0600, as origin, token_sha256, scopes and created_at. Only the token hash is kept; the only v0 scope is full.'
+      metadata { uid 'api.origins' fractalColor '#7F9FC4' evidence ['internal/uiapi/origins.go'] }
+    }
+
+    endpoint = store 'Endpoint Discovery (endpoint.json)' {
+      summary 'endpoint.json plus serve.lock for discovery and single instance'
+      description 'Mode-0600 $STATE/api/endpoint.json naming PID, version, instance and listener addresses, written once every listener is bound and removed on clean exit, plus an exclusive serve.lock that refuses a second server. CLI verbs and local SDK users discover the server from it; a dead PID means no server.'
+      metadata { uid 'api.endpoint' fractalColor '#7F9FC4' evidence ['internal/uiapi/endpoint.go', 'internal/uiapi/server.go'] }
+    }
+
+    routes = component 'Route Mux (/api/v0)' {
+      summary 'hello, sessions, status, tickets, pairing, origins, static UI'
+      description 'Versioned routes served identically on all three listeners: hello, sessions (the same code path as sidecar mobile sessions --json), status (byte for byte what sidecar api status --json prints), ws-tickets, pairing, origins and the terminal upgrade, plus the --ui static bundle with SPA fallback. Errors reuse the CLI refusal vocabulary.'
+      metadata { uid 'api.routes' fractalColor '#7F9FC4' evidence ['internal/uiapi/handler.go', 'internal/uiapi/static.go', 'internal/uiapi/errors.go'] }
+    }
+
+    terminal = component 'Terminal WebSocket Bridge' {
+      summary 'One WebSocket is one unchanged v0 terminal protocol stream'
+      description 'GET /api/v0/terminal upgrades to a WebSocket carrying one mobile protocol v0 stream: one JSON envelope per text message, close is end-of-stream and releases the lease, 30-second pings drop half-open peers, and refusals after the upgrade arrive as 44xx close codes. It calls Backend.ServeTerminal once per connection.'
+      technology 'WebSocket'
+      metadata { uid 'api.terminal' fractalColor '#7F9FC4' evidence ['internal/uiapi/terminal.go', 'internal/cli/mobile_router.go'] }
+    }
+
+    events = component 'Events Stream' {
       #proposed
-      description 'Native mobile app streaming active pane buffers and receiving push alerts.'
-      metadata { uid 'external.mobile' fractalColor '#C48282' evidence ['docs/plans/active/sidecar-mobile.md', 'internal/mobilehub/broker.go'] }
+      summary 'One WebSocket per client for invalidations and attention (U1)'
+      description 'Planned for U1: one WebSocket per client carrying generation-numbered catalog changes, attention (an agent needs input or finished), content invalidation from livewatch, and lease holder changes. Every message names the resource it invalidates. The native app consumes it too.'
+      metadata { uid 'api.events' fractalColor '#7F9FC4' evidence ['docs/plans/active/sidecar-ui-api.md'] }
+    }
+
+    spec = component 'Contract Spec & Schemas' {
+      #proposed
+      summary 'sidecar api spec: OpenAPI plus stream schemas (U1)'
+      description 'Planned for U1: request and response types in one Go package, JSON Schemas generated from them, and sidecar api spec printing the OpenAPI document plus the stream schemas, so an agent can read the whole contract in one command.'
+      metadata { uid 'api.spec' fractalColor '#7F9FC4' evidence ['docs/plans/active/sidecar-ui-api.md'] }
+    }
+
+    fixtures = adapter 'Fixture Backend' {
+      #proposed
+      summary 'api serve --fixtures: recorded sessions, no tmux (U1)'
+      description 'Planned for U1: a Backend that serves recorded sessions and terminal streams with no tmux, for UI development, SDK CI, end-to-end proofs and demo.sh.'
+      metadata { uid 'api.fixtures' fractalColor '#7F9FC4' evidence ['docs/plans/active/sidecar-ui-api.md'] }
+    }
+
+    workspace_routes = component 'Workspace Resources & Operations' {
+      #proposed
+      summary 'Workspaces, shells, worktrees and agent operations (U2)'
+      description 'Planned for U2, after the core extraction: workspace resources plus create, rename, delete and restore of shells and worktrees and agent start or prompt, all through the same state-free workspace-operation service the CLI and TUI call.'
+      metadata { uid 'api.workspace_routes' fractalColor '#7F9FC4' evidence ['docs/plans/active/sidecar-ui-api.md'] }
+    }
+
+    layouts = store 'Per-Viewer Layout Store' {
+      #proposed
+      summary 'Locked per-viewer pane trees (U3)'
+      description 'Planned for U3: a locked store holding each API client its own layout in the shared pane-tree format, so a layout can be copied across viewers but is never fought over. It replaces nothing in the TUI, whose state.json stays its own.'
+      metadata { uid 'api.layouts' fractalColor '#7F9FC4' evidence ['docs/plans/active/sidecar-ui-api.md', 'internal/state/state.go'] }
+    }
+
+    viewer_relay = component 'Viewer Relay (uirequest)' {
+      #proposed
+      summary 'A screen-holding client becomes a target for sidecar open (U4)'
+      description 'Planned for U4: an API client that holds the screen announces itself on the uirequest bus as a viewer with uiRequestRelayV1, so sidecar open and sidecar layout apply or move reach it with the same decline-not-queue rules.'
+      metadata { uid 'api.viewer_relay' fractalColor '#7F9FC4' evidence ['docs/plans/active/sidecar-ui-api.md', 'internal/uirequest/bus.go'] }
+    }
+  }
+
+  termproto = subsystem 'Headless Terminal Protocol' {
+    summary 'The mobile terminal protocol and the services behind it'
+    description 'Serves one tmux pane to a viewer that is not the TUI: target resolution, the shared @sidecar-owner geometry lease, lease-gated input, History, reconnect and cross-host owner forwarding. The same services answer sidecar mobile serve --stdio over SSH and the UI API terminal WebSocket; the UI API plan promotes the protocol to terminal protocol v1 for every client.'
+    metadata { uid 'termproto' fractalColor '#C9A06B' evidence ['internal/mobile/service.go', 'internal/mobileproto/protocol.go', 'docs/reference/mobile-protocol.md'] }
+
+    service = service 'Owner Terminal Service' {
+      summary 'One bounded protocol stream for a terminal this machine owns'
+      description 'mobile.Service runs one stream over any reader and writer. It resolves targets, subscribes through the tmux control manager, renders capture-pane frames (each v0 frame starts with ESC c), gates input on the geometry lease with explicit control and release, serves bounded History, and aborts the stream on an outbound queue overflow.'
+      metadata { uid 'termproto.service' fractalColor '#C9A06B' evidence ['internal/mobile/service.go', 'internal/mobile/render.go', 'internal/tty/geometry_lease.go'] }
+    }
+
+    catalog = component 'Sessions Catalog' {
+      summary 'Sorted, filtered rows of shells and agents'
+      description 'Builds the CatalogSnapshot of project shells and agents from configured projects, live tmux panes and agent activity, with shared sorting and filtering. One code path answers sidecar mobile sessions --json, the protocol sessions request and GET /api/v0/sessions.'
+      metadata { uid 'termproto.catalog' fractalColor '#C9A06B' evidence ['internal/mobile/catalog.go', 'internal/cli/mobile.go', 'internal/cli/mobile_router.go'] }
+    }
+
+    hub = component 'Protocol Broker & Owner Router' {
+      summary 'Routes each stream to the Sidecar that owns the terminal'
+      description 'mobilehub, active when remote hosts are configured. A fresh ProtocolBroker per stream projects v0 over the owning Sidecar, keeping at most one owner, target and attachment: an in-process service for local terminals, or sidecar mobile serve --stdio --owner-only over a validated SSH route for remote ones. It merges owner catalogs into one cross-host directory and owns no terminal state or leases.'
+      metadata { uid 'termproto.hub' fractalColor '#C9A06B' evidence ['internal/mobilehub/broker.go', 'internal/mobilehub/owner.go', 'internal/mobilehub/local.go', 'internal/mobilehub/directory.go', 'internal/cli/mobile_router.go'] }
+    }
+
+    presence = component 'Presence Geometry Arbiter' {
+      #proposed
+      summary 'The screen you are using wins, per attachment (U1)'
+      description 'Planned for U1: clients report presence (focus, visibility, idle time, fitted size) instead of control, and the owning service runs the TUI rule DecideGeometryLease for each attachment on every presence change and heartbeat. Typing claims outright; losing focus releases. The explicit control and release operations stay for compatibility.'
+      metadata { uid 'termproto.presence' fractalColor '#C9A06B' evidence ['internal/tty/geometry_lease.go', 'docs/plans/active/sidecar-ui-api.md'] }
+    }
+
+    frames = component 'Screen-Model Frames (v1)' {
+      #proposed
+      summary 'Reset-free, coalesced frames from screenmodel'
+      description 'Planned for terminal protocol v1: frames that home the cursor instead of ESC c, coalesced latest-wins before the outbound queue, and built from the byte-fed screenmodel the desktop already keeps rather than a capture-pane per output burst. U0 measurements decide whether the screenmodel part lands in U1 or later.'
+      metadata { uid 'termproto.frames' fractalColor '#C9A06B' evidence ['internal/tty/screenmodel', 'docs/plans/active/sidecar-ui-api.md'] }
+    }
+  }
+
+  uiclients = subsystem 'UI API Clients' {
+    summary 'Web UIs, embedders and scripts built only on the public API'
+    description 'Clients outside the Sidecar binary that use only what any client can use: no private endpoint and no private component API. The sidecar-ui repository (a private pnpm workspace) holds the SDK, the web components and the reference app. It has no Fractal model of its own yet, so its pieces are modeled here from the plan and the wire contract.'
+    metadata { uid 'uiclients' fractalColor '#6FA6A0' evidence ['docs/plans/active/sidecar-ui-api.md', 'docs/reference/ui-api.md'] }
+
+    app = component 'sidecar-ui Reference App' {
+      summary 'Generic SvelteKit reference UI, a starting point to fork'
+      description 'SvelteKit with adapter-static, importing only the two public packages. Served by sidecar api serve --ui DIR or from its own origin. U0 is minimal; the Sessions view, project workspaces and pane trees arrive in U1 to U3.'
+      technology 'SvelteKit, adapter-static'
+      metadata { uid 'uiclients.app' fractalColor '#6FA6A0' evidence ['docs/plans/active/sidecar-ui-api.md'] }
+    }
+
+    elements = component '@marcusv/sidecar-elements' {
+      summary 'Framework-agnostic web components such as <sidecar-terminal>'
+      description 'Svelte compiled to custom elements, with xterm.js inside <sidecar-terminal>. In U0 the element claims on display while focused, claims on input, releases on blur, and supports readonly. <sidecar-sessions> and <sidecar-workspace> are planned for U1 and U2.'
+      technology 'Svelte custom elements, xterm.js'
+      metadata { uid 'uiclients.elements' fractalColor '#6FA6A0' evidence ['docs/plans/active/sidecar-ui-api.md'] }
+    }
+
+    sdk = component '@marcusv/sidecar-client' {
+      summary 'Typed SDK that owns the hard parts of the stream'
+      description 'TypeScript SDK for browsers and Node. Its Terminal owns sequencing, heartbeats, hidden control, reconnect, and the ticket or bearer WebSocket upgrade; its Session covers resources.'
+      technology 'TypeScript, browser and Node'
+      metadata { uid 'uiclients.sdk' fractalColor '#6FA6A0' evidence ['docs/plans/active/sidecar-ui-api.md', 'docs/reference/ui-api.md'] }
+    }
+
+    embedder = component 'Embedding Apps (paired origins)' {
+      summary 'Another origin embedding Sidecar after api pair --origin'
+      description 'An app on its own origin that embeds <sidecar-terminal> after sidecar api pair --origin URL, using the paired bearer token for HTTP and a ticket per WebSocket. Proved in U0 by a second-origin example; clara-home is the expected first outside consumer.'
+      metadata { uid 'uiclients.embedder' fractalColor '#6FA6A0' evidence ['docs/reference/ui-api.md', 'docs/plans/active/sidecar-ui-api.md'] }
+    }
+
+    scripts = actor 'Agents & Scripts' {
+      summary 'Node SDK, curl over the Local socket, sidecar api verbs'
+      description 'Non-browser callers: the Node SDK with a bearer token, curl --unix-socket against the Local listener, and sidecar api status, open and pair.'
+      metadata { uid 'uiclients.scripts' fractalColor '#6FA6A0' evidence ['docs/reference/ui-api.md', 'internal/tools/uiapiproof'] }
     }
   }
 
@@ -337,7 +556,81 @@ model {
   remoting.daemon .calls workspaces.surface 'Manages remote shells' { metadata { uid 'daemon-ws' } }
   remoting.stream .streams remoting.client 'Streams remote files & diffs' { metadata { uid 'stream-client' } }
 
-  external.mobile .streams tui.app 'Streams pane frames over WebSockets' { metadata { uid 'mobile-tui' } }
+  // mobile-tui keeps its stable ID; the app has never streamed through the TUI,
+  // it runs sidecar mobile serve --stdio over SSH.
+  external.mobile .streams cli.mobile_cmd 'ssh: sidecar mobile serve --stdio' {
+    description 'The native app opens an SSH session and runs sidecar mobile serve --stdio, one terminal protocol stream per connection.'
+    metadata { uid 'mobile-tui' }
+  }
+  user .calls external.mobile 'Uses Sessions on iPhone or iPad' { metadata { uid 'user-mobile' } }
+
+  // UI API (U0, current on main at 2f0dc1e7)
+  user .calls uiclients.app 'Uses the web UI' { metadata { uid 'user-uiapp' } }
+  cli.dispatch .calls cli.api_cmd 'Dispatches api verb' { metadata { uid 'dispatch-api' } }
+  cli.dispatch .calls cli.mobile_cmd 'Dispatches mobile verb' { metadata { uid 'dispatch-mobile' } }
+  cli.api_cmd .manages api 'Runs sidecar api serve in the foreground' { metadata { uid 'apicmd-host' } }
+  cli.api_cmd .reads api.endpoint 'Discovers socket and PID' { metadata { uid 'apicmd-endpoint' } }
+  cli.api_cmd .calls api.local 'Pairing codes, origins, status' { metadata { uid 'apicmd-local' } }
+
+  api.local .calls api.routes 'Admits every request (trusted)' { metadata { uid 'local-routes' } }
+  api.browser .calls api.guards 'Host, Origin, mutation; bearer or ticket' { metadata { uid 'browser-guards' } }
+  api.tailnet .calls api.guards 'Host, Origin, mutation; tailnet login' { metadata { uid 'tailnet-guards' } }
+  api.guards .calls api.routes 'Admits an authorized request' { metadata { uid 'guards-routes' } }
+  api.guards .reads api.pairing 'Checks session tokens and tickets' { metadata { uid 'guards-pairing' } }
+  api.routes .calls api.pairing 'Codes, exchange, tickets, origins' { metadata { uid 'routes-pairing' } }
+  api.pairing .writes api.origins 'Persists origin token hashes' { metadata { uid 'pairing-origins' } }
+  api.routes .calls api.terminal 'Upgrades GET /api/v0/terminal' { metadata { uid 'routes-terminal' } }
+  api.routes .supplies uiclients.app 'Serves the --ui bundle and /pair' { metadata { uid 'routes-uiapp' } }
+  api.routes .reads termproto.catalog 'GET /api/v0/sessions (local)' { metadata { uid 'routes-catalog' } }
+  api.routes .reads termproto.hub 'Cross-host Sessions when hosts are configured' { metadata { uid 'routes-hub' } }
+  api.terminal .streams termproto.service 'One v0 stream per WebSocket, in-process' { metadata { uid 'terminal-service' } }
+  api.terminal .streams termproto.hub 'Brokered stream when hosts are configured' { metadata { uid 'terminal-hub' } }
+
+  cli.mobile_cmd .streams termproto.service 'Owner stream on stdio' { metadata { uid 'mobilecmd-service' } }
+  cli.mobile_cmd .streams termproto.hub 'Hub stream on stdio' { metadata { uid 'mobilecmd-hub' } }
+  cli.mobile_cmd .reads termproto.catalog 'mobile sessions --json' { metadata { uid 'mobilecmd-catalog' } }
+  termproto.hub .reads termproto.catalog 'Merges local rows into the directory' { metadata { uid 'hub-catalog' } }
+  termproto.hub .streams termproto.service 'Local owner in-process; remote owner via mobile serve --owner-only' { metadata { uid 'hub-service' } }
+  termproto.hub .calls remoting.client 'Validates route, builds SSH owner command' { metadata { uid 'hub-hosts' } }
+  termproto.service .calls terminal.control 'Subscribes, captures frames, sends input' { metadata { uid 'service-control' } }
+  termproto.catalog .reads external.tmux 'Lists panes across project sessions' { metadata { uid 'catalog-tmux' } }
+
+  uiclients.app .calls uiclients.elements 'Composes <sidecar-terminal>' { metadata { uid 'uiapp-elements' } }
+  uiclients.embedder .calls uiclients.elements 'Embeds <sidecar-terminal>' { metadata { uid 'embedder-elements' } }
+  uiclients.elements .calls uiclients.sdk 'Terminal over the SDK' { metadata { uid 'elements-sdk' } }
+  uiclients.sdk .calls api.browser 'Bearer HTTP, ticket WebSocket' { metadata { uid 'sdk-browser' } }
+  uiclients.sdk .calls external.tailscale 'HTTPS from a tailnet device' { metadata { uid 'sdk-tailscale' } }
+  external.tailscale .calls api.tailnet 'Proxies with Tailscale-User-Login' { metadata { uid 'tailscale-tailnet' } }
+  uiclients.scripts .calls uiclients.sdk 'Node SDK with a bearer token' { metadata { uid 'scripts-sdk' } }
+  uiclients.scripts .calls api.local 'curl --unix-socket' { metadata { uid 'scripts-local' } }
+  uiclients.scripts .calls cli.api_cmd 'sidecar api status, open, pair' { metadata { uid 'scripts-apicmd' } }
+  external.untrusted .calls api.browser 'Cross-site, rebinding, other users (refused)' {
+    description 'A page or local process can send requests to the loopback port. The Host guard refuses rebinding, the Origin guard refuses other origins, mutations need JSON plus a custom header, and every credential is bound to one origin.'
+    metadata { uid 'untrusted-browser' }
+  }
+
+  // UI API roadmap (U1 to U4, proposed)
+  uiclients.sdk .streams api.events 'Catalog, attention and invalidation events' { metadata { uid 'sdk-events' } }
+  api.events .reads termproto.catalog 'Generation-numbered catalog changes' { metadata { uid 'events-catalog' } }
+  api.events .reads agents.lifecycle 'Attention: needs input or finished' { metadata { uid 'events-attention' } }
+  api.events .reads panes.live 'Content invalidation from livewatch' { metadata { uid 'events-live' } }
+  cli.api_cmd .calls api.spec 'sidecar api spec' { metadata { uid 'apicmd-spec' } }
+  uiclients.scripts .reads api.spec 'Reads the whole contract' { metadata { uid 'scripts-spec' } }
+  api.fixtures .supplies api.routes 'Recorded sessions, no tmux' { metadata { uid 'fixtures-routes' } }
+  api.fixtures .supplies api.terminal 'Recorded terminal streams' { metadata { uid 'fixtures-terminal' } }
+  cli.api_cmd .calls cli.api_service 'api service install, uninstall, status' { metadata { uid 'apicmd-service' } }
+  cli.api_service .manages api 'Keeps api serve running (launchd or systemd)' { metadata { uid 'apiservice-host' } }
+  termproto.service .calls termproto.presence 'Presence and heartbeats per attachment' { metadata { uid 'service-presence' } }
+  termproto.presence .calls terminal.control 'Claims or releases @sidecar-owner' { metadata { uid 'presence-control' } }
+  termproto.service .calls termproto.frames 'Reset-free, coalesced frames' { metadata { uid 'service-frames' } }
+  termproto.frames .reads terminal.control 'Byte-fed screenmodel, no capture loop' { metadata { uid 'frames-control' } }
+  api.routes .calls api.workspace_routes 'Workspace and operation routes' { metadata { uid 'routes-workspaces' } }
+  api.workspace_routes .calls workspaces.git_ops 'Create, rename, delete, restore' { metadata { uid 'wsroutes-gitops' } }
+  api.workspace_routes .calls agents.control 'Start or prompt agents' { metadata { uid 'wsroutes-agents' } }
+  api.routes .writes api.layouts 'Per-viewer pane trees' { metadata { uid 'routes-layouts' } }
+  cli.open_cmd .sends api.viewer_relay 'sidecar open reaches a screen-holding client' { metadata { uid 'open-relay' } }
+  cli.layout_cmd .sends api.viewer_relay 'layout apply and move' { metadata { uid 'layout-relay' } }
+  api.viewer_relay .streams api.events 'Delivers open and layout requests' { metadata { uid 'relay-events' } }
 }
 
 views {

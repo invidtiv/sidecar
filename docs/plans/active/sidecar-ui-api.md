@@ -202,7 +202,7 @@ Create the `sidecar-ui` repo. `sidecar api serve` runs on the Unix socket and lo
 Exit:
 - From a tailnet device through `tailscale serve`, type into a running agent session. The desktop TUI shows the same session and is never resized until control is taken.
 - xterm.js works inside the component's shadow DOM: focus, selection, IME, paste.
-- Measurements are recorded: captures per second and bytes per second for one busy agent and for four, and keystroke-to-echo latency over the tailnet. These decide when v1 item 2 lands.
+- Measurements are recorded: captures per second and bytes per second for one busy agent and for four, and keystroke-to-echo latency over the tailnet. These decide when v1 item 2 lands. Loopback results and the recommendation are in [U0 measurements](sidecar-ui-api/u0-measurements.md) (`scripts/ui-api-measure.sh`): screen-model frames wait for U3, and U1 takes compression, reset-free and coalesced frames instead. The tailnet latency run is still open.
 
 ### U1: Contract v1 and Sessions
 
@@ -220,7 +220,7 @@ Splits holding several terminals and content panes, from `contentservice`. Live 
 
 An API client that holds the screen announces itself on the `uirequest` bus as a viewer with `uiRequestRelayV1`. `sidecar open` and `sidecar layout apply/move` then reach it, with the same decline-don't-queue rules. An agent says "open this diff", and the diff appears in whichever UI Marcus is using. The `build-sidecar-ui` skill is finished, with clara-home as its first outside consumer.
 
-The Fractal model in `docs/diagrams/fractal/` gains the API host, its transports and the external clients in U0, and is kept current after that.
+The Fractal model in `docs/diagrams/fractal/` includes the API host, its three listeners, the terminal protocol services, the external clients and their trust boundaries as of U0 (scenes `ui-api`, `ui-api-chain`, `ui-api-trust`, `ui-api-roadmap`; journeys `browser-pairing`, `terminal-attach-ws`), with U1 to U4 work tagged `#proposed`. It is kept current after that.
 
 ## Settled decisions
 

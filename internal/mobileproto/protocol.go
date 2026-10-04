@@ -77,6 +77,47 @@ const (
 	ErrorOverflow         = "overflow"
 )
 
+// Reset reasons: why a reset event advanced an attachment's reset generation.
+// Clients branch on them, so they are part of the v0 contract: never rename
+// one, and document any new one in docs/reference/mobile-protocol.md, whose
+// reset reason table must list exactly ResetReasons.
+const (
+	ResetResize                = "resize"
+	ResetGeometryChanged       = "geometry_changed"
+	ResetAlternateScreen       = "alternate_screen"
+	ResetIdentityChanged       = "identity_changed"
+	ResetPresenceTimeout       = "presence_timeout"
+	ResetPresenceReleaseFailed = "presence_release_failed"
+	ResetCaptureFailed         = "capture_failed"
+	ResetCaptureInvalid        = "capture_invalid"
+	ResetFrameTooLarge         = "frame_too_large"
+	ResetOutputUnavailable     = "output_unavailable"
+)
+
+// ResetReasons is every reason a reset event may carry.
+var ResetReasons = []string{
+	ResetResize,
+	ResetGeometryChanged,
+	ResetAlternateScreen,
+	ResetIdentityChanged,
+	ResetPresenceTimeout,
+	ResetPresenceReleaseFailed,
+	ResetCaptureFailed,
+	ResetCaptureInvalid,
+	ResetFrameTooLarge,
+	ResetOutputUnavailable,
+}
+
+// IsResetReason reports whether reason is one of ResetReasons.
+func IsResetReason(reason string) bool {
+	for _, known := range ResetReasons {
+		if reason == known {
+			return true
+		}
+	}
+	return false
+}
+
 // Request is the only client-to-server envelope. Fields not used by Type must
 // be omitted. RequestID correlates exactly one response; asynchronous frame and
 // reset events omit it.
