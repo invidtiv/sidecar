@@ -53,11 +53,12 @@ The status values are `queued`, `running`, `review`, `fixing`, `merged` and `blo
 | U1-a events stream | td-aa8756 | sidecar | Codex | U0-a | review MERGE-READY; follow-up running: spec integration after U1-b, plus CatalogRow.path for U1-e (td-e7f0e7) |
 | U1-b schemas, spec, fixtures | td-5ae805 | sidecar | Codex | U0-a | merged (854d108e) |
 | U1-c service install | td-d7869b | sidecar | Codex, reviewed by Codex | U0-a | merged |
-| U1-d presence and v1 frames | td-713745 | sidecar | Codex | td-552e24 merged | review (Codex reviewer, shell "rev U1-d"; branch u1d-presence @c8175f6e) |
-| U1-e web app shell and Sessions | td-57a73e | sidecar-ui | Codex | U0-b | finishing for handoff; CatalogRow.path wiring follows U1-a. Live preview: `sidecar api serve` from main on 127.0.0.1:7861, in the "Preview: sidecar-ui" tab |
-| U1-f SDK adopts v1 | td-820df7 | sidecar-ui | Codex | U1-a, U1-d | queued |
-| U1-g iOS adopts presence and events | td-fde8cf | sidecar-mobile | Codex | U1-a, U1-d | queued |
-| U1-i persist browser sessions | td-165353 | sidecar | Codex | U1-a, U1-b merged (both touch internal/uiapi) | queued |
+| U1-d presence and v1 frames | td-713745 | sidecar | Codex | td-552e24 merged | review MERGE-READY; integrating main (U1-b terminalBackend interface) plus encoder byte budget, then merge |
+| U1-e web app shell and Sessions | td-57a73e | sidecar-ui | Codex | U0-b | merged (sidecar-ui 8d183fc); Claude review fixed 6 UX defects |
+| U1-f SDK adopts v1 | td-820df7 | sidecar-ui | Codex | U1-a, U1-d | running (Codex, ~/code/sidecar-ui-u1f-sdk, branch u1f-sdk), against the u1d and ui-u1a-events branches |
+| U1-g iOS adopts presence and events | td-fde8cf | sidecar-mobile | Codex | U1-a, U1-d | running (Codex, ~/code/sidecar-mobile-u1g-presence, branch u1g-presence); presence first against the u1d branch, events after U1-a |
+| U1-i persist browser sessions | td-165353 | sidecar | Codex | U1-a, U1-b merged (both touch internal/uiapi) | queued; also td-affb04 (the --ui root goes stale when the UI dir is rebuilt) |
+| U1-e2 web app polish | td-71e0e5 | sidecar-ui | Codex | U1-e | running (Codex, ~/code/sidecar-ui-u1e2-polish, branch u1e2-polish): terminal-safe chords, needs-input, palette, phone header |
 | U1-h security review and three-viewer proof | td-295605 | all | Claude, then Codex | U1-a, U1-d, U1-f | queued |
 | U2-a core extraction | td-c709a9 | sidecar | Codex | U0-a | merged (d95b66f5) |
 
@@ -197,8 +198,10 @@ Each one is a td issue with the exact command and output. Fixes run as their own
 | (sidecar) | `sidecar create worktree --json` printed two JSON documents once, breaking a strict parser | to verify |
 | td-e930bb | Friction lane (Codex, ~/code/sidecar-friction-1): flakes, lint lock, prune safety (td-8e99af was a real production risk: blank pane cwd), identity safeguards | review (Codex reviewer, shell "rev friction-1") |
 | td-11138b | `sidecar agent prompt` reported `working`, but the Codex session later showed no conversation and the lane never ran. Orchestrator now confirms every lane on screen after prompting | open |
-| td-eeb7e8 | P1: a stale ShellCreatedMsg arriving after a project switch writes the next project's shells manifest. Fix after U2-a merges, because it touches the same code | queued |
+| td-eeb7e8 | P1: a stale ShellCreatedMsg arriving after a project switch writes the next project's shells manifest | running (bug lane) |
 | td-8e99af | A worktree-prune safety test sometimes judges a moved active worktree an orphan; checking whether production prune can do the same (friction lane, first priority) | running |
 | td-87ef7e, td-d77e97, td-cce9f6, td-5e7e28, td-9339ae, td-6db2ce | Load-dependent test flakes found under parallel lane gates (friction lane) | running |
 | td-ac892f | P1 root cause of several items above: Codex sessions share one `codex app-server` daemon env, so "current shell/project" defaults resolve to another agent (a reviewer renamed U1-d's shell). Friction lane | running |
 | td-090b9d | Not a comms bug. The orchestrator's watcher script crashed on an untitled message and skipped reports. Fixed in the watcher | invalid |
+| td-eeb7e8 lane | Codex bug lane (~/code/sidecar-bug-eeb7e8) with a completion fence for stale async messages across workspace and overview | running |
+| td-ae18e4, td-87dd09 | `comms publish` refused with "author does not follow topic" and no recovery hint (comms) | open |

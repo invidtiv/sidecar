@@ -76,6 +76,9 @@ type mobileBackend struct {
 	router      *mobilehub.CatalogRouter
 	broker      *mobilehub.ProtocolBroker
 	initialWait sync.Once
+	watchMu     sync.Mutex
+	watchCancel context.CancelFunc
+	watchDone   chan struct{}
 }
 
 func newMobileBackend(ctx context.Context, env Env) (*mobileBackend, error) {
@@ -109,6 +112,13 @@ func newMobileBackend(ctx context.Context, env Env) (*mobileBackend, error) {
 
 // Close stops the remote-host registry, if this backend holds one.
 func (b *mobileBackend) Close() {
+	b.watchMu.Lock()
+	stop, done := b.watchCancel, b.watchDone
+	b.watchMu.Unlock()
+	if stop != nil {
+		stop()
+		<-done
+	}
 	if b.registry != nil {
 		b.registry.Stop()
 	}

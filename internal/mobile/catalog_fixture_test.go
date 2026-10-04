@@ -83,6 +83,7 @@ func catalogFixtureInput(now time.Time) CatalogInput {
 	working.Presentation = agentstatus.Presentation{Lane: agentstatus.LaneWorking, Label: "working", ChangedAt: now.Add(-time.Minute), Semantic: true}
 	durable := catalogShell("one:shell:durable", "Durable Shell", "sidecar-sh-durable", "%2", now)
 	durable.ProjectKey, durable.ProjectName = "/one", "One"
+	durable.Path = "/one/subdirectory"
 	ambiguous := catalogShell("one:shell:ambiguous", "Ambiguous Shell", "sidecar-sh-ambiguous", "", now)
 	ambiguous.ProjectKey, ambiguous.ProjectName, ambiguous.Live, ambiguous.Ambiguous = "/one", "One", false, true
 	plain := workspaceinventory.Workspace{ID: "one:worktree:plain", ProjectKey: "/one", ProjectName: "One", Kind: workspaceinventory.KindWorktree, Name: "Plain Worktree", Branch: "main", Plain: true, IsMain: true, ObservedAt: now}
@@ -100,7 +101,7 @@ func catalogFixtureInput(now time.Time) CatalogInput {
 	stale := catalogShell("two:shell:stale", "Stale Shell", "sidecar-sh-stale", "%7", now)
 	stale.ProjectKey, stale.ProjectName = "/stale", "Stale"
 
-	return CatalogInput{
+	input := CatalogInput{
 		ObservedAt: now,
 		Hosts:      []mobileproto.CatalogHost{{ID: "local:aerie", Name: "aerie", State: "online", Local: true}},
 		Projects: []CatalogProject{
@@ -110,4 +111,11 @@ func catalogFixtureInput(now time.Time) CatalogInput {
 			{Label: "Missing", Order: 3, Result: workspaceinventory.ProjectResult{ProjectKey: "/missing", ProjectName: "Missing", Err: os.ErrNotExist}},
 		},
 	}
+	for i := range input.Projects {
+		for j := range input.Projects[i].Result.Workspaces {
+			workspace := &input.Projects[i].Result.Workspaces[j]
+			workspace.ProjectRoot = input.Projects[i].Result.ProjectKey
+		}
+	}
+	return input
 }
