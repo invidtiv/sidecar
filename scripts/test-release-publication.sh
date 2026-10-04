@@ -36,6 +36,11 @@ mkdir "$temporary/current" "$temporary/expected"
 sha=0000000000000000000000000000000000000000000000000000000000000000
 "$repo_root/scripts/render-homebrew-formula.sh" \
   v1.2.3 "$sha" "$temporary/expected/sidecar.rb" >/dev/null
+# Background API follows managed activations as well as Homebrew upgrades.
+for service_contract in 'service do' 'run [HOMEBREW_PREFIX/"bin/sidecar", "api", "serve"]' 'keep_alive true' 'name macos: "com.marcus.sidecar.api", linux: "sidecar-api"'; do
+  grep -Fq "$service_contract" "$temporary/expected/sidecar.rb" ||
+    fail "rendered formula lost API service contract: $service_contract"
+done
 check_formula_transition \
   "$temporary/current/missing.rb" "$temporary/expected/sidecar.rb" v1.2.3 ||
   fail "rejected the first formula publication"

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"time"
 
 	"github.com/marcus/sidecar/internal/apiservice"
 	"github.com/marcus/sidecar/internal/config"
@@ -121,6 +122,8 @@ func apiServiceVersion(ctx context.Context, env Env, status *apiservice.Status) 
 	if !status.Running {
 		return
 	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
 	client, err := uiapi.NewLocalClient(env.StateDir)
 	if err != nil {
 		return
