@@ -35,7 +35,7 @@ import (
 const agentStartTimeout = 30 * time.Second
 
 var (
-	launchWorkspaceSession  = workspaceops.LaunchWorktreeSession
+	launchWorkspaceSession  = (workspaceops.Service{}).LaunchWorktree
 	waitWorkspaceShellReady = func(ctx context.Context, target agentcontrol.Target, timeout time.Duration) (agentcontrol.Snapshot, error) {
 		return (agentcontrol.Service{Terminal: agentcontrol.NewLocalTerminal()}).WaitShellReady(ctx, target, timeout)
 	}
@@ -648,16 +648,14 @@ func (p *Plugin) StartAgentWithOptions(wt *Worktree, agentType AgentType, skipPe
 			return AgentStartedMsg{Epoch: epoch, Err: err}
 		}
 		target := agentcontrol.Target{Host: "local", Project: workspaceinventory.CanonicalPath(mainRoot), Session: sessionName, Name: name}
-		if !result.Reconnected {
-			if _, readyErr := waitWorkspaceShellReady(ctx, target, agentStartTimeout); readyErr != nil {
-				return AgentStartedMsg{Epoch: epoch, Err: fmt.Errorf("prepare agent shell: %w", readyErr)}
-			}
-		}
-		started, startErr := startWorkspaceAgent(ctx, agentcontrol.StartRequest{
+		started, stage, startErr := (workspaceops.AgentLauncher{Wait: waitWorkspaceShellReady, StartAgent: startWorkspaceAgent}).Start(ctx, agentcontrol.StartRequest{
 			Target: target,
 			Kind:   string(agentType), Argv: launchArgv, Timeout: agentStartTimeout,
-		})
+		}, !result.Reconnected, false)
 		if startErr != nil {
+			if stage == workspaceops.AgentWaitReady {
+				return AgentStartedMsg{Epoch: epoch, Err: fmt.Errorf("prepare agent shell: %w", startErr)}
+			}
 			return AgentStartedMsg{Epoch: epoch, Err: fmt.Errorf("start agent: %w", startErr)}
 		}
 		if started.Target.PaneID != "" {

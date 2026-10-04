@@ -100,7 +100,19 @@ The only v0 scope is `full`. Narrower scopes arrive with the routes they protect
 
 HTTP calls from a paired origin send `Authorization: Bearer <token>`. Pairing an origin again rotates its token. Browsers cannot set headers on a WebSocket, so a paired origin first gets a ticket with `POST /api/v0/ws-tickets` (bearer-authenticated, single-use, 30-second expiry). It then connects with `?ticket=<ticket>`. A ticket is bound to the listener and the origin it was issued to. The same-origin UI does the same with its session token. A non-browser client may instead send `Authorization: Bearer <token>` on the upgrade itself. It either sends no `Origin` or sends the origin that token is bound to (the paired origin, or for a session token the origin that exchanged it); any other `Origin` closes with `4403`.
 
+## Workspace operation core
+
+Workspace writes are prepared for U2 through `workspaceops.Service`, a transport-neutral service with no viewer, selection, or in-flight operation state. The CLI, project Workspaces TUI, and global Sessions view use the same local operation boundary; remote mutations call it on the owning host through the CLI. U2-a adds no HTTP routes, capabilities, or wire fields.
+
+Worktree creation uses a confirmed `WorktreePlan`: plan, begin (Git execution and recovery journal), identity and configured setup, finalization, then launch. The non-interactive `CreateWorktree` composes the same phases the TUI calls separately for progress and recovery. A partial Git success is journaled even after cancellation. Required journal or setup failures retain the created identity and prevent normal finalization and launch. Retry runs setup against that identity; the TUI retains its explicit open-anyway decision and can finalize before opening. Optional warnings retain each surface's existing presentation policy. Task start remains explicit: the project form starts its linked task; CLI and Sessions link without an additional task-start subprocess during setup.
+
+Shell create, rename, delete, and tombstone restore, and worktree display-name rename and deletion, go through that service. Shell persistence and locking live only in `shellstate`; the plugin's `ShellManifest` is a compatibility projection with local revision tracking. Tombstone restore restores a durable shell record without starting tmux; cold session recreation remains the existing `sessionrestore` executor. Worktree launch reconnects an existing session rather than creating another one. No operation restarts the tmux server.
+
+`workspaceops.AgentLauncher` shares readiness and provider start sequencing, retaining each caller's resolved argv, deadlines, target policy, and error wording. Reconnecting worktree sessions skip shell-readiness waiting. `agentresolve.ResolveTarget` accepts explicit caller context and a target lookup adapter, so headless callers share the CLI's target-required and project/shell scoping rules. `workspacelist.Projected`, `SectionsAt`, the pin helpers, and `Hidden` provide state-free list policy; clocks, pins, and source-resolved visibility facts are caller inputs. Human selection, scrolling, collapsed sections, and presentation remain in their models.
+
 ## HTTP routes
+
+Every HTTP `GET` route also accepts `HEAD` with the same listener and authentication rules and no response body. The terminal WebSocket handshake remains `GET`-only. The generated spec lists both methods for resources, the pairing page and static UI files.
 
 All JSON, encoded exactly as the CLI's `--json` output: one object and a trailing newline. Successful responses are `200`. Errors are `{"error": {"code": "snake_case_code", "message": "One human sentence that says what to do."}}` with a fitting status. Codes match the CLI's refusal vocabulary where one exists. The API adds these:
 
@@ -162,14 +174,40 @@ Unnegotiated v0 inherits the mobile service's bounded outbound queue. Clients th
 
 | Command | Does |
 | --- | --- |
-| `sidecar api serve [--port N] [--ui DIR] [--tailnet] [--tailnet-port N] [--json]` | Runs the server in the foreground until SIGINT or SIGTERM. `--json` writes the endpoint object as one line once every listener is bound. |
+| `sidecar api serve [--port N] [--ui DIR] [--fixtures DIR] [--tailnet] [--tailnet-port N] [--json]` | Runs the server in the foreground until SIGINT or SIGTERM. `--json` writes the endpoint object as one line once every listener is bound. |
 | `sidecar api open [--print] [--path P]` | Pairs this machine's browser and opens the UI, or prints the `/pair#code=…` URL. |
 | `sidecar api pair --origin URL` / `--list` / `--revoke URL` | Manages paired origins. `--json` gives structured output. |
 | `sidecar api pair --revoke-sessions [--origin URL] [--json]` | Signs out browser sessions from `sidecar api open`, all of them or one origin's, and closes their terminals, without restarting the server. |
 | `sidecar api service install\|uninstall\|status [--json]` | Manages or inspects the per-user background service (see below). |
 | `sidecar api status [--json]` | Reads the status route over the Local socket. Exits non-zero with a clear message when no server is running. |
 
-`sidecar api spec` arrives in U1.
+`sidecar api spec [--json]` prints the OpenAPI 3.1 document without a running server. Both forms print JSON.
+
+## Schemas and fixture development
+
+[ui-api.openapi.json](ui-api.openapi.json) is generated from the Go HTTP wire types and `mobileproto.Request`/`Response`. Components use JSON Schema 2020-12; the terminal WebSocket is described under `x-streams`. The generator uses `invopop/jsonschema` v0.13.0 because it reflects the same JSON tags used by `encoding/json` and supports the OpenAPI 3.1 schema dialect. Schema objects describe serialization; operation-specific field requirements, bounds, and ordering remain in this reference and [mobile-protocol.md](mobile-protocol.md). The route/method inventory and all schema references are checked, and a test fails if the committed document is stale. Regenerate the spec, fixture examples, checksums and CLI reference together with `./scripts/update-ui-api-contract.sh`. Staleness failures point to this same command.
+
+Security alternatives describe only the listeners that serve an operation. Remote-only ticket issuance always requires credentials. The combined document uses `x-listeners` and `x-local-auth` to distinguish the Local socket's credential-free access from authenticated Browser and Tailnet requests on shared resources; clients must honor those listener annotations.
+
+The CLI and HTTP catalog remain `mobileproto.CatalogSnapshot`. Status remains `uiapi.Status`; origin registration/list/revocation use the same named types on the CLI and HTTP. This change introduces no JSON shape changes. HTTP hello and pairing request bodies now also have named Go wire types instead of anonymous maps/structs.
+
+`testdata/ui-api/v0/` contains synthetic HTTP hello, sessions, status, error, pairing and terminal examples with `SHA256SUMS`. Tokens, handles, paths and terminal text are synthetic. The terminal transcript is generated through the real mobile service with handles normalized. SDK tests can read the corpus directly. The same `./scripts/update-ui-api-contract.sh` command regenerates the real-Service transcript before the resources and checksums, then verifies them. Every JSON/JSONL corpus file is included in the manifest, including stream transcripts added by later lanes.
+
+Fixture development requires `SIDECAR_ISOLATED_STATE=1` and temporary state/config paths. Startup refuses paths inside the real Sidecar state/config trees, including symlink aliases and API authority files linked into those trees, before it reads config or writes discovery. For an automatically cleaned proof run `./scripts/ui-api-fixture-proof.sh`. To develop a UI against a foreground fixture server:
+
+```sh
+fixture_root=$(mktemp -d /tmp/sc-fixtures.XXXXXX)
+mkdir -p "$fixture_root/state" "$fixture_root/tmux"
+printf '{}\n' > "$fixture_root/config.json"
+unset TMUX TMUX_PANE
+SIDECAR_ISOLATED_STATE=1 XDG_STATE_HOME="$fixture_root/state" TMUX_TMPDIR="$fixture_root/tmux" sidecar -config "$fixture_root/config.json" api serve --fixtures testdata/ui-api/v0 --port 0 --ui DIR
+# After stopping the server, remove only this temporary tree.
+rm -rf "$fixture_root"
+```
+
+`sessions.json` must contain an unfiltered Project-order catalog; queries use the real shared sorting/filtering/grouping functions. Ready rows use the deterministic synthetic identity issued by `mobile.FixtureIdentity`. `status.json` supplies recorded metadata, while listener addresses and connected clients/attachments describe the actual running fixture server. Pairing codes, tokens, tickets and browser sessions are always issued by the real server; fixture examples are never usable credentials. All real listener authentication, Host/Origin guards, mutation guards, limits, static routing and shutdown behavior apply.
+
+Terminals run the real mobile protocol service against a capture/geometry adapter that echoes input bytes as normalized frames. Fixture panes are shared across connections to the same target and begin with an 80×24 grid and supports real request validation, control, input, resize/reset ordering, heartbeat, release and reconnect. Capability negotiation additionally enables presence arbitration through the shared lease policy, holder-label events, reset-free/coalesced frames, view-only input takeover and server paste. Pasted bytes echo literally; no application is launched to interpret bracketed paste. It launches no shell and executes no commands. History is explicitly unavailable in this first echo adapter; it never falls through to tmux. Fixture mode is opt-in and does not replace the real backend unless `--fixtures DIR` is supplied.
 
 ### Per-user background service
 
@@ -199,6 +237,12 @@ Live proofs follow the `scripts/tmux-drive.sh` isolation rules: a private tmux s
 
 `scripts/ui-api-proof.sh` is the v0 proof. It builds a temporary binary, creates one managed shell on a private tmux server, runs `sidecar api serve`, and checks the Local routes with `curl --unix-socket`, the Browser guards, `sidecar api open` pairing, origin pairing with a ticket, and one terminal round trip over the WebSocket through `internal/tools/uiapiproof`. `TestAPITerminalRoundTripAgainstLocalOwner` in `internal/cli` covers the same terminal sequence in process.
 
+`scripts/ui-api-fixture-proof.sh` proves the real CLI spec, fixture server, catalog/status, origin pairing/ticket and legacy and negotiated v1 terminal echo journeys with isolated state/config, a private tmux namespace, port 0, a bounded client and a failing tmux shim. It checks that no tmux command ran and that shutdown removed discovery/socket files.
+
+`scripts/workspace-operations-proof.sh` proves U2-a through the real TUI and CLI: project shell creation, CLI rename visible in Workspaces and Sessions, Sessions shell creation, shell deletion and tombstone restore, and planned worktree creation and identity-pinned deletion. It builds a temporary binary and uses `tmux-drive.sh` to isolate both servers and state and clean up on exit. Set `WORKSPACE_PROOF_OUTPUT` to a directory to retain the captured text and PNGs. Pure-core regression tests cover interrupted creation, required-failure journal retention, readiness failures, and the stale-refresh fence after service deletion.
+
 `scripts/ui-api-service-proof.sh` covers fake launchd/systemd and CLI lifecycles, config-driven UI serving, explicit UI override, replacement of the stable launch link, clean exit/discovery cleanup, and restart against the same isolated state tree. It makes no service-manager or tmux changes.
 
 `scripts/ui-api-measure.sh` uses the same isolation to measure the terminal stream under agent-like load: frames, wire bytes, captures, CPU and keystroke-to-echo latency, through `internal/tools/uiapimeasure`. Results are in [U0 measurements](../plans/active/sidecar-ui-api/u0-measurements.md).
+
+To extend the contract, add the named Go request/response or stream envelope to `Spec` in `internal/uiapi/spec.go`, describe its route or `x-streams` entry there, and add typed corpus examples/tests. Then run `./scripts/update-ui-api-contract.sh`. Later stream lanes own their envelope/transcript; this command includes their committed JSON/JSONL transcript in `SHA256SUMS`.

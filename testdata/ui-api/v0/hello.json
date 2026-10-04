@@ -1,0 +1,15 @@
+{
+  "api_version": 0,
+  "api_instance": "api_fixture",
+  "server_version": "fixture",
+  "capabilities": [
+    "sessions",
+    "status",
+    "terminal",
+    "ws_tickets"
+  ],
+  "terminal": {
+    "protocol": "mobile",
+    "version": 0
+  }
+}

@@ -43,11 +43,12 @@ func apiCommand() *Command {
 	help := Flag{Name: "--help", Short: "-h", Summary: "Show this help", Bool: true}
 	jsonFlag := Flag{Name: "--json", Summary: "Write one structured result object to stdout", Bool: true}
 	serve := &Command{
-		Name: "serve", Summary: "Serve the UI API on this machine", Usage: "sidecar api serve [--port N] [--ui DIR] [--tailnet] [--tailnet-port N] [--json]",
+		Name: "serve", Summary: "Serve the UI API on this machine", Usage: "sidecar api serve [--port N] [--ui DIR] [--fixtures DIR] [--tailnet] [--tailnet-port N] [--json]",
 		Long: "Run the UI API server in the foreground until interrupted. It listens on a Unix socket in the state directory (local agents and the CLI, no auth), on 127.0.0.1 for browsers (paired with `sidecar api open` or `sidecar api pair`), and with --tailnet on a second Unix socket for `tailscale serve`, trusting only allowed tailnet logins (config api.tailnetLogins, default the node owner). " +
-			"It records itself in $STATE/api/endpoint.json and refuses to start while another server owns the same state tree. It never starts or stops tmux. Each terminal WebSocket is one mobile protocol v0 stream, served exactly as `sidecar mobile serve --stdio` serves stdin. " +
+			"It records itself in $STATE/api/endpoint.json and refuses to start while another server owns the same state tree. It never starts or stops tmux. Each terminal WebSocket is one mobile protocol v0 stream, served exactly as `sidecar mobile serve --stdio` serves stdin. --fixtures requires SIDECAR_ISOLATED_STATE=1 and temporary XDG_STATE_HOME and -config paths; it refuses real state/config paths, including symlink aliases. " +
 			"--tailnet prints the `tailscale serve` command to run; it never changes Tailscale configuration. --tailnet-port N serves the tailnet listener on a dedicated loopback port instead, for a tailscaled that cannot open a 0600 user socket; any local process or OS user can reach that port and claim an allowed tailnet login, so use it only on a machine where every local user and process is already trusted. --json writes the endpoint object as one line once every listener is bound.",
 		Flags: []Flag{{Name: "--port", Arg: "N", Summary: "Browser listener port on 127.0.0.1 (default 7861; 0 picks a free port)"},
+			{Name: "--fixtures", Arg: "DIR", Summary: "Serve recorded Sessions/status and deterministic echo terminals without tmux"},
 			{Name: "--ui", Arg: "DIR", Summary: "Serve a built UI from DIR (overrides config api.uiDir), with index.html as the fallback for app routes"},
 			{Name: "--tailnet", Summary: "Also serve the tailnet listener for tailscale serve", Bool: true},
 			{Name: "--tailnet-port", Arg: "N", Summary: "Serve the tailnet listener on this loopback port instead of a Unix socket"},
@@ -87,7 +88,7 @@ func apiCommand() *Command {
 	}
 	return &Command{Name: "api", Summary: "Serve Sidecar's UI API for web and embedded clients", Usage: "sidecar api <command>",
 		Long: "The UI API exposes Sessions and live terminals over HTTP and WebSocket so a web UI, an embedding app, or an agent can use them. The wire contract is docs/reference/ui-api.md.",
-		Sub:  []*Command{open, pair, serve, apiServiceCommand(), status}, Run: runAPIRoot}
+		Sub:  []*Command{open, pair, serve, apiServiceCommand(), status, apiSpecCommand()}, Run: runAPIRoot}
 }
 
 func runAPIRoot(env Env, args []string) int {
@@ -155,7 +156,7 @@ func runAPIServe(env Env, args []string) int {
 		_, _ = fmt.Fprint(env.Stdout, RenderHelp(cmd))
 		return 0
 	}
-	flags, err := parseAPIFlags(args, []string{"--tailnet", "--json"}, []string{"--port", "--ui", "--tailnet-port"})
+	flags, err := parseAPIFlags(args, []string{"--tailnet", "--json"}, []string{"--port", "--ui", "--tailnet-port", "--fixtures"})
 	if err != nil {
 		cliErrf(env.Stderr, "%v\n\n%s", err, RenderHelp(cmd))
 		return 2
@@ -172,6 +173,12 @@ func runAPIServe(env Env, args []string) int {
 		if tailnetPort, err = strconv.Atoi(raw); err != nil || tailnetPort < 1 || tailnetPort > 65535 {
 			cliErrf(env.Stderr, "--tailnet-port must be a number from 1 to 65535\n\n%s", RenderHelp(cmd))
 			return 2
+		}
+	}
+	if _, fixtures := flags.values["--fixtures"]; fixtures {
+		if err := checkAPIFixtureIsolation(env.StateDir); err != nil {
+			cliErrf(env.Stderr, "fixture isolation: %v\n", err)
+			return 1
 		}
 	}
 	withTailnet := flags.bools["--tailnet"] || tailnetPort > 0
@@ -214,14 +221,30 @@ func runAPIServe(env Env, args []string) int {
 		cliErrf(env.Stderr, "watch executable: %v; reinstall Sidecar and retry\n", err)
 		return 1
 	}
-	backend, err := newMobileBackend(ctx, env)
-	if err != nil {
-		cliErrln(env.Stderr, err)
-		return 1
+	var backend uiapi.Backend
+	var fixtureStatus *uiapi.Status
+	if dir, fixtures := flags.values["--fixtures"]; fixtures {
+		if dir == "" {
+			cliErrln(env.Stderr, "--fixtures requires a directory")
+			return 2
+		}
+		fixture, loadErr := uiapi.LoadFixtures(dir)
+		if loadErr != nil {
+			cliErrln(env.Stderr, loadErr)
+			return 1
+		}
+		backend, fixtureStatus = fixture, &fixture.Status
+	} else {
+		live, loadErr := newMobileBackend(ctx, env)
+		if loadErr != nil {
+			cliErrln(env.Stderr, loadErr)
+			return 1
+		}
+		defer live.Close()
+		backend = live
 	}
-	defer backend.Close()
 	server, err := uiapi.Start(uiapi.Options{StateDir: env.StateDir, Port: port, UIDir: uiDir, Tailnet: tailnet,
-		Backend: backend, Version: buildinfo.Version()})
+		Backend: backend, Version: buildinfo.Version(), FixtureStatus: fixtureStatus})
 	if err != nil {
 		cliErrln(env.Stderr, err)
 		return 1

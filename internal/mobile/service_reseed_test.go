@@ -60,7 +60,10 @@ func TestCaptureFailureRequestsAReplacementFrame(t *testing.T) {
 	}
 }
 
-type failingRelease struct{ released int }
+type failingRelease struct {
+	acceptingGeometry
+	released int
+}
 
 func (f *failingRelease) Resize(int, int) error         { return nil }
 func (f *failingRelease) Heartbeat() error              { return nil }
@@ -290,3 +293,12 @@ func TestInFlightPreResizeCaptureStillWaitsForTheExpectedGeometry(t *testing.T) 
 		t.Fatalf("expected resize lost control or stayed pending: control=%t expected=%d", a.control, a.expectedColumns)
 	}
 }
+
+func (acceptingGeometry) ClaimResize(int, int) error          { return nil }
+func (acceptingGeometry) SetHolderLabel(string, string) error { return nil }
+func (acceptingGeometry) Presence(bool, bool, time.Duration, int, int, bool) (bool, error) {
+	return true, nil
+}
+func (acceptingGeometry) ClaimInput([]byte, int, int, bool) error { return nil }
+func (acceptingGeometry) Paste([]byte) error                      { return nil }
+func (acceptingGeometry) Holder() (string, string, error)         { return "", "", nil }

@@ -1,0 +1,21 @@
+{
+  "api_version": 0,
+  "api_instance": "api_fixture",
+  "server_version": "fixture",
+  "pid": 4242,
+  "started_at": "2026-10-03T00:00:00Z",
+  "listeners": [
+    {
+      "name": "local",
+      "network": "unix",
+      "address": "/tmp/fixture/api.sock"
+    },
+    {
+      "name": "browser",
+      "network": "tcp",
+      "address": "127.0.0.1:7861"
+    }
+  ],
+  "clients": [],
+  "terminals": []
+}

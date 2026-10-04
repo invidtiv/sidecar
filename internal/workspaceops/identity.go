@@ -18,7 +18,15 @@ func PersistWorktreeIdentity(ctx context.Context, plan *WorktreePlan) []SetupOut
 	}
 	dir, err := projectdir.WorktreeDirContext(ctx, plan.MainWorktree, plan.Path)
 	if err != nil {
-		return []SetupOutcome{{Kind: "identity", Action: "resolve worktree state", Required: true, Err: err}}
+		outcomes := []SetupOutcome{
+			{Kind: "identity", Action: "base metadata", Required: true, Err: err},
+			{Kind: "identity", Action: "display name", Required: true, Err: err},
+			{Kind: "agent-metadata", Action: "agent metadata", Required: true, Err: err},
+		}
+		if plan.TaskID != "" {
+			outcomes = append(outcomes, SetupOutcome{Kind: "task-link", Action: "task link " + plan.TaskID, Required: true, Err: err})
+		}
+		return outcomes
 	}
 	write := func(kind, action, file, value string, required bool) SetupOutcome {
 		if err := ctx.Err(); err != nil {

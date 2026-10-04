@@ -141,10 +141,10 @@ func (m *Model) SetItems(items []Item) {
 }
 
 // SetPinned replaces the pin order. IDs that are not in the current catalog
-// are kept until the next reproject so a later SetItems can restore them;
-// display only includes pins that still have a matching item.
+// are kept so a later SetItems can restore them; display only includes pins
+// that still have a matching item. The owner prunes against complete inventory.
 func (m *Model) SetPinned(ids []string) {
-	m.pinnedIDs = uniquePinned(ids)
+	m.pinnedIDs = NormalizePins(ids)
 	m.reproject()
 }
 
@@ -154,12 +154,7 @@ func (m *Model) PinnedIDs() []string { return append([]string(nil), m.pinnedIDs.
 
 // IsPinned reports whether id is in the pin list.
 func (m *Model) IsPinned(id string) bool {
-	for _, existing := range m.pinnedIDs {
-		if existing == id {
-			return true
-		}
-	}
-	return false
+	return IsPinned(m.pinnedIDs, id)
 }
 
 // TogglePin pins or unpins id and returns the new pin order. First-pinned
@@ -168,39 +163,14 @@ func (m *Model) TogglePin(id string) []string {
 	if id == "" {
 		return m.PinnedIDs()
 	}
-	for i, existing := range m.pinnedIDs {
-		if existing == id {
-			m.pinnedIDs = append(m.pinnedIDs[:i:i], m.pinnedIDs[i+1:]...)
-			m.reproject()
-			return m.PinnedIDs()
-		}
-	}
-	m.pinnedIDs = append(m.pinnedIDs, id)
+	m.pinnedIDs = TogglePinned(m.pinnedIDs, id)
 	m.reproject()
 	return m.PinnedIDs()
 }
 
-func uniquePinned(ids []string) []string {
-	if len(ids) == 0 {
-		return nil
-	}
-	seen := make(map[string]bool, len(ids))
-	out := make([]string, 0, len(ids))
-	for _, id := range ids {
-		if id == "" || seen[id] {
-			continue
-		}
-		seen[id] = true
-		out = append(out, id)
-	}
-	return out
-}
-
 func (m *Model) reproject() {
 	previous := m.selectedID
-	matched := Filtered(m.items, m.filter.Query())
-	pinned, rest := splitPinned(matched, m.pinnedIDs)
-	m.visible = append(pinned, Sorted(rest, m.sortMode)...)
+	m.visible = Projected(m.items, m.filter.Query(), m.sortMode, m.pinnedIDs)
 	if previous != "" && m.indexOf(previous) >= 0 {
 		m.selectedID = previous
 		m.ensureVisible()
@@ -398,7 +368,7 @@ func (m *Model) Render(opts RenderOptions) Rendered {
 		now = time.Now()
 	}
 	matched, total := m.Counts()
-	sections := GroupedAt(m.visible, m.sortMode, now, m.pinnedIDs)
+	sections := SectionsAt(m.visible, m.sortMode, now, m.pinnedIDs)
 	// A project whose inventory could not be read is a row, not a leftover. Its
 	// lines are reserved out of the body before the item viewport is sized, so a
 	// catalog longer than the pane — the normal multi-project case — cannot make

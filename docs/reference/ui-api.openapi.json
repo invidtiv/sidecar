@@ -1,0 +1,2292 @@
+{
+  "components": {
+    "schemas": {
+      "Capabilities": {
+        "additionalProperties": false,
+        "properties": {
+          "catalog_snapshots": {
+            "type": "boolean"
+          },
+          "changed_row_frames": {
+            "type": "boolean"
+          },
+          "coalesced_frames": {
+            "type": "boolean"
+          },
+          "heartbeat_interval_ms": {
+            "type": "integer"
+          },
+          "history_snapshots": {
+            "type": "boolean"
+          },
+          "holder_labels": {
+            "type": "boolean"
+          },
+          "input": {
+            "type": "boolean"
+          },
+          "maximum_columns": {
+            "type": "integer"
+          },
+          "maximum_history_bytes": {
+            "type": "integer"
+          },
+          "maximum_history_rows": {
+            "type": "integer"
+          },
+          "maximum_input_bytes": {
+            "type": "integer"
+          },
+          "maximum_line_bytes": {
+            "type": "integer"
+          },
+          "maximum_rows": {
+            "type": "integer"
+          },
+          "normalized_full_frames": {
+            "type": "boolean"
+          },
+          "presence": {
+            "type": "boolean"
+          },
+          "presence_timeout_ms": {
+            "type": "integer"
+          },
+          "reconnect": {
+            "type": "boolean"
+          },
+          "reset_free_frames": {
+            "type": "boolean"
+          },
+          "resize": {
+            "type": "boolean"
+          },
+          "server_paste": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "normalized_full_frames",
+          "changed_row_frames",
+          "input",
+          "resize",
+          "reconnect",
+          "catalog_snapshots",
+          "history_snapshots",
+          "maximum_columns",
+          "maximum_rows",
+          "maximum_input_bytes",
+          "maximum_line_bytes",
+          "maximum_history_rows",
+          "maximum_history_bytes",
+          "heartbeat_interval_ms",
+          "presence_timeout_ms"
+        ],
+        "type": "object"
+      },
+      "CatalogCandidate": {
+        "additionalProperties": false,
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "expected_target": {
+            "$ref": "#/components/schemas/TargetIdentity"
+          },
+          "owner_host_id": {
+            "type": "string"
+          },
+          "pane": {
+            "type": "string"
+          },
+          "selector": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          },
+          "workspace_kind": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "selector",
+          "display_name",
+          "owner_host_id",
+          "workspace_id",
+          "workspace_kind",
+          "session",
+          "pane",
+          "expected_target"
+        ],
+        "type": "object"
+      },
+      "CatalogFailure": {
+        "additionalProperties": false,
+        "properties": {
+          "detail": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope",
+          "id",
+          "name",
+          "state",
+          "detail"
+        ],
+        "type": "object"
+      },
+      "CatalogHost": {
+        "additionalProperties": false,
+        "properties": {
+          "detail": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "local": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "state"
+        ],
+        "type": "object"
+      },
+      "CatalogQuery": {
+        "additionalProperties": false,
+        "properties": {
+          "hosts": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "providers": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "search": {
+            "type": "string"
+          },
+          "show_idle_sessions": {
+            "type": "boolean"
+          },
+          "sort": {
+            "type": "string"
+          },
+          "states": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "CatalogRow": {
+        "additionalProperties": false,
+        "properties": {
+          "ambiguous": {
+            "type": "boolean"
+          },
+          "attach_state": {
+            "type": "string"
+          },
+          "attachment_ready": {
+            "type": "boolean"
+          },
+          "attention": {
+            "type": "boolean"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "candidate_generation": {
+            "type": "string"
+          },
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogCandidate"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "changed_at": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "expected_target": {
+            "$ref": "#/components/schemas/TargetIdentity"
+          },
+          "group": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "live": {
+            "type": "boolean"
+          },
+          "observed_at": {
+            "type": "string"
+          },
+          "owner_host_id": {
+            "type": "string"
+          },
+          "pane": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "project_name": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "refusal": {
+            "type": "string"
+          },
+          "refusal_code": {
+            "type": "string"
+          },
+          "semantic_status": {
+            "type": "boolean"
+          },
+          "session": {
+            "type": "string"
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          },
+          "task": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          },
+          "workspace_kind": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "owner_host_id",
+          "project_id",
+          "project_name",
+          "workspace_kind",
+          "display_name",
+          "status",
+          "group",
+          "attach_state",
+          "observed_at",
+          "live",
+          "ambiguous",
+          "stale",
+          "semantic_status",
+          "attention",
+          "attachment_ready"
+        ],
+        "type": "object"
+      },
+      "CatalogSection": {
+        "additionalProperties": false,
+        "properties": {
+          "group": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogRow"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "rows"
+        ],
+        "type": "object"
+      },
+      "CatalogSnapshot": {
+        "additionalProperties": false,
+        "properties": {
+          "failures": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogFailure"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "generation": {
+            "type": "string"
+          },
+          "hosts": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogHost"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "hub_id": {
+            "type": "string"
+          },
+          "observed_at": {
+            "type": "string"
+          },
+          "owner_config_generation": {
+            "type": "string"
+          },
+          "owner_host_id": {
+            "type": "string"
+          },
+          "query": {
+            "$ref": "#/components/schemas/CatalogQuery"
+          },
+          "sections": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogSection"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "total": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "generation",
+          "observed_at",
+          "hub_id",
+          "owner_host_id",
+          "owner_config_generation",
+          "query",
+          "hosts",
+          "sections",
+          "failures",
+          "total"
+        ],
+        "type": "object"
+      },
+      "ClientCapabilities": {
+        "additionalProperties": false,
+        "properties": {
+          "coalesced_frames": {
+            "type": "boolean"
+          },
+          "holder_labels": {
+            "type": "boolean"
+          },
+          "presence": {
+            "type": "boolean"
+          },
+          "reset_free_frames": {
+            "type": "boolean"
+          },
+          "server_paste": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "ClientInfo": {
+        "additionalProperties": false,
+        "properties": {
+          "auth": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "listener": {
+            "type": "string"
+          },
+          "login": {
+            "type": "string"
+          },
+          "origin": {
+            "type": "string"
+          },
+          "since": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "listener",
+          "auth",
+          "since"
+        ],
+        "type": "object"
+      },
+      "Endpoint": {
+        "additionalProperties": false,
+        "properties": {
+          "api_instance": {
+            "type": "string"
+          },
+          "api_version": {
+            "type": "integer"
+          },
+          "pid": {
+            "type": "integer"
+          },
+          "started_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "tailnet_socket": {
+            "type": "string"
+          },
+          "tailnet_tcp": {
+            "type": "string"
+          },
+          "tcp": {
+            "type": "string"
+          },
+          "unix_socket": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pid",
+          "version",
+          "api_version",
+          "api_instance",
+          "started_at",
+          "unix_socket",
+          "tcp"
+        ],
+        "type": "object"
+      },
+      "Error": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "retry": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "type": "object"
+      },
+      "ErrorBody": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorDetail"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "type": "object"
+      },
+      "ErrorDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "type": "object"
+      },
+      "Geometry": {
+        "additionalProperties": false,
+        "properties": {
+          "columns": {
+            "type": "integer"
+          },
+          "rows": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "columns",
+          "rows"
+        ],
+        "type": "object"
+      },
+      "Hello": {
+        "additionalProperties": false,
+        "properties": {
+          "api_instance": {
+            "type": "string"
+          },
+          "api_version": {
+            "type": "integer"
+          },
+          "capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "server_version": {
+            "type": "string"
+          },
+          "terminal": {
+            "$ref": "#/components/schemas/TerminalProtocol"
+          }
+        },
+        "required": [
+          "api_version",
+          "api_instance",
+          "server_version",
+          "capabilities",
+          "terminal"
+        ],
+        "type": "object"
+      },
+      "HistorySnapshot": {
+        "additionalProperties": false,
+        "properties": {
+          "at_oldest": {
+            "type": "boolean"
+          },
+          "end_line": {
+            "type": "integer"
+          },
+          "history_rows": {
+            "type": "integer"
+          },
+          "history_size": {
+            "type": "integer"
+          },
+          "render_vt_base64": {
+            "type": "string"
+          },
+          "start_line": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "history_size",
+          "history_rows",
+          "start_line",
+          "end_line",
+          "at_oldest",
+          "render_vt_base64"
+        ],
+        "type": "object"
+      },
+      "Holder": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "label"
+        ],
+        "type": "object"
+      },
+      "ListenerInfo": {
+        "additionalProperties": false,
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "network": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "network",
+          "address"
+        ],
+        "type": "object"
+      },
+      "Modes": {
+        "additionalProperties": false,
+        "properties": {
+          "alternate_screen": {
+            "type": "boolean"
+          },
+          "application_cursor": {
+            "type": "boolean"
+          },
+          "application_keypad": {
+            "type": "boolean"
+          },
+          "autowrap": {
+            "type": "boolean"
+          },
+          "bracketed_paste": {
+            "type": "boolean"
+          },
+          "cursor_blinking": {
+            "type": "boolean"
+          },
+          "cursor_shape": {
+            "type": "string"
+          },
+          "cursor_visible": {
+            "type": "boolean"
+          },
+          "input_known": {
+            "type": "boolean"
+          },
+          "insert": {
+            "type": "boolean"
+          },
+          "mouse_any": {
+            "type": "boolean"
+          },
+          "mouse_sgr": {
+            "type": "boolean"
+          },
+          "origin": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "input_known",
+          "bracketed_paste",
+          "application_cursor",
+          "application_keypad",
+          "autowrap",
+          "origin",
+          "insert",
+          "mouse_any",
+          "mouse_sgr",
+          "alternate_screen",
+          "cursor_visible",
+          "cursor_shape",
+          "cursor_blinking"
+        ],
+        "type": "object"
+      },
+      "OriginList": {
+        "additionalProperties": false,
+        "properties": {
+          "origins": {
+            "items": {
+              "$ref": "#/components/schemas/PairedOrigin"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "origins"
+        ],
+        "type": "object"
+      },
+      "OriginRegistration": {
+        "additionalProperties": false,
+        "properties": {
+          "origin": {
+            "type": "string"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "origin",
+          "token",
+          "scopes"
+        ],
+        "type": "object"
+      },
+      "OriginRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "origin": {
+            "type": "string"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "origin"
+        ],
+        "type": "object"
+      },
+      "OriginRevocation": {
+        "additionalProperties": false,
+        "properties": {
+          "origin": {
+            "type": "string"
+          },
+          "revoked": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "origin",
+          "revoked"
+        ],
+        "type": "object"
+      },
+      "PairedOrigin": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "origin": {
+            "type": "string"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "origin",
+          "scopes",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "PairingCode": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "url",
+          "expires_at"
+        ],
+        "type": "object"
+      },
+      "PairingCodeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "next": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "PairingExchange": {
+        "additionalProperties": false,
+        "properties": {
+          "next": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "next"
+        ],
+        "type": "object"
+      },
+      "PairingExchangeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "next": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "type": "object"
+      },
+      "Presence": {
+        "additionalProperties": false,
+        "properties": {
+          "columns": {
+            "type": "integer"
+          },
+          "focused": {
+            "type": "boolean"
+          },
+          "idle_ms": {
+            "type": "integer"
+          },
+          "rows": {
+            "type": "integer"
+          },
+          "visible": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "focused",
+          "visible",
+          "idle_ms",
+          "columns",
+          "rows"
+        ],
+        "type": "object"
+      },
+      "Request": {
+        "additionalProperties": false,
+        "properties": {
+          "attachment_handle": {
+            "type": "string"
+          },
+          "attachment_id": {
+            "type": "string"
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/ClientCapabilities"
+          },
+          "catalog_query": {
+            "$ref": "#/components/schemas/CatalogQuery"
+          },
+          "columns": {
+            "type": "integer"
+          },
+          "data_base64": {
+            "type": "string"
+          },
+          "expected_target": {
+            "$ref": "#/components/schemas/TargetIdentity"
+          },
+          "history_rows": {
+            "type": "integer"
+          },
+          "last_output_sequence": {
+            "type": "integer"
+          },
+          "last_reset_generation": {
+            "type": "integer"
+          },
+          "operation_sequence": {
+            "type": "integer"
+          },
+          "presence": {
+            "$ref": "#/components/schemas/Presence"
+          },
+          "previous_attachment_generation": {
+            "type": "integer"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "rows": {
+            "type": "integer"
+          },
+          "target": {
+            "type": "string"
+          },
+          "target_handle": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer"
+          },
+          "viewer": {
+            "$ref": "#/components/schemas/Viewer"
+          }
+        },
+        "required": [
+          "version",
+          "type",
+          "request_id"
+        ],
+        "type": "object"
+      },
+      "Response": {
+        "additionalProperties": false,
+        "properties": {
+          "api_instance": {
+            "type": "string"
+          },
+          "attachment_generation": {
+            "type": "integer"
+          },
+          "attachment_handle": {
+            "type": "string"
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/Capabilities"
+          },
+          "catalog": {
+            "$ref": "#/components/schemas/CatalogSnapshot"
+          },
+          "coalesced": {
+            "type": "boolean"
+          },
+          "control": {
+            "type": "boolean"
+          },
+          "error": {
+            "$ref": "#/components/schemas/Error"
+          },
+          "frame_kind": {
+            "type": "string"
+          },
+          "geometry": {
+            "$ref": "#/components/schemas/Geometry"
+          },
+          "history": {
+            "$ref": "#/components/schemas/HistorySnapshot"
+          },
+          "history_size": {
+            "type": "integer"
+          },
+          "holder": {
+            "$ref": "#/components/schemas/Holder"
+          },
+          "modes": {
+            "$ref": "#/components/schemas/Modes"
+          },
+          "operation_sequence": {
+            "type": "integer"
+          },
+          "output_sequence": {
+            "type": "integer"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "render_vt_base64": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "reset_free": {
+            "type": "boolean"
+          },
+          "reset_generation": {
+            "type": "integer"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Target"
+          },
+          "type": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "type"
+        ],
+        "type": "object"
+      },
+      "SessionRevocation": {
+        "additionalProperties": false,
+        "properties": {
+          "origin": {
+            "type": "string"
+          },
+          "revoked": {
+            "type": "integer"
+          },
+          "terminals_closed": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revoked",
+          "terminals_closed"
+        ],
+        "type": "object"
+      },
+      "Status": {
+        "additionalProperties": false,
+        "properties": {
+          "api_instance": {
+            "type": "string"
+          },
+          "api_version": {
+            "type": "integer"
+          },
+          "clients": {
+            "items": {
+              "$ref": "#/components/schemas/ClientInfo"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "listeners": {
+            "items": {
+              "$ref": "#/components/schemas/ListenerInfo"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "pid": {
+            "type": "integer"
+          },
+          "server_version": {
+            "type": "string"
+          },
+          "started_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "terminals": {
+            "items": {
+              "$ref": "#/components/schemas/TerminalInfo"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "api_version",
+          "api_instance",
+          "server_version",
+          "pid",
+          "started_at",
+          "listeners",
+          "clients",
+          "terminals"
+        ],
+        "type": "object"
+      },
+      "Target": {
+        "additionalProperties": false,
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "geometry": {
+            "$ref": "#/components/schemas/Geometry"
+          },
+          "handle": {
+            "type": "string"
+          },
+          "hub_id": {
+            "type": "string"
+          },
+          "hub_instance": {
+            "type": "string"
+          },
+          "owner_config_generation": {
+            "type": "string"
+          },
+          "owner_host_id": {
+            "type": "string"
+          },
+          "pane": {
+            "type": "string"
+          },
+          "server_incarnation": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          },
+          "target_generation": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          },
+          "workspace_kind": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "handle",
+          "hub_id",
+          "hub_instance",
+          "owner_host_id",
+          "owner_config_generation",
+          "workspace_id",
+          "workspace_kind",
+          "session",
+          "pane",
+          "server_incarnation",
+          "target_generation",
+          "geometry"
+        ],
+        "type": "object"
+      },
+      "TargetIdentity": {
+        "additionalProperties": false,
+        "properties": {
+          "hub_id": {
+            "type": "string"
+          },
+          "owner_config_generation": {
+            "type": "string"
+          },
+          "owner_host_id": {
+            "type": "string"
+          },
+          "pane": {
+            "type": "string"
+          },
+          "server_incarnation": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          },
+          "target_generation": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          },
+          "workspace_kind": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "hub_id",
+          "owner_host_id",
+          "owner_config_generation",
+          "workspace_id",
+          "workspace_kind",
+          "session",
+          "pane",
+          "server_incarnation",
+          "target_generation"
+        ],
+        "type": "object"
+      },
+      "TerminalInfo": {
+        "additionalProperties": false,
+        "properties": {
+          "client_id": {
+            "type": "string"
+          },
+          "control": {
+            "type": "boolean"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "holder": {
+            "$ref": "#/components/schemas/Holder"
+          },
+          "owner_host_id": {
+            "type": "string"
+          },
+          "pane": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "client_id",
+          "control"
+        ],
+        "type": "object"
+      },
+      "TerminalProtocol": {
+        "additionalProperties": false,
+        "properties": {
+          "protocol": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "protocol",
+          "version"
+        ],
+        "type": "object"
+      },
+      "TerminalRequest": {
+        "$ref": "#/components/schemas/Request"
+      },
+      "TerminalResponse": {
+        "$ref": "#/components/schemas/Response"
+      },
+      "TicketRequest": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "TicketResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "expires_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "ticket": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ticket",
+          "expires_at"
+        ],
+        "type": "object"
+      },
+      "Viewer": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "label"
+        ],
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "scheme": "bearer",
+        "type": "http"
+      },
+      "tailnetLogin": {
+        "description": "Trusted only on the dedicated Tailnet listener.",
+        "in": "header",
+        "name": "Tailscale-User-Login",
+        "type": "apiKey"
+      }
+    }
+  },
+  "info": {
+    "description": "Generated by sidecar api spec. HTTP and WebSocket auth, guards and ordering: docs/reference/ui-api.md and mobile-protocol.md.",
+    "title": "Sidecar UI API",
+    "version": "0"
+  },
+  "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/v0/hello": {
+      "get": {
+        "operationId": "hello_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Hello"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there."
+      },
+      "head": {
+        "operationId": "hello_get_head",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "default": {
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there."
+      }
+    },
+    "/api/v0/origins": {
+      "delete": {
+        "operationId": "origins_delete",
+        "parameters": [
+          {
+            "description": "Required on Browser and Tailnet; not on Local.",
+            "in": "header",
+            "name": "X-Sidecar-Request",
+            "required": false,
+            "schema": {
+              "const": "1",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "origin",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OriginRevocation"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {}
+        ],
+        "x-listeners": [
+          "local"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there."
+      },
+      "get": {
+        "operationId": "origins_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OriginList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {}
+        ],
+        "x-listeners": [
+          "local"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there."
+      },
+      "head": {
+        "operationId": "origins_get_head",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "default": {
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {}
+        ],
+        "x-listeners": [
+          "local"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there."
+      },
+      "post": {
+        "operationId": "origins_post",
+        "parameters": [
+          {
+            "description": "Required on Browser and Tailnet; not on Local.",
+            "in": "header",
+            "name": "X-Sidecar-Request",
+            "required": false,
+            "schema": {
+              "const": "1",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OriginRequest"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OriginRegistration"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {}
+        ],
+        "x-listeners": [
+          "local"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there."
+      }
+    },
+    "/api/v0/pairing/codes": {
+      "post": {
+        "operationId": "pairing_codes_post",
+        "parameters": [
+          {
+            "description": "Required on Browser and Tailnet; not on Local.",
+            "in": "header",
+            "name": "X-Sidecar-Request",
+            "required": false,
+            "schema": {
+              "const": "1",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairingCodeRequest"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairingCode"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {}
+        ],
+        "x-listeners": [
+          "local"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there."
+      }
+    },
+    "/api/v0/pairing/exchange": {
+      "post": {
+        "operationId": "pairing_exchange_post",
+        "parameters": [
+          {
+            "description": "Required on Browser and Tailnet; not on Local.",
+            "in": "header",
+            "name": "X-Sidecar-Request",
+            "required": false,
+            "schema": {
+              "const": "1",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairingExchangeRequest"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairingExchange"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [],
+        "x-listeners": [
+          "browser"
+        ]
+      }
+    },
+    "/api/v0/pairing/sessions": {
+      "delete": {
+        "operationId": "pairing_sessions_delete",
+        "parameters": [
+          {
+            "description": "Required on Browser and Tailnet; not on Local.",
+            "in": "header",
+            "name": "X-Sidecar-Request",
+            "required": false,
+            "schema": {
+              "const": "1",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Omit to revoke every browser session; supply an origin to revoke only its sessions.",
+            "in": "query",
+            "name": "origin",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionRevocation"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {}
+        ],
+        "x-listeners": [
+          "local"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there."
+      }
+    },
+    "/api/v0/sessions": {
+      "get": {
+        "operationId": "sessions_get",
+        "parameters": [
+          {
+            "explode": true,
+            "in": "query",
+            "name": "sort",
+            "schema": {
+              "enum": [
+                "activity",
+                "project",
+                "recent",
+                "name"
+              ],
+              "type": "string"
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "search",
+            "schema": {
+              "type": "string"
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "host",
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 32,
+              "type": "array"
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "provider",
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 32,
+              "type": "array"
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "state",
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 32,
+              "type": "array"
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "show_idle_sessions",
+            "schema": {
+              "type": "boolean"
+            },
+            "style": "form"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogSnapshot"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there."
+      },
+      "head": {
+        "operationId": "sessions_get_head",
+        "parameters": [
+          {
+            "explode": true,
+            "in": "query",
+            "name": "sort",
+            "schema": {
+              "enum": [
+                "activity",
+                "project",
+                "recent",
+                "name"
+              ],
+              "type": "string"
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "search",
+            "schema": {
+              "type": "string"
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "host",
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 32,
+              "type": "array"
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "provider",
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 32,
+              "type": "array"
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "state",
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 32,
+              "type": "array"
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "show_idle_sessions",
+            "schema": {
+              "type": "boolean"
+            },
+            "style": "form"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "default": {
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there."
+      }
+    },
+    "/api/v0/status": {
+      "get": {
+        "operationId": "status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there."
+      },
+      "head": {
+        "operationId": "status_get_head",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "default": {
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there."
+      }
+    },
+    "/api/v0/terminal": {
+      "get": {
+        "description": "Authenticated WebSocket upgrade. Exact Host guard before upgrade; Origin/auth failures use close codes after upgrade. A single-use origin-bound ticket or explicit bearer authenticates Browser; Local is trusted; Tailnet uses its allowed login. See ui-api.md.",
+        "operationId": "terminal_stream",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "ticket",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required for tickets and Tailnet. Explicit Browser bearer clients may omit Origin.",
+            "in": "header",
+            "name": "Origin",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "WebSocket upgraded; see x-streams for messages and close codes"
+          },
+          "421": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Host refused"
+          },
+          "426": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Upgrade required"
+          }
+        },
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ]
+      }
+    },
+    "/api/v0/ws-tickets": {
+      "post": {
+        "operationId": "ws-tickets_post",
+        "parameters": [
+          {
+            "description": "Required on Browser and Tailnet; not on Local.",
+            "in": "header",
+            "name": "X-Sidecar-Request",
+            "required": false,
+            "schema": {
+              "const": "1",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TicketRequest"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TicketResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-listeners": [
+          "browser",
+          "tailnet"
+        ]
+      }
+    },
+    "/pair": {
+      "get": {
+        "operationId": "pair_page",
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Pairing page, consumes no code"
+          }
+        },
+        "security": [],
+        "x-listeners": [
+          "browser"
+        ]
+      },
+      "head": {
+        "operationId": "pair_page_head",
+        "responses": {
+          "200": {
+            "description": "Pairing page, consumes no code"
+          }
+        },
+        "security": [],
+        "x-listeners": [
+          "browser"
+        ]
+      }
+    },
+    "/{path}": {
+      "get": {
+        "description": "Static UI files with SPA fallback. Browser listener public; Tailnet requires allowed login. API paths never fall back.",
+        "operationId": "ui_files",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "UI file or index.html"
+          }
+        },
+        "x-listeners": [
+          "browser",
+          "tailnet"
+        ]
+      },
+      "head": {
+        "description": "Static UI files with SPA fallback. Browser listener public; Tailnet requires allowed login. API paths never fall back.",
+        "operationId": "ui_files_head",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "UI file or index.html"
+          }
+        },
+        "x-listeners": [
+          "browser",
+          "tailnet"
+        ]
+      }
+    }
+  },
+  "x-streams": {
+    "/api/v0/terminal": {
+      "description": "One JSON envelope per text message. hello first; open before frame; operation_sequence and applied reset/output checkpoints govern mutations. See mobile-protocol.md.",
+      "maxMessageBytes": 8388608,
+      "messageType": "text",
+      "protocol": "mobile",
+      "request": {
+        "$ref": "#/components/schemas/TerminalRequest"
+      },
+      "response": {
+        "$ref": "#/components/schemas/TerminalResponse"
+      },
+      "transport": "websocket",
+      "version": 0
+    }
+  }
+}

@@ -3,7 +3,6 @@ package mobile
 import (
 	"context"
 	"encoding/base64"
-	"fmt"
 	"time"
 
 	"github.com/marcus/sidecar/internal/mobileproto"
@@ -18,12 +17,12 @@ func (s *Service) advertisedCapabilities() mobileproto.Capabilities {
 }
 
 // Presence and input run under the same attachment operation lock as v0.
-func (a *attachment) ensurePresenceGeometry() (*tty.HeadlessGeometry, error) {
+func (a *attachment) ensurePresenceGeometry() (LeaseGeometry, error) {
 	if a.presenceGeometry != nil {
 		return a.presenceGeometry, nil
 	}
 	t := a.target.resolved
-	g, err := tty.NewHeadlessGeometry(a.service.manager, tty.HeadlessTargetIdentity{ServerPID: t.ServerPID, SessionID: t.SessionID, SessionCreated: t.SessionCreated, Session: t.Session, Pane: t.Pane, Width: t.Width, Height: t.Height, PaneCount: t.PaneCount}, a.ownerID)
+	g, err := a.service.terminalBackend.Geometry(tty.HeadlessTargetIdentity{ServerPID: t.ServerPID, SessionID: t.SessionID, SessionCreated: t.SessionCreated, Session: t.Session, Pane: t.Pane, Width: t.Width, Height: t.Height, PaneCount: t.PaneCount}, a.ownerID)
 	if err != nil {
 		return nil, err
 	}
@@ -138,12 +137,7 @@ func (s *Service) v1Input(ctx context.Context, r mobileproto.Request) {
 		err = g.ClaimInput(data, columns, rows, r.Type == mobileproto.RequestPaste)
 		geometry = g
 	} else {
-		g, yes := geometry.(interface{ Paste([]byte) error })
-		if !yes {
-			err = fmt.Errorf("paste backend unavailable")
-		} else {
-			err = g.Paste(data)
-		}
+		err = geometry.Paste(data)
 	}
 	if err != nil {
 		a.loseControlLocked()

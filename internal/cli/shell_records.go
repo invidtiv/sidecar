@@ -231,7 +231,7 @@ func runShellRestore(env Env, args []string) int {
 		return 1
 	}
 
-	got, err := workspaceops.RestoreManagedShell(proj.Path, stone.TmuxName, stone.Namespace)
+	got, err := (workspaceops.Service{}).RestoreShell(proj.Path, stone.TmuxName, stone.Namespace)
 	if err != nil {
 		if shellstate.IsAlready(err) {
 			if flags.jsonOutput {
