@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
+	"unicode/utf8"
 
 	"github.com/marcus/sidecar/internal/contentservice"
 	"github.com/marcus/sidecar/internal/viewerlayout"
@@ -50,6 +51,9 @@ func (s *Server) handleLayout(w http.ResponseWriter, r *http.Request, c caller) 
 		return
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+	if err == nil && !utf8.Valid(body) {
+		err = fmt.Errorf("layout JSON must be valid UTF-8")
+	}
 	if err == nil {
 		var fields map[string]json.RawMessage
 		if json.Unmarshal(body, &fields) != nil || fields["layout"] == nil {

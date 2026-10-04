@@ -119,3 +119,19 @@ func TestViewerAttachmentHTTPAndSpecCarry(t *testing.T) {
 		t.Fatal("saved proposal changed attachments")
 	}
 }
+
+func TestViewerAttachmentRejectsMalformedUTF8(t *testing.T) {
+	h, _ := viewerHarness(t)
+	path := "/api/v0/projects/content/layout"
+	_, etag := layoutRead(t, h, path)
+	raw, _ := json.Marshal(LayoutDocument{Layout: attachmentTree()})
+	// encoding/json otherwise silently repairs this byte to U+FFFD before
+	// attachment validation, changing the opaque selector rather than refusing.
+	body := strings.Replace(string(raw), "opaque-primary", "opaque-\xff", 1)
+	r, b := h.localDo(req{method: "PUT", path: path, body: body, header: map[string]string{"If-Match": etag}})
+	expect(t, r, b, 400, CodeInvalidRequest)
+	doc, gotETag := layoutRead(t, h, path)
+	if doc.Layout != nil || gotETag != etag {
+		t.Fatal("malformed attachment changed layout")
+	}
+}
