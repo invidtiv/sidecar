@@ -1,6 +1,6 @@
 # Sidecar UI API: build your own Sidecar UI, plus a reference web UI
 
-**Status:** draft for discussion, not started. No td epic yet. **Created:** 2026-10-03.
+**Status:** shape agreed with Marcus, not started. No td epic yet. **Created:** 2026-10-03.
 
 Related: [Sidecar mobile](sidecar-mobile.md) (the headless terminal protocol this plan grows), [mobile protocol reference](../../reference/mobile-protocol.md), [Sidecar as its own remote host runtime](sidecar-remote-hosts.md), [remote host viewer screen](../implemented/remote-host-viewer-screen.md), [pane layout control](../implemented/pane-layout-control.md), [embedded terminal transport decisions](../implemented/embedded-terminal-transport-decisions.md).
 
@@ -36,7 +36,7 @@ The contract is not frozen, and changing it is cheap. Marcus is the only user of
                       │                    │              │                  │
  components:   <sidecar-sessions> <sidecar-terminal> <sidecar-workspace>     │
                       │                                                       │
- SDK:          @sidecar/client (typed, owns terminal-stream rules)            │
+ SDK:          @marcusv/sidecar-client (typed, owns terminal-stream rules)    │
                       │                                                       │
  contract:     HTTP resources · events stream · terminal stream  (spec + JSON Schemas + fixtures)
                       │
@@ -81,6 +81,15 @@ All transports run the same handlers.
 | `tailscale serve` → loopback | Browsers and apps across the tailnet | Provides HTTPS (needed for notifications and clipboard) and a verified tailnet identity, without Sidecar handling TLS. `sidecar api serve --tailscale` configures it. |
 | SSH stdio | The native mobile app today; remote owners | `sidecar mobile serve --stdio` keeps working. It speaks the v1 terminal protocol. |
 
+### Always-on service
+
+`sidecar api serve` runs as a per-user background service, so the UI, widgets and background push work whenever the machine is up, whether or not a TUI is open. It is a standard feature, not a setup peculiar to this Mac.
+
+- `sidecar api service install|uninstall|status` sets the service up. The service manager is an adapter: launchd user agent on macOS (the default), systemd user unit on Linux. The Homebrew formula's `service` block runs the same command, so `brew services start sidecar` works too.
+- The service restarts itself when its binary changes, which covers a Homebrew upgrade, `make install-local` and `make install-worktree`. It keeps no state that a restart loses: clients reconnect through the SDK.
+- The service never starts, stops or restarts the tmux server. It only talks to the server that is already there. If tmux is not running, it reports that, and a create operation starts tmux the same way the CLI does.
+- Proofs never install the real service. They run `sidecar api serve` in the foreground against an isolated tmux server and state tree, or install under a test-only service label that the proof removes.
+
 ### Versioning and fixtures
 
 `hello` returns the protocol version and capabilities, as it does today. Inside a version, changes are additive and capability-gated. Golden fixtures live in Sidecar (`testdata/mobile-protocol/` grows into `testdata/ui-api/`), and the SDK's CI in `sidecar-ui` and the native app's tests both run against them. A contract change lands in one Sidecar commit with its fixtures, and the clients follow.
@@ -96,7 +105,7 @@ The premise holds: whoever can drive this API can open a shell as Marcus, so the
 | Browser on this machine, the UI served by `sidecar api serve` | Full access after one-time pairing per browser. `sidecar api open` opens the UI already paired. |
 | Another origin, such as clara-home on its own port | Pair the origin once (`sidecar api pair --origin URL`). Full access by default; narrower scopes (`sessions:read`, `terminal:control`, `workspace:write`) are available for widgets that should only watch. |
 
-One correction to the "same machine means trusted" premise is worth keeping. A browser runs untrusted code from every website you visit, and any of those pages can send requests to `localhost`. So a small set of guards is always on. None of them is visible to the owner:
+One correction to the "same machine means trusted" premise is worth keeping: a browser runs untrusted code from every website you visit. Same-origin rules stop a page from *reading* a `localhost` response, but not from *sending* the request. A plain GET or a form POST still executes, and WebSockets are not covered by CORS at all, so a page can open `ws://localhost:N` and drive it unless the server checks `Origin`. DNS rebinding can get around the read protection too. Some browsers now ask before a public site reaches local addresses, but that is not uniform and the server cannot rely on it. So a small set of guards is always on. None of them is visible to the owner:
 
 - An exact `Host` allowlist, which defeats DNS rebinding.
 - An exact `Origin` allowlist on every WebSocket upgrade and every mutation.
@@ -136,7 +145,7 @@ These are core fixes. Each one also helps the TUI and CLI.
 - **One workspace-operation service.** The create-worktree and create-shell sequence (plan, execute, journal, identity, setup, launch) is written three times: `internal/cli/create_worktree.go`, `internal/plugins/workspace/create_operation.go`, `internal/overview/global_create.go`. The plugin also writes shells through its own `ShellManifest` instead of `shellstate`. Pull these into one state-free service that the CLI, TUI and API all call.
 - **Agent target resolution out of `internal/cli`.** `resolveAgentTarget` (`internal/cli/agent.go:339`) moves to `agentresolve`, so the API calls `agentcontrol.Service` directly.
 - **Sidebar rules as pure functions.** Filtering, grouping and pinning move out of `workspacelist.Model` and `overview.Model`, so every client's list agrees with the TUI's. Sorting is already shared through the mobile catalog.
-- **A locked layout store.** `state.json` is a process-global singleton that `Save()` rewrites with no lock (`internal/state/state.go:574-594`). API clients get a locked per-viewer layout store from the start. Whether the TUI's layouts move into it is a separate decision.
+- **A locked layout store.** `state.json` is a process-global singleton that `Save()` rewrites with no lock (`internal/state/state.go:574-594`). API clients get a locked per-viewer layout store from the start. Layouts are per viewer: the TUI keeps its own, and each API client keeps its own in the shared tree format, so a layout can be copied across but is never fought over.
 
 Not reused: the TUI pane runtime (`paneframe`, `contentpanes.Deck`, `docview`, `issueview`, `workspacediff`, `livepanes`). It is built on `tea.Cmd` and renders ANSI. API clients get `contentservice` DTOs and render them natively. The pane tree itself (`panelayout` nodes, kinds and ratios, `panecodec`) is presentation-neutral and is part of the contract. Cell geometry and cell floors stay TUI-only.
 
@@ -144,8 +153,8 @@ Not reused: the TUI pane runtime (`paneframe`, `contentpanes.Deck`, `docview`, `
 
 A new private repo at `~/code/sidecar-ui`, created in U0. It sits beside `~/code/sidecar-mobile` and is a pnpm workspace with three packages:
 
-- **`@sidecar/client`, the SDK.** Types are generated from Sidecar's schemas. It has a `Session` for resources and events and a `Terminal` that owns sequencing, heartbeats, control and reconnect. It runs in browsers and in Node, so agents and scripts can use it too. It does not depend on any framework.
-- **`@sidecar/elements`, the web components.** They are written in Svelte and compiled to custom elements, so they work in Svelte, React or plain HTML. Theme comes from CSS custom properties (seeded from the active Sidecar theme via the API) plus `::part` hooks, so a host app can restyle them. Components emit DOM events (`sidecar-attention`, `sidecar-open`) and take attributes, so a host can wire them into its own navigation. xterm.js with the WebGL and fit addons sits inside `<sidecar-terminal>`, at zero scrollback, since History is a separate request.
+- **`@marcusv/sidecar-client`, the SDK.** Types are generated from Sidecar's schemas. It has a `Session` for resources and events and a `Terminal` that owns sequencing, heartbeats, control and reconnect. It runs in browsers and in Node, so agents and scripts can use it too. It does not depend on any framework.
+- **`@marcusv/sidecar-elements`, the web components.** They are written in Svelte and compiled to custom elements, so they work in Svelte, React or plain HTML. Theme comes from CSS custom properties (seeded from the active Sidecar theme via the API) plus `::part` hooks, so a host app can restyle them. Components emit DOM events (`sidecar-attention`, `sidecar-open`) and take attributes, so a host can wire them into its own navigation. xterm.js with the WebGL and fit addons sits inside `<sidecar-terminal>`, at zero scrollback, since History is a separate request.
 - **`apps/sidecar-ui`, the reference app.** SvelteKit with `adapter-static`. It provides a Sessions view, project workspaces, and a pane tree with terminals and native content panes (rendered markdown, highlighted side-by-side diffs, issue cards). It also does things only a browser can: pop-out windows, dragging tabs between splits, deep links (`/s/<host>/<session>`), notifications. It follows `docs/reference/design-language.md` in spirit, with icons from `roc`. It imports only the two public packages.
 
 All of it stays private until the API settles. CI runs the SDK against Sidecar's fixtures, plus an end-to-end proof against `sidecar api serve --fixtures`.
@@ -163,7 +172,7 @@ Each milestone ends in something Marcus can use. Every live proof isolates both 
 
 ### U0: Steel thread through every layer
 
-Create the `sidecar-ui` repo. `sidecar api serve` runs on the Unix socket and loopback, with the always-on guards and browser pairing. A terminal WebSocket bridges the unchanged v0 protocol. A minimal `@sidecar/client` `Terminal` and `<sidecar-terminal>`. Two consumers: the plain-HTML example, and the same element embedded in a page served from a second origin.
+Create the `sidecar-ui` repo. `sidecar api serve` runs on the Unix socket and loopback, with the always-on guards and browser pairing. A terminal WebSocket bridges the unchanged v0 protocol. A minimal `@marcusv/sidecar-client` `Terminal` and `<sidecar-terminal>`. Two consumers: the plain-HTML example, and the same element embedded in a page served from a second origin.
 
 Exit:
 - From a tailnet device through `tailscale serve`, type into a running agent session. The desktop TUI shows the same session and is never resized until control is taken.
@@ -172,7 +181,7 @@ Exit:
 
 ### U1: Contract v1 and Sessions
 
-Generated schemas and `sidecar api spec`. The events stream with catalog push and attention. v1 frames (reset-free, coalesced, server-side paste). Fixture mode. `<sidecar-sessions>` and the Sessions view in `sidecar-ui`, including cross-host rows through the hub, History and notifications. The native app moves to v1 and the events stream. Two proofs: a three-viewer lease proof (TUI, phone, browser), and an independent security review of the auth and guards.
+Generated schemas and `sidecar api spec`. The events stream with catalog push and attention. v1 frames (reset-free, coalesced, server-side paste). Fixture mode. `<sidecar-sessions>` and the Sessions view in `sidecar-ui`, including cross-host rows through the hub, History and notifications. The native app moves to v1 and the events stream. `sidecar api service install` with the launchd and systemd adapters. Two proofs: a three-viewer lease proof (TUI, phone, browser), and an independent security review of the auth and guards.
 
 ### U2: Project workspaces and operations
 
@@ -188,12 +197,12 @@ An API client that holds the screen announces itself on the `uirequest` bus as a
 
 The Fractal model in `docs/diagrams/fractal/` gains the API host, its transports and the external clients in U0, and is kept current after that.
 
-## Open decisions
+## Settled decisions
 
-1. **Layout sharing.** Should a project's pane layout be one model shared by the TUI and the API clients, or should each viewer keep its own? Recommendation: per-viewer, in the shared tree format so a layout can be copied across. Sharing needs `state.json` locking and cell↔pixel reconciliation for little gain.
-2. **Native app transport.** Should the native app stay on SSH stdio, or move to the WebSocket transport through `tailscale serve`? Recommendation: support both, keep SSH as its default for now, and revisit once the WebSocket path has run for a while.
-3. **Always on.** Should `sidecar api serve` run on demand or as a launchd agent? Always-on makes the UI and widgets dependable, and it is also the observer that background push needs (mobile M3).
-4. **Package scope.** Pick an npm scope name for the private packages. It matters only once they are published.
+- **Layouts are per viewer,** in the shared tree format (see "A locked layout store").
+- **The API host is an always-on service,** and every user can install it (see "Always-on service").
+- **npm scope `@marcusv`:** `@marcusv/sidecar-client` and `@marcusv/sidecar-elements`. The packages are not published while the repo is private. The reference app and clara-home consume them through the workspace or a git dependency.
+- **The native app keeps SSH stdio as its default transport** and also speaks v1 and the events stream. Revisit WebSocket through `tailscale serve` once that path has run for a while.
 
 ## Risks
 
