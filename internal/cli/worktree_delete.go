@@ -380,7 +380,7 @@ func executeWorktreeDeletePlan(ctx context.Context, project registeredProject, p
 		}
 	}
 	if plan.pendingCreationPlan != nil {
-		if err := workspaceops.RemovePendingCreation(plan.pendingCreationPlan); err != nil {
+		if err := (workspaceops.Service{}).FinalizeWorktree(plan.pendingCreationPlan); err != nil {
 			warnings = append(warnings, "pending creation journal: "+err.Error())
 		}
 	}
