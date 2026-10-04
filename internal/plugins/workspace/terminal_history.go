@@ -22,6 +22,7 @@ type terminalHistorySource struct {
 }
 
 type terminalHistoryLoadedMsg struct {
+	OperationScope
 	Source     terminalHistorySource
 	Capture    tty.CaptureRange
 	RequestGen uint64
@@ -101,6 +102,8 @@ func (p *Plugin) terminalHistoryFor(termPanel bool) (terminalHistorySource, bool
 // a reader who has run out of tmux history is told so rather than left pushing
 // against a bound with no explanation.
 func (p *Plugin) loadOlderTerminalHistory(termPanel bool, scrollLines int) tea.Cmd {
+	completionScope := p.completionScope()
+
 	source, ok := p.terminalHistoryFor(termPanel)
 	if !ok {
 		return nil
@@ -128,7 +131,7 @@ func (p *Plugin) loadOlderTerminalHistory(termPanel bool, scrollLines int) tea.C
 	return func() tea.Msg {
 		return p.withTerminalOwnership(ownership, func() tea.Msg {
 			capture, err := workspaceCapturePaneRange(source.Target, request.Start, request.End)
-			return terminalHistoryLoadedMsg{
+			return terminalHistoryLoadedMsg{OperationScope: completionScope,
 				Source:     source,
 				Capture:    capture,
 				RequestGen: request.Generation,

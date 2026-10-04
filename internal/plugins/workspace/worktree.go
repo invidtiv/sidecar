@@ -29,11 +29,14 @@ const maxRefreshConcurrency = 4
 // WorkDirDeletedMsg signals that the current working directory was deleted.
 // This happens when sidecar is running inside a worktree that gets deleted.
 type WorkDirDeletedMsg struct {
+	OperationScope
 	MainWorktreePath string
 }
 
 // refreshWorktrees returns a command to refresh the worktree list.
 func (p *Plugin) refreshWorktrees() tea.Cmd {
+	completionScope := p.completionScope()
+
 	if p.remoteBound() {
 		p.applyHostInventory()
 		return nil
@@ -52,7 +55,7 @@ func (p *Plugin) refreshWorktrees() tea.Cmd {
 			// We need to find the main worktree from a parent directory
 			mainPath := findMainWorktreeFromDeleted(workDir)
 			if mainPath != "" {
-				return WorkDirDeletedMsg{MainWorktreePath: mainPath}
+				return WorkDirDeletedMsg{OperationScope: completionScope, MainWorktreePath: mainPath}
 			}
 		}
 
@@ -504,12 +507,14 @@ func deleteRemoteBranchCmdContext(ctx context.Context, req workspaceops.BranchDe
 // cycle's cached Changes, so both surfaces show one answer, taken at the same
 // moment in the flow, from the same rule.
 func (p *Plugin) checkWorktreeDirty(wt *Worktree) tea.Cmd {
+	completionScope := p.completionScope()
+
 	if wt == nil {
 		return nil
 	}
 	path, missing := wt.Path, wt.IsMissing
 	return func() tea.Msg {
-		return WorktreeDirtyCheckedMsg{
+		return WorktreeDirtyCheckedMsg{OperationScope: completionScope,
 			Path:  path,
 			Dirty: worktreedelete.ProbeDirtiness(context.Background(), path, missing),
 		}

@@ -23,6 +23,7 @@ var (
 )
 
 type previewSplitCloseProbeMsg struct {
+	completionScope
 	WorkspaceID string
 	LeafID      int
 	Session     string
@@ -31,6 +32,8 @@ type previewSplitCloseProbeMsg struct {
 }
 
 func (m *Model) requestClosePreviewShellLeaf(leafID int) tea.Cmd {
+	scope := m.completionScope()
+
 	leaf := m.preview.terminalPanes.Leaf(leafID)
 	if leaf == nil || leaf.Target.Source != "shell" {
 		return nil
@@ -45,7 +48,7 @@ func (m *Model) requestClosePreviewShellLeaf(leafID int) tea.Cmd {
 	workspaceID := m.preview.workspaceID
 	return func() tea.Msg {
 		evidence, err := probePreviewTerminal(session)
-		return previewSplitCloseProbeMsg{WorkspaceID: workspaceID, LeafID: leafID, Session: session, Evidence: evidence, Err: err}
+		return previewSplitCloseProbeMsg{completionScope: scope, WorkspaceID: workspaceID, LeafID: leafID, Session: session, Evidence: evidence, Err: err}
 	}
 }
 

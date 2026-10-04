@@ -356,6 +356,8 @@ func (m *Model) attachRestoredPreviewShell(ws workspaceinventory.Workspace, live
 }
 
 func (m *Model) ensureRestoredPreviewShell(ws workspaceinventory.Workspace) tea.Cmd {
+	scope := m.createCompletionScope()
+
 	shell := panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Shell)
 	if shell == nil {
 		return nil
@@ -370,7 +372,7 @@ func (m *Model) ensureRestoredPreviewShell(ws workspaceinventory.Workspace) tea.
 	ctx := m.hostContext()
 	return func() tea.Msg {
 		paneID, err := ensureSplitSession(ctx, registry, hostID, session, workDir)
-		return previewTerminalSplitCreatedMsg{WorkspaceID: workspaceID, LeafID: leafID, Session: session, PaneID: paneID, Err: err}
+		return previewTerminalSplitCreatedMsg{completionScope: scope, WorkspaceID: workspaceID, LeafID: leafID, Session: session, PaneID: paneID, Err: err}
 	}
 }
 

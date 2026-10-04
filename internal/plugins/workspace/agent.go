@@ -317,18 +317,21 @@ func (m AgentStartedMsg) GetEpoch() uint64 { return m.Epoch }
 
 // ApproveResultMsg signals the result of an approve action.
 type ApproveResultMsg struct {
+	OperationScope
 	WorkspaceName string
 	Err           error
 }
 
 // RejectResultMsg signals the result of a reject action.
 type RejectResultMsg struct {
+	OperationScope
 	WorkspaceName string
 	Err           error
 }
 
 // SendTextResultMsg signals the result of sending text to an agent.
 type SendTextResultMsg struct {
+	OperationScope
 	WorkspaceName string
 	Text          string
 	Err           error
@@ -720,6 +723,8 @@ func (p *Plugin) agentLaunchArgv(agentType AgentType, wt *Worktree, skipPerms bo
 
 // AttachToWorktreeDir creates a tmux session in the worktree directory and attaches to it.
 func (p *Plugin) AttachToWorktreeDir(wt *Worktree) tea.Cmd {
+	completionScope := p.completionScope()
+
 	if !fullTmuxAttachEnabled() {
 		return nil
 	}
@@ -737,7 +742,7 @@ func (p *Plugin) AttachToWorktreeDir(wt *Worktree) tea.Cmd {
 		}
 		if err := tty.NewSession(args...); err != nil {
 			return func() tea.Msg {
-				return TmuxAttachFinishedMsg{WorkspaceName: wt.Name, Err: fmt.Errorf("create session: %w", err)}
+				return TmuxAttachFinishedMsg{OperationScope: completionScope, WorkspaceName: wt.Name, Err: fmt.Errorf("create session: %w", err)}
 			}
 		}
 
@@ -747,7 +752,7 @@ func (p *Plugin) AttachToWorktreeDir(wt *Worktree) tea.Cmd {
 
 	// Attach to the session - resize to full terminal first so no dot borders appear
 	return p.attachWithResize(sessionName, sessionName, wt.Name, func(err error) tea.Msg {
-		return TmuxAttachFinishedMsg{WorkspaceName: wt.Name, Err: err}
+		return TmuxAttachFinishedMsg{OperationScope: completionScope, WorkspaceName: wt.Name, Err: err}
 	})
 }
 
@@ -893,6 +898,8 @@ type AgentPollUnchangedMsg struct {
 // handlePollAgent captures output from a tmux session asynchronously.
 // Uses a goroutine to avoid blocking the UI thread on tmux subprocess calls (td-c2961e).
 func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
+	completionScope := p.completionScope()
+
 	ownership := p.currentTerminalOwnership()
 	if ownership == 0 {
 		return nil
@@ -900,7 +907,7 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 	wt := p.findWorktree(worktreeName)
 	if wt == nil || wt.Agent == nil {
 		return func() tea.Msg {
-			return AgentStoppedMsg{WorkspaceName: worktreeName, Generation: generation}
+			return AgentStoppedMsg{OperationScope: completionScope, WorkspaceName: worktreeName, Generation: generation}
 		}
 	}
 
@@ -1007,7 +1014,7 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 			// Session may have been killed
 			if strings.Contains(err.Error(), "can't find") ||
 				strings.Contains(err.Error(), "no server") {
-				return AgentStoppedMsg{WorkspaceName: worktreeName, Generation: generation}
+				return AgentStoppedMsg{OperationScope: completionScope, WorkspaceName: worktreeName, Generation: generation}
 			}
 			// Schedule retry on other errors. The delay happens after releasing
 			// terminal ownership so hiding the surface never waits on backoff.
@@ -1684,16 +1691,18 @@ func extractPrompt(output string) string {
 
 // Approve sends "y" to approve a pending prompt.
 func (p *Plugin) Approve(wt *Worktree) tea.Cmd {
+	completionScope := p.completionScope()
+
 	return func() tea.Msg {
 		if wt.Agent == nil {
-			return ApproveResultMsg{WorkspaceName: wt.Name, Err: fmt.Errorf("no agent running")}
+			return ApproveResultMsg{OperationScope: completionScope, WorkspaceName: wt.Name, Err: fmt.Errorf("no agent running")}
 		}
 
 		// Send "y" followed by Enter
 		cmd := exec.Command("tmux", "send-keys", "-t", wt.Agent.TmuxSession, "y", "Enter")
 		err := cmd.Run()
 
-		return ApproveResultMsg{
+		return ApproveResultMsg{OperationScope: completionScope,
 			WorkspaceName: wt.Name,
 			Err:           err,
 		}
@@ -1702,15 +1711,17 @@ func (p *Plugin) Approve(wt *Worktree) tea.Cmd {
 
 // Reject sends "n" to reject a pending prompt.
 func (p *Plugin) Reject(wt *Worktree) tea.Cmd {
+	completionScope := p.completionScope()
+
 	return func() tea.Msg {
 		if wt.Agent == nil {
-			return RejectResultMsg{WorkspaceName: wt.Name, Err: fmt.Errorf("no agent running")}
+			return RejectResultMsg{OperationScope: completionScope, WorkspaceName: wt.Name, Err: fmt.Errorf("no agent running")}
 		}
 
 		cmd := exec.Command("tmux", "send-keys", "-t", wt.Agent.TmuxSession, "n", "Enter")
 		err := cmd.Run()
 
-		return RejectResultMsg{
+		return RejectResultMsg{OperationScope: completionScope,
 			WorkspaceName: wt.Name,
 			Err:           err,
 		}
@@ -1735,22 +1746,24 @@ func (p *Plugin) ApproveAll() tea.Cmd {
 
 // SendText sends arbitrary text to an agent.
 func (p *Plugin) SendText(wt *Worktree, text string) tea.Cmd {
+	completionScope := p.completionScope()
+
 	return func() tea.Msg {
 		if wt.Agent == nil {
-			return SendTextResultMsg{Err: fmt.Errorf("no agent running")}
+			return SendTextResultMsg{OperationScope: completionScope, Err: fmt.Errorf("no agent running")}
 		}
 
 		// Use -l to send literal text (no key name lookup)
 		cmd := exec.Command("tmux", "send-keys", "-l", "-t", wt.Agent.TmuxSession, text)
 		if err := cmd.Run(); err != nil {
-			return SendTextResultMsg{Err: err}
+			return SendTextResultMsg{OperationScope: completionScope, Err: err}
 		}
 
 		// Send Enter separately
 		cmd = exec.Command("tmux", "send-keys", "-t", wt.Agent.TmuxSession, "Enter")
 		err := cmd.Run()
 
-		return SendTextResultMsg{
+		return SendTextResultMsg{OperationScope: completionScope,
 			WorkspaceName: wt.Name,
 			Text:          text,
 			Err:           err,
@@ -1760,6 +1773,8 @@ func (p *Plugin) SendText(wt *Worktree, text string) tea.Cmd {
 
 // AttachToSession attaches to a tmux session using tea.ExecProcess.
 func (p *Plugin) AttachToSession(wt *Worktree) tea.Cmd {
+	completionScope := p.completionScope()
+
 	if !fullTmuxAttachEnabled() || wt == nil || wt.Agent == nil {
 		return nil
 	}
@@ -1772,15 +1787,17 @@ func (p *Plugin) AttachToSession(wt *Worktree) tea.Cmd {
 
 	// Resize to full terminal before attaching so no dot borders appear
 	return p.attachWithResize(target, sessionName, wt.Name, func(err error) tea.Msg {
-		return TmuxAttachFinishedMsg{WorkspaceName: wt.Name, Err: err}
+		return TmuxAttachFinishedMsg{OperationScope: completionScope, WorkspaceName: wt.Name, Err: err}
 	})
 }
 
 // StopAgent stops an agent running in a worktree.
 func (p *Plugin) StopAgent(wt *Worktree) tea.Cmd {
+	completionScope := p.completionScope()
+
 	return func() tea.Msg {
 		if wt.Agent == nil {
-			return AgentStoppedMsg{WorkspaceName: wt.Name}
+			return AgentStoppedMsg{OperationScope: completionScope, WorkspaceName: wt.Name}
 		}
 
 		sessionName := wt.Agent.TmuxSession
@@ -1797,7 +1814,7 @@ func (p *Plugin) StopAgent(wt *Worktree) tea.Cmd {
 			_ = exec.Command("tmux", "kill-session", "-t", sessionName).Run()
 		}
 
-		return AgentStoppedMsg{WorkspaceName: wt.Name}
+		return AgentStoppedMsg{OperationScope: completionScope, WorkspaceName: wt.Name}
 	}
 }
 

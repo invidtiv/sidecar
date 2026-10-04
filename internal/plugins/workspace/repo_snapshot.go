@@ -44,6 +44,8 @@ type RepoSnapshot struct {
 // reject work completed for a prior repository, worktree, or plugin epoch.
 type OperationScope struct {
 	Epoch       uint64
+	ProjectRoot string
+	WorkDir     string
 	OperationID string
 	RepoKey     string
 	WorktreeKey string

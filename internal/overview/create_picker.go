@@ -63,12 +63,15 @@ func (m *Model) remoteCreateProviders() []workspacecreate.ProviderItem {
 }
 
 type createPickerDataMsg struct {
+	Root string
+	completionScope
 	Refs   []workspaceops.DiffRef
 	Issues []workspaceops.IssueRef
 	Notes  []workspaceops.NoteRef
 }
 
 type createHostCatalogMsg struct {
+	completionScope
 	HostID      string
 	WorkspaceID string
 	Files       []string
@@ -79,16 +82,15 @@ type createHostCatalogMsg struct {
 }
 
 func (m *Model) loadCreatePickerData() tea.Cmd {
+	scope := m.createCompletionScope()
+
 	if m.remoteSelection() {
 		if m.createForm == nil || !m.createForm.NeedsTarget() {
 			return nil
 		}
 		return m.loadRemoteCreateCatalog()
 	}
-	root := m.localSelectedRoot()
-	if root == "" && len(m.projects) > 0 {
-		root = m.projects[0].Path
-	}
+	root := m.localCreatePickerRoot()
 	if root == "" {
 		return nil
 	}
@@ -96,7 +98,7 @@ func (m *Model) loadCreatePickerData() tea.Cmd {
 	dir := root
 	return func() tea.Msg {
 		ctx := context.Background()
-		msg := createPickerDataMsg{}
+		msg := createPickerDataMsg{completionScope: scope, Root: dir}
 		if refs, err := workspaceops.RecentDiffRefs(ctx, dir, 15); err == nil {
 			msg.Refs = refs
 		}
@@ -113,6 +115,8 @@ func (m *Model) loadCreatePickerData() tea.Cmd {
 }
 
 func (m *Model) loadRemoteCreateCatalog() tea.Cmd {
+	scope := m.createCompletionScope()
+
 	ws, ok := m.SelectedWorkspace()
 	if !ok || !ws.Remote() {
 		return nil
@@ -131,7 +135,7 @@ func (m *Model) loadRemoteCreateCatalog() tea.Cmd {
 		err := runRemoteSidecar(ctx, registry, hostID, []string{
 			"content", "catalog", "--workspace", workspaceID, "--json",
 		}, &result)
-		msg := createHostCatalogMsg{HostID: hostID, WorkspaceID: rowID, Err: err}
+		msg := createHostCatalogMsg{completionScope: scope, HostID: hostID, WorkspaceID: rowID, Err: err}
 		if err != nil || !result.ValidRemoteResult() {
 			return msg
 		}
@@ -170,6 +174,8 @@ func catalogNotesToRefs(notes []contentservice.CatalogNote) []workspaceops.NoteR
 }
 
 func (m *Model) applyCreateHostCatalog(msg createHostCatalogMsg) {
+	scope := m.createCompletionScope()
+
 	if m.createForm == nil || msg.Err != nil {
 		return
 	}
@@ -177,7 +183,7 @@ func (m *Model) applyCreateHostCatalog(msg createHostCatalogMsg) {
 	if !ok || selected.HostID != msg.HostID || selected.ID != msg.WorkspaceID {
 		return
 	}
-	applyPickerData(m.createForm, createPickerDataMsg{Refs: msg.Refs, Issues: msg.Issues, Notes: msg.Notes})
+	applyPickerData(m.createForm, createPickerDataMsg{completionScope: scope, Refs: msg.Refs, Issues: msg.Issues, Notes: msg.Notes})
 	m.applyCreateFileCandidates(workspacecreate.FilesScannedMsg{Paths: msg.Files})
 }
 
@@ -234,7 +240,7 @@ func applyPickerData(form *workspacecreate.Form, msg createPickerDataMsg) {
 }
 
 func (m *Model) applyCreateFileCandidates(msg workspacecreate.FilesScannedMsg) {
-	if m.createForm == nil {
+	if m.createForm == nil || (msg.Root != "" && msg.Root != m.localSelectedRoot()) {
 		return
 	}
 	recent := make([]string, 0, 8)
@@ -349,4 +355,15 @@ func (m *Model) submitPaneTargetForm() tea.Cmd {
 		return appmsg.ShowToast("the window is too small to split", 3*time.Second)
 	}
 	return cmd
+}
+
+func (m *Model) localCreatePickerRoot() string {
+	if m.remoteSelection() {
+		return ""
+	}
+	root := m.localSelectedRoot()
+	if root == "" && len(m.projects) > 0 {
+		root = m.projects[0].Path
+	}
+	return root
 }
