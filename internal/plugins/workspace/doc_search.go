@@ -35,12 +35,15 @@ import (
 // cache as if it described this pane's directory. Wrapping keeps a pane's
 // traffic its own, and the leaf ID keeps it the right pane's.
 type docSearchMsg struct {
+	OperationScope
 	LeafID int
 	Msg    tea.Msg
 }
 
 // docSearchCmd tags a surface's command with the pane that issued it.
-func docSearchCmd(leafID int, cmd tea.Cmd) tea.Cmd {
+func (p *Plugin) docSearchCmd(leafID int, cmd tea.Cmd) tea.Cmd {
+	completionScope := p.completionScope()
+
 	if cmd == nil {
 		return nil
 	}
@@ -49,7 +52,7 @@ func docSearchCmd(leafID int, cmd tea.Cmd) tea.Cmd {
 		if msg == nil {
 			return nil
 		}
-		return docSearchMsg{LeafID: leafID, Msg: msg}
+		return docSearchMsg{OperationScope: completionScope, LeafID: leafID, Msg: msg}
 	}
 }
 
@@ -128,7 +131,7 @@ func (p *Plugin) openDocFinder(doc *docPane) tea.Cmd {
 	mode, scan := panesearch.NewFinder(&p.docFinderCaches, doc.root, p.ctx.Epoch)
 	mode.SetRecent(doc.tabs.Paths())
 	doc.mode = mode
-	return docSearchCmd(doc.leafID, scan)
+	return p.docSearchCmd(doc.leafID, scan)
 }
 
 // openDocProjectSearch opens the ripgrep project search in the focused document
@@ -268,7 +271,7 @@ func (p *Plugin) handleDocSearchMouse(doc *docPane, msg tea.MouseMsg) tea.Cmd {
 }
 
 func (p *Plugin) applyDocSearchOutcome(doc *docPane, out panesearch.Outcome, cmd tea.Cmd) tea.Cmd {
-	wrapped := docSearchCmd(doc.leafID, cmd)
+	wrapped := p.docSearchCmd(doc.leafID, cmd)
 	switch {
 	case out.Cancelled:
 		return tea.Batch(wrapped, p.cancelDocSearch(doc))
@@ -305,7 +308,7 @@ func (p *Plugin) applyDocSearchMsg(msg docSearchMsg) tea.Cmd {
 	if doc == nil || doc.mode == nil {
 		return nil
 	}
-	return docSearchCmd(doc.leafID, doc.mode.Update(msg.Msg))
+	return p.docSearchCmd(doc.leafID, doc.mode.Update(msg.Msg))
 }
 
 // renderDocSearchOverlay composites the live surface over the pane's own

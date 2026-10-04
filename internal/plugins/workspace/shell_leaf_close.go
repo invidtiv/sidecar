@@ -27,6 +27,7 @@ const (
 // when its ✕ was clicked. Err (or a session that no longer answers) means the
 // pane is gone, which is a close with nothing to confirm.
 type ShellLeafCloseProbeMsg struct {
+	OperationScope
 	Session        string
 	CurrentCommand string
 	ShellCommand   string
@@ -51,6 +52,8 @@ func loginShellCommand() string {
 // The probe is a command rather than an inline tmux call because this runs on
 // the update path, where a blocking spawn is a dropped frame.
 func (p *Plugin) requestCloseShellLeaf() tea.Cmd {
+	completionScope := p.completionScope()
+
 	if !p.shellLeafVisible() {
 		return nil
 	}
@@ -62,7 +65,7 @@ func (p *Plugin) requestCloseShellLeaf() tea.Cmd {
 	mode := p.viewMode
 	return func() tea.Msg {
 		evidence, err := capturePaneEvidence(session)
-		return ShellLeafCloseProbeMsg{
+		return ShellLeafCloseProbeMsg{OperationScope: completionScope,
 			Session:        session,
 			CurrentCommand: evidence.CurrentCommand,
 			ShellCommand:   shell,

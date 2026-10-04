@@ -102,7 +102,9 @@ const (
 
 // InteractiveSessionDeadMsg indicates the tmux session has ended.
 // Sent when send-keys or capture fails with a session/pane not found error.
-type InteractiveSessionDeadMsg struct{}
+type InteractiveSessionDeadMsg struct {
+	OperationScope
+}
 
 // terminalConfig is the one resolution of the user's terminal-interaction
 // settings this plugin works from: chords, and whether a finished selection
@@ -135,15 +137,17 @@ func (p *Plugin) isTerminalCopyChord(msg tea.KeyPressMsg) bool {
 // Bubble Tea runs each Cmd concurrently, so ordering established inside the Cmd
 // would be no ordering at all (td-8fcd2e). Call from Update.
 // Returns InteractiveSessionDeadMsg if the session has ended.
-func sendInteractiveKeysCmd(sessionName string, keys ...tty.KeySpec) tea.Cmd {
-	return awaitInteractiveSend(tty.SendKeysOrdered(sessionName, keys...))
+func (p *Plugin) sendInteractiveKeysCmd(sessionName string, keys ...tty.KeySpec) tea.Cmd {
+	return p.awaitInteractiveSend(tty.SendKeysOrdered(sessionName, keys...))
 }
 
 // awaitInteractiveSend turns a queued send's result channel into a tea.Cmd.
-func awaitInteractiveSend(done <-chan error) tea.Cmd {
+func (p *Plugin) awaitInteractiveSend(done <-chan error) tea.Cmd {
+	completionScope := p.completionScope()
+
 	return func() tea.Msg {
 		if err := <-done; err != nil && tty.IsSessionDeadError(err) {
-			return InteractiveSessionDeadMsg{}
+			return InteractiveSessionDeadMsg{OperationScope: completionScope}
 		}
 		return nil
 	}
@@ -936,6 +940,8 @@ func (p *Plugin) noteSessionEnded() tea.Cmd {
 // attachFromInteractive is the component's OnAttach hook: leave the embedded
 // pane and hand the user the full tmux session (td-fd68d1).
 func (p *Plugin) attachFromInteractive() tea.Cmd {
+	completionScope := p.completionScope()
+
 	if !fullTmuxAttachEnabled() {
 		return nil
 	}
@@ -944,7 +950,7 @@ func (p *Plugin) attachFromInteractive() tea.Cmd {
 	if isTermPanel && p.requireShellTermPane().Session != "" {
 		sessionName := p.requireShellTermPane().Session
 		return p.attachWithResize(sessionName, sessionName, "terminal", func(err error) tea.Msg {
-			return TmuxAttachFinishedMsg{Err: err}
+			return TmuxAttachFinishedMsg{OperationScope: completionScope, Err: err}
 		})
 	}
 	if shell := p.getSelectedShell(); shell != nil {
@@ -985,7 +991,7 @@ func (p *Plugin) handleUnknownSequence(msg tea.Msg) tea.Cmd {
 	if target == "" {
 		target = p.interactiveState.TargetSession
 	}
-	return sendInteractiveKeysCmd(target, tty.KeySpec{Value: csiu, Literal: true})
+	return p.sendInteractiveKeysCmd(target, tty.KeySpec{Value: csiu, Literal: true})
 }
 
 // wheelTerminal routes a wheel notch over one of this plugin's two terminal

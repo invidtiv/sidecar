@@ -68,7 +68,7 @@ func apiCommand() *Command {
 	}
 	pair := &Command{
 		Name: "pair", Summary: "Manage paired origins and browser sessions", Usage: "sidecar api pair --origin URL [--scope SCOPE] | --list | --revoke URL | --revoke-sessions [--origin URL] [--json]",
-		Long: "Register another web origin (an app embedding Sidecar components) and print its bearer token, which is shown only once and stored only as a hash in $STATE/api/origins.json. Pairing an origin again rotates its token. --list shows registrations without tokens; --revoke removes one. " +
+		Long: "Register another web origin (an app embedding Sidecar components) and print its bearer token, which is shown only once and stored only as a hash in $STATE/api/origins.json. Pairing an origin again rotates its token and closes the terminals and event streams the old token opened. --scope selects a paired origin scope, repeatable, with full as the default. --list shows registrations without tokens; --revoke removes one. " +
 			"--revoke-sessions signs out every browser paired with `sidecar api open` without restarting the server: their session tokens get 401 from then on and their open terminals close with 4401. With --origin it signs out only the browsers on that origin. Paired origins keep their tokens.",
 		Flags: []Flag{{Name: "--origin", Arg: "URL", Summary: "Pair this origin (scheme://host[:port]); with --revoke-sessions, the origin to sign out"}, {Name: "--scope", Arg: "SCOPE", Summary: "Paired origin scope, repeatable (default full)"}, {Name: "--list", Summary: "List paired origins", Bool: true}, {Name: "--revoke", Arg: "URL", Summary: "Revoke a paired origin"},
 			{Name: "--revoke-sessions", Summary: "Sign out browser sessions from `sidecar api open`", Bool: true}, jsonFlag, help},

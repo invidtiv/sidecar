@@ -577,6 +577,8 @@ func remoteTargetSession(workspace workspaceinventory.Workspace) string {
 // into a pane that already has one. Naming the command in the create is the
 // caller saying it owns the launch, and the host does exactly that and no more.
 func (m *Model) submitRemoteCreateShell(target createTarget, displayName, agentType, agentCommand string) tea.Cmd {
+	scope := m.createCompletionScope()
+
 	registry := m.hostRegistry
 	hostID, project := target.HostID, target.Project
 	incarnation := m.hostIncarnationFor(hostID)
@@ -601,7 +603,7 @@ func (m *Model) submitRemoteCreateShell(target createTarget, displayName, agentT
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(parent, remoteCreateShellTimeout)
 		defer cancel()
-		reply := globalShellCreatedMsg{remoteReply: remoteReply{HostID: hostID, Incarnation: incarnation}, Project: project}
+		reply := globalShellCreatedMsg{completionScope: scope, remoteReply: remoteReply{HostID: hostID, Incarnation: incarnation}, Project: project}
 		var result remoteShellResult
 		if err := runRemoteSidecar(ctx, registry, hostID, createArgs, &result); err != nil {
 			reply.Err = err
@@ -626,6 +628,8 @@ func (m *Model) submitRemoteCreateShell(target createTarget, displayName, agentT
 // anything. `--plan` stops after validation, so a cancelled confirmation leaves
 // the remote machine exactly as it was.
 func (m *Model) planRemoteWorktree(target createTarget, name, base, agent string, skipPerms bool) tea.Cmd {
+	scope := m.createCompletionScope()
+
 	registry := m.hostRegistry
 	hostID, project := target.HostID, target.Project
 	incarnation := m.hostIncarnationFor(hostID)
@@ -634,7 +638,7 @@ func (m *Model) planRemoteWorktree(target createTarget, name, base, agent string
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(parent, remoteQuickTimeout)
 		defer cancel()
-		reply := globalWorktreePlannedMsg{remoteReply: remoteReply{HostID: hostID, Incarnation: incarnation}, Project: project}
+		reply := globalWorktreePlannedMsg{completionScope: scope, remoteReply: remoteReply{HostID: hostID, Incarnation: incarnation}, Project: project}
 		var plan remoteWorktreePlan
 		if err := runRemoteSidecar(ctx, registry, hostID, args, &plan); err != nil {
 			reply.Err = err
@@ -654,6 +658,8 @@ func (m *Model) planRemoteWorktree(target createTarget, name, base, agent string
 // and re-deriving it from here would be a second implementation of the ordering
 // the CLI already proves.
 func (m *Model) executeRemoteWorktree(target createTarget, name, base, agent, expectOID string, skipPerms bool) tea.Cmd {
+	scope := m.createCompletionScope()
+
 	registry := m.hostRegistry
 	hostID, project := target.HostID, target.Project
 	incarnation := m.hostIncarnationFor(hostID)
@@ -662,7 +668,7 @@ func (m *Model) executeRemoteWorktree(target createTarget, name, base, agent, ex
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(parent, remoteWorktreeExecTimeout)
 		defer cancel()
-		reply := globalWorktreeCreatedMsg{remoteReply: remoteReply{HostID: hostID, Incarnation: incarnation}, Project: project}
+		reply := globalWorktreeCreatedMsg{completionScope: scope, remoteReply: remoteReply{HostID: hostID, Incarnation: incarnation}, Project: project}
 		var result remoteWorktreeResult
 		if err := runRemoteSidecar(ctx, registry, hostID, args, &result); err != nil {
 			reply.Err = err
@@ -678,6 +684,8 @@ func (m *Model) executeRemoteWorktree(target createTarget, name, base, agent, ex
 // the host. One verb covers both because `shell rename --target` resolves the
 // target against the project's manifest and dispatches on what it found.
 func (m *Model) renameRemoteWorkspace(workspace workspaceinventory.Workspace, newName string) tea.Cmd {
+	scope := m.renameCompletionScope()
+
 	registry := m.hostRegistry
 	hostID := workspace.HostID
 	incarnation := m.hostIncarnationFor(hostID)
@@ -687,7 +695,7 @@ func (m *Model) renameRemoteWorkspace(workspace workspaceinventory.Workspace, ne
 	args := remoteRenameArgs(remoteWorkspaceProjectRef(workspace), session, newName)
 	if session == "" {
 		return func() tea.Msg {
-			return renameShellDoneMsg{
+			return renameShellDoneMsg{completionScope: scope,
 				remoteReply: remoteReply{HostID: hostID, Incarnation: incarnation},
 				ID:          id,
 				NewName:     newName,
@@ -698,7 +706,7 @@ func (m *Model) renameRemoteWorkspace(workspace workspaceinventory.Workspace, ne
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(parent, remoteQuickTimeout)
 		defer cancel()
-		reply := renameShellDoneMsg{remoteReply: remoteReply{HostID: hostID, Incarnation: incarnation}, ID: id, NewName: newName}
+		reply := renameShellDoneMsg{completionScope: scope, remoteReply: remoteReply{HostID: hostID, Incarnation: incarnation}, ID: id, NewName: newName}
 		var result remoteRenameResult
 		if err := runRemoteSidecar(ctx, registry, hostID, args, &result); err != nil {
 			reply.Err = err
@@ -722,6 +730,8 @@ func (m *Model) renameRemoteWorkspace(workspace workspaceinventory.Workspace, ne
 // which is why a failure keeps the confirmation open and says what the host
 // said.
 func (m *Model) deleteRemoteShell(workspace workspaceinventory.Workspace) tea.Cmd {
+	scope := m.deleteCompletionScope()
+
 	registry := m.hostRegistry
 	hostID := workspace.HostID
 	incarnation := m.hostIncarnationFor(hostID)
@@ -734,7 +744,7 @@ func (m *Model) deleteRemoteShell(workspace workspaceinventory.Workspace) tea.Cm
 
 	refuse := func(reason string) tea.Cmd {
 		return func() tea.Msg {
-			return globalShellDeletedMsg{
+			return globalShellDeletedMsg{completionScope: scope,
 				remoteReply: remoteReply{HostID: hostID, Incarnation: incarnation},
 				Project:     project, WorkspaceID: id, Err: errors.New(reason),
 			}
@@ -756,7 +766,7 @@ func (m *Model) deleteRemoteShell(workspace workspaceinventory.Workspace) tea.Cm
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(parent, remoteQuickTimeout)
 		defer cancel()
-		reply := globalShellDeletedMsg{
+		reply := globalShellDeletedMsg{completionScope: scope,
 			remoteReply: remoteReply{HostID: hostID, Incarnation: incarnation},
 			Project:     project, WorkspaceID: id,
 		}

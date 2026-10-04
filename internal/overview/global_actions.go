@@ -46,6 +46,7 @@ var (
 // own snapshot is what confirms the deletion, and a local inventory would
 // answer a question about another machine.
 type globalShellDeletedMsg struct {
+	completionScope
 	remoteReply
 	Project     Project
 	WorkspaceID string
@@ -175,6 +176,7 @@ func (m *Model) OpenDeleteSelectedShell() tea.Cmd {
 	if reason := remoteActionRefusal(workspace, "delete"); reason != "" {
 		return appmsg.Blocked(reason)
 	}
+	m.deleteGeneration++
 	m.deleteOpen = true
 	m.deleteBusy = false
 	m.deleteError = ""
@@ -226,6 +228,7 @@ func (m *Model) OpenDeleteSelectedWorktree() tea.Cmd {
 	if reason := deleteRefusal(workspace); reason != "" {
 		return appmsg.Blocked(reason)
 	}
+	m.deleteGeneration++
 	m.deleteOpen = true
 	m.deleteBusy = false
 	m.deleteError = ""
@@ -246,6 +249,7 @@ func (m *Model) OpenDeleteSelectedWorktree() tea.Cmd {
 // primary one, whether origin still carries it, and whether the worktree holds
 // uncommitted work.
 type globalWorktreeDeleteProbeMsg struct {
+	completionScope
 	Path         string
 	IsMainBranch bool
 	HasRemote    bool
@@ -265,6 +269,8 @@ type globalWorktreeDeleteProbeMsg struct {
 // opened confirmation buys the same truth for a bounded, user-initiated cost —
 // and it is fresher than a cached inventory field would be.
 func (m *Model) probeWorktreeDelete(workspace workspaceinventory.Workspace) tea.Cmd {
+	scope := m.deleteCompletionScope()
+
 	root := m.projectRootFor(workspace)
 	path, branch := workspace.Path, workspace.Branch
 	// A worktree whose directory is gone has nothing to lose and nothing to
@@ -272,7 +278,7 @@ func (m *Model) probeWorktreeDelete(workspace workspaceinventory.Workspace) tea.
 	missing := workspace.IsMissing
 	return func() tea.Msg {
 		ctx := context.Background()
-		msg := globalWorktreeDeleteProbeMsg{Path: path}
+		msg := globalWorktreeDeleteProbeMsg{completionScope: scope, Path: path}
 		if root != "" {
 			msg.IsMainBranch = workspaceops.IsDefaultBranch(ctx, root, branch)
 			if !msg.IsMainBranch {
@@ -311,6 +317,7 @@ func (m *Model) projectRootFor(workspace workspaceinventory.Workspace) string {
 }
 
 type globalWorktreeDeleteDoneMsg struct {
+	completionScope
 	Project     Project
 	WorkspaceID string
 	Warnings    []string
@@ -331,6 +338,8 @@ func (m *Model) applyWorktreeDeleteOutcome(outcome worktreedelete.Outcome) tea.C
 // confirmation closes first, as it does on the project surface: the list is the
 // rest state, and the result arrives as a toast.
 func (m *Model) executeWorktreeDelete() tea.Cmd {
+	scope := m.deleteCompletionScope()
+
 	workspace := m.deleteWorkspace
 	idx := m.projectIndex(workspace.ProjectKey)
 	if idx < 0 {
@@ -355,7 +364,7 @@ func (m *Model) executeWorktreeDelete() tea.Cmd {
 			Path: target.Path, Branch: target.Branch,
 			Missing: target.IsMissing, Force: true,
 		}); err != nil {
-			return globalWorktreeDeleteDoneMsg{Project: project, WorkspaceID: workspace.ID, Err: err}
+			return globalWorktreeDeleteDoneMsg{completionScope: scope, Project: project, WorkspaceID: workspace.ID, Err: err}
 		}
 		var warnings []string
 		if deleteLocal {
@@ -372,7 +381,7 @@ func (m *Model) executeWorktreeDelete() tea.Cmd {
 				warnings = append(warnings, fmt.Sprintf("Remote branch: %v", err))
 			}
 		}
-		return globalWorktreeDeleteDoneMsg{Project: project, WorkspaceID: workspace.ID, Warnings: warnings}
+		return globalWorktreeDeleteDoneMsg{completionScope: scope, Project: project, WorkspaceID: workspace.ID, Warnings: warnings}
 	}
 }
 
@@ -480,6 +489,8 @@ func (m *Model) handleDeleteMouse(msg tea.MouseMsg) tea.Cmd {
 }
 
 func (m *Model) applyDeleteAction(action string) tea.Cmd {
+	scope := m.deleteCompletionScope()
+
 	switch action {
 	case "cancel", globalDeleteCancelID:
 		m.closeDelete()
@@ -504,7 +515,7 @@ func (m *Model) applyDeleteAction(action string) tea.Cmd {
 		m.deleteBusy = true
 		m.deleteModal = nil
 		return func() tea.Msg {
-			return globalShellDeletedMsg{Project: project, WorkspaceID: workspace.ID, Err: deleteManagedShell(project.Path, workspace.TmuxName, workspace.Namespace)}
+			return globalShellDeletedMsg{completionScope: scope, Project: project, WorkspaceID: workspace.ID, Err: deleteManagedShell(project.Path, workspace.TmuxName, workspace.Namespace)}
 		}
 	}
 	return nil

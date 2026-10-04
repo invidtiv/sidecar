@@ -21,6 +21,7 @@ const (
 
 // TermPanelSessionCreatedMsg is sent when the terminal panel tmux session is created.
 type TermPanelSessionCreatedMsg struct {
+	OperationScope
 	SessionName string
 	PaneID      string
 	Err         error
@@ -160,15 +161,19 @@ func (p *Plugin) attachWorkspaceTerminalSplit() tea.Cmd {
 
 // createTermPanelSession creates or reuses a tmux session for the terminal panel.
 func (p *Plugin) createTermPanelSession(sessionName string) tea.Cmd {
+	completionScope := p.completionScope()
+
 	workDir := p.termPanelWorkDir()
 
 	return func() tea.Msg {
 		paneID, err := termpanes.EnsureSession(sessionName, workDir)
-		return TermPanelSessionCreatedMsg{SessionName: sessionName, PaneID: paneID, Err: err}
+		return TermPanelSessionCreatedMsg{OperationScope: completionScope, SessionName: sessionName, PaneID: paneID, Err: err}
 	}
 }
 
 func (p *Plugin) applyPendingTermPanelSeed(session string) tea.Cmd {
+	completionScope := p.completionScope()
+
 	seed := p.pendingTermPanelSeed
 	if seed == nil || seed.session == "" || seed.session != session {
 		return nil
@@ -187,7 +192,7 @@ func (p *Plugin) applyPendingTermPanelSeed(session string) tea.Cmd {
 			err = workspaceops.TypeInShell(ctx, session, typeCmd)
 		}
 		if err != nil {
-			return TermPanelSeedFailedMsg{Err: err}
+			return TermPanelSeedFailedMsg{OperationScope: completionScope, Err: err}
 		}
 		return nil
 	}
@@ -196,6 +201,7 @@ func (p *Plugin) applyPendingTermPanelSeed(session string) tea.Cmd {
 // TermPanelSeedFailedMsg is a --run/--type that could not be sent after the
 // split session existed.
 type TermPanelSeedFailedMsg struct {
+	OperationScope
 	Err error
 }
 

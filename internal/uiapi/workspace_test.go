@@ -67,11 +67,15 @@ func TestWorkspaceRoutesScopeGuardsAndValidation(t *testing.T) {
 	if !strings.Contains(string(body), "scope_refused") {
 		t.Fatal(string(body))
 	}
+	response, body = h.tailnetDo(req{method: "POST", path: "/api/v0/projects/fixture-project/shells/create", body: `{}`, header: mutationHeaders("http://widget.example", map[string]string{tailscaleLoginHead: testTailnetLogin, "Authorization": "Bearer " + token})})
+	expectWorkspaceStatus(t, response, body, 403)
 	token, _, err = h.s.origins.pair("http://widget.example", []string{ScopeWorkspaceWrite}, h.clock.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
 	response, body = h.browserDo(req{method: "POST", path: "/api/v0/projects/fixture-project/shells/create", body: `{}`, header: map[string]string{"Authorization": "Bearer " + token, "Content-Type": "application/json", mutationHeader: "1"}})
+	expectWorkspaceStatus(t, response, body, 200)
+	response, body = h.tailnetDo(req{method: "POST", path: "/api/v0/projects/fixture-project/shells/create", body: `{}`, header: mutationHeaders("http://widget.example", map[string]string{tailscaleLoginHead: testTailnetLogin, "Authorization": "Bearer " + token})})
 	expectWorkspaceStatus(t, response, body, 200)
 	response, body = h.browserDo(req{method: "POST", path: "/api/v0/projects/fixture-project/shells/create", body: `{}`, header: map[string]string{"Authorization": "Bearer " + token}})
 	expectWorkspaceStatus(t, response, body, 403)

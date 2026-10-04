@@ -206,6 +206,20 @@ func (h *listenerHandler) authenticate(w http.ResponseWriter, r *http.Request, c
 			writeError(w, status, code, message)
 			return c, false
 		}
+		if h.pairedOnTailnet(c.origin) {
+			// The login header is ambient: tailscale serve adds it to every
+			// request from the owner's devices, whatever page sent it. It
+			// vouches for the device, not for code served from a paired
+			// origin, so that code still presents the origin's own token.
+			token, _ := bearerToken(r)
+			resolved, result := h.s.resolveBearer(token, c.origin)
+			if result != bearerOK || resolved.auth != "bearer" {
+				writeError(w, http.StatusUnauthorized, CodeUnauthenticated, "A paired origin must send its own bearer token on the tailnet listener too; pair it with `sidecar api pair --origin URL`.")
+				return c, false
+			}
+			resolved.listener, resolved.login = c.listener, login
+			return resolved, true
+		}
 		c.auth, c.login, c.client = "tailnet", login, "tailnet:"+login
 		return c, true
 	}
@@ -288,6 +302,14 @@ func (h *listenerHandler) bearerWithoutOrigin(r *http.Request) bool {
 	}
 	token, _ := bearerToken(r)
 	return token != ""
+}
+
+// pairedOnTailnet reports a request on the Tailnet listener whose Origin is a
+// paired origin rather than the listener's own. The tailnet login authorizes
+// only the listener's own origins; a paired origin authenticates with its own
+// credential, so revoking or rotating it reaches its tailnet streams too.
+func (h *listenerHandler) pairedOnTailnet(origin string) bool {
+	return h.kind == ListenerTailnet && origin != "" && !h.ownOrigin(origin) && h.s.origins.has(origin)
 }
 
 func (h *listenerHandler) hostAllowed(host string) bool {
@@ -609,10 +631,19 @@ func (s *Server) handlePairOrigin(w http.ResponseWriter, r *http.Request, _ call
 	}
 	s.credentialMu.Lock()
 	defer s.credentialMu.Unlock()
+	rotating := s.origins.has(origin)
 	token, record, err := s.origins.pair(origin, scopes, s.opts.Now())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, CodeBackend, fmt.Sprintf("Could not save the paired origin: %v.", err))
 		return
+	}
+	if rotating {
+		// Rotation replaces a token the owner may believe leaked. Every stream
+		// and ticket that exists now was authorized with the old token (the new
+		// one has not been returned yet), so end them as revocation does.
+		keys := map[string]bool{"origin:" + origin: true}
+		s.auth.revokeTickets(keys)
+		s.clients.revoke(keys)
 	}
 	writeJSON(w, http.StatusOK, OriginRegistration{Origin: record.Origin, Token: token, Scopes: record.Scopes})
 }

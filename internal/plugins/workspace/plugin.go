@@ -976,6 +976,8 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.worktrees = make([]*Worktree, 0)
 	// pendingOverviewSelection is deliberately retained across app-owned Reinit.
 	p.attachedSession = ""
+	p.pendingPrefillCmd = ""
+	p.pendingResumeWorktree = ""
 
 	// Reset poll generation counters (td-83dc22): invalidates any stale timers from previous project
 	p.pollScheduler.Reset()
@@ -1209,7 +1211,8 @@ func (p *Plugin) resetLifecycleState() {
 
 func (p *Plugin) newOperationScope(wt *Worktree) (context.Context, OperationScope) {
 	p.operationSeq++
-	scope := OperationScope{Epoch: p.ctx.Epoch, OperationID: fmt.Sprintf("%d-%d", p.ctx.Epoch, p.operationSeq)}
+	scope := p.completionScope()
+	scope.OperationID = fmt.Sprintf("%d-%d", p.ctx.Epoch, p.operationSeq)
 	if p.repoSnapshot != nil {
 		scope.RepoKey = p.repoSnapshot.Key
 	}
@@ -1268,6 +1271,12 @@ func (p *Plugin) scopeMatches(scope OperationScope) bool {
 		return true
 	}
 	if p.ctx == nil || scope.Epoch != p.ctx.Epoch {
+		return false
+	}
+	if scope.ProjectRoot != "" && scope.ProjectRoot != p.ctx.ProjectRoot {
+		return false
+	}
+	if scope.WorkDir != "" && scope.WorkDir != p.ctx.WorkDir {
 		return false
 	}
 	if scope.RepoKey != "" && p.repoSnapshot != nil && scope.RepoKey != p.repoSnapshot.Key {
