@@ -1190,7 +1190,12 @@ func (a *attachment) run() {
 		case <-a.stop:
 			return
 		case err := <-a.failures:
-			a.captureFailed(err)
+			if a.captureFailed(err) {
+				// The target is gone: this attachment is over. Stopping waits
+				// for this loop, so it cannot run here.
+				go a.stopAttachment()
+				return
+			}
 		case snapshot := <-a.snapshots:
 			a.publishQueued(snapshot)
 		case <-ticker.C:
@@ -1305,12 +1310,26 @@ func snapshotGeometryChanged(first, second tty.ControlSnapshot) bool {
 	return first.PaneWidth != second.PaneWidth || first.PaneHeight != second.PaneHeight
 }
 
-// captureFailed resets the attachment after its capture source died, then
-// asks for a replacement capture, so a full frame always follows the reset even
-// on an idle pane. The request is delayed with a capped backoff: a source that
-// keeps failing produces one reset per attempt, never a tight loop of them.
-func (a *attachment) captureFailed(err error) {
+// captureFailed handles a dead capture source. It first asks whether the
+// target itself is still there, using the same narrow current-source check
+// every operation uses. A target that is gone or replaced ends the attachment:
+// one asynchronous refusal, no reset, and no further captures, because no
+// capture of that target can ever succeed again. It reports true then, and the
+// caller stops the attachment.
+//
+// Otherwise the failure is transient: it resets the attachment and asks for a
+// replacement capture, so a full frame always follows the reset even on an
+// idle pane. The request is delayed with a capped backoff: a source that keeps
+// failing produces one reset per attempt, never a tight loop of them.
+func (a *attachment) captureFailed(err error) bool {
 	a.opMu.Lock()
+	if refusal := a.targetRefusal(); refusal != nil {
+		a.loseControlLocked()
+		a.service.removeAttachment(a.handle)
+		a.service.writeError("", refusal.Code, "capture target is gone: "+refusal.Message, false)
+		a.opMu.Unlock()
+		return true
+	}
 	a.failLocked("capture_failed", err)
 	a.opMu.Unlock()
 	a.mu.Lock()
@@ -1321,6 +1340,24 @@ func (a *attachment) captureFailed(err error) {
 	a.reseedDelay = min(delay*2, reseedMaxDelay)
 	a.mu.Unlock()
 	time.AfterFunc(delay, a.requestSnapshot)
+	return false
+}
+
+// captureRevalidateTimeout bounds the target check after a capture failure. A
+// check that runs out of time is not proof the target is gone.
+const captureRevalidateTimeout = 10 * time.Second
+
+// targetRefusal revalidates the attachment's target and returns the refusal
+// when it is gone or changed. Any other failure (a timeout, an unreadable
+// state file) is not evidence about the target and returns nil.
+func (a *attachment) targetRefusal() *ResolveError {
+	ctx, cancel := context.WithTimeout(context.Background(), captureRevalidateTimeout)
+	defer cancel()
+	var refusal *ResolveError
+	if err := a.service.revalidate(ctx, a.target); err != nil && errors.As(err, &refusal) {
+		return refusal
+	}
+	return nil
 }
 
 func (a *attachment) failLocked(reason string, err error) {
