@@ -64,7 +64,7 @@ The status values are `queued`, `running`, `review`, `fixing`, `merged` and `blo
 | U1-h security review and three-viewer proof | td-295605 | all | Claude, then Codex | U1-a, U1-d, U1-f | done. Security 6176110f; proof 23b5302d; integrated re-run against sidecar-ui 0f9cb5f passes with 0 browser page errors and a fully rendered terminal (u1h-evidence/integrated-*) |
 | U2-a core extraction | td-c709a9 | sidecar | Codex | U0-a | merged (d95b66f5) |
 | U2-b workspace resources and operations API | td-eb3d80 | sidecar | Codex | U2-a | merged (da497063) |
-| U2-c workspace UI | td-37a00e | sidecar-ui | Codex | U2-b | review (Claude: safety of destructive flows, and UX); branch u2c-workspace-ui @3d32894; docs on Sidecar branch u2c-workspace-ui-docs |
+| U2-c workspace UI | td-37a00e | sidecar-ui | Codex | U2-b | merged (sidecar-ui 6f640fe, docs 6c65ac5a). Claude review fixed delete-focus, stale-form and raw-refusal safety issues |
 | U3-a content and layouts API | td-f8784a | sidecar | Codex | U1-a | merged (05dd383b). Claude review fixed a HIGH arbitrary file write through the diff parent parameter (git --output), a watch fd-exhaustion cap, and an existence oracle through symlinks |
 | U3-b pane tree UI | td-cf59cd | sidecar-ui | Codex | U3-a, U1-f | merged (sidecar-ui 13bd63a); 70 e2e tests pass on merged main |
 | U3-c pane and content polish | td-c53032 | both | Codex | U3-b | merged (sidecar-ui 1edaf25, Sidecar c67cc04f). Review fixed two key-stealing bugs |
@@ -281,3 +281,4 @@ Each one is a td issue with the exact command and output. Fixes run as their own
 | td-17b5e2 | Worktree delete leaves other projects' shells rooted in the removed worktree live, with a vanished cwd | open |
 | td-00b64e | shell list/rename resolve the current project from env, not cwd; shell list has no --project | open |
 | td-f9306b | Shell renames keep no history; the td-ac892f collateral rename of sidecar-sh-clara-home-23 could only be guessed back to 'Shell 23' | open |
+| td-480c9b | P1: exact session-name targets fall back to display-name matching, so a destructive operation could hit another same-named shell. Also: unguarded positional targets, a literal '-' prompt refused, and no main-checkout flag. Codex bug lane ~/code/sidecar-bug-480c9b | running |
