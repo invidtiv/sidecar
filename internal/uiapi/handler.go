@@ -236,7 +236,7 @@ func (s *Server) resolveBearer(token, origin string) (caller, bearerResult) {
 		if origin != "" && origin != record.Origin {
 			return caller{}, bearerWrongOrigin
 		}
-		return caller{auth: "bearer", origin: record.Origin, client: "origin:" + record.Origin}, bearerOK
+		return caller{auth: "bearer", origin: record.Origin, client: "origin:" + record.Origin, credential: record.TokenSHA256}, bearerOK
 	}
 	if bound, client, ok := s.auth.lookupSession(token); ok {
 		if origin != "" && origin != bound {
@@ -245,6 +245,14 @@ func (s *Server) resolveBearer(token, origin string) (caller, bearerResult) {
 		return caller{auth: "session", origin: bound, client: client}, bearerOK
 	}
 	return caller{}, bearerUnknown
+}
+
+// callerLive is checked under credentialMu at ticket/terminal admission.
+func (s *Server) callerLive(c caller) bool {
+	if strings.HasPrefix(c.client, "origin:") {
+		return s.origins.credentialLive(strings.TrimPrefix(c.client, "origin:"), c.credential)
+	}
+	return s.auth.sessionClientLive(c.client)
 }
 
 func (h *listenerHandler) tailnetLogin(r *http.Request) (login, code, message string) {
@@ -414,11 +422,11 @@ func (s *Server) handleTicket(w http.ResponseWriter, r *http.Request, c caller) 
 	}
 	s.credentialMu.Lock()
 	defer s.credentialMu.Unlock()
-	if !s.auth.sessionClientLive(c.client) {
+	if !s.callerLive(c) {
 		writeError(w, http.StatusUnauthorized, CodeUnauthenticated, revokedSessionReason)
 		return
 	}
-	ticket, expires, err := s.auth.issueTicket(grant{listener: c.listener, auth: c.auth, origin: c.origin, login: c.login, client: c.client})
+	ticket, expires, err := s.auth.issueTicket(grant{listener: c.listener, auth: c.auth, origin: c.origin, login: c.login, client: c.client, credential: c.credential})
 	if err != nil {
 		writeError(w, http.StatusTooManyRequests, CodeTooMany, fmt.Sprintf("Too many unredeemed tickets (at most %d per client); open the WebSocket with one you already have, or wait 30 seconds.", maxTicketsPerClient))
 		return
@@ -593,6 +601,8 @@ func (s *Server) handlePairOrigin(w http.ResponseWriter, r *http.Request, _ call
 		writeError(w, http.StatusBadRequest, CodeInvalidRequest, err.Error())
 		return
 	}
+	s.credentialMu.Lock()
+	defer s.credentialMu.Unlock()
 	token, record, err := s.origins.pair(origin, scopes, s.opts.Now())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, CodeBackend, fmt.Sprintf("Could not save the paired origin: %v.", err))
@@ -611,6 +621,8 @@ func (s *Server) handleRevokeOrigin(w http.ResponseWriter, r *http.Request, _ ca
 		writeError(w, http.StatusBadRequest, CodeInvalidRequest, err.Error())
 		return
 	}
+	s.credentialMu.Lock()
+	defer s.credentialMu.Unlock()
 	revoked, err := s.origins.revoke(origin)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, CodeBackend, fmt.Sprintf("Could not save the paired origins: %v.", err))
@@ -620,5 +632,8 @@ func (s *Server) handleRevokeOrigin(w http.ResponseWriter, r *http.Request, _ ca
 		writeError(w, http.StatusNotFound, CodeOriginNotFound, fmt.Sprintf("%s is not paired; list registrations with `sidecar api pair --list`.", origin))
 		return
 	}
+	keys := map[string]bool{"origin:" + origin: true}
+	s.auth.revokeTickets(keys)
+	s.clients.revoke(keys)
 	writeJSON(w, http.StatusOK, OriginRevocation{Origin: origin, Revoked: true})
 }

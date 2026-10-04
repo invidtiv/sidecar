@@ -22,12 +22,13 @@ const (
 // grant is what a ticket carries from its issuing request to the WebSocket
 // upgrade that redeems it.
 type grant struct {
-	listener Listener
-	auth     string
-	origin   string
-	login    string
-	client   string
-	expires  time.Time
+	listener   Listener
+	auth       string
+	origin     string
+	login      string
+	client     string
+	credential string // paired-origin token hash at authorization time
+	expires    time.Time
 }
 
 // session is a browser session minted by a pairing exchange. Its token is a
@@ -144,6 +145,16 @@ func (a *authStore) revokeSessions(origin string) map[string]bool {
 		}
 	}
 	return revoked
+}
+
+func (a *authStore) revokeTickets(keys map[string]bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for key, g := range a.tickets {
+		if keys[g.client] {
+			delete(a.tickets, key)
+		}
+	}
 }
 
 // sessionClientLive reports whether client, a key from sessionClient, still

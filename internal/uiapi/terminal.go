@@ -127,7 +127,7 @@ const (
 	terminalDrainTimeout = 2 * time.Second
 	terminalStopTimeout  = 10 * time.Second
 	maxCloseReasonBytes  = 123
-	revokedSessionReason = "This browser session was revoked; pair again with sidecar api open."
+	revokedSessionReason = "This credential was revoked; pair again with sidecar api open or sidecar api pair --origin URL."
 )
 
 // serveTerminal upgrades first and refuses with a close code, because a
@@ -153,7 +153,7 @@ func (h *listenerHandler) serveTerminal(w http.ResponseWriter, r *http.Request) 
 	}
 	defer h.s.streams.Done()
 	h.s.credentialMu.Lock()
-	if !h.s.auth.sessionClientLive(c.client) {
+	if !h.s.callerLive(c) {
 		h.s.credentialMu.Unlock()
 		_ = conn.Close(CloseUnauthenticated, revokedSessionReason)
 		return
@@ -199,7 +199,7 @@ func (h *listenerHandler) authorizeTerminal(r *http.Request) (caller, websocket.
 		if g.origin != origin {
 			return c, CloseOriginRefused, "This ticket was issued to another origin."
 		}
-		c.auth, c.client = "ticket", g.client
+		c.auth, c.client, c.credential = "ticket", g.client, g.credential
 		return c, 0, ""
 	}
 	// Non-browser clients may send their bearer token on the upgrade. The

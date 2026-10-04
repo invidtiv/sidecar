@@ -541,3 +541,68 @@ func TestRevocationWinsOverAnAuthorizedTicketRequest(t *testing.T) {
 		t.Fatal("revoked session retained an unused ticket")
 	}
 }
+
+func TestOriginRevocationClosesTerminalsAndInvalidatesTickets(t *testing.T) {
+	h := newHarness(t)
+	const origin = "http://app.example"
+	token := h.pairOrigin(origin)
+	otherToken := h.pairOrigin("http://other.example")
+	headers := http.Header{"Origin": {origin}, "Authorization": {"Bearer " + token}}
+	c, result := h.s.resolveBearer(token, origin)
+	if result != bearerOK {
+		t.Fatal("origin authorization failed")
+	}
+	c.listener = ListenerBrowser
+	takeTicket := func() string {
+		response, data := h.browserDo(req{method: http.MethodPost, path: "/api/v0/ws-tickets", body: "{}",
+			header: mutationHeaders(origin, map[string]string{"Authorization": "Bearer " + token})})
+		expect(t, response, data, http.StatusOK, "")
+		var issued TicketResponse
+		if err := json.Unmarshal(data, &issued); err != nil {
+			t.Fatal(err)
+		}
+		return issued.Ticket
+	}
+	unused := takeTicket()
+	direct, err := h.dialBrowser(t, "", headers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = direct.CloseNow() }()
+	viaTicket, err := h.dialBrowser(t, "?ticket="+takeTicket(), http.Header{"Origin": {origin}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = viaTicket.CloseNow() }()
+	for _, conn := range []*websocket.Conn{direct, viaTicket} {
+		writeText(t, conn, `{"ready":true}`)
+		readText(t, conn)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	client := NewLocalClientForSocket(h.s.Endpoint())
+	if _, err := client.RevokeOrigin(ctx, "HTTP://APP.EXAMPLE:80/"); err != nil {
+		t.Fatal(err)
+	}
+	for _, conn := range []*websocket.Conn{direct, viaTicket} {
+		if code, _ := closeStatus(t, conn); code != CloseUnauthenticated {
+			t.Fatalf("revoked origin terminal close = %d, want 4401", code)
+		}
+	}
+	waitForClients(t, h, 0)
+	if h.bearerStatus(token) != http.StatusUnauthorized || h.bearerStatus(otherToken) != http.StatusOK {
+		t.Fatal("revocation failed to isolate the revoked credential")
+	}
+	// Re-pairing the same URL must not resurrect tickets or an authorization
+	// snapshot held by a request that arrived before revocation.
+	h.pairOrigin(origin)
+	if h.s.callerLive(c) {
+		t.Fatal("old authorization could register a terminal after revoke and re-pair")
+	}
+	h.expectBrowserClose(t, "old ticket after re-pair", "?ticket="+unused, http.Header{"Origin": {origin}}, CloseUnauthenticated)
+	w := httptest.NewRecorder()
+	h.s.handleTicket(w, httptest.NewRequest(http.MethodPost, "/api/v0/ws-tickets", strings.NewReader("{}")), c)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("old authorization issued a new ticket: %d %s", w.Code, w.Body.String())
+	}
+}

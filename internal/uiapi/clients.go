@@ -19,7 +19,8 @@ type caller struct {
 	login    string
 	// client identifies one credential holder for per-client limits: a
 	// browser session, a paired origin, a tailnet login, or local.
-	client string
+	client     string
+	credential string
 }
 
 // maxTerminalsPerClient bounds the terminal WebSockets one client may hold
