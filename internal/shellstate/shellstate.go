@@ -1,4 +1,4 @@
-// Package shellstate owns validation and persistence of Sidecar shell display names.
+// Package shellstate owns Sidecar shell definitions, validation and persistence.
 // It is deliberately independent of both the TUI and CLI transports.
 package shellstate
 
@@ -15,7 +15,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/marcus/sidecar/internal/agentsession"
-	"github.com/marcus/sidecar/internal/config"
 )
 
 const MaxNameBytes = 50
@@ -337,50 +336,15 @@ func mutateManifestRemoving(path string, apply func(*manifest) error) error {
 	return mutateManifestLive(path, true, apply)
 }
 
-// mutateManifestLive is the shells.json writer. identityRemoval is true only
-// for RemoveAtPath and RemoveIfUnchangedAtPath.
+// mutateManifestLive funnels every operation through the same locked writer.
 func mutateManifestLive(path string, identityRemoval bool, apply func(*manifest) error) error {
-	if err := config.AssertIsolatedPath(path); err != nil {
-		return &Error{Kind: KindState, Msg: "refusing shell manifest path", Err: err}
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return &Error{Kind: KindState, Msg: "create shell manifest directory", Err: err}
-	}
-	lock, err := acquireLock(path)
-	if err != nil {
-		return &Error{Kind: KindState, Msg: "lock shell manifest", Err: err}
-	}
-	defer releaseLock(lock)
-	m := manifest{Version: CurrentVersion}
-	if current, readErr := readManifest(path); readErr == nil {
-		m = current
-	} else if !os.IsNotExist(readErr) {
-		return &Error{Kind: KindState, Msg: "read shell manifest", Err: readErr}
-	}
-	if err := CheckWritableVersion(m.Version); err != nil {
-		return err
-	}
-	// Expiry runs before apply so that the mutation, and anything it decides
-	// from the tombstone list, sees the same set the readers do.
-	m.Tombstones = expireTombstonesNow(m.Tombstones)
-	before := len(m.Shells)
-	if err := apply(&m); err != nil {
-		return err
-	}
-	ObserveLiveCountWrite(path, before, len(m.Shells), identityRemoval)
-	m.Version = CurrentVersion
-	data, err := json.MarshalIndent(m, "", "  ")
-	if err != nil {
-		return &Error{Kind: KindState, Msg: "encode shell manifest", Err: err}
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
-		return &Error{Kind: KindState, Msg: "write shell manifest", Err: err}
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return &Error{Kind: KindState, Msg: "replace shell manifest", Err: err}
-	}
-	return nil
+	_, _, err := EditAtPath(path, nil, identityRemoval, func(m *Snapshot) (bool, error) {
+		if err := apply(m); err != nil {
+			return false, err
+		}
+		return true, nil
+	})
+	return err
 }
 
 // Definition contains all information needed to recreate a shell session.
@@ -471,7 +435,8 @@ type Tombstone struct {
 	DeletedAt time.Time `json:"deletedAt"`
 }
 
-type manifest struct {
+// Snapshot is the shared shells.json shape, independent of any surface.
+type Snapshot struct {
 	// Version is the schema version of the file on disk. Every writer checks
 	// it with CheckWritableVersion before rewriting, and stamps CurrentVersion
 	// on the way out, which is how a v1 file upgrades in place.
@@ -480,6 +445,9 @@ type manifest struct {
 	// Tombstones is omitted by older binaries; see Tombstone.
 	Tombstones []Tombstone `json:"tombstones,omitempty"`
 }
+
+// manifest is the internal name for the shared persisted shape.
+type manifest = Snapshot
 
 func NormalizeName(name string) (string, error) {
 	if !utf8.ValidString(name) {
@@ -661,61 +629,36 @@ func RenameAtPath(path string, req RenameRequest) (RenameResult, error) {
 		return RenameResult{}, err
 	}
 	req.Name = name
-	if err := config.AssertIsolatedPath(path); err != nil {
-		return RenameResult{}, &Error{Kind: KindState, Msg: "refusing shell manifest path", Err: err}
-	}
-	lock, err := acquireLock(path)
+	var result RenameResult
+	_, changed, err := editAtPath(path, nil, false, true, func(m *Snapshot) (bool, error) {
+		match := -1
+		for i, shell := range m.Shells {
+			if shell.TmuxName == req.TmuxName && sameNamespace(shell.Namespace, req.Namespace) {
+				if match >= 0 {
+					return false, &Error{Kind: KindAmbiguous, Msg: "current shell appears more than once in its manifest; refusing ambiguous rename"}
+				}
+				match = i
+			}
+		}
+		if match < 0 {
+			return false, notFound()
+		}
+		for i, shell := range m.Shells {
+			if i != match && shell.DisplayName == req.Name {
+				return false, &Error{Kind: KindValidation, Msg: "name is already in use in this project"}
+			}
+		}
+		result = RenameResult{Shell: req.TmuxName, OldName: m.Shells[match].DisplayName, Name: req.Name}
+		if result.OldName == result.Name {
+			return false, nil
+		}
+		m.Shells[match].DisplayName = req.Name
+		return true, nil
+	})
 	if err != nil {
-		return RenameResult{}, &Error{Kind: KindState, Msg: "lock shell manifest", Err: err}
-	}
-	defer releaseLock(lock)
-	m, err := readManifest(path)
-	if err != nil {
-		return RenameResult{}, &Error{Kind: KindState, Msg: "read shell manifest", Err: err}
-	}
-	if err := CheckWritableVersion(m.Version); err != nil {
 		return RenameResult{}, err
 	}
-	match := -1
-	for i, shell := range m.Shells {
-		if shell.TmuxName == req.TmuxName && sameNamespace(shell.Namespace, req.Namespace) {
-			if match >= 0 {
-				return RenameResult{}, &Error{Kind: KindAmbiguous, Msg: "current shell appears more than once in its manifest; refusing ambiguous rename"}
-			}
-			match = i
-		}
-	}
-	if match < 0 {
-		return RenameResult{}, notFound()
-	}
-	for i, shell := range m.Shells {
-		if i != match && shell.DisplayName == req.Name {
-			return RenameResult{}, &Error{Kind: KindValidation, Msg: "name is already in use in this project"}
-		}
-	}
-	result := RenameResult{Shell: req.TmuxName, OldName: m.Shells[match].DisplayName, Name: req.Name}
-	if result.OldName == result.Name {
-		return result, nil
-	}
-	before := len(m.Shells)
-	m.Shells[match].DisplayName = req.Name
-	// Every write sweeps, including this one: that is what keeps the file
-	// bounded without a sweeper that has to know where manifests live.
-	m.Tombstones = expireTombstonesNow(m.Tombstones)
-	m.Version = CurrentVersion
-	ObserveLiveCountWrite(path, before, len(m.Shells), false)
-	data, err := json.MarshalIndent(m, "", "  ")
-	if err != nil {
-		return RenameResult{}, &Error{Kind: KindState, Msg: "encode shell manifest", Err: err}
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
-		return RenameResult{}, &Error{Kind: KindState, Msg: "write shell manifest", Err: err}
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return RenameResult{}, &Error{Kind: KindState, Msg: "replace shell manifest", Err: err}
-	}
-	result.Changed = true
+	result.Changed = changed
 	return result, nil
 }
 
@@ -749,13 +692,17 @@ func readManifest(path string) (manifest, error) {
 const lockTimeout = 5 * time.Second
 
 func acquireLock(path string) (*os.File, error) {
+	return acquireLockKind(path, syscall.LOCK_EX)
+}
+
+func acquireLockKind(path string, kind int) (*os.File, error) {
 	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		return nil, err
 	}
 	deadline := time.Now().Add(lockTimeout)
 	for {
-		err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		err = syscall.Flock(int(lock.Fd()), kind|syscall.LOCK_NB)
 		if err == nil {
 			return lock, nil
 		}

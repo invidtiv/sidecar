@@ -1,14 +1,8 @@
 package workspace
 
 import (
-	"encoding/json"
-	"errors"
-	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"log/slog"
@@ -16,6 +10,7 @@ import (
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/tmuxenv"
+	"github.com/marcus/sidecar/internal/workspaceops"
 )
 
 // ShellManifest stores persistent shell definitions for cross-instance sync
@@ -67,7 +62,7 @@ const manifestVersion = shellstate.CurrentVersion
 // is no sensible default location for a project's shells.json, and inventing a
 // relative one silently writes state next to whatever directory the process
 // happens to be in.
-var errNoManifestPath = errors.New("shell manifest has no path")
+var errNoManifestPath = shellstate.ErrNoManifestPath
 
 // LoadShellManifest loads the shell manifest from disk.
 // Returns an empty manifest (not error) if file doesn't exist or is corrupted.
@@ -88,28 +83,12 @@ func LoadShellManifest(path string) (*ShellManifest, error) {
 		path:    path,
 	}
 
-	// Acquire shared lock for reading
-	lockFile, err := acquireManifestLock(path, false)
+	snapshot, err := shellstate.SnapshotAtPath(path)
 	if err != nil {
-		slog.Debug("manifest: lock failed, returning empty", "err", err)
+		slog.Warn("manifest: read failed, returning empty", "err", err)
 		return m, nil
 	}
-	defer releaseManifestLock(lockFile)
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return m, nil // Empty manifest is fine
-		}
-		slog.Warn("manifest: read failed", "err", err)
-		return m, nil
-	}
-
-	if err := json.Unmarshal(data, m); err != nil {
-		slog.Warn("manifest: parse failed, returning empty", "err", err)
-		m.Shells = []ShellDefinition{}
-	}
-	m.path = path
+	m.Version, m.Shells, m.Tombstones = snapshot.Version, snapshot.Shells, snapshot.Tombstones
 
 	return m, nil
 }
@@ -129,88 +108,25 @@ func (m *ShellManifest) mutateLocked(apply func([]ShellDefinition) ([]ShellDefin
 	return m.mutateLockedKind(false, apply)
 }
 
-// mutateLockedKind is the writer boundary. identityRemoval is true only for
-// RemoveShell; that is the only workspace path allowed to shrink live shells.
+// mutateLockedKind projects shellstate's authoritative snapshot back into this
+// compatibility handle. All locking, version guards and atomic disk writes live
+// in shellstate. The fallback preserves the plugin's recovery behavior when its
+// previously loaded file is missing or unreadable. Caller must hold m.mu.
 func (m *ShellManifest) mutateLockedKind(identityRemoval bool, apply func([]ShellDefinition) ([]ShellDefinition, bool)) error {
-	if strings.TrimSpace(m.path) == "" {
-		return errNoManifestPath
-	}
-	if err := config.AssertIsolatedPath(m.path); err != nil {
-		return err
-	}
-
-	dir := filepath.Dir(m.path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return err
-	}
-
-	lockFile, err := acquireManifestLock(m.path, true)
+	fallback := shellstate.Snapshot{Version: manifestVersion, Shells: m.Shells, Tombstones: m.Tombstones}
+	snapshot, changed, err := shellstate.EditAtPath(m.path, &fallback, identityRemoval, func(fresh *shellstate.Snapshot) (bool, error) {
+		m.Tombstones = fresh.Tombstones
+		next, changed := apply(fresh.Shells)
+		fresh.Shells, fresh.Tombstones = next, m.Tombstones
+		return changed, nil
+	})
 	if err != nil {
 		return err
 	}
-	defer releaseManifestLock(lockFile)
-
-	fresh, onDiskVersion := m.readFromDiskLocked()
-	if err := shellstate.CheckWritableVersion(onDiskVersion); err != nil {
-		slog.Warn("manifest: refusing to rewrite newer schema", "path", m.path, "version", onDiskVersion)
-		return err
+	m.Version, m.Shells, m.Tombstones = snapshot.Version, snapshot.Shells, snapshot.Tombstones
+	if changed {
+		m.revision++
 	}
-	// Expiry runs before apply so EnsureShells and everything else that asks
-	// which names are forgotten sees the same set the readers do.
-	m.Tombstones = shellstate.ExpireTombstones(m.Tombstones, time.Now().UTC(), shellstate.TombstoneRetention())
-	before := len(fresh)
-	next, changed := apply(fresh)
-	m.Shells = next
-	if !changed {
-		return nil
-	}
-	shellstate.ObserveLiveCountWrite(m.path, before, len(next), identityRemoval)
-	return m.writeLocked()
-}
-
-// readFromDiskLocked returns the definitions currently on disk and the schema
-// version they carry, falling back to the in-memory copy when the file is
-// missing or unreadable. Caller must hold both m.mu and the exclusive file
-// lock.
-//
-// A file we could not read reports manifestVersion: there is no version to
-// respect in that case, and the fallback is this build's own in-memory copy.
-func (m *ShellManifest) readFromDiskLocked() ([]ShellDefinition, int) {
-	data, err := os.ReadFile(m.path)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			slog.Warn("manifest: read-before-write failed, using in-memory copy", "err", err)
-		}
-		return m.Shells, manifestVersion
-	}
-	var onDisk ShellManifest
-	if err := json.Unmarshal(data, &onDisk); err != nil {
-		slog.Warn("manifest: read-before-write parse failed, using in-memory copy", "err", err)
-		return m.Shells, manifestVersion
-	}
-	m.Tombstones = onDisk.Tombstones
-	return onDisk.Shells, onDisk.Version
-}
-
-// writeLocked marshals and atomically replaces the file. Caller must hold m.mu,
-// the exclusive file lock, and must already have asserted path isolation.
-// Only mutateLocked reaches here; there is no whole-file Save.
-func (m *ShellManifest) writeLocked() error {
-	m.Version = manifestVersion
-
-	data, err := json.MarshalIndent(m, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	tmpPath := m.path + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpPath, m.path); err != nil {
-		return err
-	}
-	m.revision++
 	return nil
 }
 
@@ -222,7 +138,7 @@ func (m *ShellManifest) AddShell(def ShellDefinition) error {
 		m.Tombstones = dropWorkspaceTombstone(m.Tombstones, def.TmuxName)
 		for i, s := range shells {
 			if s.TmuxName == def.TmuxName {
-				// Carry the schema fields this serializer does not model. A
+				// Carry the schema fields the workspace projection does not model. A
 				// wholesale replacement here would drop the v3 session binding.
 				shells[i] = shellstate.CarryForward(s, def)
 				return shells, true
@@ -317,9 +233,8 @@ func (m *ShellManifest) MarkRestoreEligible(tmuxName, serverID string, now time.
 // per-shell "this one is dead" conclusion, applied N times, empties the file.
 //
 // The rule is the same one shellstate.ForgetOrPreserveAtPath applies for the
-// other surface, and it is stated here rather than delegated because this
-// manifest has its own serializer and its own lock. A record whose last-confirmed
-// server is not the one running now, or that is being judged with no server
+// other surface, and runs through the shared shellstate writer. A record
+// whose last-confirmed server is not the one running now, or that is being judged with no server
 // running at all, is preserved and marked as a cold-restore candidate. Only a
 // shell that vanished inside a server that is still up is tombstoned, because
 // that is a terminal someone closed.
@@ -337,9 +252,8 @@ func (m *ShellManifest) ReapShell(tmuxName string, server shellstate.ServerState
 				lastSeen = s.Restore.LastSeenServer
 			}
 			// The same decision table shellstate.ForgetOrPreserveAtPath applies,
-			// restated here because this surface has its own serializer and its
-			// own lock. Tombstoning needs positive evidence the server is alive
-			// and this shell is gone from it; marking eligible needs positive
+			// retained here for the plugin compatibility projection. Tombstoning
+			// needs positive evidence the server is alive and this shell is gone from it; marking eligible needs positive
 			// evidence the server died or was replaced; anything else defers.
 			switch {
 			case !server.Known(), lastSeen == "" && server.Running():
@@ -450,7 +364,7 @@ func (m *ShellManifest) UpdateShell(def ShellDefinition) error {
 // RenameShell routes display-name validation and persistence through the same
 // application boundary as the agent-facing CLI.
 func (m *ShellManifest) RenameShell(tmuxName, namespace, name string) (shellstate.RenameResult, error) {
-	result, err := shellstate.RenameAtPath(m.path, shellstate.RenameRequest{
+	result, err := (workspaceops.Service{}).RenameShell(m.path, shellstate.RenameRequest{
 		TmuxName: tmuxName, Namespace: namespace, Name: name,
 	})
 	if err != nil {
@@ -473,72 +387,6 @@ func (m *ShellManifest) RenameShell(tmuxName, namespace, name string) (shellstat
 // Path returns the manifest file path.
 func (m *ShellManifest) Path() string {
 	return m.path
-}
-
-// lockTimeout is the maximum time to wait for file lock acquisition (td-984ead)
-const lockTimeout = 5 * time.Second
-
-// lockRetryInterval is how often to retry lock acquisition
-const lockRetryInterval = 10 * time.Millisecond
-
-// acquireManifestLock acquires an advisory lock on the manifest file with timeout.
-// exclusive=true for writes, false for reads.
-func acquireManifestLock(path string, exclusive bool) (*os.File, error) {
-	// A manifest with no path is not a manifest with a default location: every
-	// path here is derived from the project's state directory, so an empty one
-	// means a caller built a handle it never gave a home. Resolving it anyway
-	// makes ".lock" relative to whatever the process's working directory
-	// happens to be — the source tree, under `go test` — and then locks and
-	// writes there. Refusing keeps that unrepresentable rather than merely
-	// unlikely.
-	if strings.TrimSpace(path) == "" {
-		return nil, errNoManifestPath
-	}
-	lockPath := path + ".lock"
-
-	// Ensure directory exists for lock file
-	dir := filepath.Dir(lockPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return nil, err
-	}
-
-	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0644)
-	if err != nil {
-		return nil, err
-	}
-
-	lockType := syscall.LOCK_SH | syscall.LOCK_NB
-	if exclusive {
-		lockType = syscall.LOCK_EX | syscall.LOCK_NB
-	}
-
-	// Try non-blocking lock with timeout (td-984ead)
-	deadline := time.Now().Add(lockTimeout)
-	for {
-		err := syscall.Flock(int(lockFile.Fd()), lockType)
-		if err == nil {
-			return lockFile, nil
-		}
-		// EWOULDBLOCK means lock is held by another process
-		if err != syscall.EWOULDBLOCK && err != syscall.EAGAIN {
-			_ = lockFile.Close()
-			return nil, err
-		}
-		if time.Now().After(deadline) {
-			_ = lockFile.Close()
-			return nil, fmt.Errorf("lock acquisition timeout after %v", lockTimeout)
-		}
-		time.Sleep(lockRetryInterval)
-	}
-}
-
-// releaseManifestLock releases the advisory lock.
-func releaseManifestLock(lockFile *os.File) {
-	if lockFile == nil {
-		return
-	}
-	_ = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
-	_ = lockFile.Close()
 }
 
 // shellToDefinition converts a ShellSession to a ShellDefinition for storage.
