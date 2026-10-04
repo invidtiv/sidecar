@@ -1,0 +1,80 @@
+package uiapi
+
+import (
+	"fmt"
+	"io/fs"
+	"net/http"
+	"os"
+	"path"
+	"path/filepath"
+	"strings"
+)
+
+// newStaticHandler serves `--ui DIR` with the single-page-app fallback, or the
+// plain no-UI page when no directory was given.
+func newStaticHandler(dir string) (http.Handler, error) {
+	if dir == "" {
+		return http.HandlerFunc(serveNoUIPage), nil
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, err
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return nil, fmt.Errorf("--ui %s: %w", dir, err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("--ui %s is not a directory", dir)
+	}
+	if _, err := os.Stat(filepath.Join(abs, "index.html")); err != nil {
+		return nil, fmt.Errorf("--ui %s must contain index.html", dir)
+	}
+	return &spaHandler{fsys: os.DirFS(abs)}, nil
+}
+
+type spaHandler struct{ fsys fs.FS }
+
+func (h *spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/")
+	if name != "" {
+		if info, err := fs.Stat(h.fsys, name); err == nil && !info.IsDir() {
+			http.ServeFileFS(w, r, h.fsys, name)
+			return
+		}
+	}
+	// Every other path is a client-side route of the app.
+	w.Header().Set("Cache-Control", "no-cache")
+	http.ServeFileFS(w, r, h.fsys, "index.html")
+}
+
+const noUIPage = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sidecar API</title>
+<style>
+body { font: 16px/1.5 system-ui, sans-serif; max-width: 40rem; margin: 3rem auto; padding: 0 1rem; color: #1f2328; background: #fff; }
+code { font: 14px ui-monospace, monospace; background: #f3f4f6; padding: 0.1rem 0.3rem; border-radius: 4px; }
+@media (prefers-color-scheme: dark) { body { color: #e6edf3; background: #0d1117; } code { background: #161b22; } }
+</style>
+</head>
+<body>
+<h1>Sidecar API</h1>
+<p>This is the Sidecar UI API (v0). No UI is being served from this address.</p>
+<p>To use a web UI, start the server with <code>sidecar api serve --ui DIR</code>, where DIR is a built UI such as the reference app in <code>~/code/sidecar-ui</code>. Then run <code>sidecar api open</code> to pair this browser and open it.</p>
+<p>To embed Sidecar in another app, pair its origin with <code>sidecar api pair --origin URL</code>.</p>
+<p>The API lives under <code>/api/v0/</code>. Its contract is <code>docs/reference/ui-api.md</code> in the Sidecar repository.</p>
+</body>
+</html>
+`
+
+func serveNoUIPage(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	if r.Method == http.MethodHead {
+		return
+	}
+	_, _ = w.Write([]byte(noUIPage))
+}

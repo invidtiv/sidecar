@@ -871,6 +871,138 @@ sidecar --agents
 sidecar -a
 ```
 
+## `sidecar api`
+
+Serve Sidecar's UI API for web and embedded clients
+
+The UI API exposes Sessions and live terminals over HTTP and WebSocket so a web UI, an embedding app, or an agent can use them. The wire contract is docs/reference/ui-api.md.
+
+```
+Usage: sidecar api <command>
+```
+
+### `sidecar api open`
+
+Pair this machine's browser and open the UI
+
+Ask the running server for a single-use pairing link (valid for 60 seconds) and open it in the default browser. The link sets a session cookie for the server's own origin and redirects to --path. --print writes the link instead of opening it.
+
+```
+Usage: sidecar api open [--print] [--path P]
+```
+
+**Options:**
+
+- `--print`: Print the pairing URL instead of opening a browser
+- `--path P`: Path to land on after pairing (default /)
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: success
+- `1`: no server running or the server refused
+- `2`: usage error
+
+**Examples:**
+
+```bash
+sidecar api open
+sidecar api open --print
+```
+
+### `sidecar api pair`
+
+Manage origins allowed to embed Sidecar
+
+Register another web origin (an app embedding Sidecar components) and print its bearer token, which is shown only once and stored only as a hash in $STATE/api/origins.json. Pairing an origin again rotates its token. --list shows registrations without tokens; --revoke removes one.
+
+```
+Usage: sidecar api pair --origin URL | --list | --revoke URL [--json]
+```
+
+**Options:**
+
+- `--origin URL`: Pair this origin (scheme://host[:port])
+- `--list`: List paired origins
+- `--revoke URL`: Revoke a paired origin
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: success
+- `1`: no server running or the server refused
+- `2`: usage error
+
+**Examples:**
+
+```bash
+sidecar api pair --origin http://localhost:5173
+sidecar api pair --list --json
+sidecar api pair --revoke http://localhost:5173
+```
+
+### `sidecar api serve`
+
+Serve the UI API on this machine
+
+Run the UI API server in the foreground until interrupted. It listens on a Unix socket in the state directory (local agents and the CLI, no auth), on 127.0.0.1 for browsers (paired with `sidecar api open` or `sidecar api pair`), and with --tailnet on a second Unix socket for `tailscale serve`, trusting only allowed tailnet logins (config api.tailnetLogins, default the node owner). It records itself in $STATE/api/endpoint.json and refuses to start while another server owns the same state tree. It never starts or stops tmux. Each terminal WebSocket is one mobile protocol v0 stream, served exactly as `sidecar mobile serve --stdio` serves stdin. --tailnet prints the `tailscale serve` command to run; it never changes Tailscale configuration. --tailnet-port N serves the tailnet listener on a dedicated loopback port instead, for a tailscaled that cannot open a 0600 user socket. --json writes the endpoint object as one line once every listener is bound.
+
+```
+Usage: sidecar api serve [--port N] [--ui DIR] [--tailnet] [--tailnet-port N] [--json]
+```
+
+**Options:**
+
+- `--port N`: Browser listener port on 127.0.0.1 (default 7861; 0 picks a free port)
+- `--ui DIR`: Serve a built UI from DIR, with index.html as the fallback for app routes
+- `--tailnet`: Also serve the tailnet listener for tailscale serve
+- `--tailnet-port N`: Serve the tailnet listener on this loopback port instead of a Unix socket
+- `--json`: Write the endpoint object as one JSON line once listening
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: stopped normally
+- `1`: could not start, or a listener failed
+- `2`: usage error
+
+**Examples:**
+
+```bash
+sidecar api serve
+sidecar api serve --ui ~/code/sidecar-ui/apps/sidecar-ui/build
+sidecar api serve --tailnet
+```
+
+### `sidecar api status`
+
+Report the running UI API server
+
+Read the status route over the local socket: listeners, connected clients, and open terminal attachments with whether each holds control. Exits 1 when no server is running.
+
+```
+Usage: sidecar api status [--json]
+```
+
+**Options:**
+
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: success
+- `1`: no server running
+- `2`: usage error
+
+**Examples:**
+
+```bash
+sidecar api status
+sidecar api status --json
+```
+
 ## `sidecar content`
 
 Read-only content and tree contract a viewing Sidecar invokes on a host
