@@ -5662,6 +5662,15 @@
             }
           },
           {
+            "description": "Optional durable workspace ID belonging to this project. Omission selects the configured project root; layouts are isolated per credential and canonical workspace root, matching viewer presence and relay.",
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "maxLength": 4096,
+              "type": "string"
+            }
+          },
+          {
             "in": "header",
             "name": "If-None-Match",
             "required": false,
@@ -5736,6 +5745,15 @@
             }
           },
           {
+            "description": "Optional durable workspace ID belonging to this project. Omission selects the configured project root; layouts are isolated per credential and canonical workspace root, matching viewer presence and relay.",
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "maxLength": 4096,
+              "type": "string"
+            }
+          },
+          {
             "in": "header",
             "name": "If-None-Match",
             "required": false,
@@ -5802,6 +5820,15 @@
             "name": "project",
             "required": true,
             "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional durable workspace ID belonging to this project. Omission selects the configured project root; layouts are isolated per credential and canonical workspace root, matching viewer presence and relay.",
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "maxLength": 4096,
               "type": "string"
             }
           },

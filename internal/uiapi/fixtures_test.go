@@ -61,6 +61,25 @@ func TestUIAPIFixtureCorpus(t *testing.T) {
 		"error.json":         ErrorBody{Error: ErrorDetail{Code: CodeUnauthenticated, Message: "Pair this browser with sidecar api open."}},
 		"pairing.json":       []any{map[string]any{"method": "POST", "path": "/api/v0/pairing/codes", "listener": "local", "request": PairingCodeRequest{Next: "/s/fixture"}, "response": PairingCode{Code: "synthetic-code", URL: "http://127.0.0.1:7861/pair#code=synthetic-code&next=%2Fs%2Ffixture", ExpiresAt: now.Add(time.Minute)}}, map[string]any{"method": "POST", "path": "/api/v0/pairing/exchange", "listener": "browser", "origin": "http://127.0.0.1:7861", "request": PairingExchangeRequest{Code: "synthetic-code", Next: "/s/fixture", PublicKey: fixtureBrowserPublicKey()}, "response": PairingExchange{RegistrationID: browserRegistrationID("http://127.0.0.1:7861", fixtureBrowserPublicKey()), Token: "synthetic-memory-token", ExpiresAt: now.Add(browserBearerTTL), Next: "/s/fixture"}}},
 	}
+	// The same layout document is read/written at the scope carried by presence
+	// and the relay proposal. These examples are synthetic, not live authority.
+	workspace := "/workspace/fixture:worktree:/workspace/feature"
+	exchange := values["viewer-exchange.json"].([]any)
+	worktreeExchange := append([]any(nil), exchange...)
+	presence := worktreeExchange[2].(ViewerPresenceRequest)
+	presence.Workspace = workspace
+	worktreeExchange[2] = presence
+	proposal := worktreeExchange[4].(EventMessage)
+	uiRequest := *proposal.UIRequest
+	uiRequest.Workspace = workspace
+	uiRequest.Request.Origin.WorkDir = "/workspace/feature"
+	proposal.UIRequest = &uiRequest
+	worktreeExchange[4] = proposal
+	values["viewer-worktree-exchange.json"] = worktreeExchange
+	values["layout-workspace-exchange.json"] = []any{
+		map[string]any{"method": "GET", "path": "/api/v0/projects/fixture-project/layout", "query": map[string]string{"workspace": workspace}, "response": LayoutDocument{}, "etag": `"synthetic-empty-layout"`},
+		map[string]any{"method": "PUT", "path": "/api/v0/projects/fixture-project/layout", "query": map[string]string{"workspace": workspace}, "if_match": `"synthetic-empty-layout"`, "request": uiRequest.Document, "response": uiRequest.Document, "etag": `"synthetic-worktree-layout"`},
+	}
 	project := workspacewire.Project{Key: "fixture-project", Name: "Fixture project", Path: "/workspace/fixture"}
 	values["projects.json"] = workspacewire.Projects{Projects: []workspacewire.Project{project}}
 	values["workspace.json"] = workspacewire.Workspace{Project: project, Catalog: catalog, Shells: []workspacewire.ShellRecord{{Shell: "fixture-echo", Name: row.DisplayName, WorkDir: project.Path, Status: "live"}, {Shell: "fixture-forgotten", Name: "Recoverable shell", Status: "forgotten", DeletedAt: &now}}}

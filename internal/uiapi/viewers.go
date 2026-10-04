@@ -349,6 +349,11 @@ func (s *Server) handleViewerAck(w http.ResponseWriter, r *http.Request, c calle
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
+	if err := s.validateViewerWorkspace(ctx, v, plan.root); err != nil {
+		s.declineViewer(plan.event.Request, err.Error())
+		writeError(w, 409, "content_changed", err.Error())
+		return
+	}
 	host := &viewerLayoutHost{s: s, ctx: ctx, v: v}
 	if err := host.validateSaved(plan.event.Document.Layout); err != nil {
 		s.declineViewer(plan.event.Request, err.Error())

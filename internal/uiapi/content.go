@@ -260,6 +260,7 @@ func addContentSpec(paths map[string]any) {
 				params = append(params, map[string]any{"name": "workspace", "in": "query", "schema": map[string]any{"type": "string"}}, map[string]any{"name": "path", "in": "query", "schema": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "maxItems": contentservice.MaxTreePaths}, "style": "form", "explode": true})
 			}
 			if path == layoutRoute {
+				params = append(params, map[string]any{"name": "workspace", "in": "query", "schema": map[string]any{"type": "string", "maxLength": contentservice.MaxLocatorBytes}, "description": "Optional durable workspace ID belonging to this project. Omission selects the configured project root; layouts are isolated per credential and canonical workspace root, matching viewer presence and relay."})
 				header := "If-None-Match"
 				required := false
 				if op["requestBody"] != nil {

@@ -39,6 +39,9 @@ type viewerLayoutHost struct {
 }
 
 func (s *Server) planViewerRequest(ctx context.Context, v *apiScreen, req uirequest.Request) (*viewerPlan, error) {
+	if err := s.validateViewerWorkspace(ctx, v, v.ws.Root); err != nil {
+		return nil, err
+	}
 	store := viewerlayout.FileStore{Dir: filepath.Join(s.dir, "layouts")}
 	doc, etag, err := store.Get(v.caller.client, v.ws.Root)
 	if err != nil {
@@ -154,6 +157,21 @@ func (s *Server) planViewerRequest(ctx context.Context, v *apiScreen, req uirequ
 	}
 	return &viewerPlan{event: UIRequestEvent{ID: req.ID, Action: req.Action, Project: v.presence.Project, Workspace: v.presence.Workspace, Request: req, Document: next, ETag: etag, ExpiresAt: req.CreatedAt.Add(ttl)}, ack: h.ack, root: v.ws.Root, viewer: v.id}, nil
 }
+
+// Presence is a snapshot, not continuing authority over a removed or
+// retargeted workspace. Re-resolve even when the tree has only terminals and
+// therefore no content references whose validation would check membership.
+func (s *Server) validateViewerWorkspace(ctx context.Context, v *apiScreen, root string) error {
+	ws, err := s.contentBackend().LookupProject(ctx, v.presence.Project, v.presence.Workspace)
+	if err != nil {
+		return err
+	}
+	if ws.Root != root {
+		return fmt.Errorf("the viewer workspace changed; select it again before retrying")
+	}
+	return nil
+}
+
 func (h *viewerLayoutHost) restore(layout *state.PaneLayoutJSON) {
 	h.leaves = map[int]*state.PaneLayoutJSON{}
 	next := 0
