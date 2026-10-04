@@ -953,6 +953,7 @@ func (m *Model) submitCreateShell() tea.Cmd {
 	spec := workspaceops.ManagedShellSpec{
 		ShellSpec:   workspaceops.ShellSpec{WorkDir: project.Path, SessionName: session, DisplayName: display, Cols: cols, Rows: rows},
 		ProjectRoot: project.Path,
+		Allocate:    true,
 		AgentType:   agent,
 		SkipPerms:   skip,
 	}
@@ -980,8 +981,17 @@ func (m *Model) submitCreateShell() tea.Cmd {
 	if m.config != nil {
 		configured = maps.Clone(m.config.Plugins.Workspace.AgentStart)
 	}
+	if custom == "" {
+		spec.DisplayName = ""
+	}
 	return func() tea.Msg {
-		_, err := createManagedShell(spec)
+		result, err := createManagedShell(spec)
+		if result.SessionName != "" {
+			session = result.SessionName
+		}
+		if result.DisplayName != "" {
+			display = result.DisplayName
+		}
 		if err == nil && agent != "" {
 			command := resolveGlobalAgentCmd(project.Path, agent, configured, skip)
 			command = withGlobalShellNaming(command, agent)

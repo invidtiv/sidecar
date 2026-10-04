@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/marcus/sidecar/internal/config"
 )
@@ -375,6 +376,21 @@ func resolveWithBase(base, projectRoot string) (string, error) {
 	}
 
 	projectsDir := filepath.Join(base, "projects")
+	// Registration must publish the directory and metadata as one allocation.
+	// Otherwise another process sees an incomplete slot and gives the same
+	// project a second state directory, bypassing its shell manifest lock.
+	if err := os.MkdirAll(projectsDir, 0755); err != nil {
+		return "", fmt.Errorf("create project registry: %w", err)
+	}
+	lock, err := os.OpenFile(filepath.Join(projectsDir, ".lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return "", fmt.Errorf("open project registry lock: %w", err)
+	}
+	defer func() { _ = lock.Close() }()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return "", fmt.Errorf("lock project registry: %w", err)
+	}
+	defer func() { _ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) }()
 
 	// Scan existing project directories for a matching path.
 	if dir, found := findByMeta(projectsDir, projectRoot); found {

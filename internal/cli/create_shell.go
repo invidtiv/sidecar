@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -338,15 +339,8 @@ func runCreateShellWorkspace(env Env, dest openDestination, flags createCommonFl
 		workDir = proj.Path
 	}
 
-	display, session := workspaceops.ShellNames(proj.Path, existingShellDefinitions(proj))
-	if custom := strings.TrimSpace(nameFlag); custom != "" {
-		var err error
-		display, err = shellstate.NormalizeName(custom)
-		if err != nil {
-			cliErrln(env.Stderr, err)
-			return exitInputRejected
-		}
-	}
+	display, session := "", ""
+	display = strings.TrimSpace(nameFlag)
 
 	spec := workspaceops.ManagedShellSpec{
 		ShellSpec: workspaceops.ShellSpec{
@@ -355,6 +349,7 @@ func runCreateShellWorkspace(env Env, dest openDestination, flags createCommonFl
 			DisplayName: display,
 		},
 		ProjectRoot: proj.Path,
+		Allocate:    true,
 		// The durable statement of which agent family this shell is for, in the
 		// same field the TUI's Create Shell writes. It is written whether or not
 		// this run also starts the process: it is the backstop that keeps the
@@ -365,10 +360,11 @@ func runCreateShellWorkspace(env Env, dest openDestination, flags createCommonFl
 		AgentType: agentKind,
 		SkipPerms: skipPerms,
 	}
-	if _, err := (workspaceops.Service{}).CreateShell(spec); err != nil {
-		cliErrln(env.Stderr, err)
-		return 1
+	created, err := (workspaceops.Service{}).CreateShell(spec)
+	if err != nil {
+		return emitShellCreateError(env, flags.jsonOutput, err)
 	}
+	session, display = created.SessionName, created.DisplayName
 
 	var seedErr error
 	if runCmd != "" {
@@ -541,4 +537,18 @@ type createShellResult struct {
 	Acked     bool   `json:"acked"`
 	Surface   string `json:"surface,omitempty"`
 	Placement string `json:"placement"`
+}
+
+func emitShellCreateError(env Env, jsonOutput bool, err error) int {
+	var named *workspaceops.ShellCreateError
+	if errors.As(err, &named) {
+		if jsonOutput {
+			_ = json.NewEncoder(env.Stdout).Encode(map[string]any{"error": map[string]string{"code": named.Code, "message": named.Message}})
+		} else {
+			cliErrln(env.Stderr, named)
+		}
+		return exitInputRejected
+	}
+	cliErrln(env.Stderr, err)
+	return 1
 }

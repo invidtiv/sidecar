@@ -4181,3 +4181,9 @@ sidecar worktree prune-sessions --plan --json
 sidecar worktree prune-sessions --project riversandroads --yes
 ```
 
+
+## Concurrent shell creation
+
+Distinct valid `sidecar create shell --project PROJECT --tab` requests can run concurrently across CLI, TUI, API, and agent processes. The shared core allocates and records each new identity under the shell manifest lock. Its returned session is authoritative; generated numbers may skip retained restore identities or names occupied by another project. Fresh creates never adopt a running session. Duplicate explicit display names refuse with `shell_name_in_use`; choose another name. Other create refusals are `shell_name_invalid`, `shell_create_failed`, and `shell_state`, with actionable messages. These refusals exit 5 and `--json` prints `{ "error": { "code": "…", "message": "…" } }`.
+
+Run `./scripts/concurrent-shell-create-proof.sh` to build and prove eight independent concurrent creates on ephemeral state and a private tmux server. It is bounded to 120 seconds and cleans up its own server and files.

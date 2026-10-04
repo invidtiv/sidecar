@@ -137,7 +137,11 @@ func NewSession(args ...string) error {
 	if err := prepareServer(); err != nil {
 		return err
 	}
-	return exec.Command("tmux", args...).Run()
+	output, err := exec.Command("tmux", args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("tmux new-session: %s: %w", strings.TrimSpace(string(output)), err)
+	}
+	return nil
 }
 
 // SetSessionEnv sets one variable in a tmux session's environment. Panes

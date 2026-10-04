@@ -968,3 +968,45 @@ func TestCreateShellRefusesAnUnknownAgentType(t *testing.T) {
 		t.Fatalf("a refused agent type still created a shell: %+v", listed)
 	}
 }
+
+func TestCreateShellNamedRefusalsKeepWinnerAndJSONContract(t *testing.T) {
+	_, stateDir := setupIsolatedCLI(t)
+	root := t.TempDir()
+	writeProjectMeta(t, stateDir, "allocation-refusals", root)
+	var out, errOut bytes.Buffer
+	args := []string{"create", "shell", "--project", root, "--tab", "--name", "Winner", "--wait", "0", "--json"}
+	handled, code := Run(args, &out, &errOut)
+	if !handled || code != 0 {
+		t.Fatalf("create winner: %d %s %s", code, out.String(), errOut.String())
+	}
+	var winner createShellResult
+	if err := json.Unmarshal(out.Bytes(), &winner); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = exec.Command("tmux", "kill-session", "-t", "="+winner.Shell.Session).Run() })
+	for _, tt := range []struct{ name, want string }{{"Winner", "shell_name_in_use"}, {strings.Repeat("x", shellstate.MaxNameBytes+1), "shell_name_invalid"}} {
+		out.Reset()
+		errOut.Reset()
+		args[6] = tt.name
+		handled, code = Run(args, &out, &errOut)
+		if !handled || code != exitInputRejected {
+			t.Fatalf("refusal: %d %s %s", code, out.String(), errOut.String())
+		}
+		var response struct {
+			Error struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(out.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		if response.Error.Code != tt.want || response.Error.Message == "" {
+			t.Fatalf("unnamed refusal: %s", out.String())
+		}
+	}
+	defs, err := shellstate.ListAtPath(filepath.Join(stateDir, "projects", "allocation-refusals", "shells.json"))
+	if err != nil || len(defs) != 1 || defs[0].TmuxName != winner.Shell.Session || !workspaceops.SessionExists(winner.Shell.Session) {
+		t.Fatalf("winner changed: %+v %v", defs, err)
+	}
+}
