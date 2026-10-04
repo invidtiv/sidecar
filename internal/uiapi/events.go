@@ -3,6 +3,7 @@ package uiapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -383,9 +384,13 @@ func (s *Server) runEvents(conn *websocket.Conn, client *trackedClient, c caller
 		return conn.Write(writeCtx, websocket.MessageText, data)
 	}
 	pending := newEventPending()
-	stop, err := s.startContentWatches(ctx, refs, pending)
+	stop, err := s.startContentWatches(ctx, c, refs, pending)
 	if err != nil {
-		_ = conn.Close(CloseProtocolViolation, closeReason(err.Error()))
+		code := CloseProtocolViolation
+		if errors.Is(err, errWatchBudget) {
+			code = CloseTooManyTerminals
+		}
+		_ = conn.Close(code, closeReason(err.Error()))
 		return
 	}
 	defer stop()

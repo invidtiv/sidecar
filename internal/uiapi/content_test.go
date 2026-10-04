@@ -384,3 +384,53 @@ func TestContentDiffAndEncodedPreviewBounds(t *testing.T) {
 		t.Fatal("missing truncation")
 	}
 }
+
+// Each open pane owns a watcher, and on macOS kqueue spends a descriptor on
+// every entry of every watched directory. A per-socket union of directories
+// let one credential register 16 streams x 32 panes of the same directory, so
+// the bound is on registrations, per credential, across all of its streams.
+func TestContentWatchBudgetIsPerClientAcrossStreams(t *testing.T) {
+	h, _ := contentHarness(t)
+	header := http.Header{"Authorization": {"Bearer " + h.pairOrigin("http://watch.example")}}
+	full := url.Values{}
+	for range 32 {
+		full.Add("content", `{"project":"content","kind":"tree"}`)
+	}
+	one := "?" + url.Values{"content": {`{"project":"content","kind":"tree"}`}}.Encode()
+	first := dialEvents(t, h, "?"+full.Encode(), header, false)
+	if e := readEvent(t, first); e.Type != "hello" {
+		t.Fatalf("first stream: %+v", e)
+	}
+	second := dialEvents(t, h, "?"+full.Encode(), header, false)
+	if e := readEvent(t, second); e.Type != "hello" {
+		t.Fatalf("second stream: %+v", e)
+	}
+	refused := dialEvents(t, h, one, header, false)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	_, _, err := refused.Read(ctx)
+	cancel()
+	if websocket.CloseStatus(err) != CloseTooManyTerminals {
+		t.Fatalf("watch budget not enforced across streams: %v", err)
+	}
+	// Closing a stream gives its registrations back.
+	_ = first.Close(websocket.StatusNormalClosure, "")
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		conn := dialEvents(t, h, one, header, false)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_, data, err := conn.Read(ctx)
+		cancel()
+		_ = conn.CloseNow()
+		if err == nil {
+			var e EventMessage
+			if json.Unmarshal(data, &e) != nil || e.Type != "hello" {
+				t.Fatalf("after release: %s", data)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("closed stream never released its watches: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}

@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/marcus/sidecar/internal/contentservice"
@@ -72,14 +74,72 @@ func refParams(ref ContentRef) contentservice.ReadParams {
 	return p
 }
 
+// maxContentWatchDirsPerClient bounds the directory registrations one
+// credential holds across all of its events streams. Each open pane owns its
+// own watcher, and on macOS kqueue spends a descriptor on every entry of every
+// watched directory, so the bound counts registrations rather than a union of
+// paths, and it is per client rather than per socket. Local callers are trusted
+// like the tmux socket and are not limited, as with terminals.
+const maxContentWatchDirsPerClient = 64
+
+// errWatchBudget refuses a subscription that would exceed the client's bound.
+var errWatchBudget = errors.New("open content exceeds this client's 64 watched directories across its events streams; narrow the visible panes")
+
+type watchBudget struct {
+	mu   sync.Mutex
+	used map[string]int
+}
+
+// reserve claims n more registrations for client, or refuses all of them.
+func (b *watchBudget) reserve(c caller, n int) bool {
+	if c.listener == ListenerLocal || n <= 0 {
+		return true
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.used[c.client]+n > maxContentWatchDirsPerClient {
+		return false
+	}
+	if b.used == nil {
+		b.used = make(map[string]int)
+	}
+	b.used[c.client] += n
+	return true
+}
+
+func (b *watchBudget) release(c caller, n int) {
+	if c.listener == ListenerLocal || n <= 0 {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.used[c.client] -= n
+	if b.used[c.client] <= 0 {
+		delete(b.used, c.client)
+	}
+}
+
+// watchRegistrations is how many directories livewatch registers for targets:
+// a directory target registers itself and a file target its parent.
+func watchRegistrations(targets []livewatch.Target) int {
+	dirs := map[string]bool{}
+	for _, target := range targets {
+		path := filepath.Clean(target.Path)
+		if !target.Dir {
+			path = filepath.Dir(path)
+		}
+		dirs[path] = true
+	}
+	return len(dirs)
+}
+
 // startContentWatches validates before hello, and owns no watches after the
 // socket closes. Each pending content batch coalesces into at most 32 refs.
-func (s *Server) startContentWatches(ctx context.Context, refs []ContentRef, pending *eventPending) (func(), error) {
+func (s *Server) startContentWatches(ctx context.Context, c caller, refs []ContentRef, pending *eventPending) (func(), error) {
 	source, ok := s.contentBackend().(ContentWatchSource)
 	if !ok && len(refs) != 0 {
 		return nil, fmt.Errorf("content backend does not support live watches")
 	}
-	dirs := map[string]bool{}
 	var watchers []*livewatch.PathWatcher
 	var stops []chan struct{}
 	stop := func() {
@@ -96,19 +156,14 @@ func (s *Server) startContentWatches(ctx context.Context, refs []ContentRef, pen
 			stop()
 			return nil, err
 		}
-		for _, target := range targets {
-			path := target.Path
-			if !target.Dir {
-				path = filepath.Dir(path)
-			}
-			dirs[path] = true
-		}
-		if len(dirs) > 64 {
+		held := watchRegistrations(targets)
+		if !s.contentWatches.reserve(c, held) {
 			stop()
-			return nil, fmt.Errorf("open content exceeds 64 watched directories; narrow the visible panes")
+			return nil, errWatchBudget
 		}
 		watcher, err := livewatch.NewPathWatcher(livewatch.Config{})
 		if err != nil {
+			s.contentWatches.release(c, held)
 			stop()
 			return nil, err
 		}
@@ -116,10 +171,10 @@ func (s *Server) startContentWatches(ctx context.Context, refs []ContentRef, pen
 		watchers = append(watchers, watcher)
 		done := make(chan struct{})
 		stops = append(stops, done)
-		go func(ref ContentRef, watcher *livewatch.PathWatcher, done chan struct{}) {
+		go func(ref ContentRef, watcher *livewatch.PathWatcher, done chan struct{}, held int) {
 			defer close(done)
+			defer func() { s.contentWatches.release(c, held) }()
 			currentTargets := targets
-			var watchErr error
 			reconcile := time.NewTicker(30 * time.Second)
 			defer reconcile.Stop()
 			for {
@@ -132,11 +187,26 @@ func (s *Server) startContentWatches(ctx context.Context, refs []ContentRef, pen
 					}
 					pending.put(EventMessage{Type: "content", Content: &ContentEvent{Resources: []ContentRef{ref}}})
 					// Git changes may alter the set of files in a working diff.
-					currentTargets, watchErr = source.WatchProject(ctx, ref.Project, ref.Workspace, refParams(ref))
+					next, watchErr := source.WatchProject(ctx, ref.Project, ref.Workspace, refParams(ref))
+					if watchErr == nil {
+						want := watchRegistrations(next)
+						if want > held && !s.contentWatches.reserve(c, want-held) {
+							watchErr = errWatchBudget
+						} else if want < held {
+							s.contentWatches.release(c, held-want)
+						}
+						if watchErr == nil {
+							held = want
+						}
+					}
 					if watchErr != nil {
+						currentTargets = nil
 						watcher.Watch()
+						s.contentWatches.release(c, held)
+						held = 0
 						pending.put(EventMessage{Type: "error", Error: &ErrorDetail{Code: "rejected", Message: watchErr.Error()}})
 					} else {
+						currentTargets = next
 						watcher.Watch(currentTargets...)
 					}
 				case <-reconcile.C:
@@ -144,7 +214,7 @@ func (s *Server) startContentWatches(ctx context.Context, refs []ContentRef, pen
 					watcher.Watch(currentTargets...)
 				}
 			}
-		}(ref, watcher, done)
+		}(ref, watcher, done, held)
 	}
 	return stop, nil
 }

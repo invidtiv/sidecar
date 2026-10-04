@@ -118,6 +118,8 @@ type Server struct {
 	eventOnce     sync.Once
 	eventErr      error
 	catalogEvents eventSignals
+	// contentWatches bounds live content registrations per credential.
+	contentWatches watchBudget
 }
 
 // ListenerInfo describes one bound listener in status.
