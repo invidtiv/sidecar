@@ -53,9 +53,10 @@ The status values are `queued`, `running`, `review`, `fixing`, `merged` and `blo
 | U1-b schemas, spec, fixtures | td-5ae805 | sidecar | Codex | U0-a | running (Codex, ~/code/sidecar-u1b-spec, branch u1b-spec) |
 | U1-c service install | td-d7869b | sidecar | Codex, reviewed by Codex | U0-a | merged |
 | U1-d presence and v1 frames | td-713745 | sidecar | Codex | td-552e24 merged | running (Codex, ~/code/sidecar-u1d-presence, branch u1d-presence) |
-| U1-e web app shell and Sessions | td-57a73e | sidecar-ui | Codex | U0-b | running (Codex, ~/code/sidecar-ui-u1e-app, branch u1e-app) |
+| U1-e web app shell and Sessions | td-57a73e | sidecar-ui | Codex | U0-b | running (Codex, ~/code/sidecar-ui-u1e-app, branch u1e-app; restarted after a lost prompt, td-11138b) |
 | U1-f SDK adopts v1 | td-820df7 | sidecar-ui | Codex | U1-a, U1-d | queued |
 | U1-g iOS adopts presence and events | td-fde8cf | sidecar-mobile | Codex | U1-a, U1-d | queued |
+| U1-i persist browser sessions | td-165353 | sidecar | Codex | U1-a, U1-b merged (both touch internal/uiapi) | queued |
 | U1-h security review and three-viewer proof | td-295605 | all | Claude, then Codex | U1-a, U1-d, U1-f | queued |
 | U2-a core extraction | td-c709a9 | sidecar | Codex | U0-a | running (Codex, ~/code/sidecar-u2a-core, branch u2a-core) |
 
@@ -194,3 +195,4 @@ Each one is a td issue with the exact command and output. Fixes run as their own
 | td-303037, td-2a7c8a | lint lock held by a parallel lane; shell-readiness flakes under concurrent full suites (folded into the friction lane) | open |
 | (sidecar) | `sidecar create worktree --json` printed two JSON documents once, breaking a strict parser | to verify |
 | td-e930bb | Friction lane (Codex, ~/code/sidecar-friction-1) covering td-0fd8fb, td-0502f3, td-836fca and the comms identity collision | running |
+| td-11138b | `sidecar agent prompt` reported `working`, but the Codex session later showed no conversation and the lane never ran. Orchestrator now confirms every lane on screen after prompting | open |
