@@ -179,7 +179,19 @@ The CLI and HTTP catalog remain `mobileproto.CatalogSnapshot`. Status remains `u
 
 `testdata/ui-api/v0/` contains synthetic HTTP hello, sessions, status, error, pairing and terminal examples with `SHA256SUMS`. Tokens, handles, paths and terminal text are synthetic. The terminal transcript is generated through the real mobile service with handles normalized. SDK tests can read the corpus directly. The same `./scripts/update-ui-api-contract.sh` command regenerates the real-Service transcript before the resources and checksums, then verifies them. Every JSON/JSONL corpus file is included in the manifest, including stream transcripts added by later lanes.
 
-Run `sidecar api serve --fixtures testdata/ui-api/v0 --port 0 --ui DIR` for UI development without tmux. `sessions.json` must contain an unfiltered Project-order catalog; queries use the real shared sorting/filtering/grouping functions. Ready rows use the deterministic synthetic identity issued by `mobile.FixtureIdentity`. `status.json` supplies recorded metadata, while listener addresses and connected clients/attachments describe the actual running fixture server. Pairing codes, tokens, tickets and browser sessions are always issued by the real server; fixture examples are never usable credentials. All real listener authentication, Host/Origin guards, mutation guards, limits, static routing and shutdown behavior apply.
+Fixture development requires `SIDECAR_ISOLATED_STATE=1` and temporary state/config paths. Startup refuses paths inside the real Sidecar state/config trees, including symlink aliases and API authority files linked into those trees, before it reads config or writes discovery. For an automatically cleaned proof run `./scripts/ui-api-fixture-proof.sh`. To develop a UI against a foreground fixture server:
+
+```sh
+fixture_root=$(mktemp -d /tmp/sc-fixtures.XXXXXX)
+mkdir -p "$fixture_root/state" "$fixture_root/tmux"
+printf '{}\n' > "$fixture_root/config.json"
+unset TMUX TMUX_PANE
+SIDECAR_ISOLATED_STATE=1 XDG_STATE_HOME="$fixture_root/state" TMUX_TMPDIR="$fixture_root/tmux" sidecar -config "$fixture_root/config.json" api serve --fixtures testdata/ui-api/v0 --port 0 --ui DIR
+# After stopping the server, remove only this temporary tree.
+rm -rf "$fixture_root"
+```
+
+`sessions.json` must contain an unfiltered Project-order catalog; queries use the real shared sorting/filtering/grouping functions. Ready rows use the deterministic synthetic identity issued by `mobile.FixtureIdentity`. `status.json` supplies recorded metadata, while listener addresses and connected clients/attachments describe the actual running fixture server. Pairing codes, tokens, tickets and browser sessions are always issued by the real server; fixture examples are never usable credentials. All real listener authentication, Host/Origin guards, mutation guards, limits, static routing and shutdown behavior apply.
 
 Terminals run the real mobile protocol service against a capture/geometry adapter that echoes input bytes as normalized frames. Each stream is independent, begins with an 80×24 grid and supports real request validation, control, input, resize/reset ordering, heartbeat, release and reconnect. It launches no shell and executes no commands. History is explicitly unavailable in this first echo adapter; it never falls through to tmux. Fixture mode is opt-in and does not replace the real backend unless `--fixtures DIR` is supplied.
 
