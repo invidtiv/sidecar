@@ -949,12 +949,13 @@ Serve the UI API on this machine
 Run the UI API server in the foreground until interrupted. It listens on a Unix socket in the state directory (local agents and the CLI, no auth), on 127.0.0.1 for browsers (paired with `sidecar api open` or `sidecar api pair`), and with --tailnet on a second Unix socket for `tailscale serve`, trusting only allowed tailnet logins (config api.tailnetLogins, default the node owner). It records itself in $STATE/api/endpoint.json and refuses to start while another server owns the same state tree. It never starts or stops tmux. Each terminal WebSocket is one mobile protocol v0 stream, served exactly as `sidecar mobile serve --stdio` serves stdin. --tailnet prints the `tailscale serve` command to run; it never changes Tailscale configuration. --tailnet-port N serves the tailnet listener on a dedicated loopback port instead, for a tailscaled that cannot open a 0600 user socket; any local process or OS user can reach that port and claim an allowed tailnet login, so use it only on a machine where every local user and process is already trusted. --json writes the endpoint object as one line once every listener is bound.
 
 ```
-Usage: sidecar api serve [--port N] [--ui DIR] [--tailnet] [--tailnet-port N] [--json]
+Usage: sidecar api serve [--port N] [--ui DIR] [--fixtures DIR] [--tailnet] [--tailnet-port N] [--json]
 ```
 
 **Options:**
 
 - `--port N`: Browser listener port on 127.0.0.1 (default 7861; 0 picks a free port)
+- `--fixtures DIR`: Serve recorded Sessions/status and deterministic echo terminals without tmux
 - `--ui DIR`: Serve a built UI from DIR, with index.html as the fallback for app routes
 - `--tailnet`: Also serve the tailnet listener for tailscale serve
 - `--tailnet-port N`: Serve the tailnet listener on this loopback port instead of a Unix socket
@@ -1001,6 +1002,33 @@ Usage: sidecar api status [--json]
 ```bash
 sidecar api status
 sidecar api status --json
+```
+
+### `sidecar api spec`
+
+Print the generated OpenAPI 3.1 and stream schemas
+
+Print the complete OpenAPI 3.1 JSON document generated from the HTTP and terminal Go wire types. No server or tmux is needed. Both forms emit JSON; --json is accepted for consistency with other API commands.
+
+```
+Usage: sidecar api spec [--json]
+```
+
+**Options:**
+
+- `--json`: Write the OpenAPI JSON document
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: success
+- `1`: could not generate or write the spec
+- `2`: usage error
+
+**Examples:**
+
+```bash
+sidecar api spec --json
 ```
 
 ## `sidecar content`

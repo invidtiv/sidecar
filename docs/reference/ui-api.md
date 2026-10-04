@@ -159,15 +159,29 @@ v0 inherits the mobile service's bounded outbound queue, so a peer that stops re
 
 | Command | Does |
 | --- | --- |
-| `sidecar api serve [--port N] [--ui DIR] [--tailnet] [--tailnet-port N] [--json]` | Runs the server in the foreground until SIGINT or SIGTERM. `--json` writes the endpoint object as one line once every listener is bound. |
+| `sidecar api serve [--port N] [--ui DIR] [--fixtures DIR] [--tailnet] [--tailnet-port N] [--json]` | Runs the server in the foreground until SIGINT or SIGTERM. `--json` writes the endpoint object as one line once every listener is bound. |
 | `sidecar api open [--print] [--path P]` | Pairs this machine's browser and opens the UI, or prints the `/pair#code=…` URL. |
 | `sidecar api pair --origin URL` / `--list` / `--revoke URL` | Manages paired origins. `--json` gives structured output. |
 | `sidecar api status [--json]` | Reads the status route over the Local socket. Exits non-zero with a clear message when no server is running. |
 
-`sidecar api spec` and `sidecar api service install|uninstall|status` arrive in U1.
+`sidecar api spec [--json]` prints the OpenAPI 3.1 document without a running server. Both forms print JSON. `sidecar api service install|uninstall|status` arrives in U1.
+
+## Schemas and fixture development
+
+[ui-api.openapi.json](ui-api.openapi.json) is generated from the Go HTTP wire types and `mobileproto.Request`/`Response`. Components use JSON Schema 2020-12; the terminal WebSocket is described under `x-streams`. The generator uses `invopop/jsonschema` v0.13.0 because it reflects the same JSON tags used by `encoding/json` and supports the OpenAPI 3.1 schema dialect. Schema objects describe serialization; operation-specific field requirements, bounds, and ordering remain in this reference and [mobile-protocol.md](mobile-protocol.md). The route/method inventory and all schema references are checked, and a test fails if the committed document is stale. Regenerate with `UPDATE_UI_API_SPEC=1 go test ./internal/uiapi -run TestSpecMatchesCommittedDocumentAndRoutes`.
+
+The CLI and HTTP catalog remain `mobileproto.CatalogSnapshot`. Status remains `uiapi.Status`; origin registration/list/revocation use the same named types on the CLI and HTTP. This change introduces no JSON shape changes. HTTP hello and pairing request bodies now also have named Go wire types instead of anonymous maps/structs.
+
+`testdata/ui-api/v0/` contains synthetic HTTP hello, sessions, status, error, pairing and terminal examples with `SHA256SUMS`. Tokens, handles, paths and terminal text are synthetic. The terminal transcript is generated through the real mobile service with handles normalized. SDK tests can read the corpus directly. Regenerate the terminal transcript first with `UPDATE_UI_API_FIXTURES=1 go test ./internal/uiapi -run TestFixtureServerTerminalUsesRealOrderingAndGuards`, then regenerate the resources and checksums with `UPDATE_UI_API_FIXTURES=1 go test ./internal/uiapi -run TestUIAPIFixtureCorpus`.
+
+Run `sidecar api serve --fixtures testdata/ui-api/v0 --port 0 --ui DIR` for UI development without tmux. `sessions.json` must contain an unfiltered Project-order catalog; queries use the real shared sorting/filtering/grouping functions. Ready rows use the deterministic synthetic identity issued by `mobile.FixtureIdentity`. `status.json` supplies recorded metadata, while listener addresses and connected clients/attachments describe the actual running fixture server. Pairing codes, tokens, tickets and browser sessions are always issued by the real server; fixture examples are never usable credentials. All real listener authentication, Host/Origin guards, mutation guards, limits, static routing and shutdown behavior apply.
+
+Terminals run the real mobile protocol service against a capture/geometry adapter that echoes input bytes as normalized frames. Each stream is independent, begins with an 80×24 grid and supports real request validation, control, input, resize/reset ordering, heartbeat, release and reconnect. It launches no shell and executes no commands. History is explicitly unavailable in this first echo adapter; it never falls through to tmux. Fixture mode is opt-in and does not replace the real backend unless `--fixtures DIR` is supplied.
 
 ## Proofs
 
 Live proofs follow the `scripts/tmux-drive.sh` isolation rules: a private tmux socket, `unset TMUX TMUX_PANE`, an isolated `XDG_STATE_HOME`, a `-config` temp path, and `SIDECAR_ISOLATED_STATE=1`. The Unix sockets and `endpoint.json` live under the isolated state tree, so a proof can never reach the user's real server. Unix socket paths are limited to 103 bytes, so a proof keeps its state tree short, under `/tmp`.
 
 `scripts/ui-api-proof.sh` is the v0 proof. It builds a temporary binary, creates one managed shell on a private tmux server, runs `sidecar api serve`, and checks the Local routes with `curl --unix-socket`, the Browser guards, `sidecar api open` pairing, origin pairing with a ticket, and one terminal round trip over the WebSocket through `internal/tools/uiapiproof`. `TestAPITerminalRoundTripAgainstLocalOwner` in `internal/cli` covers the same terminal sequence in process.
+
+`scripts/ui-api-fixture-proof.sh` proves the real CLI spec, fixture server, catalog/status, origin pairing/ticket and terminal echo journey with isolated state/config, a private tmux namespace, port 0, a bounded client and a failing tmux shim. It checks that no tmux command ran and that shutdown removed discovery/socket files.

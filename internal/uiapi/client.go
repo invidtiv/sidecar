@@ -99,14 +99,14 @@ func (c *LocalClient) Status(ctx context.Context) (Status, error) {
 // PairingCode issues a one-time code for the same-origin UI.
 func (c *LocalClient) PairingCode(ctx context.Context, next string) (PairingCode, error) {
 	var code PairingCode
-	err := c.Do(ctx, http.MethodPost, "/api/v0/pairing/codes", map[string]string{"next": next}, &code)
+	err := c.Do(ctx, http.MethodPost, "/api/v0/pairing/codes", PairingCodeRequest{Next: next}, &code)
 	return code, err
 }
 
 // PairOrigin registers origin and returns its one-time-visible token.
 func (c *LocalClient) PairOrigin(ctx context.Context, origin string) (OriginRegistration, error) {
 	var registration OriginRegistration
-	err := c.Do(ctx, http.MethodPost, "/api/v0/origins", map[string]any{"origin": origin}, &registration)
+	err := c.Do(ctx, http.MethodPost, "/api/v0/origins", OriginRequest{Origin: origin}, &registration)
 	return registration, err
 }
 

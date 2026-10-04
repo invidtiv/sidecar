@@ -45,16 +45,22 @@ type TargetRevalidator func(context.Context, ResolvedTarget) (ResolvedTarget, er
 type HistoryCapturer func(target string, start, end, maxBytes int) (tty.CaptureRange, error)
 type OwnerConfigGenerationProvider func(context.Context) (string, error)
 
+// CatalogQuerier projects already-authorized resource snapshots, for adapters
+// that expose the same catalog through HTTP and the terminal protocol.
+type CatalogQuerier func(context.Context, mobileproto.CatalogQuery) (mobileproto.CatalogSnapshot, error)
+
 type Config struct {
 	Input                                     io.Reader
 	Output                                    io.Writer
 	Resolver                                  Resolver
 	Revalidator                               TargetRevalidator
 	Catalog                                   CatalogProvider
+	CatalogQuery                              CatalogQuerier
 	HistoryCapturer                           HistoryCapturer
 	OwnerConfigGenerationProvider             OwnerConfigGenerationProvider
 	HubID, OwnerHostID, OwnerConfigGeneration string
 	Manager                                   *tty.ControlManager
+	Terminal                                  TerminalBackend
 }
 
 type Service struct {
@@ -63,9 +69,11 @@ type Service struct {
 	resolve                                        Resolver
 	revalidateTarget                               TargetRevalidator
 	catalog                                        CatalogProvider
+	catalogQuery                                   CatalogQuerier
 	historyCapture                                 HistoryCapturer
 	ownerConfigGeneration                          OwnerConfigGenerationProvider
 	manager                                        *tty.ControlManager
+	terminalBackend                                TerminalBackend
 	instance, hubID, ownerHostID, configGeneration string
 	mu                                             sync.Mutex
 	targets                                        map[string]targetState
@@ -159,10 +167,10 @@ func New(config Config) (*Service, error) {
 		historyCapture = tty.CapturePaneRangeBounded
 	}
 	s := &Service{
-		in: config.Input, out: newSafeEncoder(config.Output), resolve: config.Resolver, revalidateTarget: config.Revalidator, catalog: config.Catalog,
+		in: config.Input, out: newSafeEncoder(config.Output), resolve: config.Resolver, revalidateTarget: config.Revalidator, catalog: config.Catalog, catalogQuery: config.CatalogQuery,
 		historyCapture:        historyCapture,
 		ownerConfigGeneration: config.OwnerConfigGenerationProvider,
-		manager:               config.Manager, instance: instance, hubID: config.HubID,
+		manager:               config.Manager, terminalBackend: config.Terminal, instance: instance, hubID: config.HubID,
 		ownerHostID: config.OwnerHostID, configGeneration: config.OwnerConfigGeneration,
 		targets: make(map[string]targetState), attachments: make(map[string]*attachment),
 		seenRequests: make(map[string]struct{}),
@@ -340,7 +348,12 @@ func (s *Service) sessions(ctx context.Context, request mobileproto.Request) {
 		s.resolveFailure(request.RequestID, err)
 		return
 	}
-	snapshot, err := QueryCatalog(ctx, s.catalog, s.resolve, query, CatalogIdentity{HubID: s.hubID, OwnerHostID: s.ownerHostID, OwnerConfigGeneration: configGeneration})
+	var snapshot mobileproto.CatalogSnapshot
+	if s.catalogQuery != nil {
+		snapshot, err = s.catalogQuery(ctx, query)
+	} else {
+		snapshot, err = QueryCatalog(ctx, s.catalog, s.resolve, query, CatalogIdentity{HubID: s.hubID, OwnerHostID: s.ownerHostID, OwnerConfigGeneration: configGeneration})
+	}
 	if err != nil {
 		s.resolveFailure(request.RequestID, err)
 		return
@@ -685,7 +698,11 @@ func (s *Service) open(ctx context.Context, request mobileproto.Request, reconne
 		return
 	}
 	a := newAttachment(s, handle, request.AttachmentID, generation, target)
-	sub, err := s.manager.Subscribe(tty.ControlRequest{Session: target.resolved.Session, Pane: target.resolved.Pane, Visible: true, Focused: true, Scrollback: 1,
+	subscribe := func(r tty.ControlRequest) (CaptureSubscription, error) { return s.manager.Subscribe(r) }
+	if s.terminalBackend != nil {
+		subscribe = s.terminalBackend.Subscribe
+	}
+	sub, err := subscribe(tty.ControlRequest{Session: target.resolved.Session, Pane: target.resolved.Pane, Visible: true, Focused: true, Scrollback: 1,
 		FullMetadata: true, OnSnapshot: a.offerSnapshot, OnFallback: a.offerFailure})
 	if err != nil {
 		a.stopAttachment()
@@ -731,9 +748,17 @@ func (s *Service) control(ctx context.Context, request mobileproto.Request) {
 	expected := tty.HeadlessTargetIdentity{ServerPID: a.target.resolved.ServerPID, SessionID: a.target.resolved.SessionID,
 		SessionCreated: a.target.resolved.SessionCreated, Session: a.target.resolved.Session, Pane: a.target.resolved.Pane,
 		Width: a.target.resolved.Width, Height: a.target.resolved.Height, PaneCount: a.target.resolved.PaneCount}
-	geometry, err := tty.NewHeadlessGeometry(s.manager, expected, owner)
-	if err == nil {
-		err = geometry.ClaimResize(request.Columns, request.Rows)
+	var geometry LeaseGeometry
+	var err error
+	if s.terminalBackend != nil {
+		geometry, err = s.terminalBackend.ClaimGeometry(expected, owner, request.Columns, request.Rows)
+	} else {
+		var live *tty.HeadlessGeometry
+		live, err = tty.NewHeadlessGeometry(s.manager, expected, owner)
+		if err == nil {
+			err = live.ClaimResize(request.Columns, request.Rows)
+		}
+		geometry = live
 	}
 	if err != nil {
 		s.writeError(request.RequestID, mobileproto.ErrorLease, err.Error(), true)
@@ -1046,7 +1071,7 @@ type attachment struct {
 	handle, clientID                                   string
 	generation                                         uint64
 	target                                             targetState
-	subscription                                       captureSubscription
+	subscription                                       CaptureSubscription
 	ready                                              chan struct{}
 	snapshots                                          chan queuedSnapshot
 	failures                                           chan error
@@ -1056,7 +1081,7 @@ type attachment struct {
 	mu                                                 sync.Mutex
 	opMu                                               sync.Mutex
 	latest                                             tty.ControlSnapshot
-	geometry                                           leaseGeometry
+	geometry                                           LeaseGeometry
 	control                                            bool
 	operationSequence, outputSequence, resetGeneration uint64
 	firstOutputForReset                                uint64
@@ -1066,15 +1091,15 @@ type attachment struct {
 	reseedDelay time.Duration
 }
 
-// captureSubscription is the slice of tty.ControlSubscription an attachment
+// CaptureSubscription is the slice of tty.ControlSubscription an attachment
 // drives.
-type captureSubscription interface {
+type CaptureSubscription interface {
 	RequestSnapshot()
 	Close()
 }
 
-// leaseGeometry is the slice of tty.HeadlessGeometry an attachment drives.
-type leaseGeometry interface {
+// LeaseGeometry is the slice of tty.HeadlessGeometry an attachment drives.
+type LeaseGeometry interface {
 	Resize(width, height int) error
 	Heartbeat() error
 	SendLiteral(data []byte) error
@@ -1394,4 +1419,11 @@ func (a *attachment) stopAttachment() {
 		}
 		<-a.stopped
 	})
+}
+
+// TerminalBackend is the capture/geometry seam for deterministic fixture terminals.
+// The live service defaults to ControlManager and HeadlessGeometry unchanged.
+type TerminalBackend interface {
+	Subscribe(tty.ControlRequest) (CaptureSubscription, error)
+	ClaimGeometry(tty.HeadlessTargetIdentity, string, int, int) (LeaseGeometry, error)
 }

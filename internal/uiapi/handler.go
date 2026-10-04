@@ -405,7 +405,7 @@ type TicketResponse struct {
 }
 
 func (s *Server) handleTicket(w http.ResponseWriter, r *http.Request, c caller) {
-	var body struct{}
+	var body TicketRequest
 	if !decodeBody(w, r, &body) {
 		return
 	}
@@ -425,9 +425,7 @@ type PairingCode struct {
 }
 
 func (s *Server) handlePairingCode(w http.ResponseWriter, r *http.Request, _ caller) {
-	var body struct {
-		Next string `json:"next"`
-	}
+	var body PairingCodeRequest
 	if !decodeBody(w, r, &body) {
 		return
 	}
@@ -462,10 +460,7 @@ func (s *Server) handlePairingExchange(w http.ResponseWriter, r *http.Request, c
 		writeError(w, http.StatusForbidden, CodeOriginRefused, "Only this server's own pairing page may exchange a pairing code; open the link from `sidecar api open`.")
 		return
 	}
-	var body struct {
-		Code string `json:"code"`
-		Next string `json:"next"`
-	}
+	var body PairingExchangeRequest
 	if !decodeBody(w, r, &body) {
 		return
 	}
@@ -534,10 +529,7 @@ type OriginRevocation struct {
 }
 
 func (s *Server) handlePairOrigin(w http.ResponseWriter, r *http.Request, _ caller) {
-	var body struct {
-		Origin string   `json:"origin"`
-		Scopes []string `json:"scopes"`
-	}
+	var body OriginRequest
 	if !decodeBody(w, r, &body) {
 		return
 	}

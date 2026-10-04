@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "unauthenticated",
+    "message": "Pair this browser with sidecar api open."
+  }
+}
