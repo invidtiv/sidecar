@@ -508,6 +508,8 @@ With one, the prompt goes to the shell named by SIDECAR_SHELL — unless that on
 argument names a managed target, which is read as a missing prompt rather than as
 a prompt that happens to be a target's name. Empty text is a usage error too.
 
+Use -- before TARGET TEXT to send literal prompt text beginning with a dash.
+
 Nothing is written to a target that is blocked, unidentified, stale, dead, or
 occupied by a replacement process. The text goes through the same ordered,
 bracketed-paste-aware path the embedded terminal uses, and the submission key is
