@@ -104,6 +104,62 @@ func run() error {
 		}
 		return nil
 	}
+	// The filename must cross Git quoting, HTTP JSON and a selected source
+	// read unchanged. Clients never parse or reconstruct Git header names.
+	quotedName := `quoted "><img src=x>.md`
+	quotedPath := filepath.Join(*root, quotedName)
+	defer func() { _ = os.Remove(quotedPath) }()
+	if err = os.WriteFile(quotedPath, []byte("quoted base\n"), 0600); err != nil {
+		return err
+	}
+	if err = git("add", "--", quotedName); err != nil {
+		return err
+	}
+	if err = git("commit", "-qm", "Quoted path proof baseline"); err != nil {
+		return err
+	}
+	if err = os.WriteFile(quotedPath, []byte("quoted changed\n"), 0600); err != nil {
+		return err
+	}
+	data, _, code, err = request("GET", prefix+"content?kind=diff&operation=working-tree&target=wt", "", "")
+	if err != nil {
+		return err
+	}
+	var quotedDoc contentservice.ReadResult
+	if code != 200 {
+		return fmt.Errorf("quoted diff: %d %s", code, data)
+	}
+	if err = json.Unmarshal(data, &quotedDoc); err != nil {
+		return err
+	}
+	if quotedDoc.Diff == nil || quotedDoc.Diff.Snapshot == nil {
+		return errors.New("quoted diff has no snapshot")
+	}
+	var foundQuoted bool
+	for _, row := range quotedDoc.Diff.Snapshot.Files {
+		if row.Path != quotedName {
+			continue
+		}
+		foundQuoted = true
+		query := url.Values{"kind": {"file"}, "target": {row.Path}}
+		data, _, code, err = request("GET", prefix+"content?"+query.Encode(), "", "")
+		if err != nil {
+			return err
+		}
+		var source contentservice.ReadResult
+		if code != 200 {
+			return fmt.Errorf("quoted source: %d %s", code, data)
+		}
+		if err = json.Unmarshal(data, &source); err != nil {
+			return err
+		}
+		if source.Content != "quoted changed\n" {
+			return errors.New("quoted source did not round-trip")
+		}
+	}
+	if !foundQuoted {
+		return fmt.Errorf("quoted repository path absent from HTTP rows: %+v", quotedDoc.Diff.Snapshot.Files)
+	}
 	if err = os.WriteFile(largePath, []byte("base\n"), 0600); err != nil {
 		return err
 	}

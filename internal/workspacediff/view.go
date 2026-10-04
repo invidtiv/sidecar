@@ -940,19 +940,84 @@ func splitFileDiffs(diff string) []string {
 }
 
 func filePathFromDiff(chunk string) string {
+	var header, oldPath string
 	for _, line := range strings.Split(chunk, "\n") {
-		rest, ok := strings.CutPrefix(line, "diff --git ")
-		if !ok {
-			continue
+		if strings.HasPrefix(line, "@@") {
+			break // Patch text can itself look like a file marker.
 		}
-		a, b, found := strings.Cut(rest, " b/")
-		if !found {
-			return strings.TrimPrefix(rest, "a/")
+		if rest, ok := strings.CutPrefix(line, "diff --git "); ok {
+			header = rest
+		} else if rest, ok := strings.CutPrefix(line, "rename to "); ok {
+			return patchMarkerPath(rest, "")
+		} else if rest, ok := strings.CutPrefix(line, "copy to "); ok {
+			return patchMarkerPath(rest, "")
+		} else if rest, ok := strings.CutPrefix(line, "--- "); ok {
+			oldPath = patchMarkerPath(rest, "a/")
+		} else if rest, ok := strings.CutPrefix(line, "+++ "); ok {
+			if path := patchMarkerPath(rest, "b/"); path != "" {
+				return path
+			}
+			if oldPath != "" {
+				return oldPath // A deletion names /dev/null on the new side.
+			}
 		}
-		_ = a
-		return b
 	}
-	return ""
+	// Binary patches and pure renames have no ---/+++ markers. Quoted
+	// source paths end at an unescaped quote; unquoted paths may have spaces.
+	var destination string
+	if strings.HasPrefix(header, `"`) {
+		_, rest, ok := quotedGitPath(header)
+		if !ok || !strings.HasPrefix(rest, " ") {
+			return ""
+		}
+		destination = strings.TrimPrefix(rest, " ")
+	} else if _, rest, ok := strings.Cut(header, ` "b/`); ok {
+		destination = `"b/` + rest
+	} else if _, rest, ok := strings.Cut(header, " b/"); ok {
+		// Ordinary binary/mode-only patches repeat one path on both sides.
+		// Match those halves before searching an ambiguous " b/" in a name.
+		if len(header)%2 == 1 {
+			mid := len(header) / 2
+			if strings.HasPrefix(header, "a/") && header[mid] == ' ' && header[mid+1:] == "b/"+header[2:mid] {
+				return header[2:mid]
+			}
+		}
+		destination = "b/" + rest
+	}
+	return patchMarkerPath(destination, "b/")
+}
+
+func patchMarkerPath(raw, prefix string) string {
+	// Git appends a tab after a marker containing spaces. Control characters
+	// in filenames are always quoted, so a literal tab is a delimiter here.
+	raw, _, _ = strings.Cut(raw, "\t")
+	if strings.HasPrefix(raw, `"`) {
+		path, rest, ok := quotedGitPath(raw)
+		if !ok || rest != "" {
+			return ""
+		}
+		raw = path
+	}
+	path, ok := strings.CutPrefix(raw, prefix)
+	if !ok {
+		return ""
+	}
+	return path
+}
+
+// Git's C-style escapes include three-digit octal UTF-8 bytes, which
+// strconv.Unquote decodes without treating them as Unicode code points.
+func quotedGitPath(raw string) (path, rest string, ok bool) {
+	for i := 1; i < len(raw); i++ {
+		switch raw[i] {
+		case '\\':
+			i++
+		case '"':
+			path, err := strconv.Unquote(raw[:i+1])
+			return path, raw[i+1:], err == nil
+		}
+	}
+	return "", "", false
 }
 
 func countDiffStats(chunk string) (adds, dels int) {
@@ -1000,20 +1065,27 @@ func LoadCommitDetailFiltered(ctx context.Context, workdir, hash string, filter 
 		ParentHashes: parents,
 		IsMerge:      len(parents) > 1,
 	}
-	stat := exec.CommandContext(ctx, "git", filteredGitArgs([]string{"show", "--numstat", "--format=", hash}, filter)...)
+	stat := exec.CommandContext(ctx, "git", filteredGitArgs([]string{"show", "--numstat", "-z", "--format=", hash}, filter)...)
 	stat.Dir = workdir
 	statOut, _ := stat.Output()
-	for _, line := range strings.Split(strings.TrimSpace(string(statOut)), "\n") {
-		if line == "" {
+	records := strings.Split(string(statOut), "\x00")
+	for i := 0; i < len(records); i++ {
+		fields := strings.SplitN(records[i], "\t", 3)
+		if len(fields) != 3 {
 			continue
 		}
-		fields := strings.Fields(line)
-		if len(fields) < 3 {
-			continue
+		path := fields[2]
+		if path == "" {
+			// A rename/copy has an empty path followed by separate NUL
+			// records for the source and destination. Expose the new path.
+			if i+2 >= len(records) {
+				break
+			}
+			path = records[i+2]
+			i += 2
 		}
 		add, _ := strconv.Atoi(fields[0])
 		del, _ := strconv.Atoi(fields[1])
-		path := fields[len(fields)-1]
 		status := "M"
 		if fields[0] == "0" && fields[1] != "0" {
 			status = "D"
