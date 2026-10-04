@@ -365,7 +365,7 @@ func runCreateShellWorkspace(env Env, dest openDestination, flags createCommonFl
 		AgentType: agentKind,
 		SkipPerms: skipPerms,
 	}
-	if _, err := workspaceops.CreateManagedShell(spec); err != nil {
+	if _, err := (workspaceops.Service{}).CreateShell(spec); err != nil {
 		cliErrln(env.Stderr, err)
 		return 1
 	}

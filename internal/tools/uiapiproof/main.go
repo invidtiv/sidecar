@@ -90,6 +90,7 @@ func run() error {
 	origin := flag.String("origin", "", "Origin header to send")
 	bearer := flag.String("bearer", "", "send Authorization: Bearer with this token on the upgrade")
 	socket := flag.String("socket", "", "dial this Unix socket instead of the URL's host")
+	literalEcho := flag.Bool("literal-echo", false, "send literal marker bytes for the deterministic fixture echo terminal")
 	marker := flag.String("marker", "UIAPI_PROOF", "text the shell must echo back")
 	timeout := flag.Duration("timeout", 30*time.Second, "overall deadline")
 	flag.Parse()
@@ -159,6 +160,9 @@ func run() error {
 	// the echoed command line.
 	half := len(*marker) / 2
 	command := fmt.Sprintf("printf '%%s%%s\\n' '%s' '%s'\r", (*marker)[:half], (*marker)[half:])
+	if *literalEcho {
+		command = *marker
+	}
 	inputStarted := time.Now()
 	if _, _, err := s.call(ctx, mobileproto.Request{Type: mobileproto.RequestInput, AttachmentHandle: attachment, OperationSequence: 2,
 		LastResetGeneration: reset, LastOutputSequence: output, DataBase64: base64.StdEncoding.EncodeToString([]byte(command))}); err != nil {

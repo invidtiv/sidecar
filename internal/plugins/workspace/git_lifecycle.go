@@ -729,7 +729,7 @@ func runCleanupPlanContext(ctx context.Context, plan CleanupPlan) *CleanupResult
 	// also what closes the session before the directory goes (td-3df472); this
 	// path must not kill anything itself.
 	if plan.DeleteWorktree {
-		if err := workspaceops.DeleteWorktree(ctx, workspaceops.WorktreeRemoval{
+		if err := (workspaceops.Service{}).DeleteWorktree(ctx, workspaceops.WorktreeRemoval{
 			RepoPath: plan.RepoPath, ProjectRoot: plan.ProjectRoot,
 			Path: plan.WorktreePath, Branch: plan.Branch, ExpectedOID: plan.ExpectedOID,
 		}); err != nil {

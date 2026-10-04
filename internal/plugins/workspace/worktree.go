@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -315,13 +314,12 @@ func (p *Plugin) beginCreateWorktree() tea.Cmd {
 	}
 	repoKey := scope.RepoKey
 	return func() tea.Msg {
-		wt, err := addCreatedWorktree(ctx, repoKey, &plan)
-		if wt != nil {
-			if journalErr := persistPendingCreation(context.Background(), &plan, wt); journalErr != nil {
-				err = errors.Join(err, journalErr)
-			}
-		}
-		return CreateWorktreeAddedMsg{OperationScope: scope, Plan: &plan, Worktree: wt, Err: err}
+		shared := sharedCreatePlan(&plan)
+		shared.RepoKey = repoKey
+		creation := (workspaceops.Service{}).BeginWorktree(ctx, shared)
+		plan.Path = shared.Path
+		wt := worktreeFromShared(creation.Record, &plan)
+		return CreateWorktreeAddedMsg{OperationScope: scope, Plan: &plan, Worktree: wt, Err: workspaceops.CreationError(creation)}
 	}
 }
 
@@ -346,7 +344,7 @@ func deleteNewlyCreated(ctx context.Context, plan *CreateOperationPlan, expected
 	result := CreateRecoveryDeleteResult{}
 	// Creation rollback: nobody confirmed a destructive action, so this states
 	// no force and pins the identity it created instead.
-	if err := workspaceops.DeleteWorktree(ctx, workspaceops.WorktreeRemoval{
+	if err := (workspaceops.Service{}).DeleteWorktree(ctx, workspaceops.WorktreeRemoval{
 		RepoPath: plan.SourceWorktree, ProjectRoot: plan.MainWorktree,
 		Path: plan.Path, Branch: plan.Branch, ExpectedOID: expectedOID,
 	}); err != nil {
@@ -416,19 +414,12 @@ func (p *Plugin) doCreateWorktreeContext(ctx context.Context, name, baseBranch, 
 		return nil, err
 	}
 	plan.TaskID, plan.TaskTitle, plan.AgentType = taskID, taskTitle, agentType
-	wt, err := addCreatedWorktree(ctx, repoKey, plan)
-	if err != nil {
-		return wt, err
-	}
-	result := runCreateSetup(ctx, plan, wt)
-	if result.HasRequiredFailure() {
-		for _, warning := range result.Warnings() {
-			if warning.Required {
-				return wt, fmt.Errorf("%s: %w", warning.Action, warning.Err)
-			}
-		}
-	}
-	return wt, nil
+	shared := sharedCreatePlan(plan)
+	shared.RepoKey = repoKey
+	shared.OperationID = fmt.Sprintf("create-%d", time.Now().UnixNano())
+	creation := (workspaceops.Service{}).CreateWorktree(ctx, shared, true)
+	plan.Path = shared.Path
+	return worktreeFromShared(creation.Record, plan), workspaceops.CreationError(creation)
 }
 
 // doDeleteWorktreeContext runs the shared deletion path. The git work itself
@@ -440,7 +431,7 @@ func (p *Plugin) doCreateWorktreeContext(ctx context.Context, name, baseBranch, 
 // separate from req.RepoPath, which is only the checkout the git commands run
 // from.
 func doDeleteWorktreeContext(ctx context.Context, req workspaceops.WorktreeRemoval) error {
-	return workspaceops.DeleteWorktree(ctx, req)
+	return (workspaceops.Service{}).DeleteWorktree(ctx, req)
 }
 
 // pushSelected returns a command to push the selected worktree's branch.
@@ -606,7 +597,7 @@ func saveDisplayName(projectRoot, worktreePath, name string) error {
 }
 
 func saveDisplayNameContext(ctx context.Context, projectRoot, worktreePath, name string) error {
-	_, err := workspaceops.RenameWorktreeDisplayName(ctx, config.StateDir(), projectRoot, worktreePath, name)
+	_, err := (workspaceops.Service{}).RenameWorktree(ctx, config.StateDir(), projectRoot, worktreePath, name)
 	return err
 }
 

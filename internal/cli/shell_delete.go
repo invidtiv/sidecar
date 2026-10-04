@@ -43,7 +43,7 @@ const shellStatusDeleted = "deleted"
 //
 // This is the verb the Sessions browser's Delete runs on a host, and it is
 // deliberately the same function that surface calls locally
-// (workspaceops.DeleteManagedShell) rather than a second implementation of
+// ((workspaceops.Service{}).DeleteShell) rather than a second implementation of
 // "close it and tombstone it". A remote delete and a local delete are then one
 // behaviour observed from two places, which is the only way they cannot drift.
 //
@@ -171,7 +171,7 @@ func runShellDelete(env Env, args []string) int {
 		return shellTargetUnregistered
 	}
 
-	if err := workspaceops.DeleteManagedShell(tgt.Project.Path, tgt.Session, tgt.Namespace); err != nil {
+	if err := (workspaceops.Service{}).DeleteShell(tgt.Project.Path, tgt.Session, tgt.Namespace); err != nil {
 		cliErrln(env.Stderr, err)
 		return 1
 	}

@@ -497,3 +497,64 @@ func TestStaleSyncSnapshotIsDiscarded(t *testing.T) {
 		t.Fatalf("manifest = %v, want the deleted shell to stay deleted", names)
 	}
 }
+
+func TestServiceDeleteFencesStaleSyncSnapshot(t *testing.T) {
+	root := t.TempDir()
+	manifestPath := filepath.Join(root, "shells.json")
+	workDir := filepath.Join(root, "sidecar")
+	live := sessionNameSeries(3, "sidecar-sh-sidecar")
+
+	hooks := fakeInstance(t, manifestPath, workDir, namespaceA, live)
+	p := newInstancePlugin(t, hooks, workDir)
+	installLiveShells(p, live, hooks.getPaneID)
+
+	manifest, err := LoadShellManifest(manifestPath)
+	if err != nil {
+		t.Fatalf("LoadShellManifest() error = %v", err)
+	}
+	p.shellManifest = manifest
+	for _, shell := range p.shells {
+		definition := shellToDefinition(shell)
+		definition.Namespace = namespaceA
+		if err := manifest.AddShell(definition); err != nil {
+			t.Fatalf("AddShell() error = %v", err)
+		}
+	}
+
+	staleManifest, err := LoadShellManifest(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The snapshot a sync goroutine would have taken before the delete.
+	stale := shellManifestSyncMsg{
+		Scope:        p.currentShellStartupScope(),
+		Manifest:     staleManifest,
+		Running:      map[string]bool{live[0]: true, live[1]: true, live[2]: true},
+		PaneIDs:      map[string]string{},
+		Namespace:    namespaceA,
+		BaseRevision: manifest.Revision(),
+	}
+
+	// The service has already removed the durable record before its result
+	// arrives. RemoveShell in the UI reconciliation is now a successful no-op.
+	if err := shellstate.RemoveAtPath(manifestPath, shellstate.Identity{TmuxName: live[2], Namespace: namespaceA}); err != nil {
+		t.Fatal(err)
+	}
+	if names := manifestNames(t, manifestPath); len(names) != 2 {
+		t.Fatalf("service delete did not remove exact record: %v", names)
+	}
+	p.update(ShellKilledMsg{SessionName: live[2]})
+
+	_, command := p.update(stale)
+
+	if len(p.shells) != 2 {
+		t.Fatalf("shells = %d, want 2: a stale snapshot resurrected a deleted shell", len(p.shells))
+	}
+	if command == nil {
+		t.Fatal("a discarded sync must schedule a fresh one, not drop the refresh")
+	}
+	if names := manifestNames(t, manifestPath); len(names) != 2 {
+		t.Fatalf("manifest = %v, want the deleted shell to stay deleted", names)
+	}
+}

@@ -396,7 +396,7 @@ func TestGlobalDeleteIsTheSharedWorkspaceopsPath(t *testing.T) {
 		name        string
 		got, shared any
 	}{
-		{"execDeleteWorktree", execDeleteWorktree, workspaceops.DeleteWorktree},
+		{"execDeleteWorktree", execDeleteWorktree, (workspaceops.Service{}).DeleteWorktree},
 		{"execDeleteLocalBranch", execDeleteLocalBranch, workspaceops.DeleteLocalBranch},
 		{"execDeleteRemoteBranch", execDeleteRemoteBranch, workspaceops.DeleteRemoteBranch},
 	}

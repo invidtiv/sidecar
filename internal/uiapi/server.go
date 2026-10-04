@@ -63,13 +63,14 @@ type TailnetOptions struct {
 type Options struct {
 	StateDir string
 	// Port is the Browser listener's loopback port; 0 picks a free one.
-	Port    int
-	UIDir   string
-	Tailnet *TailnetOptions
-	Backend Backend
-	Version string
-	Now     func() time.Time
-	Logf    func(format string, args ...any)
+	Port          int
+	UIDir         string
+	Tailnet       *TailnetOptions
+	Backend       Backend
+	Version       string
+	FixtureStatus *Status
+	Now           func() time.Time
+	Logf          func(format string, args ...any)
 	// KeepaliveInterval and KeepaliveTimeout govern terminal WebSocket pings;
 	// zero means 30s and 15s.
 	KeepaliveInterval time.Duration
@@ -364,14 +365,10 @@ func (s *Server) beginStream() bool {
 	return true
 }
 
-func (s *Server) hello() map[string]any {
-	return map[string]any{
-		"api_version":    APIVersion,
-		"api_instance":   s.instance,
-		"server_version": s.opts.Version,
-		"capabilities":   []string{"sessions", "status", "terminal", "ws_tickets", "events"},
-		"terminal":       map[string]any{"protocol": "mobile", "version": mobileproto.Version},
-	}
+func (s *Server) hello() Hello {
+	return Hello{APIVersion: APIVersion, APIInstance: s.instance, ServerVersion: s.opts.Version,
+		Capabilities: []string{"sessions", "status", "terminal", "ws_tickets", "events"},
+		Terminal:     TerminalProtocol{Protocol: "mobile", Version: mobileproto.Version}}
 }
 
 // Status is GET /api/v0/status and `sidecar api status --json`.
@@ -388,6 +385,12 @@ type Status struct {
 
 func (s *Server) status() Status {
 	clients, terminals := s.clients.snapshot()
+	if s.opts.FixtureStatus != nil {
+		status := *s.opts.FixtureStatus
+		status.Listeners = append([]ListenerInfo(nil), s.listeners...)
+		status.Clients, status.Terminals = clients, terminals
+		return status
+	}
 	return Status{APIVersion: APIVersion, APIInstance: s.instance, ServerVersion: s.opts.Version, PID: os.Getpid(),
 		StartedAt: s.startedAt, Listeners: append([]ListenerInfo(nil), s.listeners...), Clients: clients, Terminals: terminals}
 }

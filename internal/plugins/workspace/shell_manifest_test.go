@@ -705,6 +705,31 @@ func TestManifestRevisionTracksWrites(t *testing.T) {
 	}
 }
 
+// A no-op still refreshes the compatibility projection from the authoritative
+// snapshot used by shellstate, without counting a write or reverting a peer.
+func TestManifestNoOpRefreshesSharedSnapshot(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shells.json")
+	m := &ShellManifest{Version: 1, path: path, Shells: []ShellDefinition{{TmuxName: "stale"}}}
+	peer := shellstate.Definition{TmuxName: "peer", DisplayName: "Peer"}
+	if err := shellstate.AddAtPath(path, peer); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.RemoveShell("absent"); err != nil {
+		t.Fatal(err)
+	}
+	if m.Version != shellstate.CurrentVersion || len(m.Shells) != 1 || m.Shells[0].TmuxName != peer.TmuxName || m.Revision() != 0 {
+		t.Fatalf("no-op did not project shared snapshot: version=%d shells=%+v revision=%d", m.Version, m.Shells, m.Revision())
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("no-op changed peer manifest: %v", err)
+	}
+}
+
 // TestRevivingAShellKeepsItsSessionBinding is the regression test for a
 // blocking defect: shells.json has a second serializer, and it replaced records
 // wholesale.
@@ -805,8 +830,8 @@ func TestAPathlessShellManifestRefusesInsteadOfWritingBesideTheProcess(t *testin
 	if err := pathless.MarkRestoreEligible("sidecar-sh-x", "pid=1", time.Now()); !errors.Is(err, errNoManifestPath) {
 		t.Fatalf("MarkRestoreEligible on a pathless manifest error = %v, want errNoManifestPath", err)
 	}
-	if _, err := acquireManifestLock("", true); !errors.Is(err, errNoManifestPath) {
-		t.Fatalf("acquireManifestLock(\"\") error = %v, want errNoManifestPath", err)
+	if _, err := shellstate.SnapshotAtPath(""); !errors.Is(err, errNoManifestPath) {
+		t.Fatalf("SnapshotAtPath(\"\") error = %v, want errNoManifestPath", err)
 	}
 
 	after := dirEntryNames(t, cwd)

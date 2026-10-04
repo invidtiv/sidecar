@@ -355,7 +355,7 @@ type worktreeDeleteWarnings struct {
 
 func executeWorktreeDeletePlan(ctx context.Context, project registeredProject, plan worktreeDeletePlan) worktreeDeleteWarnings {
 	var warnings []string
-	if err := workspaceops.DeleteWorktree(ctx, workspaceops.WorktreeRemoval{
+	if err := (workspaceops.Service{}).DeleteWorktree(ctx, workspaceops.WorktreeRemoval{
 		RepoPath: project.Path, ProjectRoot: project.Path, Path: plan.resolvedWorktreePath,
 		Branch: plan.Branch, ExpectedOID: plan.HeadOID, Force: true,
 	}); err != nil {
@@ -380,7 +380,7 @@ func executeWorktreeDeletePlan(ctx context.Context, project registeredProject, p
 		}
 	}
 	if plan.pendingCreationPlan != nil {
-		if err := workspaceops.RemovePendingCreation(plan.pendingCreationPlan); err != nil {
+		if err := (workspaceops.Service{}).FinalizeWorktree(plan.pendingCreationPlan); err != nil {
 			warnings = append(warnings, "pending creation journal: "+err.Error())
 		}
 	}

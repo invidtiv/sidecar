@@ -17,6 +17,7 @@ require (
 	github.com/charmbracelet/x/vt v0.0.0-20260803091719-3755ebad01b1
 	github.com/coder/websocket v1.8.15
 	github.com/fsnotify/fsnotify v1.9.0
+	github.com/invopop/jsonschema v0.13.0
 	github.com/marcus/tasks v1.18.0
 	github.com/marcus/td v0.66.0
 	github.com/mattn/go-runewidth v0.0.23
@@ -34,6 +35,8 @@ require (
 require (
 	charm.land/huh/v2 v2.0.3 // indirect
 	github.com/aymerick/douceur v0.2.0 // indirect
+	github.com/bahlo/generic-list-go v0.2.0 // indirect
+	github.com/buger/jsonparser v1.1.1 // indirect
 	github.com/catppuccin/go v0.3.0 // indirect
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect
 	github.com/charmbracelet/x/conpty v0.2.0 // indirect
@@ -52,6 +55,7 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/css v1.0.1 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
+	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/makeworld-the-better-one/dither/v2 v2.4.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-sixel v0.0.5 // indirect
@@ -63,6 +67,7 @@ require (
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/sahilm/fuzzy v0.1.1 // indirect
 	github.com/soniakeys/quant v1.0.0 // indirect
+	github.com/wk8/go-ordered-map/v2 v2.1.8 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	github.com/yuin/goldmark-emoji v1.0.5 // indirect
 	golang.org/x/exp v0.0.0-20250620022241-b7579e27df2b // indirect
