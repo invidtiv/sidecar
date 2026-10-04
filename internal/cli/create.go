@@ -3,12 +3,10 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/marcus/sidecar/internal/agentcontrol"
-	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspacewire"
 )
@@ -242,17 +240,6 @@ func createAcksAllDeclined(acks []uirequest.Ack) bool {
 		}
 	}
 	return true
-}
-
-func existingShellDefinitions(proj registeredProject) []shellstate.Definition {
-	if proj.Dir == "" {
-		return proj.Shells
-	}
-	listed, err := shellstate.ListAtPath(filepath.Join(proj.Dir, "shells.json"))
-	if err != nil {
-		return proj.Shells
-	}
-	return listed
 }
 
 // createAgentStartResult distinguishes creating durable identity from starting

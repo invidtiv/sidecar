@@ -8,7 +8,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestResolveWithBase_NewProject(t *testing.T) {
@@ -509,5 +511,34 @@ func TestLookupEquivalentReturnsEverySpelling(t *testing.T) {
 	}
 	if got := LookupEquivalent(link); len(got) != 2 {
 		t.Fatalf("LookupEquivalent = %+v, want both registry entries", got)
+	}
+}
+
+func TestResolveRegistryContentionIsBounded(t *testing.T) {
+	base := t.TempDir()
+	lock, err := os.OpenFile(filepath.Join(base, "projects.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = lock.Close() }()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	// Release even on the unfixed implementation, so the negative proof cannot hang.
+	released := make(chan struct{})
+	go func() {
+		time.Sleep(6 * time.Second)
+		_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+		close(released)
+	}()
+	started := time.Now()
+	_, err = resolveWithBase(base, "/tmp/contended-registry")
+	elapsed := time.Since(started)
+	<-released
+	if err == nil || !strings.Contains(err.Error(), "timeout") || elapsed > 5500*time.Millisecond {
+		t.Fatalf("registry contention was not a bounded refusal: %v after %v", err, elapsed)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(base, "projects")); len(entries) != 0 {
+		t.Fatalf("refused registration created entries: %v", entries)
 	}
 }

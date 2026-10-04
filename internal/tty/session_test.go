@@ -1,12 +1,14 @@
 package tty
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/marcus/sidecar/internal/testenv"
 )
@@ -374,4 +376,16 @@ func prepareAndReadOverrides() (string, error) {
 	}
 	out, err := exec.Command("tmux", "show-options", "-sv", "terminal-overrides").Output()
 	return string(out), err
+}
+
+func TestNewSessionContextCancelsWhilePreparationIsBusy(t *testing.T) {
+	tmuxSessionGate <- struct{}{}
+	defer func() { <-tmuxSessionGate }()
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	err := NewSessionContext(ctx, "new-session", "-d", "-s", "never-created")
+	if !errors.Is(err, context.DeadlineExceeded) || time.Since(started) > time.Second {
+		t.Fatalf("waiting for preparation ignored deadline: %v", err)
+	}
 }

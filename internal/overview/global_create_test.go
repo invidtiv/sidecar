@@ -324,8 +324,8 @@ func TestGlobalCreateResolvesNamesAndConfigInsideTargetProject(t *testing.T) {
 	if msg.Project.Path != "/tmp/two" || got.ProjectRoot != "/tmp/two" || got.WorkDir != "/tmp/two" {
 		t.Fatalf("target project leaked: msg=%+v spec=%+v", msg.Project, got)
 	}
-	if got.SessionName != "sidecar-sh-two-3" || got.DisplayName != "Shell 3" {
-		t.Fatalf("target names = %q/%q, want sidecar-sh-two-3/Shell 3", got.SessionName, got.DisplayName)
+	if !got.Allocate || got.SessionName != "sidecar-sh-two-3" || got.DisplayName != "" {
+		t.Fatalf("target names = %q/%q, want fresh allocation with a sidecar-sh-two-3 preview", got.SessionName, got.DisplayName)
 	}
 }
 
@@ -339,7 +339,7 @@ func TestGlobalShellCreateLaunchesConfiguredAgent(t *testing.T) {
 	originalCreate, originalStart := createManagedShell, startGlobalAgent
 	defer func() { createManagedShell, startGlobalAgent = originalCreate, originalStart }()
 	createManagedShell = func(spec workspaceops.ManagedShellSpec) (workspaceops.ShellResult, error) {
-		return workspaceops.ShellResult{SessionName: spec.SessionName}, nil
+		return workspaceops.ShellResult{SessionName: "allocated-shell-42", DisplayName: "Allocated 42"}, nil
 	}
 	var request agentcontrol.StartRequest
 	startGlobalAgent = func(_ context.Context, got agentcontrol.StartRequest) (agentcontrol.Agent, error) {
@@ -348,7 +348,7 @@ func TestGlobalShellCreateLaunchesConfiguredAgent(t *testing.T) {
 	}
 	m.OpenCreateShell("sidecar")
 	msg := m.submitCreateShell()().(globalShellCreatedMsg)
-	if msg.Err != nil || request.Target.Session == "" || !strings.Contains(strings.Join(request.Argv, " "), "codex-custom") {
+	if msg.Err != nil || request.Target.Session != "allocated-shell-42" || request.Target.Name != "Allocated 42" || !strings.Contains(strings.Join(request.Argv, " "), "codex-custom") {
 		t.Fatalf("configured agent launch: request=%+v err=%v", request, msg.Err)
 	}
 }
@@ -1040,8 +1040,8 @@ func TestNewerCreateReplacesPendingTmux(t *testing.T) {
 	m.pendingCreatedPath = "/tmp/stale"
 	m.OpenCreateShell("sidecar")
 	_ = m.submitCreateShell()
-	if m.pendingCreatedTmux == "" || m.pendingCreatedTmux == "old-session" {
-		t.Fatalf("pending tmux = %q, want the newer session", m.pendingCreatedTmux)
+	if m.pendingCreatedTmux != "" {
+		t.Fatalf("pending tmux = %q before allocation returned", m.pendingCreatedTmux)
 	}
 	if m.pendingCreatedPath != "" {
 		t.Fatalf("newer shell create left stale path %q", m.pendingCreatedPath)
@@ -1317,5 +1317,26 @@ func TestProjectChangeReloadsBranches(t *testing.T) {
 	}
 	if len(dirs) != 2 || dirs[1] != "/tmp/braid" {
 		t.Fatalf("reload dirs = %v, want sidecar then braid", dirs)
+	}
+}
+
+func TestAllocatedShellIdentityControlsPendingSelection(t *testing.T) {
+	_ = state.SetLastCreateAgent("")
+	m := catalogModel(t)
+	m.config = &config.Config{}
+	original := createManagedShell
+	t.Cleanup(func() { createManagedShell = original })
+	createManagedShell = func(spec workspaceops.ManagedShellSpec) (workspaceops.ShellResult, error) {
+		return workspaceops.ShellResult{SessionName: "allocated-shell-42", DisplayName: "Allocated 42"}, nil
+	}
+	m.OpenCreateShell("sidecar")
+	command := m.submitCreateShell()
+	if m.pendingCreatedTmux != "" || m.honorPendingCreated() {
+		t.Fatal("stale preview can select another writer's shell before allocation")
+	}
+	message := command().(globalShellCreatedMsg)
+	m.Update(message)
+	if m.pendingCreatedTmux != "allocated-shell-42" {
+		t.Fatalf("selection follows preview instead of returned identity: %q", m.pendingCreatedTmux)
 	}
 }

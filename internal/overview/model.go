@@ -1087,13 +1087,13 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 			m.clearPendingCreated()
 			return nil
 		}
+		m.pendingCreatedTmux = msg.Tmux
+		m.pendingCreatedPath = ""
+		m.pendingCreatedHost = msg.HostID
 		if msg.HostID != "" {
 			// The row arrives with that host's next snapshot. Nothing is
 			// synthesized here, and no local inventory is taken: a local
 			// refresh would answer a question about another machine.
-			m.pendingCreatedTmux = msg.Tmux
-			m.pendingCreatedPath = ""
-			m.pendingCreatedHost = msg.HostID
 			m.closeCreateShell()
 			return nil
 		}
