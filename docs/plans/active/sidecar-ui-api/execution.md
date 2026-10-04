@@ -61,7 +61,7 @@ The status values are `queued`, `running`, `review`, `fixing`, `merged` and `blo
 | U1-e2 web app polish | td-71e0e5 | sidecar-ui | Codex | U1-e | merged (sidecar-ui 5e0ecb2) |
 | U1-c2 socket activation | td-11f799 | sidecar | Codex | U1-c | merged (7f684dc4). Review fixed an IPv4-mapped IPv6 and socket-type masquerade. The fake-supervisor proof refused 827 competing binds across a restart |
 | U1-g2 native follow-ups | td-468816 | sidecar-mobile | Codex | U1-g | running (Codex, ~/code/sidecar-mobile-u1g2-native): global alerts, banner instead of a modal, events liveness, fewer channel reopens |
-| U1-h security review and three-viewer proof | td-295605 | all | Claude, then Codex | U1-a, U1-d, U1-f | security merged (6176110f). Three-viewer proof passes on transport (40/40 bytes, 14 handoffs, zero ping-pong); in Codex review (branch u1h-three-viewer, which also carries TUI geometry fixes) |
+| U1-h security review and three-viewer proof | td-295605 | all | Claude, then Codex | U1-a, U1-d, U1-f | merged (security 6176110f, proof 23b5302d). The review fixed 2 more TUI P1s. Browser rendering still blocked by td-945516 |
 | U2-a core extraction | td-c709a9 | sidecar | Codex | U0-a | merged (d95b66f5) |
 | U2-b workspace resources and operations API | td-eb3d80 | sidecar | Codex | U2-a | merged (da497063) |
 | U2-c workspace UI | td-37a00e | sidecar-ui | Codex | U2-b | queued; U2-b is on main, so it can start |
