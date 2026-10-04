@@ -392,18 +392,19 @@ func (p *Plugin) applyManifestSync(sync shellManifestSyncMsg) tea.Cmd {
 		}
 	}
 
+	manifestSnapshot := p.shellManifest.Snapshot()
 	result := mergeShellState(shellMergeInput{
 		Existing:  p.shells,
-		Manifest:  p.shellManifest.Shells,
+		Manifest:  manifestSnapshot.Shells,
 		Running:   sync.Running,
-		Forgotten: tombstoneTmuxNames(p.shellManifest.Tombstones),
+		Forgotten: tombstoneTmuxNames(manifestSnapshot.Tombstones),
 		PaneID:    func(name string) string { return sync.PaneIDs[name] },
 		WorkDir:   p.ctx.WorkDir,
 		Namespace: sync.Namespace,
 	})
 
 	p.shells = result.Shells
-	p.rebuildNestedShells(p.shellManifest.Shells, func(name string) string { return sync.PaneIDs[name] })
+	p.rebuildNestedShells(manifestSnapshot.Shells, func(name string) string { return sync.PaneIDs[name] })
 
 	// Only shells that vanished from the live manifest *and* are not running
 	// here — or that were explicitly forgotten — reach Dropped.

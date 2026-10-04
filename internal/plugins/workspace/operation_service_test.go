@@ -3,6 +3,7 @@ package workspace
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/marcus/sidecar/internal/config"
@@ -11,6 +12,40 @@ import (
 	"github.com/marcus/sidecar/internal/tmuxenv"
 	"github.com/marcus/sidecar/internal/workspaceops"
 )
+
+// A service command can mutate the compatibility handle while the TUI rebuilds
+// the sidebar in response to an unrelated worktree refresh.
+func TestServiceShellRecordsConcurrentSidebarProjection(t *testing.T) {
+	root := t.TempDir()
+	manifest, err := LoadShellManifest(filepath.Join(root, "shells.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &Plugin{ctx: &plugin.Context{ProjectRoot: root, WorkDir: root}, shellManifest: manifest}
+	svc := p.shellOperationService()
+	var workers sync.WaitGroup
+	workers.Add(1)
+	done := make(chan struct{})
+	go func() {
+		defer workers.Done()
+		defer close(done)
+		for i := 0; i < 100; i++ {
+			if err := svc.Shells.AddShell(ShellDefinition{TmuxName: "sidecar-sh-proof-1", DisplayName: "Proof", WorkDir: root}); err != nil {
+				t.Error(err)
+				return
+			}
+		}
+	}()
+	for {
+		p.rebuildNestedShellsFromState()
+		select {
+		case <-done:
+			workers.Wait()
+			return
+		default:
+		}
+	}
+}
 
 func TestServiceShellCreationPreservesLoadedManifestRecovery(t *testing.T) {
 	if !workspaceops.TmuxInstalled() {

@@ -33,6 +33,23 @@ type ShellManifest struct {
 	revision uint64     // bumped on every successful local write
 }
 
+// Snapshot returns a coherent projection for readers outside the manifest
+// mutex. The slices must be copied: background service writes and rename can
+// replace or edit them while the TUI is rebuilding its sidebar. Manifest edits
+// replace nested Agent/Restore values rather than modifying them in place.
+func (m *ShellManifest) Snapshot() shellstate.Snapshot {
+	if m == nil {
+		return shellstate.Snapshot{}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return shellstate.Snapshot{
+		Version:    m.Version,
+		Shells:     append([]ShellDefinition(nil), m.Shells...),
+		Tombstones: append([]shellstate.Tombstone(nil), m.Tombstones...),
+	}
+}
+
 // Revision counts the successful writes this process has made through this
 // manifest object. A reconciliation that started before a local delete and
 // lands after it would resurrect the deleted shell, so callers stamp the
