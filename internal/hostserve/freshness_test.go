@@ -526,6 +526,20 @@ func TestServeReapsAShellWhoseSessionIsGone(t *testing.T) {
 	}
 }
 
+func TestServeObservationOnlyDoesNotReapShells(t *testing.T) {
+	observations := 0
+	recorder := reapRun(t, shellliveness.Gone, nil, func(o *Options) {
+		o.ObservationOnly = true
+		o.OnSnapshot = func(hostproto.Snapshot) { observations++ }
+	})
+	if names := recorder.forgottenNames(); len(names) != 0 {
+		t.Fatalf("catalog observer reaped shell records: %v", names)
+	}
+	if observations != 2 {
+		t.Fatalf("observation-only mode collected %d snapshots, want 2", observations)
+	}
+}
+
 // TestServeKeepsAShellWhenTmuxCannotAnswer. Unknown is what an unreachable tmux
 // produces, and it must never close anything.
 func TestServeKeepsAShellWhenTmuxCannotAnswer(t *testing.T) {

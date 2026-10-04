@@ -6,7 +6,8 @@
     "sessions",
     "status",
     "terminal",
-    "ws_tickets"
+    "ws_tickets",
+    "events"
   ],
   "terminal": {
     "protocol": "mobile",

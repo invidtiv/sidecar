@@ -22,9 +22,14 @@ root=$(cd "$(mktemp -d /tmp/sidecar-uiapi-proof.XXXXXX)" && pwd -P)
 : > "$root/.sidecar-uiapi-proof-owned"
 socket="$root/tmux/tmux-$uid/default"
 server_pid=""
+events_pid=""
 
 cleanup() {
 	status=$?
+	if [ -n "$events_pid" ] && kill -0 "$events_pid" 2>/dev/null; then
+		kill -TERM "$events_pid" 2>/dev/null || true
+		wait "$events_pid" 2>/dev/null || true
+	fi
 	if [ -n "$server_pid" ] && kill -0 "$server_pid" 2>/dev/null; then
 		kill -TERM "$server_pid" 2>/dev/null || true
 		wait "$server_pid" 2>/dev/null || true
@@ -56,10 +61,11 @@ git init -q "$root/project"
 step "build"
 go build -o "$root/sidecar" ./cmd/sidecar
 go build -o "$root/uiapiproof" ./internal/tools/uiapiproof
+go build -o "$root/uieventsproof" ./internal/tools/uieventsproof
 sc() { "$root/sidecar" -config "$config" "$@"; }
 
 step "create a managed shell on the private tmux server"
-created=$(cd "$root/project" && sc create shell --name "UI API proof" --json --wait 0)
+created=$(cd "$root/project" && sc create shell --project proof --name "UI API proof" --json --wait 0)
 session=$(printf '%s' "$created" | python3 -c 'import json,sys; print(json.load(sys.stdin)["shell"]["session"])')
 env -u TMUX -u TMUX_PANE "$tmux_bin" -S "$socket" has-session -t "$session" || fail "shell $session is not on the private server"
 echo "session=$session socket=$socket"
@@ -106,6 +112,8 @@ http, cli = (strip(json.load(open(p))) for p in sys.argv[1:3])
 for d in (http, cli): d.pop("generation", None)
 assert http == cli, "HTTP and CLI catalogs differ"
 assert sys.argv[3] in json.dumps(http), "session missing from catalog"
+rows = [row for section in http["sections"] for row in section["rows"]]
+assert all(row.get("path") for row in rows), "catalog rows missing owner paths"
 print("sessions ok: HTTP document matches `mobile sessions --json`")
 PY
 local_get /api/v0/status | python3 -c 'import json,sys; d=json.load(sys.stdin); assert [l["name"] for l in d["listeners"]]==["local","browser"], d; print("status ok")'
@@ -174,6 +182,30 @@ ticket=$(curl -fsS -X POST -H "Origin: $app" -H "Authorization: Bearer $token" -
 	python3 -c 'import json,sys; print(json.load(sys.stdin)["ticket"])')
 echo "origin paired, ticket issued"
 
+step "events: hello, catalog and shell rename pushed by the manifest watcher"
+events_ticket=$(curl -fsS -X POST -H "Origin: $app" -H "Authorization: Bearer $token" -H 'Content-Type: application/json' -H 'X-Sidecar-Request: 1' -d '{}' "$base/api/v0/ws-tickets" |
+	python3 -c 'import json,sys; print(json.load(sys.stdin)["ticket"])')
+timeout 100 "$root/uieventsproof" -url "ws://$tcp/api/v0/events?ticket=$events_ticket&sort=name" -origin "$app" -sidecar "$root/sidecar" -config "$config" -session "$session" > "$root/events.out" 2> "$root/events.err" &
+events_pid=$!
+i=0
+while ! grep -q '"rename_found":true' "$root/events.out"; do
+	i=$((i + 1))
+	[ "$i" -le 100 ] || fail "events rename did not arrive: $(cat "$root/events.err")"
+	kill -0 "$events_pid" 2>/dev/null || fail "events proof exited: $(cat "$root/events.err")"
+	sleep 0.1
+done
+cat "$root/events.out"
+
+step "events CLI: Local JSONL bridge"
+timeout 2 "$root/sidecar" -config "$config" api events --stdio --sort name > "$root/events.cli.out" 2> "$root/events.cli.err" || [ "$?" = 124 ] || fail "events CLI failed: $(cat "$root/events.cli.err")"
+python3 - "$root/events.cli.out" <<'PY'
+import json,sys
+rows=[json.loads(line) for line in open(sys.argv[1])]
+assert [r["type"] for r in rows[:3]]==["hello","catalog","terminals"],rows
+assert [r["seq"] for r in rows[:3]]==[1,2,3],rows
+print("events CLI ok: hello, catalog, terminals as JSONL")
+PY
+
 step "terminal round-trip over the WebSocket (Browser listener, ticket)"
 "$root/uiapiproof" -url "ws://$tcp/api/v0/terminal?ticket=$ticket" -origin "$app" -target "$session" | tee "$root/terminal.json"
 owner=$(env -u TMUX -u TMUX_PANE "$tmux_bin" -S "$socket" show-options -v -t "$session" @sidecar-owner 2>/dev/null || true)
@@ -202,6 +234,10 @@ step "stop"
 kill -TERM "$server_pid"
 wait "$server_pid" || fail "serve exited non-zero: $(cat "$root/serve.err")"
 server_pid=""
+wait "$events_pid" || fail "events proof failed: $(cat "$root/events.err")"
+events_pid=""
+cat "$root/events.out"
+grep -q '"shutdown_found":true' "$root/events.out" || fail "events shutdown missing"
 [ ! -e "$endpoint" ] || fail "endpoint.json survived shutdown"
 [ ! -e "$api_sock" ] || fail "api.sock survived shutdown"
 echo "private_socket=$socket"

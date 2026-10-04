@@ -28,6 +28,7 @@
           "workspace_id": "fixture-project",
           "workspace_kind": "shell",
           "display_name": "Echo terminal",
+          "path": "/workspace/fixture",
           "provider": "codex",
           "status": "working",
           "group": "Working",

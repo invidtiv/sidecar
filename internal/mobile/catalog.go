@@ -305,6 +305,12 @@ func catalogResolveState(err error) (string, string) {
 	return state, code
 }
 
+// ValidateCatalogQuery checks a query without collecting a catalog.
+func ValidateCatalogQuery(query mobileproto.CatalogQuery) error {
+	_, _, err := normalizeCatalogQuery(query)
+	return err
+}
+
 func normalizeCatalogQuery(query mobileproto.CatalogQuery) (mobileproto.CatalogQuery, workspacelist.Sort, error) {
 	if len(query.Hosts) > mobileproto.MaxCatalogFilters || len(query.Providers) > mobileproto.MaxCatalogFilters || len(query.States) > mobileproto.MaxCatalogFilters {
 		return query, 0, &ResolveError{Code: mobileproto.ErrorInvalidRequest, Message: "catalog query exceeds protocol bounds"}
@@ -395,9 +401,13 @@ func catalogRow(workspace workspaceinventory.Workspace, item workspacelist.Item,
 	if workspace.HostID != "" {
 		owner = workspace.HostID
 	}
+	path := workspace.Path
+	if path == "" {
+		path = workspace.ProjectRoot
+	}
 	row := mobileproto.CatalogRow{
 		ID: workspace.ID, OwnerHostID: owner, ProjectID: workspace.ProjectKey, ProjectName: item.Project,
-		WorkspaceKind: string(workspace.Kind), DisplayName: workspace.Name,
+		WorkspaceKind: string(workspace.Kind), DisplayName: workspace.Name, Path: path,
 		Branch: workspace.Branch, Task: workspace.TaskID, Provider: workspace.Provider, Status: item.Status,
 		Group: string(item.Group), Session: workspace.TmuxName, Pane: workspace.PaneID,
 		ObservedAt: workspace.ObservedAt.UTC().Format(time.RFC3339Nano), ChangedAt: formatCatalogTime(item.ChangedAt),
