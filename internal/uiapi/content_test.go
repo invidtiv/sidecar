@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"github.com/coder/websocket"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -432,5 +434,52 @@ func TestContentWatchBudgetIsPerClientAcrossStreams(t *testing.T) {
 			t.Fatalf("closed stream never released its watches: %v", err)
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// A project symlink that points outside the root must not become an oracle
+// for what exists out there: an existing and a missing path beneath it are
+// refused identically by reads, tree listings and watch subscriptions.
+func TestEscapingSymlinkRefusalsDoNotRevealOutsideExistence(t *testing.T) {
+	h, root := contentHarness(t)
+	outside := t.TempDir()
+	if err := os.Mkdir(filepath.Join(outside, "present"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
+		t.Fatal(err)
+	}
+	same := func(what, present, absent string) {
+		t.Helper()
+		if strings.ReplaceAll(present, "present", "absent") != absent {
+			t.Errorf("%s reveals out-of-root existence:\n present: %s\n  absent: %s", what, present, absent)
+		}
+	}
+	for _, route := range []string{"content?kind=file&target=", "tree?path="} {
+		var bodies []string
+		for _, name := range []string{"present", "absent"} {
+			response, data := h.localDo(req{method: "GET", path: "/api/v0/projects/content/" + route + "escape/" + name})
+			if response.StatusCode != 403 {
+				t.Fatalf("%s%s: %d %s", route, name, response.StatusCode, data)
+			}
+			bodies = append(bodies, string(data))
+		}
+		same(route, bodies[0], bodies[1])
+	}
+	for _, kind := range []string{"file", "tree"} {
+		var reasons []string
+		for _, name := range []string{"present", "absent"} {
+			raw, _ := json.Marshal(ContentRef{Project: "content", Kind: kind, Target: "escape/" + name})
+			conn := dialEvents(t, h, "?"+url.Values{"content": {string(raw)}}.Encode(), nil, true)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_, _, err := conn.Read(ctx)
+			cancel()
+			var closeErr websocket.CloseError
+			if !errors.As(err, &closeErr) || closeErr.Code != CloseProtocolViolation {
+				t.Fatalf("%s watch %s: %v", kind, name, err)
+			}
+			reasons = append(reasons, closeErr.Reason)
+		}
+		same(kind+" watch", reasons[0], reasons[1])
 	}
 }

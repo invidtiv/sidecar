@@ -3,7 +3,6 @@ package contentservice
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -30,32 +29,28 @@ func (s *Service) WatchProject(ctx context.Context, project, workspace string, p
 	}
 	switch params.Kind {
 	case KindFile:
-		if err = StrictRelative(params.Target); err != nil {
-			return nil, err
-		}
-		_, abs, err := ContainedRelative(ws.Root, params.Target)
+		rel, err := projectRelative(params.Target)
 		if err != nil {
 			return nil, err
 		}
-		if err := validateWatchPath(ws.Root, params.Target); err != nil {
+		if err := checkRooted(ws.Root, rel); err != nil {
 			return nil, err
 		}
+		abs := filepath.Join(ws.Root, filepath.FromSlash(rel))
 		return []livewatch.Target{livewatch.File(abs), livewatch.File(canonical(abs))}, nil
 	case KindTree:
 		path := params.Target
 		if path == "" || path == "." {
 			return []livewatch.Target{livewatch.Dir(ws.Root)}, nil
 		}
-		if err = StrictRelative(path); err != nil {
-			return nil, err
-		}
-		_, abs, err := ContainedRelative(ws.Root, path)
+		rel, err := projectRelative(path)
 		if err != nil {
 			return nil, err
 		}
-		if err := validateWatchPath(ws.Root, path); err != nil {
+		if err := checkRooted(ws.Root, rel); err != nil {
 			return nil, err
 		}
+		abs := filepath.Join(ws.Root, filepath.FromSlash(rel))
 		return []livewatch.Target{livewatch.Dir(abs), livewatch.Dir(canonical(abs))}, nil
 	case KindIssue:
 		doc, err := s.ReadProject(ctx, project, workspace, params)
@@ -92,17 +87,14 @@ func (s *Service) WatchProject(ctx context.Context, project, workspace string, p
 			}
 		}
 		add := func(path string) error {
-			if err := StrictRelative(path); err != nil {
-				return err
-			}
-			_, abs, err := ContainedRelative(ws.Root, path)
+			rel, err := projectRelative(path)
 			if err != nil {
 				return err
 			}
-			if err := validateWatchPath(ws.Root, path); err != nil {
+			if err := checkRooted(ws.Root, rel); err != nil {
 				return err
 			}
-			targets = append(targets, livewatch.File(abs))
+			targets = append(targets, livewatch.File(filepath.Join(ws.Root, filepath.FromSlash(rel))))
 			return nil
 		}
 		if params.Path != "" {
@@ -131,20 +123,4 @@ func (s *Service) WatchProject(ctx context.Context, project, workspace string, p
 		return targets, nil
 	}
 	return nil, fmt.Errorf("unknown content watch kind %q", params.Kind)
-}
-
-// A missing target is watchable, but a missing child of an escaping symlink
-// is not. EvalSymlinks alone cannot distinguish those cases; a rooted stat
-// rejects the escape before it attempts the nonexistent final component.
-func validateWatchPath(root, path string) error {
-	dir, err := os.OpenRoot(root)
-	if err != nil {
-		return Rejected("project root is not readable: %v", err)
-	}
-	defer func() { _ = dir.Close() }()
-	_, err = dir.Stat(path)
-	if err != nil && !os.IsNotExist(err) {
-		return Rejected("watch path %q is not accessible within the project: %v", path, err)
-	}
-	return nil
 }

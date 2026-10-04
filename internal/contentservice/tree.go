@@ -125,7 +125,14 @@ func (s *Service) treeWorkspaceRead(ctx context.Context, ws Workspace, paths []s
 		if err := ctx.Err(); err != nil {
 			return TreeResult{}, err
 		}
-		rel, abs, err := resolveTreeDir(ws.Root, raw)
+		var rel, abs string
+		var err error
+		if root == nil {
+			rel, abs, err = resolveTreeDir(ws.Root, raw)
+		} else if trimmed := strings.TrimSpace(raw); trimmed != "" && trimmed != "." {
+			// The rooted listing below decides containment; see projectRelative.
+			rel, err = projectRelative(raw)
+		}
 		if err != nil {
 			// A path that escapes the root is a rejected request, not a
 			// directory that happens to be missing. Answering it per-directory
