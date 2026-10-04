@@ -11,6 +11,7 @@ import (
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/hosts"
+	"github.com/marcus/sidecar/internal/managedtarget"
 )
 
 // newRemoteRunner is the transport seam. Production dials the host over the
@@ -172,7 +173,7 @@ func runRemoteAgentList(env Env, f agentFlags) int {
 // Exactness is also a parser guard: an older owner must refuse rather than
 // apply its display-name fallback to a new exact request.
 func remoteSelector(target string, f agentFlags) (string, agentFlags) {
-	if !f.exact && strings.HasPrefix(target, "name:") {
+	if !f.exact && !strings.HasPrefix(target, "session:") && !managedtarget.IsManagedSession(target) {
 		f.nameTarget = true
 		return target, f
 	}

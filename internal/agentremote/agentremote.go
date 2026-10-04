@@ -49,7 +49,8 @@ type Runner func(ctx context.Context, hostID string, args []string, out any) err
 type Client struct {
 	// ExactTargets fences API identity requests, including against older owners.
 	ExactTargets bool
-	// NameTarget marks an explicit human name: selector; older owners refuse.
+	// NameTarget preserves ordinary bare targets and name: selectors so the
+	// owner resolves them with exact-session precedence; older owners refuse.
 	NameTarget bool
 	HostID     string
 	Run        Runner
@@ -130,7 +131,7 @@ func (c Client) StartArgs(session, kind string, timeout time.Duration, providerA
 		args = append(args, "--timeout", timeout.String())
 	}
 	if session != "" {
-		if !c.ExactTargets && strings.HasPrefix(session, "name:") {
+		if !c.ExactTargets && (c.NameTarget || strings.HasPrefix(session, "name:")) {
 			args = append(args, session)
 		} else {
 			if !c.ExactTargets {
@@ -221,7 +222,11 @@ func (c Client) SessionRestoreArgsWithPrefill(dryRun, agents, yes, prefill bool,
 		args = append(args, "--prefill")
 	}
 	if strings.TrimSpace(shell) != "" {
-		args = append(args, "--exact-shell", "--shell", shell)
+		guard := "--exact-shell"
+		if c.NameTarget {
+			guard = "--exact-shell=false"
+		}
+		args = append(args, guard, "--shell", shell)
 	}
 	return args
 }

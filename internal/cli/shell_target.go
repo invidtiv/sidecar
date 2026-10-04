@@ -175,6 +175,8 @@ func callerShellOrigin(stateDir string) (shellstate.OriginInfo, bool) {
 	return origin, true
 }
 
+const managedTargetHelp = "A bare TARGET first matches an exact tmux session name. If no session matches, an ordinary display name such as \"rev U3-c\" or \"Shell 3\" resolves only when unique. Missing sidecar-sh-*, sidecar-ws-* and sidecar-tp-* targets never fall back to display names and refuse. Use name:DISPLAY for explicit display-name lookup, including session-shaped display names; session:NAME for exact session lookup, including literal names beginning with name: or session:. Display-name ambiguity refuses; address the exact session or use explicit --project scope where supported."
+
 type shellTargetScan struct {
 	projects   []registeredProject
 	candidates []managedtarget.Target
@@ -202,7 +204,7 @@ func (l *shellTargetLookup) resolve(env Env, target, shellFlag, projectFlag stri
 		if ok && typed.Kind == managedtarget.NotFound {
 			return shellTarget{}, shellTargetUnregistered, err
 		}
-		if ok && typed.Kind == managedtarget.Ambiguous && !strings.HasPrefix(target, "name:") && shellFlag == "" && projectFlag == "" {
+		if ok && typed.Kind == managedtarget.Ambiguous && !typed.ByName && shellFlag == "" && projectFlag == "" {
 			// The caller's own project breaks a tie a global search cannot.
 			// An agent driving a sibling worktree from its managed shell has
 			// already said which Sidecar it means — SIDECAR_SHELL names it —

@@ -108,17 +108,17 @@ func TestProjectJSONPathCanonicalizesSymlink(t *testing.T) {
 
 func TestCLIExactSessionRefusesCollisionAcrossMutatingVerbs(t *testing.T) {
 	for _, args := range [][]string{
-		{"shell", "rename", "--target", "deleted-session", "Wrong"},
-		{"shell", "delete", "--target", "deleted-session"},
-		{"shell", "restore", "deleted-session"},
-		{"shell", "send", "--target", "deleted-session", "--type", "Wrong"},
-		{"agent", "prompt", "deleted-session", "Wrong"},
-		{"agent", "start", "deleted-session", "--kind", "codex"},
+		{"shell", "rename", "--target", "sidecar-sh-deleted", "Wrong"},
+		{"shell", "delete", "--target", "sidecar-sh-deleted"},
+		{"shell", "restore", "sidecar-sh-deleted"},
+		{"shell", "send", "--target", "sidecar-sh-deleted", "--type", "Wrong"},
+		{"agent", "prompt", "sidecar-sh-deleted", "Wrong"},
+		{"agent", "start", "sidecar-sh-deleted", "--kind", "codex"},
 	} {
 		t.Run(strings.Join(args[:2], "/"), func(t *testing.T) {
 			idle := codexIdleFixture(t)
 			stateDir, workDir := targetProject(t)
-			writeProjectShells(t, stateDir, "demo", shellstate.Definition{TmuxName: "live", DisplayName: "deleted-session", WorkDir: workDir, Namespace: tmuxenv.Namespace()})
+			writeProjectShells(t, stateDir, "demo", shellstate.Definition{TmuxName: "live", DisplayName: "sidecar-sh-deleted", WorkDir: workDir, Namespace: tmuxenv.Namespace()})
 			terminal := &cliAgentTerminal{launched: true, screen: idle}
 			useCLIAgentTerminal(t, terminal)
 			args = append(args, "--project", "demo", "--json")
@@ -127,7 +127,7 @@ func TestCLIExactSessionRefusesCollisionAcrossMutatingVerbs(t *testing.T) {
 			if !handled || exit == 0 {
 				t.Fatalf("stale target accepted: %d %s %s", exit, out.String(), stderr.String())
 			}
-			if names := manifestNames(t, stateDir); names["live"] != "deleted-session" || len(names) != 1 {
+			if names := manifestNames(t, stateDir); names["live"] != "sidecar-sh-deleted" || len(names) != 1 {
 				t.Fatalf("changed collision: %v", names)
 			}
 			if terminal.inspects != 0 || len(terminal.submitted) != 0 {
@@ -192,13 +192,13 @@ func TestRemotePlainSessionTargetsRequireExactOwnerSupport(t *testing.T) {
 	newRemoteRunner = func(_ Env, _ string) (agentremote.Runner, error) {
 		return func(_ context.Context, _ string, args []string, _ any) error {
 			called = true
-			if !slices.Contains(args, "--exact-target") || args[len(args)-2] != "deleted-session" {
+			if !slices.Contains(args, "--exact-target") || args[len(args)-2] != "sidecar-sh-deleted" {
 				t.Fatalf("unsafe owner argv: %v", args)
 			}
 			return &hosts.RunError{ExitCode: 2, Stderr: "unknown option --exact-target"}
 		}, nil
 	}
-	code, out, stderr := runAgentCLI(t, "agent", "prompt", "--host", "owner", "--project", "demo", "--json", "--", "deleted-session", "-")
+	code, out, stderr := runAgentCLI(t, "agent", "prompt", "--host", "owner", "--project", "demo", "--json", "--", "sidecar-sh-deleted", "-")
 	if !called || code == 0 {
 		t.Fatalf("older owner must refuse: called=%v code=%d %s %s", called, code, out, stderr)
 	}

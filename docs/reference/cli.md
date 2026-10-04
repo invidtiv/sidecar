@@ -6,6 +6,8 @@ Sidecar provides non-interactive commands for scripting and agent workflows.
 
 Inspect, start, and coordinate agents in Sidecar-managed shells
 
+A bare TARGET first matches an exact tmux session name. If no session matches, an ordinary display name such as "rev U3-c" or "Shell 3" resolves only when unique. Missing sidecar-sh-*, sidecar-ws-* and sidecar-tp-* targets never fall back to display names and refuse. Use name:DISPLAY for explicit display-name lookup, including session-shaped display names; session:NAME for exact session lookup, including literal names beginning with name: or session:. Display-name ambiguity refuses; address the exact session or use explicit --project scope where supported.
+
 Provider-aware control over shells Sidecar owns.
 
 The safe sequence is: create the layout separately with sidecar create shell, start the provider with agent start, prompt and wait, read before you send keys, and never close a target you did not create.
@@ -161,7 +163,7 @@ sidecar agent explain --file internal/agentactivity/testdata/claude/blocked.txt 
 
 Get one managed agent
 
-TARGET is an exact managed tmux session name. Use name:DISPLAY for an explicitly named display-name lookup, which must be unique; session:NAME escapes a literal session name beginning with name: or session:. Plain session targets never fall back to display names. Inside a managed shell it may be omitted.
+A bare TARGET first matches an exact tmux session name. If no session matches, an ordinary display name such as "rev U3-c" or "Shell 3" resolves only when unique. Missing sidecar-sh-*, sidecar-ws-* and sidecar-tp-* targets never fall back to display names and refuse. Use name:DISPLAY for explicit display-name lookup, including session-shaped display names; session:NAME for exact session lookup, including literal names beginning with name: or session:. Display-name ambiguity refuses; address the exact session or use explicit --project scope where supported. Inside a managed shell TARGET may be omitted.
 
 An explicit TARGET is searched across every registered project. When an exact session identity exists in several projects, the caller's own project — the one SIDECAR_SHELL belongs to — breaks the tie; outside a managed shell the refusal lists the projects, and --project NAME (a slug, path, or a worktree Sidecar created, by path or basename) or --shell NAME picks one. Display-name ambiguity always refuses until --project explicitly narrows the search. These rules are shared by get, start, prompt, wait, read, and send-keys.
 
@@ -505,6 +507,8 @@ sidecar agent manifests --clear-cache
 
 Send a prompt to a managed agent, optionally waiting for it to settle
 
+A bare TARGET first matches an exact tmux session name. If no session matches, an ordinary display name such as "rev U3-c" or "Shell 3" resolves only when unique. Missing sidecar-sh-*, sidecar-ws-* and sidecar-tp-* targets never fall back to display names and refuse. Use name:DISPLAY for explicit display-name lookup, including session-shaped display names; session:NAME for exact session lookup, including literal names beginning with name: or session:. Display-name ambiguity refuses; address the exact session or use explicit --project scope where supported.
+
 With two positional arguments the first is the target and the second is the prompt.
 With one, the prompt goes to the shell named by SIDECAR_SHELL — unless that one
 argument names a managed target, which is read as a missing prompt rather than as
@@ -566,6 +570,8 @@ sidecar agent prompt "Summarise what changed." --json
 ### `sidecar agent read`
 
 Read a managed agent's output without touching it
+
+A bare TARGET first matches an exact tmux session name. If no session matches, an ordinary display name such as "rev U3-c" or "Shell 3" resolves only when unique. Missing sidecar-sh-*, sidecar-ws-* and sidecar-tp-* targets never fall back to display names and refuse. Use name:DISPLAY for explicit display-name lookup, including session-shaped display names; session:NAME for exact session lookup, including literal names beginning with name: or session:. Display-name ambiguity refuses; address the exact session or use explicit --project scope where supported.
 
 Every source is a passive snapshot. Reads never scroll, resize, or otherwise
 manipulate the agent's own screen.
@@ -741,6 +747,8 @@ sidecar agent report-session --kind codex --clear
 
 Send validated logical keys to a managed agent's UI
 
+A bare TARGET first matches an exact tmux session name. If no session matches, an ordinary display name such as "rev U3-c" or "Shell 3" resolves only when unique. Missing sidecar-sh-*, sidecar-ws-* and sidecar-tp-* targets never fall back to display names and refuse. Use name:DISPLAY for explicit display-name lookup, including session-shaped display names; session:NAME for exact session lookup, including literal names beginning with name: or session:. Display-name ambiguity refuses; address the exact session or use explicit --project scope where supported.
+
 With two or more positional arguments the first is the target and the rest are
 keys. With exactly one, the key goes to the shell named by SIDECAR_SHELL.
 
@@ -787,6 +795,8 @@ sidecar agent send-keys name:reviewer esc
 
 Start a provider in an idle managed shell and wait for readiness
 
+A bare TARGET first matches an exact tmux session name. If no session matches, an ordinary display name such as "rev U3-c" or "Shell 3" resolves only when unique. Missing sidecar-sh-*, sidecar-ws-* and sidecar-tp-* targets never fall back to display names and refuse. Use name:DISPLAY for explicit display-name lookup, including session-shaped display names; session:NAME for exact session lookup, including literal names beginning with name: or session:. Display-name ambiguity refuses; address the exact session or use explicit --project scope where supported.
+
 Refuses commands, editors, copy mode, agents, ambiguous panes, and replacement processes. Provider arguments remain structured until the final shell boundary. Use --target SESSION for a literal session target, including one beginning with a dash. Values after -- are always provider arguments, including when targeting the current shell.
 
 ```
@@ -822,6 +832,8 @@ sidecar agent start name:reviewer --kind codex --timeout 30s
 ### `sidecar agent wait`
 
 Wait for a managed agent to reach a settled state
+
+A bare TARGET first matches an exact tmux session name. If no session matches, an ordinary display name such as "rev U3-c" or "Shell 3" resolves only when unique. Missing sidecar-sh-*, sidecar-ws-* and sidecar-tp-* targets never fall back to display names and refuse. Use name:DISPLAY for explicit display-name lookup, including session-shaped display names; session:NAME for exact session lookup, including literal names beginning with name: or session:. Display-name ambiguity refuses; address the exact session or use explicit --project scope where supported.
 
 Observes the target without writing to it. The target stays pinned to the same
 tmux session, pane, pane process, server, and provider for the whole wait: a
@@ -3558,6 +3570,8 @@ sidecar session policy name:reviewer --resume
 
 Recreate managed shells, and optionally resume their exact conversations
 
+A bare TARGET first matches an exact tmux session name. If no session matches, an ordinary display name such as "rev U3-c" or "Shell 3" resolves only when unique. Missing sidecar-sh-*, sidecar-ws-* and sidecar-tp-* targets never fall back to display names and refuse. Use name:DISPLAY for explicit display-name lookup, including session-shaped display names; session:NAME for exact session lookup, including literal names beginning with name: or session:. Display-name ambiguity refuses; address the exact session or use explicit --project scope where supported.
+
 Executes the plan `session status` prints.
 
 Shells are recreated under their own tmux session names and existing working directories; no --run command, dev server, or test watcher is ever replayed. A missing working directory is a refusal, never a fallback to another directory, and a tmux session name held by something else is a refusal too — Sidecar never closes a live session to take its name.
@@ -3575,8 +3589,8 @@ Usage: sidecar session restore [--dry-run] [--shell TARGET] [--prefill | --agent
 **Options:**
 
 - `--dry-run`: Print the plan and exit without creating or starting anything
-- `--exact-shell`: Require owner support for exact shell selection
-- `--shell TARGET`: Restore only this exact tmux session name
+- `--exact-shell`: Treat --shell as a literal session identity; older owners refuse
+- `--shell TARGET`: Restore one session or unique display name; name:DISPLAY/session:NAME are explicit forms
 - `--agents`: Also resume eligible exact agent conversations
 - `--prefill`: Type eligible resume commands without pressing Enter
 - `--yes`: Confirm agent resumes non-interactively when the policy is ask
@@ -3713,6 +3727,8 @@ has no record to tombstone — this is the only CLI path that closes one, and
 There is no current-shell form. Deleting the shell you are sitting in would
 kill the session running the command, so the subject is always named.
 
+A bare TARGET first matches an exact tmux session name. If no session matches, an ordinary display name such as "rev U3-c" or "Shell 3" resolves only when unique. Missing sidecar-sh-*, sidecar-ws-* and sidecar-tp-* targets never fall back to display names and refuse. Use name:DISPLAY for explicit display-name lookup, including session-shaped display names; session:NAME for exact session lookup, including literal names beginning with name: or session:. Display-name ambiguity refuses; address the exact session or use explicit --project scope where supported.
+
 ```
 Usage: sidecar shell delete --target SESSION [--project NAME] [--json]
 ```
@@ -3720,7 +3736,7 @@ Usage: sidecar shell delete --target SESSION [--project NAME] [--json]
 **Options:**
 
 - `--exact-target`: Interpret --target as a literal session identity (required by API callers)
-- `--target SESSION`: Exact session; use name:DISPLAY for explicit display-name lookup
+- `--target SESSION`: Session or unique ordinary display name; name:DISPLAY/session:NAME are explicit forms
 - `--shell NAME`: Resolve the project from a registered shell
 - `--project NAME`: Target project (slug, basename, or path)
 - `--json`: Write one structured result object to stdout
@@ -3867,6 +3883,8 @@ project (--project, or the project this directory is in) — a name Sidecar does
 not own is refused rather than renamed. --shell and --project only scope a
 --target; without one, the current shell is the only subject.
 
+A bare TARGET first matches an exact tmux session name. If no session matches, an ordinary display name such as "rev U3-c" or "Shell 3" resolves only when unique. Missing sidecar-sh-*, sidecar-ws-* and sidecar-tp-* targets never fall back to display names and refuse. Use name:DISPLAY for explicit display-name lookup, including session-shaped display names; session:NAME for exact session lookup, including literal names beginning with name: or session:. Display-name ambiguity refuses; address the exact session or use explicit --project scope where supported.
+
 ```
 Usage: sidecar shell rename [--target SESSION [--project NAME]] [--json] <display-name>
 ```
@@ -3874,7 +3892,7 @@ Usage: sidecar shell rename [--target SESSION [--project NAME]] [--json] <displa
 **Options:**
 
 - `--exact-target`: Interpret --target as a literal session identity (required by API callers)
-- `--target SESSION`: Exact session; use name:DISPLAY for explicit display-name lookup
+- `--target SESSION`: Session or unique ordinary display name; name:DISPLAY/session:NAME are explicit forms
 - `--shell NAME`: Resolve the project from a registered shell (with --target)
 - `--project NAME`: Target project (slug, basename, or path; with --target)
 - `--json`: Write one structured result object to stdout
@@ -3952,6 +3970,8 @@ The keys go to the tmux server this process resolves, and the session must be
 running: a record for a session that is not up is a tmux failure (exit 1), not
 a silent success.
 
+A bare TARGET first matches an exact tmux session name. If no session matches, an ordinary display name such as "rev U3-c" or "Shell 3" resolves only when unique. Missing sidecar-sh-*, sidecar-ws-* and sidecar-tp-* targets never fall back to display names and refuse. Use name:DISPLAY for explicit display-name lookup, including session-shaped display names; session:NAME for exact session lookup, including literal names beginning with name: or session:. Display-name ambiguity refuses; address the exact session or use explicit --project scope where supported.
+
 ```
 Usage: sidecar shell send --target SESSION (--run COMMAND | --type COMMAND) [--project NAME] [--json]
 ```
@@ -3959,7 +3979,7 @@ Usage: sidecar shell send --target SESSION (--run COMMAND | --type COMMAND) [--p
 **Options:**
 
 - `--exact-target`: Interpret --target as a literal session identity (required by remote viewers)
-- `--target SESSION`: Exact session; use name:DISPLAY for explicit display-name lookup
+- `--target SESSION`: Session or unique ordinary display name; name:DISPLAY/session:NAME are explicit forms
 - `--run COMMAND`: Execute COMMAND in the session
 - `--type COMMAND`: Type COMMAND without pressing Enter
 - `--shell NAME`: Resolve the project from a registered shell

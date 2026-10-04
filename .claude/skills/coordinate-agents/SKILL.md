@@ -27,9 +27,9 @@ sidecar shell list --json     # what shells exist
 sidecar agent list --json     # which of them have a live agent, and its status
 ```
 
-A target is a Sidecar-managed shell: its tmux session name, or its display name when that name is unique in the project. Inside a managed shell you may omit the target entirely and the command addresses `SIDECAR_SHELL`. Outside one, name the target.
+A target is a Sidecar-managed shell. A bare target first matches an exact tmux session name. An ordinary display name such as `rev U3-c` or `Shell 3` still resolves when unique; ambiguity refuses. A missing `sidecar-sh-*`, `sidecar-ws-*` or `sidecar-tp-*` target never falls back to a display name. `name:DISPLAY` explicitly selects a unique display name, including a session-shaped one, and `session:NAME` selects an exact session, including literal names starting with `name:` or `session:`. `agent start --target SESSION` and `--exact-target` interpret the target as a literal exact identity. Inside a managed shell you may omit the target entirely and the command addresses `SIDECAR_SHELL`. Outside one, name the target.
 
-`agent list` reports each live pane once, under the project that owns it, however many registered projects can see its checkout. An explicit target is searched across every project; if the same name exists in several, the project your own shell belongs to breaks the tie, so a sibling worktree resolves from a managed shell without flags. Outside a managed shell the refusal lists the projects and names the fix: `--project NAME` (a slug, a path, or a worktree Sidecar created, by path or basename) or `--shell NAME`. The `project` field of a `create shell` / `create worktree --json` result is the value `--project` accepts.
+`agent list` reports each live pane once, under the project that owns it, however many registered projects can see its checkout. An explicit target is searched across every project; if the same exact session identity exists in several, the project your own shell belongs to breaks the tie, so a sibling worktree resolves from a managed shell without flags. Outside a managed shell the refusal lists the projects and names the fix: `--project NAME` (a slug, a path, or a worktree Sidecar created, by path or basename) or `--shell NAME`. Display-name ambiguity always refuses until `--project` explicitly narrows the search. Remote commands preserve these selector rules and carry parser guards; older owners refuse before mutation and must be upgraded. The `project` field of a `create shell` / `create worktree --json` result is the value `--project` accepts.
 
 ### 2. Create the layout separately
 
@@ -55,6 +55,8 @@ Creating a shell does not steal the user's focus. Do not rearrange panes the use
 ```bash
 sidecar agent start "$target" --kind codex --timeout 30s --json
 ```
+
+`agent start` reserves `--` for provider arguments. Use positional TARGET for a session or ordinary display name, `name:DISPLAY` for an explicit name, or `--target SESSION` for a literal exact session (including a leading dash).
 
 This returns **only when the expected provider is positively identified and ready for input**. It is not "the bytes were sent". Refusals worth knowing:
 

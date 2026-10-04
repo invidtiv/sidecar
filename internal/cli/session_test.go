@@ -58,6 +58,52 @@ func restorableShell(name string) shellstate.Definition {
 	}
 }
 
+func TestSessionRestoreBareDisplayNameCompatibility(t *testing.T) {
+	_, stateDir := setupIsolatedCLI(t)
+	def := restorableShell("sidecar-sh-harness-3")
+	def.DisplayName = "Shell 3"
+	seedRestoreManifest(t, stateDir, def)
+	for _, selector := range []string{"Shell 3", "name:Shell 3", "sidecar-sh-harness-3", "session:sidecar-sh-harness-3"} {
+		out, stderr, code := runCLI(t, "session", "restore", "--shell", selector, "--dry-run", "--json")
+		var doc struct {
+			Steps []sessionrestore.Step `json:"steps"`
+		}
+		if code != 0 || json.Unmarshal([]byte(out), &doc) != nil || len(doc.Steps) != 1 || doc.Steps[0].Action != sessionrestore.ActionRecreateShell {
+			t.Fatalf("selector %q: code=%d out=%s err=%s", selector, code, out, stderr)
+		}
+	}
+	for _, args := range [][]string{
+		{"--shell", "sidecar-sh-deleted"},
+		{"--shell", "Shell 3", "--exact-shell"},
+	} {
+		_, stderr, code := runCLI(t, append([]string{"session", "restore", "--dry-run", "--json"}, args...)...)
+		if code == 0 || !strings.Contains(stderr, "session") {
+			t.Fatalf("exact missing selector accepted: code=%d err=%s", code, stderr)
+		}
+	}
+	second := restorableShell("sidecar-sh-harness-4")
+	second.DisplayName = def.DisplayName
+	seedRestoreManifest(t, stateDir, def, second)
+	_, stderr, code := runCLI(t, "session", "restore", "--shell", "Shell 3", "--dry-run", "--json")
+	if code == 0 || !strings.Contains(stderr, "ambiguous") {
+		t.Fatalf("ambiguous restore accepted: code=%d err=%s", code, stderr)
+	}
+}
+
+func TestSessionRestoreAmbiguityHasUsableAdvice(t *testing.T) {
+	_, stateDir := setupIsolatedCLI(t)
+	def := restorableShell("sidecar-sh-harness-3")
+	def.DisplayName = "Shell 3"
+	seedRestoreManifest(t, stateDir, def)
+	root := t.TempDir()
+	writeProjectMeta(t, stateDir, "other", root)
+	writeProjectShells(t, stateDir, "other", shellstate.Definition{TmuxName: "sidecar-sh-other-3", DisplayName: "Shell 3", WorkDir: root})
+	_, stderr, code := runCLI(t, "session", "restore", "--shell", "Shell 3", "--dry-run", "--json")
+	if code == 0 || !strings.Contains(stderr, "ambiguous") || strings.Contains(stderr, "--project") || !strings.Contains(stderr, "session status") {
+		t.Fatalf("restore has no --project option; advice must name an available fix: code=%d err=%s", code, stderr)
+	}
+}
+
 func withBoundAgent(def shellstate.Definition, kind, value string) shellstate.Definition {
 	def.AgentType = kind
 	def.Agent = &shellstate.AgentBinding{

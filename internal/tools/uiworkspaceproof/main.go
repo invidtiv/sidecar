@@ -200,6 +200,15 @@ func run() error {
 	if err := request("shells/create", map[string]any{"name": target}, 200, &collision); err != nil {
 		return err
 	}
+	// Ordinary bare display names remain a supported CLI target. Restore the
+	// session-shaped display name afterwards for the stale-identity proof.
+	if err := request("shells/rename", map[string]any{"target": collision.Shell.Session, "name": "rev U3-c"}, 200, nil); err != nil {
+		return err
+	}
+	args := []string{"-config", *cfg, "shell", "rename", "--target", "rev U3-c", "--project", *project, "--json", "--", target}
+	if output, err := exec.CommandContext(ctx, *binary, args...).CombinedOutput(); err != nil {
+		return fmt.Errorf("CLI bare display-name rename: %v %s", err, output)
+	}
 	for _, op := range []string{"shells/rename", "shells/delete"} {
 		body := map[string]any{"target": target}
 		if op == "shells/rename" {
@@ -287,7 +296,7 @@ func run() error {
 	if _, err := os.Stat(wt.Path); !os.IsNotExist(err) {
 		return errors.New("confirmed delete retained worktree")
 	}
-	return json.NewEncoder(os.Stdout).Encode(map[string]bool{"workspace_cli_parity": true, "shell_lifecycle": true, "workspace_push": true, "worktree_source_guard": true, "dirty_delete_confirmation": true, "delete_identity_guard": true, "agent_feature_refusals": true, "stale_session_collision_refused": true, "main_checkout_metadata": true, "literal_dash_prompt_validated": true})
+	return json.NewEncoder(os.Stdout).Encode(map[string]bool{"workspace_cli_parity": true, "shell_lifecycle": true, "workspace_push": true, "worktree_source_guard": true, "dirty_delete_confirmation": true, "delete_identity_guard": true, "agent_feature_refusals": true, "stale_session_collision_refused": true, "main_checkout_metadata": true, "literal_dash_prompt_validated": true, "bare_display_name_cli_compatible": true})
 }
 func main() {
 	if err := run(); err != nil {

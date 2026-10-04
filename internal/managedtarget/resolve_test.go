@@ -6,10 +6,43 @@ import (
 )
 
 func TestResolveMissingSessionNeverFallsBackToDisplayName(t *testing.T) {
-	candidates := []Target{{Host: "local", Project: "p", Session: "live", Name: "deleted"}}
-	_, err := Resolve(candidates, Query{Host: "local", Value: "deleted"})
+	candidates := []Target{{Host: "local", Project: "p", Session: "live", Name: "sidecar-sh-deleted"}}
+	_, err := Resolve(candidates, Query{Host: "local", Value: "sidecar-sh-deleted"})
 	if e, ok := err.(*Error); !ok || e.Kind != NotFound {
 		t.Fatalf("stale session resolved to collision: %v", err)
+	}
+}
+
+func TestResolveBareTargetCompatibility(t *testing.T) {
+	for _, name := range []string{"rev U3-c", "Shell 3"} {
+		candidates := []Target{{Session: "sidecar-sh-demo-3", Name: name}}
+		got, err := Resolve(candidates, Query{Value: name})
+		if err != nil || got.Session != candidates[0].Session {
+			t.Fatalf("unique bare display name %q: %+v %v", name, got, err)
+		}
+		_, err = Resolve(append(candidates, Target{Session: "sidecar-sh-demo-4", Name: name}), Query{Value: name})
+		if e, ok := err.(*Error); !ok || e.Kind != Ambiguous {
+			t.Fatalf("ambiguous bare display name %q: %v", name, err)
+		}
+		got, err = Resolve(append(candidates, Target{Session: name, Name: "Other"}), Query{Value: name})
+		if err != nil || got.Session != name {
+			t.Fatalf("exact session must win for %q: %+v %v", name, got, err)
+		}
+		_, err = Resolve(candidates, Query{Value: SessionSelector(name)})
+		if e, ok := err.(*Error); !ok || e.Kind != NotFound {
+			t.Fatalf("explicit session fell back for %q: %v", name, err)
+		}
+	}
+	for _, name := range []string{"sidecar-sh-deleted", "sidecar-ws-deleted", "sidecar-tp-deleted"} {
+		candidates := []Target{{Session: "live", Name: name}}
+		_, err := Resolve(candidates, Query{Value: name})
+		if e, ok := err.(*Error); !ok || e.Kind != NotFound || !strings.Contains(e.Message, "session") {
+			t.Fatalf("missing managed session %q must clearly refuse: %v", name, err)
+		}
+		got, err := Resolve(candidates, Query{Value: "name:" + name})
+		if err != nil || got.Session != "live" {
+			t.Fatalf("explicit display name %q: %+v %v", name, got, err)
+		}
 	}
 }
 
