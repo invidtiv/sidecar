@@ -120,7 +120,8 @@ type Server struct {
 	catalogEvents eventSignals
 	holderCache   legacyHolderCache
 	// contentWatches bounds live content registrations per credential.
-	contentWatches watchBudget
+	contentWatches  watchBudget
+	contentRequests contentRequestBudget
 }
 
 // ListenerInfo describes one bound listener in status.
@@ -337,6 +338,10 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		s.closing = true
 		s.streamMu.Unlock()
 		s.cancel()
+		// Close even listeners whose Serve goroutine has not yet registered
+		// with net/http. Do so before releasing the single-instance lock:
+		// UnixListener.Close unlinks its path, which may soon name a successor.
+		s.closeListeners()
 		for _, server := range s.servers {
 			if err := server.Shutdown(ctx); err != nil && result == nil {
 				result = err

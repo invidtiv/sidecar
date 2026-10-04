@@ -3,7 +3,6 @@ package workspacediff
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -11,11 +10,17 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
+
+	"github.com/marcus/sidecar/internal/rootfile"
 )
 
 // LoadSnapshot resolves base and HEAD, then loads the pinned snapshot.
 func LoadSnapshot(ctx context.Context, workdir, baseRef string) (*Snapshot, error) {
+	return LoadSnapshotFiltered(ctx, workdir, baseRef, nil)
+}
+
+// LoadSnapshotFiltered applies an optional API policy before reading patches.
+func LoadSnapshotFiltered(ctx context.Context, workdir, baseRef string, filter *ReadFilter) (*Snapshot, error) {
 	if _, err := os.Lstat(workdir); err != nil {
 		return nil, fmt.Errorf("inspect worktree %s: %w", workdir, err)
 	}
@@ -33,12 +38,16 @@ func LoadSnapshot(ctx context.Context, workdir, baseRef string) (*Snapshot, erro
 	if err != nil {
 		return nil, fmt.Errorf("resolve HEAD: %w", err)
 	}
-	return LoadSnapshotPinned(ctx, workdir, baseRef, strings.TrimSpace(string(baseOIDBytes)), strings.TrimSpace(string(headOIDBytes)))
+	return loadSnapshotPinnedFiltered(ctx, workdir, baseRef, strings.TrimSpace(string(baseOIDBytes)), strings.TrimSpace(string(headOIDBytes)), filter)
 }
 
 // LoadSnapshotPinned loads working-tree, unique commits, and aggregate diffs
 // against already-resolved OIDs.
 func LoadSnapshotPinned(ctx context.Context, workdir, baseRef, baseOID, headOID string) (*Snapshot, error) {
+	return loadSnapshotPinnedFiltered(ctx, workdir, baseRef, baseOID, headOID, nil)
+}
+
+func loadSnapshotPinnedFiltered(ctx context.Context, workdir, baseRef, baseOID, headOID string, filter *ReadFilter) (*Snapshot, error) {
 	if _, err := os.Lstat(workdir); err != nil {
 		return nil, fmt.Errorf("inspect worktree %s: %w", workdir, err)
 	}
@@ -49,22 +58,22 @@ func LoadSnapshotPinned(ctx context.Context, workdir, baseRef, baseOID, headOID 
 		return nil, fmt.Errorf("resolved HEAD OID is unavailable")
 	}
 
-	tracked, err := gitOutputBytes(ctx, workdir, "diff", "--binary", headOID)
+	tracked, err := GitOutputBounded(ctx, workdir, MaxDiffBytes, filteredGitArgs([]string{"diff", "--binary", headOID}, filter)...)
 	if err != nil {
 		return nil, err
 	}
-	untracked, meta, err := untrackedFileDiffs(ctx, workdir)
+	untracked, meta, err := untrackedFileDiffsWithFilter(ctx, workdir, os.Lstat, filter)
 	if err != nil {
 		return nil, err
 	}
-	working := joinDiffParts(string(tracked), untracked)
+	working := joinDiffParts(tracked.display(), untracked)
 
 	mergeBaseBytes, err := gitOutputBytes(ctx, workdir, "merge-base", baseOID, headOID)
 	if err != nil {
 		return nil, fmt.Errorf("resolve merge-base for base ref %q: %w", baseRef, err)
 	}
 	mergeBase := strings.TrimSpace(string(mergeBaseBytes))
-	committed, err := gitOutputBytes(ctx, workdir, "diff", "--binary", mergeBase+".."+headOID)
+	committed, err := GitOutputBounded(ctx, workdir, MaxDiffBytes, filteredGitArgs([]string{"diff", "--binary", mergeBase + ".." + headOID}, filter)...)
 	if err != nil {
 		return nil, fmt.Errorf("aggregate committed diff for %q (%s..HEAD): %w", baseRef, mergeBase, err)
 	}
@@ -74,54 +83,52 @@ func LoadSnapshotPinned(ctx context.Context, workdir, baseRef, baseOID, headOID 
 	}
 
 	state := LoadStateReady
-	if working == "" && len(commits) == 0 && len(committed) == 0 {
+	if working == "" && len(commits) == 0 && committed.Raw == "" {
 		state = LoadStateClean
-	} else if meta.Truncated {
+	} else if meta.Truncated || tracked.Truncated || committed.Truncated {
 		state = LoadStateTruncated
 	}
 	return &Snapshot{State: state, WorkingTree: working, Commits: commits,
-		AggregateCommitted: string(committed), AggregateUncommitted: working,
+		AggregateCommitted: committed.display(), AggregateUncommitted: working,
 		BaseRef: baseRef, MergeBase: mergeBase, UntrackedShown: meta.Shown,
 		UntrackedOmitted: meta.Omitted, UntrackedBytesOmitted: meta.BytesOmitted,
-		Truncated: meta.Truncated}, nil
+		Truncated: meta.Truncated || tracked.Truncated || committed.Truncated}, nil
 }
 
 // LoadWorkingTreeFileDiff loads one working-tree path's patch: tracked diff
 // against HEAD, or an untracked-file synthetic diff.
 func LoadWorkingTreeFileDiff(ctx context.Context, workdir, path string) (string, error) {
+	patch, err := LoadWorkingTreeFilePatch(ctx, workdir, path)
+	return patch.display(), err
+}
+
+// LoadWorkingTreeFilePatch loads a bounded tracked or synthetic untracked patch.
+func LoadWorkingTreeFilePatch(ctx context.Context, workdir, path string) (Patch, error) {
 	if path == "" {
-		return "", fmt.Errorf("path is required")
+		return Patch{}, fmt.Errorf("path is required")
 	}
-	tracked, err := gitDiffPath(ctx, workdir, path)
+	tracked, err := GitOutputBounded(ctx, workdir, MaxDiffBytes, "diff", "--binary", "HEAD", "--", path)
 	if err != nil {
-		return "", err
+		return Patch{}, err
 	}
-	if strings.TrimSpace(tracked) != "" {
+	if strings.TrimSpace(tracked.Raw) != "" {
 		return tracked, nil
 	}
 	full := filepath.Join(workdir, filepath.FromSlash(path))
 	info, err := os.Lstat(full)
 	if err != nil {
-		return "", err
+		return Patch{}, err
 	}
 	if !info.Mode().IsRegular() {
-		return "", fmt.Errorf("untracked path is not a regular file: %s", path)
+		return Patch{}, fmt.Errorf("untracked path is not a regular file: %s", path)
 	}
 	diff, _, err := untrackedFileDiffBounded(workdir, path)
-	return diff, err
-}
-
-func gitDiffPath(ctx context.Context, dir, path string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", "diff", "--binary", "HEAD", "--", path)
-	cmd.Dir = dir
-	out, err := cmd.Output()
-	if err != nil {
-		var exit *exec.ExitError
-		if !errors.As(err, &exit) || exit.ExitCode() != 1 {
-			return "", fmt.Errorf("git diff HEAD -- %s: %w", path, err)
-		}
+	truncated := info.Size() > MaxUntrackedFileSize
+	if len(diff) > MaxDiffBytes {
+		diff = diff[:MaxDiffBytes]
+		truncated = true
 	}
-	return string(out), nil
+	return Patch{Raw: diff, Truncated: truncated}, err
 }
 
 func gitOutputBytes(ctx context.Context, dir string, args ...string) ([]byte, error) {
@@ -150,12 +157,8 @@ type untrackedDiffMeta struct {
 	Truncated      bool
 }
 
-func untrackedFileDiffs(ctx context.Context, workdir string) (string, untrackedDiffMeta, error) {
-	return untrackedFileDiffsWithLstat(ctx, workdir, os.Lstat)
-}
-
-func untrackedFileDiffsWithLstat(ctx context.Context, workdir string, lstat func(string) (os.FileInfo, error)) (string, untrackedDiffMeta, error) {
-	output, err := gitOutputBytes(ctx, workdir, "ls-files", "-z", "--others", "--exclude-standard")
+func untrackedFileDiffsWithFilter(ctx context.Context, workdir string, lstat func(string) (os.FileInfo, error), filter *ReadFilter) (string, untrackedDiffMeta, error) {
+	output, err := gitOutputBytes(ctx, workdir, filteredGitArgs([]string{"ls-files", "-z", "--others", "--exclude-standard"}, filter)...)
 	if err != nil {
 		return "", untrackedDiffMeta{}, err
 	}
@@ -169,6 +172,9 @@ func untrackedFileDiffsWithLstat(ctx context.Context, workdir string, lstat func
 			continue
 		}
 		file := string(field)
+		if filter != nil && filter.AllowPath != nil && !filter.AllowPath(file) {
+			continue
+		}
 		if inspected >= MaxUntrackedFiles {
 			meta.Omitted++
 			meta.Truncated = true
@@ -226,7 +232,7 @@ func untrackedFileDiffBounded(workdir, file string) (string, int64, error) {
 		return "", 0, err
 	}
 	defer func() { _ = dir.Close() }()
-	f, err := dir.OpenFile(file, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	f, err := rootfile.OpenNoFollow(dir, file)
 	if err != nil {
 		return "", 0, err
 	}

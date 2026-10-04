@@ -8,11 +8,51 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/marcus/sidecar/internal/contentservice"
 )
 
 const ScopeContentRead = "content:read"
+
+const maxContentRequestsPerClient = 4
+
+// Content reads spend memory and subprocesses before encoding. Refuse rather
+// than queue excess work, sharing one budget across projects and both routes.
+type contentRequestBudget struct {
+	mu   sync.Mutex
+	used map[string]int
+}
+
+func (b *contentRequestBudget) reserve(client string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.used[client] >= maxContentRequestsPerClient {
+		return false
+	}
+	if b.used == nil {
+		b.used = make(map[string]int)
+	}
+	b.used[client]++
+	return true
+}
+
+func (b *contentRequestBudget) release(client string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.used[client]--
+	if b.used[client] <= 0 {
+		delete(b.used, client)
+	}
+}
+
+func (s *Server) admitContent(w http.ResponseWriter, c caller) bool {
+	if s.contentRequests.reserve(c.client) {
+		return true
+	}
+	writeError(w, http.StatusTooManyRequests, "too_many_outstanding", "This client already has four content reads in progress; wait for a read to finish.")
+	return false
+}
 
 // ContentBackend preserves the shared content DTOs at the transport seam.
 type ContentBackend interface {
@@ -128,6 +168,10 @@ func (s *Server) handleContent(w http.ResponseWriter, r *http.Request, c caller)
 	if !s.requireScope(w, c, ScopeContentRead) {
 		return
 	}
+	if !s.admitContent(w, c) {
+		return
+	}
+	defer s.contentRequests.release(c.client)
 	_, project := projectContentRoute(r.URL.Path)
 	p, err := contentParams(r.URL.Query())
 	if err != nil {
@@ -151,6 +195,10 @@ func (s *Server) handleTree(w http.ResponseWriter, r *http.Request, c caller) {
 	if !s.requireScope(w, c, ScopeContentRead) {
 		return
 	}
+	if !s.admitContent(w, c) {
+		return
+	}
+	defer s.contentRequests.release(c.client)
 	_, project := projectContentRoute(r.URL.Path)
 	q := r.URL.Query()
 	for key, values := range q {
@@ -195,6 +243,10 @@ func addContentSpec(paths map[string]any) {
 			params, _ := op["parameters"].([]any)
 			params = append(params, map[string]any{"name": "project", "in": "path", "required": true, "schema": map[string]any{"type": "string"}, "description": "Exact configured project name."})
 			op["x-required-scope"] = ScopeContentRead
+			if path == contentRoute || path == treeRoute {
+				op["x-max-concurrent-requests-per-client"] = maxContentRequestsPerClient
+				op["responses"].(map[string]any)["429"] = map[string]any{"description": "Four content/tree reads are already in progress for this credential holder; wait for a read to finish.", "content": jsonContent("ErrorBody")}
+			}
 			if path == contentRoute {
 				for _, name := range []string{"workspace", "kind", "operation", "target", "path", "parent", "if_revision", "offset", "limit"} {
 					schema := map[string]any{"type": "string"}

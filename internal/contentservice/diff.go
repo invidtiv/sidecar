@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/marcus/sidecar/internal/rootfile"
 	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
@@ -120,6 +121,7 @@ type DiffDocument struct {
 
 // ReadParams is one content read, including optional diff locators.
 type ReadParams struct {
+	diffFilter  *workspacediff.ReadFilter
 	WorkspaceID string
 	Kind        string
 	Operation   string
@@ -206,13 +208,13 @@ func (s *Service) readDiffAt(ctx context.Context, root string, params ReadParams
 	}
 	switch params.Operation {
 	case OpWorkingTree:
-		return s.readWorkingTree(ctx, root, params.IfRevision)
+		return s.readWorkingTree(ctx, root, params.IfRevision, params.diffFilter)
 	case OpWorkingTreeFile:
 		return s.readWorkingTreeFile(ctx, root, params.Path, params.IfRevision)
 	case OpCommit:
-		return s.readCommit(ctx, root, params.Target, params.IfRevision)
+		return s.readCommit(ctx, root, params.Target, params.IfRevision, params.diffFilter)
 	case OpRange:
-		return s.readRange(ctx, root, params.Target, params.IfRevision)
+		return s.readRange(ctx, root, params.Target, params.IfRevision, params.diffFilter)
 	case OpCommitFile:
 		return s.readCommitFile(ctx, root, params.Target, params.Path, params.Parent, params.IfRevision)
 	case OpFullFile:
@@ -222,7 +224,7 @@ func (s *Service) readDiffAt(ctx context.Context, root string, params ReadParams
 	}
 }
 
-func (s *Service) readWorkingTree(ctx context.Context, root, ifRevision string) (DiffDocument, error) {
+func (s *Service) readWorkingTree(ctx context.Context, root, ifRevision string, filter *workspacediff.ReadFilter) (DiffDocument, error) {
 	rev, err := s.workingTreeRevision(ctx, root)
 	if err != nil {
 		return DiffDocument{}, err
@@ -230,7 +232,7 @@ func (s *Service) readWorkingTree(ctx context.Context, root, ifRevision string) 
 	if ifRevision != "" && ifRevision == rev {
 		return DiffDocument{Revision: rev, NotModified: true}, nil
 	}
-	snap, err := workspacediff.LoadSnapshot(ctx, root, "")
+	snap, err := workspacediff.LoadSnapshotFiltered(ctx, root, "", filter)
 	if err != nil {
 		return DiffDocument{}, Internal("load working-tree diff", err)
 	}
@@ -251,18 +253,20 @@ func (s *Service) readWorkingTreeFile(ctx context.Context, root, path, ifRevisio
 	if ifRevision != "" && ifRevision == fileRev {
 		return DiffDocument{Revision: fileRev, NotModified: true}, nil
 	}
-	raw, err := loadWorkingTreeFileDiff(ctx, root, rel)
+	patch, err := workspacediff.LoadWorkingTreeFilePatch(ctx, root, rel)
 	if err != nil {
 		return DiffDocument{}, Internal("load working-tree file", err)
 	}
+	raw := patch.Raw
 	dto := &DiffDTO{
-		Target: workspacediff.IdentityWorkingTree,
-		File:   &DiffFileDTO{Path: rel, Raw: raw},
+		Target:    workspacediff.IdentityWorkingTree,
+		File:      &DiffFileDTO{Path: rel, Raw: raw},
+		Truncated: patch.Truncated,
 	}
 	return DiffDocument{DTO: dto, FileRaw: raw, FilePath: rel, Revision: fileRev}, nil
 }
 
-func (s *Service) readCommit(ctx context.Context, root, target, ifRevision string) (DiffDocument, error) {
+func (s *Service) readCommit(ctx context.Context, root, target, ifRevision string, filter *workspacediff.ReadFilter) (DiffDocument, error) {
 	spec, err := ResolveDiff(ctx, root, target)
 	if err != nil {
 		return DiffDocument{}, err
@@ -274,7 +278,7 @@ func (s *Service) readCommit(ctx context.Context, root, target, ifRevision strin
 	if ifRevision != "" && ifRevision == rev {
 		return DiffDocument{Revision: rev, NotModified: true}, nil
 	}
-	detail, err := workspacediff.LoadCommitDetail(ctx, root, spec.A)
+	detail, err := workspacediff.LoadCommitDetailFiltered(ctx, root, spec.A, filter)
 	if err != nil {
 		return DiffDocument{}, Internal("load commit", err)
 	}
@@ -285,7 +289,7 @@ func (s *Service) readCommit(ctx context.Context, root, target, ifRevision strin
 	return DiffDocument{DTO: dto, Commit: detail, Revision: rev}, nil
 }
 
-func (s *Service) readRange(ctx context.Context, root, target, ifRevision string) (DiffDocument, error) {
+func (s *Service) readRange(ctx context.Context, root, target, ifRevision string, filter *workspacediff.ReadFilter) (DiffDocument, error) {
 	spec, err := ResolveDiff(ctx, root, target)
 	if err != nil {
 		return DiffDocument{}, err
@@ -297,14 +301,16 @@ func (s *Service) readRange(ctx context.Context, root, target, ifRevision string
 	if ifRevision != "" && ifRevision == rev {
 		return DiffDocument{Revision: rev, NotModified: true}, nil
 	}
-	raw, err := workspacediff.LoadRangeDiff(ctx, root, spec)
+	patch, err := workspacediff.LoadRangePatchFiltered(ctx, root, spec, filter)
 	if err != nil {
 		return DiffDocument{}, Internal("load range", err)
 	}
+	raw := patch.Raw
 	files := workspacediff.ParseFiles(raw)
 	dto := &DiffDTO{
-		Target: rev,
-		Range:  &DiffRangeDTO{Spec: strings.TrimPrefix(rev, "r:"), Raw: raw, Files: diffFileRows(files)},
+		Target:    rev,
+		Range:     &DiffRangeDTO{Spec: strings.TrimPrefix(rev, "r:"), Raw: raw, Files: diffFileRows(files)},
+		Truncated: patch.Truncated,
 	}
 	return DiffDocument{DTO: dto, RangeRaw: raw, Revision: rev}, nil
 }
@@ -335,11 +341,12 @@ func (s *Service) readCommitFile(ctx context.Context, root, target, path, parent
 	if ifRevision != "" && ifRevision == rev {
 		return DiffDocument{Revision: rev, NotModified: true}, nil
 	}
-	raw, err := workspacediff.LoadCommitFileDiff(ctx, root, hash, rel, parent)
+	patch, err := workspacediff.LoadCommitFilePatch(ctx, root, hash, rel, parent)
 	if err != nil {
 		return DiffDocument{}, Internal("load commit file", err)
 	}
-	dto := &DiffDTO{Target: spec.Identity(), File: &DiffFileDTO{Path: rel, Raw: raw}}
+	raw := patch.Raw
+	dto := &DiffDTO{Target: spec.Identity(), File: &DiffFileDTO{Path: rel, Raw: raw}, Truncated: patch.Truncated}
 	return DiffDocument{DTO: dto, FileRaw: raw, FilePath: rel, Revision: rev}, nil
 }
 
@@ -356,7 +363,7 @@ func (s *Service) readFullFile(ctx context.Context, root string, params ReadPara
 	if err != nil {
 		return DiffDocument{}, err
 	}
-	oldContent, newContent, rawDiff, rev, err := s.fullFileContents(ctx, root, spec, rel, parent)
+	oldContent, newContent, rawDiff, rev, sourceTruncated, err := s.fullFileContents(ctx, root, spec, rel, parent)
 	if err != nil {
 		return DiffDocument{}, err
 	}
@@ -373,7 +380,7 @@ func (s *Service) readFullFile(ctx context.Context, root string, params ReadPara
 	if newTotal > total {
 		total = newTotal
 	}
-	truncated := params.Limit > 0 && (offset+params.Limit) < total
+	truncated := sourceTruncated || (params.Limit > 0 && (offset+params.Limit) < total)
 	if len(oldContent) > workspacediff.MaxUntrackedFileSize || len(newContent) > workspacediff.MaxUntrackedFileSize {
 		truncated = true
 	}
@@ -391,39 +398,49 @@ func (s *Service) readFullFile(ctx context.Context, root string, params ReadPara
 	return DiffDocument{DTO: dto, FilePath: rel, Revision: rev}, nil
 }
 
-func (s *Service) fullFileContents(ctx context.Context, root string, spec workspacediff.Target, path, parent string) (oldContent, newContent, rawDiff, rev string, err error) {
+func (s *Service) fullFileContents(ctx context.Context, root string, spec workspacediff.Target, path, parent string) (oldContent, newContent, rawDiff, rev string, truncated bool, err error) {
+	var oldFile, newFile, patch workspacediff.Patch
 	switch spec.Kind {
 	case workspacediff.TargetCommit:
 		parentRef := spec.A + "~1"
 		if parent != "" {
 			parentRef = parent
 		}
-		oldContent, _ = s.gitShowFile(ctx, root, parentRef, path)
-		newContent, _ = s.gitShowFile(ctx, root, spec.A, path)
-		rawDiff, err = workspacediff.LoadCommitFileDiff(ctx, root, spec.A, path, parent)
+		oldFile, _ = s.gitShowFile(ctx, root, parentRef, path)
+		newFile, _ = s.gitShowFile(ctx, root, spec.A, path)
+		patch, err = workspacediff.LoadCommitFilePatch(ctx, root, spec.A, path, parent)
 		rev = spec.Identity() + ":" + path
-		return oldContent, newContent, rawDiff, rev, err
 	default:
-		oldContent, _ = s.gitShowFile(ctx, root, "HEAD", path)
-		newContent, _ = readWorktreeFileBounded(root, path)
-		rawDiff, err = loadWorkingTreeFileDiff(ctx, root, path)
+		oldFile, _ = s.gitShowFile(ctx, root, "HEAD", path)
+		newFile, _ = readWorktreeFilePatch(root, path)
+		patch, err = workspacediff.LoadWorkingTreeFilePatch(ctx, root, path)
 		wtRev, revErr := s.workingTreeRevision(ctx, root)
 		if revErr != nil {
-			return "", "", "", "", revErr
+			return "", "", "", "", false, revErr
 		}
-		return oldContent, newContent, rawDiff, wtRev + ":" + path, err
+		rev = wtRev + ":" + path
 	}
+	if ctx.Err() != nil {
+		return "", "", "", "", false, ctx.Err()
+	}
+	return oldFile.Raw, newFile.Raw, patch.Raw, rev, oldFile.Truncated || newFile.Truncated || patch.Truncated, err
 }
 
-func (s *Service) gitShowFile(ctx context.Context, root, rev, path string) (string, error) {
-	out, err := s.gitOutput(ctx, root, "show", rev+":"+filepath.ToSlash(path))
+func (s *Service) gitShowFile(ctx context.Context, root, rev, path string) (workspacediff.Patch, error) {
+	args := []string{"show", rev + ":" + filepath.ToSlash(path)}
+	if s.Git == nil {
+		return workspacediff.GitOutputBounded(ctx, root, workspacediff.MaxUntrackedFileSize, args...)
+	}
+	// Injected git functions are test adapters; production reads use the stream.
+	out, err := s.Git(ctx, root, args...)
 	if err != nil {
-		return "", err
+		return workspacediff.Patch{}, err
 	}
-	if len(out) > workspacediff.MaxUntrackedFileSize {
-		return string(out[:workspacediff.MaxUntrackedFileSize]), nil
+	truncated := len(out) > workspacediff.MaxUntrackedFileSize
+	if truncated {
+		out = out[:workspacediff.MaxUntrackedFileSize]
 	}
-	return string(out), nil
+	return workspacediff.Patch{Raw: string(out), Truncated: truncated}, nil
 }
 
 func (s *Service) gitOutput(ctx context.Context, root string, args ...string) ([]byte, error) {
@@ -478,44 +495,43 @@ func containDiffPath(path string) (string, error) {
 	return filepath.ToSlash(cleaned), nil
 }
 
-func loadWorkingTreeFileDiff(ctx context.Context, root, path string) (string, error) {
-	raw, err := workspacediff.LoadWorkingTreeFileDiff(ctx, root, path)
-	if err != nil {
-		return "", err
-	}
-	return raw, nil
-}
-
-func readWorktreeFileBounded(root, path string) (string, error) {
+func readWorktreeFilePatch(root, path string) (workspacediff.Patch, error) {
 	full := filepath.Join(root, filepath.FromSlash(path))
 	info, err := os.Lstat(full)
 	if err != nil {
-		return "", err
+		return workspacediff.Patch{}, err
 	}
 	if !info.Mode().IsRegular() {
-		return "", fmt.Errorf("not a regular file")
+		return workspacediff.Patch{}, fmt.Errorf("not a regular file")
 	}
 	if info.Size() > workspacediff.MaxUntrackedFileSize {
-		return "", nil
+		return workspacediff.Patch{Truncated: true}, nil
 	}
 	dir, err := os.OpenRoot(root)
 	if err != nil {
-		return "", err
+		return workspacediff.Patch{}, err
 	}
 	defer func() { _ = dir.Close() }()
-	f, err := dir.Open(filepath.FromSlash(path))
+	f, err := rootfile.OpenNoFollow(dir, filepath.FromSlash(path))
 	if err != nil {
-		return "", err
+		return workspacediff.Patch{}, err
 	}
 	defer func() { _ = f.Close() }()
+	current, err := f.Stat()
+	if err != nil {
+		return workspacediff.Patch{}, err
+	}
+	if !current.Mode().IsRegular() {
+		return workspacediff.Patch{}, fmt.Errorf("not a regular file")
+	}
 	data, err := io.ReadAll(io.LimitReader(f, workspacediff.MaxUntrackedFileSize+1))
 	if err != nil {
-		return "", err
+		return workspacediff.Patch{}, err
 	}
 	if len(data) > workspacediff.MaxUntrackedFileSize {
-		return "", nil
+		return workspacediff.Patch{Truncated: true}, nil
 	}
-	return string(data), nil
+	return workspacediff.Patch{Raw: string(data)}, nil
 }
 
 func pageText(s string, offset, limit int) (string, int) {

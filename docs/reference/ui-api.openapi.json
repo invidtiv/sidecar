@@ -3355,6 +3355,16 @@
             },
             "description": "Success"
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Four content/tree reads are already in progress for this credential holder; wait for a read to finish."
+          },
           "default": {
             "content": {
               "application/json": {
@@ -3381,6 +3391,7 @@
           "tailnet"
         ],
         "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there.",
+        "x-max-concurrent-requests-per-client": 4,
         "x-required-scope": "content:read"
       },
       "head": {
@@ -3474,6 +3485,9 @@
           "200": {
             "description": "Success"
           },
+          "429": {
+            "description": "Four content/tree reads are already in progress for this credential holder; wait for a read to finish."
+          },
           "default": {
             "description": "Named refusal; see ui-api.md for status codes and remedies"
           }
@@ -3493,6 +3507,7 @@
           "tailnet"
         ],
         "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there.",
+        "x-max-concurrent-requests-per-client": 4,
         "x-required-scope": "content:read"
       }
     },
@@ -3779,6 +3794,16 @@
             },
             "description": "Success"
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Four content/tree reads are already in progress for this credential holder; wait for a read to finish."
+          },
           "default": {
             "content": {
               "application/json": {
@@ -3805,6 +3830,7 @@
           "tailnet"
         ],
         "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there.",
+        "x-max-concurrent-requests-per-client": 4,
         "x-required-scope": "content:read"
       },
       "head": {
@@ -3844,6 +3870,9 @@
           "200": {
             "description": "Success"
           },
+          "429": {
+            "description": "Four content/tree reads are already in progress for this credential holder; wait for a read to finish."
+          },
           "default": {
             "description": "Named refusal; see ui-api.md for status codes and remedies"
           }
@@ -3863,6 +3892,7 @@
           "tailnet"
         ],
         "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there.",
+        "x-max-concurrent-requests-per-client": 4,
         "x-required-scope": "content:read"
       }
     },

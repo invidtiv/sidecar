@@ -2,10 +2,10 @@ package contentservice
 
 import (
 	"context"
-	"github.com/marcus/sidecar/internal/config"
-	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/marcus/sidecar/internal/config"
 )
 
 // LookupProject resolves an explicitly configured project and an optional
@@ -54,23 +54,46 @@ func (s *Service) ReadProject(ctx context.Context, project, workspace string, pa
 		return ReadResult{}, UnknownKind(params.Kind)
 	}
 	if params.Kind == KindFile {
-		rel, err := projectRelative(params.Target)
+		policy, err := s.openProjectPolicy(ctx, ws.Root)
 		if err != nil {
 			return ReadResult{}, err
 		}
-		doc, err := readContainedFile(ctx, ws.Root, rel, params.IfRevision)
+		defer policy.close()
+		rel, err := policy.path(params.Target)
+		if err != nil {
+			return ReadResult{}, err
+		}
+		file, err := policy.open(rel)
+		if err != nil {
+			return ReadResult{}, Rejected("file %q is not readable within the project: %v", rel, err)
+		}
+		defer func() { _ = file.Close() }()
+		display, _ := projectRelative(params.Target)
+		doc, err := readOpened(ctx, ResolvedFile{Display: display, Absolute: file.Name()}, file, params.IfRevision)
 		if err != nil {
 			return ReadResult{}, err
 		}
 		return readResultFrom(ws.ID, doc), nil
 	}
-	if params.Kind == KindDiff && params.Path != "" {
-		rel, err := projectRelative(params.Path)
+	if params.Kind == KindDiff {
+		policy, err := s.openProjectPolicy(ctx, ws.Root)
 		if err != nil {
 			return ReadResult{}, err
 		}
-		if err := checkRooted(ws.Root, rel); err != nil {
-			return ReadResult{}, err
+		defer policy.close()
+		if policy.metadata(".") {
+			return ReadResult{}, refuseGitMetadata()
+		}
+		params.diffFilter = policy.diffFilter()
+		if params.Path != "" {
+			if _, err := policy.path(params.Path); err != nil {
+				return ReadResult{}, err
+			}
+			// The Git path identifies the tree entry, not a symlink's file target.
+			params.Path, err = projectRelative(params.Path)
+			if err != nil {
+				return ReadResult{}, err
+			}
 		}
 	}
 	return s.readWorkspace(ctx, ws, params)
@@ -82,17 +105,21 @@ func (s *Service) TreeProject(ctx context.Context, project, workspace string, pa
 	if err != nil {
 		return TreeResult{}, err
 	}
+	policy, err := s.openProjectPolicy(ctx, ws.Root)
+	if err != nil {
+		return TreeResult{}, err
+	}
+	defer policy.close()
 	for _, path := range paths {
-		if err := StrictRelative(path); err != nil {
+		if path == "" {
+			path = "."
+		}
+		if _, err := policy.path(path); err != nil {
 			return TreeResult{}, err
 		}
 	}
-	dir, err := os.OpenRoot(ws.Root)
-	if err != nil {
-		return TreeResult{}, Rejected("project root is not readable: %v", err)
-	}
-	defer func() { _ = dir.Close() }()
-	return s.treeWorkspaceRead(ctx, ws, paths, dir)
+	tree, err := s.treeWorkspaceOpen(ctx, ws, paths, policy.root, policy.open)
+	return policy.filterTree(tree), err
 }
 
 // StrictRelative rejects traversal components even when cleaning would leave
@@ -123,20 +150,4 @@ func projectRelative(raw string) (string, error) {
 		return "", err
 	}
 	return filepath.ToSlash(filepath.Clean(filepath.FromSlash(raw))), nil
-}
-
-// checkRooted refuses a path that is unreachable within root, through an
-// escaping symlink at any component included. A missing in-root path passes:
-// a deleted file still has a diff and a file not yet written can be watched.
-func checkRooted(root, rel string) error {
-	dir, err := os.OpenRoot(root)
-	if err != nil {
-		return Rejected("project root is not readable: %v", err)
-	}
-	defer func() { _ = dir.Close() }()
-	_, err = dir.Stat(filepath.FromSlash(rel))
-	if err != nil && !os.IsNotExist(err) {
-		return Rejected("path %q is not accessible within the project: %v", rel, err)
-	}
-	return nil
 }
