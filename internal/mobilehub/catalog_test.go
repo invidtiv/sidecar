@@ -1,6 +1,7 @@
 package mobilehub
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -135,4 +136,58 @@ func rawOwnerCatalog(rawOwner, projectID, selector string) mobileproto.CatalogSn
 	return mobileproto.CatalogSnapshot{HubID: "owner-hub", OwnerHostID: rawOwner, OwnerConfigGeneration: "owner-cfg",
 		Query: mobileproto.CatalogQuery{Sort: "project"}, Hosts: []mobileproto.CatalogHost{{ID: rawOwner, State: "online", Local: true}},
 		Sections: []mobileproto.CatalogSection{{Key: projectID, Rows: []mobileproto.CatalogRow{row}}}, Total: 1}
+}
+
+func TestRemapOwnerCatalogPreservesRealPathThroughComposition(t *testing.T) {
+	for _, path := range []string{"/Users/owner/code/repo/worktree", ""} {
+		t.Run(path, func(t *testing.T) {
+			raw := rawOwnerCatalog("book-local", "same", "candidate_v0_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+			data, err := json.Marshal(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var wire map[string]any
+			if err := json.Unmarshal(data, &wire); err != nil {
+				t.Fatal(err)
+			}
+			rawRow := wire["sections"].([]any)[0].(map[string]any)["rows"].([]any)[0].(map[string]any)
+			if path != "" {
+				rawRow["path"] = path
+			}
+			data, err = json.Marshal(wire)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(data, &raw); err != nil {
+				t.Fatal(err)
+			}
+			remapped, err := RemapOwnerCatalog(CatalogAuthority{HubID: "aerie", HubConfigGeneration: "cfg", OwnerHostID: "book", RegistrationFingerprint: "reg"}, raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			snapshot, err := mobile.ComposeCatalog(mobileproto.CatalogQuery{}, mobile.CatalogIdentity{HubID: "aerie", OwnerHostID: "local:aerie", OwnerConfigGeneration: "cfg"}, time.Now(), []mobileproto.CatalogHost{{ID: "local:aerie", State: "online", Local: true}, {ID: "book", State: "online"}}, []mobile.CatalogSource{remapped.Source}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			row := snapshot.Sections[0].Rows[0]
+			if row.ProjectID == raw.Sections[0].Rows[0].ProjectID {
+				t.Fatal("test must exercise scoped remote identity")
+			}
+			data, err = json.Marshal(row)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rawRow = nil
+			if err := json.Unmarshal(data, &rawRow); err != nil {
+				t.Fatal(err)
+			}
+			if path == "" {
+				if _, exists := rawRow["path"]; exists {
+					t.Fatal("omitted path became present")
+				}
+			} else if rawRow["path"] != path {
+				t.Fatalf("remapped path = %v, want owner path %q", rawRow["path"], path)
+			}
+		})
+	}
 }

@@ -58,6 +58,7 @@ type clientRegistry struct {
 	now     func() time.Time
 	next    uint64
 	clients map[string]*trackedClient
+	changes eventSignals
 }
 
 type trackedClient struct {
@@ -69,6 +70,7 @@ type trackedClient struct {
 	// lastErrorCode is the code of the most recent outbound error envelope
 	// that was the latest message on the stream, used to pick a close code.
 	lastErrorCode string
+	changed       func()
 	// revoked closes when the credential this client connected with is
 	// revoked; its terminal then closes with 4401.
 	revoked    chan struct{}
@@ -86,7 +88,7 @@ func (r *clientRegistry) add(kind string, c caller) (*trackedClient, bool) {
 	if c.listener != ListenerLocal {
 		held := 0
 		for _, existing := range r.clients {
-			if existing.key == c.client {
+			if existing.key == c.client && existing.info.Kind == kind {
 				held++
 			}
 		}
@@ -99,12 +101,14 @@ func (r *clientRegistry) add(kind string, c caller) (*trackedClient, bool) {
 	client := &trackedClient{info: ClientInfo{ID: id, Kind: kind, Listener: c.listener, Auth: c.auth, Origin: c.origin, Login: c.login, Since: r.now().UTC()}}
 	client.term.ClientID = id
 	client.key = c.client
+	client.changed = r.changes.signal
 	client.revoked = make(chan struct{})
 	r.clients[id] = client
 	return client, true
 }
 
-// revoke signals every client whose key is in keys and returns how many.
+// revoke signals every stream whose key is in keys and returns the terminal
+// count for SessionRevocation. Events do not count as terminal attachments.
 func (r *clientRegistry) revoke(keys map[string]bool) int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -112,7 +116,9 @@ func (r *clientRegistry) revoke(keys map[string]bool) int {
 	for _, client := range r.clients {
 		if keys[client.key] {
 			client.revokeOnce.Do(func() { close(client.revoked) })
-			count++
+			if client.info.Kind == "terminal" {
+				count++
+			}
 		}
 	}
 	return count
@@ -122,6 +128,7 @@ func (r *clientRegistry) remove(client *trackedClient) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.clients, client.info.ID)
+	r.changes.signal()
 }
 
 // sessionKeys includes established streams whose session token was evicted
@@ -193,7 +200,14 @@ func (c *trackedClient) observe(line []byte) {
 		return
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	wasOpen, before := c.open, c.term
+	defer func() {
+		changed := wasOpen != c.open || before != c.term
+		c.mu.Unlock()
+		if changed && c.changed != nil {
+			c.changed()
+		}
+	}()
 	c.lastErrorCode = ""
 	if response.Target != nil {
 		c.term.OwnerHostID, c.term.WorkspaceID = response.Target.OwnerHostID, response.Target.WorkspaceID
@@ -230,4 +244,22 @@ func (c *trackedClient) finalErrorCode() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.lastErrorCode
+}
+
+func (r *clientRegistry) terminalsFor(key string) []TerminalInfo {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	terms := make([]TerminalInfo, 0)
+	for _, client := range r.clients {
+		if client.key != key {
+			continue
+		}
+		client.mu.Lock()
+		if client.open {
+			terms = append(terms, client.term)
+		}
+		client.mu.Unlock()
+	}
+	sort.Slice(terms, func(i, j int) bool { return terms[i].ClientID < terms[j].ClientID })
+	return terms
 }

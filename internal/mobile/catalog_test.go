@@ -2,6 +2,7 @@ package mobile
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -324,5 +325,39 @@ func assertCatalogVerdict(t *testing.T, row mobileproto.CatalogRow, state, code 
 	t.Helper()
 	if row.AttachState != state || row.RefusalCode != code || row.AttachmentReady != ready || row.OwnerHostID != "local:test" {
 		t.Fatalf("verdict = %+v, want state=%q code=%q ready=%t", row, state, code, ready)
+	}
+}
+
+func TestCatalogRowsExposeOwnerPathWithProjectFallback(t *testing.T) {
+	now := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
+	for _, tc := range []struct{ name, workspacePath, projectRoot, want string }{
+		{"shell workspace", "/owner/repo/subdirectory", "/owner/repo", "/owner/repo/subdirectory"},
+		{"project fallback", "", "/owner/repo", "/owner/repo"},
+		{"older inventory", "", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			workspace := catalogShell("row", "Shell", "sidecar-sh-path", "%1", now)
+			workspace.Path, workspace.ProjectRoot = tc.workspacePath, tc.projectRoot
+			snapshot := mustCatalog(t, CatalogInput{ObservedAt: now, Projects: []CatalogProject{{Result: workspaceinventory.ProjectResult{ProjectKey: "/repo", Workspaces: []workspaceinventory.Workspace{workspace}}}}}, mobileproto.CatalogQuery{})
+			row := catalogRowsByID(snapshot)["row"]
+			data, err := json.Marshal(row)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var wire map[string]any
+			if err := json.Unmarshal(data, &wire); err != nil {
+				t.Fatal(err)
+			}
+			if tc.want == "" {
+				if _, exists := wire["path"]; exists {
+					t.Fatal("empty path must remain omitted")
+				}
+			} else if wire["path"] != tc.want {
+				t.Fatalf("row path = %v, want owner path %q", wire["path"], tc.want)
+			}
+			if !row.AttachmentReady {
+				t.Fatal("presentation path changed attachment authority")
+			}
+		})
 	}
 }

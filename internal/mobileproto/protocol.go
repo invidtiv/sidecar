@@ -169,13 +169,15 @@ type CatalogHost struct {
 }
 
 type CatalogRow struct {
-	ID                  string             `json:"id"`
-	OwnerHostID         string             `json:"owner_host_id"`
-	ProjectID           string             `json:"project_id"`
-	ProjectName         string             `json:"project_name"`
-	WorkspaceID         string             `json:"workspace_id,omitempty"`
-	WorkspaceKind       string             `json:"workspace_kind"`
-	DisplayName         string             `json:"display_name"`
+	ID            string `json:"id"`
+	OwnerHostID   string `json:"owner_host_id"`
+	ProjectID     string `json:"project_id"`
+	ProjectName   string `json:"project_name"`
+	WorkspaceID   string `json:"workspace_id,omitempty"`
+	WorkspaceKind string `json:"workspace_kind"`
+	DisplayName   string `json:"display_name"`
+	// Path is presentation metadata on the owning host, never a scoped selector.
+	Path                string             `json:"path,omitempty"`
 	Branch              string             `json:"branch,omitempty"`
 	Task                string             `json:"task,omitempty"`
 	Provider            string             `json:"provider,omitempty"`

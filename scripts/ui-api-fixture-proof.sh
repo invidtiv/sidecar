@@ -36,7 +36,7 @@ done
 socket=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["unix_socket"])' "$root/start.json")
 tcp=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["tcp"])' "$root/start.json")
 curl -fsS --unix-socket "$socket" http://sidecar/api/v0/sessions > "$root/sessions.json"
-python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));assert d["total"]==1 and d["sections"][0]["rows"][0]["target"]=="fixture-echo"' "$root/sessions.json"
+python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));assert d["total"]==1 and d["sections"][0]["rows"][0]["target"]=="fixture-echo" and d["sections"][0]["rows"][0]["path"]=="/workspace/fixture"' "$root/sessions.json"
 sc api status --json > "$root/status.json"
 python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));assert d["server_version"]=="fixture" and d["terminals"]==[]' "$root/status.json"
 # Exercise real pairing and ticket guards rather than bypassing browser auth.

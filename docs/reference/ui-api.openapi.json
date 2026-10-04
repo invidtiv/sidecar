@@ -1,6 +1,35 @@
 {
   "components": {
     "schemas": {
+      "AttentionEvent": {
+        "additionalProperties": false,
+        "properties": {
+          "catalog_id": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "needs_input",
+              "finished"
+            ],
+            "type": "string"
+          },
+          "time": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "catalog_id",
+          "title",
+          "time"
+        ],
+        "type": "object"
+      },
       "Capabilities": {
         "additionalProperties": false,
         "properties": {
@@ -275,6 +304,9 @@
             "type": "string"
           },
           "pane": {
+            "type": "string"
+          },
+          "path": {
             "type": "string"
           },
           "project_id": {
@@ -576,6 +608,111 @@
         ],
         "type": "object"
       },
+      "EventMessage": {
+        "additionalProperties": false,
+        "properties": {
+          "api_instance": {
+            "type": "string"
+          },
+          "api_version": {
+            "enum": [
+              0
+            ],
+            "type": "integer"
+          },
+          "attention": {
+            "$ref": "#/components/schemas/AttentionEvent"
+          },
+          "capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "catalog": {
+            "$ref": "#/components/schemas/CatalogSnapshot"
+          },
+          "error": {
+            "$ref": "#/components/schemas/ErrorDetail"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "seq": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "server_version": {
+            "type": "string"
+          },
+          "terminals": {
+            "items": {
+              "$ref": "#/components/schemas/EventTerminal"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "type": {
+            "enum": [
+              "hello",
+              "catalog",
+              "attention",
+              "terminals",
+              "error",
+              "shutdown"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "seq",
+          "api_version"
+        ],
+        "type": "object"
+      },
+      "EventTerminal": {
+        "additionalProperties": false,
+        "properties": {
+          "client_id": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "holder": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GeometryHolder"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "owner_host_id": {
+            "type": "string"
+          },
+          "pane": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "client_id",
+          "session",
+          "pane",
+          "holder"
+        ],
+        "type": "object"
+      },
       "Geometry": {
         "additionalProperties": false,
         "properties": {
@@ -589,6 +726,22 @@
         "required": [
           "columns",
           "rows"
+        ],
+        "type": "object"
+      },
+      "GeometryHolder": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "label"
         ],
         "type": "object"
       },
@@ -1404,6 +1557,131 @@
   "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
   "openapi": "3.1.0",
   "paths": {
+    "/api/v0/events": {
+      "get": {
+        "description": "Authenticated WebSocket upgrade. Exact Host guard before upgrade; Origin/auth failures use close codes after upgrade. A single-use origin-bound ticket or explicit bearer authenticates Browser; Local is trusted; Tailnet uses its allowed login. See ui-api.md.",
+        "operationId": "events_stream",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "ticket",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required for tickets and Tailnet. Explicit Browser bearer clients may omit Origin.",
+            "in": "header",
+            "name": "Origin",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "sort",
+            "schema": {
+              "enum": [
+                "activity",
+                "project",
+                "recent",
+                "name"
+              ],
+              "type": "string"
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "search",
+            "schema": {
+              "type": "string"
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "host",
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 32,
+              "type": "array"
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "provider",
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 32,
+              "type": "array"
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "state",
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 32,
+              "type": "array"
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "show_idle_sessions",
+            "schema": {
+              "type": "boolean"
+            },
+            "style": "form"
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "WebSocket upgraded; see x-streams for messages and close codes"
+          },
+          "421": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Host refused"
+          },
+          "426": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Upgrade required"
+          }
+        },
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ]
+      }
+    },
     "/api/v0/hello": {
       "get": {
         "operationId": "hello_get",
@@ -2274,6 +2552,16 @@
     }
   },
   "x-streams": {
+    "/api/v0/events": {
+      "description": "Server-to-client JSON envelopes only; hello, catalog and terminals baseline first. Contiguous seq starts at 1 on each connection. Catalog changes precede attention. Reconnect replaces the baseline without replay. Client data closes with 4400. See ui-api.md.",
+      "messageType": "text",
+      "protocol": "ui_api",
+      "response": {
+        "$ref": "#/components/schemas/EventMessage"
+      },
+      "transport": "websocket",
+      "version": 0
+    },
     "/api/v0/terminal": {
       "description": "One JSON envelope per text message. hello first; open before frame; operation_sequence and applied reset/output checkpoints govern mutations. See mobile-protocol.md.",
       "maxMessageBytes": 8388608,
