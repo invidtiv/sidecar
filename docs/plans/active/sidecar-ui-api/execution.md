@@ -59,7 +59,7 @@ The status values are `queued`, `running`, `review`, `fixing`, `merged` and `blo
 | U1-g iOS adopts presence and events | td-fde8cf | sidecar-mobile | Codex | U1-a, U1-d | review (Claude reviewer); branch u1g-presence @c408f9f. Simulator and legacy-server proofs pass; device proof is Marcus's |
 | U1-i persist browser sessions | td-165353 | sidecar | Codex | U1-a, U1-b merged (both touch internal/uiapi) | merged (7f2ce809). SDK adoption running (td-3ac23b, ~/code/sidecar-ui-u1i-sdk) |
 | U1-e2 web app polish | td-71e0e5 | sidecar-ui | Codex | U1-e | merged (sidecar-ui 5e0ecb2) |
-| U1-c2 socket activation | td-11f799 | sidecar | Codex | U1-c | running (Codex, ~/code/sidecar-u1c2-socket-activation): launchd Sockets / systemd .socket so the port is never free during restarts |
+| U1-c2 socket activation | td-11f799 | sidecar | Codex | U1-c | review (Codex reviewer, shell "rev U1-c2"); branch @9006be74, adds the purego dependency |
 | U1-h security review and three-viewer proof | td-295605 | all | Claude, then Codex | U1-a, U1-d, U1-f | security merged (6176110f). Three-viewer proof passes on transport (40/40 bytes, 14 handoffs, zero ping-pong); in Codex review (branch u1h-three-viewer, which also carries TUI geometry fixes) |
 | U2-a core extraction | td-c709a9 | sidecar | Codex | U0-a | merged (d95b66f5) |
 | U2-b workspace resources and operations API | td-eb3d80 | sidecar | Codex | U2-a | review MERGE-READY (Codex; fixed 5 P1 delete and remote data-loss bugs); integrating main, then merge. U2-c must send expect_delete_state |
