@@ -3,6 +3,7 @@ package contentservice
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -36,6 +37,9 @@ func (s *Service) WatchProject(ctx context.Context, project, workspace string, p
 		if err != nil {
 			return nil, err
 		}
+		if err := validateWatchPath(ws.Root, params.Target); err != nil {
+			return nil, err
+		}
 		return []livewatch.Target{livewatch.File(abs), livewatch.File(canonical(abs))}, nil
 	case KindTree:
 		path := params.Target
@@ -47,6 +51,9 @@ func (s *Service) WatchProject(ctx context.Context, project, workspace string, p
 		}
 		_, abs, err := ContainedRelative(ws.Root, path)
 		if err != nil {
+			return nil, err
+		}
+		if err := validateWatchPath(ws.Root, path); err != nil {
 			return nil, err
 		}
 		return []livewatch.Target{livewatch.Dir(abs), livewatch.Dir(canonical(abs))}, nil
@@ -92,6 +99,9 @@ func (s *Service) WatchProject(ctx context.Context, project, workspace string, p
 			if err != nil {
 				return err
 			}
+			if err := validateWatchPath(ws.Root, path); err != nil {
+				return err
+			}
 			targets = append(targets, livewatch.File(abs))
 			return nil
 		}
@@ -121,4 +131,20 @@ func (s *Service) WatchProject(ctx context.Context, project, workspace string, p
 		return targets, nil
 	}
 	return nil, fmt.Errorf("unknown content watch kind %q", params.Kind)
+}
+
+// A missing target is watchable, but a missing child of an escaping symlink
+// is not. EvalSymlinks alone cannot distinguish those cases; a rooted stat
+// rejects the escape before it attempts the nonexistent final component.
+func validateWatchPath(root, path string) error {
+	dir, err := os.OpenRoot(root)
+	if err != nil {
+		return Rejected("project root is not readable: %v", err)
+	}
+	defer func() { _ = dir.Close() }()
+	_, err = dir.Stat(path)
+	if err != nil && !os.IsNotExist(err) {
+		return Rejected("watch path %q is not accessible within the project: %v", path, err)
+	}
+	return nil
 }

@@ -294,8 +294,11 @@ func TestFixtureContentUsesRecordedDTOsWithoutHostFallback(t *testing.T) {
 }
 
 func TestContentSubscriptionRejectsEscapesAndBounds(t *testing.T) {
-	h, _ := contentHarness(t)
-	for _, ref := range []ContentRef{{Project: "content", Kind: "file", Target: "../secret"}, {Project: "content", Kind: "tree", Target: "../"}, {Project: "missing", Kind: "file", Target: "a"}} {
+	h, root := contentHarness(t)
+	if err := os.Symlink(t.TempDir(), filepath.Join(root, "escape")); err != nil {
+		t.Fatal(err)
+	}
+	for _, ref := range []ContentRef{{Project: "content", Kind: "file", Target: "../secret"}, {Project: "content", Kind: "tree", Target: "../"}, {Project: "missing", Kind: "file", Target: "a"}, {Project: "content", Kind: "file", Target: "escape/not-created"}, {Project: "content", Kind: "tree", Target: "escape/not-created"}} {
 		raw, _ := json.Marshal(ref)
 		conn := dialEvents(t, h, "?"+url.Values{"content": {string(raw)}}.Encode(), nil, true)
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -312,6 +315,30 @@ func TestContentSubscriptionRejectsEscapesAndBounds(t *testing.T) {
 	}
 	if _, err := parseContentRefs(q); err == nil {
 		t.Fatal("unbounded subscriptions")
+	}
+}
+
+func TestContentEventsWatchMissingInRootFile(t *testing.T) {
+	h, root := contentHarness(t)
+	raw, _ := json.Marshal(ContentRef{Project: "content", Kind: "file", Target: "not-created.md"})
+	conn := dialEvents(t, h, "?"+url.Values{"content": {string(raw)}}.Encode(), nil, true)
+	defer func() { _ = conn.CloseNow() }()
+	initialEvents(t, conn)
+	if err := os.WriteFile(filepath.Join(root, "not-created.md"), []byte("created"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, data, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var event EventMessage
+	if err := json.Unmarshal(data, &event); err != nil {
+		t.Fatal(err)
+	}
+	if event.Type != "content" || event.Content == nil || len(event.Content.Resources) != 1 || event.Content.Resources[0].Target != "not-created.md" {
+		t.Fatalf("creation was not invalidated: %s", data)
 	}
 }
 
