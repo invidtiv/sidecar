@@ -11,6 +11,7 @@ import (
 
 	"github.com/marcus/sidecar/internal/agentcatalog"
 	"github.com/marcus/sidecar/internal/agentcontrol"
+	"github.com/marcus/sidecar/internal/agentresolve"
 	"github.com/marcus/sidecar/internal/agentsession"
 	"github.com/marcus/sidecar/internal/agenttranscript"
 	"github.com/marcus/sidecar/internal/config"
@@ -345,21 +346,22 @@ func resolveAgentTarget(env Env, lookup *shellTargetLookup, target string, f age
 }
 
 func resolveAgentTargetError(env Env, lookup *shellTargetLookup, target string, f agentFlags, explicit bool) (agentcontrol.Target, error) {
-	if target == "" {
-		return agentcontrol.Target{}, &agentcontrol.Error{Code: agentcontrol.ErrNotFound, Message: "target is required outside a managed shell"}
-	}
 	if lookup == nil {
 		lookup = &shellTargetLookup{}
 	}
-	tgt, code, err := lookup.find(env, target, f.shell, f.project, explicit && f.shell == "" && f.project == "")
-	if err != nil {
-		typed := &agentcontrol.Error{Code: agentcontrol.ErrTransport, Message: err.Error(), Err: err}
-		if code == shellTargetUnregistered || code == exitInputRejected {
-			typed.Code = agentcontrol.ErrNotFound
+	return agentresolve.ResolveTarget(agentresolve.TargetQuery{
+		Target: target, Shell: f.shell, Project: f.project, Explicit: explicit,
+	}, func(target, shell, project string, globalExplicit bool) (agentcontrol.Target, error) {
+		tgt, code, err := lookup.find(env, target, shell, project, globalExplicit)
+		if err != nil {
+			typed := &agentcontrol.Error{Code: agentcontrol.ErrTransport, Message: err.Error(), Err: err}
+			if code == shellTargetUnregistered || code == exitInputRejected {
+				typed.Code = agentcontrol.ErrNotFound
+			}
+			return agentcontrol.Target{}, typed
 		}
-		return agentcontrol.Target{}, typed
-	}
-	return targetFromShell(tgt), nil
+		return targetFromShell(tgt), nil
+	})
 }
 
 // agentService builds the service and the cleanup its terminal needs. The
