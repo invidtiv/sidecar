@@ -1327,6 +1327,32 @@
           "tailnet"
         ],
         "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there."
+      },
+      "head": {
+        "operationId": "hello_get_head",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "default": {
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          },
+          {}
+        ],
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there."
       }
     },
     "/api/v0/origins": {
@@ -1409,6 +1435,30 @@
                 }
               }
             },
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          },
+          {}
+        ],
+        "x-listeners": [
+          "local"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there."
+      },
+      "head": {
+        "operationId": "origins_get_head",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "default": {
             "description": "Named refusal; see ui-api.md for status codes and remedies"
           }
         },
@@ -1777,6 +1827,106 @@
           "tailnet"
         ],
         "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there."
+      },
+      "head": {
+        "operationId": "sessions_get_head",
+        "parameters": [
+          {
+            "explode": true,
+            "in": "query",
+            "name": "sort",
+            "schema": {
+              "enum": [
+                "activity",
+                "project",
+                "recent",
+                "name"
+              ],
+              "type": "string"
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "search",
+            "schema": {
+              "type": "string"
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "host",
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 32,
+              "type": "array"
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "provider",
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 32,
+              "type": "array"
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "state",
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 32,
+              "type": "array"
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "show_idle_sessions",
+            "schema": {
+              "type": "boolean"
+            },
+            "style": "form"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "default": {
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          },
+          {}
+        ],
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there."
       }
     },
     "/api/v0/status": {
@@ -1801,6 +1951,32 @@
                 }
               }
             },
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          },
+          {}
+        ],
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there."
+      },
+      "head": {
+        "operationId": "status_get_head",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "default": {
             "description": "Named refusal; see ui-api.md for status codes and remedies"
           }
         },
@@ -1956,12 +2132,47 @@
         "x-listeners": [
           "browser"
         ]
+      },
+      "head": {
+        "operationId": "pair_page_head",
+        "responses": {
+          "200": {
+            "description": "Pairing page, consumes no code"
+          }
+        },
+        "security": [],
+        "x-listeners": [
+          "browser"
+        ]
       }
     },
     "/{path}": {
       "get": {
         "description": "Static UI files with SPA fallback. Browser listener public; Tailnet requires allowed login. API paths never fall back.",
         "operationId": "ui_files",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "UI file or index.html"
+          }
+        },
+        "x-listeners": [
+          "browser",
+          "tailnet"
+        ]
+      },
+      "head": {
+        "description": "Static UI files with SPA fallback. Browser listener public; Tailnet requires allowed login. API paths never fall back.",
+        "operationId": "ui_files_head",
         "parameters": [
           {
             "in": "path",

@@ -102,6 +102,8 @@ HTTP calls from a paired origin send `Authorization: Bearer <token>`. Pairing an
 
 ## HTTP routes
 
+Every HTTP `GET` route also accepts `HEAD` with the same listener and authentication rules and no response body. The terminal WebSocket handshake remains `GET`-only. The generated spec lists both methods for resources, the pairing page and static UI files.
+
 All JSON, encoded exactly as the CLI's `--json` output: one object and a trailing newline. Successful responses are `200`. Errors are `{"error": {"code": "snake_case_code", "message": "One human sentence that says what to do."}}` with a fitting status. Codes match the CLI's refusal vocabulary where one exists. The API adds these:
 
 | Code | Status | When |
