@@ -4,6 +4,7 @@ package agentactivity
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"os"
@@ -19,6 +20,8 @@ import (
 )
 
 const orphanShellHelperEnv = "SIDECAR_TEST_ORPHAN_SHELL_HELPER"
+const orphanShellHelperFIFOEnv = "SIDECAR_TEST_ORPHAN_SHELL_FIFO"
+const orphanShellHelperPIDEnv = "SIDECAR_TEST_ORPHAN_SHELL_PID"
 
 // TestForegroundShellReadyIgnoresInitAdoptedDaemonLive is both the regression
 // and its helper process. The helper starts a non-job-control background
@@ -27,7 +30,8 @@ const orphanShellHelperEnv = "SIDECAR_TEST_ORPHAN_SHELL_HELPER"
 // server: idle shell group leader plus an init-adopted group member.
 func TestForegroundShellReadyIgnoresInitAdoptedDaemonLive(t *testing.T) {
 	if os.Getenv(orphanShellHelperEnv) == "1" {
-		if err := exec.Command("/bin/sh", "-c", "sleep 5 &").Run(); err != nil {
+		if err := exec.Command("/bin/sh", "-c", `(IFS= read -r release < "$1") & printf '%s\n' "$!" > "$2"`,
+			"orphan-helper", os.Getenv(orphanShellHelperFIFOEnv), os.Getenv(orphanShellHelperPIDEnv)).Run(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(2)
 		}
@@ -47,6 +51,43 @@ func TestForegroundShellReadyIgnoresInitAdoptedDaemonLive(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	// Keep the init-adopted daemon alive until cleanup. A fixed sleep could
+	// expire while a loaded machine was inspecting the process table, turning
+	// the fixture into an ordinary idle shell before the assertion saw it.
+	fifoPath := filepath.Join(root, "daemon-release")
+	pidPath := filepath.Join(root, "daemon-pid")
+	if err := syscall.Mkfifo(fifoPath, 0600); err != nil {
+		t.Fatal(err)
+	}
+	release, err := os.OpenFile(fifoPath, os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = release.WriteString("done\n")
+		_ = release.Close()
+		data, err := os.ReadFile(pidPath)
+		if err != nil {
+			return // The helper may not have started.
+		}
+		pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+		if err != nil || pid <= 0 {
+			t.Errorf("invalid daemon pid: %q", data)
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		tick := time.NewTicker(5 * time.Millisecond)
+		defer tick.Stop()
+		for unix.Kill(pid, 0) != syscall.ESRCH {
+			select {
+			case <-ctx.Done():
+				t.Errorf("orphan helper did not exit after release: pid=%d", pid)
+				return
+			case <-tick.C:
+			}
+		}
+	})
 	socket := filepath.Join(root, "tmux.sock")
 	session := "orphan-shell-ready"
 	binary, err := os.Executable()
@@ -55,7 +96,8 @@ func TestForegroundShellReadyIgnoresInitAdoptedDaemonLive(t *testing.T) {
 	}
 	cmd := exec.Command("tmux", "-S", socket, "-f", "/dev/null", "new-session", "-d", "-s", session,
 		binary, "-test.run=^TestForegroundShellReadyIgnoresInitAdoptedDaemonLive$")
-	cmd.Env = append(os.Environ(), "TMUX=", orphanShellHelperEnv+"=1")
+	cmd.Env = append(os.Environ(), "TMUX=", "TMUX_PANE=", orphanShellHelperEnv+"=1",
+		orphanShellHelperFIFOEnv+"="+fifoPath, orphanShellHelperPIDEnv+"="+pidPath)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("start private tmux: %v: %s", err, out)
 	}

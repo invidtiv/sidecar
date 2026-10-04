@@ -67,7 +67,10 @@ func requireTmux(t *testing.T) {
 func startFakeAgent(t *testing.T, name string) (Service, *LocalTerminal, Target) {
 	t.Helper()
 	session := fmt.Sprintf("sidecar-agentcontrol-m2-%s-%d", name, time.Now().UnixNano())
-	if out, err := exec.Command("tmux", "new-session", "-d", "-s", session).CombinedOutput(); err != nil {
+	// Pass argv directly so tmux neither invokes the user's login shell nor
+	// runs a configured default command. Personal startup/prompt jobs can
+	// become busy after WaitShellReady and correctly fail Launch's recheck.
+	if out, err := exec.Command("tmux", "new-session", "-d", "-s", session, "/bin/bash", "--noprofile", "--norc").CombinedOutput(); err != nil {
 		t.Fatalf("new isolated session: %v: %s", err, out)
 	}
 	t.Cleanup(func() { _ = exec.Command("tmux", "kill-session", "-t", session).Run() })
@@ -90,6 +93,30 @@ func startFakeAgent(t *testing.T, name string) (Service, *LocalTerminal, Target)
 		t.Fatalf("%s did not start: %v", name, err)
 	}
 	return svc, terminal, agent.Target
+}
+
+// A fake-provider fixture must not depend on personal shell setup or a server
+// default command. The package's private server makes changing this option
+// safe, and these integration tests do not run in parallel.
+func TestFakeAgentFixtureIgnoresDefaultShellCommand(t *testing.T) {
+	requireTmux(t)
+	previous, err := exec.Command("tmux", "show-options", "-gqv", "default-command").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if out, err := exec.Command("tmux", "set-option", "-g", "default-command", strings.TrimSpace(string(previous))).CombinedOutput(); err != nil {
+			t.Errorf("restore private server default command: %v: %s", err, out)
+		}
+	})
+	if out, err := exec.Command("tmux", "set-option", "-g", "default-command", "exec sleep 30").CombinedOutput(); err != nil {
+		t.Fatalf("set private server default command: %v: %s", err, out)
+	}
+	svc, _, target := startFakeAgent(t, "hermetic")
+	agent, err := svc.Get(context.Background(), target)
+	if err != nil || agent.Agent.Status != StatusIdle || agent.Agent.Kind != "fake" {
+		t.Fatalf("fixture did not start its own provider: %+v, %v", agent, err)
+	}
 }
 
 // TestTwoIsolatedAgentsPromptWaitReadAndKeysInvolveOnlyTheirOwnShell is the M2
