@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/invopop/jsonschema"
+	"github.com/marcus/sidecar/internal/contentservice"
 	"github.com/marcus/sidecar/internal/mobileproto"
 )
 
@@ -14,6 +15,7 @@ import (
 func Spec() ([]byte, error) {
 	schemas := map[string]any{}
 	values := map[string]any{
+		"ContentReadResult": contentservice.ReadResult{}, "ContentTreeResult": contentservice.TreeResult{}, "ContentRef": ContentRef{}, "LayoutDocument": LayoutDocument{},
 		"Hello": Hello{}, "Status": Status{}, "Endpoint": Endpoint{}, "ErrorBody": ErrorBody{},
 		"TicketRequest": TicketRequest{}, "TicketResponse": TicketResponse{},
 		"PairingCodeRequest": PairingCodeRequest{}, "PairingCode": PairingCode{},
@@ -101,6 +103,12 @@ func Spec() ([]byte, error) {
 	add("/api/v0/hello", "get", "", "Hello", all, false)
 	add("/api/v0/sessions", "get", "", "CatalogSnapshot", all, false)
 	add("/api/v0/status", "get", "", "Status", all, false)
+	add(contentRoute, "get", "", "ContentReadResult", all, false)
+	add(treeRoute, "get", "", "ContentTreeResult", all, false)
+	add(layoutRoute, "get", "", "LayoutDocument", all, false)
+	add(layoutRoute, "put", "LayoutDocument", "LayoutDocument", all, false)
+	addContentSpec(paths)
+
 	add("/api/v0/ws-tickets", "post", "TicketRequest", "TicketResponse", remote, false)
 	add("/api/v0/pairing/codes", "post", "PairingCodeRequest", "PairingCode", local, false)
 	add("/api/v0/pairing/sessions", "delete", "", "SessionRevocation", local, false)
@@ -131,6 +139,7 @@ func Spec() ([]byte, error) {
 	paths[eventsPath] = streamOperation("events", all)
 	events := paths[eventsPath].(map[string]any)["get"].(map[string]any)
 	events["parameters"] = append(events["parameters"].([]any), params...)
+	events["parameters"] = append(events["parameters"].([]any), map[string]any{"name": "content", "in": "query", "schema": map[string]any{"type": "array", "items": map[string]any{"type": "string", "contentMediaType": "application/json", "contentSchema": schemaRef("ContentRef")}, "maxItems": 32}, "style": "form", "explode": true, "description": "JSON reference for each open content pane; reconnect to change the set. Requires content:read."})
 	paths["/pair"] = map[string]any{"get": map[string]any{"operationId": "pair_page", "security": []any{}, "x-listeners": []string{"browser"}, "responses": map[string]any{"200": map[string]any{"description": "Pairing page, consumes no code", "content": map[string]any{"text/html": map[string]any{"schema": map[string]any{"type": "string"}}}}}}}
 	paths["/{path}"] = map[string]any{"get": map[string]any{"operationId": "ui_files", "x-listeners": remote, "description": "Static UI files with SPA fallback. Browser listener public; Tailnet requires allowed login. API paths never fall back.", "parameters": []any{map[string]any{"name": "path", "in": "path", "required": true, "schema": map[string]any{"type": "string"}}}, "responses": map[string]any{"200": map[string]any{"description": "UI file or index.html"}}}}
 	// dispatch maps HEAD to GET, and static files also support HEAD. A

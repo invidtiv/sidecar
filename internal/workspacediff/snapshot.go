@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 )
 
 // LoadSnapshot resolves base and HEAD, then loads the pinned snapshot.
@@ -220,11 +221,23 @@ func untrackedFileDiffBounded(workdir, file string) (string, int64, error) {
 	if info.Size() > MaxUntrackedFileSize {
 		return truncatedUntrackedDiff(file, info.Size()), 0, nil
 	}
-	f, err := os.Open(fullPath)
+	dir, err := os.OpenRoot(workdir)
+	if err != nil {
+		return "", 0, err
+	}
+	defer func() { _ = dir.Close() }()
+	f, err := dir.OpenFile(file, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return "", 0, err
 	}
 	defer func() { _ = f.Close() }()
+	current, err := f.Stat()
+	if err != nil {
+		return "", 0, err
+	}
+	if !current.Mode().IsRegular() {
+		return "", 0, fmt.Errorf("untracked path is not a regular file: %s", file)
+	}
 	data, err := io.ReadAll(io.LimitReader(f, MaxUntrackedFileSize+1))
 	if err != nil {
 		return "", 0, err

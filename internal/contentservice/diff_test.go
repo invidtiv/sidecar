@@ -173,3 +173,36 @@ func TestEncodeDiffTruncatesBeforeTransportCap(t *testing.T) {
 		t.Fatal("large diff was not truncated")
 	}
 }
+
+// A diff parent is a git argument. An option-shaped parent such as
+// --output=FILE made `git diff` and `git show` write a file anywhere the user
+// can, through a read-only content route.
+func TestDiffParentNeverReachesGitAsAnOption(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	initGitRepo(t, root)
+	oid := commitContentRepo(t, root)
+	id := canonical(root) + ":worktree:" + canonical(root)
+	svc := testService(t, root, nil, &gitRecorder{})
+	written := filepath.Join(t.TempDir(), "written")
+	for _, op := range []string{OpCommitFile, OpFullFile} {
+		_, err := svc.ReadParams(context.Background(), ReadParams{WorkspaceID: id, Kind: KindDiff, Operation: op, Target: "c:" + oid, Path: "tracked.txt", Parent: "--output=" + written})
+		if err == nil {
+			t.Errorf("%s accepted an option-shaped parent", op)
+		}
+	}
+	if matches, _ := filepath.Glob(written + "*"); len(matches) != 0 {
+		t.Fatalf("a read wrote files through git: %v", matches)
+	}
+	// A real parent still resolves, to a full object id.
+	res, err := svc.ReadParams(context.Background(), ReadParams{WorkspaceID: id, Kind: KindDiff, Operation: OpCommitFile, Target: "c:" + oid, Path: "tracked.txt", Parent: oid[:12]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(res.Revision, ":"+oid) {
+		t.Fatalf("parent not resolved to an object id: %q", res.Revision)
+	}
+}

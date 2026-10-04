@@ -1,0 +1,12 @@
+{
+  "kind": "issue",
+  "operation": "card",
+  "workspace": "fixture-project",
+  "target": "td-123456",
+  "revision": "fixture-issue-v1",
+  "issue": {
+    "id": "td-123456",
+    "title": "Fixture issue",
+    "status": "open"
+  }
+}

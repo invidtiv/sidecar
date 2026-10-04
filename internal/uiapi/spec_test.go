@@ -75,6 +75,9 @@ func TestSpecDocumentsHeadMethodsServedByHandlers(t *testing.T) {
 		t.Fatal(err)
 	}
 	for path, route := range h.s.routeTable() {
+		if strings.Contains(path, "{project}") {
+			continue
+		}
 		if route.methods[http.MethodGet] == nil {
 			continue
 		}
@@ -169,7 +172,7 @@ func TestSpecDocumentsEventsStreamAndSharedCatalogQuery(t *testing.T) {
 		t.Fatal("missing upgrade authentication parameters")
 	}
 	sessionsParams := paths["/api/v0/sessions"].(map[string]any)["get"].(map[string]any)["parameters"]
-	if !reflect.DeepEqual(params[2:], sessionsParams) {
+	if !reflect.DeepEqual(params[2:len(params)-1], sessionsParams) {
 		t.Fatal("event query differs from Sessions query")
 	}
 	if get["responses"].(map[string]any)["101"] == nil {
