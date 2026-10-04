@@ -115,6 +115,19 @@ if SIDECAR_DRIVE_RUN_DIR="$RUN_DIR" SIDECAR_DRIVE_OUT="$RUN_DIR/../outside" \
     exit 1
 fi
 
+# Accelerate the old fixture lifetime without slowing this regression down.
+# Pacing sleeps retain their real clock; a reintroduced `sleep 30` expires at
+# once, proving panes must live until the driver explicitly stops them.
+export SIDECAR_TEST_REAL_SLEEP="$(command -v sleep)"
+mkdir -p "$TEST_ROOT/timing"
+cat >"$TEST_ROOT/timing/sleep" <<'SHIM'
+#!/bin/bash
+[ "${1-}" != "30" ] || exit 0
+exec "$SIDECAR_TEST_REAL_SLEEP" "$@"
+SHIM
+chmod +x "$TEST_ROOT/timing/sleep"
+export PATH="$TEST_ROOT/timing:$PATH"
+
 FAKE_SIDECAR="$TEST_ROOT/fake-sidecar"
 cat >"$FAKE_SIDECAR" <<'SHIM'
 #!/bin/bash
