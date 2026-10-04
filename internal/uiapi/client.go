@@ -104,9 +104,9 @@ func (c *LocalClient) PairingCode(ctx context.Context, next string) (PairingCode
 }
 
 // PairOrigin registers origin and returns its one-time-visible token.
-func (c *LocalClient) PairOrigin(ctx context.Context, origin string) (OriginRegistration, error) {
+func (c *LocalClient) PairOrigin(ctx context.Context, origin string, scopes ...string) (OriginRegistration, error) {
 	var registration OriginRegistration
-	err := c.Do(ctx, http.MethodPost, "/api/v0/origins", OriginRequest{Origin: origin}, &registration)
+	err := c.Do(ctx, http.MethodPost, "/api/v0/origins", OriginRequest{Origin: origin, Scopes: scopes}, &registration)
 	return registration, err
 }
 

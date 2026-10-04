@@ -1,0 +1,14 @@
+{
+  "type": "content",
+  "seq": 4,
+  "api_version": 0,
+  "content": {
+    "resources": [
+      {
+        "project": "fixture-project",
+        "kind": "file",
+        "target": "README.md"
+      }
+    ]
+  }
+}

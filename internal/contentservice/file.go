@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 	"unicode"
 
@@ -177,6 +178,10 @@ func readResolved(ctx context.Context, resolved ResolvedFile, ifRevision string)
 	}
 	defer func() { _ = file.Close() }()
 
+	return readOpened(ctx, resolved, file, ifRevision)
+}
+
+func readOpened(ctx context.Context, resolved ResolvedFile, file *os.File, ifRevision string) (Document, error) {
 	info, err := file.Stat()
 	if err != nil {
 		return Document{}, Internal("stat file", err)
@@ -264,4 +269,26 @@ func formatModTime(t time.Time) string {
 		return ""
 	}
 	return t.UTC().Format(time.RFC3339Nano)
+}
+
+// readContainedFile uses an OS root handle so a concurrent symlink replacement
+// cannot race the containment check and read outside the project.
+func readContainedFile(ctx context.Context, root, relative, ifRevision string) (Document, error) {
+	if err := StrictRelative(relative); err != nil {
+		return Document{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return Document{}, err
+	}
+	dir, err := os.OpenRoot(root)
+	if err != nil {
+		return Document{}, Rejected("project root is not readable: %v", err)
+	}
+	defer func() { _ = dir.Close() }()
+	file, err := dir.OpenFile(relative, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return Document{}, Rejected("file %q is not readable within the project: %v", relative, err)
+	}
+	defer func() { _ = file.Close() }()
+	return readOpened(ctx, ResolvedFile{Display: relative, Absolute: filepath.Join(root, relative)}, file, ifRevision)
 }

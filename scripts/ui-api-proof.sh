@@ -61,11 +61,15 @@ printf '{"projects":{"list":[{"name":"proof","path":"%s"}]}}\n' "$root/project" 
 mkdir -p "$root/state/sidecar/projects/proof"
 printf '{"path":"%s"}\n' "$root/project" > "$root/state/sidecar/projects/proof/meta.json"
 git init -q "$root/project"
+printf "# Content proof\n" > "$root/project/README.md"
+git -C "$root/project" add README.md
+git -C "$root/project" -c user.name=Proof -c user.email=proof@example.invalid commit -qm "Initial proof"
 
 step "build"
 go build -o "$root/sidecar" ./cmd/sidecar
 go build -o "$root/uiapiproof" ./internal/tools/uiapiproof
 go build -o "$root/uieventsproof" ./internal/tools/uieventsproof
+go build -o "$root/uicontentproof" ./internal/tools/uicontentproof
 sc() { "$root/sidecar" -config "$config" "$@"; }
 
 step "create a managed shell on the private tmux server"
@@ -122,6 +126,9 @@ print("sessions ok: HTTP document matches `mobile sessions --json`")
 PY
 local_get /api/v0/status | python3 -c 'import json,sys; d=json.load(sys.stdin); assert [l["name"] for l in d["listeners"]]==["local","browser"], d; print("status ok")'
 sc api status > /dev/null || fail "sidecar api status failed"
+
+step "Content, layouts and open-pane invalidation"
+timeout 40 "$root/uicontentproof" -socket "$api_sock" -root "$root/project"
 
 step "Browser listener guards"
 code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: evil.example' "$base/api/v0/hello")

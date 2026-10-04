@@ -554,6 +554,341 @@
         ],
         "type": "object"
       },
+      "ContentEvent": {
+        "additionalProperties": false,
+        "properties": {
+          "resources": {
+            "items": {
+              "$ref": "#/components/schemas/ContentRef"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "resources"
+        ],
+        "type": "object"
+      },
+      "ContentReadResult": {
+        "$ref": "#/components/schemas/ReadResult"
+      },
+      "ContentRef": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "operation": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "project": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          },
+          "workspace": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "ContentTreeResult": {
+        "$ref": "#/components/schemas/TreeResult"
+      },
+      "DiffCommitDTO": {
+        "additionalProperties": false,
+        "properties": {
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/DiffCommitFileDTO"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "hash": {
+            "type": "string"
+          },
+          "isMerge": {
+            "type": "boolean"
+          },
+          "parentHashes": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "shortHash": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "hash"
+        ],
+        "type": "object"
+      },
+      "DiffCommitFileDTO": {
+        "additionalProperties": false,
+        "properties": {
+          "additions": {
+            "type": "integer"
+          },
+          "deletions": {
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
+      "DiffCommitRowDTO": {
+        "additionalProperties": false,
+        "properties": {
+          "hash": {
+            "type": "string"
+          },
+          "pushed": {
+            "type": "boolean"
+          },
+          "subject": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "hash"
+        ],
+        "type": "object"
+      },
+      "DiffDTO": {
+        "additionalProperties": false,
+        "properties": {
+          "commit": {
+            "$ref": "#/components/schemas/DiffCommitDTO"
+          },
+          "file": {
+            "$ref": "#/components/schemas/DiffFileDTO"
+          },
+          "fullFile": {
+            "$ref": "#/components/schemas/DiffFullFileDTO"
+          },
+          "pageLimit": {
+            "type": "integer"
+          },
+          "pageOffset": {
+            "type": "integer"
+          },
+          "pageTotal": {
+            "type": "integer"
+          },
+          "range": {
+            "$ref": "#/components/schemas/DiffRangeDTO"
+          },
+          "snapshot": {
+            "$ref": "#/components/schemas/DiffSnapshotDTO"
+          },
+          "target": {
+            "type": "string"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "target"
+        ],
+        "type": "object"
+      },
+      "DiffFileDTO": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "raw": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
+      "DiffFileRowDTO": {
+        "additionalProperties": false,
+        "properties": {
+          "additions": {
+            "type": "integer"
+          },
+          "deletions": {
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          },
+          "raw": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
+      "DiffFullFileDTO": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "type": "integer"
+          },
+          "newContent": {
+            "type": "string"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "oldContent": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "rawDiff": {
+            "type": "string"
+          },
+          "total": {
+            "type": "integer"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
+      "DiffRangeDTO": {
+        "additionalProperties": false,
+        "properties": {
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/DiffFileRowDTO"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "raw": {
+            "type": "string"
+          },
+          "spec": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "spec"
+        ],
+        "type": "object"
+      },
+      "DiffSnapshotDTO": {
+        "additionalProperties": false,
+        "properties": {
+          "aggregateCommitted": {
+            "type": "string"
+          },
+          "aggregateUncommitted": {
+            "type": "string"
+          },
+          "baseRef": {
+            "type": "string"
+          },
+          "commits": {
+            "items": {
+              "$ref": "#/components/schemas/DiffCommitRowDTO"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/DiffFileRowDTO"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "mergeBase": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "untrackedBytesOmitted": {
+            "type": "integer"
+          },
+          "untrackedOmitted": {
+            "type": "integer"
+          },
+          "untrackedShown": {
+            "type": "integer"
+          },
+          "workingTree": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Document": {
+        "additionalProperties": false,
+        "properties": {
+          "layout": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PaneLayoutJSON"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "layout"
+        ],
+        "type": "object"
+      },
       "Endpoint": {
         "additionalProperties": false,
         "properties": {
@@ -671,6 +1006,9 @@
           "catalog": {
             "$ref": "#/components/schemas/CatalogSnapshot"
           },
+          "content": {
+            "$ref": "#/components/schemas/ContentEvent"
+          },
           "error": {
             "$ref": "#/components/schemas/ErrorDetail"
           },
@@ -699,6 +1037,7 @@
               "catalog",
               "attention",
               "terminals",
+              "content",
               "error",
               "shutdown"
             ],
@@ -863,6 +1202,151 @@
         ],
         "type": "object"
       },
+      "IssueDTO": {
+        "additionalProperties": false,
+        "properties": {
+          "acceptance": {
+            "type": "string"
+          },
+          "children": {
+            "items": {
+              "$ref": "#/components/schemas/IssueRefDTO"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "labels": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "logs": {
+            "items": {
+              "$ref": "#/components/schemas/IssueLogDTO"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "owner": {
+            "$ref": "#/components/schemas/IssueOwnerDTO"
+          },
+          "parent": {
+            "$ref": "#/components/schemas/IssueRefDTO"
+          },
+          "parentId": {
+            "type": "string"
+          },
+          "points": {
+            "type": "integer"
+          },
+          "priority": {
+            "type": "string"
+          },
+          "siblings": {
+            "items": {
+              "$ref": "#/components/schemas/IssueRefDTO"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "IssueLogDTO": {
+        "additionalProperties": false,
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "IssueOwnerDTO": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "root": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "root"
+        ],
+        "type": "object"
+      },
+      "IssueRefDTO": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "priority": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "LayoutDocument": {
+        "$ref": "#/components/schemas/Document"
+      },
       "ListenerInfo": {
         "additionalProperties": false,
         "properties": {
@@ -943,6 +1427,36 @@
           "cursor_visible",
           "cursor_shape",
           "cursor_blinking"
+        ],
+        "type": "object"
+      },
+      "NoteDTO": {
+        "additionalProperties": false,
+        "properties": {
+          "archived": {
+            "type": "boolean"
+          },
+          "content": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "pinned": {
+            "type": "boolean"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
         ],
         "type": "object"
       },
@@ -1128,6 +1642,255 @@
         ],
         "type": "object"
       },
+      "PaneDiffTabJSON": {
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "scroll": {
+            "type": "integer"
+          },
+          "spec": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "spec"
+        ],
+        "type": "object"
+      },
+      "PaneDocTabJSON": {
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "scroll": {
+            "type": "integer"
+          },
+          "wrap": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
+      "PaneIssueTabJSON": {
+        "additionalProperties": false,
+        "properties": {
+          "issue": {
+            "type": "string"
+          },
+          "ownerName": {
+            "type": "string"
+          },
+          "ownerRoot": {
+            "type": "string"
+          },
+          "scroll": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "issue"
+        ],
+        "type": "object"
+      },
+      "PaneLayoutJSON": {
+        "additionalProperties": false,
+        "properties": {
+          "active": {
+            "type": "integer"
+          },
+          "diffTabs": {
+            "items": {
+              "$ref": "#/components/schemas/PaneDiffTabJSON"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "focusKind": {
+            "type": "string"
+          },
+          "hostId": {
+            "type": "string"
+          },
+          "issue": {
+            "type": "string"
+          },
+          "issueTabs": {
+            "items": {
+              "$ref": "#/components/schemas/PaneIssueTabJSON"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "noteTabs": {
+            "items": {
+              "$ref": "#/components/schemas/PaneNoteTabJSON"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "open": {
+            "type": "boolean"
+          },
+          "projectKey": {
+            "type": "string"
+          },
+          "projectRoot": {
+            "type": "string"
+          },
+          "resourceTabs": {
+            "items": {
+              "$ref": "#/components/schemas/PaneResourceTabJSON"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "root": {
+            "type": "string"
+          },
+          "scroll": {
+            "type": "integer"
+          },
+          "session": {
+            "type": "string"
+          },
+          "split": {
+            "$ref": "#/components/schemas/PaneSplitJSON"
+          },
+          "surface": {
+            "type": "string"
+          },
+          "tabs": {
+            "items": {
+              "$ref": "#/components/schemas/PaneDocTabJSON"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "workspaceId": {
+            "type": "string"
+          },
+          "workspaceKey": {
+            "type": "string"
+          },
+          "workspaceKind": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "PaneNoteTabJSON": {
+        "additionalProperties": false,
+        "properties": {
+          "note": {
+            "type": "string"
+          },
+          "scroll": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "note"
+        ],
+        "type": "object"
+      },
+      "PaneResourceTabJSON": {
+        "additionalProperties": false,
+        "properties": {
+          "collection": {
+            "type": "string"
+          },
+          "cursorId": {
+            "type": "string"
+          },
+          "filters": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "locator": {
+            "type": "string"
+          },
+          "matcher": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "query": {
+            "type": "string"
+          },
+          "scroll": {
+            "type": "integer"
+          },
+          "sort": {
+            "type": "string"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider"
+        ],
+        "type": "object"
+      },
+      "PaneSplitJSON": {
+        "additionalProperties": false,
+        "properties": {
+          "a": {
+            "$ref": "#/components/schemas/PaneLayoutJSON"
+          },
+          "axis": {
+            "type": "string"
+          },
+          "b": {
+            "$ref": "#/components/schemas/PaneLayoutJSON"
+          },
+          "ratio": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "axis",
+          "ratio",
+          "a",
+          "b"
+        ],
+        "type": "object"
+      },
       "Presence": {
         "additionalProperties": false,
         "properties": {
@@ -1153,6 +1916,87 @@
           "idle_ms",
           "columns",
           "rows"
+        ],
+        "type": "object"
+      },
+      "ReadResult": {
+        "additionalProperties": false,
+        "properties": {
+          "binary": {
+            "type": "boolean"
+          },
+          "collection": {
+            "$ref": "#/components/schemas/WirePage"
+          },
+          "content": {
+            "type": "string"
+          },
+          "diff": {
+            "$ref": "#/components/schemas/DiffDTO"
+          },
+          "display": {
+            "type": "string"
+          },
+          "image": {
+            "type": "boolean"
+          },
+          "issue": {
+            "$ref": "#/components/schemas/IssueDTO"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "matcher": {
+            "type": "string"
+          },
+          "modTime": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "notModified": {
+            "type": "boolean"
+          },
+          "note": {
+            "$ref": "#/components/schemas/NoteDTO"
+          },
+          "operation": {
+            "type": "string"
+          },
+          "oversize": {
+            "type": "boolean"
+          },
+          "path": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "resource": {
+            "$ref": "#/components/schemas/WireDocument"
+          },
+          "resourceError": {
+            "$ref": "#/components/schemas/WireError"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          },
+          "totalSize": {
+            "type": "integer"
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "workspace": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
         ],
         "type": "object"
       },
@@ -1642,6 +2486,87 @@
         ],
         "type": "object"
       },
+      "TreeDir": {
+        "additionalProperties": false,
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/TreeEntry"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "err": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
+      "TreeEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "dir": {
+            "type": "boolean"
+          },
+          "ignored": {
+            "type": "boolean"
+          },
+          "modified": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer"
+          },
+          "symlink": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "TreeResult": {
+        "additionalProperties": false,
+        "properties": {
+          "dirs": {
+            "items": {
+              "$ref": "#/components/schemas/TreeDir"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": "string"
+          },
+          "workspace": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "workspace",
+          "dirs"
+        ],
+        "type": "object"
+      },
       "Viewer": {
         "additionalProperties": false,
         "properties": {
@@ -1656,6 +2581,248 @@
           "kind",
           "label"
         ],
+        "type": "object"
+      },
+      "WireBody": {
+        "additionalProperties": false,
+        "properties": {
+          "format": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
+      },
+      "WireDocument": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "$ref": "#/components/schemas/WireBody"
+          },
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/WireField"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "freshForSeconds": {
+            "type": "number"
+          },
+          "identity": {
+            "type": "string"
+          },
+          "sections": {
+            "items": {
+              "$ref": "#/components/schemas/WireSection"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "sourceUrl": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/WireStatus"
+          },
+          "subtitle": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "identity",
+          "title"
+        ],
+        "type": "object"
+      },
+      "WireError": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "setupHint": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "type": "object"
+      },
+      "WireField": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "value"
+        ],
+        "type": "object"
+      },
+      "WireItem": {
+        "additionalProperties": false,
+        "properties": {
+          "cells": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "id": {
+            "type": "string"
+          },
+          "sourceUrl": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/WireStatus"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "WirePage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/WireItem"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "nextCursor": {
+            "type": "string"
+          },
+          "notices": {
+            "items": {
+              "$ref": "#/components/schemas/WirePageNotic"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "outcome": {
+            "type": "string"
+          },
+          "total": {
+            "type": "integer"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "WirePageNotic": {
+        "additionalProperties": false,
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "tone": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
+      },
+      "WireSection": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "$ref": "#/components/schemas/WireBody"
+          },
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/WireField"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/WireTimelineItem"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "WireStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "tone": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "label"
+        ],
+        "type": "object"
+      },
+      "WireTimelineItem": {
+        "additionalProperties": false,
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "when": {
+            "type": "string"
+          }
+        },
         "type": "object"
       }
     },
@@ -1769,6 +2936,24 @@
             "name": "show_idle_sessions",
             "schema": {
               "type": "boolean"
+            },
+            "style": "form"
+          },
+          {
+            "description": "JSON reference for each open content pane; reconnect to change the set. Requires content:read.",
+            "explode": true,
+            "in": "query",
+            "name": "content",
+            "schema": {
+              "items": {
+                "contentMediaType": "application/json",
+                "contentSchema": {
+                  "$ref": "#/components/schemas/ContentRef"
+                },
+                "type": "string"
+              },
+              "maxItems": 32,
+              "type": "array"
             },
             "style": "form"
           }
@@ -2303,6 +3488,616 @@
           "local"
         ],
         "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there."
+      }
+    },
+    "/api/v0/projects/{project}/content": {
+      "get": {
+        "operationId": "projects_{project}_content_get",
+        "parameters": [
+          {
+            "description": "Exact configured project name.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "operation",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "target",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "parent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "if_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContentReadResult"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there.",
+        "x-required-scope": "content:read"
+      },
+      "head": {
+        "operationId": "projects_{project}_content_get_head",
+        "parameters": [
+          {
+            "description": "Exact configured project name.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "operation",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "target",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "parent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "if_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "default": {
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there.",
+        "x-required-scope": "content:read"
+      }
+    },
+    "/api/v0/projects/{project}/layout": {
+      "get": {
+        "operationId": "projects_{project}_layout_get",
+        "parameters": [
+          {
+            "description": "Exact configured project name.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LayoutDocument"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "ETag": {
+                "description": "Quoted content digest; send unchanged as If-Match.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Layout unchanged"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there.",
+        "x-required-scope": "content:read"
+      },
+      "head": {
+        "operationId": "projects_{project}_layout_get_head",
+        "parameters": [
+          {
+            "description": "Exact configured project name.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "ETag": {
+                "description": "Quoted content digest; send unchanged as If-Match.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Layout unchanged"
+          },
+          "default": {
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there.",
+        "x-required-scope": "content:read"
+      },
+      "put": {
+        "operationId": "projects_{project}_layout_put",
+        "parameters": [
+          {
+            "description": "Required on Browser and Tailnet; not on Local.",
+            "in": "header",
+            "name": "X-Sidecar-Request",
+            "required": false,
+            "schema": {
+              "const": "1",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exact configured project name.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LayoutDocument"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LayoutDocument"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "ETag": {
+                "description": "Quoted content digest; send unchanged as If-Match.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "412": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Read the layout and retry with its current ETag."
+          },
+          "428": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Read the layout and retry with its current ETag."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there.",
+        "x-required-scope": "content:read"
+      }
+    },
+    "/api/v0/projects/{project}/tree": {
+      "get": {
+        "operationId": "projects_{project}_tree_get",
+        "parameters": [
+          {
+            "description": "Exact configured project name.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "path",
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 256,
+              "type": "array"
+            },
+            "style": "form"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContentTreeResult"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there.",
+        "x-required-scope": "content:read"
+      },
+      "head": {
+        "operationId": "projects_{project}_tree_get_head",
+        "parameters": [
+          {
+            "description": "Exact configured project name.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "path",
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 256,
+              "type": "array"
+            },
+            "style": "form"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "default": {
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there.",
+        "x-required-scope": "content:read"
       }
     },
     "/api/v0/sessions": {

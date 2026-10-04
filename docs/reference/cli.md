@@ -948,15 +948,16 @@ sidecar api open --print
 
 Manage paired origins and browser sessions
 
-Register another web origin (an app embedding Sidecar components) and print its bearer token, which is shown only once and stored only as a hash in $STATE/api/origins.json. Pairing an origin again rotates its token and closes the terminals and event streams the old token opened. --list shows registrations without tokens; --revoke removes one. --revoke-sessions signs out every browser paired with `sidecar api open` without restarting the server: their session tokens get 401 from then on and their open terminals close with 4401. With --origin it signs out only the browsers on that origin. Revocation persists across API restarts. Paired origins keep their tokens; --revoke URL also revokes browser sessions bound to that exact origin.
+Register another web origin (an app embedding Sidecar components) and print its bearer token, which is shown only once and stored only as a hash in $STATE/api/origins.json. Pairing an origin again rotates its token and closes the terminals and event streams the old token opened. --scopes takes a comma-separated list, full by default; content:read restricts access to content and layout preferences. --list shows registrations without tokens; --revoke removes one. --revoke-sessions signs out every browser paired with `sidecar api open` without restarting the server: their session tokens get 401 from then on and their open terminals close with 4401. With --origin it signs out only the browsers on that origin. Revocation persists across API restarts. Paired origins keep their tokens; --revoke URL also revokes browser sessions bound to that exact origin.
 
 ```
-Usage: sidecar api pair --origin URL | --list | --revoke URL | --revoke-sessions [--origin URL] [--json]
+Usage: sidecar api pair --origin URL [--scopes LIST] | --list | --revoke URL | --revoke-sessions [--origin URL] [--json]
 ```
 
 **Options:**
 
 - `--origin URL`: Pair this origin (scheme://host[:port]); with --revoke-sessions, the origin to sign out
+- `--scopes LIST`: Comma-separated scopes for a new pairing (full or content:read)
 - `--list`: List paired origins
 - `--revoke URL`: Revoke a paired origin
 - `--revoke-sessions`: Sign out browser sessions from `sidecar api open`
@@ -1445,6 +1446,8 @@ case the start is refused and names the command to put them in.
 Usage refusals with --json are `{"error":{"code":"usage",...}}` on stderr,
 like the agent verbs; without --json they are the reason and the help text.
 The result carries `project`, the slug every other verb's --project accepts.
+With --agent, `agent_start` reports kind and status: ready, failed, or not_started.
+A failed start includes its named error, retains the created shell, and exits 1.
 
 ```
 Usage: sidecar create shell [options]
@@ -1528,7 +1531,9 @@ confirmation passes the plan's sourceOid back here, and gets the same
 source-moved guard the TUI's confirmation gets from executing its stored plan.
 
 The result carries `project`, the slug the agent verbs' --project accepts, and
-those verbs also accept the worktree's path or basename as --project. Usage
+those verbs also accept the worktree's path or basename as --project. With --agent,
+`agent_start` reports kind and status: ready, failed, or not_started. A failed
+start includes its named error, retains the worktree and shell, and exits 1. Usage
 refusals with --json are `{"error":{"code":"usage",...}}` on stderr, like
 the agent verbs; without --json they are the reason and the help text.
 

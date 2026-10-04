@@ -290,6 +290,9 @@ func TestCreateShellAgentWithARunCommandStartsNothingItself(t *testing.T) {
 		t.Fatalf("json: %v (%q)", err, out.String())
 	}
 	t.Cleanup(func() { _ = exec.Command("tmux", "kill-session", "-t", result.Shell.Session).Run() })
+	if result.AgentStart == nil || result.AgentStart.Kind != "codex" || result.AgentStart.Status != "not_started" || result.AgentStart.Error != nil {
+		t.Fatalf("caller-owned launch agent_start = %+v", result.AgentStart)
+	}
 	if terminal.launched {
 		t.Fatalf("agent control launched %v behind the caller's own --run", terminal.argv)
 	}

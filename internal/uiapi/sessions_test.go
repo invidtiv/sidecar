@@ -555,3 +555,19 @@ func TestBrowserEvictionPurgesInMemoryBearer(t *testing.T) {
 		t.Fatal("new registration failed")
 	}
 }
+
+// Possession of a cloneable signing key does not bypass the browser's Origin
+// binding, even when the foreign origin is paired and the signature is valid.
+func TestBrowserForeignOriginKeyProofCannotAuthenticate(t *testing.T) {
+	h := newHarness(t)
+	key, paired := h.pairBrowserKey()
+	foreign := "http://foreign.example:5173"
+	h.pairOrigin(foreign)
+	challenge := h.proofChallenge(paired.RegistrationID)
+	proof := signedProof(t, key, h.ownOrigin(), paired.RegistrationID, challenge)
+	r, b := h.submitProof(foreign, proof)
+	expect(t, r, b, http.StatusForbidden, CodeOriginRefused)
+	// The origin guard refused before spending the legitimate nonce.
+	r, b = h.submitProof(h.ownOrigin(), proof)
+	expect(t, r, b, http.StatusOK, "")
+}

@@ -21,8 +21,8 @@ const (
 	maxBodyBytes        = 64 << 10
 	tailscaleLoginHead  = "Tailscale-User-Login"
 	mutationHeader      = "X-Sidecar-Request"
-	corsAllowedHeaders  = "Authorization, Content-Type, X-Sidecar-Request"
-	corsAllowedMethods  = "GET, POST, DELETE"
+	corsAllowedHeaders  = "Authorization, Content-Type, X-Sidecar-Request, If-Match, If-None-Match"
+	corsAllowedMethods  = "GET, HEAD, POST, PUT, DELETE"
 	corsPreflightMaxAge = "600"
 )
 
@@ -54,6 +54,9 @@ func (s *Server) routeTable() map[string]*route {
 	local := []Listener{ListenerLocal}
 	remote := []Listener{ListenerBrowser, ListenerTailnet}
 	return map[string]*route{
+		contentRoute:               {methods: map[string]routeFunc{http.MethodGet: s.handleContent}},
+		treeRoute:                  {methods: map[string]routeFunc{http.MethodGet: s.handleTree}},
+		layoutRoute:                {methods: map[string]routeFunc{http.MethodGet: s.handleLayout, http.MethodPut: s.handleLayout}},
 		"/api/v0/hello":            {methods: map[string]routeFunc{http.MethodGet: s.handleHello}},
 		"/api/v0/sessions":         {methods: map[string]routeFunc{http.MethodGet: s.handleSessions}},
 		"/api/v0/status":           {methods: map[string]routeFunc{http.MethodGet: s.handleStatus}},
@@ -102,6 +105,7 @@ func (h *listenerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if paired {
 		w.Header().Set("Access-Control-Allow-Origin", origin)
 		w.Header().Add("Vary", "Origin")
+		w.Header().Set("Access-Control-Expose-Headers", "ETag")
 	}
 	if r.Method == http.MethodOptions {
 		if !paired {
@@ -129,6 +133,9 @@ func (h *listenerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (h *listenerHandler) dispatch(w http.ResponseWriter, r *http.Request, c caller) {
 	rt := h.routes[r.URL.Path]
+	if template, _ := projectContentRoute(r.URL.Path); template != "" {
+		rt = h.routes[template]
+	}
 	if rt == nil {
 		if strings.HasPrefix(r.URL.Path, "/api/") || h.kind == ListenerLocal {
 			writeError(w, http.StatusNotFound, CodeNotFound, fmt.Sprintf("There is no route %s; see docs/reference/ui-api.md for the v0 routes.", r.URL.Path))
@@ -178,6 +185,11 @@ func (h *listenerHandler) dispatch(w http.ResponseWriter, r *http.Request, c cal
 	if !rt.public {
 		var ok bool
 		if c, ok = h.authenticate(w, r, c); !ok {
+			return
+		}
+	}
+	if !rt.public && r.URL.Path != "/api/v0/hello" && r.URL.Path != "/api/v0/ws-tickets" {
+		if template, _ := projectContentRoute(r.URL.Path); template == "" && !h.s.requireScope(w, c, ScopeFull) {
 			return
 		}
 	}

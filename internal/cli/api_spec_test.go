@@ -32,7 +32,7 @@ func TestAPISpecCLIUsesGeneratedContractWithoutServer(t *testing.T) {
 }
 
 func TestAPIServeFixturesRefusesUnisolatedPaths(t *testing.T) {
-	for _, mode := range []string{"no-assertion", "real-state", "real-config", "state-symlink", "origins-symlink", "sessions-symlink", "session-lock-symlink"} {
+	for _, mode := range []string{"no-assertion", "real-state", "real-config", "state-symlink", "origins-symlink", "sessions-symlink", "session-lock-symlink", "layouts-symlink"} {
 		t.Run(mode, func(t *testing.T) {
 			root, err := os.MkdirTemp("/tmp", "u1b-guard-")
 			if err != nil {
@@ -49,7 +49,7 @@ func TestAPIServeFixturesRefusesUnisolatedPaths(t *testing.T) {
 				state = config.RealUserStateDir()
 			case "real-config":
 				config.SetConfigPath(filepath.Join(config.RealUserConfigDir(), "config.json"))
-			case "state-symlink", "origins-symlink", "sessions-symlink", "session-lock-symlink":
+			case "state-symlink", "origins-symlink", "sessions-symlink", "session-lock-symlink", "layouts-symlink":
 				if err := os.MkdirAll(config.RealUserStateDir(), 0700); err != nil {
 					t.Fatal(err)
 				}
@@ -71,6 +71,9 @@ func TestAPIServeFixturesRefusesUnisolatedPaths(t *testing.T) {
 					}
 				} else {
 					state = link
+				}
+				if mode == "layouts-symlink" {
+					link, target = filepath.Join(uiapi.Dir(state), "layouts"), config.RealUserStateDir()
 				}
 				if err := os.Symlink(target, link); err != nil {
 					t.Fatal(err)

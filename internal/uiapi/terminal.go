@@ -143,6 +143,9 @@ func (h *listenerHandler) serveTerminal(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	c, code, reason := h.authorizeTerminal(r)
+	if code == 0 && !h.s.hasScope(c, ScopeFull) {
+		code, reason = CloseOriginRefused, "This credential needs full access to open terminals."
+	}
 	if code != 0 {
 		_ = conn.Close(code, reason)
 		return

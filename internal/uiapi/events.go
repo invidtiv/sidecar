@@ -3,6 +3,7 @@ package uiapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -58,7 +59,7 @@ type AttentionEvent struct {
 // EventMessage is one text frame (or one JSONL line on the CLI bridge).
 // Seq starts at 1 with hello, increases on delivery, and resets on reconnect.
 type EventMessage struct {
-	Type          string                       `json:"type" jsonschema:"enum=hello,enum=catalog,enum=attention,enum=terminals,enum=error,enum=shutdown"`
+	Type          string                       `json:"type" jsonschema:"enum=hello,enum=catalog,enum=attention,enum=terminals,enum=content,enum=error,enum=shutdown"`
 	Seq           uint64                       `json:"seq" jsonschema:"minimum=1"`
 	APIVersion    int                          `json:"api_version" jsonschema:"enum=0"`
 	APIInstance   string                       `json:"api_instance,omitempty"`
@@ -68,6 +69,7 @@ type EventMessage struct {
 	Attention     *AttentionEvent              `json:"attention,omitempty"`
 	Terminals     *[]EventTerminal             `json:"terminals,omitempty"`
 	Error         *ErrorDetail                 `json:"error,omitempty"`
+	Content       *ContentEvent                `json:"content,omitempty"`
 	Reason        string                       `json:"reason,omitempty"`
 }
 
@@ -134,6 +136,7 @@ func eventQuery(values url.Values) (mobileproto.CatalogQuery, error) {
 		copy[key] = append([]string(nil), list...)
 	}
 	copy.Del("ticket")
+	copy.Del("content")
 	if len(values["ticket"]) > 1 {
 		return mobileproto.CatalogQuery{}, fmt.Errorf("ticket takes one value")
 	}
@@ -195,7 +198,16 @@ func (h *listenerHandler) serveEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer h.s.clients.remove(client)
-	h.s.runEvents(conn, client, c, query)
+	refs, err := parseContentRefs(r.URL.Query())
+	if err != nil {
+		_ = conn.Close(CloseProtocolViolation, closeReason(err.Error()))
+		return
+	}
+	if len(refs) > 0 && !h.s.hasScope(c, ScopeContentRead) {
+		_ = conn.Close(CloseOriginRefused, "This credential needs content:read to watch content.")
+		return
+	}
+	h.s.runEvents(conn, client, c, query, refs)
 }
 
 // eventPending separates collection from socket writes. State is latest-wins;
@@ -209,6 +221,7 @@ type eventPending struct {
 	attention      map[string]EventMessage
 	attentionSizes map[string]int
 	attentionBytes int
+	content        map[string]ContentRef
 	err            *EventMessage
 }
 
@@ -235,6 +248,14 @@ func (p *eventPending) put(m EventMessage) {
 			// A changing row population can outgrow even the maximum catalog.
 			// Surface that loss explicitly; never silently discard an alert.
 			p.err = &EventMessage{Type: "error", Error: &ErrorDetail{Code: mobileproto.ErrorOverflow, Message: "Pending attention exceeded the stream bound; use the latest catalog to reconcile attention."}}
+		}
+	case "content":
+		if p.content == nil {
+			p.content = make(map[string]ContentRef)
+		}
+		for _, ref := range m.Content.Resources {
+			key, _ := json.Marshal(ref)
+			p.content[string(key)] = ref
 		}
 	case "error":
 		p.err = &m
@@ -267,6 +288,19 @@ func (p *eventPending) take() []EventMessage {
 	if p.terminals != nil {
 		out = append(out, *p.terminals)
 		p.terminals = nil
+	}
+	if len(p.content) != 0 {
+		keys := make([]string, 0, len(p.content))
+		for key := range p.content {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		refs := make([]ContentRef, 0, len(keys))
+		for _, key := range keys {
+			refs = append(refs, p.content[key])
+		}
+		p.content = nil
+		out = append(out, EventMessage{Type: "content", Content: &ContentEvent{Resources: refs}})
 	}
 	if p.err != nil {
 		out = append(out, *p.err)
@@ -306,7 +340,7 @@ func attentionChanges(before, after *mobileproto.CatalogSnapshot, now time.Time)
 	return out
 }
 
-func (s *Server) runEvents(conn *websocket.Conn, client *trackedClient, c caller, query mobileproto.CatalogQuery) {
+func (s *Server) runEvents(conn *websocket.Conn, client *trackedClient, c caller, query mobileproto.CatalogQuery, refs []ContentRef) {
 	s.startCatalogEvents()
 	catalogChanges, unsubscribe := s.catalogEvents.subscribe()
 	defer unsubscribe()
@@ -349,7 +383,18 @@ func (s *Server) runEvents(conn *websocket.Conn, client *trackedClient, c caller
 		defer done()
 		return conn.Write(writeCtx, websocket.MessageText, data)
 	}
-	if err := write(EventMessage{Type: "hello", APIInstance: s.instance, ServerVersion: s.opts.Version, Capabilities: []string{"catalog", "attention", "terminals", "shutdown"}}); err != nil {
+	pending := newEventPending()
+	stop, err := s.startContentWatches(ctx, c, refs, pending)
+	if err != nil {
+		code := CloseProtocolViolation
+		if errors.Is(err, errWatchBudget) {
+			code = CloseTooManyTerminals
+		}
+		_ = conn.Close(code, closeReason(err.Error()))
+		return
+	}
+	defer stop()
+	if err := write(EventMessage{Type: "hello", APIInstance: s.instance, ServerVersion: s.opts.Version, Capabilities: []string{"catalog", "attention", "terminals", "content", "shutdown"}}); err != nil {
 		return
 	}
 	if s.eventErr != nil {
@@ -357,7 +402,6 @@ func (s *Server) runEvents(conn *websocket.Conn, client *trackedClient, c caller
 		_ = conn.Close(websocket.StatusInternalError, "The catalog watcher could not start; restart sidecar api serve.")
 		return
 	}
-	pending := newEventPending()
 	producerDone := make(chan struct{})
 	go func() {
 		defer close(producerDone)
@@ -392,6 +436,9 @@ func (s *Server) collectEvents(ctx context.Context, c caller, query mobileproto.
 	var previous *mobileproto.CatalogSnapshot
 	var lastTerminals []EventTerminal
 	refreshCatalog := func() {
+		if !s.hasScope(c, ScopeFull) {
+			return
+		}
 		queryCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 		snapshot, err := s.opts.Backend.Sessions(queryCtx, query)
@@ -464,7 +511,7 @@ func (s *Server) eventTerminals(ctx context.Context, c caller) []EventTerminal {
 				holder = &GeometryHolder{Kind: term.Holder.Kind, Label: term.Holder.Label}
 			}
 		} else if source != nil {
-			holder = source.GeometryHolder(ctx, term)
+			holder = s.legacyHolder(ctx, source, term)
 		}
 		out = append(out, EventTerminal{ClientID: term.ClientID, OwnerHostID: term.OwnerHostID, Session: term.Session, Pane: term.Pane, DisplayName: term.DisplayName, Holder: holder})
 	}

@@ -116,6 +116,13 @@ func (s *Service) v1Input(ctx context.Context, r mobileproto.Request) {
 		s.writeError(r.RequestID, mobileproto.ErrorInvalidRequest, "input must be valid non-empty base64 within the advertised bound", false)
 		return
 	}
+	if r.Type == mobileproto.RequestPaste {
+		data = tty.NormalizeHeadlessPaste(data)
+		if len(data) == 0 {
+			s.writeError(r.RequestID, mobileproto.ErrorInvalidRequest, "paste contains no bytes after removing bracketed-paste markers", false)
+			return
+		}
+	}
 	a.mu.Lock()
 	snapshot := a.latest
 	geometry := a.geometry

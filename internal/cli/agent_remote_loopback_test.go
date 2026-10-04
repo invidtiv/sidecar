@@ -328,7 +328,9 @@ func (h *loopbackHost) processEnv() []string {
 func (h *loopbackHost) local(args ...string) runResult {
 	h.t.Helper()
 	full := append([]string{"-config", h.hostConfig}, args...)
-	cmd := exec.Command(h.bin, full...) //nolint:gosec // built above
+	ctx, cancel := loopbackOperationContext(h.t)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, h.bin, full...) //nolint:gosec // built above
 	cmd.Env = h.processEnv()
 	cmd.Dir = h.hostWork
 	var out, errOut bytes.Buffer
@@ -357,10 +359,83 @@ func (h *loopbackHost) remote(args ...string) runResult {
 	return runResult{stdout: out.String(), stderr: errOut.String(), code: code}
 }
 
+// Fixture progress is synchronized on shell/provider evidence. Its only time
+// bound is the test's own deadlock budget, shared by all operations: a busy
+// machine must not turn a slower successful startup into a 30s product refusal.
+func loopbackOperationContext(t *testing.T) (context.Context, context.CancelFunc) {
+	t.Helper()
+	deadline, ok := t.Deadline()
+	if !ok {
+		deadline = time.Now().Add(2 * time.Minute)
+	}
+	// Leave the test runner time to print diagnostics and stop private servers.
+	return context.WithDeadline(t.Context(), deadline.Add(-2*time.Second))
+}
+
+func (h *loopbackHost) operationTimeout() time.Duration {
+	ctx, cancel := loopbackOperationContext(h.t)
+	defer cancel()
+	deadline, _ := ctx.Deadline()
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		h.t.Fatal("loopback test exhausted its operation budget")
+	}
+	return remaining
+}
+
+func TestLoopbackStartupUsesTheTestDeadline(t *testing.T) {
+	if _, ok := t.Deadline(); !ok {
+		t.Skip("requires an enclosing test runner deadline")
+	}
+	dir := t.TempDir()
+	argsPath := filepath.Join(dir, "startup-argv")
+	answer, err := json.Marshal(agentcontrol.Agent{Agent: agentcontrol.AgentState{
+		Kind: "codex", InteractiveReady: true, Evidence: "sidecar.composer_idle",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(dir, "fixture-sidecar")
+	writeFile(t, bin, fmt.Sprintf(`#!/bin/sh
+if [ "$4" = start ]; then printf '%%s\n' "$@" > %q; fi
+printf '%%s\n' %q
+`, argsPath, string(answer)))
+	if err := os.Chmod(bin, 0700); err != nil {
+		t.Fatal(err)
+	}
+	h := &loopbackHost{t: t, bin: bin, hostWork: dir, hostConfig: filepath.Join(dir, "config.json"), agentSession: "explicit-fixture"}
+	ctx, cancel := loopbackOperationContext(t)
+	defer cancel()
+	deadline, _ := ctx.Deadline()
+	before := time.Now()
+	h.startAgent()
+	after := time.Now()
+	argv, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := strings.Split(strings.TrimSpace(string(argv)), "\n")
+	var got time.Duration
+	for i, arg := range args {
+		if arg == "--timeout" && i+1 < len(args) {
+			got, err = time.ParseDuration(args[i+1])
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	// Bracket the actual command invocation, so scheduler stalls on either
+	// side do not assert any elapsed-time performance target. Replacing the
+	// real start call's budget with a fixed 30s fails this contract.
+	if lower, upper := deadline.Sub(after), deadline.Sub(before); got < lower || got > upper {
+		t.Fatalf("fixture startup budget %s did not follow test deadline (%s..%s remaining); argv=%q", got, lower, upper, args)
+	}
+}
+
 // startAgent brings the agent session up to a live, identified, idle codex.
 func (h *loopbackHost) startAgent() agentcontrol.Agent {
 	h.t.Helper()
-	result := h.local("agent", "start", h.agentSession, "--kind", "codex", "--timeout", "30s", "--json")
+	result := h.local("agent", "start", h.agentSession, "--kind", "codex", "--timeout", h.operationTimeout().String(), "--json")
 	if result.code != 0 {
 		h.t.Fatalf("starting the fixture provider: exit %d\nstdout: %s\nstderr: %s", result.code, result.stdout, result.stderr)
 	}
@@ -387,9 +462,10 @@ func (h *loopbackHost) startAgent() agentcontrol.Agent {
 // steady-state rows assert Evidence exactly.
 func (h *loopbackHost) settleAgent() {
 	h.t.Helper()
-	deadline := time.Now().Add(15 * time.Second)
+	ctx, cancel := loopbackOperationContext(h.t)
+	defer cancel()
 	var last string
-	for time.Now().Before(deadline) {
+	for ctx.Err() == nil {
 		result := h.local("agent", "get", h.agentSession, "--json")
 		if result.code == 0 {
 			last = decodeAgent(h.t, result.stdout).Agent.Evidence
@@ -416,7 +492,7 @@ func (h *loopbackHost) resetAgentPane() {
 
 func (h *loopbackHost) waitForShell(session string) {
 	h.t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := loopbackOperationContext(h.t)
 	defer cancel()
 	tick := time.NewTicker(50 * time.Millisecond)
 	defer tick.Stop()
@@ -675,14 +751,14 @@ func TestALoopbackHostAnswersEveryAgentVerbExactlyAsTheHostItselfWould(t *testin
 		{name: "get", args: []string{"agent", "get", h.agentSession, "--json"}},
 		{
 			name: "prompt",
-			args: []string{"agent", "prompt", h.agentSession, "summarise the diff", "--wait", "--timeout", "30s", "--json"},
+			args: []string{"agent", "prompt", h.agentSession, "summarise the diff", "--wait", "--timeout", h.operationTimeout().String(), "--json"},
 		},
-		{name: "wait", args: []string{"agent", "wait", h.agentSession, "--timeout", "30s", "--json"}},
+		{name: "wait", args: []string{"agent", "wait", h.agentSession, "--timeout", h.operationTimeout().String(), "--json"}},
 		{name: "send-keys", args: []string{"agent", "send-keys", h.agentSession, "space", "--json"}},
 		{
 			name:                       "start",
 			prepare:                    func() { h.resetAgentPane() },
-			args:                       []string{"agent", "start", h.agentSession, "--kind", "codex", "--timeout", "30s", "--json"},
+			args:                       []string{"agent", "start", h.agentSession, "--kind", "codex", "--timeout", h.operationTimeout().String(), "--json"},
 			panePIDChanges:             true,
 			evidenceIsARaceAtReadiness: true,
 		},
