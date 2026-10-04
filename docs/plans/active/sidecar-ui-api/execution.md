@@ -281,6 +281,6 @@ Each one is a td issue with the exact command and output. Fixes run as their own
 | td-17b5e2 | Worktree delete leaves other projects' shells rooted in the removed worktree live, with a vanished cwd | open |
 | td-00b64e | shell list/rename resolve the current project from env, not cwd; shell list has no --project | open |
 | td-f9306b | Shell renames keep no history; the td-ac892f collateral rename of sidecar-sh-clara-home-23 could only be guessed back to 'Shell 23' | open |
-| td-480c9b | P1: exact session-name targets fall back to display-name matching, so a destructive operation could hit another same-named shell. Also: unguarded positional targets, a literal '-' prompt refused, and no main-checkout flag. Codex bug lane ~/code/sidecar-bug-480c9b | running |
+| td-480c9b | P1: exact session-name targets fall back to display-name matching, so a destructive operation could hit another same-named shell. Also: unguarded positional targets, a literal '-' prompt refused, and no main-checkout flag. Fixed on bug-480c9b @8492a037; in Codex review, which is checking that documented display-name targets still work | review |
 | td-418046 | P1: layout routes resolve only the project root while the viewer relay reads the worktree root, so agent-driven layouts in worktrees cannot work. Codex bug lane ~/code/sidecar-bug-418046 | running |
 | td-4db5c6 | P2: a terminal renders very small even while this browser holds the size. Codex bug lane ~/code/sidecar-ui-bug-4db5c6 | running |
