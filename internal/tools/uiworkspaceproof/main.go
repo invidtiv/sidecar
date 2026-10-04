@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/uiapi"
 	"github.com/marcus/sidecar/internal/workspaceops"
 	"github.com/marcus/sidecar/internal/workspacewire"
@@ -60,6 +61,9 @@ func run() error {
 			if err := json.Unmarshal(result, out); err != nil {
 				return err
 			}
+		}
+		if op == "shells/create" && want == 409 && response.Header.Get("X-Sidecar-Exit-Code") != "5" {
+			return fmt.Errorf("shell creation lost named refusal exit status: %s", response.Header.Get("X-Sidecar-Exit-Code"))
 		}
 		if response.Header.Get("X-Sidecar-Exit-Code") == "" && want != 400 {
 			return fmt.Errorf("%s lost CLI exit status", op)
@@ -106,6 +110,18 @@ func run() error {
 	}
 	if created.Shell.Session == "" || created.Project != *project {
 		return fmt.Errorf("created shell: %+v", created)
+	}
+	for _, tc := range []struct{ name, code string }{
+		{"API workspace shell", "shell_name_in_use"},
+		{strings.Repeat("x", shellstate.MaxNameBytes+1), "shell_name_invalid"},
+	} {
+		var refusal uiapi.ErrorBody
+		if err := request("shells/create", map[string]any{"name": tc.name}, 409, &refusal); err != nil {
+			return err
+		}
+		if refusal.Error.Code != tc.code || refusal.Error.Message == "" {
+			return fmt.Errorf("shell creation lost named refusal: %+v", refusal)
+		}
 	}
 	if err := waitWorkspace(); err != nil {
 		return err
