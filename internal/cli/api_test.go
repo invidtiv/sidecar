@@ -51,6 +51,8 @@ func TestAPICommandUsageErrors(t *testing.T) {
 	for _, args := range [][]string{
 		{"api", "pair"},
 		{"api", "pair", "--list", "--origin", "http://a.example"},
+		{"api", "pair", "--revoke-sessions", "--list"},
+		{"api", "pair", "--revoke-sessions", "--revoke", "http://a.example"},
 		{"api", "serve", "--port", "nope"},
 		{"api", "serve", "--port", "70000"},
 		{"api", "serve", "--tailnet-port", "0"},
@@ -109,6 +111,14 @@ func TestAPICommandsAgainstARunningServer(t *testing.T) {
 	}
 	if code, _, stderr = runAPICLI(t, "api", "pair", "--revoke", "http://app.example:5173"); code != 1 || !strings.Contains(stderr, "not paired") {
 		t.Fatalf("second revoke: %d %q", code, stderr)
+	}
+	code, stdout, stderr = runAPICLI(t, "api", "pair", "--revoke-sessions", "--origin", server.BrowserURL(), "--json")
+	var sessions uiapi.SessionRevocation
+	if code != 0 || json.Unmarshal([]byte(stdout), &sessions) != nil || sessions.Origin != server.BrowserURL() || sessions.Revoked != 0 {
+		t.Fatalf("revoke-sessions --origin: %d %q %q", code, stdout, stderr)
+	}
+	if code, stdout, _ = runAPICLI(t, "api", "pair", "--revoke-sessions"); code != 0 || !strings.Contains(stdout, "Signed out 0 browser session(s) on every origin") {
+		t.Fatalf("revoke-sessions: %d %q", code, stdout)
 	}
 
 	code, stdout, _ = runAPICLI(t, "api", "open", "--print", "--path", "/s/x")
