@@ -262,14 +262,31 @@ func TestServiceRemoveCancelsSoundBeforeBlockedNativeLedger(t *testing.T) {
 	blockerLedger := mustOpenLedgerPath(t, path)
 	removeLedger := mustOpenLedgerPath(t, path)
 	player := &fakeSound{capability: Capability{Available: true, Provider: "fake"}}
-	hostSound := NewHostSound(stateDir, player, 75*time.Millisecond, time.Second, RealClock{})
+	clock := &manualClock{now: time.Now().UTC()}
+	hostSound := NewHostSound(stateDir, player, 75*time.Millisecond, time.Second, clock)
 	n := notify.Notification{ID: "dismiss-before-cue", Source: notify.SourceWaiting, Sticky: true, CreatedAt: time.Now().UTC()}
 	soundDone := make(chan ProviderReceipt, 1)
 	go func() {
 		receipt, _ := hostSound.PlayNotification(context.Background(), n.ID, CueAttention)
 		soundDone <- receipt
 	}()
-	item := waitSoundItems(t, hostSound, 1)[n.ID]
+	waitSoundItems(t, hostSound, 1)
+	// Freeze playback until the blocked ledger and cancellation are established.
+	// A real 75ms timer can expire during setup on a busy machine, before Remove
+	// is even called, which does not test cancellation ordering.
+	timerDeadline := time.Now().Add(2 * time.Second)
+	for {
+		clock.mu.Lock()
+		waiting := clock.fn != nil
+		clock.mu.Unlock()
+		if waiting {
+			break
+		}
+		if time.Now().After(timerDeadline) {
+			t.Fatal("sound did not register its delayed playback timer")
+		}
+		runtime.Gosched()
+	}
 
 	nativeStarted := make(chan struct{})
 	releaseNative := make(chan struct{})
@@ -292,11 +309,7 @@ func TestServiceRemoveCancelsSoundBeforeBlockedNativeLedger(t *testing.T) {
 	go func() { removeDone <- service.Remove(context.Background(), n) }()
 	waitSoundCancellation(t, hostSound, n.ID)
 
-	wait := time.Until(item.BatchDeadline) + 20*time.Millisecond
-	if wait > 0 {
-		timer := time.NewTimer(wait)
-		<-timer.C
-	}
+	clock.fire()
 	receipt := <-soundDone
 	if receipt.Reason != ClaimCancelled || len(player.played) != 0 {
 		t.Fatalf("sound receipt=%+v played=%v", receipt, player.played)
