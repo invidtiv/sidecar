@@ -19,23 +19,47 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 )
+
+var hostingSocket string
+
+// RememberHostingServer records the outer pane's namespace before main clears
+// TMUX. Pane IDs are unique only within one server. This performs no I/O.
+func RememberHostingServer() {
+	hostingSocket, _, _ = strings.Cut(os.Getenv("TMUX"), ",")
+}
 
 // SocketPath returns the path of the default tmux socket this process would use.
 func SocketPath() string {
 	return filepath.Join(tmpDir(), "tmux-"+strconv.Itoa(os.Getuid()), "default")
 }
 
-// HostingPane returns the tmux pane ID this process is running in, from
-// TMUX_PANE. Empty when sidecar was launched outside tmux.
+// HostingPane returns the tmux pane hosting this process only when it belongs
+// to the server Sidecar addresses. Empty outside tmux or across namespaces.
 //
 // main unsets TMUX early so sidecar's own tmux sessions stay independent of
 // the outer one, but it deliberately leaves TMUX_PANE alone: which pane hosts
 // this process is a fact about the outside world that several components need
 // (the pane inventory must never correlate a workspace row to it — a preview
 // bound to the hosting pane resizes the window sidecar itself draws in), and
-// the environment keeps that answer with no subprocess and no startup cost.
+// the environment keeps that answer with no subprocess. Differently spelled
+// socket paths need a file-identity check before the pane can be refused.
 func HostingPane() string {
+	if hostingSocket != "" {
+		addressedSocket := SocketPath()
+		if filepath.Clean(hostingSocket) != filepath.Clean(addressedSocket) {
+			// tmux resolves directory symlinks (notably /tmp -> /private/tmp
+			// on macOS) when publishing TMUX. Different spellings can still
+			// name the same server. Only consult file identity on this path;
+			// remembering the outer namespace remains free of startup I/O.
+			hosting, hostingErr := os.Stat(hostingSocket)
+			addressed, addressedErr := os.Stat(addressedSocket)
+			if hostingErr != nil || addressedErr != nil || !os.SameFile(hosting, addressed) {
+				return ""
+			}
+		}
+	}
 	return os.Getenv("TMUX_PANE")
 }
 

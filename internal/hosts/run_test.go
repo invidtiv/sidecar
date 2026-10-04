@@ -446,3 +446,15 @@ func fakeSSHOnPath(t *testing.T, script string) {
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
+
+func TestRunSidecarPreservesPartialResultOnFailure(t *testing.T) {
+	c := testRunClient(t, Host{ID: "owner", Target: "owner"}, stubInvoker("profile banner\n{\"path\":\"/owner/created\"}\n", "setup failed", 1))
+	var result struct {
+		Path string `json:"path"`
+	}
+	err := c.RunSidecar(context.Background(), []string{"create", "worktree", "--project", "proof", "--json", "--", "topic"}, &result)
+	var runErr *RunError
+	if !errors.As(err, &runErr) || runErr.ExitCode != 1 || result.Path != "/owner/created" {
+		t.Fatalf("result=%+v error=%v", result, err)
+	}
+}

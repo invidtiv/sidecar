@@ -8,6 +8,9 @@
     "terminal",
     "ws_tickets",
     "events",
+    "projects",
+    "workspace",
+    "workspace_operations",
     "content",
     "layouts"
   ],

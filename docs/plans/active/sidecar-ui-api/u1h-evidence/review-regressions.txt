@@ -1,0 +1,13 @@
+--- FAIL: TestHostingPaneRecognizesSocketPathAliases (0.00s)
+    tmuxenv_test.go:121: same socket through a directory symlink: HostingPane() = "", want %42
+FAIL
+FAIL	github.com/marcus/sidecar/internal/tmuxenv	0.133s
+FAIL
+--- FAIL: TestSwitchingInteractivePanesActivatesTheNewGeometryDriver (0.31s)
+    terminal_control_test.go:135: pane switch did not activate the panel's standing geometry driver:
+        set-option -t panel-session window-size manual
+        -u display-message -t %2 -p #{session_name}	#{@sidecar-owner}	#{@sidecar-holder-owner}	#{@sidecar-holder-kind}	#{@sidecar-holder-label}
+        display-message -t %2 -p #{pane_width},#{pane_height}
+FAIL
+FAIL	github.com/marcus/sidecar/internal/plugins/workspace	0.690s
+FAIL

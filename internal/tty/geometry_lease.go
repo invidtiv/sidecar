@@ -406,23 +406,31 @@ func (tmuxLeaseStore) read(target string) (string, string, bool) {
 		return "", "", false
 	}
 	out, err := exec.Command("tmux", tmuxformat.ClientArgs("display-message", "-t", target, "-p",
-		"#{session_name}\t#{"+leaseOptionName+"}")...).Output()
+		"#{session_name}\t#{"+leaseOptionName+"}\t#{"+headlessHolderOwner+"}\t#{"+headlessHolderKind+"}\t#{"+headlessHolderLabel+"}")...).Output()
 	if err != nil {
 		return "", "", false
 	}
-	session, token, found := strings.Cut(strings.TrimRight(string(out), "\r\n"), "\t")
-	if !found || session == "" {
+	fields := strings.SplitN(strings.TrimRight(string(out), "\r\n"), "\t", 5)
+	if len(fields) < 2 || fields[0] == "" {
 		return "", "", false
+	}
+	session, token := fields[0], strings.TrimSpace(fields[1])
+	if len(fields) == 5 {
+		kind, label := holderFromMetadata(token, fields[2], fields[3], fields[4])
+		geometryHolders.Store(session, geometryHolder{owner: leaseOwner(token), kind: kind, label: label})
 	}
 	return session, strings.TrimSpace(token), true
 }
 
 func (tmuxLeaseStore) set(session, token string) {
-	_ = exec.Command("tmux", "set-option", "-t", session, leaseOptionName, token).Run()
+	if exec.Command("tmux", "set-option", "-t", session, leaseOptionName, token).Run() == nil {
+		geometryHolders.Store(session, geometryHolder{owner: leaseOwner(token)})
+	}
 }
 
 func (tmuxLeaseStore) clear(session string) {
 	_ = exec.Command("tmux", "set-option", "-u", "-t", session, leaseOptionName).Run()
+	geometryHolders.Delete(session)
 }
 
 // inputMark reports the activity marker of the tmux clients attached to session

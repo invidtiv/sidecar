@@ -1,5 +1,5 @@
 #!/bin/sh
-# Fake-manager contract plus foreground upgrade/UI-config proof. No manager
+# Fake-manager contract plus foreground and socket-activated upgrade proof. No manager
 # changes and no tmux commands, even for cleanup. Both state axes are isolated.
 set -eu
 unset TMUX TMUX_PANE
@@ -67,4 +67,7 @@ curl -fsS "http://$tcp/" | grep -q OVERRIDE_UI_PROOF || fail '--ui did not overr
 kill -TERM "$server_pid"
 wait "$server_pid" || fail 'shutdown failed'
 server_pid=""
+echo '== socket-activated binary restart: manager keeps port across 5-second gap'
+go build -o "$root/bin/supervisor-proof" ./internal/tools/uiapiserviceproof
+timeout 60 "$root/bin/supervisor-proof" "$root" "$config" "$root/bin/first" "$root/bin/second"
 echo 'ui-api-service-proof: PASS'

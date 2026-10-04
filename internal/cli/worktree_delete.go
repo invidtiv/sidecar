@@ -11,6 +11,7 @@ import (
 
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/workspaceops"
+	"github.com/marcus/sidecar/internal/workspacewire"
 	"github.com/marcus/sidecar/internal/worktreedelete"
 )
 
@@ -19,28 +20,9 @@ const (
 	worktreeDeleteStatusDeleted = "deleted"
 )
 
-type worktreeDeletePlan struct {
-	Project              string `json:"project"`
-	Name                 string `json:"name"`
-	Path                 string `json:"path"`
-	Branch               string `json:"branch"`
-	HeadOID              string `json:"headOid"`
-	BranchOID            string `json:"branchOid"`
-	Dirtiness            string `json:"dirtiness"`
-	HasRemoteBranch      bool   `json:"hasRemoteBranch"`
-	DeleteLocalBranch    bool   `json:"deleteLocalBranch"`
-	DeleteRemoteBranch   bool   `json:"deleteRemoteBranch"`
-	PendingCreation      bool   `json:"pendingCreation"`
-	pendingCreationPlan  *workspaceops.WorktreePlan
-	resolvedWorktreePath string
-}
+type worktreeDeletePlan = workspacewire.WorktreeDeletePlan
 
-type worktreeDeleteDocument struct {
-	Status   string             `json:"status"`
-	Deleted  bool               `json:"deleted"`
-	Plan     worktreeDeletePlan `json:"plan"`
-	Warnings []string           `json:"warnings,omitempty"`
-}
+type worktreeDeleteDocument = workspacewire.WorktreeDeleted
 
 type worktreeDeleteErrorDocument struct {
 	Error struct {
@@ -80,6 +62,7 @@ func runWorktreeDelete(env Env, args []string) int {
 	projectFlag := ""
 	expectHeadOID := ""
 	expectBranch := ""
+	expectDeleteState := ""
 	planOnly := false
 	yes := false
 	deleteLocal := false
@@ -123,6 +106,12 @@ func runWorktreeDelete(env Env, args []string) int {
 			}
 			expectBranch = value
 			i = next
+		case arg == "--expect-delete-state" || strings.HasPrefix(arg, "--expect-delete-state="):
+			value, next, ok := takeFlagArg(arg, args, i, "--expect-delete-state")
+			if !ok || value == "" {
+				return usage("--expect-delete-state requires the deleteState from a plan")
+			}
+			expectDeleteState, i = value, next
 		case arg == "--":
 			positional = append(positional, args[i+1:]...)
 			i = len(args)
@@ -140,11 +129,14 @@ func runWorktreeDelete(env Env, args []string) int {
 	if planOnly && yes {
 		return usage("--yes cannot be combined with --plan or --dry-run")
 	}
-	if planOnly && (expectHeadOID != "" || expectBranch != "") {
+	if planOnly && (expectHeadOID != "" || expectBranch != "" || expectDeleteState != "") {
 		return usage("--expect-branch and --expect-head-oid apply only when deleting; use the path, branch, and headOid returned by --plan")
 	}
 	if (expectHeadOID == "") != (expectBranch == "") {
 		return usage("--expect-branch and --expect-head-oid must be provided together")
+	}
+	if expectDeleteState != "" && expectHeadOID == "" {
+		return usage("--expect-delete-state requires --expect-head-oid and --expect-branch")
 	}
 	if expectHeadOID != "" && !filepath.IsAbs(positional[0]) {
 		return usage("a planned deletion must use the absolute path returned by --plan as TARGET")
@@ -171,6 +163,7 @@ func runWorktreeDelete(env Env, args []string) int {
 	}
 
 	if planOnly {
+		plan.DeleteState, _ = workspaceops.WorktreeDeleteState(ctx, plan.Path)
 		doc := worktreeDeleteDocument{Status: worktreeDeleteStatusPlanned, Plan: plan}
 		if jsonOutput {
 			return writeJSON(env, doc)
@@ -188,6 +181,8 @@ func runWorktreeDelete(env Env, args []string) int {
 			exitInputRejected)
 	}
 
+	plan.ExpectedDeleteState = expectDeleteState
+	plan.DeleteState = expectDeleteState
 	warnings := executeWorktreeDeletePlan(ctx, project, plan)
 	if warnings.err != nil {
 		var identityErr *workspaceops.WorktreeIdentityError
@@ -267,7 +262,7 @@ func resolveWorktreeDeletePlan(ctx context.Context, env Env, project registeredP
 		HeadOID: state.HEAD, BranchOID: workspaceops.BranchOID(ctx, project.Path, state.Branch),
 		Dirtiness:       dirtinessName(worktreedelete.ProbeDirtiness(ctx, state.Path, false)),
 		HasRemoteBranch: hasRemote, DeleteLocalBranch: confirmation.DeleteLocal, DeleteRemoteBranch: confirmation.DeleteRemoteBranch(),
-		resolvedWorktreePath: state.Path,
+		ResolvedWorktreePath: state.Path,
 	}
 	if _, ok := projectdir.LookupWorktreeWithBase(env.StateDir, project.Path, state.Path); ok {
 		repoKey, keyErr := workspaceops.RepoKeyForPath(ctx, project.Path)
@@ -283,7 +278,7 @@ func resolveWorktreeDeletePlan(ctx context.Context, env Env, project registeredP
 			}
 			if journal != nil {
 				plan.PendingCreation = true
-				plan.pendingCreationPlan = &journal.Plan
+				plan.PendingCreationPlan = &journal.Plan
 			}
 		}
 	}
@@ -356,8 +351,8 @@ type worktreeDeleteWarnings struct {
 func executeWorktreeDeletePlan(ctx context.Context, project registeredProject, plan worktreeDeletePlan) worktreeDeleteWarnings {
 	var warnings []string
 	if err := (workspaceops.Service{}).DeleteWorktree(ctx, workspaceops.WorktreeRemoval{
-		RepoPath: project.Path, ProjectRoot: project.Path, Path: plan.resolvedWorktreePath,
-		Branch: plan.Branch, ExpectedOID: plan.HeadOID, Force: true,
+		RepoPath: project.Path, ProjectRoot: project.Path, Path: plan.ResolvedWorktreePath,
+		Branch: plan.Branch, ExpectedOID: plan.HeadOID, ExpectedDeleteState: plan.ExpectedDeleteState, Force: true,
 	}); err != nil {
 		var removedWarning *workspaceops.WorktreeRemovedWarning
 		if !errors.As(err, &removedWarning) {
@@ -379,8 +374,8 @@ func executeWorktreeDeletePlan(ctx context.Context, project registeredProject, p
 			warnings = append(warnings, "remote branch: "+err.Error())
 		}
 	}
-	if plan.pendingCreationPlan != nil {
-		if err := (workspaceops.Service{}).FinalizeWorktree(plan.pendingCreationPlan); err != nil {
+	if plan.PendingCreationPlan != nil {
+		if err := (workspaceops.Service{}).FinalizeWorktree(plan.PendingCreationPlan); err != nil {
 			warnings = append(warnings, "pending creation journal: "+err.Error())
 		}
 	}

@@ -53,7 +53,7 @@ func (rt *route) localOnly() bool {
 func (s *Server) routeTable() map[string]*route {
 	local := []Listener{ListenerLocal}
 	remote := []Listener{ListenerBrowser, ListenerTailnet}
-	return map[string]*route{
+	routes := map[string]*route{
 		contentRoute:               {methods: map[string]routeFunc{http.MethodGet: s.handleContent}},
 		treeRoute:                  {methods: map[string]routeFunc{http.MethodGet: s.handleTree}},
 		layoutRoute:                {methods: map[string]routeFunc{http.MethodGet: s.handleLayout, http.MethodPut: s.handleLayout}},
@@ -70,6 +70,8 @@ func (s *Server) routeTable() map[string]*route {
 		"/api/v0/pairing/exchange":             {methods: map[string]routeFunc{http.MethodPost: s.handlePairingExchange}, listeners: []Listener{ListenerBrowser}, public: true},
 		"/pair":                                {methods: map[string]routeFunc{http.MethodGet: s.handlePair}, listeners: []Listener{ListenerBrowser}, public: true},
 	}
+	s.workspaceRoutes(routes)
+	return routes
 }
 
 type listenerHandler struct {
@@ -105,7 +107,7 @@ func (h *listenerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if paired {
 		w.Header().Set("Access-Control-Allow-Origin", origin)
 		w.Header().Add("Vary", "Origin")
-		w.Header().Set("Access-Control-Expose-Headers", "ETag")
+		w.Header().Set("Access-Control-Expose-Headers", "ETag, X-Sidecar-Exit-Code")
 	}
 	if r.Method == http.MethodOptions {
 		if !paired {
@@ -135,6 +137,10 @@ func (h *listenerHandler) dispatch(w http.ResponseWriter, r *http.Request, c cal
 	rt := h.routes[r.URL.Path]
 	if template, _ := projectContentRoute(r.URL.Path); template != "" {
 		rt = h.routes[template]
+	}
+	if rt == nil {
+		key, _ := workspaceRoute(r.URL.EscapedPath())
+		rt = h.routes[key]
 	}
 	if rt == nil {
 		if strings.HasPrefix(r.URL.Path, "/api/") || h.kind == ListenerLocal {
@@ -189,8 +195,14 @@ func (h *listenerHandler) dispatch(w http.ResponseWriter, r *http.Request, c cal
 		}
 	}
 	if !rt.public && r.URL.Path != "/api/v0/hello" && r.URL.Path != "/api/v0/ws-tickets" {
-		if template, _ := projectContentRoute(r.URL.Path); template == "" && !h.s.requireScope(w, c, ScopeFull) {
-			return
+		if template, _ := projectContentRoute(r.URL.Path); template == "" {
+			scope := ScopeFull
+			if workspace, _ := workspaceRoute(r.URL.EscapedPath()); workspace != "" || r.URL.Path == "/api/v0/projects" {
+				scope = ScopeWorkspaceWrite
+			}
+			if !h.s.requireScope(w, c, scope) {
+				return
+			}
 		}
 	}
 	fn(w, r, c)
@@ -373,8 +385,15 @@ func decodeBody(w http.ResponseWriter, r *http.Request, into any) bool {
 	reader := http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	decoder := json.NewDecoder(reader)
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(into); err != nil && !errors.Is(err, io.EOF) {
+	if err := decoder.Decode(into); errors.Is(err, io.EOF) {
+		return true
+	} else if err != nil {
 		writeError(w, http.StatusBadRequest, CodeInvalidRequest, fmt.Sprintf("The request body is not the expected JSON object: %v.", err))
+		return false
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		writeError(w, 400, CodeInvalidRequest, "Send exactly one JSON object.")
 		return false
 	}
 	return true

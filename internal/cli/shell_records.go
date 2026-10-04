@@ -12,6 +12,7 @@ import (
 	"github.com/marcus/sidecar/internal/managedtarget"
 	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/workspaceops"
+	"github.com/marcus/sidecar/internal/workspacewire"
 )
 
 const (
@@ -29,31 +30,11 @@ type shellRecordFlags struct {
 	positional  []string
 }
 
-type shellListResult struct {
-	Shells []shellListItem `json:"shells"`
-}
+type shellListResult = workspacewire.ShellList
 
-type shellListItem struct {
-	Shell     string     `json:"shell"`
-	Name      string     `json:"name"`
-	Namespace string     `json:"namespace,omitempty"`
-	AgentType string     `json:"agentType,omitempty"`
-	SkipPerms bool       `json:"skipPerms,omitempty"`
-	WorkDir   string     `json:"workDir,omitempty"`
-	Status    string     `json:"status"`
-	DeletedAt *time.Time `json:"deletedAt,omitempty"`
-	// OrphanedRoot is the removed worktree a live record's WorkDir lies in,
-	// when that worktree was removed outside Sidecar (td-0b90da). `sidecar
-	// worktree prune-sessions` closes such a shell along with the worktree's
-	// own session.
-	OrphanedRoot string `json:"orphanedRoot,omitempty"`
-}
+type shellListItem = workspacewire.ShellRecord
 
-type shellRecordResult struct {
-	Shell  string `json:"shell"`
-	Name   string `json:"name,omitempty"`
-	Status string `json:"status"`
-}
+type shellRecordResult = workspacewire.ShellRestored
 
 func runShellList(env Env, args []string) int {
 	cmd := RootCommand().FindSubcommand("shell").FindSubcommand("list")

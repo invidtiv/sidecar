@@ -268,6 +268,17 @@ func (p *Plugin) renderCapturedTerminalWithClose(chips, actions []string, hint s
 	reserve := p.reserveHeader(width, closeLeafID != 0)
 	headerWidth := reserve.TabsWidth
 	interactive := p.interactiveDescribes(termPanel)
+	target := p.primaryTermPane().Target
+	if termPanel {
+		target = p.requireShellTermPane().Target
+	}
+	if target.Host == "" {
+		holderTarget := target.Pane
+		if holderTarget == "" {
+			holderTarget = target.Session
+		}
+		hint = termpreview.WithGeometryHolderHint(hint, holderTarget)
+	}
 	// While interactive the exit key leads the hints and is what the row must
 	// keep; the chips give way for it instead of the other way round.
 	hintFloor := 0

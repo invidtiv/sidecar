@@ -51,7 +51,7 @@ The canonical synthetic terminal transcript and catalog query/response corpus, w
 
 ## Catalog and attention events over SSH
 
-Native clients can open a separate SSH exec without a PTY running `sidecar api events --stdio`. It bridges the running API service's Local events socket and writes the same `api_version`, `type` and `seq` envelopes as [the UI API events stream](ui-api.md#events-stream), one per JSONL line. It requires the always-on API service on that host and reports how to start it when unavailable. It does not change the terminal v0 handshake, envelopes, operation sequences or attachment lifecycle. Each reconnect starts a new event sequence and catalog baseline; no old attention is replayed. Catalog filters match `sidecar mobile sessions --json`.
+Native clients can open a separate SSH exec without a PTY running `sidecar api events --stdio`. It bridges the running API service's Local events socket and writes the same `api_version`, `type` and `seq` envelopes as [the UI API events stream](ui-api.md#events-stream), one per JSONL line. It requires the always-on API service on that host and reports how to start it when unavailable. It does not change the terminal v0 handshake, envelopes, operation sequences or attachment lifecycle. Each reconnect starts a new event sequence and catalog baseline; no old attention is replayed. Catalog filters match `sidecar mobile sessions --json`. Additive `workspace` messages invalidate project/workspace resources using the same envelope and sequence; clients that only consume catalog/attention can ignore them. The workspace resources and operations are documented in [UI API v0](ui-api.md#project-workspaces-and-operations).
 
 ## Reset reasons
 
@@ -93,6 +93,8 @@ All five presence fields are required. `idle_ms` is an integer from 0 through 86
 
 The correlated acknowledgment is `type:"presence"`, with the attachment handle/generation, accepted `operation_sequence`, current `output_sequence` and `reset_generation`, and `control:true` only when this attachment holds the size. False is represented by an omitted `control`, as in v0. A presence resize acknowledges first, then emits `reset` with reason `resize`, then the replacement full frame. Further operations wait for that frame. A failed operation does not consume its sequence.
 
+On a single-pane window, an already fitted presence or input transaction renews ownership without issuing `resize-window`. The geometry condition is evaluated inside the same identity and lease guard as the mutation. Idle preemption compares the owner’s advertised idle duration, sampled when its lease token was refreshed, with the active viewer’s idle duration. The five-second margin is not a wall-clock handoff deadline measured from the abandoned viewer’s last input; heartbeat and lease-refresh cadence determine when that evidence becomes observable. Blur and deliberate input need no idle margin.
+
 Heartbeats remain at five seconds and use the same operation/checkpoint fields. With `presence` negotiated, a heartbeat is valid while viewing without control. It may carry a full `presence` object, or omit it to reuse the last accepted presence while increasing idle time by the elapsed server time. The first heartbeat must supply presence if no presence has been accepted. After fifteen seconds without presence, heartbeat or input, an owned lease expires as in v0. The next presence or input can acquire again.
 
 Input with presence negotiated claims outright and delivers the bytes in one owning-service tmux transaction, even when another viewer owns the size. It retains identity, input-mode and sequence/checkpoint validation. It uses the most recently accepted fitted geometry, or the current frame geometry before any presence. Input is never replayed after an uncertain acknowledgment. The explicit `control`, `resize` and `release` operations remain available for tools and legacy clients.
@@ -106,6 +108,8 @@ With `holder_labels` negotiated, the service emits asynchronous `holder` events 
 ```
 
 An unowned pane uses empty kind and label. A TUI holder is described as `kind:"tui"`, with a host label such as `TUI on aerie`; an unknown owner falls back to an advisory label. Clients use this event for a quiet, fading “sized for …” hint. Labels convey presentation only and must be rendered as text. The events-stream terminal projection can reuse this holder object.
+
+For local terminals, the project Workspaces and global Sessions TUI headers also name a foreign holder. They reuse the holder interpretation used by negotiated terminal streams, cache metadata during the existing lease observation, and render it through one `termpreview` formatter. Their view functions run no holder subprocess. Application focus refits the current viewport even when its fitted dimensions are unchanged and the pane emits no output. Interactive project terminals keep the same background geometry arbitration as Sessions terminals, including when a click switches directly between live panes. Pane IDs are scoped to their tmux socket, including socket path aliases, so a separate outer TUI server never hides or blocks a managed pane with the same ID.
 
 ### Full-frame flags and slow peers
 

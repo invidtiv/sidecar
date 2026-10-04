@@ -91,6 +91,13 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 
 	case tea.FocusMsg:
 		cmds = appendActivityAnimationCmd(cmds, p.startActivityAnimation())
+		// An idle pane emits no output to trigger the resize path. Refit on
+		// application focus as well, through the same scoped lease arbitration.
+		if p.focused {
+			if cmd := p.resizeTmuxTargetCmd(p.previewResizeTarget()); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
 
 	case shellStartupResultMsg:
 		return p, p.applyShellStartup(msg)

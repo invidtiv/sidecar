@@ -17,10 +17,17 @@ class Sidecar < Formula
     name macos: "com.haplab.sidecar.api", linux: "sidecar-api"
     # Follow the same stable link that managed local/worktree installs activate.
     run [HOMEBREW_PREFIX/"bin/sidecar", "api", "serve"]
+    sockets browser: "tcp://127.0.0.1:7861"
     keep_alive true
-    environment_variables PATH: std_service_path_env
+    environment_variables PATH: std_service_path_env, SIDECAR_API_SOCKET_ACTIVATION: "1"
     log_path var/"log/sidecar-api.log"
     error_log_path var/"log/sidecar-api.log"
+  end
+
+  def caveats
+    if OS.linux?
+      "Use `sidecar api service install` on Linux: Homebrew services cannot generate the systemd socket unit that keeps the browser origin reserved during upgrades."
+    end
   end
 
   test do

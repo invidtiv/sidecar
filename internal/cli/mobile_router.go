@@ -158,12 +158,16 @@ func (b *mobileBackend) Sessions(ctx context.Context, query mobileproto.CatalogQ
 }
 
 func queryLocalMobileCatalog(ctx context.Context, env Env, query mobileproto.CatalogQuery) (mobileproto.CatalogSnapshot, error) {
+	return queryLocalMobileCatalogFrom(ctx, env, query, mobileCatalogProvider(env))
+}
+
+func queryLocalMobileCatalogFrom(ctx context.Context, env Env, query mobileproto.CatalogQuery, provider mobile.CatalogProvider) (mobileproto.CatalogSnapshot, error) {
 	host, _ := os.Hostname()
 	configGeneration, err := currentMobileConfigGeneration(ctx)
 	if err != nil {
 		return mobileproto.CatalogSnapshot{}, err
 	}
-	snapshot, err := mobile.QueryCatalog(ctx, mobileCatalogProvider(env), mobileResolver(env), query, mobile.CatalogIdentity{
+	snapshot, err := mobile.QueryCatalog(ctx, provider, mobileResolver(env), query, mobile.CatalogIdentity{
 		HubID: host, OwnerHostID: "local:" + host, OwnerConfigGeneration: configGeneration,
 	})
 	if err != nil {

@@ -644,7 +644,7 @@ func RootCommand() *Command {
 		Launch: runSetupLaunch,
 	}
 
-	root.Sub = []*Command{agentCommand(), agentsCmd, apiCommand(), contentCommand(), createCmd, helpCmd, hostCommand(), layoutCommand(), mobileCommand(), notifyCommand(), openCmd, pluginCommand(), projectCommand(), repoCommand(), requestCommand(), sessionCommand(), setupCmd, shellCmd, terminalLinksCommand(), worktreeCommand()}
+	root.Sub = []*Command{agentCommand(), agentsCmd, apiCommand(), contentCommand(), createCmd, helpCmd, hostCommand(), layoutCommand(), mobileCommand(), notifyCommand(), openCmd, pluginCommand(), projectCommand(), repoCommand(), requestCommand(), sessionCommand(), setupCmd, shellCmd, terminalLinksCommand(), workspaceCommand(), worktreeCommand()}
 	return root
 }
 
@@ -666,7 +666,10 @@ func worktreeCommand() *Command {
 			"A real deletion always requires --yes. For a plan-first deletion, use the returned\n" +
 			"absolute path as TARGET and pass its branch and headOid back with --expect-branch\n" +
 			"and --expect-head-oid. Both expectations are required together, so a branch rename\n" +
-			"at the same commit is refused rather than mistaken for the confirmed checkout.\n\n" +
+			"at the same commit is refused rather than mistaken for the confirmed checkout.\n" +
+			"Pass deleteState back with --expect-delete-state to also fence the checkout incarnation\n" +
+			"and every file being removed, including ignored work. Unverifiable plans have an empty\n" +
+			"deleteState and cannot be used for state-fenced deletion.\n\n" +
 			"Deleting closes the Sidecar worktree session and any managed shells rooted in the\n" +
 			"worktree before removing its directory, then forgets those shell records. A dirty\n" +
 			"worktree is force-removed only after --yes, matching the warning and decision in\n" +
@@ -685,6 +688,7 @@ func worktreeCommand() *Command {
 			{Name: "--delete-remote-branch", Summary: "Also delete the branch from origin when it exists", Bool: true},
 			{Name: "--expect-branch", Arg: "BRANCH", Summary: "Refuse if the absolute target no longer checks out this planned branch"},
 			{Name: "--expect-head-oid", Arg: "OID", Summary: "Refuse if HEAD differs from a previously returned plan"},
+			{Name: "--expect-delete-state", Arg: "HASH", Summary: "Refuse if checkout incarnation or contents differ from the deleteState in a plan"},
 			{Name: "--json", Summary: "Write one structured plan or result object to stdout", Bool: true},
 			{Name: "--help", Short: "-h", Summary: "Show this help", Bool: true},
 		},

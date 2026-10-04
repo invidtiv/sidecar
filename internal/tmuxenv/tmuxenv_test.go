@@ -75,3 +75,49 @@ func TestHostingPaneReadsTheEnvironment(t *testing.T) {
 		t.Fatalf("HostingPane() = %q, want empty outside tmux", got)
 	}
 }
+
+func TestHostingPaneIsScopedToItsServer(t *testing.T) {
+	previous := hostingSocket
+	t.Cleanup(func() { hostingSocket = previous })
+	t.Setenv("TMUX_TMPDIR", t.TempDir())
+	t.Setenv("TMUX_PANE", "%0")
+	t.Setenv("TMUX", SocketPath()+",123,0")
+	RememberHostingServer()
+	t.Setenv("TMUX", "") // main clears this before child commands.
+	if got := HostingPane(); got != "%0" {
+		t.Fatalf("same server hosting pane = %q", got)
+	}
+	t.Setenv("TMUX_TMPDIR", t.TempDir())
+	if got := HostingPane(); got != "" {
+		t.Fatalf("foreign server pane %q must not hide or block a local pane with the same ID", got)
+	}
+}
+
+func TestHostingPaneRecognizesSocketPathAliases(t *testing.T) {
+	previous := hostingSocket
+	t.Cleanup(func() { hostingSocket = previous })
+	root := t.TempDir()
+	realDir := filepath.Join(root, "real")
+	aliasDir := filepath.Join(root, "alias")
+	if err := os.Mkdir(realDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realDir, aliasDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUX_TMPDIR", realDir)
+	if err := os.MkdirAll(filepath.Dir(SocketPath()), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(SocketPath(), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUX", SocketPath()+",123,0")
+	t.Setenv("TMUX_PANE", "%42")
+	RememberHostingServer()
+	t.Setenv("TMUX", "")
+	t.Setenv("TMUX_TMPDIR", aliasDir)
+	if got := HostingPane(); got != "%42" {
+		t.Fatalf("same socket through a directory symlink: HostingPane() = %q, want %%42", got)
+	}
+}

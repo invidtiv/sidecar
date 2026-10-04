@@ -14,6 +14,7 @@ import (
 
 const Label = "com.haplab.sidecar.api"
 const Unit = "sidecar-api.service"
+const SocketUnit = "sidecar-api.socket"
 
 // Exit is the last termination reported by the manager. Nil means unknown.
 type Exit struct {
@@ -21,18 +22,26 @@ type Exit struct {
 	Signal string `json:"signal,omitempty"`
 }
 
-type Status struct {
-	Manager   string `json:"manager"`
-	Label     string `json:"label"`
+type SocketStatus struct {
 	File      string `json:"file"`
 	Installed bool   `json:"installed"`
 	Loaded    bool   `json:"loaded"`
-	Running   bool   `json:"running"`
-	PID       int    `json:"pid"`
-	Version   string `json:"version"`
-	LastExit  *Exit  `json:"last_exit"`
-	Log       string `json:"log"`
-	Message   string `json:"message"`
+	Listening bool   `json:"listening"`
+}
+
+type Status struct {
+	Socket    SocketStatus `json:"socket"`
+	Manager   string       `json:"manager"`
+	Label     string       `json:"label"`
+	File      string       `json:"file"`
+	Installed bool         `json:"installed"`
+	Loaded    bool         `json:"loaded"`
+	Running   bool         `json:"running"`
+	PID       int          `json:"pid"`
+	Version   string       `json:"version"`
+	LastExit  *Exit        `json:"last_exit"`
+	Log       string       `json:"log"`
+	Message   string       `json:"message"`
 }
 
 // Manager is the service-manager seam. Tests and headless callers inject it.
@@ -61,6 +70,7 @@ type Options struct {
 type Native struct {
 	options          Options
 	file, label, log string
+	socketFile       string
 }
 
 func New(options Options) (*Native, error) {
@@ -98,6 +108,7 @@ func New(options Options) (*Native, error) {
 		n.file = filepath.Join(base, "systemd", "user", Unit)
 		n.label = Unit
 		n.log = "journalctl --user -u " + Unit
+		n.socketFile = filepath.Join(base, "systemd", "user", SocketUnit)
 	}
 	return n, nil
 }
@@ -115,12 +126,16 @@ func (n *Native) command(ctx context.Context, args ...string) ([]byte, error) {
 }
 
 func (n *Native) Install(ctx context.Context) error {
+	if len(filepath.Join(n.options.StateDir, "api", "api.sock")) > 103 {
+		return errors.New("API Unix socket path exceeds 103 bytes; use a shorter XDG_STATE_HOME and retry install")
+	}
+
 	status, err := n.Status(ctx)
 	if err != nil {
 		return err
 	}
-	if status.Loaded { // stop only this job, before replacing its definition
-		if err := n.unload(ctx); err != nil {
+	if status.Loaded || status.Socket.Loaded { // stop only this job, before replacing its definition
+		if err := n.unload(ctx, status); err != nil {
 			return err
 		}
 	}
@@ -134,6 +149,11 @@ func (n *Native) Install(ctx context.Context) error {
 	if err := writeFile(n.file, data); err != nil {
 		return fmt.Errorf("write service: %w; check permissions on %s and retry install", err, n.file)
 	}
+	if n.options.OS == "linux" {
+		if err := writeFile(n.socketFile, n.socketDefinition()); err != nil {
+			return fmt.Errorf("write socket unit: %w", err)
+		}
+	}
 	if n.options.OS == "darwin" {
 		if _, err := n.command(ctx, "enable", n.target()); err != nil {
 			return err
@@ -143,19 +163,26 @@ func (n *Native) Install(ctx context.Context) error {
 		if _, err := n.command(ctx, "--user", "daemon-reload"); err != nil {
 			return err
 		}
-		_, err = n.command(ctx, "--user", "enable", "--now", Unit)
+		_, err = n.command(ctx, "--user", "enable", "--now", SocketUnit, Unit)
 	}
 	return err
 }
 
 func (n *Native) domain() string { return fmt.Sprintf("gui/%d", n.options.UID) }
 func (n *Native) target() string { return n.domain() + "/" + Label }
-func (n *Native) unload(ctx context.Context) error {
+func (n *Native) unload(ctx context.Context, status Status) error {
 	if n.options.OS == "darwin" {
 		_, err := n.command(ctx, "bootout", n.target())
 		return err
 	}
-	_, err := n.command(ctx, "--user", "disable", "--now", Unit)
+	units := []string{}
+	if status.Socket.Installed || status.Socket.Loaded {
+		units = append(units, SocketUnit)
+	}
+	if status.Installed || status.Loaded {
+		units = append(units, Unit)
+	}
+	_, err := n.command(ctx, append([]string{"--user", "disable", "--now"}, units...)...)
 	return err
 }
 
@@ -164,15 +191,20 @@ func (n *Native) Uninstall(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if status.Loaded || (n.options.OS == "linux" && status.Installed) {
-		if err := n.unload(ctx); err != nil {
+	if status.Loaded || status.Socket.Loaded || (n.options.OS == "linux" && (status.Installed || status.Socket.Installed)) {
+		if err := n.unload(ctx, status); err != nil {
 			return err
 		}
 	}
 	if err := os.Remove(n.file); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove service: %w; check permissions on %s and retry uninstall", err, n.file)
 	}
-	if n.options.OS == "linux" && status.Installed {
+	if n.options.OS == "linux" {
+		if removeErr := os.Remove(n.socketFile); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			return fmt.Errorf("remove socket unit: %w", removeErr)
+		}
+	}
+	if n.options.OS == "linux" && (status.Installed || status.Socket.Installed) {
 		_, err = n.command(ctx, "--user", "daemon-reload")
 	}
 	return err
