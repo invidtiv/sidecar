@@ -49,7 +49,7 @@ func apiCommand() *Command {
 			"--tailnet prints the `tailscale serve` command to run; it never changes Tailscale configuration. --tailnet-port N serves the tailnet listener on a dedicated loopback port instead, for a tailscaled that cannot open a 0600 user socket; any local process or OS user can reach that port and claim an allowed tailnet login, so use it only on a machine where every local user and process is already trusted. --json writes the endpoint object as one line once every listener is bound.",
 		Flags: []Flag{{Name: "--port", Arg: "N", Summary: "Browser listener port on 127.0.0.1 (default 7861; 0 picks a free port)"},
 			{Name: "--fixtures", Arg: "DIR", Summary: "Serve recorded Sessions/status and deterministic echo terminals without tmux"},
-			{Name: "--ui", Arg: "DIR", Summary: "Serve a built UI from DIR, with index.html as the fallback for app routes"},
+			{Name: "--ui", Arg: "DIR", Summary: "Serve a built UI from DIR (overrides config api.uiDir), with index.html as the fallback for app routes"},
 			{Name: "--tailnet", Summary: "Also serve the tailnet listener for tailscale serve", Bool: true},
 			{Name: "--tailnet-port", Arg: "N", Summary: "Serve the tailnet listener on this loopback port instead of a Unix socket"},
 			{Name: "--json", Summary: "Write the endpoint object as one JSON line once listening", Bool: true}, help},
@@ -88,7 +88,7 @@ func apiCommand() *Command {
 	}
 	return &Command{Name: "api", Summary: "Serve Sidecar's UI API for web and embedded clients", Usage: "sidecar api <command>",
 		Long: "The UI API exposes Sessions and live terminals over HTTP and WebSocket so a web UI, an embedding app, or an agent can use them. The wire contract is docs/reference/ui-api.md.",
-		Sub:  []*Command{open, pair, serve, status, apiSpecCommand()}, Run: runAPIRoot}
+		Sub:  []*Command{open, pair, serve, apiServiceCommand(), status, apiSpecCommand()}, Run: runAPIRoot}
 }
 
 func runAPIRoot(env Env, args []string) int {
@@ -196,6 +196,25 @@ func runAPIServe(env Env, args []string) int {
 			return 1
 		}
 	}
+	cfg, err := config.Load()
+	if err != nil {
+		cliErrf(env.Stderr, "load API config: %v; fix %s and retry\n", err, config.ConfigPath())
+		return 1
+	}
+	uiDir := cfg.API.UIDir
+	if explicit, ok := flags.values["--ui"]; ok {
+		uiDir = explicit
+	}
+	executable, err := apiExecutablePath()
+	if err != nil {
+		cliErrln(env.Stderr, err)
+		return 1
+	}
+	changed, err := uiapi.WatchExecutable(ctx, executable, time.Second)
+	if err != nil {
+		cliErrf(env.Stderr, "watch executable: %v; reinstall Sidecar and retry\n", err)
+		return 1
+	}
 	var backend uiapi.Backend
 	var fixtureStatus *uiapi.Status
 	if dir, fixtures := flags.values["--fixtures"]; fixtures {
@@ -218,7 +237,7 @@ func runAPIServe(env Env, args []string) int {
 		defer live.Close()
 		backend = live
 	}
-	server, err := uiapi.Start(uiapi.Options{StateDir: env.StateDir, Port: port, UIDir: flags.values["--ui"], Tailnet: tailnet,
+	server, err := uiapi.Start(uiapi.Options{StateDir: env.StateDir, Port: port, UIDir: uiDir, Tailnet: tailnet,
 		Backend: backend, Version: buildinfo.Version(), FixtureStatus: fixtureStatus})
 	if err != nil {
 		cliErrln(env.Stderr, err)
@@ -242,6 +261,8 @@ func runAPIServe(env Env, args []string) int {
 	code := 0
 	select {
 	case <-ctx.Done():
+	case <-changed:
+		_, _ = fmt.Fprintf(env.Stderr, "Sidecar executable changed at %s; shutting down cleanly so the service manager can restart the API. tmux is unchanged.\n", executable)
 	case err := <-server.Failed():
 		cliErrln(env.Stderr, err)
 		code = 1

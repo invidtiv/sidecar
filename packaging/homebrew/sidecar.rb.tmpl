@@ -13,6 +13,16 @@ class Sidecar < Formula
     system "go", "build", *std_go_args(ldflags:), "./cmd/sidecar"
   end
 
+  service do
+    name macos: "com.haplab.sidecar.api", linux: "sidecar-api"
+    # Follow the same stable link that managed local/worktree installs activate.
+    run [HOMEBREW_PREFIX/"bin/sidecar", "api", "serve"]
+    keep_alive true
+    environment_variables PATH: std_service_path_env
+    log_path var/"log/sidecar-api.log"
+    error_log_path var/"log/sidecar-api.log"
+  end
+
   test do
     assert_match version.to_s, shell_output("#{bin}/sidecar --version")
   end
