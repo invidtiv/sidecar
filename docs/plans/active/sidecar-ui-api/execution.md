@@ -50,14 +50,14 @@ The status values are `queued`, `running`, `review`, `fixing`, `merged` and `blo
 | U0-b SDK/element | td-83cce9 | sidecar-ui | Claude | — | merged (sidecar-ui 2c0f521) |
 | U0-a follow-ups | td-552e24 | sidecar | Claude, reviewed by Codex | U0-a | merged (e3ca48c2) |
 | U0-c proof and measurements | td-d8fcb0 | both | Claude, plus Marcus for the live half | U0-a, U0-b | automatable half done (0b1476b2, a0dfb694); live half with Marcus pending |
-| U1-a events stream | td-aa8756 | sidecar | Codex | U0-a | review MERGE-READY; follow-up running: spec integration after U1-b, plus CatalogRow.path for U1-e (td-e7f0e7) |
+| U1-a events stream | td-aa8756 | sidecar | Codex | U0-a | merged (6a11e85e), including the spec integration and CatalogRow.path |
 | U1-b schemas, spec, fixtures | td-5ae805 | sidecar | Codex | U0-a | merged (854d108e) |
 | U1-c service install | td-d7869b | sidecar | Codex, reviewed by Codex | U0-a | merged |
 | U1-d presence and v1 frames | td-713745 | sidecar | Codex | td-552e24 merged | review MERGE-READY; integrating main (U1-b terminalBackend interface) plus encoder byte budget, then merge |
 | U1-e web app shell and Sessions | td-57a73e | sidecar-ui | Codex | U0-b | merged (sidecar-ui 8d183fc); Claude review fixed 6 UX defects |
 | U1-f SDK adopts v1 | td-820df7 | sidecar-ui | Codex | U1-a, U1-d | running (Codex, ~/code/sidecar-ui-u1f-sdk, branch u1f-sdk), against the u1d and ui-u1a-events branches |
 | U1-g iOS adopts presence and events | td-fde8cf | sidecar-mobile | Codex | U1-a, U1-d | running (Codex, ~/code/sidecar-mobile-u1g-presence, branch u1g-presence); presence first against the u1d branch, events after U1-a |
-| U1-i persist browser sessions | td-165353 | sidecar | Codex | U1-a, U1-b merged (both touch internal/uiapi) | queued; also td-affb04 (the --ui root goes stale when the UI dir is rebuilt) |
+| U1-i persist browser sessions | td-165353 | sidecar | Codex | U1-a, U1-b merged (both touch internal/uiapi) | running (Codex, ~/code/sidecar-u1i-sessions, branch u1i-sessions), plus td-affb04 (stale --ui root) |
 | U1-e2 web app polish | td-71e0e5 | sidecar-ui | Codex | U1-e | running (Codex, ~/code/sidecar-ui-u1e2-polish, branch u1e2-polish): terminal-safe chords, needs-input, palette, phone header |
 | U1-h security review and three-viewer proof | td-295605 | all | Claude, then Codex | U1-a, U1-d, U1-f | queued |
 | U2-a core extraction | td-c709a9 | sidecar | Codex | U0-a | merged (d95b66f5) |
