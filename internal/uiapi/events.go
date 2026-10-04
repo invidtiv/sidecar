@@ -45,11 +45,11 @@ type EventTerminal struct {
 	Session     string          `json:"session"`
 	Pane        string          `json:"pane"`
 	DisplayName string          `json:"display_name,omitempty"`
-	Holder      *GeometryHolder `json:"holder"`
+	Holder      *GeometryHolder `json:"holder" jsonschema:"nullable"`
 }
 
 type AttentionEvent struct {
-	Kind      string    `json:"kind"`
+	Kind      string    `json:"kind" jsonschema:"enum=needs_input,enum=finished"`
 	CatalogID string    `json:"catalog_id"`
 	Title     string    `json:"title"`
 	Time      time.Time `json:"time"`
@@ -58,9 +58,9 @@ type AttentionEvent struct {
 // EventMessage is one text frame (or one JSONL line on the CLI bridge).
 // Seq starts at 1 with hello, increases on delivery, and resets on reconnect.
 type EventMessage struct {
-	Type          string                       `json:"type"`
-	Seq           uint64                       `json:"seq"`
-	APIVersion    int                          `json:"api_version"`
+	Type          string                       `json:"type" jsonschema:"enum=hello,enum=catalog,enum=attention,enum=terminals,enum=error,enum=shutdown"`
+	Seq           uint64                       `json:"seq" jsonschema:"minimum=1"`
+	APIVersion    int                          `json:"api_version" jsonschema:"enum=0"`
 	APIInstance   string                       `json:"api_instance,omitempty"`
 	ServerVersion string                       `json:"server_version,omitempty"`
 	Capabilities  []string                     `json:"capabilities,omitempty"`
