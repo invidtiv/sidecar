@@ -16,3 +16,13 @@ func filteredGitArgs(args []string, filter *ReadFilter) []string {
 	out := append(append([]string(nil), args...), "--", ".")
 	return append(out, filter.ExcludePaths...)
 }
+
+// filteredGitFileArgs treats a selected filename literally while retaining
+// administrative exclusions if the filename denotes a directory.
+func filteredGitFileArgs(args []string, path string, filter *ReadFilter) []string {
+	out := append(append([]string(nil), args...), "--", ":(top,literal)"+path)
+	if filter != nil {
+		out = append(out, filter.ExcludePaths...)
+	}
+	return out
+}

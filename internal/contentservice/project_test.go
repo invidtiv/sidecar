@@ -36,7 +36,7 @@ func TestProjectRefusesGitMetadata(t *testing.T) {
 	}
 	svc := testService(t, root, nil, nil)
 	ctx := context.Background()
-	for _, path := range []string{".git/config", ".GIT/config", "nested/.git/config", ".git/missing", "admin-alias/config", "admin-alias/missing", "config-alias"} {
+	for _, path := range []string{".git/config", ".GIT/config", ".git/packed-refs", ".GIT/PACKED-REFS", "nested/.git/config", ".git/missing", "admin-alias/config", "admin-alias/missing", "config-alias"} {
 		t.Run(path, func(t *testing.T) {
 			result, err := svc.ReadProject(ctx, "demo", "", ReadParams{Kind: KindFile, Operation: OpDocument, Target: path})
 			if !IsRejected(err) {
@@ -75,6 +75,24 @@ func TestProjectRefusesGitMetadata(t *testing.T) {
 	}
 	if _, err := svc.WatchProject(ctx, "demo", "", ReadParams{Kind: KindFile, Operation: OpDocument, Target: ".env"}); err != nil {
 		t.Fatalf(".env watch: %v", err)
+	}
+	for _, dir := range []string{"legitimate-git-docs", "github", ".git-notes"} {
+		if err := os.Mkdir(filepath.Join(root, dir), 0700); err != nil {
+			t.Fatal(err)
+		}
+		path := dir + "/guide.md"
+		if err := os.WriteFile(filepath.Join(root, path), []byte("ordinary guide"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := svc.ReadProject(ctx, "demo", "", ReadParams{Kind: KindFile, Operation: OpDocument, Target: path}); err != nil || got.Content != "ordinary guide" {
+			t.Fatalf("git-containing ordinary path %q refused: %+v %v", path, got, err)
+		}
+		if _, err := svc.TreeProject(ctx, "demo", "", []string{dir}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := svc.WatchProject(ctx, "demo", "", ReadParams{Kind: KindFile, Operation: OpDocument, Target: path}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	// The desktop's established content behavior is unaffected by the API policy.
 	result, err = svc.Read(ctx, canonical(root)+":worktree:"+canonical(root), KindFile, OpDocument, ".git/config", "")
@@ -375,6 +393,44 @@ func TestProjectAggregateDiffsExcludeGitMetadataBeforeRead(t *testing.T) {
 			}
 		})
 	}
+	// Single-file operations must not reinterpret a caller path as a wildcard,
+	// pathspec magic, or an unfiltered directory-wide diff.
+	for _, op := range []string{OpWorkingTreeFile, OpCommitFile, OpFullFile} {
+		for _, path := range []string{".", "*", ":(glob)**", ":(top)administration/config"} {
+			t.Run(op+"/"+path, func(t *testing.T) {
+				target := "c:" + head
+				if op == OpWorkingTreeFile || op == OpFullFile {
+					target = "wt"
+				}
+				result, err := svc.ReadProject(context.Background(), "demo", "", ReadParams{Kind: KindDiff, Operation: op, Target: target, Path: path})
+				if err != nil { // A literal nonexistent filename may be refused.
+					return
+				}
+				raw, err := json.Marshal(result)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if strings.Contains(string(raw), "synthetic-aggregate-token") || strings.Contains(string(raw), "diff --git a/administration/config") {
+					t.Fatalf("single-file selector %q disclosed Git metadata: %s", path, raw)
+				}
+			})
+		}
+	}
+
+	literalPath := "star*.md"
+	if err := os.WriteFile(filepath.Join(root, literalPath), []byte("literal base\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	projectGit(t, root, "add", "--", literalPath)
+	projectGit(t, root, "commit", "-qm", "literal filename")
+	if err := os.WriteFile(filepath.Join(root, literalPath), []byte("literal change\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.ReadProject(context.Background(), "demo", "", ReadParams{Kind: KindDiff, Operation: OpWorkingTreeFile, Target: "wt", Path: literalPath})
+	if err != nil || got.Diff == nil || got.Diff.File == nil || !strings.Contains(got.Diff.File.Raw, "+literal change") || strings.Contains(got.Diff.File.Raw, "note.md") {
+		t.Fatalf("literal wildcard filename diff: %+v %v", got, err)
+	}
+
 	// A working-tree subscription retains its internal Git invalidators without
 	// turning excluded metadata into public content references or refusing the pane.
 	if _, err := svc.WatchProject(context.Background(), "demo", "", ReadParams{Kind: KindDiff, Operation: OpWorkingTree, Target: "wt"}); err != nil {

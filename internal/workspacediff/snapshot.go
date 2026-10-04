@@ -104,10 +104,15 @@ func LoadWorkingTreeFileDiff(ctx context.Context, workdir, path string) (string,
 
 // LoadWorkingTreeFilePatch loads a bounded tracked or synthetic untracked patch.
 func LoadWorkingTreeFilePatch(ctx context.Context, workdir, path string) (Patch, error) {
+	return LoadWorkingTreeFilePatchFiltered(ctx, workdir, path, nil)
+}
+
+// LoadWorkingTreeFilePatchFiltered applies policy even to directory selectors.
+func LoadWorkingTreeFilePatchFiltered(ctx context.Context, workdir, path string, filter *ReadFilter) (Patch, error) {
 	if path == "" {
 		return Patch{}, fmt.Errorf("path is required")
 	}
-	tracked, err := GitOutputBounded(ctx, workdir, MaxDiffBytes, "diff", "--binary", "HEAD", "--", path)
+	tracked, err := GitOutputBounded(ctx, workdir, MaxDiffBytes, filteredGitFileArgs([]string{"diff", "--binary", "HEAD"}, path, filter)...)
 	if err != nil {
 		return Patch{}, err
 	}

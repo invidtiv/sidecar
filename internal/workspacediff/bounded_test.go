@@ -260,3 +260,70 @@ func TestBoundedGitAcceptsInternalStopAfterOverflow(t *testing.T) {
 		}
 	}
 }
+
+func TestBoundedDiffPreservesNormalPatches(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	root := t.TempDir()
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.CommandContext(ctx, "git", args...)
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com")
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+		return string(out)
+	}
+	write := func(path, text string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(root, path), []byte(text), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	git("init", "-b", "main")
+	original := strings.Repeat("context\n", 30)
+	write("text.txt", original)
+	write("binary.dat", "\x00original\x01")
+	write("old.txt", "rename me\n")
+	git("add", ".")
+	git("commit", "-m", "base")
+	base := strings.TrimSpace(git("rev-parse", "HEAD"))
+	lines := strings.Split(original, "\n")
+	lines[1], lines[25] = "first hunk", strings.Repeat("long line ", 9000)
+	write("text.txt", strings.Join(lines, "\n"))
+	write("binary.dat", "\x00changed\x01")
+	git("mv", "old.txt", "new.txt")
+	want := git("diff", "--binary", "HEAD")
+	if len(want) >= MaxDiffBytes || !strings.Contains(want, "rename from old.txt") || !strings.Contains(want, "GIT binary patch") {
+		t.Fatal("fixture must be a below-bound text, binary and rename patch")
+	}
+	snapshot, err := LoadSnapshot(ctx, root, "main")
+	if err != nil || snapshot.Truncated || snapshot.WorkingTree != strings.TrimRight(want, "\n") {
+		t.Fatalf("snapshot lost normal patch bytes: %v", err)
+	}
+	files := ParseFiles(snapshot.WorkingTree)
+	if len(files) != 3 {
+		t.Fatalf("normal files = %d, want text, binary, rename", len(files))
+	}
+	for _, file := range files {
+		if file.Path == "text.txt" && (file.Additions != 2 || file.Deletions != 2 || strings.Count(file.Raw, "@@ -") != 2) {
+			t.Fatalf("lost hunk or stats: additions=%d deletions=%d", file.Additions, file.Deletions)
+		}
+	}
+	patch, err := LoadWorkingTreeFilePatch(ctx, root, "text.txt")
+	if err != nil || patch.Truncated || patch.Raw != git("diff", "--binary", "HEAD", "--", "text.txt") {
+		t.Fatalf("selected working patch changed: %v", err)
+	}
+	git("add", ".")
+	git("commit", "-m", "normal changes")
+	patch, err = LoadRangePatch(ctx, root, Target{Kind: TargetRange, A: base, B: "HEAD", Dots: ".."})
+	if err != nil || patch.Truncated || patch.Raw != want {
+		t.Fatalf("range patch changed: %v", err)
+	}
+	patch, err = LoadCommitFilePatch(ctx, root, "HEAD", "text.txt", base)
+	if err != nil || patch.Truncated || patch.Raw != git("diff", base, "HEAD", "--", "text.txt") {
+		t.Fatalf("commit patch changed: %v", err)
+	}
+}

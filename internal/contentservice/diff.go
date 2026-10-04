@@ -210,13 +210,13 @@ func (s *Service) readDiffAt(ctx context.Context, root string, params ReadParams
 	case OpWorkingTree:
 		return s.readWorkingTree(ctx, root, params.IfRevision, params.diffFilter)
 	case OpWorkingTreeFile:
-		return s.readWorkingTreeFile(ctx, root, params.Path, params.IfRevision)
+		return s.readWorkingTreeFile(ctx, root, params.Path, params.IfRevision, params.diffFilter)
 	case OpCommit:
 		return s.readCommit(ctx, root, params.Target, params.IfRevision, params.diffFilter)
 	case OpRange:
 		return s.readRange(ctx, root, params.Target, params.IfRevision, params.diffFilter)
 	case OpCommitFile:
-		return s.readCommitFile(ctx, root, params.Target, params.Path, params.Parent, params.IfRevision)
+		return s.readCommitFile(ctx, root, params.Target, params.Path, params.Parent, params.IfRevision, params.diffFilter)
 	case OpFullFile:
 		return s.readFullFile(ctx, root, params)
 	default:
@@ -240,7 +240,7 @@ func (s *Service) readWorkingTree(ctx context.Context, root, ifRevision string, 
 	return DiffDocument{DTO: dto, Snapshot: snap, Revision: rev}, nil
 }
 
-func (s *Service) readWorkingTreeFile(ctx context.Context, root, path, ifRevision string) (DiffDocument, error) {
+func (s *Service) readWorkingTreeFile(ctx context.Context, root, path, ifRevision string, filter *workspacediff.ReadFilter) (DiffDocument, error) {
 	rel, err := containDiffPath(path)
 	if err != nil {
 		return DiffDocument{}, err
@@ -253,7 +253,7 @@ func (s *Service) readWorkingTreeFile(ctx context.Context, root, path, ifRevisio
 	if ifRevision != "" && ifRevision == fileRev {
 		return DiffDocument{Revision: fileRev, NotModified: true}, nil
 	}
-	patch, err := workspacediff.LoadWorkingTreeFilePatch(ctx, root, rel)
+	patch, err := workspacediff.LoadWorkingTreeFilePatchFiltered(ctx, root, rel, filter)
 	if err != nil {
 		return DiffDocument{}, Internal("load working-tree file", err)
 	}
@@ -315,7 +315,7 @@ func (s *Service) readRange(ctx context.Context, root, target, ifRevision string
 	return DiffDocument{DTO: dto, RangeRaw: raw, Revision: rev}, nil
 }
 
-func (s *Service) readCommitFile(ctx context.Context, root, target, path, parent, ifRevision string) (DiffDocument, error) {
+func (s *Service) readCommitFile(ctx context.Context, root, target, path, parent, ifRevision string, filter *workspacediff.ReadFilter) (DiffDocument, error) {
 	rel, err := containDiffPath(path)
 	if err != nil {
 		return DiffDocument{}, err
@@ -341,7 +341,7 @@ func (s *Service) readCommitFile(ctx context.Context, root, target, path, parent
 	if ifRevision != "" && ifRevision == rev {
 		return DiffDocument{Revision: rev, NotModified: true}, nil
 	}
-	patch, err := workspacediff.LoadCommitFilePatch(ctx, root, hash, rel, parent)
+	patch, err := workspacediff.LoadCommitFilePatchFiltered(ctx, root, hash, rel, parent, filter)
 	if err != nil {
 		return DiffDocument{}, Internal("load commit file", err)
 	}
@@ -363,7 +363,7 @@ func (s *Service) readFullFile(ctx context.Context, root string, params ReadPara
 	if err != nil {
 		return DiffDocument{}, err
 	}
-	oldContent, newContent, rawDiff, rev, sourceTruncated, err := s.fullFileContents(ctx, root, spec, rel, parent)
+	oldContent, newContent, rawDiff, rev, sourceTruncated, err := s.fullFileContents(ctx, root, spec, rel, parent, params.diffFilter)
 	if err != nil {
 		return DiffDocument{}, err
 	}
@@ -398,7 +398,7 @@ func (s *Service) readFullFile(ctx context.Context, root string, params ReadPara
 	return DiffDocument{DTO: dto, FilePath: rel, Revision: rev}, nil
 }
 
-func (s *Service) fullFileContents(ctx context.Context, root string, spec workspacediff.Target, path, parent string) (oldContent, newContent, rawDiff, rev string, truncated bool, err error) {
+func (s *Service) fullFileContents(ctx context.Context, root string, spec workspacediff.Target, path, parent string, filter *workspacediff.ReadFilter) (oldContent, newContent, rawDiff, rev string, truncated bool, err error) {
 	var oldFile, newFile, patch workspacediff.Patch
 	switch spec.Kind {
 	case workspacediff.TargetCommit:
@@ -408,12 +408,12 @@ func (s *Service) fullFileContents(ctx context.Context, root string, spec worksp
 		}
 		oldFile, _ = s.gitShowFile(ctx, root, parentRef, path)
 		newFile, _ = s.gitShowFile(ctx, root, spec.A, path)
-		patch, err = workspacediff.LoadCommitFilePatch(ctx, root, spec.A, path, parent)
+		patch, err = workspacediff.LoadCommitFilePatchFiltered(ctx, root, spec.A, path, parent, filter)
 		rev = spec.Identity() + ":" + path
 	default:
 		oldFile, _ = s.gitShowFile(ctx, root, "HEAD", path)
 		newFile, _ = readWorktreeFilePatch(root, path)
-		patch, err = workspacediff.LoadWorkingTreeFilePatch(ctx, root, path)
+		patch, err = workspacediff.LoadWorkingTreeFilePatchFiltered(ctx, root, path, filter)
 		wtRev, revErr := s.workingTreeRevision(ctx, root)
 		if revErr != nil {
 			return "", "", "", "", false, revErr

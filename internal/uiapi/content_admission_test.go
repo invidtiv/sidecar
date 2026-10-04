@@ -134,3 +134,75 @@ func TestContentHTTPAdmissionIsPerClientAndSharedAcrossReads(t *testing.T) {
 	response, data = h.browserDo(req{path: paths[0], header: headers})
 	expect(t, response, data, 403, "rejected")
 }
+
+func TestLocalContentAdmissionReleasesDisconnectedRequests(t *testing.T) {
+	b := &heldContentBackend{entered: make(chan struct{}, 8), release: make(chan struct{})}
+	h := newHarness(t, func(o *Options) { o.Content = b })
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	released := false
+	defer func() {
+		cancel()
+		if !released {
+			close(b.release)
+		}
+		wg.Wait()
+	}()
+	paths := []string{"/api/v0/projects/one/content?kind=file&target=a", "/api/v0/projects/two/tree"}
+	for i := 0; i < 4; i++ {
+		request, err := http.NewRequestWithContext(ctx, "GET", "http://local"+paths[i%2], nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			response, _ := h.local.Do(request)
+			if response != nil {
+				_ = response.Body.Close()
+			}
+		}()
+		select {
+		case <-b.entered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("local request did not enter backend")
+		}
+	}
+	requestCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stop()
+	request, _ := http.NewRequestWithContext(requestCtx, "GET", "http://local"+paths[0], nil)
+	response, err := h.local.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	expect(t, response, data, 429, "too_many_outstanding")
+	cancel() // Close all four clients while their reads are in the backend.
+	wg.Wait()
+	// All four slots must disappear, including requests whose canceled client
+	// returned before the server noticed its closed connection.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		h.s.contentRequests.mu.Lock()
+		remaining := len(h.s.contentRequests.used)
+		h.s.contentRequests.mu.Unlock()
+		if remaining == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("disconnected Local reads retained admission slots")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(b.release)
+	released = true
+	request, _ = http.NewRequestWithContext(requestCtx, "GET", "http://local"+paths[1], nil)
+	response, err = h.local.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ = io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	expect(t, response, data, 403, "rejected")
+}

@@ -799,11 +799,16 @@ func LoadCommitFileDiff(ctx context.Context, workdir, hash, path, parentHash str
 
 // LoadCommitFilePatch loads a bounded commit patch with explicit truncation.
 func LoadCommitFilePatch(ctx context.Context, workdir, hash, path, parentHash string) (Patch, error) {
-	args := []string{"show", hash, "--", path}
+	return LoadCommitFilePatchFiltered(ctx, workdir, hash, path, parentHash, nil)
+}
+
+// LoadCommitFilePatchFiltered applies policy to a literal selected path.
+func LoadCommitFilePatchFiltered(ctx context.Context, workdir, hash, path, parentHash string, filter *ReadFilter) (Patch, error) {
+	args := []string{"show", hash}
 	if parentHash != "" {
-		args = []string{"diff", parentHash, hash, "--", path}
+		args = []string{"diff", parentHash, hash}
 	}
-	return GitOutputBounded(ctx, workdir, MaxDiffBytes, args...)
+	return GitOutputBounded(ctx, workdir, MaxDiffBytes, filteredGitFileArgs(args, path, filter)...)
 }
 
 // WorkingTreeFileMsg is a cursor-driven working-tree file patch load.
