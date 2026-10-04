@@ -61,7 +61,7 @@ The status values are `queued`, `running`, `review`, `fixing`, `merged` and `blo
 | U1-e2 web app polish | td-71e0e5 | sidecar-ui | Codex | U1-e | merged (sidecar-ui 5e0ecb2) |
 | U1-h security review and three-viewer proof | td-295605 | all | Claude, then Codex | U1-a, U1-d, U1-f | security merged (6176110f); three-viewer proof running (Codex, ~/code/sidecar-u1h-three-viewer) |
 | U2-a core extraction | td-c709a9 | sidecar | Codex | U0-a | merged (d95b66f5) |
-| U2-b workspace resources and operations API | td-eb3d80 | sidecar | Codex | U2-a | running |
+| U2-b workspace resources and operations API | td-eb3d80 | sidecar | Codex | U2-a | review (Codex reviewer, shell "rev U2-b"); branch u2b-workspace-api @3423e767, which also carries the agent `--` terminator fix td-66d7e3 |
 | U2-c workspace UI | td-37a00e | sidecar-ui | Codex | U2-b | queued |
 | U3-a content and layouts API | td-f8784a | sidecar | Codex | U1-a | review (Claude security reviewer); branch u3a-content-api @cd4978c2 |
 | U3-b pane tree UI | td-cf59cd | sidecar-ui | Codex | U3-a, U1-f | queued until U3-a lands (U1-f merged) |
@@ -268,3 +268,4 @@ Each one is a td issue with the exact command and output. Fixes run as their own
 | td-6153d0 | `create worktree --agent codex` sometimes leaves the shell without Codex and reports success; under load. Recovered with `agent start --kind codex` | open |
 | td-ab3af0 | Friction lane 2 (Codex, ~/code/sidecar-friction-2): notes test hang td-aa4fb7, loopback/tmux-drive load flakes td-d881e2, silent Codex start failure td-6153d0, project reorder must not cancel operations, shared events holder polling | running |
 | td-58caeb | `comms send @ui-u2b` returned agent-not-found from another lane; peer handles are not reliably discoverable | open |
+| td-07f7b1 | Eight simultaneous valid `create shell` calls gave 1 success and 7 generic exit-1 errors (allocation race). Codex bug lane ~/code/sidecar-bug-07f7b1 | running |
