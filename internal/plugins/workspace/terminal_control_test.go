@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/agentactivity"
 	"github.com/marcus/sidecar/internal/app"
+	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/tty"
 )
 
@@ -95,6 +96,55 @@ func TestApplicationFocusSchedulesGeometryForAnIdleInteractivePane(t *testing.T)
 	execute(cmd)
 	if !resized {
 		t.Fatal("focus command did not restore the current fitted viewport")
+	}
+}
+
+func TestSwitchingInteractivePanesActivatesTheNewGeometryDriver(t *testing.T) {
+	logPath := installSuccessfulFakeTmux(t)
+	p := newTerminalEmbeddingTestPlugin()
+	t.Cleanup(p.stopTerminalModels)
+	p.width, p.height = 100, 30
+	p.sidebarVisible = false
+	p.worktrees = []*Worktree{{Key: "worktree", Name: "worktree", Agent: &Agent{TmuxSession: "primary-session", TmuxPane: "%1"}}}
+	showTermPanel(t, p, SplitCols, 50)
+	p.requireShellTermPane().Session = "panel-session"
+	p.requireShellTermPane().PaneID = "%2"
+	p.reconcileTerminalModels()
+	p.enterInteractiveMode()
+	runCommandTree(p.activeInteractiveTerminal().ActivateInput())
+	// Separate geometry assertions made by mode entry from the standing tty
+	// driver. Only ActivateInput should assert geometry through the latter.
+	originalResize := workspaceResizeTmuxPane
+	t.Cleanup(func() { workspaceResizeTmuxPane = originalResize })
+	workspaceResizeTmuxPane = func(string, int, int) {}
+	if err := os.WriteFile(logPath, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	p.mouseHandler.HitMap.Clear()
+	p.mouseHandler.HitMap.Add(regionTermPanelContent, mouse.Rect{X: 70, Y: 10, W: 10, H: 5}, nil)
+	_, cmd := p.Update(tea.MouseClickMsg{X: 71, Y: 11, Button: tea.MouseLeft})
+	if p.interactiveState == nil || !p.interactiveState.Active || p.interactiveState.TargetPane != "%2" {
+		t.Fatalf("click did not transfer interactive input to the panel: %+v", p.interactiveState)
+	}
+	runCommandTree(cmd)
+	logged, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(logged), "resize-window -t %2") {
+		t.Fatalf("pane switch did not activate the panel's standing geometry driver:\n%s", logged)
+	}
+	if err := os.WriteFile(logPath, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, cmd = p.Update(nil)
+	runCommandTree(cmd)
+	logged, err = os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(logged), "resize-window") {
+		t.Fatalf("ordinary update reactivated a settled interactive pane:\n%s", logged)
 	}
 }
 

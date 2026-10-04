@@ -73,7 +73,12 @@ type workspaceTerminalTarget = termpanes.Target
 // routed explicitly by interactive mode so a visible preview never captures
 // input intended for workspace navigation.
 func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
-	wasInteractive := p.interactiveState != nil && p.interactiveState.Active
+	previousInteraction := p.interactiveState
+	previousTerminal := p.activeInteractiveTerminal()
+	var previousScope tty.MessageScope
+	if previousTerminal != nil {
+		previousScope = previousTerminal.Scope()
+	}
 	if epochMsg, ok := msg.(plugin.EpochMessage); ok && plugin.IsStale(p.ctx, epochMsg) {
 		return p, nil
 	}
@@ -145,8 +150,12 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	p.syncTerminalResizeHold()
 	cmds = append(cmds, p.reconcileTerminalModels()...)
 	p.syncTerminalModels()
-	if !wasInteractive && p.interactiveState != nil && p.interactiveState.Active {
-		if model := p.activeInteractiveTerminal(); model != nil {
+	if p.interactiveState != nil && p.interactiveState.Active {
+		// A click can leave one live pane and enter another in the same
+		// update. Boolean mode state misses that handoff, as well as a model
+		// reopened during reconciliation: each new input lifetime needs a hold.
+		if model := p.activeInteractiveTerminal(); model != nil &&
+			(p.interactiveState != previousInteraction || model != previousTerminal || model.Scope() != previousScope) {
 			cmds = append(cmds, model.ActivateInput())
 		}
 	}
