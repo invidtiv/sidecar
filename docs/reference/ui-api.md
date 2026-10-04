@@ -165,6 +165,10 @@ A `workspace` event carries `workspace: {projects, workspaces: [{project, host?}
 
 The synthetic projects, workspace, workspace event and operation exchanges are in `testdata/ui-api/v0/`, under the same schema/checksum gate. Fixture workspaces support reads; mutations refuse `unsupported` and never fall through to the machine. `./scripts/ui-api-proof.sh` exercises HTTP/CLI workspace parity, shell create/rename/delete/restore, workspace push, worktree planning/source fencing, dirty confirmation, delete identity fencing and agent-feature refusals with both tmux and state isolated. Unit tests also exercise simultaneous API and TUI manifest writers with the live path watcher.
 
+### Workspace client presentation
+
+The sidecar-ui SDK exposes the generated operation-specific request/response types through `projects`, `workspace` and `workspaceOperation`, and delivers normalized `workspace` invalidations through `Session.events`. Non-success bodies, including partial creation and agent submission receipts, remain available as `SidecarError.result`; the CLI status is `exitCode`. Consumers must preserve those outcomes and must not retry uncertain mutations. The embeddable `<sidecar-workspace>` renders project worktrees, shells and forgotten shell records, with in-context create/rename/delete/restore and agent forms. It renders the exact dirty probe and submits all deletion guards and branch decisions from the plan. Restore is record-only shell recovery; deleted Git worktrees use creation rather than an invented restore route. Terminal opens emit the untouched catalog row or explicit candidate for the host app to place. No wire route, schema, mobile envelope or capability changes in U2-c.
+
 ## HTTP routes
 
 Every HTTP `GET` route also accepts `HEAD` with the same listener and authentication rules and no response body. The terminal WebSocket handshake remains `GET`-only. The generated spec lists both methods for resources, the pairing page and static UI files.
