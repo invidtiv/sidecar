@@ -332,17 +332,17 @@ func TestShellAllocationHungTmuxReleasesWriterLock(t *testing.T) {
 			}
 			writerStart := time.Now()
 			writerErr := shellstate.AddAtPath(filepath.Join(dir, "shells.json"), shellstate.Definition{TmuxName: "other-writer", DisplayName: "Other writer"})
+			// Capture the writer's actual wait before waiting for ownership-pinned
+			// rollback, which runs after EditShells has released the file lock.
+			writerElapsed := time.Since(writerStart)
 			createErr := <-done
-			t.Logf("hung %s: writer wait %v, create returned in %v", phase, time.Since(writerStart), time.Since(started))
+			t.Logf("hung %s: writer wait %v, create returned in %v", phase, writerElapsed, time.Since(started))
 			var named *ShellCreateError
 			if !errors.As(createErr, &named) || named.Code != "shell_create_failed" || !strings.Contains(named.Message, "deadline") {
 				t.Errorf("hung %s was not a named timeout: %v", phase, createErr)
 			}
-			if elapsed := time.Since(started); elapsed > 3*time.Second {
-				t.Errorf("lock held across hung %s for %v", phase, elapsed)
-			}
-			if writerErr != nil || time.Since(writerStart) > 3*time.Second {
-				t.Errorf("other writer blocked: %v (%v)", writerErr, time.Since(writerStart))
+			if writerErr != nil || writerElapsed > 3*time.Second {
+				t.Errorf("other writer blocked across hung %s: %v (%v)", phase, writerErr, writerElapsed)
 			}
 			t.Setenv("HUNG_PHASE", "")
 			defs, err := shellstate.ListAtPath(filepath.Join(dir, "shells.json"))

@@ -11,8 +11,9 @@ import (
 )
 
 func TestHeadlessMachineOutputWithoutALocale(t *testing.T) {
+	withoutLocaleTTY(t)
 	name := fmt.Sprintf("sidecar-locale-free-headless-%d", time.Now().UnixNano())
-	if out, err := exec.Command("tmux", "new-session", "-d", "-x", "40", "-y", "6", "-s", name).CombinedOutput(); err != nil {
+	if out, err := exec.Command("tmux", "new-session", "-d", "-x", "40", "-y", "6", "-s", name, "/bin/sh", "-c", "printf 'history-\\347\\225\\214\\n'; printf 'live-e\\314\\201\\n'; exec /bin/sh").CombinedOutput(); err != nil {
 		t.Fatalf("start private tmux session: %v: %s", err, out)
 	}
 	t.Cleanup(func() { _ = exec.Command("tmux", "kill-session", "-t", name).Run() })
@@ -21,13 +22,8 @@ func TestHeadlessMachineOutputWithoutALocale(t *testing.T) {
 		t.Fatal(err)
 	}
 	pane := strings.TrimSpace(string(paneOut))
-	if out, err := exec.Command("tmux", "send-keys", "-l", "-t", pane, "printf 'history-\\347\\225\\214\\n'; printf 'live-e\\314\\201\\n'").CombinedOutput(); err != nil {
-		t.Fatalf("write private pane: %v: %s", err, out)
-	}
-	if out, err := exec.Command("tmux", "send-keys", "-t", pane, "Enter").CombinedOutput(); err != nil {
-		t.Fatalf("execute private pane command: %v: %s", err, out)
-	}
-	withoutLocaleTTY(t)
+	// Produce the markers in the pane's startup command. Sending keys to a
+	// newly created interactive shell races its startup input handling.
 	identity, err := InspectHeadlessTarget(context.Background(), name)
 	if err != nil {
 		t.Fatal(err)

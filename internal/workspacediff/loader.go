@@ -29,6 +29,7 @@ type CommitResult struct {
 
 // RangeResult is one A..B / A...B patch load.
 type RangeResult struct {
+	Truncated   bool
 	Raw         string
 	Files       []File
 	Revision    string
@@ -37,6 +38,7 @@ type RangeResult struct {
 
 // FileResult is one selected-file patch load.
 type FileResult struct {
+	Truncated   bool
 	Path        string
 	Raw         string
 	Revision    string
@@ -62,27 +64,27 @@ func (localLoader) LoadCommitDetail(ctx context.Context, workdir, hash, _ string
 }
 
 func (localLoader) LoadRange(ctx context.Context, workdir string, t Target, _ string) (RangeResult, error) {
-	raw, err := LoadRangeDiff(ctx, workdir, t)
+	patch, err := LoadRangePatch(ctx, workdir, t)
 	if err != nil {
 		return RangeResult{}, err
 	}
-	return RangeResult{Raw: raw, Files: ParseFiles(raw)}, nil
+	return RangeResult{Raw: patch.Raw, Files: ParseFiles(patch.Raw), Truncated: patch.Truncated}, nil
 }
 
 func (localLoader) LoadCommitFile(ctx context.Context, workdir, hash, path, parentHash, _ string) (FileResult, error) {
-	raw, err := LoadCommitFileDiff(ctx, workdir, hash, path, parentHash)
+	patch, err := LoadCommitFilePatch(ctx, workdir, hash, path, parentHash)
 	if err != nil {
 		return FileResult{}, err
 	}
-	return FileResult{Path: path, Raw: raw}, nil
+	return FileResult{Path: path, Raw: patch.Raw, Truncated: patch.Truncated}, nil
 }
 
 func (localLoader) LoadWorkingTreeFile(ctx context.Context, workdir, path, _ string) (FileResult, error) {
-	raw, err := LoadWorkingTreeFileDiff(ctx, workdir, path)
+	patch, err := LoadWorkingTreeFilePatch(ctx, workdir, path)
 	if err != nil {
 		return FileResult{}, err
 	}
-	return FileResult{Path: path, Raw: raw}, nil
+	return FileResult{Path: path, Raw: patch.Raw, Truncated: patch.Truncated}, nil
 }
 
 func (v *View) git() Loader {

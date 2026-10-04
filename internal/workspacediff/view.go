@@ -34,10 +34,11 @@ type View struct {
 	Focus       Focus
 	ViewMode    ViewMode
 
-	CommitDetail      *CommitDetail
-	CommitFileCursor  int
-	CommitFileScroll  int
-	CommitFileDiffRaw string
+	CommitDetail            *CommitDetail
+	CommitFileCursor        int
+	CommitFileScroll        int
+	CommitFileDiffRaw       string
+	CommitFileDiffTruncated bool
 
 	// CommitDetailErr is why the commit under the cursor has no file list.
 	// A load that fails must say so: a nil CommitDetail with nothing recorded
@@ -294,6 +295,7 @@ func (v *View) ApplyCommitDetail(msg CommitDetailMsg) tea.Cmd {
 		v.CommitFileCursor = 0
 		v.CommitFileScroll = 0
 		v.CommitFileDiffRaw = ""
+		v.CommitFileDiffTruncated = false
 	}
 	v.ClampScroll()
 	if v.Focus == FocusCommitFiles || v.Focus == FocusCommitDiff {
@@ -327,6 +329,7 @@ func (v *View) applyCommitRoot(msg CommitDetailMsg) tea.Cmd {
 		v.CommitFileCursor = 0
 		v.CommitFileScroll = 0
 		v.CommitFileDiffRaw = ""
+		v.CommitFileDiffTruncated = false
 	}
 	v.ClampScroll()
 	return v.LoadSelectedCommitFile()
@@ -451,6 +454,7 @@ func (v *View) ApplyLoadedSnapshot(snapshot *Snapshot, workdir, workspaceID stri
 
 // RangeMsg is the result of LoadRange for one A..B / A...B tab.
 type RangeMsg struct {
+	Truncated   bool
 	Epoch       uint64
 	Binding     uint64
 	WorkspaceID string
@@ -488,29 +492,31 @@ func loadRangeCmdBound(loader Loader, workdir string, t Target, epoch uint64, wo
 		if err != nil {
 			return RangeMsg{Epoch: epoch, Binding: binding, WorkspaceID: workspaceID, Identity: ident, Err: err}
 		}
-		return RangeMsg{Epoch: epoch, Binding: binding, WorkspaceID: workspaceID, Identity: ident, Raw: result.Raw, Files: result.Files, Revision: result.Revision, NotModified: result.NotModified}
+		return RangeMsg{Epoch: epoch, Binding: binding, WorkspaceID: workspaceID, Identity: ident, Raw: result.Raw, Truncated: result.Truncated, Files: result.Files, Revision: result.Revision, NotModified: result.NotModified}
 	}
 }
 
 // LoadRangeDiff runs git diff --binary for a range target.
 func LoadRangeDiff(ctx context.Context, workdir string, t Target) (string, error) {
+	patch, err := LoadRangePatch(ctx, workdir, t)
+	return patch.display(), err
+}
+
+// LoadRangePatch preserves the truncation flag for headless consumers.
+func LoadRangePatch(ctx context.Context, workdir string, t Target) (Patch, error) {
+	return LoadRangePatchFiltered(ctx, workdir, t, nil)
+}
+
+// LoadRangePatchFiltered excludes protected API paths before Git emits them.
+func LoadRangePatchFiltered(ctx context.Context, workdir string, t Target, filter *ReadFilter) (Patch, error) {
 	if t.Kind != TargetRange || t.A == "" || t.B == "" {
-		return "", errors.New("not a range target")
+		return Patch{}, errors.New("not a range target")
 	}
 	dots := t.Dots
 	if dots != "..." {
 		dots = ".."
 	}
-	cmd := exec.CommandContext(ctx, "git", "diff", "--binary", t.A+dots+t.B)
-	cmd.Dir = workdir
-	out, err := cmd.Output()
-	if err != nil {
-		var exit *exec.ExitError
-		if !errors.As(err, &exit) || exit.ExitCode() != 1 {
-			return "", err
-		}
-	}
-	return string(out), nil
+	return GitOutputBounded(ctx, workdir, MaxDiffBytes, filteredGitArgs([]string{"diff", "--binary", t.A + dots + t.B}, filter)...)
 }
 
 // ApplyRangeMsg installs a range patch when Identity matches this r: tab.
@@ -542,6 +548,9 @@ func (v *View) ApplyRangeMsg(msg RangeMsg) tea.Cmd {
 	}
 	v.Error = ""
 	v.State = LoadStateReady
+	if msg.Truncated {
+		v.State = LoadStateTruncated
+	}
 	v.Snapshot = nil
 	v.Commits = nil
 	v.CommitDetail = nil
@@ -710,6 +719,7 @@ func (v *View) FileNames() []string {
 
 // CommitFileDiffMsg is a completed commit-file patch load.
 type CommitFileDiffMsg struct {
+	Truncated   bool
 	Epoch       uint64
 	Binding     uint64
 	WorkspaceID string
@@ -737,9 +747,11 @@ func (v *View) ApplyCommitFileDiff(msg CommitFileDiffMsg) tea.Cmd {
 	// The load has landed either way. Marking it landed is what stops the pane
 	// sitting on "Loading diff…" when git returned an error or an empty patch.
 	v.CommitFileDiffLoaded = true
+	v.CommitFileDiffTruncated = msg.Truncated && msg.Err == nil
 	if msg.Err != nil {
 		v.CommitFileDiffErr = msg.Err.Error()
 		v.CommitFileDiffRaw = ""
+		v.CommitFileDiffTruncated = false
 		return nil
 	}
 	v.CommitFileDiffErr = ""
@@ -773,7 +785,7 @@ func (v *View) LoadSelectedCommitFile() tea.Cmd {
 		raw := result.Raw
 		return CommitFileDiffMsg{
 			Epoch: epoch, Binding: binding, WorkspaceID: id, Identity: ident,
-			CommitHash: hash, FilePath: file.Path, Raw: raw, Err: err,
+			CommitHash: hash, FilePath: file.Path, Raw: raw, Err: err, Truncated: result.Truncated,
 		}
 	}
 }
@@ -781,21 +793,27 @@ func (v *View) LoadSelectedCommitFile() tea.Cmd {
 // LoadCommitFileDiff loads one path's patch from a commit, diffing against
 // parentHash for merges so combined diffs do not come back empty.
 func LoadCommitFileDiff(ctx context.Context, workdir, hash, path, parentHash string) (string, error) {
-	args := []string{"show", hash, "--", path}
+	patch, err := LoadCommitFilePatch(ctx, workdir, hash, path, parentHash)
+	return patch.display(), err
+}
+
+// LoadCommitFilePatch loads a bounded commit patch with explicit truncation.
+func LoadCommitFilePatch(ctx context.Context, workdir, hash, path, parentHash string) (Patch, error) {
+	return LoadCommitFilePatchFiltered(ctx, workdir, hash, path, parentHash, nil)
+}
+
+// LoadCommitFilePatchFiltered applies policy to a literal selected path.
+func LoadCommitFilePatchFiltered(ctx context.Context, workdir, hash, path, parentHash string, filter *ReadFilter) (Patch, error) {
+	args := []string{"show", hash}
 	if parentHash != "" {
-		args = []string{"diff", parentHash, hash, "--", path}
+		args = []string{"diff", parentHash, hash}
 	}
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = workdir
-	out, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-	return string(out), nil
+	return GitOutputBounded(ctx, workdir, MaxDiffBytes, filteredGitFileArgs(args, path, filter)...)
 }
 
 // WorkingTreeFileMsg is a cursor-driven working-tree file patch load.
 type WorkingTreeFileMsg struct {
+	Truncated   bool
 	Epoch       uint64
 	Binding     uint64
 	WorkspaceID string
@@ -824,7 +842,7 @@ func (v *View) LoadSelectedWorkingTreeFile() tea.Cmd {
 		result, err := loader.LoadWorkingTreeFile(context.Background(), workdir, path, "")
 		return WorkingTreeFileMsg{
 			Epoch: epoch, Binding: binding, WorkspaceID: id, Identity: ident,
-			Path: path, Raw: result.Raw, Err: err,
+			Path: path, Raw: result.Raw, Err: err, Truncated: result.Truncated,
 		}
 	}
 }
@@ -840,6 +858,9 @@ func (v *View) ApplyWorkingTreeFile(msg WorkingTreeFileMsg) tea.Cmd {
 	for i := range v.Files {
 		if v.Files[i].Path == msg.Path {
 			v.Files[i].Raw = msg.Raw
+			if msg.Truncated {
+				v.State = LoadStateTruncated
+			}
 			adds, dels := countDiffStats(msg.Raw)
 			v.Files[i].Additions = adds
 			v.Files[i].Deletions = dels
@@ -956,6 +977,11 @@ func countDiffStats(chunk string) (adds, dels int) {
 // resolution. Without the parents, LoadSelectedCommitFile has nothing to diff
 // against and every file in a merge renders as an empty patch.
 func LoadCommitDetail(ctx context.Context, workdir, hash string) (*CommitDetail, error) {
+	return LoadCommitDetailFiltered(ctx, workdir, hash, nil)
+}
+
+// LoadCommitDetailFiltered omits protected API paths from the commit file list.
+func LoadCommitDetailFiltered(ctx context.Context, workdir, hash string, filter *ReadFilter) (*CommitDetail, error) {
 	cmd := exec.CommandContext(ctx, "git", "show", "--format=%H%n%h%n%P%n%s", "-s", hash)
 	cmd.Dir = workdir
 	output, err := cmd.Output()
@@ -974,7 +1000,7 @@ func LoadCommitDetail(ctx context.Context, workdir, hash string) (*CommitDetail,
 		ParentHashes: parents,
 		IsMerge:      len(parents) > 1,
 	}
-	stat := exec.CommandContext(ctx, "git", "show", "--numstat", "--format=", hash)
+	stat := exec.CommandContext(ctx, "git", filteredGitArgs([]string{"show", "--numstat", "--format=", hash}, filter)...)
 	stat.Dir = workdir
 	statOut, _ := stat.Output()
 	for _, line := range strings.Split(strings.TrimSpace(string(statOut)), "\n") {

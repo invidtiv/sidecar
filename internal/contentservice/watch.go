@@ -2,6 +2,7 @@ package contentservice
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -27,31 +28,37 @@ func (s *Service) WatchProject(ctx context.Context, project, workspace string, p
 			return nil, err
 		}
 	}
+	policy, err := s.openProjectPolicy(ctx, ws.Root)
+	if err != nil {
+		return nil, err
+	}
+	defer policy.close()
 	switch params.Kind {
 	case KindFile:
-		rel, err := projectRelative(params.Target)
+		rel, err := policy.path(params.Target)
 		if err != nil {
 			return nil, err
 		}
-		if err := checkRooted(ws.Root, rel); err != nil {
-			return nil, err
-		}
-		abs := filepath.Join(ws.Root, filepath.FromSlash(rel))
-		return []livewatch.Target{livewatch.File(abs), livewatch.File(canonical(abs))}, nil
+		original, _ := projectRelative(params.Target)
+		abs := filepath.Join(ws.Root, filepath.FromSlash(original))
+		resolved := filepath.Join(ws.Root, filepath.FromSlash(rel))
+		return []livewatch.Target{livewatch.File(abs), livewatch.File(resolved)}, nil
 	case KindTree:
 		path := params.Target
 		if path == "" || path == "." {
+			if _, err := policy.path("."); err != nil {
+				return nil, err
+			}
 			return []livewatch.Target{livewatch.Dir(ws.Root)}, nil
 		}
-		rel, err := projectRelative(path)
+		rel, err := policy.path(path)
 		if err != nil {
 			return nil, err
 		}
-		if err := checkRooted(ws.Root, rel); err != nil {
-			return nil, err
-		}
-		abs := filepath.Join(ws.Root, filepath.FromSlash(rel))
-		return []livewatch.Target{livewatch.Dir(abs), livewatch.Dir(canonical(abs))}, nil
+		original, _ := projectRelative(path)
+		abs := filepath.Join(ws.Root, filepath.FromSlash(original))
+		resolved := filepath.Join(ws.Root, filepath.FromSlash(rel))
+		return []livewatch.Target{livewatch.Dir(abs), livewatch.Dir(resolved)}, nil
 	case KindIssue:
 		doc, err := s.ReadProject(ctx, project, workspace, params)
 		if err != nil {
@@ -87,11 +94,8 @@ func (s *Service) WatchProject(ctx context.Context, project, workspace string, p
 			}
 		}
 		add := func(path string) error {
-			rel, err := projectRelative(path)
+			rel, err := policy.path(path)
 			if err != nil {
-				return err
-			}
-			if err := checkRooted(ws.Root, rel); err != nil {
 				return err
 			}
 			targets = append(targets, livewatch.File(filepath.Join(ws.Root, filepath.FromSlash(rel))))
@@ -105,6 +109,12 @@ func (s *Service) WatchProject(ctx context.Context, project, workspace string, p
 		if doc.Diff != nil && doc.Diff.Snapshot != nil {
 			for _, file := range doc.Diff.Snapshot.Files {
 				if err = add(file.Path); err != nil {
+					// A tracked symlink's patch contains its target string, never
+					// the administrative contents. Keep aggregate Git watches but
+					// do not register that target as ordinary project content.
+					if errors.Is(err, errGitMetadata) {
+						continue
+					}
 					return nil, err
 				}
 			}

@@ -143,7 +143,6 @@ type modelHarness struct {
 	mu        sync.Mutex
 	fallbacks []error
 	channels  []controlChannel
-	slow      time.Duration
 }
 
 func newModelHarness(t *testing.T) *modelHarness {
@@ -174,15 +173,7 @@ func (h *modelHarness) subscribe(t *testing.T) *ControlSubscription {
 			h.fallbacks = append(h.fallbacks, err)
 			h.mu.Unlock()
 		},
-		OnModelFrame: func(frame ModelFrame) {
-			h.mu.Lock()
-			slow := h.slow
-			h.mu.Unlock()
-			if slow > 0 {
-				time.Sleep(slow)
-			}
-			h.recorder.onFrame(frame)
-		},
+		OnModelFrame:   h.recorder.onFrame,
 		OnModelInvalid: h.recorder.onInvalid,
 	})
 	if err != nil {
@@ -397,29 +388,51 @@ func (h *modelHarness) sawReason(reason ResyncReason) bool {
 	return false
 }
 
-// Pause/continue: a consumer slow enough to make tmux pause the pane must end up
-// resynchronized rather than showing a stitched-together screen. tmux drops the
-// pane's buffered output while paused, so the recovery is a fresh seed and the
-// resulting frame must still be internally continuous.
+// Pause/continue recovery is driven by an explicit pause on the real tmux
+// control client. Callback slowness and a finite flood do not guarantee tmux's
+// pause-after threshold is crossed, particularly under parallel suite load.
+// This proves the real pause notification, production continue and fresh seed;
+// it deliberately does not measure automatic overload timing.
 func TestModelPauseContinueForcesReseedAndStaysContinuous(t *testing.T) {
 	h := newModelHarness(t)
-	h.mu.Lock()
-	// Keep the actor behind long enough to cross tmux's pause-after threshold
-	// even now that incremental model frames are substantially cheaper to build.
-	h.slow = 500 * time.Millisecond
-	h.mu.Unlock()
-	h.tmux.startWriter("")
+	h.tmux.startWriter("0.01")
 	sub := h.subscribe(t)
 	defer sub.Close()
-
-	waitUntil(t, 60*time.Second, "tmux to pause the pane", func() bool {
+	waitUntil(t, 15*time.Second, "ten numbered lines before pause", func() bool {
+		frame, ok := h.recorder.lastFrame()
+		return ok && len(numbersIn(frame.Frame.CombinedOutput())) >= 10
+	})
+	seedsBefore := h.seeds()
+	h.mu.Lock()
+	channel := h.channels[0]
+	h.mu.Unlock()
+	process, ok := channel.(*processControlChannel)
+	if !ok {
+		t.Fatal("pause proof requires a real process control channel")
+	}
+	clientPID := strconv.Itoa(process.cmd.Process.Pid)
+	clientName := ""
+	for _, line := range strings.Split(strings.TrimSpace(h.tmux.run("list-clients", "-F", "#{client_name}\t#{client_pid}\t#{client_control_mode}")), "\n") {
+		fields := strings.Split(line, "\t")
+		if len(fields) == 3 && fields[1] == clientPID && fields[2] == "1" {
+			if clientName != "" {
+				t.Fatal("control process matched multiple tmux clients")
+			}
+			clientName = fields[0]
+		}
+	}
+	if clientName == "" {
+		t.Fatal("private tmux server did not identify the control client")
+	}
+	// Invoke from a separate client so %pause is outside this control client's
+	// command-response guard. Notification-looking capture text inside a guard
+	// must remain response data, which is why issuing pause on that stream is
+	// not a sound fixture on every supported tmux release.
+	h.tmux.run("refresh-client", "-t", clientName, "-A", h.tmux.pane+":pause")
+	waitUntil(t, 15*time.Second, "the real tmux pause notification", func() bool {
 		return h.sawReason(ResyncPause)
 	})
-	h.mu.Lock()
-	h.slow = 0
-	h.mu.Unlock()
-
-	waitUntil(t, 30*time.Second, "a reseed after pause", func() bool { return h.seeds() >= 2 })
+	waitUntil(t, 30*time.Second, "a fresh reseed after pause", func() bool { return h.seeds() > seedsBefore })
 
 	// Recovery is a fresh seed, so the model must converge on exactly what tmux
 	// has — no stitched-together screen, no duplicated or dropped tail.

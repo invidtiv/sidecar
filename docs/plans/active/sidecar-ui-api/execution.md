@@ -60,15 +60,15 @@ The status values are `queued`, `running`, `review`, `fixing`, `merged` and `blo
 | U1-i persist browser sessions | td-165353 | sidecar | Codex | U1-a, U1-b merged (both touch internal/uiapi) | merged: server 7f2ce809, SDK sidecar-ui 4a16fbf (the review fixed a P1 infinite reconnect on unknown event kinds) |
 | U1-e2 web app polish | td-71e0e5 | sidecar-ui | Codex | U1-e | merged (sidecar-ui 5e0ecb2) |
 | U1-c2 socket activation | td-11f799 | sidecar | Codex | U1-c | merged (7f684dc4). Review fixed an IPv4-mapped IPv6 and socket-type masquerade. The fake-supervisor proof refused 827 competing binds across a restart |
-| U1-g2 native follow-ups | td-468816 | sidecar-mobile | Codex | U1-g | running (Codex, ~/code/sidecar-mobile-u1g2-native): global alerts, banner instead of a modal, events liveness, fewer channel reopens |
-| U1-h security review and three-viewer proof | td-295605 | all | Claude, then Codex | U1-a, U1-d, U1-f | merged (security 6176110f, proof 23b5302d). The review fixed 2 more TUI P1s. Browser rendering still blocked by td-945516 |
+| U1-g2 native follow-ups | td-468816 | sidecar-mobile | Codex | U1-g | merged into sidecar-mobile main locally (bba67db, not pushed). Review fixed banner accessibility and an events-fallback recovery gap. Device checks are Marcus's |
+| U1-h security review and three-viewer proof | td-295605 | all | Claude, then Codex | U1-a, U1-d, U1-f | done. Security 6176110f; proof 23b5302d; integrated re-run against sidecar-ui 0f9cb5f passes with 0 browser page errors and a fully rendered terminal (u1h-evidence/integrated-*) |
 | U2-a core extraction | td-c709a9 | sidecar | Codex | U0-a | merged (d95b66f5) |
 | U2-b workspace resources and operations API | td-eb3d80 | sidecar | Codex | U2-a | merged (da497063) |
-| U2-c workspace UI | td-37a00e | sidecar-ui | Codex | U2-b | queued; U2-b is on main, so it can start |
+| U2-c workspace UI | td-37a00e | sidecar-ui | Codex | U2-b | running (Codex, ~/code/sidecar-ui-u2c-workspace-ui) |
 | U3-a content and layouts API | td-f8784a | sidecar | Codex | U1-a | merged (05dd383b). Claude review fixed a HIGH arbitrary file write through the diff parent parameter (git --output), a watch fd-exhaustion cap, and an existence oracle through symlinks |
-| U3-b pane tree UI | td-cf59cd | sidecar-ui | Codex | U3-a, U1-f | review MERGE-READY (Claude: no security findings, 7 fixes); integrating sidecar-ui main (U1-i SDK) |
-| U3-c pane and content polish | td-c53032 | both | Codex | U3-b | queued |
-| U4 viewers agents can target | td-799dd6 | both | Codex | U3 | queued |
+| U3-b pane tree UI | td-cf59cd | sidecar-ui | Codex | U3-a, U1-f | merged (sidecar-ui 13bd63a); 70 e2e tests pass on merged main |
+| U3-c pane and content polish | td-c53032 | both | Codex | U3-b | running (Codex, ~/code/sidecar-ui-u3c-polish), plus Sidecar fix td-331945 |
+| U4 viewers agents can target | td-799dd6 | both | Codex | U3 | U4-a (server) running (Codex, ~/code/sidecar-u4a-viewer); U4-b (client) after its contract lands |
 
 U2-b onward are briefed below.
 
@@ -246,7 +246,7 @@ A project page with worktrees and shells, and native, keyboard-first create, ren
 - Browser sessions remain exposed to an origin takeover only when the port is free: foreground `api serve` restarts, or a stopped or uninstalled service. Under the socket-activated service the supervisor holds the port continuously.
 - A paired origin trusts everything served from that origin, including whatever serves that port next.
 - The static UI has no script CSP. sidecar-ui must render every server and agent string as text. Reviews have confirmed it does.
-- `content:read` can read everything under a project root, including `.git/config` and `.env`. Whether to refuse `.git/` internals is an open follow-up, with diff memory bounds (td-0e9748).
+- `content:read` can read everything under a project root except Git metadata, which the API refuses (b73eb69a). `.env` stays readable on purpose: it is ordinary project content. Diffs are bounded at 768 KiB, and content reads are capped at four concurrent requests per credential.
 - Saved layouts hold client-supplied paths. Every consumer must treat them as untrusted and re-validate them through the API.
 
 ## Bugs and friction found along the way
@@ -271,8 +271,8 @@ Each one is a td issue with the exact command and output. Fixes run as their own
 | td-eeb7e8 lane | Codex bug lane (~/code/sidecar-bug-eeb7e8) with a completion fence for stale async messages across workspace and overview | merged (7d9b53f7) |
 | td-ae18e4, td-87dd09 | `comms publish` refused with "author does not follow topic" and no recovery hint (comms) | open |
 | td-6153d0 | `create worktree --agent codex` sometimes leaves the shell without Codex and reports success; under load. Recovered with `agent start --kind codex` | open |
-| td-275a14 | Friction lane 3 (Codex, ~/code/sidecar-friction-3): remaining load flakes, diff memory bound td-0e9748, refuse .git internals over content:read, setupIsolatedCLI tmux isolation | review (Codex reviewer, shell "rev friction-3") |
+| td-275a14 | Friction lane 3 (Codex, ~/code/sidecar-friction-3): remaining load flakes, diff memory bound td-0e9748, refuse .git internals over content:read, setupIsolatedCLI tmux isolation | merged (b73eb69a). Review fixed a P1 Git-metadata bypass through pathspec selectors |
 | td-ab3af0 | Friction lane 2 (Codex, ~/code/sidecar-friction-2): notes test hang td-aa4fb7, loopback/tmux-drive load flakes td-d881e2, silent Codex start failure td-6153d0, project reorder must not cancel operations, shared events holder polling, server paste-marker strip | merged (c3ac2418) |
 | td-58caeb | `comms send @ui-u2b` returned agent-not-found from another lane; peer handles are not reliably discoverable | open |
 | td-07f7b1 | Eight simultaneous valid `create shell` calls gave 1 success and 7 generic exit-1 errors (allocation race). Fixed on bug-07f7b1 @d375077a with atomic allocation under the shellstate lock | merged (94f34653); review added a 2 s tmux budget under the lock |
-| td-945516 | P1: after geometry handoffs xterm throws cell exceptions and the browser terminal goes blank (sidecar-ui). Fixed on bug-945516 (reset before resize, one atomic write); docs on Sidecar branch bug-945516-docs | review (Codex reviewer, shell "rev 945516") |
+| td-945516 | P1: after geometry handoffs xterm throws cell exceptions and the browser terminal goes blank (sidecar-ui). Fixed on bug-945516 (reset before resize, one atomic write); docs on Sidecar branch bug-945516-docs | merged (sidecar-ui 0f9cb5f, docs 6d247084). Review closed a server-content CSI injection |
