@@ -246,7 +246,7 @@ A project page with worktrees and shells, and native, keyboard-first create, ren
 - Browser sessions remain exposed to an origin takeover only when the port is free: foreground `api serve` restarts, or a stopped or uninstalled service. Under the socket-activated service the supervisor holds the port continuously.
 - A paired origin trusts everything served from that origin, including whatever serves that port next.
 - The static UI has no script CSP. sidecar-ui must render every server and agent string as text. Reviews have confirmed it does.
-- `content:read` can read everything under a project root, including `.git/config` and `.env`. Whether to refuse `.git/` internals is an open follow-up, with diff memory bounds (td-0e9748).
+- `content:read` can read everything under a project root except Git metadata, which the API refuses (b73eb69a). `.env` stays readable on purpose: it is ordinary project content. Diffs are bounded at 768 KiB, and content reads are capped at four concurrent requests per credential.
 - Saved layouts hold client-supplied paths. Every consumer must treat them as untrusted and re-validate them through the API.
 
 ## Bugs and friction found along the way
@@ -271,7 +271,7 @@ Each one is a td issue with the exact command and output. Fixes run as their own
 | td-eeb7e8 lane | Codex bug lane (~/code/sidecar-bug-eeb7e8) with a completion fence for stale async messages across workspace and overview | merged (7d9b53f7) |
 | td-ae18e4, td-87dd09 | `comms publish` refused with "author does not follow topic" and no recovery hint (comms) | open |
 | td-6153d0 | `create worktree --agent codex` sometimes leaves the shell without Codex and reports success; under load. Recovered with `agent start --kind codex` | open |
-| td-275a14 | Friction lane 3 (Codex, ~/code/sidecar-friction-3): remaining load flakes, diff memory bound td-0e9748, refuse .git internals over content:read, setupIsolatedCLI tmux isolation | review (Codex reviewer, shell "rev friction-3") |
+| td-275a14 | Friction lane 3 (Codex, ~/code/sidecar-friction-3): remaining load flakes, diff memory bound td-0e9748, refuse .git internals over content:read, setupIsolatedCLI tmux isolation | merged (b73eb69a). Review fixed a P1 Git-metadata bypass through pathspec selectors |
 | td-ab3af0 | Friction lane 2 (Codex, ~/code/sidecar-friction-2): notes test hang td-aa4fb7, loopback/tmux-drive load flakes td-d881e2, silent Codex start failure td-6153d0, project reorder must not cancel operations, shared events holder polling, server paste-marker strip | merged (c3ac2418) |
 | td-58caeb | `comms send @ui-u2b` returned agent-not-found from another lane; peer handles are not reliably discoverable | open |
 | td-07f7b1 | Eight simultaneous valid `create shell` calls gave 1 success and 7 generic exit-1 errors (allocation race). Fixed on bug-07f7b1 @d375077a with atomic allocation under the shellstate lock | merged (94f34653); review added a 2 s tmux budget under the lock |
