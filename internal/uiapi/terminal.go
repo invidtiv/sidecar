@@ -188,6 +188,19 @@ func (h *listenerHandler) authorizeTerminal(r *http.Request) (caller, websocket.
 		if code != "" {
 			return c, CloseUnauthenticated, message
 		}
+		if h.pairedOnTailnet(origin) {
+			// See authenticate: a paired origin's page spends a ticket bought
+			// with its own token here too, never the ambient login alone.
+			g, ok := h.s.auth.redeemTicket(r.URL.Query().Get("ticket"))
+			if !ok || g.listener != h.kind || g.auth != "bearer" {
+				return c, CloseUnauthenticated, "A paired origin opens tailnet streams with a ticket from POST /api/v0/ws-tickets, bought with its token."
+			}
+			if g.origin != origin {
+				return c, CloseOriginRefused, "This ticket was issued to another origin."
+			}
+			c.auth, c.login, c.client, c.credential = "ticket", login, g.client, g.credential
+			return c, 0, ""
+		}
 		c.auth, c.login, c.client = "tailnet", login, "tailnet:"+login
 		return c, 0, ""
 	}

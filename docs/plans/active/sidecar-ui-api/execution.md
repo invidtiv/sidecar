@@ -53,16 +53,21 @@ The status values are `queued`, `running`, `review`, `fixing`, `merged` and `blo
 | U1-a events stream | td-aa8756 | sidecar | Codex | U0-a | merged (6a11e85e), including the spec integration and CatalogRow.path |
 | U1-b schemas, spec, fixtures | td-5ae805 | sidecar | Codex | U0-a | merged (854d108e) |
 | U1-c service install | td-d7869b | sidecar | Codex, reviewed by Codex | U0-a | merged |
-| U1-d presence and v1 frames | td-713745 | sidecar | Codex | td-552e24 merged | review MERGE-READY; integrating main (U1-b terminalBackend interface) plus encoder byte budget, then merge |
+| U1-d presence and v1 frames | td-713745 | sidecar | Codex | td-552e24 merged | merged (c75857ac) |
 | U1-e web app shell and Sessions | td-57a73e | sidecar-ui | Codex | U0-b | merged (sidecar-ui 8d183fc); Claude review fixed 6 UX defects |
 | U1-f SDK adopts v1 | td-820df7 | sidecar-ui | Codex | U1-a, U1-d | running (Codex, ~/code/sidecar-ui-u1f-sdk, branch u1f-sdk), against the u1d and ui-u1a-events branches |
 | U1-g iOS adopts presence and events | td-fde8cf | sidecar-mobile | Codex | U1-a, U1-d | running (Codex, ~/code/sidecar-mobile-u1g-presence, branch u1g-presence); presence first against the u1d branch, events after U1-a |
 | U1-i persist browser sessions | td-165353 | sidecar | Codex | U1-a, U1-b merged (both touch internal/uiapi) | running (Codex, ~/code/sidecar-u1i-sessions, branch u1i-sessions), plus td-affb04 (stale --ui root) |
-| U1-e2 web app polish | td-71e0e5 | sidecar-ui | Codex | U1-e | running (Codex, ~/code/sidecar-ui-u1e2-polish, branch u1e2-polish): terminal-safe chords, needs-input, palette, phone header |
-| U1-h security review and three-viewer proof | td-295605 | all | Claude, then Codex | U1-a, U1-d, U1-f | queued |
+| U1-e2 web app polish | td-71e0e5 | sidecar-ui | Codex | U1-e | merged (sidecar-ui 5e0ecb2) |
+| U1-h security review and three-viewer proof | td-295605 | all | Claude, then Codex | U1-a, U1-d, U1-f | security review running (Claude) on main c75857ac; three-viewer proof after U1-f |
 | U2-a core extraction | td-c709a9 | sidecar | Codex | U0-a | merged (d95b66f5) |
+| U2-b workspace resources and operations API | td-eb3d80 | sidecar | Codex | U2-a | running |
+| U2-c workspace UI | td-37a00e | sidecar-ui | Codex | U2-b | queued |
+| U3-a content and layouts API | td-f8784a | sidecar | Codex | U1-a | running |
+| U3-b pane tree UI | td-cf59cd | sidecar-ui | Codex | U3-a, U1-f | queued |
+| U4 viewers agents can target | td-799dd6 | both | Codex | U3 | queued |
 
-U2-b onward (workspace resources, operations, `<sidecar-workspace>`), U3 and U4 are briefed once U2-a and U1 settle.
+U2-b onward are briefed below.
 
 ## Lane briefs
 
@@ -184,6 +189,52 @@ Make one state-free workspace-operation service for creating, renaming, deleting
 
 This is a large refactor in shared code, so keep commits small and reviewable.
 
+### U2-b: workspace resources and operations over the API
+
+This builds on U2-a's `workspaceops.Service`, `agentresolve` and the pure `workspacelist` rules.
+
+- **Read routes.**
+  - `GET /api/v0/projects` lists the configured projects.
+  - `GET /api/v0/projects/{project}/workspace` returns that project's worktrees and shells, with agent state, ordered and grouped by the same pure rules the TUI uses.
+  - Push changes for both through the events stream (`workspace` messages), driven by the existing watchers.
+- **Operations.** Add `POST` routes for shell create, rename, delete and restore; worktree create (plan, then confirmed execute, with the `--expect-source-oid` guard), rename and delete (the dirty probe comes first and is refused unless confirmed); and agent start and prompt.
+  - Each calls the same service the CLI calls.
+  - Each returns the CLI's `--json` shape and refusal codes.
+  - Each needs a new `workspace:write` scope. `full` implies it.
+- **Remote hosts.** Mutations on a remote host go through the owning host's CLI, exactly as Sessions does today.
+- **Contract.** Regenerate the spec and fixtures. Add tests, including concurrent-writer tests against the TUI watcher, and extend the live proof.
+
+### U2-c: `<sidecar-workspace>` and project workspaces in sidecar-ui
+
+A project page with worktrees and shells, and native, keyboard-first create, rename and delete flows.
+
+- Destructive actions confirm in context. Worktree delete shows exactly what the dirty probe found.
+- Agent start and prompt are available from a shell.
+- The `<sidecar-workspace>` element is embeddable like the others.
+- The same no-internals rule and phone layout apply.
+- This starts after U2-b's contract lands on main.
+
+### U3-a: content panes and layouts over the API
+
+- **Content routes.** Read routes over `contentservice` cover file previews, markdown docs, diffs, issues, notes and the project file tree. They return the existing DTOs, and they check paths against project roots: no traversal, and symlink escapes refused.
+- **Live refresh.** Content invalidation goes on the events stream (`content` messages), from `livewatch` path watchers scoped to the panes that clients have open.
+- **Layouts.** A locked, per-viewer layout store under `$STATE/api/layouts/` uses the shared `panelayout` and `panecodec` tree format, with no cell geometry. `GET` and `PUT` it per project and per viewer, with conditional writes (ETag/If-Match). Viewers are the browser session and the paired origin.
+- **Scopes.** Add `content:read`; `full` implies it.
+- **Contract.** Regenerate the spec and fixtures, and extend the proof.
+
+### U3-b: pane tree and content panes in sidecar-ui
+
+- **Pane tree.** Splits, holding several terminals and content panes, built from the layout store. Panes can be dragged between splits, and tabs can be moved.
+- **Content panes.** Rendered natively: markdown as typography, diffs with syntax highlighting side by side, issues as cards, and a file tree.
+- **Platform.** Pop-out windows, live refresh from content events, and keyboard navigation between panes.
+- This starts after U3-a lands. Screen-model frames are measured again here, only if several visible terminals show cost.
+
+### U4: API clients as viewers that agents can target
+
+- **Server (U4-a).** An API client that holds the screen announces itself on the `uirequest` bus as a viewer with `uiRequestRelayV1`. `sidecar open` and `sidecar layout get/apply/move` then reach it, with the same decline-don't-queue rules and exit codes.
+- **Client (U4-b).** The browser receives those requests over the events stream, applies them to its pane tree, and acknowledges.
+- **Result.** An agent says "open this diff" and it appears in whichever UI Marcus is using.
+
 ## Bugs and friction found along the way
 
 Each one is a td issue with the exact command and output. Fixes run as their own lanes.
@@ -203,5 +254,6 @@ Each one is a td issue with the exact command and output. Fixes run as their own
 | td-87ef7e, td-d77e97, td-cce9f6, td-5e7e28, td-9339ae, td-6db2ce | Load-dependent test flakes found under parallel lane gates (friction lane) | running |
 | td-ac892f | Fixed in 70eaa52e for newly launched agents. P1 root cause of several items above: Codex sessions share one `codex app-server` daemon env, so "current shell/project" defaults resolve to another agent (a reviewer renamed U1-d's shell). Friction lane | running |
 | td-090b9d | Not a comms bug. The orchestrator's watcher script crashed on an untitled message and skipped reports. Fixed in the watcher | invalid |
-| td-eeb7e8 lane | Codex bug lane (~/code/sidecar-bug-eeb7e8) with a completion fence for stale async messages across workspace and overview | running |
+| td-eeb7e8 lane | Codex bug lane (~/code/sidecar-bug-eeb7e8) with a completion fence for stale async messages across workspace and overview | review (Codex reviewer, shell "rev eeb7e8"; branch bug-eeb7e8 @5d7cef2d) |
 | td-ae18e4, td-87dd09 | `comms publish` refused with "author does not follow topic" and no recovery hint (comms) | open |
+| td-6153d0 | `create worktree --agent codex` sometimes leaves the shell without Codex and reports success; under load. Recovered with `agent start --kind codex` | open |
