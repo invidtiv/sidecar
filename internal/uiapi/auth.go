@@ -3,6 +3,7 @@ package uiapi
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"strings"
 	"sync"
 	"time"
 )
@@ -117,7 +118,48 @@ func (a *authStore) lookupSession(token string) (origin, client string, ok bool)
 	if !ok {
 		return "", "", false
 	}
-	return s.origin, "session:" + key[:16], true
+	return s.origin, sessionClient(key), true
+}
+
+// sessionClient is the client key a session's requests, tickets and
+// terminals are counted under.
+func sessionClient(key string) string { return "session:" + key[:16] }
+
+// revokeSessions drops every browser session, or only those bound to origin
+// when it is not empty, together with the tickets they issued. It returns the
+// client keys it revoked, so their open terminals can be closed.
+func (a *authStore) revokeSessions(origin string) map[string]bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	revoked := map[string]bool{}
+	for key, s := range a.sessions {
+		if origin == "" || s.origin == origin {
+			delete(a.sessions, key)
+			revoked[sessionClient(key)] = true
+		}
+	}
+	for key, g := range a.tickets {
+		if revoked[g.client] {
+			delete(a.tickets, key)
+		}
+	}
+	return revoked
+}
+
+// sessionClientLive reports whether client, a key from sessionClient, still
+// names a session. Keys of other kinds are not sessions and always are.
+func (a *authStore) sessionClientLive(client string) bool {
+	if !strings.HasPrefix(client, "session:") {
+		return true
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for key := range a.sessions {
+		if sessionClient(key) == client {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *authStore) issueTicket(g grant) (string, time.Time, error) {

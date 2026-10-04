@@ -117,6 +117,7 @@ const (
 	terminalDrainTimeout = 2 * time.Second
 	terminalStopTimeout  = 10 * time.Second
 	maxCloseReasonBytes  = 123
+	revokedSessionReason = "This browser session was revoked; pair again with sidecar api open."
 )
 
 // serveTerminal upgrades first and refuses with a close code, because a
@@ -147,6 +148,12 @@ func (h *listenerHandler) serveTerminal(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	defer h.s.clients.remove(client)
+	// A revocation that ran between authorizing and registering missed this
+	// client; it removed the session first, so the session is gone here.
+	if !h.s.auth.sessionClientLive(c.client) {
+		_ = conn.Close(CloseUnauthenticated, revokedSessionReason)
+		return
+	}
 	h.s.runTerminal(conn, client)
 }
 
@@ -250,6 +257,13 @@ func (s *Server) runTerminal(conn *websocket.Conn, client *trackedClient) {
 		if result.violation != "" {
 			_ = conn.Close(CloseProtocolViolation, closeReason(result.violation))
 		}
+		if _, ok := waitBackend(); !ok {
+			<-backendDone
+		}
+		_ = conn.CloseNow()
+	case <-client.revoked:
+		_ = requestWriter.Close()
+		_ = conn.Close(CloseUnauthenticated, revokedSessionReason)
 		if _, ok := waitBackend(); !ok {
 			<-backendDone
 		}

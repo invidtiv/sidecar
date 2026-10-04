@@ -90,6 +90,8 @@ Success, `200`. `token` is the contract; `next` is additive (the validated path,
 
 Sessions are kept in memory in v0, so a server restart means pairing again, and a client that gets `401 unauthenticated` with a stored token should discard it and ask the user to run `sidecar api open`. Persisting sessions is a later decision.
 
+`sidecar api pair --revoke-sessions` signs out browser sessions without a restart (`DELETE /api/v0/pairing/sessions`, Local only). With `--origin URL` (`?origin=URL`) it revokes only the sessions bound to that origin. A revoked token gets `401 unauthenticated` on its next request, tickets it issued and has not redeemed stop working, and every terminal it opened, directly or through a ticket, closes at once with `4401`. Paired origins are not sessions: their tokens survive, and `--revoke URL` manages them.
+
 ### Another origin (an embedding app)
 
 `sidecar api pair --origin https://app.example:5173` registers the origin over the Local socket (`POST /api/v0/origins`) and prints a bearer token. Registrations persist in `$STATE/api/origins.json` with mode 0600, as `{origin, token_sha256, scopes, created_at}`. The server keeps only the token hash. `sidecar api pair --list` and `--revoke ORIGIN` manage registrations.
@@ -128,6 +130,7 @@ All JSON, encoded exactly as the CLI's `--json` output: one object and a trailin
 | `POST /api/v0/ws-tickets` | Browser, Tailnet | Body `{}` or empty. Returns `{ticket, expires_at}`. At most 16 unredeemed per client. |
 | `POST /api/v0/pairing/codes` | Local only | Body `{next?}`, default `/`. Returns `{code, url, expires_at}`, where `url` is `http://127.0.0.1:<port>/pair#code=…&next=…`. |
 | `POST /api/v0/origins` | Local only | Body `{origin, scopes?}`. The origin is normalized (lowercase, default port dropped) and must be only `scheme://host[:port]`. Returns `{origin, token, scopes}`. The token is shown only once. |
+| `DELETE /api/v0/pairing/sessions[?origin=…]` | Local only | Revokes every browser session, or only those bound to `origin` (normalized like `POST /api/v0/origins`). Returns `{origin?, revoked, terminals_closed}`: how many sessions were revoked and how many open terminals they held were closed with `4401`. Revoking none is not an error. Any other query parameter gets `400 invalid_request`. |
 | `GET /api/v0/origins`, `DELETE /api/v0/origins?origin=…` | Local only | Lists registrations as `{origins: [{origin, scopes, created_at}]}`, or revokes one and returns `{origin, revoked: true}`. Tokens are never listed. |
 | `POST /api/v0/pairing/exchange` | Browser | Body `{code, next?}` from the listener's own origin. Returns `{token, next}` (see Pairing). |
 | `GET /pair` | Browser | The pairing page (see Pairing). Sets nothing and consumes nothing. |
@@ -144,7 +147,7 @@ All JSON, encoded exactly as the CLI's `--json` output: one object and a trailin
 - Close codes:
   - `1000`: the protocol stream ended normally.
   - `4400`: protocol violation. This includes a stream the service ends right after an `invalid_request`, `protocol_mismatch` or `handshake_required` error, which is delivered before the close.
-  - `4401`: unauthenticated: no usable ticket, bearer token or tailnet login, or a used or expired ticket.
+  - `4401`: unauthenticated: no usable ticket, bearer token or tailnet login, or a used or expired ticket. An open terminal also closes with `4401` when the browser session it was opened with is revoked.
   - `4403`: origin refused: no `Origin` without a bearer token (a ticket alone needs its `Origin`), an origin that is not allowed, or a ticket or token used from another origin.
   - `4409`: the server is shutting down.
   - `4429`: too many terminals: this client already holds 16 open terminal WebSockets (the WebSocket form of `too_many_outstanding`). Close one and retry.
@@ -162,6 +165,7 @@ v0 inherits the mobile service's bounded outbound queue, so a peer that stops re
 | `sidecar api serve [--port N] [--ui DIR] [--tailnet] [--tailnet-port N] [--json]` | Runs the server in the foreground until SIGINT or SIGTERM. `--json` writes the endpoint object as one line once every listener is bound. |
 | `sidecar api open [--print] [--path P]` | Pairs this machine's browser and opens the UI, or prints the `/pair#code=…` URL. |
 | `sidecar api pair --origin URL` / `--list` / `--revoke URL` | Manages paired origins. `--json` gives structured output. |
+| `sidecar api pair --revoke-sessions [--origin URL] [--json]` | Signs out browser sessions from `sidecar api open`, all of them or one origin's, and closes their terminals, without restarting the server. |
 | `sidecar api status [--json]` | Reads the status route over the Local socket. Exits non-zero with a clear message when no server is running. |
 
 `sidecar api spec` and `sidecar api service install|uninstall|status` arrive in U1.

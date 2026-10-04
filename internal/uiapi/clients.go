@@ -66,6 +66,10 @@ type trackedClient struct {
 	// lastErrorCode is the code of the most recent outbound error envelope
 	// that was the latest message on the stream, used to pick a close code.
 	lastErrorCode string
+	// revoked closes when the credential this client connected with is
+	// revoked; its terminal then closes with 4401.
+	revoked    chan struct{}
+	revokeOnce sync.Once
 }
 
 func newClientRegistry(now func() time.Time) *clientRegistry {
@@ -92,8 +96,23 @@ func (r *clientRegistry) add(kind string, c caller) (*trackedClient, bool) {
 	client := &trackedClient{info: ClientInfo{ID: id, Kind: kind, Listener: c.listener, Auth: c.auth, Origin: c.origin, Login: c.login, Since: r.now().UTC()}}
 	client.term.ClientID = id
 	client.key = c.client
+	client.revoked = make(chan struct{})
 	r.clients[id] = client
 	return client, true
+}
+
+// revoke signals every client whose key is in keys and returns how many.
+func (r *clientRegistry) revoke(keys map[string]bool) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	count := 0
+	for _, client := range r.clients {
+		if keys[client.key] {
+			client.revokeOnce.Do(func() { close(client.revoked) })
+			count++
+		}
+	}
+	return count
 }
 
 func (r *clientRegistry) remove(client *trackedClient) {

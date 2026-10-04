@@ -54,11 +54,12 @@ func (s *Server) routeTable() map[string]*route {
 	local := []Listener{ListenerLocal}
 	remote := []Listener{ListenerBrowser, ListenerTailnet}
 	return map[string]*route{
-		"/api/v0/hello":         {methods: map[string]routeFunc{http.MethodGet: s.handleHello}},
-		"/api/v0/sessions":      {methods: map[string]routeFunc{http.MethodGet: s.handleSessions}},
-		"/api/v0/status":        {methods: map[string]routeFunc{http.MethodGet: s.handleStatus}},
-		"/api/v0/ws-tickets":    {methods: map[string]routeFunc{http.MethodPost: s.handleTicket}, listeners: remote},
-		"/api/v0/pairing/codes": {methods: map[string]routeFunc{http.MethodPost: s.handlePairingCode}, listeners: local},
+		"/api/v0/hello":            {methods: map[string]routeFunc{http.MethodGet: s.handleHello}},
+		"/api/v0/sessions":         {methods: map[string]routeFunc{http.MethodGet: s.handleSessions}},
+		"/api/v0/status":           {methods: map[string]routeFunc{http.MethodGet: s.handleStatus}},
+		"/api/v0/ws-tickets":       {methods: map[string]routeFunc{http.MethodPost: s.handleTicket}, listeners: remote},
+		"/api/v0/pairing/codes":    {methods: map[string]routeFunc{http.MethodPost: s.handlePairingCode}, listeners: local},
+		"/api/v0/pairing/sessions": {methods: map[string]routeFunc{http.MethodDelete: s.handleRevokeSessions}, listeners: local},
 		"/api/v0/origins": {methods: map[string]routeFunc{http.MethodGet: s.handleListOrigins, http.MethodPost: s.handlePairOrigin,
 			http.MethodDelete: s.handleRevokeOrigin}, listeners: local},
 		"/api/v0/pairing/exchange": {methods: map[string]routeFunc{http.MethodPost: s.handlePairingExchange}, listeners: []Listener{ListenerBrowser}, public: true},
@@ -533,6 +534,37 @@ type OriginList struct {
 type OriginRevocation struct {
 	Origin  string `json:"origin"`
 	Revoked bool   `json:"revoked"`
+}
+
+// SessionRevocation is DELETE /api/v0/pairing/sessions.
+type SessionRevocation struct {
+	Origin          string `json:"origin,omitempty"`
+	Revoked         int    `json:"revoked"`
+	TerminalsClosed int    `json:"terminals_closed"`
+}
+
+// handleRevokeSessions drops browser sessions, all of them or one origin's,
+// without a restart. Their tokens get 401 on the next request, their unused
+// tickets stop working, and their open terminals close with 4401.
+func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request, _ caller) {
+	var origin string
+	if r.URL.Query().Has("origin") {
+		normalized, err := NormalizeOrigin(r.URL.Query().Get("origin"))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, CodeInvalidRequest, err.Error())
+			return
+		}
+		origin = normalized
+	}
+	for key := range r.URL.Query() {
+		if key != "origin" {
+			writeError(w, http.StatusBadRequest, CodeInvalidRequest, fmt.Sprintf("unknown query parameter %q; only origin narrows a session revocation", key))
+			return
+		}
+	}
+	revoked := s.auth.revokeSessions(origin)
+	closed := s.clients.revoke(revoked)
+	writeJSON(w, http.StatusOK, SessionRevocation{Origin: origin, Revoked: len(revoked), TerminalsClosed: closed})
 }
 
 func (s *Server) handlePairOrigin(w http.ResponseWriter, r *http.Request, _ caller) {

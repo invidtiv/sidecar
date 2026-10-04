@@ -400,3 +400,119 @@ func TestStaticUIRefusesCrossSiteFraming(t *testing.T) {
 		check("browser /", response)
 	}
 }
+
+func (h *harness) revokeSessions(query string) SessionRevocation {
+	h.t.Helper()
+	response, data := h.localDo(req{method: http.MethodDelete, path: "/api/v0/pairing/sessions" + query})
+	expect(h.t, response, data, http.StatusOK, "")
+	var revocation SessionRevocation
+	if err := json.Unmarshal(data, &revocation); err != nil {
+		h.t.Fatal(err)
+	}
+	return revocation
+}
+
+func (h *harness) bearerStatus(token string) int {
+	h.t.Helper()
+	response, _ := h.browserDo(req{path: "/api/v0/status", header: map[string]string{"Authorization": "Bearer " + token}})
+	return response.StatusCode
+}
+
+// Browser sessions can be signed out without a restart: one origin's, or
+// all of them. A revoked token gets 401, its unused tickets stop working, and
+// its open terminals close with 4401. Paired origins are not sessions.
+func TestRevokeBrowserSessions(t *testing.T) {
+	h := newHarness(t)
+	const app = "http://app.example:5173"
+	appToken := h.pairOrigin(app)
+	numeric := h.pairBrowser() // bound to http://127.0.0.1:<port>
+	localhost := strings.Replace(h.ownOrigin(), "127.0.0.1", "localhost", 1)
+	response, data := h.exchange(localhost, fragmentValue(t, h.pairingCode("/").URL, "code"), "/")
+	expect(t, response, data, http.StatusOK, "")
+	var named PairingExchange
+	if err := json.Unmarshal(data, &named); err != nil {
+		t.Fatal(err)
+	}
+
+	sessionTerminal, err := h.dialBrowser(t, "", http.Header{"Authorization": {"Bearer " + numeric}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sessionTerminal.CloseNow() }()
+	writeText(t, sessionTerminal, `{"before":true}`)
+	if got := readText(t, sessionTerminal); got != `{"before":true}` {
+		t.Fatalf("echo = %q", got)
+	}
+	appTerminal, err := h.dialBrowser(t, "", http.Header{"Authorization": {"Bearer " + appToken}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = appTerminal.CloseNow() }()
+	response, data = h.browserDo(req{method: http.MethodPost, path: "/api/v0/ws-tickets", body: "{}", header: mutationHeaders(h.ownOrigin(), map[string]string{"Authorization": "Bearer " + numeric})})
+	expect(t, response, data, http.StatusOK, "")
+	var ticket TicketResponse
+	_ = json.Unmarshal(data, &ticket)
+	waitForClients(t, h, 2)
+
+	// Only the localhost origin's session.
+	if got := h.revokeSessions("?origin=" + url.QueryEscape(localhost)); got.Revoked != 1 || got.TerminalsClosed != 0 || got.Origin != localhost {
+		t.Fatalf("origin revocation = %+v", got)
+	}
+	if status := h.bearerStatus(named.Token); status != http.StatusUnauthorized {
+		t.Fatalf("revoked localhost session = %d", status)
+	}
+	if status := h.bearerStatus(numeric); status != http.StatusOK {
+		t.Fatalf("other origin's session = %d", status)
+	}
+
+	// Every session; the open terminal closes at once.
+	if got := h.revokeSessions(""); got.Revoked != 1 || got.TerminalsClosed != 1 || got.Origin != "" {
+		t.Fatalf("revocation = %+v", got)
+	}
+	if code, _ := closeStatus(t, sessionTerminal); code != CloseUnauthenticated {
+		t.Fatalf("revoked session's terminal closed %d, want 4401", code)
+	}
+	if status := h.bearerStatus(numeric); status != http.StatusUnauthorized {
+		t.Fatalf("revoked session = %d", status)
+	}
+	h.expectBrowserClose(t, "ticket from a revoked session", "?ticket="+ticket.Ticket, http.Header{"Origin": {h.ownOrigin()}}, CloseUnauthenticated)
+	h.expectBrowserClose(t, "revoked session on the upgrade", "", http.Header{"Authorization": {"Bearer " + numeric}}, CloseUnauthenticated)
+
+	// A paired origin is not a browser session.
+	if status := h.bearerStatus(appToken); status != http.StatusOK {
+		t.Fatalf("paired origin after session revocation = %d", status)
+	}
+	writeText(t, appTerminal, `{"after":true}`)
+	if got := readText(t, appTerminal); got != `{"after":true}` {
+		t.Fatalf("paired origin terminal echo = %q", got)
+	}
+
+	// Nothing left is fine; the route is Local-only and validates origin.
+	if got := h.revokeSessions(""); got.Revoked != 0 {
+		t.Fatalf("empty revocation = %+v", got)
+	}
+	response, data = h.localDo(req{method: http.MethodDelete, path: "/api/v0/pairing/sessions?origin=ftp://nope"})
+	expect(t, response, data, http.StatusBadRequest, CodeInvalidRequest)
+	response, data = h.localDo(req{method: http.MethodDelete, path: "/api/v0/pairing/sessions?who=all"})
+	expect(t, response, data, http.StatusBadRequest, CodeInvalidRequest)
+	response, data = h.browserDo(req{method: http.MethodDelete, path: "/api/v0/pairing/sessions", header: mutationHeaders(h.ownOrigin(), map[string]string{"Authorization": "Bearer " + appToken})})
+	expect(t, response, data, http.StatusForbidden, CodeLocalOnly)
+}
+
+// A revocation that lands between a terminal's authorization and its
+// registration must still close it.
+func TestRevokedSessionCannotRegisterATerminal(t *testing.T) {
+	h := newHarness(t)
+	session := h.pairBrowser()
+	_, client, ok := h.s.auth.lookupSession(session)
+	if !ok || !h.s.auth.sessionClientLive(client) {
+		t.Fatal("fresh session is not live")
+	}
+	h.s.auth.revokeSessions("")
+	if h.s.auth.sessionClientLive(client) {
+		t.Fatal("revoked session still live")
+	}
+	if !h.s.auth.sessionClientLive("origin:http://app.example") || !h.s.auth.sessionClientLive("local") {
+		t.Fatal("non-session clients must always be live")
+	}
+}
