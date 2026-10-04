@@ -407,6 +407,15 @@ func TestBearerClientsMayOmitOrigin(t *testing.T) {
 	_ = json.Unmarshal(data, &issued)
 	h.expectBrowserClose(t, "ticket without origin", "?ticket="+issued.Ticket, nil, CloseOriginRefused)
 	h.expectBrowserClose(t, "ticket and bearer without origin", "?ticket="+issued.Ticket, http.Header{"Authorization": {"Bearer " + token}}, CloseOriginRefused)
+	// Only Authorization: Bearer with a token earns the relaxation; any other
+	// scheme, or an empty token, still needs an Origin.
+	for _, authorization := range []string{"Basic " + token, "Token " + token, "Bearer", "Bearer   ", token} {
+		headers := mutationHeaders("", map[string]string{"Authorization": authorization})
+		delete(headers, "Origin")
+		response, data := h.browserDo(req{method: http.MethodPost, path: "/api/v0/ws-tickets", body: "{}", header: headers})
+		expect(t, response, data, http.StatusForbidden, CodeOriginRefused)
+		h.expectBrowserClose(t, "upgrade with "+authorization, "", http.Header{"Authorization": {authorization}}, CloseOriginRefused)
+	}
 	// The Tailnet login is ambient, so the relaxation does not reach it.
 	login := map[string]string{tailscaleLoginHead: testTailnetLogin, "Authorization": "Bearer " + token}
 	headers := mutationHeaders("", login)

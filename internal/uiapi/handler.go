@@ -264,12 +264,14 @@ func (h *listenerHandler) tailnetLogin(r *http.Request) (login, code, message st
 // without a preflight. Node, curl and native clients send no Origin. The token
 // itself is still validated, and an Origin that is present must match it. On
 // the Tailnet listener the login header is ambient, so Origin stays required.
+// Only the Bearer scheme with a non-empty token qualifies: Basic and other
+// schemes can be attached by a browser on its own, so they are not deliberate.
 func (h *listenerHandler) bearerWithoutOrigin(r *http.Request) bool {
 	if h.kind != ListenerBrowser {
 		return false
 	}
-	_, present := bearerToken(r)
-	return present
+	token, _ := bearerToken(r)
+	return token != ""
 }
 
 func (h *listenerHandler) hostAllowed(host string) bool {
