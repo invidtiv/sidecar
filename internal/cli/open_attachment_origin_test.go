@@ -38,6 +38,21 @@ func TestOpenDestinationCarriesOnlyVerifiedMatchingPane(t *testing.T) {
 	if err != nil || dest.Origin.TmuxPane != "" {
 		t.Fatalf("missing caller pane: %+v %v", dest, err)
 	}
+	// A legacy shell without a recorded socket cannot validate a pane from
+	// an arbitrary server, even when that server has the same session name.
+	t.Setenv("TMUX_PANE", "%7")
+	manifest := `{"shells":[{"tmuxName":"sidecar-sh-sidecar-1"}]}`
+	if err := os.WriteFile(filepath.Join(stateDir, "projects", "sidecar", "shells.json"), []byte(manifest), 0600); err != nil {
+		t.Fatal(err)
+	}
+	script = "#!/bin/sh\nprintf 'sidecar-sh-sidecar-1\\t/other/socket\\n'\n"
+	if err := os.WriteFile(tmux, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	dest, err = resolveOpenDestination(t.Context(), stateDir, "sidecar-sh-sidecar-1", "sidecar", resolveProjectOnly)
+	if err != nil || dest.Origin.TmuxPane != "" {
+		t.Fatalf("unverified legacy socket leaked pane: %+v %v", dest, err)
+	}
 }
 
 func TestExplicitShellUsesDurableWorkspaceOutsideCallerCheckout(t *testing.T) {
@@ -66,5 +81,16 @@ func TestExplicitShellUsesDurableWorkspaceOutsideCallerCheckout(t *testing.T) {
 	}
 	if got := resolveTargetWorkDirForDest(filepath.Join(home, "sidecar"), dest, "README.md"); got != dest.Origin.WorkDir {
 		t.Fatalf("open changed shell workspace to %s", got)
+	}
+	// A legacy record has the same project-root fallback as the catalog and
+	// content resolver, even from a checkout recorded by another shell.
+	manifest = `{"shells":[{"tmuxName":"sidecar-sh-sidecar-1"},{"tmuxName":"sidecar-sh-sidecar-2","workDir":` + quoteJSON(t, linked) + `}]}`
+	if err := os.WriteFile(filepath.Join(dir, "shells.json"), []byte(manifest), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(linked)
+	dest, err = resolveExplicitDestination(filepath.Join(home, "sidecar"), "sidecar-sh-sidecar-1", "sidecar", resolveProjectOnly)
+	if err != nil || dest.Origin.WorkDir != canonicalOpenPath(root) {
+		t.Fatalf("legacy shell inherited caller checkout: %+v %v", dest, err)
 	}
 }

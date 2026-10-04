@@ -1352,3 +1352,23 @@ func TestShellInventoryUsesDurableOwningWorkspace(t *testing.T) {
 		})
 	}
 }
+
+func TestOwningWorkspacePathUsesDeepestRootThroughSymlinks(t *testing.T) {
+	root := t.TempDir()
+	linked := filepath.Join(root, "linked")
+	if err := os.MkdirAll(filepath.Join(linked, "src"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(root, alias); err != nil {
+		t.Fatal(err)
+	}
+	for _, roots := range [][]string{{root, linked}, {filepath.Join(alias, "linked"), alias}} {
+		if got := OwningWorkspacePath(filepath.Join(alias, "linked", "src"), root, roots); got != canonical(linked) {
+			t.Fatalf("aliased nested directory mapped to %q, want %q", got, canonical(linked))
+		}
+		if got := OwningWorkspacePath(alias, root, roots); got != canonical(root) {
+			t.Fatalf("aliased main checkout mapped to %q, want %q", got, canonical(root))
+		}
+	}
+}

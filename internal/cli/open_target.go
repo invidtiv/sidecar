@@ -267,7 +267,7 @@ func resolveOpenDestination(ctx context.Context, stateDir, shellFlag, projectFla
 			}
 		}
 		identity, identityErr := currentPaneIdentity(ctx)
-		if identityErr == nil && identity.session == dest.Origin.TmuxSession && (dest.Origin.Namespace == "" || canonicalOpenPath(dest.Origin.Namespace) == identity.socket) {
+		if identityErr == nil && identity.session == dest.Origin.TmuxSession && dest.Origin.Namespace != "" && canonicalOpenPath(dest.Origin.Namespace) == identity.socket {
 			dest.Origin.TmuxPane = identity.pane
 		}
 	}()
@@ -333,10 +333,7 @@ func resolveExplicitDestination(stateDir, shellFlag, projectFlag string, registe
 		if err != nil {
 			return openDestination{}, err
 		}
-		workDir := resolveTargetWorkDir(hitProj, "")
-		if shell.WorkDir != "" {
-			workDir = resolveShellWorkspacePath(hitProj, shell.WorkDir)
-		}
+		workDir := resolveShellWorkspacePath(hitProj, shell.WorkDir)
 		return destFromShell(hitProj, shell, workDir, uirequest.ResolvedShell), nil
 	}
 
@@ -917,6 +914,12 @@ func (p registeredProject) roots() []string {
 // An explicitly named shell belongs to its durable directory, regardless of
 // the caller's checkout. Use current Git membership, not other shells' paths.
 func resolveShellWorkspacePath(proj registeredProject, workDir string) string {
+	if workDir == "" {
+		if proj.Path == "" {
+			return ""
+		}
+		return canonicalOpenPath(proj.Path)
+	}
 	roots := []string{proj.Path}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
