@@ -120,6 +120,36 @@ func TestMobileShellRevalidationUnavailablePaneRevokesIdentity(t *testing.T) {
 	}
 }
 
+func TestMobileCaptureRevalidationUsesIndependentProbe(t *testing.T) {
+	state, target, _ := mobileShellRevalidationFixture(t)
+	bin := t.TempDir()
+	probe := "#!/bin/sh\nprintf '42\\t$3\\t1700000000\\tsidecar-sh-perf\\t%%7\\t80\\t24\\t1\\n'\n"
+	if err := os.WriteFile(filepath.Join(bin, "tmux"), []byte(probe), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	manager := tty.NewControlManager()
+	manager.Stop() // the transport used by ordinary mutation checks failed
+	if _, err := mobileTargetRevalidator(Env{StateDir: state}, manager)(context.Background(), target); err == nil {
+		t.Fatal("ordinary revalidation used a subprocess after transport failure")
+	}
+	got, err := mobileTargetRevalidator(Env{StateDir: state}, nil)(context.Background(), target)
+	if err != nil || got.Session != target.Session || got.Pane != target.Pane || got.ServerPID != 42 {
+		t.Fatalf("independent recovery probe = %+v, %v", got, err)
+	}
+}
+
+func TestMobileShellRevalidationTimeoutIsInconclusive(t *testing.T) {
+	state, target, _ := mobileShellRevalidationFixture(t)
+	_, err := revalidateMobileShell(context.Background(), state, target, func(context.Context, string) (tty.HeadlessTargetIdentity, error) {
+		return tty.HeadlessTargetIdentity{}, context.DeadlineExceeded
+	})
+	var refusal *mobile.ResolveError
+	if !errors.Is(err, context.DeadlineExceeded) || errors.As(err, &refusal) {
+		t.Fatalf("timeout was reported as a replaced target: %v", err)
+	}
+}
+
 func TestMobileCandidateUnavailableControlRevokesIdentity(t *testing.T) {
 	manager := tty.NewControlManager()
 	manager.Stop()

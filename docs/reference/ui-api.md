@@ -8,7 +8,7 @@ v0 is the U0 steel thread. It serves the Sessions catalog and the existing termi
 
 `sidecar api serve` is one long-running, headless process per user. It never starts, stops or restarts the tmux server. It holds one remote-host registry and catalog router for its lifetime, and gives each terminal connection its own protocol broker, which is the same per-stream model `sidecar mobile serve --stdio` uses.
 
-On start it writes `$STATE/api/endpoint.json` with mode 0600. `$STATE` is `config.StateDir()`. It removes the file on clean exit (SIGINT or SIGTERM). A second `serve` refuses to start while the first is running: the server holds an exclusive lock on `$STATE/api/serve.lock` for its lifetime, the kernel drops the lock if the process dies, and the refusal names the PID recorded in `endpoint.json`. A client that finds an `endpoint.json` whose PID is not alive treats it as no server.
+On start it writes `$STATE/api/endpoint.json` with mode 0600. `$STATE` is `config.StateDir()`. It removes the file on clean exit (SIGINT, SIGTERM, or executable replacement). A second `serve` refuses to start while the first is running: the server holds an exclusive lock on `$STATE/api/serve.lock` for its lifetime, the kernel drops the lock if the process dies, and the refusal names the PID recorded in `endpoint.json`. A client that finds an `endpoint.json` whose PID is not alive treats it as no server.
 
 ```json
 {
@@ -46,7 +46,7 @@ Recorded on aerie on 2026-10-03: the standalone Tailscale build 1.102.4 (`io.tai
 ### Guards on the Browser and Tailnet listeners
 
 - **Host:** the `Host` header must exactly match an allowed value. For Browser that is `127.0.0.1:<port>` and `localhost:<port>`. For Tailnet it is the node's MagicDNS name (from `tailscale status --json`), bare or with `:443` or `:80`. Any other value gets `421 host_refused`, on every route including the terminal upgrade. This defeats DNS rebinding.
-- **Origin:** a WebSocket upgrade must carry an allowed `Origin`, and so must any request that is not `GET` or `HEAD`, with one exception on the Browser listener: a request or upgrade that carries `Authorization: Bearer` may omit `Origin` (see Authentication). Allowed origins are the listener's own origins plus paired origins. A listener's own origins are `http://127.0.0.1:<port>` and `http://localhost:<port>` for Browser, and `https://<magicdns>` and `http://<magicdns>` for Tailnet. Any request that carries an `Origin` outside that set, including a `GET`, gets `403 origin_refused`. A `GET` or `HEAD` without an `Origin` goes on to authentication.
+- **Origin:** a WebSocket upgrade must carry an allowed `Origin`, and so must any request that is not `GET` or `HEAD`, with one exception on the Browser listener: a request or upgrade that carries `Authorization: Bearer <token>` with a non-empty token may omit `Origin` (see Authentication). Any other `Authorization` scheme, such as `Basic`, or an empty bearer token does not qualify, because a browser can attach those by itself. Allowed origins are the listener's own origins plus paired origins. A listener's own origins are `http://127.0.0.1:<port>` and `http://localhost:<port>` for Browser, and `https://<magicdns>` and `http://<magicdns>` for Tailnet. Any request that carries an `Origin` outside that set, including a `GET`, gets `403 origin_refused`. A `GET` or `HEAD` without an `Origin` goes on to authentication.
 - **Mutations:** a non-GET request must be `Content-Type: application/json` and must carry `X-Sidecar-Request: 1`. A browser cannot send either cross-site without a CORS preflight, and the server refuses unpaired preflights.
 - **CORS:** only paired origins get CORS headers: the exact `Access-Control-Allow-Origin` with `Vary: Origin`, and on a preflight `Access-Control-Allow-Methods: GET, POST, DELETE`, allowed headers `Authorization, Content-Type, X-Sidecar-Request`, and `Access-Control-Max-Age: 600`. There are no credentials. A preflight from any other origin gets `403 origin_refused`.
 
@@ -90,9 +90,11 @@ Success, `200`. `token` is the contract; `next` is additive (the validated path,
 
 Sessions are kept in memory in v0, so a server restart means pairing again, and a client that gets `401 unauthenticated` with a stored token should discard it and ask the user to run `sidecar api open`. Persisting sessions is a later decision.
 
+`sidecar api pair --revoke-sessions` signs out browser sessions without a restart (`DELETE /api/v0/pairing/sessions`, Local only). With `--origin URL` (`?origin=URL`) it revokes only the sessions bound to that origin. A revoked token gets `401 unauthenticated` on its next request, tickets it issued and has not redeemed stop working, and every terminal it opened, directly or through a ticket, closes at once with `4401`, including streams whose session token was evicted from the bounded in-memory session store. `revoked` counts stored session tokens; `terminals_closed` also includes those older streams. Paired origins are not sessions: their tokens survive, and `--revoke URL` manages them.
+
 ### Another origin (an embedding app)
 
-`sidecar api pair --origin https://app.example:5173` registers the origin over the Local socket (`POST /api/v0/origins`) and prints a bearer token. Registrations persist in `$STATE/api/origins.json` with mode 0600, as `{origin, token_sha256, scopes, created_at}`. The server keeps only the token hash. `sidecar api pair --list` and `--revoke ORIGIN` manage registrations.
+`sidecar api pair --origin https://app.example:5173` registers the origin over the Local socket (`POST /api/v0/origins`) and prints a bearer token. Registrations persist in `$STATE/api/origins.json` with mode 0600, as `{origin, token_sha256, scopes, created_at}`. The server keeps only the token hash. `sidecar api pair --list` lists registrations. `sidecar api pair --revoke ORIGIN` (`DELETE /api/v0/origins?origin=…`, Local only) removes the registration, invalidates its unused tickets, and closes every terminal authenticated with that origin's token or tickets with `4401`. A concurrent request authorized before revocation cannot issue a new ticket or register a terminal afterward. Re-pairing the same URL does not revive the old credential or its tickets. Other origins and browser sessions remain valid.
 
 The only v0 scope is `full`. Narrower scopes arrive with the routes they protect.
 
@@ -128,7 +130,8 @@ All JSON, encoded exactly as the CLI's `--json` output: one object and a trailin
 | `POST /api/v0/ws-tickets` | Browser, Tailnet | Body `{}` or empty. Returns `{ticket, expires_at}`. At most 16 unredeemed per client. |
 | `POST /api/v0/pairing/codes` | Local only | Body `{next?}`, default `/`. Returns `{code, url, expires_at}`, where `url` is `http://127.0.0.1:<port>/pair#code=…&next=…`. |
 | `POST /api/v0/origins` | Local only | Body `{origin, scopes?}`. The origin is normalized (lowercase, default port dropped) and must be only `scheme://host[:port]`. Returns `{origin, token, scopes}`. The token is shown only once. |
-| `GET /api/v0/origins`, `DELETE /api/v0/origins?origin=…` | Local only | Lists registrations as `{origins: [{origin, scopes, created_at}]}`, or revokes one and returns `{origin, revoked: true}`. Tokens are never listed. |
+| `DELETE /api/v0/pairing/sessions[?origin=…]` | Local only | Revokes every browser session, or only those bound to `origin` (normalized like `POST /api/v0/origins`). Returns `{origin?, revoked, terminals_closed}`: how many sessions were revoked and how many open terminals they held were closed with `4401`. Revoking none is not an error. Any other query parameter gets `400 invalid_request`. |
+| `GET /api/v0/origins`, `DELETE /api/v0/origins?origin=…` | Local only | Lists registrations as `{origins: [{origin, scopes, created_at}]}`, or revokes one, invalidates its unused tickets and closes its terminals with `4401`, then returns `{origin, revoked: true}`. Tokens are never listed. |
 | `POST /api/v0/pairing/exchange` | Browser | Body `{code, next?}` from the listener's own origin. Returns `{token, next}` (see Pairing). |
 | `GET /pair` | Browser | The pairing page (see Pairing). Sets nothing and consumes nothing. |
 | `GET /*` | Browser, Tailnet | The static UI directory from `--ui DIR`, which must contain `index.html`, with the SPA fallback to `index.html` for any path that is not a file. Paths under `/api/` never fall back. Files are served only from inside `DIR`: a symlink that leads outside it is not followed. Every static response carries `Content-Security-Policy: frame-ancestors 'self'` and `X-Frame-Options: SAMEORIGIN`, so another site cannot frame the UI. Without `--ui`, a small plain page explains how to pair and where the UI lives. |
@@ -139,12 +142,12 @@ All JSON, encoded exactly as the CLI's `--json` output: one object and a trailin
 
 - Each WebSocket **text** message carries exactly one protocol JSON envelope, with no trailing newline. The 8 MiB line bound applies per message. A binary message, an empty message, or one that contains a CR or LF closes the connection with code `4400`. A message over the bound closes with `1009`.
 - Closing the socket is end-of-stream. The server releases that stream's lease exactly as it does on stdin EOF.
-- The server pings every 30 seconds. A peer whose pong does not arrive within 15 seconds is dropped, which is end-of-stream too, so a half-open socket (a laptop that slept, a proxy that lost the peer) cannot hold a terminal or its lease. Browsers answer pings automatically; other clients must keep reading.
+- The server pings every 30 seconds. A peer whose pong does not arrive within 15 seconds is dropped, which is end-of-stream too, so a half-open socket (a laptop that slept, a proxy that lost the peer) cannot hold a terminal or its lease. Browsers answer pings automatically; other clients must keep reading. The server reads a pong only while it is reading the socket, and the protocol service handles requests one at a time, so while the server's own inbound side is blocked handing a request to a busy service it skips the ping and excuses a missed pong. That exemption lasts at most one minute since connection start or the last successful pong, checked on each ping interval. The server then closes the socket, breaks the blocked request write, and cancels the backend, so a peer that disappears during a permanent service stall cannot retain a terminal indefinitely.
 - The `Host` guard answers `421` before the upgrade. Every other refusal happens after the upgrade, as a close code, because a browser cannot read the status of a failed handshake.
 - Close codes:
   - `1000`: the protocol stream ended normally.
   - `4400`: protocol violation. This includes a stream the service ends right after an `invalid_request`, `protocol_mismatch` or `handshake_required` error, which is delivered before the close.
-  - `4401`: unauthenticated: no usable ticket, bearer token or tailnet login, or a used or expired ticket.
+  - `4401`: unauthenticated: no usable ticket, bearer token or tailnet login, or a used or expired ticket. An open terminal also closes with `4401` when the browser session it was opened with is revoked.
   - `4403`: origin refused: no `Origin` without a bearer token (a ticket alone needs its `Origin`), an origin that is not allowed, or a ticket or token used from another origin.
   - `4409`: the server is shutting down.
   - `4429`: too many terminals: this client already holds 16 open terminal WebSockets (the WebSocket form of `too_many_outstanding`). Close one and retry.
@@ -162,14 +165,40 @@ v0 inherits the mobile service's bounded outbound queue, so a peer that stops re
 | `sidecar api serve [--port N] [--ui DIR] [--tailnet] [--tailnet-port N] [--json]` | Runs the server in the foreground until SIGINT or SIGTERM. `--json` writes the endpoint object as one line once every listener is bound. |
 | `sidecar api open [--print] [--path P]` | Pairs this machine's browser and opens the UI, or prints the `/pair#code=…` URL. |
 | `sidecar api pair --origin URL` / `--list` / `--revoke URL` | Manages paired origins. `--json` gives structured output. |
+| `sidecar api pair --revoke-sessions [--origin URL] [--json]` | Signs out browser sessions from `sidecar api open`, all of them or one origin's, and closes their terminals, without restarting the server. |
+| `sidecar api service install\|uninstall\|status [--json]` | Manages or inspects the per-user background service (see below). |
 | `sidecar api status [--json]` | Reads the status route over the Local socket. Exits non-zero with a clear message when no server is running. |
 
-`sidecar api spec` and `sidecar api service install|uninstall|status` arrive in U1.
+`sidecar api spec` arrives in U1.
+
+### Per-user background service
+
+`sidecar api service install|uninstall|status [--json]` uses one service-manager adapter: a launchd LaunchAgent on macOS, a systemd user unit on Linux. `install` writes a private definition, loads/enables it and starts it at login; repeating install unloads only that API job before replacing its definition. `uninstall` stops that job and removes its definition, preserving Sidecar state, paired origins and tmux. It is safe to repeat uninstall. No service command starts, stops or restarts tmux. Run as the login user without sudo. Linux needs a running systemd user manager; this command does not enable lingering or configure system services.
+
+The macOS label is `com.marcus.sidecar.api`, in `~/Library/LaunchAgents/com.marcus.sidecar.api.plist`; the Linux unit is `sidecar-api.service`, in `$XDG_CONFIG_HOME/systemd/user/` (default `~/.config/systemd/user/`). macOS stdout/stderr go to `$STATE/api/service.log`; Linux logs go to `journalctl --user -u sidecar-api.service`. Manager failures name the failed operation and where to inspect logs. A definition is retained if unloading fails, so a retry can recover it. An unrelated foreground API server causes install to refuse with its PID and instructions to stop that API process first; it is never killed by install. The refusal checks the held server lock even when discovery is missing, stale or unreadable (including a server still starting).
+
+The definition records the current absolute `-config` path, state root and PATH, without inheriting tmux, agent identity or secrets. Its executable retains the launch/PATH symlink when that link names this exact binary. Use an installed stable `sidecar` link when installing, rather than a version-specific binary path. The service runs `sidecar -config PATH api serve`; the default Browser port remains 7861 and it does not enable Tailnet or change Tailscale configuration. The static UI directory comes from config `api.uiDir`. Both foreground and service starts read it; explicit `serve --ui DIR` overrides it (an empty value disables it). Prefer an absolute UI directory with `index.html`. Config changes take effect at the next server start; rerun install to restart with changed config.
+
+The release pipeline renders a Homebrew `service` block from `packaging/homebrew/sidecar.rb.tmpl`. `brew services start sidecar` uses the same labels and `sidecar api serve` command, following the Homebrew-prefix `bin/sidecar` link that `make install-local` and `make install-worktree` activate. Choose either `brew services` or `api service` as the manager of that job; switching managers means stopping/uninstalling the old one first. Homebrew services use the default Sidecar config/state paths.
+
+Every `serve` watches the original stable executable path once per second. An atomic binary replacement, symlink retarget, or changed executable size/mtime logs the replacement and shuts down normally: WebSockets close, attachments release, listeners and discovery files are removed, then launchd's KeepAlive or systemd's Restart=always launches the new binary. A briefly missing path during upgrade is ignored until a replacement exists. A foreground `serve` also exits cleanly on replacement; its caller must restart it. No restart changes tmux. Browser session tokens are still in-memory v0 state, so a restarted server requires browser pairing again; persisted paired-origin tokens survive.
+
+`status --json` reports the manager's job, including when it is absent or stopped (exit 0):
+
+```json
+{"manager":"launchd","label":"com.marcus.sidecar.api","file":"/…/Library/LaunchAgents/com.marcus.sidecar.api.plist","installed":true,"loaded":true,"running":true,"pid":4242,"version":"v1.16.0","last_exit":{"code":0},"log":"/…/api/service.log","message":"API service is running; open it with `sidecar api open`."}
+```
+
+`installed` means the definition exists, `loaded` means the manager reports it loaded, and `running` means the manager reports a running process with a positive PID. A stopped job has PID 0. `version` is the running server version read through the Local API only when its PID matches the manager; it is an empty string when unknown, stopped, or still starting. `last_exit` is null when the manager has no termination record, otherwise `{code, signal?}`; a signal termination carries `code: 0` and the manager's signal name or number. A healthy current process can retain a previous failed exit record. Install/uninstall with `--json` return the same status shape after the operation. Manager errors exit 1 with an actionable stderr message, usage errors exit 2. Installation can return a loaded job before its asynchronous startup finishes; use `api status` to verify API readiness.
+
+Service-manager access is refused under `SIDECAR_ISOLATED_STATE=1`. Tests inject fake managers; proofs run foreground servers on port 0.
 
 ## Proofs
 
 Live proofs follow the `scripts/tmux-drive.sh` isolation rules: a private tmux socket, `unset TMUX TMUX_PANE`, an isolated `XDG_STATE_HOME`, a `-config` temp path, and `SIDECAR_ISOLATED_STATE=1`. The Unix sockets and `endpoint.json` live under the isolated state tree, so a proof can never reach the user's real server. Unix socket paths are limited to 103 bytes, so a proof keeps its state tree short, under `/tmp`.
 
 `scripts/ui-api-proof.sh` is the v0 proof. It builds a temporary binary, creates one managed shell on a private tmux server, runs `sidecar api serve`, and checks the Local routes with `curl --unix-socket`, the Browser guards, `sidecar api open` pairing, origin pairing with a ticket, and one terminal round trip over the WebSocket through `internal/tools/uiapiproof`. `TestAPITerminalRoundTripAgainstLocalOwner` in `internal/cli` covers the same terminal sequence in process.
+
+`scripts/ui-api-service-proof.sh` covers fake launchd/systemd and CLI lifecycles, config-driven UI serving, explicit UI override, replacement of the stable launch link, clean exit/discovery cleanup, and restart against the same isolated state tree. It makes no service-manager or tmux changes.
 
 `scripts/ui-api-measure.sh` uses the same isolation to measure the terminal stream under agent-like load: frames, wire bytes, captures, CPU and keystroke-to-echo latency, through `internal/tools/uiapimeasure`. Results are in [U0 measurements](../plans/active/sidecar-ui-api/u0-measurements.md).

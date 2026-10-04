@@ -199,8 +199,8 @@ model {
     }
 
     api_cmd = component 'API Commands' {
-      summary 'sidecar api serve, open, pair and status'
-      description 'sidecar api serve runs the UI API host in the foreground; api open, api pair and api status discover it from endpoint.json and talk to it over the Local socket.'
+      summary 'sidecar api serve, open, pair, status and service'
+      description 'sidecar api serve runs the UI API host in the foreground; api open, api pair and api status discover it from endpoint.json and talk to it over the Local socket. api service manages the per-user launchd or systemd job through its service-manager adapter.'
       metadata { uid 'cli.api_cmd' fractalColor '#82A6B6' evidence ['internal/cli/api.go'] }
     }
 
@@ -211,10 +211,9 @@ model {
     }
 
     api_service = adapter 'API Service Adapter' {
-      #proposed
-      summary 'sidecar api service install: launchd or systemd (U1)'
-      description 'Planned for U1: sidecar api service install, uninstall and status behind a service-manager adapter, a launchd user agent on macOS by default and a systemd user unit on Linux. The service restarts when its binary changes and never starts, stops or restarts the tmux server.'
-      metadata { uid 'cli.api_service' fractalColor '#82A6B6' evidence ['docs/plans/active/sidecar-ui-api.md'] }
+      summary 'Per-user launchd or systemd service'
+      description 'Implemented in U1-c: api service install, uninstall and status use the Manager interface, with launchd on macOS, systemd user units on Linux, and fake managers for tests. The job runs api serve with the recorded config and stable executable link. Config api.uiDir supplies the UI directory. Executable replacement triggers a clean exit and manager restart. Status names installation, loading, process PID, actual server version and last termination. No service operation starts, stops or restarts tmux.'
+      metadata { uid 'cli.api_service' fractalColor '#82A6B6' evidence ['internal/apiservice/service.go', 'internal/apiservice/definition.go', 'internal/apiservice/status.go', 'internal/cli/api_service.go', 'internal/uiapi/executable.go', 'packaging/homebrew/sidecar.rb.tmpl', 'scripts/ui-api-service-proof.sh'] }
     }
   }
 
@@ -606,6 +605,10 @@ model {
     metadata { uid 'untrusted-browser' }
   }
 
+  // U1-c service management (implemented on u1c-service, awaiting review)
+  cli.api_cmd .calls cli.api_service 'api service install, uninstall, status' { metadata { uid 'apicmd-service' } }
+  cli.api_service .manages api 'Keeps api serve running (launchd or systemd)' { metadata { uid 'apiservice-host' } }
+
   // UI API roadmap (U1 to U4, proposed)
   uiclients.sdk .streams api.events 'Catalog, attention and invalidation events' { metadata { uid 'sdk-events' } }
   api.events .reads termproto.catalog 'Generation-numbered catalog changes' { metadata { uid 'events-catalog' } }
@@ -615,9 +618,7 @@ model {
   uiclients.scripts .reads api.spec 'Reads the whole contract' { metadata { uid 'scripts-spec' } }
   api.fixtures .supplies api.routes 'Recorded sessions, no tmux' { metadata { uid 'fixtures-routes' } }
   api.fixtures .supplies api.terminal 'Recorded terminal streams' { metadata { uid 'fixtures-terminal' } }
-  cli.api_cmd .calls cli.api_service 'api service install, uninstall, status' { metadata { uid 'apicmd-service' } }
-  cli.api_service .manages api 'Keeps api serve running (launchd or systemd)' { metadata { uid 'apiservice-host' } }
-  termproto.service .calls termproto.presence 'Presence and heartbeats per attachment' { metadata { uid 'service-presence' } }
+    termproto.service .calls termproto.presence 'Presence and heartbeats per attachment' { metadata { uid 'service-presence' } }
   termproto.presence .calls terminal.control 'Claims or releases @sidecar-owner' { metadata { uid 'presence-control' } }
   termproto.service .calls termproto.frames 'Reset-free, coalesced frames' { metadata { uid 'service-frames' } }
   termproto.frames .reads terminal.control 'Byte-fed screenmodel, no capture loop' { metadata { uid 'frames-control' } }

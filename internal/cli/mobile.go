@@ -146,6 +146,7 @@ func newMobileOwnerService(env Env, input io.Reader, output io.Writer) (*mobile.
 	return mobile.New(mobile.Config{
 		Input: input, Output: output, HubID: host, OwnerHostID: "local:" + host,
 		OwnerConfigGeneration: mobileConfigGeneration(), Resolver: mobileResolver(env), Revalidator: mobileTargetRevalidator(env, manager), Catalog: mobileCatalogProvider(env), Manager: manager,
+		CaptureRevalidator:            mobileTargetRevalidator(env, nil),
 		OwnerConfigGenerationProvider: currentMobileConfigGeneration,
 	})
 }
@@ -390,6 +391,12 @@ func mobileTargetRevalidator(env Env, manager *tty.ControlManager) mobile.Target
 	ownerHostID := "local:" + host
 	return func(ctx context.Context, target mobile.ResolvedTarget) (mobile.ResolvedTarget, error) {
 		inspect := func(ctx context.Context, pane string) (tty.HeadlessTargetIdentity, error) {
+			// Recovery cannot ask the capture connection that just failed.
+			// A nil manager selects a fresh, bounded local read of the same
+			// exact pane and durable source; mutation checks keep the actor.
+			if manager == nil {
+				return tty.InspectHeadlessPane(ctx, pane)
+			}
 			return manager.InspectHeadlessPane(ctx, target.Session, pane)
 		}
 		if !mobile.IsCandidateSelector(target.Selector) {
@@ -406,7 +413,9 @@ func mobileTargetRevalidator(env Env, manager *tty.ControlManager) mobile.Target
 			return revalidateMobileShell(ctx, env.StateDir, target, inspect)
 		}
 		collector := workspaceinventory.Collector{}.WithDefaults()
-		collector.Runner = mobilePaneInventoryRunner{manager: manager, session: target.Session, fallback: collector.Runner}
+		if manager != nil {
+			collector.Runner = mobilePaneInventoryRunner{manager: manager, session: target.Session, fallback: collector.Runner}
+		}
 		source := newMobileCandidateWorkspaceProvider(configuredProjects, collector)
 		return mobile.RevalidateCatalogCandidate(ctx, target, ownerHostID, source, inspect)
 	}
