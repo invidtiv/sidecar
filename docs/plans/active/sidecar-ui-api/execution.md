@@ -55,16 +55,16 @@ The status values are `queued`, `running`, `review`, `fixing`, `merged` and `blo
 | U1-c service install | td-d7869b | sidecar | Codex, reviewed by Codex | U0-a | merged |
 | U1-d presence and v1 frames | td-713745 | sidecar | Codex | td-552e24 merged | merged (c75857ac) |
 | U1-e web app shell and Sessions | td-57a73e | sidecar-ui | Codex | U0-b | merged (sidecar-ui 8d183fc); Claude review fixed 6 UX defects |
-| U1-f SDK adopts v1 | td-820df7 | sidecar-ui | Codex | U1-a, U1-d | review (Claude reviewer); branch u1f-sdk @3669641 |
+| U1-f SDK adopts v1 | td-820df7 | sidecar-ui | Codex | U1-a, U1-d | merged (sidecar-ui fdad866); Claude review fixed the paste-marker strip |
 | U1-g iOS adopts presence and events | td-fde8cf | sidecar-mobile | Codex | U1-a, U1-d | running (Codex, ~/code/sidecar-mobile-u1g-presence, branch u1g-presence); presence first against the u1d branch, events after U1-a |
 | U1-i persist browser sessions | td-165353 | sidecar | Codex | U1-a, U1-b merged (both touch internal/uiapi) | redesign running: non-extractable WebCrypto key with signed nonces and short-lived in-memory bearers, so nothing stealable is at rest (security finding 4). SDK side follows U1-f |
 | U1-e2 web app polish | td-71e0e5 | sidecar-ui | Codex | U1-e | merged (sidecar-ui 5e0ecb2) |
-| U1-h security review and three-viewer proof | td-295605 | all | Claude, then Codex | U1-a, U1-d, U1-f | security review merged (6176110f): tailnet paired-origin tokens, re-pair closes streams, owner-only service PATH. Three-viewer proof after U1-f |
+| U1-h security review and three-viewer proof | td-295605 | all | Claude, then Codex | U1-a, U1-d, U1-f | security merged (6176110f); three-viewer proof running (Codex, ~/code/sidecar-u1h-three-viewer) |
 | U2-a core extraction | td-c709a9 | sidecar | Codex | U0-a | merged (d95b66f5) |
 | U2-b workspace resources and operations API | td-eb3d80 | sidecar | Codex | U2-a | running |
 | U2-c workspace UI | td-37a00e | sidecar-ui | Codex | U2-b | queued |
 | U3-a content and layouts API | td-f8784a | sidecar | Codex | U1-a | running |
-| U3-b pane tree UI | td-cf59cd | sidecar-ui | Codex | U3-a, U1-f | queued |
+| U3-b pane tree UI | td-cf59cd | sidecar-ui | Codex | U3-a, U1-f | queued until U3-a lands (U1-f merged) |
 | U4 viewers agents can target | td-799dd6 | both | Codex | U3 | queued |
 
 U2-b onward are briefed below.
