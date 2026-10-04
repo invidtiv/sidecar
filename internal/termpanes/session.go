@@ -40,7 +40,10 @@ func EnsureSession(session, workDir string) (string, error) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		return "", fmt.Errorf("tmux not installed")
 	}
-	if err := tty.NewSession("new-session", "-d", "-s", session, "-c", workDir); err != nil {
+	// A split has its own comms identity, but is not a project-managed shell:
+	// publishing the full shell contract would claim a manifest row it lacks.
+	if err := tty.NewSession("new-session", "-d", "-s", session, "-c", workDir,
+		"-e", "COMMS_SESSION="+workspaceops.CommsSessionID(session)); err != nil {
 		return "", fmt.Errorf("create terminal panel session: %w", err)
 	}
 	if err := workspaceops.RecordRecoverableSession(session, workDir, "Terminal", ""); err != nil {
