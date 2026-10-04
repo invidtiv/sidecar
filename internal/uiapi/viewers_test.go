@@ -278,8 +278,8 @@ func TestAPIViewerBatchesAreAtomicAndAckUsesCurrentETag(t *testing.T) {
 		t.Fatal("stale proposal replaced current tree")
 	}
 	request = postScreenRequest(t, h, root, uirequest.ActionLayout, uirequest.LayoutPayload{Mode: "apply", Panes: []uirequest.LayoutPane{{Kind: "issue", Targets: []string{"td-123456"}}, {Kind: "file", Targets: []string{"../escape"}}}}, "")
-	if ack := waitScreenAck(t, h, request); ack.Status != uirequest.StatusDeclined {
-		t.Fatal(ack)
+	if ack := waitScreenAck(t, h, request); ack.Status != uirequest.StatusDeclined || ack.ItemsVersion != 1 || len(ack.Items) != 2 {
+		t.Fatalf("batch refusal lost item verdicts: %+v", ack)
 	}
 	_, etag, _ = store.Get("local", root)
 	if etag != after {

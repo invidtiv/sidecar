@@ -23,6 +23,11 @@ import (
 
 // viewerLayoutHost adapts the existing all-or-nothing planner, with CSS-pixel
 // floors and no TUI, tmux or privileged content path.
+// Preserve the shared planner's per-item refusal contract for CLI callers.
+type viewerPlanRefusal struct{ ack uirequest.Ack }
+
+func (e *viewerPlanRefusal) Error() string { return e.ack.Reason }
+
 type viewerLayoutHost struct {
 	s      *Server
 	ctx    context.Context
@@ -106,7 +111,11 @@ func (s *Server) planViewerRequest(ctx context.Context, v *apiScreen, req uirequ
 		}
 	}
 	if h.ack.Status == uirequest.StatusDeclined {
-		return nil, fmt.Errorf("%s", h.ack.Reason)
+		h.ack.Instance = req.Viewer
+		h.ack.Host = uirequest.HostName()
+		h.ack.PID = os.Getpid()
+		h.ack.Surface = "browser"
+		return nil, &viewerPlanRefusal{ack: h.ack}
 	}
 	if req.Action == uirequest.ActionLayout && len(payload.Columns) > 0 {
 		live := 0

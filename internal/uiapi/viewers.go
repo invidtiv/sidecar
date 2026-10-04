@@ -256,7 +256,11 @@ func (s *Server) relayUIRequest(req uirequest.Request) {
 	defer cancel()
 	plan, err := s.planViewerRequest(ctx, v, req)
 	if err != nil {
-		s.declineViewer(req, err.Error())
+		if refusal, ok := err.(*viewerPlanRefusal); ok {
+			_ = uirequest.WriteAck(s.opts.StateDir, req.ID, req.Action, refusal.ack)
+		} else {
+			s.declineViewer(req, err.Error())
+		}
 		return
 	}
 	if !plan.event.ExpiresAt.After(time.Now()) {
