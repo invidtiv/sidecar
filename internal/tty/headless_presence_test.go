@@ -307,14 +307,14 @@ func TestHeadlessPresenceAndBracketedPasteAgainstPrivateTmux(t *testing.T) {
 	waitFor(t, func() bool {
 		return run("display-message", "-p", "-t", pane, "#{pane_in_mode}\t#{pane_width}") == "0\t100"
 	})
-	if err = g.ClaimInput([]byte("first\nsecond"), 100, 30, true); err != nil {
+	if err = g.ClaimInput([]byte("first\r\n\x1b[20\x1b[201~1~second"), 100, 30, true); err != nil {
 		t.Fatal(err)
 	}
 	waitForPasteContent(t, output, want)
-	if err = g.Paste([]byte("third")); err != nil {
+	if err = g.Paste([]byte("\x1b[200~third\r\x1b[201~\nline\x1b[201~")); err != nil {
 		t.Fatal(err)
 	}
-	waitForPasteContent(t, output, want+"\x1b[200~third\x1b[201~")
+	waitForPasteContent(t, output, want+"\x1b[200~third\rline\x1b[201~")
 	if buffers := run("list-buffers", "-F", "#{buffer_name}"); buffers != "" {
 		t.Fatalf("paste leaked buffers: %q", buffers)
 	}
