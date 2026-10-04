@@ -2,6 +2,7 @@ package agentcontrol
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"strings"
 	"time"
@@ -26,6 +27,9 @@ type Snapshot struct {
 	// engine's read window (agentactivity.Observation.PaneHeight).
 	PaneHeight int
 	CapturedAt time.Time
+	// LaunchID is supplied to Launch and returned by Inspect only when that
+	// exact launch has completed, including an exit too fast to observe.
+	LaunchID string
 }
 
 // Terminal is the adapter every control operation goes through. The local
@@ -227,6 +231,7 @@ func (s Service) Start(ctx context.Context, req StartRequest) (Agent, error) {
 		return Agent{}, err
 	}
 	pinned := initial.Target
+	initial.LaunchID = rand.Text()
 	if err := s.Terminal.Launch(startCtx, initial, req.Argv); err != nil {
 		return Agent{}, transport(pinned, err)
 	}
@@ -251,12 +256,13 @@ func (s Service) Start(ctx context.Context, req StartRequest) (Agent, error) {
 			if !sameOccupant(pinned, snap.Target) {
 				return Agent{}, &Error{Code: ErrReplaced, Message: "managed pane was replaced while the agent was starting", Target: &pinned}
 			}
-			if snap.Dead {
+			if snap.Dead || snap.LaunchID == initial.LaunchID {
 				return Agent{}, &Error{Code: ErrStartFailed, Message: fmt.Sprintf("agent %s exited while starting", req.Kind), Target: &pinned}
 			}
 			// tmux acknowledging launch input does not mean the shell has read it.
-			// Only a positively identified provider returning to an idle shell
-			// proves an exit. An unobserved launch waits for the caller deadline.
+			// Without a completion receipt, only a positively identified provider
+			// returning to an idle shell proves an exit. Otherwise keep waiting
+			// within the caller deadline for the shell to consume launch input.
 			if err := shellReady(snap); err == nil && providerObserved {
 				return Agent{}, &Error{Code: ErrStartFailed, Message: fmt.Sprintf("agent %s exited before it became ready", req.Kind), Target: &pinned}
 			}

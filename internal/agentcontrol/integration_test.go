@@ -97,6 +97,40 @@ func TestIsolatedTmuxFakeProviderSteelThread(t *testing.T) {
 	t.Fatal("fake provider never reached blocked/read state")
 }
 
+func TestStartObservesFastExitAgainstPrivateTmux(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux unavailable")
+	}
+	session := fmt.Sprintf("fast-exit-%d", time.Now().UnixNano())
+	if out, err := exec.Command("tmux", "new-session", "-d", "-s", session, "/bin/bash", "--noprofile", "--norc", "-i").CombinedOutput(); err != nil {
+		t.Fatalf("private session: %v: %s", err, out)
+	}
+	t.Cleanup(func() { _ = exec.Command("tmux", "kill-session", "-t", session).Run() })
+	terminal := NewLocalTerminal()
+	t.Cleanup(terminal.Close)
+	svc := Service{Terminal: terminal, Poll: 20 * time.Millisecond, Detect: func(Snapshot, *agentactivity.Tracker) AgentState {
+		// Deliberately miss the process: the shell's execution receipt must
+		// prove this exit independently of foreground observations.
+		return AgentState{}
+	}}
+	ready, err := svc.WaitShellReady(t.Context(), Target{Session: session, Namespace: tmuxenv.Namespace()}, 10*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// After reproducing the old deadline failure, use the enclosing test's
+	// deadlock budget: the regression asserts exit evidence, not scheduling
+	// within two seconds on a loaded machine.
+	timeout := time.Minute
+	if deadline, ok := t.Deadline(); ok {
+		timeout = time.Until(deadline.Add(-2 * time.Second))
+	}
+	_, err = svc.Start(t.Context(), StartRequest{Target: ready.Target, Kind: "codex", Argv: []string{"/bin/false"}, Timeout: timeout})
+	var typed *Error
+	if !AsError(err, &typed) || typed.Code != ErrStartFailed {
+		t.Fatalf("fast exit = %v, want %s", err, ErrStartFailed)
+	}
+}
+
 // The package TestMain owns a private server, and none of these fixtures runs
 // in parallel. An inherited default command must not determine their occupant.
 func TestIsolatedIntegrationFixturesIgnoreDefaultShellCommand(t *testing.T) {
