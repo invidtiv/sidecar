@@ -218,8 +218,21 @@ func TestWaitCannotBeSatisfiedByARealReplacementOccupant(t *testing.T) {
 	requireTmux(t)
 	svc, terminal, target := startFakeAgent(t, "replaced")
 
-	if err := terminal.Submit(context.Background(), Snapshot{Target: target}, "keep working"); err != nil {
+	if err := terminal.Submit(context.Background(), Snapshot{Target: target}, "block"); err != nil {
 		t.Fatal(err)
+	}
+	// The fixture's ordinary turn finishes after 300ms, so submitting it
+	// races natural completion against the old 300ms respawn delay. A blocked
+	// turn cannot satisfy Until: done. Observe that turn through Wait's own
+	// detector before replacing the process, rather than guessing with sleep.
+	pinned := make(chan struct{})
+	var pinnedOnce sync.Once
+	svc.Detect = func(snap Snapshot, tracker *agentactivity.Tracker) AgentState {
+		state := fakeProviderDetect(snap, tracker)
+		if state.Status == StatusBlocked {
+			pinnedOnce.Do(func() { close(pinned) })
+		}
+		return state
 	}
 	done := make(chan error, 1)
 	go func() {
@@ -227,9 +240,13 @@ func TestWaitCannotBeSatisfiedByARealReplacementOccupant(t *testing.T) {
 		done <- err
 	}()
 
-	// Give the wait time to pin and subscribe, then hand the pane to a
-	// different process that immediately shows the settled marker.
-	time.Sleep(300 * time.Millisecond)
+	select {
+	case <-pinned:
+	case err := <-done:
+		t.Fatalf("wait ended before pinning the blocked original: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("wait did not observe the blocked original")
+	}
 	if out, err := exec.Command("tmux", "respawn-pane", "-k", "-t", target.PaneID, "sh", "-c", "printf 'FAKE_DONE\\n'; sleep 30").CombinedOutput(); err != nil {
 		t.Fatalf("respawn pane: %v: %s", err, out)
 	}
