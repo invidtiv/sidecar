@@ -63,8 +63,8 @@ The status values are `queued`, `running`, `review`, `fixing`, `merged` and `blo
 | U2-a core extraction | td-c709a9 | sidecar | Codex | U0-a | merged (d95b66f5) |
 | U2-b workspace resources and operations API | td-eb3d80 | sidecar | Codex | U2-a | review (Codex reviewer, shell "rev U2-b"); branch u2b-workspace-api @3423e767, which also carries the agent `--` terminator fix td-66d7e3 |
 | U2-c workspace UI | td-37a00e | sidecar-ui | Codex | U2-b | queued |
-| U3-a content and layouts API | td-f8784a | sidecar | Codex | U1-a | review (Claude security reviewer); branch u3a-content-api @cd4978c2 |
-| U3-b pane tree UI | td-cf59cd | sidecar-ui | Codex | U3-a, U1-f | queued until U3-a lands (U1-f merged) |
+| U3-a content and layouts API | td-f8784a | sidecar | Codex | U1-a | merged (05dd383b). Claude review fixed a HIGH arbitrary file write through the diff parent parameter (git --output), a watch fd-exhaustion cap, and an existence oracle through symlinks |
+| U3-b pane tree UI | td-cf59cd | sidecar-ui | Codex | U3-a, U1-f | running (Codex, ~/code/sidecar-ui-u3b-panes, branch u3b-panes) |
 | U4 viewers agents can target | td-799dd6 | both | Codex | U3 | queued |
 
 U2-b onward are briefed below.
@@ -242,7 +242,8 @@ A project page with worktrees and shells, and native, keyboard-first create, ren
 - `--tailnet-port` lets any local process act as the owner on the tailnet listener. It is documented, and warned at start.
 - A paired origin trusts everything served from that origin, including whatever serves that port next.
 - The static UI has no script CSP. sidecar-ui must render every server and agent string as text. Reviews have confirmed it does.
-- Each events stream polls `tmux` once a second for each older-protocol terminal, bounded by the per-credential caps (LOW).
+- `content:read` can read everything under a project root, including `.git/config` and `.env`. Whether to refuse `.git/` internals is an open follow-up, with diff memory bounds (td-0e9748).
+- Saved layouts hold client-supplied paths. Every consumer must treat them as untrusted and re-validate them through the API.
 
 ## Bugs and friction found along the way
 
