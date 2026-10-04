@@ -158,6 +158,7 @@ func Start(opts Options) (*Server, error) {
 	defer func() {
 		if !ok {
 			s.closeListeners()
+			s.closeStatic()
 			cancel()
 			releaseLock(lock)
 		}
@@ -287,6 +288,12 @@ func (s *Server) serve(index int) {
 	}()
 }
 
+func (s *Server) closeStatic() {
+	if closer, ok := s.static.(io.Closer); ok {
+		_ = closer.Close()
+	}
+}
+
 func (s *Server) closeListeners() {
 	for _, listener := range s.bound {
 		_ = listener.Close()
@@ -328,6 +335,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		}
 		removeEndpoint(s.dir, s.instance)
 		releaseLock(s.lock)
+		s.closeStatic()
 	})
 	return result
 }

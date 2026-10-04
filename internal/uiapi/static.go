@@ -30,10 +30,23 @@ func newStaticHandler(dir string) (http.Handler, error) {
 	if _, err := os.Stat(filepath.Join(abs, "index.html")); err != nil {
 		return nil, fmt.Errorf("--ui %s must contain index.html", dir)
 	}
-	return &spaHandler{fsys: os.DirFS(abs)}, nil
+	// os.Root, not os.DirFS: a symlink inside DIR that points outside it must
+	// not be followed, because static files on the Browser listener need no
+	// credential and so are readable by anything that can reach loopback.
+	root, err := os.OpenRoot(abs)
+	if err != nil {
+		return nil, fmt.Errorf("--ui %s: %w", dir, err)
+	}
+	return &spaHandler{root: root, fsys: root.FS()}, nil
 }
 
-type spaHandler struct{ fsys fs.FS }
+type spaHandler struct {
+	root *os.Root
+	fsys fs.FS
+}
+
+// Close releases the UI directory.
+func (h *spaHandler) Close() error { return h.root.Close() }
 
 func (h *spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/")
