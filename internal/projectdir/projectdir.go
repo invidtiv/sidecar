@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/marcus/sidecar/internal/config"
 )
@@ -387,8 +388,19 @@ func resolveWithBase(base, projectRoot string) (string, error) {
 		return "", fmt.Errorf("open project registry lock: %w", err)
 	}
 	defer func() { _ = lock.Close() }()
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
-		return "", fmt.Errorf("lock project registry: %w", err)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			break
+		}
+		if err != syscall.EWOULDBLOCK && err != syscall.EAGAIN {
+			return "", fmt.Errorf("lock project registry: %w", err)
+		}
+		if time.Now().After(deadline) {
+			return "", fmt.Errorf("lock project registry: acquisition timeout after 5s; retry registration")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	defer func() { _ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) }()
 
