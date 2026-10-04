@@ -50,7 +50,7 @@ The status values are `queued`, `running`, `review`, `fixing`, `merged` and `blo
 | U0-c proof and measurements | td-d8fcb0 | both | Claude, plus Marcus for the live half | U0-a, U0-b | running (automatable half) |
 | U1-a events stream | td-aa8756 | sidecar | Codex | U0-a | queued |
 | U1-b schemas, spec, fixtures | td-5ae805 | sidecar | Codex | U0-a | queued |
-| U1-c service install | td-d7869b | sidecar | Codex | U0-a | queued |
+| U1-c service install | td-d7869b | sidecar | Codex | U0-a | running (u1c-service; adapters, CLI and replacement proof) |
 | U1-d presence and v1 frames | td-713745 | sidecar | Codex | td-552e24 merged | blocked on td-552e24 |
 | U1-e web app shell and Sessions | td-57a73e | sidecar-ui | Codex | U0-b | queued |
 | U1-f SDK adopts v1 | td-820df7 | sidecar-ui | Codex | U1-a, U1-d | queued |

@@ -8,7 +8,7 @@ v0 is the U0 steel thread. It serves the Sessions catalog and the existing termi
 
 `sidecar api serve` is one long-running, headless process per user. It never starts, stops or restarts the tmux server. It holds one remote-host registry and catalog router for its lifetime, and gives each terminal connection its own protocol broker, which is the same per-stream model `sidecar mobile serve --stdio` uses.
 
-On start it writes `$STATE/api/endpoint.json` with mode 0600. `$STATE` is `config.StateDir()`. It removes the file on clean exit (SIGINT or SIGTERM). A second `serve` refuses to start while the first is running: the server holds an exclusive lock on `$STATE/api/serve.lock` for its lifetime, the kernel drops the lock if the process dies, and the refusal names the PID recorded in `endpoint.json`. A client that finds an `endpoint.json` whose PID is not alive treats it as no server.
+On start it writes `$STATE/api/endpoint.json` with mode 0600. `$STATE` is `config.StateDir()`. It removes the file on clean exit (SIGINT, SIGTERM, or executable replacement). A second `serve` refuses to start while the first is running: the server holds an exclusive lock on `$STATE/api/serve.lock` for its lifetime, the kernel drops the lock if the process dies, and the refusal names the PID recorded in `endpoint.json`. A client that finds an `endpoint.json` whose PID is not alive treats it as no server.
 
 ```json
 {
@@ -162,12 +162,37 @@ v0 inherits the mobile service's bounded outbound queue, so a peer that stops re
 | `sidecar api serve [--port N] [--ui DIR] [--tailnet] [--tailnet-port N] [--json]` | Runs the server in the foreground until SIGINT or SIGTERM. `--json` writes the endpoint object as one line once every listener is bound. |
 | `sidecar api open [--print] [--path P]` | Pairs this machine's browser and opens the UI, or prints the `/pair#code=…` URL. |
 | `sidecar api pair --origin URL` / `--list` / `--revoke URL` | Manages paired origins. `--json` gives structured output. |
+| `sidecar api service install\|uninstall\|status [--json]` | Manages or inspects the per-user background service (see below). |
 | `sidecar api status [--json]` | Reads the status route over the Local socket. Exits non-zero with a clear message when no server is running. |
 
-`sidecar api spec` and `sidecar api service install|uninstall|status` arrive in U1.
+`sidecar api spec` arrives in U1.
+
+### Per-user background service
+
+`sidecar api service install|uninstall|status [--json]` uses one service-manager adapter: a launchd LaunchAgent on macOS, a systemd user unit on Linux. `install` writes a private definition, loads/enables it and starts it at login; repeating install unloads only that API job before replacing its definition. `uninstall` stops that job and removes its definition, preserving Sidecar state, paired origins and tmux. It is safe to repeat uninstall. No service command starts, stops or restarts tmux. Run as the login user without sudo. Linux needs a running systemd user manager; this command does not enable lingering or configure system services.
+
+The macOS label is `com.marcus.sidecar.api`, in `~/Library/LaunchAgents/com.marcus.sidecar.api.plist`; the Linux unit is `sidecar-api.service`, in `$XDG_CONFIG_HOME/systemd/user/` (default `~/.config/systemd/user/`). macOS stdout/stderr go to `$STATE/api/service.log`; Linux logs go to `journalctl --user -u sidecar-api.service`. Manager failures name the failed operation and where to inspect logs. A definition is retained if unloading fails, so a retry can recover it. An unrelated foreground API server causes install to refuse with its PID and instructions to stop that API process first; it is never killed by install.
+
+The definition records the current absolute `-config` path, state root and PATH, without inheriting tmux, agent identity or secrets. Its executable retains the launch/PATH symlink when that link names this exact binary. Use an installed stable `sidecar` link when installing, rather than a version-specific binary path. The service runs `sidecar -config PATH api serve`; the default Browser port remains 7861 and it does not enable Tailnet or change Tailscale configuration. The static UI directory comes from config `api.uiDir`. Both foreground and service starts read it; explicit `serve --ui DIR` overrides it (an empty value disables it). Prefer an absolute UI directory with `index.html`. Config changes take effect at the next server start; rerun install to restart with changed config.
+
+The release pipeline renders a Homebrew `service` block from `packaging/homebrew/sidecar.rb.tmpl`. `brew services start sidecar` uses the same labels and `sidecar api serve` command, following the Homebrew-prefix `bin/sidecar` link that `make install-local` and `make install-worktree` activate. Choose either `brew services` or `api service` as the manager of that job; switching managers means stopping/uninstalling the old one first. Homebrew services use the default Sidecar config/state paths.
+
+Every `serve` watches the original stable executable path once per second. An atomic binary replacement, symlink retarget, or changed executable size/mtime logs the replacement and shuts down normally: WebSockets close, attachments release, listeners and discovery files are removed, then launchd's KeepAlive or systemd's Restart=always launches the new binary. A briefly missing path during upgrade is ignored until a replacement exists. A foreground `serve` also exits cleanly on replacement; its caller must restart it. No restart changes tmux. Browser session tokens are still in-memory v0 state, so a restarted server requires browser pairing again; persisted paired-origin tokens survive.
+
+`status --json` reports the manager's job, including when it is absent or stopped (exit 0):
+
+```json
+{"manager":"launchd","label":"com.marcus.sidecar.api","file":"/…/Library/LaunchAgents/com.marcus.sidecar.api.plist","installed":true,"loaded":true,"running":true,"pid":4242,"version":"v1.16.0","last_exit":{"code":0},"log":"/…/api/service.log","message":"API service is running; open it with `sidecar api open`."}
+```
+
+`installed` means the definition exists, `loaded` means the manager reports it loaded, and `running` means the manager reports a running process with a positive PID. A stopped job has PID 0. `version` is the running server version read through the Local API only when its PID matches the manager; it is an empty string when unknown, stopped, or still starting. `last_exit` is null when the manager has no termination record, otherwise `{code, signal?}`; a signal termination carries `code: 0` and the manager's signal name or number. A healthy current process can retain a previous failed exit record. Install/uninstall with `--json` return the same status shape after the operation. Manager errors exit 1 with an actionable stderr message, usage errors exit 2. Installation can return a loaded job before its asynchronous startup finishes; use `api status` to verify API readiness.
+
+Service-manager access is refused under `SIDECAR_ISOLATED_STATE=1`. Tests inject fake managers; proofs run foreground servers on port 0.
 
 ## Proofs
 
 Live proofs follow the `scripts/tmux-drive.sh` isolation rules: a private tmux socket, `unset TMUX TMUX_PANE`, an isolated `XDG_STATE_HOME`, a `-config` temp path, and `SIDECAR_ISOLATED_STATE=1`. The Unix sockets and `endpoint.json` live under the isolated state tree, so a proof can never reach the user's real server. Unix socket paths are limited to 103 bytes, so a proof keeps its state tree short, under `/tmp`.
 
 `scripts/ui-api-proof.sh` is the v0 proof. It builds a temporary binary, creates one managed shell on a private tmux server, runs `sidecar api serve`, and checks the Local routes with `curl --unix-socket`, the Browser guards, `sidecar api open` pairing, origin pairing with a ticket, and one terminal round trip over the WebSocket through `internal/tools/uiapiproof`. `TestAPITerminalRoundTripAgainstLocalOwner` in `internal/cli` covers the same terminal sequence in process.
+
+`scripts/ui-api-service-proof.sh` covers fake launchd/systemd and CLI lifecycles, config-driven UI serving, explicit UI override, replacement of the stable launch link, clean exit/discovery cleanup, and restart against the same isolated state tree. It makes no service-manager or tmux changes.
