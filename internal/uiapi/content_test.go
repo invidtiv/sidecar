@@ -100,6 +100,14 @@ func TestProjectContentDTOsAndPathBoundary(t *testing.T) {
 	if len(tree.Dirs) != 1 || len(tree.Dirs[0].Entries) != 2 {
 		t.Fatalf("tree: %s", data)
 	}
+	response, data = h.localDo(req{method: "GET", path: "/api/v0/projects/content/tree?path=.&path=deleted"})
+	expect(t, response, data, 200, "")
+	if err := json.Unmarshal(data, &tree); err != nil {
+		t.Fatal(err)
+	}
+	if len(tree.Dirs) != 2 || len(tree.Dirs[0].Entries) != 2 || tree.Dirs[1].Err != "directory deleted no longer exists" {
+		t.Fatalf("missing expansion blanked the tree: %s", data)
+	}
 	response, data = h.localDo(req{method: "GET", path: "/api/v0/projects/content/content?kind=file&target=readme.md&workspace=another:shell:key"})
 	expect(t, response, data, 403, "rejected")
 }

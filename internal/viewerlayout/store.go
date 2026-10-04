@@ -81,6 +81,7 @@ func layoutETag(data []byte) string {
 
 var ErrRequired = errors.New("read the layout first and send its ETag as If-Match")
 var ErrChanged = errors.New("the layout changed; read it again before saving")
+var ErrInvalid = errors.New("invalid layout")
 
 // Store is the presentation-neutral persistence seam for viewer preferences.
 // FileStore serializes read/compare/write across processes with an OS lock.
@@ -100,7 +101,7 @@ func (s FileStore) Put(viewer, project, match string, doc Document) (Document, s
 	}
 	count := 0
 	if err := validateLayout(doc.Layout, 0, &count); err != nil {
-		return Document{}, "", err
+		return Document{}, "", fmt.Errorf("%w: %v", ErrInvalid, err)
 	}
 	return s.access(viewer, project, match, &doc)
 }

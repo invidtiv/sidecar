@@ -77,8 +77,12 @@ func (s *Server) handleLayout(w http.ResponseWriter, r *http.Request, c caller) 
 		writeError(w, 412, "precondition_failed", err.Error())
 		return
 	}
-	if err != nil {
+	if errors.Is(err, viewerlayout.ErrInvalid) {
 		writeError(w, 400, CodeInvalidRequest, err.Error())
+		return
+	}
+	if err != nil {
+		writeContentError(w, err)
 		return
 	}
 	w.Header().Set("ETag", etag)

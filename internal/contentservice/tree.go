@@ -141,6 +141,10 @@ func (s *Service) treeWorkspaceRead(ctx context.Context, ws Workspace, paths []s
 			}
 			file, err := root.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 			if err != nil {
+				if os.IsNotExist(err) || os.IsPermission(err) {
+					result.Dirs = append(result.Dirs, listTreeEntries(rel, nil, err, ignore))
+					continue
+				}
 				return TreeResult{}, Rejected("directory %q is not readable within the project: %v", rel, err)
 			}
 			entries, err := file.ReadDir(-1)
