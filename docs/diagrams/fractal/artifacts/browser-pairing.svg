@@ -1,0 +1,165 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" role="img" aria-labelledby="sequence-title sequence-description" data-theme="graphite" data-theme-appearance="light">
+  <title id="sequence-title">Pair a Browser and Open a Terminal</title><desc id="sequence-description">How the owner&apos;s browser goes from sidecar api open to a live terminal WebSocket on the loopback Browser listener, without a token ever appearing in a URL that is sent.</desc><metadata>{&quot;journeyId&quot;:&quot;browser-pairing&quot;,&quot;provenance&quot;:&quot;Authored 2026-10-03 from docs/reference/ui-api.md (Pairing, Terminal stream) and internal/uiapi (auth.go, pairpage.go, terminal.go) and internal/cli/api.go, as implemented for U0 on main at 2f0dc1e7. An authored scenario, not a captured trace; the browser&apos;s own page logic is summarized in descriptions.&quot;,&quot;hiddenLanes&quot;:[],&quot;rows&quot;:[{&quot;id&quot;:&quot;mint&quot;,&quot;type&quot;:&quot;phase&quot;,&quot;messageIds&quot;:[&quot;run_open&quot;,&quot;request_code&quot;,&quot;mint_code&quot;,&quot;code_returned&quot;,&quot;open_browser&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;owner&quot;,&quot;api_cmd&quot;,&quot;local&quot;,&quot;pairing&quot;,&quot;browser&quot;]},{&quot;id&quot;:&quot;run_open&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;run_open&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;owner&quot;,&quot;api_cmd&quot;]},{&quot;id&quot;:&quot;request_code&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;request_code&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;api_cmd&quot;,&quot;local&quot;]},{&quot;id&quot;:&quot;mint_code&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;mint_code&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;local&quot;,&quot;pairing&quot;]},{&quot;id&quot;:&quot;code_returned&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;code_returned&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;local&quot;,&quot;api_cmd&quot;]},{&quot;id&quot;:&quot;open_browser&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;open_browser&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;api_cmd&quot;,&quot;browser&quot;]},{&quot;id&quot;:&quot;exchange&quot;,&quot;type&quot;:&quot;phase&quot;,&quot;messageIds&quot;:[&quot;get_pair&quot;,&quot;pair_page&quot;,&quot;post_exchange&quot;,&quot;guard_exchange&quot;,&quot;redeem_code&quot;,&quot;token_returned&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;browser&quot;,&quot;browser_listener&quot;,&quot;guards&quot;,&quot;pairing&quot;]},{&quot;id&quot;:&quot;get_pair&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;get_pair&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;browser&quot;,&quot;browser_listener&quot;]},{&quot;id&quot;:&quot;pair_page&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;pair_page&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;browser_listener&quot;,&quot;browser&quot;]},{&quot;id&quot;:&quot;post_exchange&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;post_exchange&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;browser&quot;,&quot;browser_listener&quot;]},{&quot;id&quot;:&quot;guard_exchange&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;guard_exchange&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;browser_listener&quot;,&quot;guards&quot;]},{&quot;id&quot;:&quot;redeem_code&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;redeem_code&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;guards&quot;,&quot;pairing&quot;]},{&quot;id&quot;:&quot;token_returned&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;token_returned&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;browser_listener&quot;,&quot;browser&quot;]},{&quot;id&quot;:&quot;attach&quot;,&quot;type&quot;:&quot;phase&quot;,&quot;messageIds&quot;:[&quot;request_ticket&quot;,&quot;check_bearer&quot;,&quot;issue_ticket&quot;,&quot;ticket_returned&quot;,&quot;upgrade&quot;,&quot;check_upgrade&quot;,&quot;admit_stream&quot;,&quot;start_stream&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;browser&quot;,&quot;browser_listener&quot;,&quot;guards&quot;,&quot;pairing&quot;,&quot;bridge&quot;,&quot;owner_service&quot;]},{&quot;id&quot;:&quot;request_ticket&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;request_ticket&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;browser&quot;,&quot;browser_listener&quot;]},{&quot;id&quot;:&quot;check_bearer&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;check_bearer&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;browser_listener&quot;,&quot;guards&quot;]},{&quot;id&quot;:&quot;issue_ticket&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;issue_ticket&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;guards&quot;,&quot;pairing&quot;]},{&quot;id&quot;:&quot;ticket_returned&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;ticket_returned&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;browser_listener&quot;,&quot;browser&quot;]},{&quot;id&quot;:&quot;upgrade&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;upgrade&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;browser&quot;,&quot;browser_listener&quot;]},{&quot;id&quot;:&quot;check_upgrade&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;check_upgrade&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;browser_listener&quot;,&quot;guards&quot;]},{&quot;id&quot;:&quot;admit_stream&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;admit_stream&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;guards&quot;,&quot;bridge&quot;]},{&quot;id&quot;:&quot;start_stream&quot;,&quot;type&quot;:&quot;message&quot;,&quot;messageIds&quot;:[&quot;start_stream&quot;],&quot;hiddenMessageIds&quot;:[],&quot;participantIds&quot;:[&quot;bridge&quot;,&quot;owner_service&quot;]}]}</metadata>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#85857f"/></marker>
+    <marker id="arrow-open" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10" fill="none" stroke="#85857f" stroke-width="1.5"/></marker>
+  </defs>
+  <rect width="1920" height="1080" fill="#f8f8f6"/>
+  <g font-family="Arial, Helvetica, sans-serif" data-export-layer="title">
+    <text x="70" y="43" font-size="11" letter-spacing="2.5" fill="#626b6f">FRACTAL / SEQUENCE JOURNEY</text>
+    <text x="70" y="88" text-anchor="start" font-size="34" fill="#292927"><tspan x="70" dy="0">Pair a Browser and Open a Terminal</tspan></text>
+    <text x="70" y="126" text-anchor="start" font-size="15" fill="#74746f"><tspan x="70" dy="0">How the owner&apos;s browser goes from sidecar api open to a live terminal WebSocket on the loopback Browser listener, without a token ever appearing in a URL that is sent.</tspan></text>
+  </g>
+  <g font-family="Arial, Helvetica, sans-serif" transform="translate(543.023639362287 190) scale(0.41781198460692687)"><g data-column="owner" data-members="owner" data-elements="">
+    <rect x="102" y="32" width="160" height="63" rx="12" fill="#ffffff" stroke="#759EB5" stroke-width="2"/>
+    <text x="182" y="59" text-anchor="middle" font-size="15" fill="#292927"><tspan x="182" dy="0">Owner</tspan></text>
+    <path d="M182 95V1749" stroke="#ddddda" stroke-width="1.2" stroke-dasharray="5 7"/>
+  </g><g data-column="browser" data-members="browser" data-elements="">
+    <rect x="306" y="32" width="160" height="63" rx="12" fill="#ffffff" stroke="#6FA6A0" stroke-width="2"/>
+    <text x="386" y="59" text-anchor="middle" font-size="15" fill="#292927"><tspan x="386" dy="0">Browser</tspan></text>
+    <path d="M386 95V1749" stroke="#ddddda" stroke-width="1.2" stroke-dasharray="5 7"/>
+  </g><g data-column="api_cmd" data-members="api_cmd" data-elements="cli.api_cmd">
+    <rect x="510" y="32" width="160" height="63" rx="12" fill="#ffffff" stroke="#82A6B6" stroke-width="2"/>
+    <text x="590" y="59" text-anchor="middle" font-size="15" fill="#292927"><tspan x="590" dy="0">sidecar api open</tspan></text>
+    <path d="M590 95V1749" stroke="#ddddda" stroke-width="1.2" stroke-dasharray="5 7"/>
+  </g><g data-column="local" data-members="local" data-elements="api.local">
+    <rect x="714" y="32" width="160" height="63" rx="12" fill="#ffffff" stroke="#7F9FC4" stroke-width="2"/>
+    <text x="794" y="59" text-anchor="middle" font-size="15" fill="#292927"><tspan x="794" dy="0">Local Listener</tspan></text>
+    <path d="M794 95V1749" stroke="#ddddda" stroke-width="1.2" stroke-dasharray="5 7"/>
+  </g><g data-column="browser_listener" data-members="browser_listener" data-elements="api.browser">
+    <rect x="918" y="32" width="160" height="63" rx="12" fill="#ffffff" stroke="#7F9FC4" stroke-width="2"/>
+    <text x="998" y="59" text-anchor="middle" font-size="15" fill="#292927"><tspan x="998" dy="0">Browser Listener</tspan></text>
+    <path d="M998 95V1749" stroke="#ddddda" stroke-width="1.2" stroke-dasharray="5 7"/>
+  </g><g data-column="guards" data-members="guards" data-elements="api.guards">
+    <rect x="1122" y="32" width="160" height="63" rx="12" fill="#ffffff" stroke="#7F9FC4" stroke-width="2"/>
+    <text x="1202" y="59" text-anchor="middle" font-size="15" fill="#292927"><tspan x="1202" dy="0">Guards &amp; Auth</tspan></text>
+    <path d="M1202 95V1749" stroke="#ddddda" stroke-width="1.2" stroke-dasharray="5 7"/>
+  </g><g data-column="pairing" data-members="pairing" data-elements="api.pairing">
+    <rect x="1326" y="32" width="160" height="63" rx="12" fill="#ffffff" stroke="#7F9FC4" stroke-width="2"/>
+    <text x="1406" y="59" text-anchor="middle" font-size="15" fill="#292927"><tspan x="1406" dy="0">Pairing &amp; Tickets</tspan></text>
+    <path d="M1406 95V1749" stroke="#ddddda" stroke-width="1.2" stroke-dasharray="5 7"/>
+  </g><g data-column="bridge" data-members="bridge" data-elements="api.terminal">
+    <rect x="1530" y="32" width="160" height="63" rx="12" fill="#ffffff" stroke="#7F9FC4" stroke-width="2"/>
+    <text x="1610" y="59" text-anchor="middle" font-size="15" fill="#292927"><tspan x="1610" dy="0">Terminal Bridge</tspan></text>
+    <path d="M1610 95V1749" stroke="#ddddda" stroke-width="1.2" stroke-dasharray="5 7"/>
+  </g><g data-column="owner_service" data-members="owner_service" data-elements="termproto.service">
+    <rect x="1734" y="32" width="160" height="63" rx="12" fill="#ffffff" stroke="#C9A06B" stroke-width="2"/>
+    <text x="1814" y="59" text-anchor="middle" font-size="15" fill="#292927"><tspan x="1814" dy="0">Owner Terminal</tspan><tspan x="1814" dy="19">Service</tspan></text>
+    <path d="M1814 95V1749" stroke="#ddddda" stroke-width="1.2" stroke-dasharray="5 7"/>
+  </g><g data-row-id="mint" data-message-ids="run_open,request_code,mint_code,code_returned,open_browser" data-participant-ids="owner,api_cmd,local,pairing,browser" data-row-type="phase" data-phase-depth="0" data-collapsed="false">
+        <rect x="58" y="137" width="1880" height="35" rx="10" fill="#eeeeeb" stroke="#d5d5d0"/>
+        <text x="78" y="160" text-anchor="start" font-size="15" fill="#292927"><tspan x="78" dy="0">1. Mint a one-time code</tspan></text>
+        <text x="286.865" y="160" text-anchor="start" font-size="11" fill="#7d7d77"><tspan x="286.865" dy="0">Only a process that can open the 0600 Local socket can start pairing.</tspan></text>
+        <text x="1896" y="158.5" text-anchor="end" font-size="11" fill="#7d7d77">5 interactions</text>
+      </g><g data-row-id="run_open" data-message-ids="run_open" data-participant-ids="owner,api_cmd" data-row-type="message" data-kind="call">
+      <rect x="206" y="186" width="360" height="34" rx="7" fill="#f8f8f6"/>
+      <text x="386" y="209" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="386" dy="0">sidecar api open</tspan></text>
+      
+      <path d="M182 225H582" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow)"/>
+    </g><g data-row-id="request_code" data-message-ids="request_code" data-participant-ids="api_cmd,local" data-row-type="message" data-kind="call">
+      <rect x="512" y="250" width="360" height="66" rx="7" fill="#f8f8f6"/>
+      <text x="692" y="273" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="692" dy="0">POST /api/v0/pairing/codes</tspan></text>
+      <text x="692" y="295" text-anchor="middle" font-size="11" fill="#7d7d77"><tspan x="692" dy="0">The command finds the socket through</tspan><tspan x="692" dy="15">$STATE/api/endpoint.json.</tspan></text>
+      <path d="M590 321H786" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow)"/>
+    </g><g data-row-id="mint_code" data-message-ids="mint_code" data-participant-ids="local,pairing" data-row-type="message" data-kind="call">
+      <rect x="920" y="346" width="360" height="34" rx="7" fill="#f8f8f6"/>
+      <text x="1100" y="369" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="1100" dy="0">Mint a single-use 60-second code</tspan></text>
+      
+      <path d="M794 385H1398" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow)"/>
+    </g><g data-row-id="code_returned" data-message-ids="code_returned" data-participant-ids="local,api_cmd" data-row-type="message" data-kind="return">
+      <rect x="512" y="410" width="360" height="34" rx="7" fill="#f8f8f6"/>
+      <text x="692" y="433" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="692" dy="0">{code, url, expires_at}</tspan></text>
+      
+      <path d="M794 449H598" fill="none" stroke="#85857f" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#arrow)"/>
+    </g><g data-row-id="open_browser" data-message-ids="open_browser" data-participant-ids="api_cmd,browser" data-row-type="message" data-kind="async">
+      <rect x="308" y="474" width="360" height="81" rx="7" fill="#f8f8f6"/>
+      <text x="488" y="497" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="488" dy="0">Open /pair#code=...&amp;next=...</tspan></text>
+      <text x="488" y="519" text-anchor="middle" font-size="11" fill="#7d7d77"><tspan x="488" dy="0">The code rides in the URL fragment, which a browser never</tspan><tspan x="488" dy="15">sends, so it stays out of request lines, proxy logs and</tspan><tspan x="488" dy="15">Referer.</tspan></text>
+      <path d="M590 560H394" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow-open)"/>
+    </g><g data-row-id="exchange" data-message-ids="get_pair,pair_page,post_exchange,guard_exchange,redeem_code,token_returned" data-participant-ids="browser,browser_listener,guards,pairing" data-row-type="phase" data-phase-depth="0" data-collapsed="false">
+        <rect x="58" y="585" width="1880" height="35" rx="10" fill="#eeeeeb" stroke="#d5d5d0"/>
+        <text x="78" y="608" text-anchor="start" font-size="15" fill="#292927"><tspan x="78" dy="0">2. Exchange the code for a session token</tspan></text>
+        <text x="433.3850000000002" y="608" text-anchor="start" font-size="11" fill="#7d7d77"><tspan x="433.3850000000002" dy="0">The pair page reads the fragment, clears it from history, and spends the code once.</tspan></text>
+        <text x="1896" y="606.5" text-anchor="end" font-size="11" fill="#7d7d77">6 interactions</text>
+      </g><g data-row-id="get_pair" data-message-ids="get_pair" data-participant-ids="browser,browser_listener" data-row-type="message" data-kind="call">
+      <rect x="512" y="634" width="360" height="34" rx="7" fill="#f8f8f6"/>
+      <text x="692" y="657" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="692" dy="0">GET /pair</tspan></text>
+      
+      <path d="M386 673H990" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow)"/>
+    </g><g data-row-id="pair_page" data-message-ids="pair_page" data-participant-ids="browser_listener,browser" data-row-type="message" data-kind="return">
+      <rect x="512" y="698" width="360" height="66" rx="7" fill="#f8f8f6"/>
+      <text x="692" y="721" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="692" dy="0">Locked-down pair page</tspan></text>
+      <text x="692" y="743" text-anchor="middle" font-size="11" fill="#7d7d77"><tspan x="692" dy="0">Hashed-script CSP, no framing, no-store, no-referrer.</tspan><tspan x="692" dy="15">Loading it consumes nothing.</tspan></text>
+      <path d="M998 769H394" fill="none" stroke="#85857f" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#arrow)"/>
+    </g><g data-row-id="post_exchange" data-message-ids="post_exchange" data-participant-ids="browser,browser_listener" data-row-type="message" data-kind="call">
+      <rect x="512" y="794" width="360" height="66" rx="7" fill="#f8f8f6"/>
+      <text x="692" y="817" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="692" dy="0">POST /api/v0/pairing/exchange {code}</tspan></text>
+      <text x="692" y="839" text-anchor="middle" font-size="11" fill="#7d7d77"><tspan x="692" dy="0">JSON body plus X-Sidecar-Request: 1, from the listener&apos;s</tspan><tspan x="692" dy="15">own Origin.</tspan></text>
+      <path d="M386 865H990" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow)"/>
+    </g><g data-row-id="guard_exchange" data-message-ids="guard_exchange" data-participant-ids="browser_listener,guards" data-row-type="message" data-kind="call">
+      <rect x="920" y="890" width="360" height="34" rx="7" fill="#f8f8f6"/>
+      <text x="1100" y="913" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="1100" dy="0">Host, own Origin, mutation guard</tspan></text>
+      
+      <path d="M998 929H1194" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow)"/>
+    </g><g data-row-id="redeem_code" data-message-ids="redeem_code" data-participant-ids="guards,pairing" data-row-type="message" data-kind="call">
+      <rect x="1124" y="954" width="360" height="34" rx="7" fill="#f8f8f6"/>
+      <text x="1304" y="977" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="1304" dy="0">Redeem code; bind token to this Origin</tspan></text>
+      
+      <path d="M1202 993H1398" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow)"/>
+    </g><g data-row-id="token_returned" data-message-ids="token_returned" data-participant-ids="browser_listener,browser" data-row-type="message" data-kind="return">
+      <rect x="512" y="1018" width="360" height="66" rx="7" fill="#f8f8f6"/>
+      <text x="692" y="1041" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="692" dy="0">{token, next}</tspan></text>
+      <text x="692" y="1063" text-anchor="middle" font-size="11" fill="#7d7d77"><tspan x="692" dy="0">The page stores the token in localStorage as</tspan><tspan x="692" dy="15">sidecar.session and navigates to next on the same origin.</tspan></text>
+      <path d="M998 1089H394" fill="none" stroke="#85857f" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#arrow)"/>
+    </g><g data-row-id="attach" data-message-ids="request_ticket,check_bearer,issue_ticket,ticket_returned,upgrade,check_upgrade,admit_stream,start_stream" data-participant-ids="browser,browser_listener,guards,pairing,bridge,owner_service" data-row-type="phase" data-phase-depth="0" data-collapsed="false">
+        <rect x="58" y="1114" width="1880" height="35" rx="10" fill="#eeeeeb" stroke="#d5d5d0"/>
+        <text x="78" y="1137" text-anchor="start" font-size="15" fill="#292927"><tspan x="78" dy="0">3. Open a terminal WebSocket</tspan></text>
+        <text x="333.8900000000001" y="1137" text-anchor="start" font-size="11" fill="#7d7d77"><tspan x="333.8900000000001" dy="0">Browsers cannot set headers on a WebSocket, so the bearer token buys a short-lived ticket.</tspan></text>
+        <text x="1896" y="1135.5" text-anchor="end" font-size="11" fill="#7d7d77">8 interactions</text>
+      </g><g data-row-id="request_ticket" data-message-ids="request_ticket" data-participant-ids="browser,browser_listener" data-row-type="message" data-kind="call">
+      <rect x="512" y="1163" width="360" height="34" rx="7" fill="#f8f8f6"/>
+      <text x="692" y="1186" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="692" dy="0">POST /api/v0/ws-tickets (Bearer)</tspan></text>
+      
+      <path d="M386 1202H990" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow)"/>
+    </g><g data-row-id="check_bearer" data-message-ids="check_bearer" data-participant-ids="browser_listener,guards" data-row-type="message" data-kind="call">
+      <rect x="920" y="1227" width="360" height="34" rx="7" fill="#f8f8f6"/>
+      <text x="1100" y="1250" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="1100" dy="0">Bearer bound to this Origin; per-client limits</tspan></text>
+      
+      <path d="M998 1266H1194" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow)"/>
+    </g><g data-row-id="issue_ticket" data-message-ids="issue_ticket" data-participant-ids="guards,pairing" data-row-type="message" data-kind="call">
+      <rect x="1124" y="1291" width="360" height="34" rx="7" fill="#f8f8f6"/>
+      <text x="1304" y="1314" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="1304" dy="0">Issue a single-use 30-second ticket</tspan></text>
+      
+      <path d="M1202 1330H1398" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow)"/>
+    </g><g data-row-id="ticket_returned" data-message-ids="ticket_returned" data-participant-ids="browser_listener,browser" data-row-type="message" data-kind="return">
+      <rect x="512" y="1355" width="360" height="34" rx="7" fill="#f8f8f6"/>
+      <text x="692" y="1378" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="692" dy="0">{ticket, expires_at}</tspan></text>
+      
+      <path d="M998 1394H394" fill="none" stroke="#85857f" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#arrow)"/>
+    </g><g data-row-id="upgrade" data-message-ids="upgrade" data-participant-ids="browser,browser_listener" data-row-type="message" data-kind="call">
+      <rect x="512" y="1419" width="360" height="34" rx="7" fill="#f8f8f6"/>
+      <text x="692" y="1442" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="692" dy="0">GET /api/v0/terminal?ticket=... (upgrade)</tspan></text>
+      
+      <path d="M386 1458H990" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow)"/>
+    </g><g data-row-id="check_upgrade" data-message-ids="check_upgrade" data-participant-ids="browser_listener,guards" data-row-type="message" data-kind="call">
+      <rect x="920" y="1483" width="360" height="81" rx="7" fill="#f8f8f6"/>
+      <text x="1100" y="1506" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="1100" dy="0">Host before upgrade; ticket and Origin after</tspan></text>
+      <text x="1100" y="1528" text-anchor="middle" font-size="11" fill="#7d7d77"><tspan x="1100" dy="0">A Host refusal is a 421 before the upgrade; every other</tspan><tspan x="1100" dy="15">refusal is a 44xx close code, since a browser cannot read a</tspan><tspan x="1100" dy="15">failed handshake.</tspan></text>
+      <path d="M998 1569H1194" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow)"/>
+    </g><g data-row-id="admit_stream" data-message-ids="admit_stream" data-participant-ids="guards,bridge" data-row-type="message" data-kind="call">
+      <rect x="1226" y="1594" width="360" height="34" rx="7" fill="#f8f8f6"/>
+      <text x="1406" y="1617" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="1406" dy="0">Admit the stream</tspan></text>
+      
+      <path d="M1202 1633H1602" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow)"/>
+    </g><g data-row-id="start_stream" data-message-ids="start_stream" data-participant-ids="bridge,owner_service" data-row-type="message" data-kind="async">
+      <rect x="1532" y="1658" width="360" height="81" rx="7" fill="#f8f8f6"/>
+      <text x="1712" y="1681" text-anchor="middle" font-size="13" fill="#62625e"><tspan x="1712" dy="0">One v0 protocol stream, hello first</tspan></text>
+      <text x="1712" y="1703" text-anchor="middle" font-size="11" fill="#7d7d77"><tspan x="1712" dy="0">Without remote hosts the local owner service runs</tspan><tspan x="1712" dy="15">in-process; with them a per-stream broker routes to the</tspan><tspan x="1712" dy="15">owning Sidecar.</tspan></text>
+      <path d="M1610 1744H1806" fill="none" stroke="#85857f" stroke-width="2" marker-end="url(#arrow-open)"/>
+    </g></g>
+  <g font-family="Arial, Helvetica, sans-serif" data-export-layer="footer">
+    <path d="M70 992H1850" stroke="#ddddda"/>
+    <text x="70" y="1027" font-size="12" font-weight="600" letter-spacing="1" fill="#626b6f">CURRENT · 19 INTERACTIONS</text>
+    <text x="620" y="1027" font-size="11" fill="#7d7d77">SOURCE · Authored 2026-10-03 from docs/reference/ui-api.md (Pairing, Terminal stream) and internal/uiapi (auth.go, pairpage.go, terminal.go) and internal/cli/api.go, as implemented for U0 on main at 2f0dc1e7. An authored scena…</text>
+  </g>
+  </svg>
