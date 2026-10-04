@@ -56,7 +56,7 @@ The status values are `queued`, `running`, `review`, `fixing`, `merged` and `blo
 | U1-d presence and v1 frames | td-713745 | sidecar | Codex | td-552e24 merged | merged (c75857ac) |
 | U1-e web app shell and Sessions | td-57a73e | sidecar-ui | Codex | U0-b | merged (sidecar-ui 8d183fc); Claude review fixed 6 UX defects |
 | U1-f SDK adopts v1 | td-820df7 | sidecar-ui | Codex | U1-a, U1-d | merged (sidecar-ui fdad866); Claude review fixed the paste-marker strip |
-| U1-g iOS adopts presence and events | td-fde8cf | sidecar-mobile | Codex | U1-a, U1-d | running (Codex, ~/code/sidecar-mobile-u1g-presence, branch u1g-presence); presence first against the u1d branch, events after U1-a |
+| U1-g iOS adopts presence and events | td-fde8cf | sidecar-mobile | Codex | U1-a, U1-d | review (Claude reviewer); branch u1g-presence @c408f9f. Simulator and legacy-server proofs pass; device proof is Marcus's |
 | U1-i persist browser sessions | td-165353 | sidecar | Codex | U1-a, U1-b merged (both touch internal/uiapi) | merged (7f2ce809). SDK adoption running (td-3ac23b, ~/code/sidecar-ui-u1i-sdk) |
 | U1-e2 web app polish | td-71e0e5 | sidecar-ui | Codex | U1-e | merged (sidecar-ui 5e0ecb2) |
 | U1-c2 socket activation | td-11f799 | sidecar | Codex | U1-c | running (Codex, ~/code/sidecar-u1c2-socket-activation): launchd Sockets / systemd .socket so the port is never free during restarts |
