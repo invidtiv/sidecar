@@ -196,6 +196,10 @@ func TestEventsAttachmentsAndHolderChangesAreCredentialScoped(t *testing.T) {
 	b.countsMu.Lock()
 	b.holder = &GeometryHolder{Kind: "mobile", Label: "iPhone"}
 	b.countsMu.Unlock()
+	// The harness clock controls cache expiry. Signal after advancing it so
+	// the observed change does not depend on the wall-clock polling tick.
+	h.clock.Advance(legacyHolderTTL)
+	h.s.clients.changes.signal()
 	e = readEvent(t, c)
 	if e.Type != "terminals" || (*e.Terminals)[0].Holder.Label != "iPhone" {
 		t.Fatalf("holder: %+v", e)

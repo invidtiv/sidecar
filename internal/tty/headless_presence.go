@@ -199,6 +199,10 @@ func (g *HeadlessGeometry) Paste(data []byte) (err error) {
 }
 
 func (g *HeadlessGeometry) pasteOperation(data []byte) (string, func() error, error) {
+	data = NormalizeHeadlessPaste(data)
+	if len(data) == 0 {
+		return "", nil, fmt.Errorf("tmux control: empty headless paste after removing bracketed-paste markers")
+	}
 	file, err := os.CreateTemp("", "sidecar-paste-*") // CreateTemp creates mode 0600.
 	if err != nil {
 		return "", nil, err

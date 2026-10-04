@@ -656,6 +656,26 @@ func sameConfiguredProjects(paths []string, projects []Project) bool {
 	return true
 }
 
+func sameConfiguredProjectMembership(paths []string, projects []Project) bool {
+	if len(paths) != len(projects) {
+		return false
+	}
+	// Ordering is presentation, not configuration authority. Keep pending
+	// operations alive when the same projects are reordered. Collection still
+	// refreshes to apply the configured presentation order.
+	membership := make(map[string]int, len(paths))
+	for _, path := range paths {
+		membership[path]++
+	}
+	for _, project := range projects {
+		if membership[project.Path] == 0 {
+			return false
+		}
+		membership[project.Path]--
+	}
+	return true
+}
+
 // SetProjects applies a changed configured project set immediately, canceling
 // any cycle that is still running so the change cannot be silently dropped.
 // Ensure defers to an in-flight cycle, which is right for visibility gestures
@@ -669,7 +689,7 @@ func (m *Model) SetProjects(projects []Project) tea.Cmd {
 }
 
 func (m *Model) start(projects []Project, reason string) tea.Cmd {
-	if !sameConfiguredProjects(m.configuredPaths, projects) {
+	if !sameConfiguredProjectMembership(m.configuredPaths, projects) {
 		m.configurationGeneration++
 		// Their replies now belong to the previous configuration. Retire the
 		// dialogs too, rather than leaving a busy modal with no valid reply.

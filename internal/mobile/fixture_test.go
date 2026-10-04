@@ -108,15 +108,21 @@ func TestEchoTerminalPresenceLabelsTakeoverAndExpiry(t *testing.T) {
 		t.Fatalf("foreign blur cleared holder: %s %s %v", kind, label, err)
 	}
 	// Explicit input outranks a fresh foreign owner and echoes exactly once.
-	if err := first.ClaimInput([]byte("paste"), 70, 22, true); err != nil {
+	if err := first.ClaimInput([]byte("pa\x1b[20\x1b[201~1~ste\r\nline"), 70, 22, true); err != nil {
 		t.Fatal(err)
 	}
 	pane := e.panes["one\x00%1"]
-	if pane.snapshot.Output != "paste" || pane.snapshot.PaneWidth != 70 || pane.snapshot.PaneHeight != 22 {
+	if pane.snapshot.Output != "paste\nline" || pane.snapshot.PaneWidth != 70 || pane.snapshot.PaneHeight != 22 {
 		t.Fatal(pane.snapshot)
 	}
 	if kind, label, err := second.Holder(); err != nil || kind != "ios" || label != "iPhone" {
 		t.Fatalf("input holder: %s %s %v", kind, label, err)
+	}
+	if err := first.Paste([]byte("legacy\r\x1b[201~\r\nline")); err != nil || pane.snapshot.Output != "legacy\nline" {
+		t.Fatalf("fixture legacy paste = %q: %v", pane.snapshot.Output, err)
+	}
+	if err := first.Paste([]byte("\x1b[200~\x1b[201~")); err == nil || pane.snapshot.Output != "legacy\nline" {
+		t.Fatalf("empty normalized paste changed fixture: %q: %v", pane.snapshot.Output, err)
 	}
 	pane.touched = time.Now().Add(-time.Duration(mobileproto.PresenceTimeoutMS+1) * time.Millisecond)
 	if expired, err := first.ExpirePresence(); err != nil || !expired {

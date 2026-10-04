@@ -118,6 +118,7 @@ type Server struct {
 	eventOnce     sync.Once
 	eventErr      error
 	catalogEvents eventSignals
+	holderCache   legacyHolderCache
 	// contentWatches bounds live content registrations per credential.
 	contentWatches watchBudget
 }

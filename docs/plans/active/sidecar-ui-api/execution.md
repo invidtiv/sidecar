@@ -269,4 +269,4 @@ Each one is a td issue with the exact command and output. Fixes run as their own
 | td-6153d0 | `create worktree --agent codex` sometimes leaves the shell without Codex and reports success; under load. Recovered with `agent start --kind codex` | open |
 | td-ab3af0 | Friction lane 2 (Codex, ~/code/sidecar-friction-2): notes test hang td-aa4fb7, loopback/tmux-drive load flakes td-d881e2, silent Codex start failure td-6153d0, project reorder must not cancel operations, shared events holder polling, server paste-marker strip | review (Codex reviewer, shell "rev friction-2") |
 | td-58caeb | `comms send @ui-u2b` returned agent-not-found from another lane; peer handles are not reliably discoverable | open |
-| td-07f7b1 | Eight simultaneous valid `create shell` calls gave 1 success and 7 generic exit-1 errors (allocation race). Codex bug lane ~/code/sidecar-bug-07f7b1 | running |
+| td-07f7b1 | Eight simultaneous valid `create shell` calls gave 1 success and 7 generic exit-1 errors (allocation race). Fixed on bug-07f7b1 @d375077a with atomic allocation under the shellstate lock | review (Codex reviewer, shell "rev 07f7b1") |

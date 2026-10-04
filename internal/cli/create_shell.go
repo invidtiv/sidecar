@@ -407,10 +407,11 @@ func runCreateShellWorkspace(env Env, dest openDestination, flags createCommonFl
 			Session:     session,
 			WorkDir:     workDir,
 		},
-		Project:   proj.Key,
-		Acked:     len(acks) > 0,
-		Surface:   createAckSurface(acks),
-		Placement: createPlacementWorkspace,
+		Project:    proj.Key,
+		Acked:      len(acks) > 0,
+		Surface:    createAckSurface(acks),
+		Placement:  createPlacementWorkspace,
+		AgentStart: createdAgentStart(agentKind, startAgent, seedErr),
 	}
 
 	if flags.jsonOutput {
@@ -533,7 +534,8 @@ type createShellInfo struct {
 }
 
 type createShellResult struct {
-	Shell createShellInfo `json:"shell"`
+	AgentStart *createAgentStartResult `json:"agent_start,omitempty"`
+	Shell      createShellInfo         `json:"shell"`
 	// Project is the registered project slug the shell belongs to: the value
 	// `--project` on every other verb accepts, so a caller holding this result
 	// can address what it created without guessing the selector.
