@@ -294,18 +294,6 @@ func (g *HeadlessGeometry) Holder() (kind, label string, err error) {
 	if len(parts) != 9 || parts[0] != strconv.Itoa(g.expected.ServerPID) || parts[1] != g.expected.SessionID || parts[2] != g.expected.SessionCreated || parts[3] != g.expected.Session || parts[4] != g.expected.Pane {
 		return "", "", fmt.Errorf("tmux control: holder identity changed")
 	}
-	owner := leaseOwner(parts[5])
-	if parts[5] == "" {
-		return "", "", nil
-	}
-	if parts[6] == owner && parts[7] != "" {
-		return parts[7], parts[8], nil
-	}
-	if strings.Contains(owner, "-mobile-") {
-		return "unknown", "Another viewer", nil
-	}
-	if host, _, ok := splitInstanceID(owner); ok {
-		return "tui", "TUI on " + host, nil
-	}
-	return "unknown", "Another viewer", nil
+	kind, label = holderFromMetadata(parts[5], parts[6], parts[7], parts[8])
+	return kind, label, nil
 }

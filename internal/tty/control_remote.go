@@ -675,7 +675,15 @@ func (m *Model) setRemoteInputSize(width, height int) {
 // SetApplicationFocused releases a remote geometry claim on blur and reclaims
 // it on focus if this pane still owns input.
 func (m *Model) SetApplicationFocused(focused bool) tea.Cmd {
-	if !m.remote || m.remoteBackend == nil {
+	if !m.remote {
+		if focused && m.IsActive() {
+			// The fitted viewport can be unchanged while a peer changed tmux.
+			m.resizeOwed = true
+			return m.ResizeAndPollImmediate(m.Width, m.Height)
+		}
+		return nil
+	}
+	if m.remoteBackend == nil {
 		return nil
 	}
 	m.remoteInputMu.Lock()

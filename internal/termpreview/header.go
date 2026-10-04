@@ -4,7 +4,20 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/tty"
 )
+
+// WithGeometryHolderHint preserves the surface's existing keyboard hint while
+// naming the other screen from the shared cached lease observation.
+func WithGeometryHolderHint(hints, target string) string {
+	if holder := tty.GeometryHolderHint(target); holder != "" {
+		if hints == "" {
+			return holder
+		}
+		return hints + " · " + holder
+	}
+	return hints
+}
 
 // ChipGap is the columns between two chips, and the minimum gap between a
 // header row's left and right regions.

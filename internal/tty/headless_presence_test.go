@@ -409,6 +409,16 @@ func TestFocusedAttachmentsDoNotPingPongAndPasteCannotInjectCommands(t *testing.
 	if owned, e := a.Presence(true, true, 0, 100, 30, false); e != nil || !owned {
 		t.Fatalf("first viewer claim: %v %v", owned, e)
 	}
+	run("set-option", "-g", "@proof-resizes", "0")
+	run("set-hook", "-g", "after-resize-window", `set-option -gF @proof-resizes "#{e|+:#{@proof-resizes},1}"`)
+	for i := 0; i < 3; i++ {
+		if owned, e := a.Presence(true, true, 0, 100, 30, false); e != nil || !owned {
+			t.Fatalf("settled heartbeat: %v %v", owned, e)
+		}
+	}
+	if got := run("show-options", "-gqv", "@proof-resizes"); got != "0" {
+		t.Fatalf("settled presence issued %s resize-window calls, want zero", got)
+	}
 	// Both attachments share a process but must retain separate lease identities.
 	// Advance beyond the stale budget while the owner keeps heartbeating.
 	for i := 0; i < 15; i++ {

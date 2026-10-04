@@ -63,6 +63,41 @@ func TestRegainingFocusReconcilesTheSelectedTerminalOnce(t *testing.T) {
 	}
 }
 
+func TestApplicationFocusSchedulesGeometryForAnIdleInteractivePane(t *testing.T) {
+	p := newTerminalEmbeddingTestPlugin()
+	p.width, p.height = 100, 30
+	p.sidebarVisible = false
+	p.worktrees = []*Worktree{{Key: "worktree", Name: "worktree", Agent: &Agent{TmuxSession: "project", TmuxPane: "%1"}}}
+	p.interactiveState = &InteractiveState{Active: true, TargetSession: "project", TargetPane: "%1"}
+	_, cmd := p.Update(tea.FocusMsg{})
+	if cmd == nil {
+		t.Fatal("application focus did not schedule geometry; idle panes cannot recover the fitted size")
+	}
+	originalQuery, originalResize := workspaceQueryPaneSize, workspaceResizeTmuxPane
+	t.Cleanup(func() { workspaceQueryPaneSize, workspaceResizeTmuxPane = originalQuery, originalResize })
+	workspaceQueryPaneSize = func(string) (int, int, bool) { return 73, 19, true }
+	var resized bool
+	workspaceResizeTmuxPane = func(target string, width, height int) {
+		if target == "%1" && width > 73 && height > 19 {
+			resized = true
+		}
+	}
+	var execute func(tea.Cmd)
+	execute = func(c tea.Cmd) {
+		if c != nil {
+			if batch, ok := c().(tea.BatchMsg); ok {
+				for _, next := range batch {
+					execute(next)
+				}
+			}
+		}
+	}
+	execute(cmd)
+	if !resized {
+		t.Fatal("focus command did not restore the current fitted viewport")
+	}
+}
+
 func TestTerminalCaptureTraceIsOptInAndMetadataOnly(t *testing.T) {
 	var output bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&output, nil))
