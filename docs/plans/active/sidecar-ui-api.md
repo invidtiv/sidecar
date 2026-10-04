@@ -1,6 +1,6 @@
 # Sidecar UI API: build your own Sidecar UI, plus a reference web UI
 
-**Status:** shape agreed with Marcus, not started. No td epic yet. **Created:** 2026-10-03.
+**Status:** U0 in progress. `~/code/sidecar-ui` created (private). Wire contract: [UI API v0](../../reference/ui-api.md). **Epic:** td-921cfd. **U0:** td-e59c45 (U0-a td-ba925d, U0-b td-83cce9, U0-c td-d8fcb0). **Created:** 2026-10-03.
 
 Related: [Sidecar mobile](sidecar-mobile.md) (the headless terminal protocol this plan grows), [mobile protocol reference](../../reference/mobile-protocol.md), [Sidecar as its own remote host runtime](sidecar-remote-hosts.md), [remote host viewer screen](../implemented/remote-host-viewer-screen.md), [pane layout control](../implemented/pane-layout-control.md), [embedded terminal transport decisions](../implemented/embedded-terminal-transport-decisions.md).
 
