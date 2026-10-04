@@ -1,7 +1,7 @@
 // Authored architecture for Sidecar. Evidence paths are relative to the repository root.
 // Status: Fractal's #proposed tag marks planned work and shows only in proposed scenes;
 // untagged elements are current. For the UI API (api, termproto, uiclients, cli.api_*),
-// current means U0 as implemented on main at 2f0dc1e7, and #proposed means U1 to U4 in
+// current means U0 plus U1-a events as implemented in this tree; #proposed means remaining U1 to U4 in
 // docs/plans/active/sidecar-ui-api.md. Each proposed description names its milestone.
 specification {
   element subsystem
@@ -310,7 +310,7 @@ model {
 
   api = subsystem 'UI API Host (sidecar api serve)' {
     summary 'Headless HTTP and WebSocket API for UIs that are not the TUI'
-    description 'One long-running headless process per user exposing Sessions and live terminals over HTTP and WebSocket. It owns transport, trust and the HTTP/WebSocket mapping only: what a Sessions row says and what a terminal stream means belong to the terminal protocol services behind its Backend seam. It never starts, stops or restarts tmux. Untagged children are U0, implemented on main at 2f0dc1e7; #proposed children are U1 to U4 work from the UI API plan.'
+    description 'One long-running headless process per user exposing Sessions and live terminals over HTTP and WebSocket. It owns transport, trust and the HTTP/WebSocket mapping only: what a Sessions row says and what a terminal stream means belong to the terminal protocol services behind its Backend seam. It never starts, stops or restarts tmux. Untagged children are U0 and U1-a events implemented in this tree; #proposed children are remaining U1 to U4 work from the UI API plan.'
     metadata { uid 'api' fractalColor '#7F9FC4' evidence ['internal/uiapi/server.go', 'internal/cli/api.go', 'docs/reference/ui-api.md', 'docs/plans/active/sidecar-ui-api.md'] }
 
     local = component 'Local Listener' {
@@ -359,8 +359,8 @@ model {
     }
 
     routes = component 'Route Mux (/api/v0)' {
-      summary 'hello, sessions, status, tickets, pairing, origins, static UI'
-      description 'Versioned routes served identically on all three listeners: hello, sessions (the same code path as sidecar mobile sessions --json), status (byte for byte what sidecar api status --json prints), ws-tickets, pairing, origins and the terminal upgrade, plus the --ui static bundle with SPA fallback. Errors reuse the CLI refusal vocabulary.'
+      summary 'hello, sessions, status, tickets, pairing, origins, streams, static UI'
+      description 'Versioned routes served identically on all three listeners: hello, sessions (the same code path as sidecar mobile sessions --json), status (byte for byte what sidecar api status --json prints), ws-tickets, pairing, origins and terminal/events upgrades, plus the --ui static bundle with SPA fallback. Errors reuse the CLI refusal vocabulary.'
       metadata { uid 'api.routes' fractalColor '#7F9FC4' evidence ['internal/uiapi/handler.go', 'internal/uiapi/static.go', 'internal/uiapi/errors.go'] }
     }
 
@@ -372,10 +372,9 @@ model {
     }
 
     events = component 'Events Stream' {
-      #proposed
-      summary 'One WebSocket per client for invalidations and attention (U1)'
-      description 'Planned for U1: one WebSocket per client carrying generation-numbered catalog changes, attention (an agent needs input or finished), content invalidation from livewatch, and lease holder changes. Every message names the resource it invalidates. The native app consumes it too.'
-      metadata { uid 'api.events' fractalColor '#7F9FC4' evidence ['docs/plans/active/sidecar-ui-api.md'] }
+      summary 'Authenticated catalog, attention and attachment push'
+      description 'GET /api/v0/events uses the terminal trust model on every listener and emits hello, generation-numbered catalog snapshots, needs-input or finished attention, attachment and holder snapshots, and orderly shutdown. A single hostserve observer reuses manifest watches and desktop agent status collection; remote invalidations come from registry snapshots and diffs. State coalesces in bounded per-client buffers. sidecar api events --stdio bridges the Local socket to JSONL for SSH consumers; native adoption and content invalidation remain proposed.'
+      metadata { uid 'api.events' fractalColor '#7F9FC4' evidence ['internal/uiapi/events.go', 'internal/cli/api_events_source.go', 'internal/cli/api_events.go', 'scripts/ui-api-proof.sh', 'docs/reference/ui-api.md'] }
     }
 
     spec = component 'Contract Spec & Schemas' {
@@ -606,11 +605,17 @@ model {
     metadata { uid 'untrusted-browser' }
   }
 
+  api.routes .streams api.events 'Upgrades GET /api/v0/events' { metadata { uid 'routes-events' evidence 'internal/uiapi/handler.go' } }
+  api.events .reads remoting.daemon 'Local manifest and status observations' { metadata { uid 'events-local-observer' evidence 'internal/cli/api_events_source.go' } }
+  api.events .reads remoting.client 'Remote inventory and health changes' { metadata { uid 'events-remote-observer' evidence 'internal/cli/api_events_source.go' } }
+  api.events .reads terminal.control 'Observed open-session geometry holder' { metadata { uid 'events-holder' evidence 'internal/cli/api_events_source.go' } }
+  cli.api_cmd .streams api.events 'Local JSONL bridge for SSH clients' { metadata { uid 'apicmd-events' evidence 'internal/cli/api_events.go' } }
+
   // UI API roadmap (U1 to U4, proposed)
-  uiclients.sdk .streams api.events 'Catalog, attention and invalidation events' { metadata { uid 'sdk-events' } }
+  uiclients.sdk .streams api.events 'Catalog, attention and invalidation events' { #proposed metadata { uid 'sdk-events' } }
   api.events .reads termproto.catalog 'Generation-numbered catalog changes' { metadata { uid 'events-catalog' } }
   api.events .reads agents.lifecycle 'Attention: needs input or finished' { metadata { uid 'events-attention' } }
-  api.events .reads panes.live 'Content invalidation from livewatch' { metadata { uid 'events-live' } }
+  api.events .reads panes.live 'Content invalidation from livewatch' { #proposed metadata { uid 'events-live' } }
   cli.api_cmd .calls api.spec 'sidecar api spec' { metadata { uid 'apicmd-spec' } }
   uiclients.scripts .reads api.spec 'Reads the whole contract' { metadata { uid 'scripts-spec' } }
   api.fixtures .supplies api.routes 'Recorded sessions, no tmux' { metadata { uid 'fixtures-routes' } }
