@@ -673,6 +673,7 @@ func mergeConfig(cfg *Config, raw *rawConfig) {
 
 	// API
 	if raw.API != nil {
+		cfg.API.UIDir = raw.API.UIDir
 		for _, login := range raw.API.TailnetLogins {
 			if login = strings.TrimSpace(login); login != "" {
 				cfg.API.TailnetLogins = append(cfg.API.TailnetLogins, login)

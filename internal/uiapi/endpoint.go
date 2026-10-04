@@ -70,6 +70,29 @@ func ReadEndpoint(stateDir string) (Endpoint, error) {
 	return endpoint, nil
 }
 
+// CheckServiceInstall refuses a service alongside an existing foreground server.
+// The lock is authoritative even before discovery is published or if it is lost.
+// A held lock is replaceable only when discovery identifies the manager's PID.
+func CheckServiceInstall(stateDir string, managedPID int) error {
+	lock, err := acquireLock(Dir(stateDir))
+	if err == nil {
+		releaseLock(lock)
+		return nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return nil // No API state directory, hence no held serve.lock.
+	}
+	var running *AlreadyRunningError
+	if !errors.As(err, &running) {
+		return fmt.Errorf("check API server lock: %w; check permissions on %s and retry service install", err, Dir(stateDir))
+	}
+	endpoint, endpointErr := ReadEndpoint(stateDir)
+	if endpointErr == nil && managedPID > 0 && endpoint.PID == managedPID {
+		return nil
+	}
+	return fmt.Errorf("API server is already running outside this service (pid %d, or still starting); stop that API process, then retry `sidecar api service install`", running.PID)
+}
+
 // acquireLock takes the per-state-tree single-instance lock. The kernel
 // releases it when the process dies, so a crashed server never blocks the next
 // one; the recorded PID only makes the refusal say who holds it.
