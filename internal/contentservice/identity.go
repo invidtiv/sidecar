@@ -8,6 +8,7 @@ import (
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/shellstate"
+	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
 const (
@@ -79,7 +80,13 @@ func (s *Service) lookupWorkspace(ctx context.Context, workspaceID string) (Work
 		}
 		for _, sh := range shells {
 			if sh.TmuxName == key {
-				return Workspace{ID: workspaceID, Kind: kindShell, Key: key, Root: root}, nil
+				paths := []string{root}
+				if sh.WorkDir != "" {
+					if worktrees, err := s.listWorktrees(ctx, root); err == nil {
+						paths = append(paths, worktrees...)
+					}
+				}
+				return Workspace{ID: workspaceID, Kind: kindShell, Key: key, Root: workspaceinventory.OwningWorkspacePath(sh.WorkDir, root, paths)}, nil
 			}
 		}
 		return Workspace{}, Rejected("workspace %q no longer owns this shell", workspaceID)

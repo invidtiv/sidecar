@@ -41,7 +41,7 @@ func TestUIAPIFixtureCorpus(t *testing.T) {
 			EventMessage{Type: "viewer", Seq: 2, Viewer: &ViewerIdentity{ID: "api-viewer-fixture", Capability: "uiRequestRelayV1"}},
 			ViewerPresenceRequest{ViewerID: "api-viewer-fixture", Focused: true, Visible: true, Project: "fixture-project", Session: "fixture-echo", Viewport: Viewport{Width: 1200, Height: 800}, FocusedPane: 1},
 			ViewerPresenceResponse{Holder: true},
-			EventMessage{Type: "ui_request", Seq: 3, UIRequest: &UIRequestEvent{ID: "fixture-request", Action: uirequest.ActionOpen, Project: "fixture-project", Request: uirequest.Request{Viewer: "api-viewer-fixture", Version: 1, ID: "fixture-request", CreatedAt: now, TTLMs: 15000, Action: uirequest.ActionOpen, Origin: uirequest.Origin{WorkDir: "/workspace/fixture", TmuxSession: "fixture-echo"}, Target: uirequest.Target{Kind: "file", Value: "README.md"}}, Document: LayoutDocument{Layout: &state.PaneLayoutJSON{Split: &state.PaneSplitJSON{Axis: "cols", Ratio: 50, A: &state.PaneLayoutJSON{Kind: "terminal", Session: "fixture-echo"}, B: &state.PaneLayoutJSON{Kind: "doc", Tabs: []state.PaneDocTabJSON{{Path: "README.md"}}}}}}, ETag: `"synthetic-layout-revision"`, ExpiresAt: now.Add(15 * time.Second)}},
+			EventMessage{Type: "ui_request", Seq: 3, UIRequest: &UIRequestEvent{ID: "fixture-request", Action: uirequest.ActionOpen, Project: "fixture-project", Request: uirequest.Request{Viewer: "api-viewer-fixture", Version: 1, ID: "fixture-request", CreatedAt: now, TTLMs: 15000, Action: uirequest.ActionOpen, Origin: uirequest.Origin{WorkDir: "/workspace/fixture", TmuxSession: "fixture-echo", TmuxPane: "%1"}, Target: uirequest.Target{Kind: "file", Value: "README.md"}}, OriginPane: 1, Document: LayoutDocument{Layout: &state.PaneLayoutJSON{Split: &state.PaneSplitJSON{Axis: "cols", Ratio: 50, A: &state.PaneLayoutJSON{Kind: "terminal", Session: "fixture-echo", Attachment: &state.PaneAttachmentJSON{Selector: "opaque-fixture-selector", ExpectedTarget: identity}}, B: &state.PaneLayoutJSON{Kind: "doc", Tabs: []state.PaneDocTabJSON{{Path: "README.md"}}}}}}, ETag: `"synthetic-layout-revision"`, ExpiresAt: now.Add(15 * time.Second)}},
 			ViewerAckRequest{ViewerID: "api-viewer-fixture", ID: "fixture-request", Status: uirequest.StatusOpened},
 		},
 		"session-proof.json": []any{
@@ -55,7 +55,7 @@ func TestUIAPIFixtureCorpus(t *testing.T) {
 		"content-note.json":  contentservice.ReadResult{Kind: "note", Operation: "note", Workspace: "fixture-project", Target: "nt-123456", Revision: "fixture-note-v1", Note: &contentservice.NoteDTO{ID: "nt-123456", Title: "Fixture note", Content: "A note pane."}},
 		"content-diff.json":  contentservice.ReadResult{Kind: "diff", Operation: "working-tree", Workspace: "fixture-project", Target: "working-tree", Revision: "fixture-diff-v1", Diff: &contentservice.DiffDTO{Target: "working-tree", Snapshot: &contentservice.DiffSnapshotDTO{Files: []contentservice.DiffFileRowDTO{{Path: "README.md", Raw: "@@ -1 +1 @@\n-old\n+new\n"}}}}},
 		"content-tree.json":  contentservice.TreeResult{Kind: "tree", Workspace: "fixture-project", Dirs: []contentservice.TreeDir{{Path: "", Entries: []contentservice.TreeEntry{{Name: "README.md"}}}}},
-		"layout.json":        LayoutDocument{Layout: &state.PaneLayoutJSON{Split: &state.PaneSplitJSON{Axis: "cols", Ratio: 50, A: &state.PaneLayoutJSON{Kind: "terminal", Session: "fixture-echo"}, B: &state.PaneLayoutJSON{Kind: "doc", Tabs: []state.PaneDocTabJSON{{Path: "README.md", Mode: "rendered"}}}}}},
+		"layout.json":        LayoutDocument{Layout: &state.PaneLayoutJSON{Split: &state.PaneSplitJSON{Axis: "cols", Ratio: 50, A: &state.PaneLayoutJSON{Kind: "terminal", Session: "fixture-echo", Attachment: &state.PaneAttachmentJSON{Selector: "opaque-fixture-selector", ExpectedTarget: identity}}, B: &state.PaneLayoutJSON{Kind: "doc", Tabs: []state.PaneDocTabJSON{{Path: "README.md", Mode: "rendered"}}}}}},
 		"content-event.json": EventMessage{Type: "content", Seq: 4, Content: &ContentEvent{Resources: []ContentRef{{Project: "fixture-project", Kind: "file", Target: "README.md"}}}},
 		"status.json":        Status{APIVersion: 0, APIInstance: "api_fixture", ServerVersion: "fixture", PID: 4242, StartedAt: now, Listeners: []ListenerInfo{{Name: ListenerLocal, Network: "unix", Address: "/tmp/fixture/api.sock"}, {Name: ListenerBrowser, Network: "tcp", Address: "127.0.0.1:7861"}}, Clients: []ClientInfo{}, Terminals: []TerminalInfo{}},
 		"error.json":         ErrorBody{Error: ErrorDetail{Code: CodeUnauthenticated, Message: "Pair this browser with sidecar api open."}},
@@ -79,6 +79,23 @@ func TestUIAPIFixtureCorpus(t *testing.T) {
 	values["layout-workspace-exchange.json"] = []any{
 		map[string]any{"method": "GET", "path": "/api/v0/projects/fixture-project/layout", "query": map[string]string{"workspace": workspace}, "response": LayoutDocument{}, "etag": `"synthetic-empty-layout"`},
 		map[string]any{"method": "PUT", "path": "/api/v0/projects/fixture-project/layout", "query": map[string]string{"workspace": workspace}, "if_match": `"synthetic-empty-layout"`, "request": uiRequest.Document, "response": uiRequest.Document, "etag": `"synthetic-worktree-layout"`},
+	}
+	secondIdentity := identity
+	secondIdentity.Pane = "%2"
+	firstHint := &state.PaneAttachmentJSON{Selector: "opaque-fixture-candidate-one", ExpectedTarget: identity}
+	secondHint := &state.PaneAttachmentJSON{Selector: "opaque-fixture-candidate-two", ExpectedTarget: secondIdentity}
+	candidates := LayoutDocument{Layout: &state.PaneLayoutJSON{Split: &state.PaneSplitJSON{Axis: "cols", Ratio: 50,
+		A: &state.PaneLayoutJSON{Kind: "terminal", Session: identity.Session, Attachment: firstHint},
+		B: &state.PaneLayoutJSON{Kind: "shell", Session: identity.Session, Attachment: secondHint}}}}
+	values["layout-candidates.json"] = candidates
+	values["viewer-candidates-exchange.json"] = []any{
+		map[string]any{"method": "PUT", "path": "/api/v0/projects/fixture-project/layout", "request": candidates, "response": candidates, "etag": `"synthetic-candidate-layout"`},
+		EventMessage{Type: "ui_request", Seq: 3, UIRequest: &UIRequestEvent{ID: "fixture-candidate-request", Action: uirequest.ActionLayout, Project: "fixture-project", OriginPane: 3,
+			Request: uirequest.Request{Version: 1, ID: "fixture-candidate-request", CreatedAt: now, TTLMs: 15000, Action: uirequest.ActionLayout,
+				Origin: uirequest.Origin{TmuxSession: identity.Session, TmuxPane: secondIdentity.Pane, WorkDir: "/workspace/fixture"}, Payload: json.RawMessage(`{"mode":"get"}`)},
+			Document: candidates, ETag: `"synthetic-candidate-layout"`, ExpiresAt: now.Add(15 * time.Second)}},
+		ViewerAckRequest{ViewerID: "api-viewer-fixture", ID: "fixture-candidate-request", Status: uirequest.StatusOpened},
+		ViewerAckResponse{Document: candidates, ETag: `"synthetic-candidate-layout"`},
 	}
 	project := workspacewire.Project{Key: "fixture-project", Name: "Fixture project", Path: "/workspace/fixture"}
 	values["projects.json"] = workspacewire.Projects{Projects: []workspacewire.Project{project}}

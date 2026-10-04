@@ -6,15 +6,18 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/uirequest"
+	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
 type openDestination struct {
@@ -251,7 +254,23 @@ func registeredProjectForCreate(stateDir string, dest openDestination) (register
 	return registeredProject{}, &destError{code: 2, msg: unregisteredCreateProject}
 }
 
-func resolveOpenDestination(ctx context.Context, stateDir, shellFlag, projectFlag string, register projectRegistration) (openDestination, error) {
+func resolveOpenDestination(ctx context.Context, stateDir, shellFlag, projectFlag string, register projectRegistration) (dest openDestination, err error) {
+	// Carry only independently checked caller evidence matching the resolved
+	// session/socket. Explicit targeting of another shell has no pane identity.
+	defer func() {
+		if err != nil || dest.Origin.TmuxSession == "" {
+			return
+		}
+		if dest.Resolved == uirequest.ResolvedCurrentShell && dest.Origin.WorkDir != "" {
+			if proj, lookupErr := registeredProjectForCreate(stateDir, dest); lookupErr == nil {
+				dest.Origin.WorkDir = resolveShellWorkspacePath(proj, dest.Origin.WorkDir)
+			}
+		}
+		identity, identityErr := currentPaneIdentity(ctx)
+		if identityErr == nil && identity.session == dest.Origin.TmuxSession && dest.Origin.Namespace != "" && canonicalOpenPath(dest.Origin.Namespace) == identity.socket {
+			dest.Origin.TmuxPane = identity.pane
+		}
+	}()
 	if shellFlag != "" || projectFlag != "" {
 		return resolveExplicitDestination(stateDir, shellFlag, projectFlag, register)
 	}
@@ -314,10 +333,7 @@ func resolveExplicitDestination(stateDir, shellFlag, projectFlag string, registe
 		if err != nil {
 			return openDestination{}, err
 		}
-		workDir := resolveTargetWorkDir(hitProj, "")
-		if workDir == "" && shell.WorkDir != "" {
-			workDir = shell.WorkDir
-		}
+		workDir := resolveShellWorkspacePath(hitProj, shell.WorkDir)
 		return destFromShell(hitProj, shell, workDir, uirequest.ResolvedShell), nil
 	}
 
@@ -895,6 +911,29 @@ func (p registeredProject) roots() []string {
 	return roots
 }
 
+// An explicitly named shell belongs to its durable directory, regardless of
+// the caller's checkout. Use current Git membership, not other shells' paths.
+func resolveShellWorkspacePath(proj registeredProject, workDir string) string {
+	if workDir == "" {
+		if proj.Path == "" {
+			return ""
+		}
+		return canonicalOpenPath(proj.Path)
+	}
+	roots := []string{proj.Path}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "git", "--no-optional-locks", "-C", proj.Path, "worktree", "list", "--porcelain").Output()
+	if err == nil {
+		for _, line := range strings.Split(string(out), "\n") {
+			if path, ok := strings.CutPrefix(line, "worktree "); ok {
+				roots = append(roots, path)
+			}
+		}
+	}
+	return workspaceinventory.OwningWorkspacePath(workDir, proj.Path, roots)
+}
+
 func resolveTargetWorkDir(proj registeredProject, raw string) string {
 	roots := proj.roots()
 	cwd, cwdErr := os.Getwd()
@@ -1044,6 +1083,9 @@ func uniqueShellDisplay(proj registeredProject) string {
 }
 
 func resolveTargetWorkDirForDest(stateDir string, dest openDestination, raw string) string {
+	if dest.Resolved == uirequest.ResolvedShell {
+		return dest.Origin.WorkDir
+	}
 	if dest.Origin.ProjectKey == "" {
 		return dest.Origin.WorkDir
 	}

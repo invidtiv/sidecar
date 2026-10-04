@@ -49,9 +49,11 @@ type UIRequestEvent struct {
 	Project   string            `json:"project"`
 	Workspace string            `json:"workspace,omitempty"`
 	Request   uirequest.Request `json:"request"`
-	Document  LayoutDocument    `json:"document"`
-	ETag      string            `json:"etag"`
-	ExpiresAt time.Time         `json:"expires_at"`
+	// OriginPane identifies the matched leaf in the pre-proposal tree preorder.
+	OriginPane int            `json:"origin_pane,omitempty"`
+	Document   LayoutDocument `json:"document"`
+	ETag       string         `json:"etag"`
+	ExpiresAt  time.Time      `json:"expires_at"`
 }
 type ViewerAckRequest struct {
 	ViewerID string           `json:"viewer_id"`

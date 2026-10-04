@@ -1923,7 +1923,9 @@ already on screen exactly as `layout get` prints them: the primary as
 {"kind":"primary"}, a split terminal as {"kind":"shell","session":
 "<tmux-session>"}. A spec omitting a live terminal declines naming the
 session — apply never destroys one. Passive panes not named are closed
-freely (their content re-opens). Pass `-` to read the spec from stdin.
+freely (their content re-opens). Carried API-viewer leaves retain their saved
+attachment hints; a spec never creates or replaces them. Pass `-` to read
+the spec from stdin.
 
 --pane opens panes ADDITIVELY without closing anything. Each value is one
 descriptor as its JSON object verbatim:
@@ -2003,7 +2005,8 @@ mutually exclusive with --shell and --project.
 
 A layout that escapes the grid vocabulary reports "grid": null plus the raw
 tree; it is still valid. Human output is a small ASCII sketch plus a table;
---json passes the payload through unchanged, which is the contract.
+--json passes the payload through unchanged, including opaque API-viewer
+attachment hints on live leaves. Those hints grant no terminal authority.
 
 Unlike open, a layout request never queues: when this shell is not on
 screen the request declines instead (exit 4), because a stale answer is

@@ -484,7 +484,7 @@ func cliErrln(w io.Writer, a ...any) {
 	_, _ = fmt.Fprintln(w, a...)
 }
 
-type shellIdentity struct{ session, socket, path string }
+type shellIdentity struct{ session, socket, path, pane string }
 
 func currentShellIdentity(ctx context.Context) (shellIdentity, error) {
 	identity, err := currentPaneIdentity(ctx)
@@ -523,7 +523,7 @@ func currentPaneIdentity(ctx context.Context) (shellIdentity, error) {
 	if len(parts) == 3 {
 		path = filepath.Clean(parts[2])
 	}
-	return shellIdentity{session: parts[0], socket: socket, path: path}, nil
+	return shellIdentity{session: parts[0], socket: socket, path: path, pane: pane}, nil
 }
 
 func lookupCurrentShellName(ctx context.Context, stateDir string, identity shellIdentity) (shellstate.LookupResult, error) {

@@ -38,11 +38,15 @@ func (s *Service) LookupProject(ctx context.Context, project, workspace string) 
 	if err != nil {
 		return Workspace{}, err
 	}
-	if ws.Kind == kindWorktree {
+	if ws.Kind == kindWorktree || ws.Root != root {
 		// Git keeps registrations for directories deleted outside Git. Resolve
 		// the checkout itself too: a recreated directory or substituted symlink
 		// must not borrow that registration (or redirect a layout store key).
-		expected, err := filepath.Abs(ws.Key)
+		expectedPath := ws.Root
+		if ws.Kind == kindWorktree {
+			expectedPath = ws.Key
+		}
+		expected, err := filepath.Abs(expectedPath)
 		if err != nil {
 			return Workspace{}, Rejected("workspace no longer owns this worktree")
 		}
