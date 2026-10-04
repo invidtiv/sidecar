@@ -121,8 +121,8 @@ type harness struct {
 
 func shortTempDir(t *testing.T) string {
 	t.Helper()
-	// Unix socket paths are bounded; t.TempDir under $TMPDIR is too long on macOS.
-	dir, err := os.MkdirTemp("/tmp", "uiapi")
+	// Unix socket paths are bounded; t.TempDir nests too deep on macOS.
+	dir, err := os.MkdirTemp("", "uiapi")
 	if err != nil {
 		t.Fatal(err)
 	}

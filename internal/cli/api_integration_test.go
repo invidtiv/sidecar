@@ -23,11 +23,14 @@ import (
 	"github.com/marcus/sidecar/internal/uiapi"
 )
 
-// apiStateTree isolates state and config the way setupIsolatedCLI does, under
-// /tmp so the API's Unix socket paths stay inside the sun_path bound.
+// apiStateTree isolates state and config the way setupIsolatedCLI does, in a
+// directory directly under the temp root so the API's Unix socket paths stay
+// inside the sun_path bound (t.TempDir nests too deep on macOS). Removal is
+// best-effort: a shell started in the private tmux inherits XDG_STATE_HOME,
+// and its login hooks can still write there after the session is killed.
 func apiStateTree(t *testing.T, projectRoot string) string {
 	t.Helper()
-	stateHome, err := os.MkdirTemp("/tmp", "scapi")
+	stateHome, err := os.MkdirTemp("", "scapi")
 	if err != nil {
 		t.Fatal(err)
 	}
