@@ -39,3 +39,32 @@ func TestOpenDestinationCarriesOnlyVerifiedMatchingPane(t *testing.T) {
 		t.Fatalf("missing caller pane: %+v %v", dest, err)
 	}
 }
+
+func TestExplicitShellUsesDurableWorkspaceOutsideCallerCheckout(t *testing.T) {
+	home, _ := setupShellCLI(t, "linked shell")
+	root, linked := t.TempDir(), t.TempDir()
+	if err := os.Mkdir(filepath.Join(linked, "src"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(home, "sidecar", "projects", "sidecar")
+	if err := os.WriteFile(filepath.Join(dir, "meta.json"), []byte(`{"path":`+quoteJSON(t, root)+`}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{"shells":[{"tmuxName":"sidecar-sh-sidecar-1","workDir":` + quoteJSON(t, filepath.Join(linked, "src")) + `}]}`
+	if err := os.WriteFile(filepath.Join(dir, "shells.json"), []byte(manifest), 0600); err != nil {
+		t.Fatal(err)
+	}
+	git := filepath.Join(filepath.SplitList(os.Getenv("PATH"))[0], "git")
+	script := "#!/bin/sh\nprintf 'worktree %s\\n\\nworktree %s\\n' " + shellQuote(root) + " " + shellQuote(linked) + "\n"
+	if err := os.WriteFile(git, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+	dest, err := resolveExplicitDestination(filepath.Join(home, "sidecar"), "sidecar-sh-sidecar-1", "sidecar", resolveProjectOnly)
+	if err != nil || dest.Origin.WorkDir != canonicalOpenPath(linked) {
+		t.Fatalf("explicit shell: %+v %v", dest, err)
+	}
+	if got := resolveTargetWorkDirForDest(filepath.Join(home, "sidecar"), dest, "README.md"); got != dest.Origin.WorkDir {
+		t.Fatalf("open changed shell workspace to %s", got)
+	}
+}

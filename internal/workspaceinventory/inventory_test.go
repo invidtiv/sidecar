@@ -1312,3 +1312,43 @@ func TestWorktreeRowDoesNotCorrelateToASidecarTUI(t *testing.T) {
 		t.Fatalf("main workspace correlated to the sidecar TUI: %#v", main)
 	}
 }
+
+func TestShellInventoryUsesDurableOwningWorkspace(t *testing.T) {
+	stateBase := t.TempDir()
+	config.SetTestStateDir(stateBase)
+	t.Cleanup(config.ResetTestStateDir)
+	root, linked := t.TempDir(), t.TempDir()
+	for _, base := range []string{root, linked} {
+		if err := os.Mkdir(filepath.Join(base, "src"), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	projectState, err := projectdir.ResolveWithBase(stateBase, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct{ name, workDir, want string }{
+		{"linked root", linked, linked},
+		{"linked subdirectory", filepath.Join(linked, "src"), linked},
+		{"main subdirectory", filepath.Join(root, "src"), root},
+		{"legacy", "", root},
+		{"unknown", t.TempDir(), root},
+		{"sibling prefix", linked + "-other", root},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			manifest := fmt.Sprintf(`{"shells":[{"tmuxName":"owned-shell","workDir":%q}]}`, tt.workDir)
+			if err := os.WriteFile(filepath.Join(projectState, "shells.json"), []byte(manifest), 0600); err != nil {
+				t.Fatal(err)
+			}
+			runner := &fakeRunner{git: map[string]string{root: "worktree " + root + "\n\nworktree " + linked + "\n"}}
+			result := (Collector{Runner: runner}).CollectProjectInventory(t.Context(), "demo", root)
+			if result.Err != nil {
+				t.Fatal(result.Err)
+			}
+			shell := result.Workspaces[len(result.Workspaces)-1]
+			if shell.Path != canonical(tt.want) || shell.ProjectRoot != canonical(root) || shell.ID != canonical(root)+":shell:owned-shell" {
+				t.Fatalf("shell ownership: %+v, want path %s", shell, tt.want)
+			}
+		})
+	}
+}

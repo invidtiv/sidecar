@@ -281,6 +281,14 @@ func run() error {
 		if err != nil {
 			return err
 		}
+		for event.Type == "workspace" {
+			// Workspace mutations from the preceding proof may still be
+			// publishing. They do not replace this subscription’s baseline.
+			event, err = read()
+			if err != nil {
+				return err
+			}
+		}
 		if event.Type != kind {
 			return fmt.Errorf("baseline %s: %+v", kind, event)
 		}

@@ -159,6 +159,9 @@ func (p *proof) cli(args ...string) <-chan commandResult {
 		args = append([]string{"-config", p.config}, args...)
 		cmd := exec.CommandContext(p.ctx, p.binary, args...)
 		cmd.Dir = p.root
+		if p.workspace != "" {
+			cmd.Dir = p.projectRoot
+		}
 		if p.originPane != "" {
 			cmd.Env = privateEnv()
 			cmd.Env = append(cmd.Env, "TMUX="+p.tmuxSocket+",0,0", "TMUX_PANE="+p.originPane)
@@ -212,6 +215,11 @@ func (p *proof) flags() []string {
 	return []string{"--project", p.projectRoot, "--shell", p.session, "--wait", "4s", "--json"}
 }
 func (p *proof) run() error {
+	if p.workspace != "" {
+		if err := p.shellWorkspaceCatalog(); err != nil {
+			return err
+		}
+	}
 	data, code, err := p.call("/api/v0/origins", uiapi.OriginRequest{Origin: "https://viewer-proof.example", Scopes: []string{uiapi.ScopeUIControl, uiapi.ScopeContentRead}}, true)
 	if err != nil {
 		return err
@@ -252,6 +260,12 @@ func (p *proof) run() error {
 	}
 	if code != 200 {
 		return fmt.Errorf("layout PUT %d", code)
+	}
+	if p.workspace != "" {
+		alias, _, err := p.readLayout("/api/v0/projects/" + url.PathEscape(p.project) + "/layout?workspace=" + url.QueryEscape(p.projectRoot+":shell:"+p.session))
+		if err != nil || !reflect.DeepEqual(alias, doc) {
+			return fmt.Errorf("shell layout root disagrees with worktree: %+v %v", alias, err)
+		}
 	}
 	if err = p.presence(true); err != nil {
 		return err
@@ -388,6 +402,32 @@ func (p *proof) catalog() (mobileproto.CatalogSnapshot, error) {
 	err = json.NewDecoder(response.Body).Decode(&snapshot)
 	return snapshot, err
 }
+
+// The manifest watch may still be refreshing after create shell. Demand the
+// actual shell row, never substitute a worktree row or the tmux pane cwd.
+func (p *proof) shellWorkspaceCatalog() error {
+	deadline := time.Now().Add(5 * time.Second)
+	var got string
+	for time.Now().Before(deadline) {
+		snapshot, err := p.catalog()
+		if err != nil {
+			return err
+		}
+		for _, section := range snapshot.Sections {
+			for _, row := range section.Rows {
+				if row.Session == p.session {
+					got = row.Path
+					if got == p.root {
+						return nil
+					}
+				}
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("shell catalog path %q, want owning worktree %q", got, p.root)
+}
+
 func (p *proof) candidateAttachments() error {
 	second, err := p.tmux("split-window", "-d", "-t", p.session, "-c", p.root, "-P", "-F", "#{pane_id}")
 	if err != nil {

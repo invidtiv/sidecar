@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/marcus/sidecar/internal/shellstate"
 )
 
 func projectGit(t *testing.T, root string, args ...string) string {
@@ -465,5 +467,34 @@ func TestProjectAggregateWatchSkipsTrackedMetadataAlias(t *testing.T) {
 	}
 	if len(targets) == 0 {
 		t.Fatal("Git invalidators were lost")
+	}
+}
+
+func TestShellWorkspaceResolvesDurableWorktree(t *testing.T) {
+	root := t.TempDir()
+	initGitRepo(t, root)
+	projectGit(t, root, "-c", "user.name=Proof", "-c", "user.email=proof@example.invalid", "commit", "--allow-empty", "-qm", "initial")
+	linked := filepath.Join(t.TempDir(), "linked")
+	projectGit(t, root, "worktree", "add", "-qb", "linked", linked)
+	subdir := filepath.Join(linked, "src")
+	if err := os.Mkdir(subdir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	shells := []shellstate.Definition{{TmuxName: "linked-shell", WorkDir: subdir}}
+	svc := testService(t, root, shells, nil)
+	id := canonical(root) + ":shell:linked-shell"
+	ws, err := svc.LookupProject(t.Context(), "demo", id)
+	if err != nil || ws.Root != canonical(linked) || ws.ID != id {
+		t.Fatalf("shell workspace: %+v %v", ws, err)
+	}
+	shells[0].WorkDir = t.TempDir()
+	ws, err = svc.LookupProject(t.Context(), "demo", id)
+	if err != nil || ws.Root != canonical(root) {
+		t.Fatalf("unknown directory fallback: %+v %v", ws, err)
+	}
+	shells[0].WorkDir = ""
+	ws, err = svc.LookupProject(t.Context(), "demo", id)
+	if err != nil || ws.Root != canonical(root) {
+		t.Fatalf("legacy fallback: %+v %v", ws, err)
 	}
 }
