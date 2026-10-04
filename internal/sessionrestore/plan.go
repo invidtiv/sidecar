@@ -690,7 +690,7 @@ func decideAgent(in Input, sh Shell, policy agentsession.Policy, providerAvailab
 			out.Reason = ReasonProviderUnavailable
 			return out
 		}
-		if _, err := agentsession.PlanCandidatePrefill(kind, candidate); err != nil {
+		if _, err := agentsession.PlanCandidatePrefillPreview(kind, candidate); err != nil {
 			out.Reason = ReasonProviderRejectedRef
 			return out
 		}
@@ -709,9 +709,9 @@ func decideAgent(in Input, sh Shell, policy agentsession.Policy, providerAvailab
 	}
 
 	// Ask the catalog for a real resume rather than trusting a capability bit:
-	// PlanResume is the same call the executor makes, so a plan that says
-	// resume-agent is a plan whose argv has already been built once.
-	if _, err := agentsession.PlanResume(kind, ref); err != nil {
+	// Validate the native resume shape without resolving runtime capabilities.
+	// The executor revalidates argv in the restored shell's working directory.
+	if _, err := agentsession.PlanResumePreview(kind, ref); err != nil {
 		out.Reason = resumeRefusal(err)
 		return out
 	}

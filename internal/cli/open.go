@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/uirequest"
 )
 
@@ -334,7 +337,13 @@ func runOpen(env Env, args []string) int {
 	if collectionFlag != "" {
 		target, err = uirequest.ResolveCollectionTarget(pluginFlag, collectionFlag, queryFlag, raw, filterFlags)
 	} else {
-		target, err = uirequest.ResolveTarget(dest.Origin.WorkDir, raw, lineNo, uirequest.ResolveOptions{Diff: wantDiff, Provider: providerFlag})
+		var callerFile bool
+		if !wantDiff && providerFlag == "" && shellFlag == "" && projectFlag == "" {
+			target, callerFile, err = resolveCallerFile(dest.Origin.WorkDir, raw, lineNo)
+		}
+		if !callerFile {
+			target, err = uirequest.ResolveTarget(dest.Origin.WorkDir, raw, lineNo, uirequest.ResolveOptions{Diff: wantDiff, Provider: providerFlag})
+		}
 	}
 	if err != nil {
 		cliErrf(env.Stderr, "validation error: %v\n\n%s", err, openHelp)
@@ -484,4 +493,39 @@ func parseWaitDuration(s string) (time.Duration, error) {
 		return time.Duration(n) * time.Millisecond, nil
 	}
 	return time.ParseDuration(s)
+}
+
+// resolveCallerFile separates the path the caller supplied from the screen the
+// request addresses. A harness can run in a different directory from the shell
+// whose identity it inherited; that identity must never select a different,
+// same-named file. Explicit destinations retain workspace-relative semantics.
+func resolveCallerFile(workDir, raw string, line int) (uirequest.Target, bool, error) {
+	raw = strings.TrimSpace(raw)
+	if terminallink.IssueID(raw) || strings.HasPrefix(raw, "sidecar://note/") {
+		return uirequest.Target{}, false, nil
+	}
+	path := stripLineSuffix(raw)
+	if path == "" || filepath.IsAbs(path) || (path == "~" || strings.HasPrefix(path, "~/")) {
+		return uirequest.Target{}, false, nil
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return uirequest.Target{}, false, nil
+	}
+	if _, err := os.Lstat(filepath.Join(cwd, path)); os.IsNotExist(err) {
+		return uirequest.Target{}, false, nil
+	} else if err != nil {
+		return uirequest.Target{}, true, err
+	}
+	target, err := uirequest.ResolveFileTarget(cwd, raw, line)
+	if err != nil {
+		return uirequest.Target{}, true, err
+	}
+	absolute := canonicalOpenPath(filepath.Join(cwd, filepath.FromSlash(target.Value)))
+	if rel, err := filepath.Rel(canonicalOpenPath(workDir), absolute); workDir != "" && err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		target.Value = filepath.ToSlash(rel)
+	} else {
+		target.Value = absolute
+	}
+	return target, true, nil
 }

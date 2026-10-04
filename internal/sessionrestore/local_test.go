@@ -2,6 +2,7 @@ package sessionrestore
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,6 +35,8 @@ func TestRenderedInputRightEmpty(t *testing.T) {
 	}
 }
 
+const prefillTestPrompt = "sidecar-prefill> "
+
 func TestPrefillInputEmptyRealShells(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux unavailable")
@@ -54,7 +57,9 @@ func TestPrefillInputEmptyRealShells(t *testing.T) {
 			socket := tmuxenv.SocketPath()
 			_ = os.MkdirAll(filepath.Dir(socket), 0700)
 			name := "prefill-" + shell.name
-			if out, err := exec.Command("tmux", "new-session", "-d", "-s", name, shell.command).CombinedOutput(); err != nil {
+			if out, err := exec.Command("tmux", "new-session", "-d", "-s", name,
+				"-e", "PS1="+prefillTestPrompt, "-e", "PROMPT="+prefillTestPrompt,
+				"-e", "PROMPT_COMMAND=", "-e", "RPROMPT=", "-e", "RPS1=", "-e", "EDITOR=emacs", "-e", "VISUAL=emacs", "-e", "TERM=xterm-256color", shell.command).CombinedOutput(); err != nil {
 				t.Fatalf("start: %v: %s", err, out)
 			}
 			t.Cleanup(func() { _ = exec.Command("tmux", "-S", socket, "kill-server").Run() })
@@ -72,11 +77,21 @@ func TestPrefillInputEmptyRealShells(t *testing.T) {
 						t.Fatalf("move fixture cursor: %v: %s", err, out)
 					}
 				}
-				time.Sleep(40 * time.Millisecond)
-				bx, by, before, _ := prefillPaneScreen(context.Background(), name)
+				wantX := len(prefillTestPrompt + "echo foo #")
+				if atStart {
+					wantX = len(prefillTestPrompt)
+				}
+				waitPrefillTestScreen(t, name, wantX, prefillTestPrompt+"echo foo #")
+				bx, by, before, err := prefillPaneScreen(context.Background(), name)
+				if err != nil {
+					t.Fatal(err)
+				}
 				empty, _, err := prefillInputEmpty(context.Background(), name)
-				time.Sleep(40 * time.Millisecond)
-				ax, ay, after, _ := prefillPaneScreen(context.Background(), name)
+				waitPrefillTestScreen(t, name, bx, prefillTestPrompt+"echo foo #")
+				ax, ay, after, screenErr := prefillPaneScreen(context.Background(), name)
+				if screenErr != nil {
+					t.Fatal(screenErr)
+				}
 				if err != nil || empty {
 					t.Fatalf("nonempty start=%v = %v, %v", atStart, empty, err)
 				}
@@ -94,14 +109,61 @@ func TestPrefillInputEmptyRealShells(t *testing.T) {
 
 func waitShellPrompt(t *testing.T, target string) {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		out, _ := exec.Command("tmux", "display-message", "-p", "-t", target, "#{pane_current_command}").Output()
-		if strings.TrimSpace(string(out)) != "" {
-			time.Sleep(60 * time.Millisecond)
+	// Process identity does not prove that shell startup or a Ctrl-C redraw
+	// has finished. Wait for the fixture's actual prompt and editor cursor.
+	waitPrefillTestScreen(t, target, len(prefillTestPrompt), prefillTestPrompt)
+}
+
+func waitPrefillTestScreen(t *testing.T, target string, wantX int, wantLine string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	tick := time.NewTicker(5 * time.Millisecond)
+	defer tick.Stop()
+	var x, y int
+	var rows []string
+	for {
+		nx, ny, nextRows, err := prefillPaneScreen(ctx, target)
+		if err != nil {
+			t.Fatalf("read fixture screen for %q at x=%d: %v; last cursor=(%d,%d), rows=%q", wantLine, wantX, err, x, y, rows)
+		}
+		x, y, rows = nx, ny, nextRows
+		if x == wantX && y >= 0 && y < len(rows) && rows[y] == strings.TrimRight(wantLine, " ") {
 			return
 		}
-		time.Sleep(20 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			t.Fatalf("fixture did not render %q at cursor x=%d; got (%d,%d), %q", wantLine, wantX, x, y, rows)
+		case <-tick.C:
+		}
 	}
-	t.Fatal("shell prompt did not become ready")
+}
+
+func TestWaitShellPromptRequiresRenderedPrompt(t *testing.T) {
+	// A current command already identifies the shell while its startup files
+	// are still running. Model that ordering without a load-dependent delay:
+	// the first screen is startup output; only the next screen has the prompt.
+	dir := t.TempDir()
+	observed := filepath.Join(dir, "startup-observed")
+	script := fmt.Sprintf(`#!/bin/sh
+case "$1" in
+  display-message)
+    case "$*" in
+      *pane_current_command*) printf 'bash\n' ;;
+      *) if [ -f %q ]; then printf '%d|0|24\n'; else printf '0|0|24\n'; fi ;;
+    esac ;;
+  capture-pane)
+    if [ -f %q ]; then printf '%%s\n' %q; else printf 'running startup files\n'; touch %q; fi ;;
+  *) exit 1 ;;
+esac
+`, observed, len(prefillTestPrompt), observed, strings.TrimRight(prefillTestPrompt, " "), observed)
+	if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	waitShellPrompt(t, "starting-shell")
+	x, y, rows, err := prefillPaneScreen(context.Background(), "starting-shell")
+	if err != nil || x != len(prefillTestPrompt) || y != 0 || len(rows) == 0 || rows[0] != strings.TrimRight(prefillTestPrompt, " ") {
+		t.Fatalf("readiness returned before the rendered prompt: cursor=(%d,%d) rows=%q error=%v", x, y, rows, err)
+	}
 }

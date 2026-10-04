@@ -196,12 +196,12 @@ Each one is a td issue with the exact command and output. Fixes run as their own
 | (comms) | Two Codex lanes collided on comms identity at join; worked around with COMMS_SESSION. Codex shell commands apparently do not carry the pane identity comms relies on | to file |
 | td-303037, td-2a7c8a | lint lock held by a parallel lane; shell-readiness flakes under concurrent full suites (folded into the friction lane) | open |
 | (sidecar) | `sidecar create worktree --json` printed two JSON documents once, breaking a strict parser | to verify |
-| td-e930bb | Friction lane (Codex, ~/code/sidecar-friction-1): flakes, lint lock, prune safety (td-8e99af was a real production risk: blank pane cwd), identity safeguards | review (Codex reviewer, shell "rev friction-1") |
+| td-e930bb | Friction lane: flakes, lint lock, prune safety (td-8e99af, td-cd833a, td-60fb5c were real production risks), Codex `--no-daemon` launch, implicit-caller identity guard, per-shell COMMS_SESSION | merged (70eaa52e); takes effect for Codex agents started by a Sidecar built from main |
 | td-11138b | `sidecar agent prompt` reported `working`, but the Codex session later showed no conversation and the lane never ran. Orchestrator now confirms every lane on screen after prompting | open |
 | td-eeb7e8 | P1: a stale ShellCreatedMsg arriving after a project switch writes the next project's shells manifest | running (bug lane) |
 | td-8e99af | A worktree-prune safety test sometimes judges a moved active worktree an orphan; checking whether production prune can do the same (friction lane, first priority) | running |
 | td-87ef7e, td-d77e97, td-cce9f6, td-5e7e28, td-9339ae, td-6db2ce | Load-dependent test flakes found under parallel lane gates (friction lane) | running |
-| td-ac892f | P1 root cause of several items above: Codex sessions share one `codex app-server` daemon env, so "current shell/project" defaults resolve to another agent (a reviewer renamed U1-d's shell). Friction lane | running |
+| td-ac892f | Fixed in 70eaa52e for newly launched agents. P1 root cause of several items above: Codex sessions share one `codex app-server` daemon env, so "current shell/project" defaults resolve to another agent (a reviewer renamed U1-d's shell). Friction lane | running |
 | td-090b9d | Not a comms bug. The orchestrator's watcher script crashed on an untitled message and skipped reports. Fixed in the watcher | invalid |
 | td-eeb7e8 lane | Codex bug lane (~/code/sidecar-bug-eeb7e8) with a completion fence for stale async messages across workspace and overview | running |
 | td-ae18e4, td-87dd09 | `comms publish` refused with "author does not follow topic" and no recovery hint (comms) | open |

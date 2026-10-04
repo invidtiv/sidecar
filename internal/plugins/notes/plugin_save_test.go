@@ -610,11 +610,26 @@ func TestStopUsesFallbackDraftWithoutBlockingTd(t *testing.T) {
 	p.editorTextarea.SetValue("fallback-final")
 	p.editorDirty = true
 	failing := &alwaysFailStore{noteStore: p.store, err: errors.New("td blocked"), closed: make(chan struct{})}
-	p.store = failing
-	started := time.Now()
-	p.Stop()
-	if time.Since(started) > 100*time.Millisecond {
-		t.Fatal("Stop synchronously called td after the primary checkpoint failed")
+	blocked := newBlockingStore(failing)
+	p.store = blocked
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(blocked.release) }) }
+	t.Cleanup(func() {
+		release()
+		<-blocked.closed
+	})
+	stopped := make(chan struct{})
+	go func() {
+		p.Stop()
+		close(stopped)
+	}()
+	// Measure the dependency, not the duration of local fsyncs: Stop must
+	// finish while the td write is held indefinitely. The timeout is only a
+	// deadlock guard; passing requires completion before releasing the store.
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop waited for the blocked td write after the primary checkpoint failed")
 	}
 	path, err := fallbackDraftPath(badRoot, a.ID)
 	if err != nil {
@@ -624,8 +639,16 @@ func TestStopUsesFallbackDraftWithoutBlockingTd(t *testing.T) {
 		t.Fatalf("fallback recovery draft missing: %v", err)
 	}
 	t.Cleanup(func() { _ = os.Remove(path) })
-	closeStoreEventually := failing.closed
-	<-closeStoreEventually
+	draft, err := readNoteDraft(path)
+	if err != nil || draft.Content != "fallback-final" || draft.ID != a.ID || draft.ProjectRoot != badRoot {
+		t.Fatalf("fallback draft did not retain final content and identity: %+v, %v", draft, err)
+	}
+	<-blocked.started
+	release()
+	<-blocked.closed
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("failed background write discarded the fallback draft: %v", err)
+	}
 }
 
 func TestOlderInlineAutosaveCannotOverwriteFinalExitSave(t *testing.T) {

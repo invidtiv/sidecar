@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/adapter"
+	"github.com/marcus/sidecar/internal/agentcatalog"
 	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/clip"
 )
@@ -61,13 +62,22 @@ func (p *Plugin) yankResumeCommand() tea.Cmd {
 		return nil
 	}
 
-	cmd := resumeCommand(session)
-	if cmd == "" {
+	if resumeCommand(session) == "" {
 		return nil
 	}
-
-	return clip.Copy(cmd, func(r clip.Result) tea.Msg {
-		return app.FlashMsg{Text: r.Message("Yanked: " + cmd)}
+	selected := *session
+	workDir := session.WorktreePath
+	if workDir == "" && p.ctx != nil {
+		workDir = p.ctx.WorkDir
+	}
+	return clip.CopyFrom(func() (string, tea.Msg) {
+		argv, ok := resumeArgvInDir(&selected, workDir)
+		if !ok {
+			return "", app.ToastMsg{Message: "Could not resolve resume command for " + selected.AdapterName, IsError: true}
+		}
+		return agentcatalog.DisplayCommand(argv), nil
+	}, func(r clip.Result, command string) tea.Msg {
+		return app.FlashMsg{Text: r.Message("Yanked: " + command)}
 	})
 }
 

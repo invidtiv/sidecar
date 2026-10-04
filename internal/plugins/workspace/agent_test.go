@@ -3,6 +3,7 @@ package workspace
 import (
 	"context"
 	"fmt"
+	"github.com/marcus/sidecar/internal/testenv"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -21,6 +22,7 @@ import (
 )
 
 func TestStartAgentWithOptionsRoutesCatalogLaunchThroughAgentControl(t *testing.T) {
+	testenv.ProviderHelp(t, "codex", "usage: codex (older standalone CLI)")
 	root, worktree := t.TempDir(), t.TempDir()
 	p := &Plugin{ctx: &plugin.Context{Epoch: 9, ProjectRoot: root, WorkDir: root, Config: config.Default()}, operationCtx: context.Background()}
 	wt := &Worktree{Key: "feature-key", Name: "feature", Path: worktree}
@@ -57,6 +59,104 @@ func TestStartAgentWithOptionsRoutesCatalogLaunchThroughAgentControl(t *testing.
 	}
 	if got := loadAgentType(root, worktree); got != AgentCodex {
 		t.Fatalf("persisted agent = %q, want codex", got)
+	}
+}
+
+func TestStartAgentWithOptionsDefersProbeAndUsesCapturedTargetDirectory(t *testing.T) {
+	root, worktree, bin := t.TempDir(), t.TempDir(), t.TempDir()
+	probes := filepath.Join(bin, "probes")
+	script := "#!/bin/sh\npwd >> " + shellQuote(probes) + "\nif [ \"$PWD\" = " + shellQuote(worktree) + " ]; then printf '%s' '--no-daemon'; else printf '%s' 'legacy usage'; fi\n"
+	if err := os.WriteFile(filepath.Join(bin, "codex"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Chdir(root)
+	cfg := config.Default()
+	cfg.Plugins.Workspace.AgentStart = map[string]string{}
+	p := &Plugin{ctx: &plugin.Context{Epoch: 9, ProjectRoot: root, WorkDir: root, Config: cfg}, operationCtx: context.Background()}
+	wt := &Worktree{Key: "captured-target", Name: "captured", Path: worktree}
+	originalLaunch, originalStart := launchWorkspaceSession, startWorkspaceAgent
+	t.Cleanup(func() { launchWorkspaceSession, startWorkspaceAgent = originalLaunch, originalStart })
+	launchWorkspaceSession = func(_ context.Context, spec workspaceops.AgentLaunchSpec) (workspaceops.AgentLaunchResult, error) {
+		if spec.WorkDir != worktree {
+			t.Fatalf("launch cwd=%q, want captured target %q", spec.WorkDir, worktree)
+		}
+		return workspaceops.AgentLaunchResult{SessionName: spec.SessionName, Reconnected: true}, nil
+	}
+	var request agentcontrol.StartRequest
+	startWorkspaceAgent = func(_ context.Context, got agentcontrol.StartRequest) (agentcontrol.Agent, error) {
+		request = got
+		return agentcontrol.Agent{Target: got.Target}, nil
+	}
+	cmd := p.StartAgentWithOptions(wt, AgentCodex, false)
+	if data, err := os.ReadFile(probes); !os.IsNotExist(err) {
+		t.Fatalf("provider probe ran before the asynchronous command: %q, %v", data, err)
+	}
+	// A later selection must not change the execution context already chosen.
+	p.ctx.Config.Plugins.Workspace.AgentStart["codex"] = "codex-custom --profile later"
+	wt.Path = t.TempDir()
+	p.ctx = &plugin.Context{Epoch: 10, ProjectRoot: wt.Path, WorkDir: wt.Path, Config: config.Default()}
+	msg := cmd().(AgentStartedMsg)
+	if msg.Err != nil || msg.Epoch != 9 || strings.Join(request.Argv, " ") != "codex --no-daemon" {
+		t.Fatalf("captured launch=%v message=%+v", request.Argv, msg)
+	}
+	data, err := os.ReadFile(probes)
+	if err != nil || len(data) == 0 {
+		t.Fatalf("execution did not probe the provider: %q %v", data, err)
+	}
+	for _, dir := range strings.Fields(string(data)) {
+		if dir != worktree {
+			t.Fatalf("provider was selected from cwd %q, want %q", dir, worktree)
+		}
+	}
+}
+
+func TestConfiguredAgentLaunchDoesNotProbeUnusedCatalogCommand(t *testing.T) {
+	testenv.ProviderHelp(t, "codex", "legacy usage")
+	root, worktree := t.TempDir(), t.TempDir()
+	cfg := config.Default()
+	cfg.Plugins.Workspace.AgentStart = map[string]string{"codex": "codex-custom --profile explicit"}
+	p := &Plugin{ctx: &plugin.Context{ProjectRoot: root, WorkDir: root, Config: cfg}}
+	// A catalog probe would fail. The user selected a different executable.
+	path, err := exec.LookPath("codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 8\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	argv, err := p.agentLaunchArgv(AgentCodex, &Worktree{Path: worktree}, false, cfg.Plugins.Workspace.AgentStart["codex"])
+	if err != nil || len(argv) != 3 || argv[2] != cfg.Plugins.Workspace.AgentStart["codex"] {
+		t.Fatalf("explicit command depends on unused catalog help: %v %v", argv, err)
+	}
+}
+
+func TestShellAgentLaunchUsesCapturedTargetDirectory(t *testing.T) {
+	caller, target, bin := t.TempDir(), t.TempDir(), t.TempDir()
+	script := "#!/bin/sh\nif [ \"$PWD\" = " + shellQuote(target) + " ]; then printf '%s' '--no-daemon'; else printf '%s' 'legacy usage'; fi\n"
+	if err := os.WriteFile(filepath.Join(bin, "codex"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Chdir(caller)
+	p := &Plugin{ctx: &plugin.Context{ProjectRoot: target, WorkDir: target, Config: config.Default()}}
+	originalWait, originalStart := waitWorkspaceShellReady, startWorkspaceAgent
+	t.Cleanup(func() { waitWorkspaceShellReady, startWorkspaceAgent = originalWait, originalStart })
+	waitWorkspaceShellReady = func(_ context.Context, selected agentcontrol.Target, _ time.Duration) (agentcontrol.Snapshot, error) {
+		return agentcontrol.Snapshot{Target: selected}, nil
+	}
+	var request agentcontrol.StartRequest
+	startWorkspaceAgent = func(_ context.Context, got agentcontrol.StartRequest) (agentcontrol.Agent, error) {
+		request = got
+		return agentcontrol.Agent{Target: got.Target}, nil
+	}
+	cmd := p.startAgentInShell("sidecar-sh-captured", AgentCodex, false)
+	p.ctx = &plugin.Context{ProjectRoot: caller, WorkDir: caller, Config: config.Default()}
+	if msg := cmd(); msg == nil {
+		t.Fatal("shell agent launch returned no result")
+	}
+	if strings.Join(request.Argv, " ") != "codex --no-daemon" || request.Target.Project != workspaceinventory.CanonicalPath(target) {
+		t.Fatalf("shell launch used a later or ambient context: %+v", request)
 	}
 }
 
@@ -301,6 +401,7 @@ func TestGetAgentCommand(t *testing.T) {
 }
 
 func TestResolveAgentBaseCommand(t *testing.T) {
+	testenv.ProviderHelp(t, "codex", "usage: codex (older standalone CLI)")
 	tmpDir := t.TempDir()
 
 	tests := []struct {
@@ -988,6 +1089,7 @@ func TestBuildAgentCommand(t *testing.T) {
 }
 
 func TestBuildAgentCommandSyntax(t *testing.T) {
+	testenv.ProviderHelp(t, "codex", "usage: codex (older standalone CLI)")
 	// Test expected output format for each agent
 	tests := []struct {
 		agentType AgentType
@@ -1490,6 +1592,7 @@ func TestResolveConfigAgentStart_WildcardFallbackChain(t *testing.T) {
 // TestResolveAgentBaseCommand_ThreeLayerPrecedence verifies the full precedence chain:
 // .sidecar-agent-start file > config agentStart > AgentCommands default.
 func TestResolveAgentBaseCommand_ThreeLayerPrecedence(t *testing.T) {
+	testenv.ProviderHelp(t, "codex", "usage: codex (older standalone CLI)")
 	tmpDir := t.TempDir()
 	overridePath := tmpDir + "/" + sidecarAgentStartFile
 

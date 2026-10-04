@@ -119,12 +119,10 @@ type TmuxSession struct {
 	// Path, which is how a session that no registered project accounts for
 	// proves it is a worktree session for that directory.
 	NameFromPath bool
-	// PaneInExistingDir reports that at least one of the session's panes is
-	// working in a directory that exists. An agent follows `git worktree move`
-	// or a plain `mv`; the session's start directory does not. A session with
-	// live work somewhere real is never an orphan, whatever its start
-	// directory says.
-	PaneInExistingDir bool
+	// PanePathsMissing is positive evidence that every pane's absolute current
+	// directory is missing while its parent exists. Blank, unreadable, or
+	// incomplete pane evidence leaves this false and cannot justify a prune.
+	PanePathsMissing bool
 }
 
 // OrphanObservation is everything one pass knows.
@@ -249,7 +247,7 @@ func PlanWorktreeOrphans(obs OrphanObservation) OrphanPlan {
 			// when it is not an orphan, so the unattributed pass below cannot
 			// reach a different answer about it.
 			decided[name] = true
-			if reason == "" || session.Path == "" || session.PaneInExistingDir || !PathWithin(session.Path, root.Root) {
+			if reason == "" || session.Path == "" || !session.PanePathsMissing || !PathWithin(session.Path, root.Root) {
 				continue
 			}
 			plan.Orphans = append(plan.Orphans, OrphanSession{
@@ -268,7 +266,7 @@ func PlanWorktreeOrphans(obs OrphanObservation) OrphanPlan {
 			continue
 		}
 		decided[name] = true
-		if session.Path == "" || !session.PathMissing || !session.NameFromPath || session.PaneInExistingDir {
+		if session.Path == "" || !session.PathMissing || !session.NameFromPath || !session.PanePathsMissing {
 			continue
 		}
 		// A missing directory inside a registered root is that root's

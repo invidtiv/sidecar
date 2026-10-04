@@ -2,6 +2,7 @@ package conversations
 
 import (
 	"fmt"
+	"github.com/marcus/sidecar/internal/testenv"
 	"io"
 	"reflect"
 	"strings"
@@ -3092,6 +3093,7 @@ func TestStripANSIBackground(t *testing.T) {
 
 // TestResumeCommand verifies resume command generation for all adapters.
 func TestResumeCommand(t *testing.T) {
+	testenv.ProviderHelp(t, "codex", "usage: codex (older standalone CLI)")
 	tests := []struct {
 		name     string
 		session  *adapter.Session
@@ -3230,6 +3232,7 @@ func TestDefaultAgentIdxForAdapter(t *testing.T) {
 // plugin. This is the form that gets executed; the string above is only what a
 // human reads.
 func TestResumeArgv(t *testing.T) {
+	testenv.ProviderHelp(t, "codex", "usage: codex (older standalone CLI)")
 	tests := []struct {
 		name    string
 		session *adapter.Session

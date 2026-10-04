@@ -1,6 +1,7 @@
 package workspaceops
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"os/exec"
@@ -429,6 +430,8 @@ func NewSessionWithIdentity(args []string, sessionName, displayName string) erro
 // It also publishes the managed-shell contract documented on
 // [shellstate.ManagedEnv], which is what tells a provider hook it is allowed to
 // report lifecycle state and which server incarnation to namespace it under.
+// COMMS_SESSION gives shell-tool children an identity even without TMUX_PANE;
+// a new managed session always derives it rather than inheriting another lane.
 //
 // This function and [SetShellEnv] are a pair and must stay in step: the -e form
 // needs tmux 3.2, and SetShellEnv is the fallback for older tmux and for the
@@ -439,13 +442,13 @@ func ShellEnvArgs(sessionName, displayName string) []string {
 		"-e", shellstate.SessionEnv + "=" + sessionName,
 		"-e", shellstate.NameEnv + "=" + displayName,
 	}
-	for k, v := range managedShellEnv() {
+	for k, v := range managedShellEnv(sessionName) {
 		args = append(args, "-e", k+"="+v)
 	}
 	return args
 }
 
-// SetShellEnv publishes the display name to the tmux session environment.
+// SetShellEnv publishes the same identity contract to the session environment.
 // Panes already running keep the value they were created with — the manifest
 // and `sidecar shell rename` remain the authority, this is only the cue.
 func SetShellEnv(sessionName, displayName string) {
@@ -454,7 +457,7 @@ func SetShellEnv(sessionName, displayName string) {
 	}
 	_ = tty.SetSessionEnv(sessionName, shellstate.SessionEnv, sessionName)
 	_ = tty.SetSessionEnv(sessionName, shellstate.NameEnv, displayName)
-	for k, v := range managedShellEnv() {
+	for k, v := range managedShellEnv(sessionName) {
 		_ = tty.SetSessionEnv(sessionName, k, v)
 	}
 }
@@ -471,7 +474,7 @@ func SetShellEnv(sessionName, displayName string) {
 // Ordering is not guaranteed because the result is a map, which is fine for
 // `-e` flags and for set-environment, but means callers must not depend on
 // argument order.
-func managedShellEnv() map[string]string {
+func managedShellEnv(sessionName string) map[string]string {
 	env := map[string]string{
 		shellstate.ManagedEnv: "1",
 	}
@@ -480,6 +483,14 @@ func managedShellEnv() map[string]string {
 	}
 	if host, err := os.Hostname(); err == nil && host != "" {
 		env[shellstate.HostEnv] = host
+	}
+	// Codex and other harnesses may omit TMUX_PANE from shell-tool children.
+	// Publish an explicit comms identity before the first pane starts, rather
+	// than inheriting the creator's COMMS_SESSION and joining another lane.
+	// Display-name changes keep the identity; a different socket or managed
+	// session gets its own. The launching process is never changed.
+	if sessionName != "" {
+		env["COMMS_SESSION"] = CommsSessionID(sessionName)
 	}
 	if pid := ServerPID(); pid > 0 {
 		env[shellstate.ServerEnv] = strconv.Itoa(pid)
@@ -495,6 +506,17 @@ func managedShellEnv() map[string]string {
 		env[shellstate.BinEnv] = exe
 	}
 	return env
+}
+
+// CommsSessionID derives the explicit comms identity of a newly-created local
+// terminal. Split terminals use it without claiming managed-shell ownership.
+// It never inherits COMMS_SESSION or changes the launching process environment.
+func CommsSessionID(sessionName string) string {
+	// Comms stores ambient identities on the owning machine. The socket is
+	// the stable namespace there; hostname changes must not retarget a lane.
+	identity := tmuxenv.Namespace() + "\x00" + sessionName
+	digest := sha256.Sum256([]byte(identity))
+	return fmt.Sprintf("sidecar:%x", digest[:16])
 }
 
 // ServerPID returns the PID of the tmux server on the current socket, or 0 when

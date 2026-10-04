@@ -1,10 +1,13 @@
 package workspace
 
 import (
+	"bufio"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -380,7 +383,11 @@ func TestCreatePostAddInventoryCancelledWithPartialResult(t *testing.T) {
 
 func TestPRImportDefaultBranchDiscoveryCancelledAfterAdd(t *testing.T) {
 	binDir := t.TempDir()
-	marker := filepath.Join(t.TempDir(), "default-branch-started")
+	gateDir := t.TempDir()
+	startedPath := filepath.Join(gateDir, "head-verification-started")
+	releasePath := filepath.Join(gateDir, "head-verification-release")
+	started := openPRImportFixtureFIFO(t, startedPath)
+	release := openPRImportFixtureFIFO(t, releasePath)
 	git := filepath.Join(binDir, "git")
 	script := `#!/bin/sh
 if [ "$1" = fetch ]; then exit 0; fi
@@ -393,7 +400,7 @@ case "$*" in
   "config --get remote.origin.url") echo https://github.com/base/repo.git ;;
   "rev-parse refs/sidecar/pr/1/"*"/head") printf '%040d\n' 1 ;;
   "rev-parse refs/sidecar/pr/1/"*"/base") printf '%040d\n' 2 ;;
-  "rev-parse HEAD") touch "$SIDECAR_TEST_MARKER"; exec sleep 30 ;;
+  "rev-parse HEAD") printf 'started\n' > "$SIDECAR_TEST_STARTED"; IFS= read -r release < "$SIDECAR_TEST_RELEASE"; exit 8 ;;
   *) echo "unexpected git args: $*" >&2; exit 8 ;;
 esac
 `
@@ -401,18 +408,36 @@ esac
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("SIDECAR_TEST_MARKER", marker)
+	t.Setenv("SIDECAR_TEST_STARTED", startedPath)
+	t.Setenv("SIDECAR_TEST_RELEASE", releasePath)
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 
 	p := New()
+	t.Cleanup(func() {
+		p.Stop()
+		_, _ = release.WriteString("cleanup\n")
+	})
 	oldDir := t.TempDir()
 	if err := p.Init(&plugin.Context{Epoch: 50, WorkDir: oldDir, ProjectRoot: oldDir}); err != nil {
 		t.Fatal(err)
 	}
 	cmd := p.fetchAndCreateWorktree(PRListItem{Number: 1, NodeID: "node1", Branch: "feature", HeadOID: "0000000000000000000000000000000000000001", BaseBranch: "main", Repository: "base/repo", URL: "https://example.test/pr/1"})
 	done := make(chan FetchPRDoneMsg, 1)
+	ready := make(chan error, 1)
+	go func() {
+		line, err := bufio.NewReader(started).ReadString('\n')
+		if err == nil && strings.TrimSpace(line) != "started" {
+			err = fmt.Errorf("unexpected PR fixture readiness: %q", line)
+		}
+		ready <- err
+	}()
 	go func() { done <- cmd().(FetchPRDoneMsg) }()
-	waitForFile(t, marker)
+	// Preparation may involve many subprocesses on a loaded machine. Wait for
+	// the actual held post-add command, or report an operation that failed
+	// before reaching it; no elapsed-time guess decides when to cancel.
+	if err := waitPRImportFixtureStarted(ready, done); err != nil {
+		t.Fatal(err)
+	}
 	newDir := t.TempDir()
 	if err := p.Init(&plugin.Context{Epoch: 51, WorkDir: newDir, ProjectRoot: newDir}); err != nil {
 		t.Fatal(err)
@@ -429,6 +454,37 @@ esac
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("PR default-branch discovery survived reinit cancellation")
+	}
+}
+
+func openPRImportFixtureFIFO(t *testing.T, path string) *os.File {
+	t.Helper()
+	if out, err := exec.Command("mkfifo", path).CombinedOutput(); err != nil {
+		t.Fatalf("create PR fixture gate: %v: %s", err, out)
+	}
+	file, err := os.OpenFile(path, os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = file.Close() })
+	return file
+}
+
+func waitPRImportFixtureStarted(started <-chan error, done <-chan FetchPRDoneMsg) error {
+	select {
+	case err := <-started:
+		return err
+	case msg := <-done:
+		return fmt.Errorf("PR import completed before held post-add command: %v", msg.Err)
+	}
+}
+
+func TestPRImportFixtureReportsFailureBeforeHeldCommand(t *testing.T) {
+	started := make(chan error)
+	done := make(chan FetchPRDoneMsg, 1)
+	done <- FetchPRDoneMsg{Err: fmt.Errorf("fetch failed")}
+	if err := waitPRImportFixtureStarted(started, done); err == nil || !strings.Contains(err.Error(), "fetch failed") {
+		t.Fatalf("fixture did not report early operation failure: %v", err)
 	}
 }
 

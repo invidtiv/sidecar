@@ -326,6 +326,10 @@ func runShellName(env Env, args []string) int {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if err := validateImplicitCaller(ctx, env.StateDir); err != nil {
+		cliErrln(env.Stderr, err)
+		return 1
+	}
 	identity, err := currentShellIdentity(ctx)
 	if err != nil {
 		cliErrln(env.Stderr, err)
@@ -432,6 +436,10 @@ func runShellRenameCurrent(env Env, args []string) int {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if err := validateImplicitCaller(ctx, env.StateDir); err != nil {
+		cliErrln(env.Stderr, err)
+		return 1
+	}
 	identity, err := currentShellIdentity(ctx)
 	if err != nil {
 		cliErrln(env.Stderr, err)
@@ -479,6 +487,19 @@ func cliErrln(w io.Writer, a ...any) {
 type shellIdentity struct{ session, socket, path string }
 
 func currentShellIdentity(ctx context.Context) (shellIdentity, error) {
+	identity, err := currentPaneIdentity(ctx)
+	if err != nil {
+		return shellIdentity{}, err
+	}
+	if !strings.HasPrefix(identity.session, "sidecar-sh-") && !strings.HasPrefix(identity.session, "sidecar-ws-") {
+		return shellIdentity{}, fmt.Errorf("current tmux session is not a Sidecar project shell")
+	}
+	return identity, nil
+}
+
+// currentPaneIdentity collects the independent pane cue, even if that pane is
+// not managed by Sidecar. Such a pane can contradict an inherited shell claim.
+func currentPaneIdentity(ctx context.Context) (shellIdentity, error) {
 	if os.Getenv("TMUX") == "" {
 		return shellIdentity{}, fmt.Errorf("not inside tmux; run this command from a Sidecar project shell")
 	}
@@ -493,9 +514,6 @@ func currentShellIdentity(ctx context.Context) (shellIdentity, error) {
 	parts := strings.Split(strings.TrimSpace(string(out)), "\t")
 	if len(parts) < 2 || len(parts) > 3 || parts[0] == "" || parts[1] == "" {
 		return shellIdentity{}, fmt.Errorf("tmux returned an incomplete current-shell identity")
-	}
-	if !strings.HasPrefix(parts[0], "sidecar-sh-") && !strings.HasPrefix(parts[0], "sidecar-ws-") {
-		return shellIdentity{}, fmt.Errorf("current tmux session is not a Sidecar project shell")
 	}
 	socket := filepath.Clean(parts[1])
 	if resolved, resolveErr := filepath.EvalSymlinks(socket); resolveErr == nil {

@@ -2,6 +2,7 @@ package agentintegration
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/marcus/sidecar/internal/agentactivity"
 	"github.com/marcus/sidecar/internal/agentlifecycle"
@@ -779,6 +781,64 @@ func TestPiReinstantiationSendsNoSequenceToRestart(t *testing.T) {
 	// store except as two more reports against the same run.
 	if !reflect.DeepEqual(first, second) {
 		t.Fatalf("the replacement instance spawned different argv than the first:\nfirst  %v\nsecond %v", first, second)
+	}
+}
+
+// TestPiReinstantiateHarnessPublishesOnlyCompleteArgv holds the first state
+// report between opening its output and writing argv. Seeing that output as a
+// completed report let the harness read an empty list under full-suite load.
+func TestPiReinstantiateHarnessPublishesOnlyCompleteArgv(t *testing.T) {
+	node := requireNode(t, "that report argv is published only after it is complete")
+	dir := t.TempDir()
+	gatePath := filepath.Join(dir, "write-gate")
+	if out, err := exec.Command("mkfifo", gatePath).CombinedOutput(); err != nil {
+		t.Fatalf("create publication gate: %v: %s", err, out)
+	}
+	gate, err := os.OpenFile(gatePath, os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = gate.WriteString("release\n")
+		_ = gate.Close()
+	})
+	argvDir := filepath.Join(dir, "argv")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, node, "reinstantiate-harness.mjs", filepath.Join(dir, "sidecar-stub"), argvDir)
+	cmd.Dir = filepath.Join("assets", "pi")
+	cmd.Env = append(os.Environ(), "SIDECAR_ARGV_WRITE_GATE="+gatePath)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	// The marker is written only after output has been opened. It gives this
+	// assertion the precise redirection/write interleaving that used to race.
+	tick := time.NewTicker(5 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if _, err := os.Stat(gatePath + ".ready"); err == nil {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			_, _ = gate.WriteString("release\n")
+			_ = cmd.Wait()
+			t.Fatalf("report did not reach publication gate: %s", stderr.String())
+		case <-tick.C:
+		}
+	}
+	if data, err := os.ReadFile(filepath.Join(argvDir, "2")); !os.IsNotExist(err) {
+		t.Errorf("unfinished report was published: argv=%q error=%v", data, err)
+	}
+	_, _ = gate.WriteString("release\n")
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("publication harness: %v: %s", err, stderr.String())
+	}
+	data, err := os.ReadFile(filepath.Join(argvDir, "2"))
+	if err != nil || !strings.HasPrefix(string(data), "agent\nreport\n") {
+		t.Fatalf("completed state argv = %q, %v", data, err)
 	}
 }
 

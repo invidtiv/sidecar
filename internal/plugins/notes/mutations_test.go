@@ -4,8 +4,10 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"sort"
 	"sync"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/plugin"
@@ -395,40 +397,82 @@ func TestOptimisticDeleteImmediateSelectionTombstoneAndSuccess(t *testing.T) {
 // shifted the editorNote pointer onto the neighbor's slot; loadNoteIntoEditor
 // then early-returned on the matching ID and the pane kept the archived body.
 func TestOptimisticArchiveReloadsRightPaneContent(t *testing.T) {
-	p, controlled, notes := newDeleteMutationPlugin(t, 3)
-	controlled.archiveStarted = make(chan struct{})
-	controlled.archiveRelease = make(chan struct{})
-	p.cursor = 1
-	loadEditorForTest(p, 1)
-	p.activePane = PaneList
+	for _, test := range []struct {
+		name     string
+		boundary bool
+	}{
+		{name: "real store order"},
+		{name: "creation crosses timestamp boundary", boundary: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var base noteStore = openTestStore(t)
+			if test.boundary {
+				base = timestampBoundarySeedStore{noteStore: base}
+			}
+			p, controlled, notes := newDeleteMutationPluginWithStore(t, 3, base)
+			controlled.archiveStarted = make(chan struct{})
+			controlled.archiveRelease = make(chan struct{})
+			p.cursor = 1
+			loadEditorForTest(p, 1)
+			p.activePane = PaneList
 
-	archiveCmd := p.toggleArchive()
-	if p.editorNote == nil || p.editorNote.ID != notes[2].ID {
-		t.Fatalf("begin: editor=%v, want %s", p.editorNote, notes[2].ID)
-	}
-	if got := p.editorTextarea.Value(); got != notes[2].Content {
-		t.Fatalf("begin: textarea=%q, want %q", got, notes[2].Content)
-	}
-	if len(p.previewLines) != 1 || p.previewLines[0] != notes[2].Content {
-		t.Fatalf("begin: previewLines=%v, want [%q]", p.previewLines, notes[2].Content)
-	}
+			archiveCmd := p.toggleArchive()
+			if p.editorNote == nil || p.editorNote.ID != notes[2].ID {
+				t.Fatalf("begin: editor=%v, want %s", p.editorNote, notes[2].ID)
+			}
+			if got := p.editorTextarea.Value(); got != notes[2].Content {
+				t.Fatalf("begin: textarea=%q, want %q", got, notes[2].Content)
+			}
+			if len(p.previewLines) != 1 || p.previewLines[0] != notes[2].Content {
+				t.Fatalf("begin: previewLines=%v, want [%q]", p.previewLines, notes[2].Content)
+			}
 
-	result := runCommandAsync(archiveCmd)
-	<-controlled.archiveStarted
-	close(controlled.archiveRelease)
-	archived := (<-result).(NoteArchiveToggledMsg)
-	_, followup := p.Update(archived)
-	applyCommandResults(t, p, followup)
+			result := runCommandAsync(archiveCmd)
+			<-controlled.archiveStarted
+			close(controlled.archiveRelease)
+			archived := (<-result).(NoteArchiveToggledMsg)
+			_, followup := p.Update(archived)
+			applyCommandResults(t, p, followup)
 
-	if p.cursor != 1 || p.editorNote == nil || p.editorNote.ID != notes[2].ID {
-		t.Fatalf("after cycle: cursor=%d editor=%+v, want 1/%s", p.cursor, p.editorNote, notes[2].ID)
+			if p.cursor != 1 || p.editorNote == nil || p.editorNote.ID != notes[2].ID {
+				t.Fatalf("after cycle: cursor=%d editor=%+v, want 1/%s", p.cursor, p.editorNote, notes[2].ID)
+			}
+			if got := p.editorTextarea.Value(); got != notes[2].Content {
+				t.Fatalf("after cycle: textarea=%q, want %q", got, notes[2].Content)
+			}
+			if len(p.previewLines) != 1 || p.previewLines[0] != notes[2].Content {
+				t.Fatalf("after cycle: previewLines=%v, want [%q]", p.previewLines, notes[2].Content)
+			}
+		})
 	}
-	if got := p.editorTextarea.Value(); got != notes[2].Content {
-		t.Fatalf("after cycle: textarea=%q, want %q", got, notes[2].Content)
+}
+
+// td stores note times at second precision. This adapter models A/B created
+// together and C in the next second, supplying that legitimate List order
+// without depending on how quickly the test machine creates the three notes.
+type timestampBoundarySeedStore struct{ noteStore }
+
+func (s timestampBoundarySeedStore) List(includeArchived bool) ([]Note, error) {
+	notes, err := s.noteStore.List(includeArchived)
+	if err != nil {
+		return nil, err
 	}
-	if len(p.previewLines) != 1 || p.previewLines[0] != notes[2].Content {
-		t.Fatalf("after cycle: previewLines=%v, want [%q]", p.previewLines, notes[2].Content)
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i := range notes {
+		notes[i].CreatedAt = base
+		notes[i].UpdatedAt = base
+		if notes[i].Title == "C" {
+			notes[i].CreatedAt = base.Add(time.Second)
+			notes[i].UpdatedAt = base.Add(time.Second)
+		}
 	}
+	sort.SliceStable(notes, func(i, j int) bool {
+		if notes[i].UpdatedAt.Equal(notes[j].UpdatedAt) {
+			return notes[i].Title < notes[j].Title
+		}
+		return notes[i].UpdatedAt.After(notes[j].UpdatedAt)
+	})
+	return notes, nil
 }
 
 func TestOptimisticArchiveImmediateSelectionAndRollback(t *testing.T) {
@@ -636,14 +680,22 @@ func newMutationPlugin(t *testing.T) (*Plugin, *controlledMutationStore) {
 
 func newDeleteMutationPlugin(t *testing.T, count int) (*Plugin, *controlledMutationStore, []Note) {
 	t.Helper()
-	base := openTestStore(t)
-	notes := make([]Note, count)
-	for i := range notes {
-		note, err := base.Create(string(rune('A'+i)), "body "+string(rune('A'+i)))
+	return newDeleteMutationPluginWithStore(t, count, openTestStore(t))
+}
+
+func newDeleteMutationPluginWithStore(t *testing.T, count int, base noteStore) (*Plugin, *controlledMutationStore, []Note) {
+	t.Helper()
+	for i := 0; i < count; i++ {
+		_, err := base.Create(string(rune('A'+i)), "body "+string(rune('A'+i)))
 		if err != nil {
 			t.Fatal(err)
 		}
-		notes[i] = *note
+	}
+	// Start from the same canonical order that reloads use. Creating A/B/C
+	// does not imply List returns A/B/C: td orders by updated_at descending.
+	notes, err := base.List(false)
+	if err != nil {
+		t.Fatal(err)
 	}
 	controlled := newControlledMutationStore(base)
 	p := New()
