@@ -15,8 +15,7 @@ import (
 	"time"
 )
 
-// ScopeFull is the only v0 scope. Narrower scopes arrive with the routes they
-// protect.
+// ScopeFull grants every API capability, including narrower scoped routes.
 const ScopeFull = "full"
 
 // OriginRecord is one paired origin as persisted. The bearer token itself is
@@ -216,10 +215,30 @@ func normalizeScopes(scopes []string) ([]string, error) {
 	if len(scopes) == 0 {
 		return []string{ScopeFull}, nil
 	}
+	seen := map[string]bool{}
+	out := []string{}
 	for _, scope := range scopes {
-		if scope != ScopeFull {
-			return nil, fmt.Errorf("scope %q is not available in v0; the only scope is %q", scope, ScopeFull)
+		if scope != ScopeFull && scope != ScopeContentRead {
+			return nil, fmt.Errorf("scope %q is not available; use full or content:read", scope)
+		}
+		if !seen[scope] {
+			out = append(out, scope)
+			seen[scope] = true
 		}
 	}
-	return []string{ScopeFull}, nil
+	if seen[ScopeFull] {
+		return []string{ScopeFull}, nil
+	}
+	return out, nil
+}
+
+func (s *originStore) lookup(origin string) (OriginRecord, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, r := range s.records {
+		if r.Origin == origin {
+			return r, true
+		}
+	}
+	return OriginRecord{}, false
 }

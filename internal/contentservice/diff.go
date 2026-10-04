@@ -322,6 +322,9 @@ func (s *Service) readCommitFile(ctx context.Context, root, target, path, parent
 	if spec.Kind == workspacediff.TargetWorkingTree {
 		return DiffDocument{}, Rejected("commit-file requires a commit target")
 	}
+	if parent, err = resolveParent(ctx, root, parent); err != nil {
+		return DiffDocument{}, err
+	}
 	if spec.Kind == workspacediff.TargetRange {
 		hash = spec.B
 	}
@@ -349,7 +352,11 @@ func (s *Service) readFullFile(ctx context.Context, root string, params ReadPara
 	if err != nil {
 		return DiffDocument{}, err
 	}
-	oldContent, newContent, rawDiff, rev, err := s.fullFileContents(ctx, root, spec, rel, params.Parent)
+	parent, err := resolveParent(ctx, root, params.Parent)
+	if err != nil {
+		return DiffDocument{}, err
+	}
+	oldContent, newContent, rawDiff, rev, err := s.fullFileContents(ctx, root, spec, rel, parent)
 	if err != nil {
 		return DiffDocument{}, err
 	}
@@ -440,6 +447,26 @@ func (s *Service) workingTreeRevision(ctx context.Context, root string) (string,
 	return "v1:" + hex.EncodeToString(sum[:]), nil
 }
 
+// resolveParent turns an optional parent locator into a full commit id. The
+// parent becomes a git argument, so nothing option-shaped (--output=FILE makes
+// git diff and git show write files) may ever reach git from it.
+func resolveParent(ctx context.Context, root, parent string) (string, error) {
+	if parent == "" {
+		return "", nil
+	}
+	if err := validateLocator(parent, "parent"); err != nil {
+		return "", err
+	}
+	if strings.HasPrefix(strings.TrimSpace(parent), "-") {
+		return "", Rejected("parent %q is not a commit", parent)
+	}
+	resolved, err := workspacediff.ResolveSpec(ctx, root, workspacediff.Target{Kind: workspacediff.TargetCommit, A: parent})
+	if err != nil || resolved.A == "" || strings.HasPrefix(resolved.A, "-") {
+		return "", Rejected("parent %q is not a commit", parent)
+	}
+	return resolved.A, nil
+}
+
 func containDiffPath(path string) (string, error) {
 	if err := validateLocator(path, "path"); err != nil {
 		return "", err
@@ -471,7 +498,12 @@ func readWorktreeFileBounded(root, path string) (string, error) {
 	if info.Size() > workspacediff.MaxUntrackedFileSize {
 		return "", nil
 	}
-	f, err := os.Open(full)
+	dir, err := os.OpenRoot(root)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = dir.Close() }()
+	f, err := dir.Open(filepath.FromSlash(path))
 	if err != nil {
 		return "", err
 	}

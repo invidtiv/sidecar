@@ -1,0 +1,21 @@
+{
+  "layout": {
+    "split": {
+      "axis": "cols",
+      "ratio": 50,
+      "a": {
+        "kind": "terminal",
+        "session": "fixture-echo"
+      },
+      "b": {
+        "kind": "doc",
+        "tabs": [
+          {
+            "path": "README.md",
+            "mode": "rendered"
+          }
+        ]
+      }
+    }
+  }
+}

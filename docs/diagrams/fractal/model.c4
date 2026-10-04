@@ -347,7 +347,7 @@ model {
 
     origins = store 'Paired Origins (origins.json)' {
       summary 'Mode-0600 registry of paired origin token hashes'
-      description 'Persists paired embedding origins in $STATE/api/origins.json, mode 0600, as origin, token_sha256, scopes and created_at. Only the token hash is kept; the only v0 scope is full.'
+      description 'Persists paired embedding origins in $STATE/api/origins.json, mode 0600, as origin, token_sha256, scopes and created_at. Only the token hash is kept; full implies every scope; content:read grants content and per-viewer layout preferences without granting terminals.'
       metadata { uid 'api.origins' fractalColor '#7F9FC4' evidence ['internal/uiapi/origins.go'] }
     }
 
@@ -371,8 +371,8 @@ model {
     }
 
     events = component 'Events Stream' {
-      summary 'Authenticated catalog, attention and attachment push'
-      description 'GET /api/v0/events uses the terminal trust model on every listener and emits hello, generation-numbered catalog snapshots, needs-input or finished attention, attachment and holder snapshots, and orderly shutdown. A single hostserve observer reuses manifest watches and desktop agent status collection; remote invalidations come from registry snapshots and diffs. State coalesces in bounded per-client buffers. sidecar api events --stdio bridges the Local socket to JSONL for SSH consumers; native adoption and content invalidation remain proposed.'
+      summary 'Authenticated catalog, attention, attachment and open-content push'
+      description 'GET /api/v0/events uses the terminal trust model on every listener and emits hello, generation-numbered catalog snapshots, needs-input or finished attention, attachment and holder snapshots, and orderly shutdown. A single hostserve observer reuses manifest watches and desktop agent status collection; remote invalidations come from registry snapshots and diffs. State coalesces in bounded per-client buffers. sidecar api events --stdio bridges the Local socket to JSONL for SSH consumers; Open content panes subscribe through bounded content references and receive livewatch invalidations; watchers are released with each socket. Native adoption remains separate.'
       metadata { uid 'api.events' fractalColor '#7F9FC4' evidence ['internal/uiapi/events.go', 'internal/cli/api_events_source.go', 'internal/cli/api_events.go', 'scripts/ui-api-proof.sh', 'docs/reference/ui-api.md'] }
     }
 
@@ -396,10 +396,9 @@ model {
     }
 
     layouts = store 'Per-Viewer Layout Store' {
-      #proposed
       summary 'Locked per-viewer pane trees (U3)'
-      description 'Planned for U3: a locked store holding each API client its own layout in the shared pane-tree format, so a layout can be copied across viewers but is never fought over. It replaces nothing in the TUI, whose state.json stays its own.'
-      metadata { uid 'api.layouts' fractalColor '#7F9FC4' evidence ['docs/plans/active/sidecar-ui-api.md', 'internal/state/state.go'] }
+      description 'GET and conditional PUT of each authenticated viewer and project layout under $STATE/api/layouts. The shared tree format contains ratios and tab references, with no cell geometry. OS locking, ETag comparison and atomic replacement prevent lost writes; the TUI state remains separate.'
+      metadata { uid 'api.layouts' fractalColor '#7F9FC4' evidence ['internal/viewerlayout/store.go', 'internal/uiapi/layouts.go', 'internal/panecodec/panecodec.go', 'internal/state/state.go'] }
     }
 
     viewer_relay = component 'Viewer Relay (uirequest)' {
