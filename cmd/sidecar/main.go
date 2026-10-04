@@ -111,6 +111,7 @@ func main() {
 	// Unset TMUX so sidecar's internal tmux sessions are independent of any
 	// outer tmux session. This allows prefix+d to detach from the workspace's
 	// inner session rather than the user's outer tmux.
+	tmuxenv.RememberHostingServer()
 	_ = os.Unsetenv("TMUX")
 	// After TMUX is unset, tmux children talk to this process's default
 	// socket — the server that holds Sidecar-managed sessions. Tests never

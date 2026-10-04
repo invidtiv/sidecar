@@ -73,6 +73,12 @@ type workspaceTerminalTarget = termpanes.Target
 // routed explicitly by interactive mode so a visible preview never captures
 // input intended for workspace navigation.
 func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
+	previousInteraction := p.interactiveState
+	previousTerminal := p.activeInteractiveTerminal()
+	var previousScope tty.MessageScope
+	if previousTerminal != nil {
+		previousScope = previousTerminal.Scope()
+	}
 	if epochMsg, ok := msg.(plugin.EpochMessage); ok && plugin.IsStale(p.ctx, epochMsg) {
 		return p, nil
 	}
@@ -99,9 +105,19 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	case tea.FocusMsg:
 		p.applicationFocused = true
 		p.setTerminalFocus(true)
+		for _, model := range []*tty.Model{p.primaryTermPane().Terminal, p.requireShellTermPane().Terminal} {
+			if model != nil && p.focused {
+				cmds = append(cmds, model.SetApplicationFocused(true))
+			}
+		}
 	case tea.BlurMsg:
 		p.applicationFocused = false
 		p.setTerminalFocus(false)
+		for _, model := range []*tty.Model{p.primaryTermPane().Terminal, p.requireShellTermPane().Terminal} {
+			if model != nil {
+				cmds = append(cmds, model.SetApplicationFocused(false))
+			}
+		}
 	case tea.KeyPressMsg, tea.PasteMsg, tea.MouseMsg:
 		// Input is routed by workspace interactive mode after its own navigation,
 		// selection, panel-toggle, and coordinate policy has run.
@@ -134,6 +150,15 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	p.syncTerminalResizeHold()
 	cmds = append(cmds, p.reconcileTerminalModels()...)
 	p.syncTerminalModels()
+	if p.interactiveState != nil && p.interactiveState.Active {
+		// A click can leave one live pane and enter another in the same
+		// update. Boolean mode state misses that handoff, as well as a model
+		// reopened during reconciliation: each new input lifetime needs a hold.
+		if model := p.activeInteractiveTerminal(); model != nil &&
+			(p.interactiveState != previousInteraction || model != previousTerminal || model.Scope() != previousScope) {
+			cmds = append(cmds, model.ActivateInput())
+		}
+	}
 	// Swept once per update for the same reason as the focus rule above: the
 	// watch set must match the open pane set, and there are too many places that
 	// open, close, retarget or restore a pane to trust each of them to say so.

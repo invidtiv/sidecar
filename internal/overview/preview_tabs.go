@@ -194,6 +194,13 @@ func (m *Model) renderOutputTerminalLeaf(leafID int, kind panelayout.Kind, width
 			}
 		}
 	}
+	if leaf.Target.Host == "" {
+		holderTarget := leaf.Target.Pane
+		if holderTarget == "" {
+			holderTarget = leaf.Target.Session
+		}
+		hints = termpreview.WithGeometryHolderHint(hints, holderTarget)
+	}
 	message := m.preview.reason
 	if kind == panelayout.Shell {
 		message = ""

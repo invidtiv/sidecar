@@ -1,0 +1,121 @@
+{
+  "sidecar_ui_commit": "fdad8665c3f846591d743b91ac01ca4fb3ae6253",
+  "handoffs": [
+    {
+      "to": "ios",
+      "ms": 25,
+      "geometry": "73x19"
+    },
+    {
+      "to": "tui",
+      "ms": 326,
+      "geometry": "91x39"
+    },
+    {
+      "to": "browser",
+      "ms": 1237,
+      "bytes": 3,
+      "geometry": "121x41"
+    },
+    {
+      "to": "ios",
+      "ms": 350,
+      "bytes": 3,
+      "geometry": "73x19"
+    },
+    {
+      "to": "tui",
+      "ms": 382,
+      "bytes": 3,
+      "geometry": "91x39"
+    },
+    {
+      "to": "browser",
+      "ms": 909,
+      "bytes": 3,
+      "geometry": "121x41"
+    },
+    {
+      "to": "ios",
+      "ms": 508,
+      "bytes": 3,
+      "geometry": "73x19"
+    },
+    {
+      "to": "tui",
+      "ms": 447,
+      "bytes": 3,
+      "geometry": "91x39"
+    },
+    {
+      "to": "browser",
+      "ms": 1053,
+      "bytes": 3,
+      "geometry": "121x41"
+    },
+    {
+      "to": "ios",
+      "ms": 379,
+      "bytes": 3,
+      "geometry": "73x19"
+    },
+    {
+      "to": "tui",
+      "ms": 478,
+      "bytes": 3,
+      "geometry": "91x39"
+    },
+    {
+      "to": "browser",
+      "ms": 222,
+      "bytes": 3,
+      "geometry": "121x41"
+    },
+    {
+      "to": "ios",
+      "ms": 173,
+      "bytes": 3,
+      "geometry": "73x19"
+    },
+    {
+      "to": "tui",
+      "ms": 637,
+      "bytes": 3,
+      "geometry": "91x39"
+    }
+  ],
+  "quiet_windows": [
+    {
+      "ms": 6636,
+      "resize_window_calls": 0
+    }
+  ],
+  "holder_checks": 18,
+  "tui_geometry": "91x39",
+  "browser_geometry": "121x41",
+  "browser_blur_ms": 51,
+  "ios_blur_ms": 33,
+  "expected_bytes": 40,
+  "received_bytes": 40,
+  "input_exact": true,
+  "idle_preemption": {
+    "abandoned_ms": 7994,
+    "active_to_holder_ms": 179,
+    "browser_label": "Browser"
+  },
+  "browser_hint_checks": 1,
+  "focused_input_takeovers": {
+    "count": 2,
+    "ms": 1691
+  },
+  "resize_hook_positive_control": true,
+  "browser_pageerrors": [
+    "Cannot read properties of undefined (reading 'setCellFromCodepoint')",
+    "Cannot read properties of undefined (reading 'loadCell')",
+    "Cannot read properties of undefined (reading 'loadCell')",
+    "Cannot read properties of undefined (reading 'loadCell')",
+    "Cannot read properties of undefined (reading 'loadCell')",
+    "Cannot read properties of undefined (reading 'loadCell')",
+    "Cannot read properties of undefined (reading 'loadCell')"
+  ]
+}

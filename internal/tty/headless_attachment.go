@@ -130,7 +130,11 @@ type headlessPaneLayout struct {
 
 func (g *HeadlessGeometry) resizeOperations(width, height int) ([]string, bool, string, error) {
 	if g.expected.PaneCount <= 1 {
-		return []string{"resize-window -t " + controlQuote(g.expected.Pane) + " -x " + strconv.Itoa(width) + " -y " + strconv.Itoa(height)}, false, "", nil
+		// Evaluate at the mutation boundary, inside the identity/lease guard.
+		// Heartbeats still renew ownership but a settled box issues no resize.
+		needsResize := "#{||:#{!=:#{pane_width}," + strconv.Itoa(width) + "},#{!=:#{pane_height}," + strconv.Itoa(height) + "}}"
+		resize := "resize-window -t " + controlQuote(g.expected.Pane) + " -x " + strconv.Itoa(width) + " -y " + strconv.Itoa(height)
+		return []string{"if-shell -F -t " + controlQuote(g.expected.Pane) + " " + controlQuote(needsResize) + " " + controlQuote(resize)}, false, "", nil
 	}
 	layout, err := g.readLayout()
 	if err != nil {

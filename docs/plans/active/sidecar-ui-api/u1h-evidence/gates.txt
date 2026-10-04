@@ -1,0 +1,184 @@
+Verified source:86205ffed374bb0350adb5c4eae6153c7743bc7f
+Merged main:c3ac24181bfdd0f72b737113608be0e0f0381d81
+sidecar-ui main:fdad8665c3f846591d743b91ac01ca4fb3ae6253
+
+Exit 0: timeout 300 go build ./...
+Log:/tmp/u1h-gate-build-handoff.log
+Exit 0: GOFLAGS=-p=1 timeout 1800 go test ./... (full suite)
+Log:/tmp/u1h-gate-tests-verified.log
+Exit 0: timeout 360 make lint (0 issues)
+Log:/tmp/u1h-gate-lint-handoff.log
+Exit 0: timeout 300 ./scripts/ui-api-proof.sh
+Log:/tmp/u1h-gate-ui-api-handoff.log
+Exit 0: THREE_VIEWER_OUTPUT=/tmp/u1h-three-handoff timeout 420 ./scripts/three-viewer-proof.sh
+Log:/tmp/u1h-gate-three-handoff.log
+
+Proof results, screenshots, real browser protocol transcript:/tmp/u1h-three-handoff
+Browser rendering excluded:7 xterm errors and blank terminal content area; td-945516.
+
+ok  	github.com/marcus/sidecar/cmd/sidecar	(cached)
+ok  	github.com/marcus/sidecar/internal/activitystore	(cached)
+ok  	github.com/marcus/sidecar/internal/adapter	(cached)
+ok  	github.com/marcus/sidecar/internal/adapter/amp	(cached)
+ok  	github.com/marcus/sidecar/internal/adapter/antigravity	(cached)
+ok  	github.com/marcus/sidecar/internal/adapter/cache	(cached)
+ok  	github.com/marcus/sidecar/internal/adapter/claudecode	(cached)
+ok  	github.com/marcus/sidecar/internal/adapter/codex	(cached)
+ok  	github.com/marcus/sidecar/internal/adapter/copilot	(cached)
+ok  	github.com/marcus/sidecar/internal/adapter/cursor	(cached)
+ok  	github.com/marcus/sidecar/internal/adapter/grok	(cached)
+ok  	github.com/marcus/sidecar/internal/adapter/kiro	(cached)
+?   	github.com/marcus/sidecar/internal/adapter/muse	[no test files]
+?   	github.com/marcus/sidecar/internal/adapter/omp	[no test files]
+ok  	github.com/marcus/sidecar/internal/adapter/opencode	0.263s
+ok  	github.com/marcus/sidecar/internal/adapter/pi	(cached)
+ok  	github.com/marcus/sidecar/internal/adapter/piagent	(cached)
+ok  	github.com/marcus/sidecar/internal/adapter/pricing	(cached)
+?   	github.com/marcus/sidecar/internal/adapter/testutil	[no test files]
+ok  	github.com/marcus/sidecar/internal/adapter/tieredwatcher	(cached)
+ok  	github.com/marcus/sidecar/internal/adapter/warp	(cached)
+ok  	github.com/marcus/sidecar/internal/agentactivity	(cached)
+ok  	github.com/marcus/sidecar/internal/agentactivity/manifest	(cached)
+ok  	github.com/marcus/sidecar/internal/agentactivity/manifests	(cached)
+ok  	github.com/marcus/sidecar/internal/agentbroadcast	(cached)
+ok  	github.com/marcus/sidecar/internal/agentcatalog	(cached)
+ok  	github.com/marcus/sidecar/internal/agentcontrol	(cached)
+ok  	github.com/marcus/sidecar/internal/agentintegration	(cached)
+ok  	github.com/marcus/sidecar/internal/agentlifecycle	(cached)
+ok  	github.com/marcus/sidecar/internal/agentlifecycle/lifecycleenv	(cached)
+ok  	github.com/marcus/sidecar/internal/agentlifecycle/lifecycleharness	(cached)
+ok  	github.com/marcus/sidecar/internal/agentlifecycle/lifecyclestore	(cached)
+ok  	github.com/marcus/sidecar/internal/agentremote	(cached)
+ok  	github.com/marcus/sidecar/internal/agentresolve	(cached)
+ok  	github.com/marcus/sidecar/internal/agentsession	(cached)
+ok  	github.com/marcus/sidecar/internal/agentstatus	(cached)
+ok  	github.com/marcus/sidecar/internal/agenttranscript	(cached)
+ok  	github.com/marcus/sidecar/internal/apiservice	(cached)
+ok  	github.com/marcus/sidecar/internal/app	(cached)
+ok  	github.com/marcus/sidecar/internal/broadcastmodal	(cached)
+ok  	github.com/marcus/sidecar/internal/buildinfo	(cached)
+ok  	github.com/marcus/sidecar/internal/cli	(cached)
+ok  	github.com/marcus/sidecar/internal/clip	(cached)
+ok  	github.com/marcus/sidecar/internal/community	(cached)
+ok  	github.com/marcus/sidecar/internal/config	(cached)
+ok  	github.com/marcus/sidecar/internal/configchecks	(cached)
+ok  	github.com/marcus/sidecar/internal/configui	(cached)
+ok  	github.com/marcus/sidecar/internal/contentlink	(cached)
+ok  	github.com/marcus/sidecar/internal/contentpanes	(cached)
+ok  	github.com/marcus/sidecar/internal/contentservice	(cached)
+ok  	github.com/marcus/sidecar/internal/docview	(cached)
+ok  	github.com/marcus/sidecar/internal/event	(cached)
+ok  	github.com/marcus/sidecar/internal/fdmonitor	(cached)
+ok  	github.com/marcus/sidecar/internal/features	(cached)
+ok  	github.com/marcus/sidecar/internal/filefind	(cached)
+ok  	github.com/marcus/sidecar/internal/filepreview	(cached)
+ok  	github.com/marcus/sidecar/internal/gitinit	(cached)
+ok  	github.com/marcus/sidecar/internal/hostproto	(cached)
+ok  	github.com/marcus/sidecar/internal/hosts	(cached)
+ok  	github.com/marcus/sidecar/internal/hostserve	(cached)
+ok  	github.com/marcus/sidecar/internal/image	(cached)
+ok  	github.com/marcus/sidecar/internal/inlineedit	(cached)
+ok  	github.com/marcus/sidecar/internal/installui	(cached)
+ok  	github.com/marcus/sidecar/internal/issueview	(cached)
+ok  	github.com/marcus/sidecar/internal/kanban	(cached)
+ok  	github.com/marcus/sidecar/internal/keymap	(cached)
+ok  	github.com/marcus/sidecar/internal/layoutapply	(cached)
+ok  	github.com/marcus/sidecar/internal/layoutreport	(cached)
+ok  	github.com/marcus/sidecar/internal/livepanes	(cached)
+ok  	github.com/marcus/sidecar/internal/livewatch	(cached)
+ok  	github.com/marcus/sidecar/internal/managedtarget	(cached)
+ok  	github.com/marcus/sidecar/internal/markdown	(cached)
+ok  	github.com/marcus/sidecar/internal/migration	(cached)
+ok  	github.com/marcus/sidecar/internal/mobile	(cached)
+ok  	github.com/marcus/sidecar/internal/mobilehub	(cached)
+ok  	github.com/marcus/sidecar/internal/mobileproto	(cached)
+ok  	github.com/marcus/sidecar/internal/modal	(cached)
+ok  	github.com/marcus/sidecar/internal/mouse	(cached)
+ok  	github.com/marcus/sidecar/internal/msg	(cached)
+ok  	github.com/marcus/sidecar/internal/noteview	(cached)
+ok  	github.com/marcus/sidecar/internal/notify	(cached)
+ok  	github.com/marcus/sidecar/internal/notifydelivery	(cached)
+?   	github.com/marcus/sidecar/internal/notifydelivery/assets/gen	[no test files]
+ok  	github.com/marcus/sidecar/internal/overlay	(cached)
+ok  	github.com/marcus/sidecar/internal/overview	(cached)
+ok  	github.com/marcus/sidecar/internal/palette	(cached)
+ok  	github.com/marcus/sidecar/internal/panebadge	(cached)
+ok  	github.com/marcus/sidecar/internal/panecodec	(cached)
+ok  	github.com/marcus/sidecar/internal/paneframe	(cached)
+ok  	github.com/marcus/sidecar/internal/panelayout	(cached)
+?   	github.com/marcus/sidecar/internal/panelpref	[no test files]
+ok  	github.com/marcus/sidecar/internal/panemodal	(cached)
+ok  	github.com/marcus/sidecar/internal/panereposition	(cached)
+?   	github.com/marcus/sidecar/internal/panesearch	[no test files]
+ok  	github.com/marcus/sidecar/internal/parityscan	(cached)
+ok  	github.com/marcus/sidecar/internal/pathcomplete	(cached)
+ok  	github.com/marcus/sidecar/internal/plugin	(cached)
+ok  	github.com/marcus/sidecar/internal/pluginbrowser	(cached)
+ok  	github.com/marcus/sidecar/internal/pluginhost	(cached)
+ok  	github.com/marcus/sidecar/internal/plugins/assembly	(cached)
+ok  	github.com/marcus/sidecar/internal/plugins/conversations	(cached)
+ok  	github.com/marcus/sidecar/internal/plugins/filebrowser	(cached)
+ok  	github.com/marcus/sidecar/internal/plugins/gitstatus	(cached)
+ok  	github.com/marcus/sidecar/internal/plugins/notes	(cached)
+ok  	github.com/marcus/sidecar/internal/plugins/tasks	(cached)
+ok  	github.com/marcus/sidecar/internal/plugins/tdmonitor	(cached)
+ok  	github.com/marcus/sidecar/internal/plugins/workspace	(cached)
+?   	github.com/marcus/sidecar/internal/procgroup	[no test files]
+ok  	github.com/marcus/sidecar/internal/projectdir	(cached)
+ok  	github.com/marcus/sidecar/internal/projectlist	(cached)
+ok  	github.com/marcus/sidecar/internal/projectsearch	(cached)
+ok  	github.com/marcus/sidecar/internal/queryfield	(cached)
+ok  	github.com/marcus/sidecar/internal/reposervice	(cached)
+ok  	github.com/marcus/sidecar/internal/resource	(cached)
+ok  	github.com/marcus/sidecar/internal/resourceview	(cached)
+ok  	github.com/marcus/sidecar/internal/reveal	(cached)
+ok  	github.com/marcus/sidecar/internal/scroll	(cached)
+?   	github.com/marcus/sidecar/internal/scroll/scrolltest	[no test files]
+ok  	github.com/marcus/sidecar/internal/sessionrestore	(cached)
+ok  	github.com/marcus/sidecar/internal/shellliveness	(cached)
+ok  	github.com/marcus/sidecar/internal/shellstate	(cached)
+ok  	github.com/marcus/sidecar/internal/startupfail	(cached)
+?   	github.com/marcus/sidecar/internal/startuptrace	[no test files]
+ok  	github.com/marcus/sidecar/internal/state	(cached)
+ok  	github.com/marcus/sidecar/internal/styles	(cached)
+ok  	github.com/marcus/sidecar/internal/tabs	(cached)
+ok  	github.com/marcus/sidecar/internal/targetactivation	(cached)
+ok  	github.com/marcus/sidecar/internal/tdroot	(cached)
+ok  	github.com/marcus/sidecar/internal/tdsetup	(cached)
+ok  	github.com/marcus/sidecar/internal/terminallink	(cached)
+ok  	github.com/marcus/sidecar/internal/terminalperf	(cached)
+ok  	github.com/marcus/sidecar/internal/termnotify	(cached)
+ok  	github.com/marcus/sidecar/internal/termpanes	(cached)
+ok  	github.com/marcus/sidecar/internal/termpreview	(cached)
+ok  	github.com/marcus/sidecar/internal/termtitle	(cached)
+ok  	github.com/marcus/sidecar/internal/testenv	(cached)
+ok  	github.com/marcus/sidecar/internal/testfixture/terminal	(cached)
+ok  	github.com/marcus/sidecar/internal/testfixture/terminal/cmd/opencode	(cached)
+ok  	github.com/marcus/sidecar/internal/textselect	(cached)
+ok  	github.com/marcus/sidecar/internal/theme	(cached)
+ok  	github.com/marcus/sidecar/internal/themecheck	0.589s
+ok  	github.com/marcus/sidecar/internal/tmuxenv	(cached)
+ok  	github.com/marcus/sidecar/internal/tmuxformat	(cached)
+ok  	github.com/marcus/sidecar/internal/tmuxserver	(cached)
+ok  	github.com/marcus/sidecar/internal/tools/herdrsync	(cached)
+?   	github.com/marcus/sidecar/internal/tools/threeviewer	[no test files]
+?   	github.com/marcus/sidecar/internal/tools/uiapimeasure	[no test files]
+?   	github.com/marcus/sidecar/internal/tools/uiapiproof	[no test files]
+?   	github.com/marcus/sidecar/internal/tools/uicontentproof	[no test files]
+?   	github.com/marcus/sidecar/internal/tools/uieventsproof	[no test files]
+ok  	github.com/marcus/sidecar/internal/tty	(cached)
+ok  	github.com/marcus/sidecar/internal/tty/screenmodel	(cached)
+ok  	github.com/marcus/sidecar/internal/ui	(cached)
+ok  	github.com/marcus/sidecar/internal/uiapi	25.967s
+ok  	github.com/marcus/sidecar/internal/uirequest	2.482s
+ok  	github.com/marcus/sidecar/internal/version	0.483s
+ok  	github.com/marcus/sidecar/internal/viewerlayout	0.282s
+ok  	github.com/marcus/sidecar/internal/workspacecatalog	0.222s
+ok  	github.com/marcus/sidecar/internal/workspacecreate	1.250s
+ok  	github.com/marcus/sidecar/internal/workspacediff	3.046s
+ok  	github.com/marcus/sidecar/internal/workspaceinventory	2.751s
+ok  	github.com/marcus/sidecar/internal/workspacelist	(cached)
+ok  	github.com/marcus/sidecar/internal/workspaceops	26.034s
+ok  	github.com/marcus/sidecar/internal/worktreedelete	2.376s
+?   	github.com/marcus/sidecar/scripts/spike-holdpane	[no test files]
+?   	github.com/marcus/sidecar/scripts/spike-latency-proxy	[no test files]

@@ -1,6 +1,7 @@
 package tty
 
 import (
+	tea "charm.land/bubbletea/v2"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -966,6 +967,35 @@ func TestHeldLeaseReadFailureDoesNotSynthesizeGeometryAcquisition(t *testing.T) 
 		t.Fatalf("unresolved lease read synthesized %d geometry restorations", got)
 	}
 	keeper.releaseHold("%4")
+}
+
+func TestLocalApplicationFocusRefitsUnchangedViewport(t *testing.T) {
+	m := New(nil)
+	m.State = &State{Active: true, TargetSession: "focus-proof", TargetPane: "%4"}
+	m.Width, m.Height = 92, 31
+	originalQuery, originalResize := terminalQueryPaneSize, terminalResizePane
+	t.Cleanup(func() { terminalQueryPaneSize, terminalResizePane = originalQuery, originalResize })
+	terminalQueryPaneSize = func(string) (int, int, bool) { return 73, 19, true }
+	var resized bool
+	terminalResizePane = func(target string, width, height int) { resized = target == "%4" && width == 92 && height == 31 }
+	cmd := m.SetApplicationFocused(true)
+	if cmd == nil {
+		t.Fatal("local focus did not refit unchanged viewport after a peer resized it")
+	}
+	var execute func(tea.Cmd)
+	execute = func(c tea.Cmd) {
+		if c != nil {
+			if batch, ok := c().(tea.BatchMsg); ok {
+				for _, next := range batch {
+					execute(next)
+				}
+			}
+		}
+	}
+	execute(cmd)
+	if !resized {
+		t.Fatal("local focus did not assert fitted geometry")
+	}
 }
 
 func TestReleaseDuringBlockedLocalActivationLeavesNoClaimOrResize(t *testing.T) {
