@@ -356,7 +356,7 @@ func (m *Model) attachRestoredPreviewShell(ws workspaceinventory.Workspace, live
 }
 
 func (m *Model) ensureRestoredPreviewShell(ws workspaceinventory.Workspace) tea.Cmd {
-	scope := m.completionScope()
+	scope := m.createCompletionScope()
 
 	shell := panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Shell)
 	if shell == nil {

@@ -144,6 +144,14 @@ type previewTerminalSplitCreatedMsg struct {
 	Err         error
 }
 
+// A split belongs to its pane even after another create dialog opens. Only
+// dialog updates use Create; pane adoption still uses configuration authority.
+func (msg previewTerminalSplitCreatedMsg) getCompletionScope() completionScope {
+	scope := msg.completionScope
+	scope.Create = 0
+	return scope
+}
+
 func (m *Model) createPreviewTerminalSplit() tea.Cmd {
 	if !features.IsEnabled(features.WorkspaceTerminalPanel.Name) || m.createForm == nil {
 		return nil
@@ -250,6 +258,7 @@ func (m *Model) applyPreviewTerminalSplitCreated(msg previewTerminalSplitCreated
 			return nil
 		}
 		if msg.Err != nil {
+			m.clearPendingSplitSeed(msg.Session)
 			cached.root, cached.focus = panelayout.Close(cached.root, msg.LeafID)
 			cached.terminals.Release(msg.LeafID)
 			m.preview.paneCache[msg.WorkspaceID] = cached
@@ -257,28 +266,41 @@ func (m *Model) applyPreviewTerminalSplitCreated(msg previewTerminalSplitCreated
 		}
 		leaf.PaneID = msg.PaneID
 		leaf.Target.Session, leaf.Target.Pane = msg.Session, msg.PaneID
-		return nil
+		return m.applyPendingSplitSeed(msg.Session, msg.completionScope)
 	}
-	m.createBusy = false
+	// Scoped split messages capture even generation zero (no dialog yet).
+	// Unlike the generic optional Create fence, zero is not a wildcard here.
+	dialogCurrent := !msg.Scoped || (m.completionCurrent(msg.completionScope) && msg.Create == m.createGeneration)
+	if dialogCurrent {
+		m.createBusy = false
+	}
 	if msg.Err != nil {
-		m.pendingSplitSeed = nil
+		m.clearPendingSplitSeed(msg.Session)
 		m.preview.paneRoot, m.preview.paneFocus = panelayout.Close(m.preview.paneRoot, msg.LeafID)
 		m.preview.terminalPanes.Release(msg.LeafID)
-		m.createModal = nil
-		m.setCreateError(msg.Err.Error())
+		if dialogCurrent {
+			m.createModal = nil
+			m.setCreateError(msg.Err.Error())
+		}
 		m.persistSessionsLayout()
 		return nil
 	}
 	leaf.PaneID = msg.PaneID
 	leaf.Target.Session, leaf.Target.Pane = msg.Session, msg.PaneID
-	m.closeCreateShell()
+	if dialogCurrent {
+		m.closeCreateShell()
+	}
 	m.persistSessionsLayout()
-	return tea.Batch(m.syncTerminalLeaf(msg.LeafID), m.syncTerminalGeometry(), m.applyPendingSplitSeed(msg.Session))
+	return tea.Batch(m.syncTerminalLeaf(msg.LeafID), m.syncTerminalGeometry(), m.applyPendingSplitSeed(msg.Session, msg.completionScope))
 }
 
-func (m *Model) applyPendingSplitSeed(session string) tea.Cmd {
-	scope := m.createCompletionScope()
+func (m *Model) clearPendingSplitSeed(session string) {
+	if m.pendingSplitSeed != nil && m.pendingSplitSeed.session == session {
+		m.pendingSplitSeed = nil
+	}
+}
 
+func (m *Model) applyPendingSplitSeed(session string, scope completionScope) tea.Cmd {
 	seed := m.pendingSplitSeed
 	if seed == nil || seed.session == "" || seed.session != session {
 		return nil

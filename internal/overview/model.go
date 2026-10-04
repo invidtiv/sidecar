@@ -671,6 +671,12 @@ func (m *Model) SetProjects(projects []Project) tea.Cmd {
 func (m *Model) start(projects []Project, reason string) tea.Cmd {
 	if !sameConfiguredProjects(m.configuredPaths, projects) {
 		m.configurationGeneration++
+		// Their replies now belong to the previous configuration. Retire the
+		// dialogs too, rather than leaving a busy modal with no valid reply.
+		m.closeCreateShell()
+		m.closeRenameShell()
+		m.closeDelete()
+		m.pendingSplitSeed = nil
 	}
 	if m.cancel != nil {
 		if m.pollScheduled {
@@ -1076,6 +1082,9 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 	case previewTerminalSplitCreatedMsg:
 		return m.applyPreviewTerminalSplitCreated(msg)
 	case previewSplitSeedFailedMsg:
+		if msg.Scoped && msg.Create != m.createGeneration {
+			return nil
+		}
 		if msg.Err != nil {
 			m.setCreateError(msg.Err.Error())
 		}

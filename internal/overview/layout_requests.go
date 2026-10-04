@@ -355,7 +355,7 @@ func (h overviewLayoutHost) RestoreSpec(layout *state.PaneLayoutJSON) tea.Cmd {
 	return h.m.restoreSpecPreviewLayout(layout)
 }
 func (h overviewLayoutHost) AdoptSpecShell(spec uirequest.LayoutPane) (string, string, tea.Cmd) {
-	scope := h.m.completionScope()
+	scope := h.m.createCompletionScope()
 
 	ws, ok := h.m.SelectedWorkspace()
 	if !ok {
