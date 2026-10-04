@@ -948,10 +948,10 @@ sidecar api open --print
 
 Manage paired origins and browser sessions
 
-Register another web origin (an app embedding Sidecar components) and print its bearer token, which is shown only once and stored only as a hash in $STATE/api/origins.json. Pairing an origin again rotates its token. --scopes takes a comma-separated list, full by default; content:read restricts access to content and layout preferences. --list shows registrations without tokens; --revoke removes one. --revoke-sessions signs out every browser paired with `sidecar api open` without restarting the server: their session tokens get 401 from then on and their open terminals close with 4401. With --origin it signs out only the browsers on that origin. Paired origins keep their tokens.
+Register another web origin (an app embedding Sidecar components) and print its bearer token, which is shown only once and stored only as a hash in $STATE/api/origins.json. Pairing an origin again rotates its token and closes the terminals and event streams the old token opened. --scopes takes a comma-separated list, full by default; content:read restricts access to content and layout preferences. --list shows registrations without tokens; --revoke removes one. --revoke-sessions signs out every browser paired with `sidecar api open` without restarting the server: their session tokens get 401 from then on and their open terminals close with 4401. With --origin it signs out only the browsers on that origin. Paired origins keep their tokens.
 
 ```
-Usage: sidecar api pair --origin URL | --list | --revoke URL | --revoke-sessions [--origin URL] [--scopes LIST] [--json]
+Usage: sidecar api pair --origin URL [--scopes LIST] | --list | --revoke URL | --revoke-sessions [--origin URL] [--json]
 ```
 
 **Options:**

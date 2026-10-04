@@ -55,11 +55,11 @@ The status values are `queued`, `running`, `review`, `fixing`, `merged` and `blo
 | U1-c service install | td-d7869b | sidecar | Codex, reviewed by Codex | U0-a | merged |
 | U1-d presence and v1 frames | td-713745 | sidecar | Codex | td-552e24 merged | merged (c75857ac) |
 | U1-e web app shell and Sessions | td-57a73e | sidecar-ui | Codex | U0-b | merged (sidecar-ui 8d183fc); Claude review fixed 6 UX defects |
-| U1-f SDK adopts v1 | td-820df7 | sidecar-ui | Codex | U1-a, U1-d | running (Codex, ~/code/sidecar-ui-u1f-sdk, branch u1f-sdk), against the u1d and ui-u1a-events branches |
+| U1-f SDK adopts v1 | td-820df7 | sidecar-ui | Codex | U1-a, U1-d | review (Claude reviewer); branch u1f-sdk @3669641 |
 | U1-g iOS adopts presence and events | td-fde8cf | sidecar-mobile | Codex | U1-a, U1-d | running (Codex, ~/code/sidecar-mobile-u1g-presence, branch u1g-presence); presence first against the u1d branch, events after U1-a |
-| U1-i persist browser sessions | td-165353 | sidecar | Codex | U1-a, U1-b merged (both touch internal/uiapi) | running (Codex, ~/code/sidecar-u1i-sessions, branch u1i-sessions), plus td-affb04 (stale --ui root) |
-| U1-e2 web app polish | td-71e0e5 | sidecar-ui | Codex | U1-e | running (Codex, ~/code/sidecar-ui-u1e2-polish, branch u1e2-polish): terminal-safe chords, needs-input, palette, phone header |
-| U1-h security review and three-viewer proof | td-295605 | all | Claude, then Codex | U1-a, U1-d, U1-f | security review running (Claude) on main c75857ac; three-viewer proof after U1-f |
+| U1-i persist browser sessions | td-165353 | sidecar | Codex | U1-a, U1-b merged (both touch internal/uiapi) | redesign running: non-extractable WebCrypto key with signed nonces and short-lived in-memory bearers, so nothing stealable is at rest (security finding 4). SDK side follows U1-f |
+| U1-e2 web app polish | td-71e0e5 | sidecar-ui | Codex | U1-e | merged (sidecar-ui 5e0ecb2) |
+| U1-h security review and three-viewer proof | td-295605 | all | Claude, then Codex | U1-a, U1-d, U1-f | security review merged (6176110f): tailnet paired-origin tokens, re-pair closes streams, owner-only service PATH. Three-viewer proof after U1-f |
 | U2-a core extraction | td-c709a9 | sidecar | Codex | U0-a | merged (d95b66f5) |
 | U2-b workspace resources and operations API | td-eb3d80 | sidecar | Codex | U2-a | running |
 | U2-c workspace UI | td-37a00e | sidecar-ui | Codex | U2-b | queued |
@@ -235,6 +235,15 @@ A project page with worktrees and shells, and native, keyboard-first create, ren
 - **Client (U4-b).** The browser receives those requests over the events stream, applies them to its pane tree, and acknowledges.
 - **Result.** An agent says "open this diff" and it appears in whichever UI Marcus is using.
 
+## Accepted risks (from the U1-h security review)
+
+- Any credential grants full control until narrower scopes land with U2-b and U3-a. `readonly` on `<sidecar-terminal>` is a client promise; the server does not enforce it.
+- A viewer chooses its own holder label, so the "sized for …" hint can be spoofed by another client the owner has paired.
+- `--tailnet-port` lets any local process act as the owner on the tailnet listener. It is documented, and warned at start.
+- A paired origin trusts everything served from that origin, including whatever serves that port next.
+- The static UI has no script CSP. sidecar-ui must render every server and agent string as text. Reviews have confirmed it does.
+- Each events stream polls `tmux` once a second for each older-protocol terminal, bounded by the per-credential caps (LOW).
+
 ## Bugs and friction found along the way
 
 Each one is a td issue with the exact command and output. Fixes run as their own lanes.
@@ -254,5 +263,6 @@ Each one is a td issue with the exact command and output. Fixes run as their own
 | td-87ef7e, td-d77e97, td-cce9f6, td-5e7e28, td-9339ae, td-6db2ce | Load-dependent test flakes found under parallel lane gates (friction lane) | running |
 | td-ac892f | Fixed in 70eaa52e for newly launched agents. P1 root cause of several items above: Codex sessions share one `codex app-server` daemon env, so "current shell/project" defaults resolve to another agent (a reviewer renamed U1-d's shell). Friction lane | running |
 | td-090b9d | Not a comms bug. The orchestrator's watcher script crashed on an untitled message and skipped reports. Fixed in the watcher | invalid |
-| td-eeb7e8 lane | Codex bug lane (~/code/sidecar-bug-eeb7e8) with a completion fence for stale async messages across workspace and overview | running |
+| td-eeb7e8 lane | Codex bug lane (~/code/sidecar-bug-eeb7e8) with a completion fence for stale async messages across workspace and overview | review (Codex reviewer, shell "rev eeb7e8"; branch bug-eeb7e8 @5d7cef2d) |
 | td-ae18e4, td-87dd09 | `comms publish` refused with "author does not follow topic" and no recovery hint (comms) | open |
+| td-6153d0 | `create worktree --agent codex` sometimes leaves the shell without Codex and reports success; under load. Recovered with `agent start --kind codex` | open |

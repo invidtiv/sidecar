@@ -149,7 +149,12 @@ func TestTerminalBearerOnUpgrade(t *testing.T) {
 
 func (h *harness) dialTailnet(t *testing.T, header http.Header) *websocket.Conn {
 	t.Helper()
-	conn, _, err := websocket.Dial(context.Background(), "ws://"+testTailnetHost+terminalPath,
+	return h.dialTailnetQuery(t, "", header)
+}
+
+func (h *harness) dialTailnetQuery(t *testing.T, query string, header http.Header) *websocket.Conn {
+	t.Helper()
+	conn, _, err := websocket.Dial(context.Background(), "ws://"+testTailnetHost+terminalPath+query,
 		&websocket.DialOptions{HTTPClient: unixClient(h.s.Endpoint().TailnetSocket), HTTPHeader: header})
 	if err != nil {
 		t.Fatal(err)
@@ -213,10 +218,10 @@ func TestTailnetMutationsNeedOwnOriginAndJSON(t *testing.T) {
 func TestTicketIsBoundToItsListener(t *testing.T) {
 	h := newHarness(t)
 	const app = "http://app.example:5173"
-	h.pairOrigin(app)
-	// A paired origin takes a ticket on the Tailnet listener...
+	token := h.pairOrigin(app)
+	// A paired origin takes a ticket on the Tailnet listener with its token...
 	response, data := h.tailnetDo(req{method: http.MethodPost, path: "/api/v0/ws-tickets", body: "{}",
-		header: mutationHeaders(app, map[string]string{tailscaleLoginHead: testTailnetLogin})})
+		header: mutationHeaders(app, map[string]string{tailscaleLoginHead: testTailnetLogin, "Authorization": "Bearer " + token})})
 	expect(t, response, data, http.StatusOK, "")
 	var issued TicketResponse
 	if err := json.Unmarshal(data, &issued); err != nil {
