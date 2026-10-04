@@ -617,7 +617,12 @@ func TestOriginRevocationClosesTerminalsAndInvalidatesTickets(t *testing.T) {
 }
 
 func TestSessionRevocationClosesAnEvictedSessionsTerminal(t *testing.T) {
-	h := newHarness(t)
+	// Forcing eviction creates maxSessions registrations, each a real flock +
+	// atomic store write. Under -race that loop can outrun the default 30s
+	// keepalive window while this idle test connection sends no pong, dropping
+	// the terminal before revocation and hiding the behavior under test. This
+	// test exercises revocation, not keepalive, so hold the ping off.
+	h := newHarness(t, func(o *Options) { o.KeepaliveInterval = time.Hour })
 	token := h.pairBrowser()
 	conn, err := h.dialBrowser(t, "", http.Header{"Authorization": {"Bearer " + token}})
 	if err != nil {
