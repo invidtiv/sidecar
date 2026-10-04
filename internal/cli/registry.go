@@ -370,7 +370,9 @@ func RootCommand() *Command {
 			"case the start is refused and names the command to put them in.\n\n" +
 			"Usage refusals with --json are `{\"error\":{\"code\":\"usage\",...}}` on stderr,\n" +
 			"like the agent verbs; without --json they are the reason and the help text.\n" +
-			"The result carries `project`, the slug every other verb's --project accepts.",
+			"The result carries `project`, the slug every other verb's --project accepts.\n\n" +
+			"Distinct valid workspace-shell requests can run concurrently across CLI, TUI, API, and agent processes. The shared core allocates and records each identity under the shell manifest lock. The returned session is authoritative; generated numbers skip retained restore identities and occupied sessions. Fresh creates never adopt a running session.\n\n" +
+			"Create refusals are named: shell_name_in_use asks for another display name, shell_name_invalid asks for a valid name, shell_create_failed includes tmux diagnostics, and shell_state asks the caller to check project state or manifest permissions. These refusals exit 5; --json writes {error: {code, message}} to stderr. Run ./scripts/concurrent-shell-create-proof.sh for an isolated, bounded eight-process proof.",
 		Flags: []Flag{
 			{Name: "--name", Arg: "NAME", Summary: "Display name (default: the next Shell N)"},
 			{Name: "--cwd", Arg: "PATH", Summary: "Start in PATH without changing project ownership"},
@@ -390,11 +392,11 @@ func RootCommand() *Command {
 		Args: ArgSpec{Min: 0, Max: 0},
 		ExitCodes: []ExitCode{
 			{Code: 0, Summary: "created (missing ack is non-fatal in workspace-shell mode)"},
-			{Code: 1, Summary: "state or tmux failure"},
+			{Code: 1, Summary: "request delivery, output, or post-create launch failure"},
 			{Code: 2, Summary: "usage error, or this directory is not in a registered project"},
 			{Code: 3, Summary: "no running instance (split mode)"},
 			{Code: 4, Summary: "instance declined (cap, too small, or feature off)"},
-			{Code: 5, Summary: "a value was rejected: --name, --cwd, --agent, an unknown --project / --shell, or provider arguments with agent_control off"},
+			{Code: 5, Summary: "named create refusal, or a value was rejected: --name, --cwd, --agent, an unknown --project / --shell, or provider arguments with agent_control off"},
 		},
 		Examples: []Example{
 			{Command: "sidecar create shell --name reviewer --agent codex --json"},

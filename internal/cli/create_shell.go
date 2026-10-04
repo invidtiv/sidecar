@@ -543,7 +543,7 @@ func emitShellCreateError(env Env, jsonOutput bool, err error) int {
 	var named *workspaceops.ShellCreateError
 	if errors.As(err, &named) {
 		if jsonOutput {
-			_ = json.NewEncoder(env.Stdout).Encode(map[string]any{"error": map[string]string{"code": named.Code, "message": named.Message}})
+			_ = json.NewEncoder(env.Stderr).Encode(map[string]any{"error": map[string]string{"code": named.Code, "message": named.Message}})
 		} else {
 			cliErrln(env.Stderr, named)
 		}

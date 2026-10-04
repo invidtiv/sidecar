@@ -382,7 +382,7 @@ func resolveWithBase(base, projectRoot string) (string, error) {
 	if err := os.MkdirAll(projectsDir, 0755); err != nil {
 		return "", fmt.Errorf("create project registry: %w", err)
 	}
-	lock, err := os.OpenFile(filepath.Join(projectsDir, ".lock"), os.O_CREATE|os.O_RDWR, 0600)
+	lock, err := os.OpenFile(projectsDir+".lock", os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return "", fmt.Errorf("open project registry lock: %w", err)
 	}

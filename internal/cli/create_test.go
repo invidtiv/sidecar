@@ -998,11 +998,11 @@ func TestCreateShellNamedRefusalsKeepWinnerAndJSONContract(t *testing.T) {
 				Message string `json:"message"`
 			} `json:"error"`
 		}
-		if err := json.Unmarshal(out.Bytes(), &response); err != nil {
+		if err := json.Unmarshal(errOut.Bytes(), &response); err != nil {
 			t.Fatal(err)
 		}
 		if response.Error.Code != tt.want || response.Error.Message == "" {
-			t.Fatalf("unnamed refusal: %s", out.String())
+			t.Fatalf("unnamed refusal: %s", errOut.String())
 		}
 	}
 	defs, err := shellstate.ListAtPath(filepath.Join(stateDir, "projects", "allocation-refusals", "shells.json"))

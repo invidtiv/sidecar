@@ -1447,6 +1447,10 @@ Usage refusals with --json are `{"error":{"code":"usage",...}}` on stderr,
 like the agent verbs; without --json they are the reason and the help text.
 The result carries `project`, the slug every other verb's --project accepts.
 
+Distinct valid workspace-shell requests can run concurrently across CLI, TUI, API, and agent processes. The shared core allocates and records each identity under the shell manifest lock. The returned session is authoritative; generated numbers skip retained restore identities and occupied sessions. Fresh creates never adopt a running session.
+
+Create refusals are named: shell_name_in_use asks for another display name, shell_name_invalid asks for a valid name, shell_create_failed includes tmux diagnostics, and shell_state asks the caller to check project state or manifest permissions. These refusals exit 5; --json writes {error: {code, message}} to stderr. Run ./scripts/concurrent-shell-create-proof.sh for an isolated, bounded eight-process proof.
+
 ```
 Usage: sidecar create shell [options]
 ```
@@ -1471,11 +1475,11 @@ Usage: sidecar create shell [options]
 **Exit codes:**
 
 - `0`: created (missing ack is non-fatal in workspace-shell mode)
-- `1`: state or tmux failure
+- `1`: request delivery, output, or post-create launch failure
 - `2`: usage error, or this directory is not in a registered project
 - `3`: no running instance (split mode)
 - `4`: instance declined (cap, too small, or feature off)
-- `5`: a value was rejected: --name, --cwd, --agent, an unknown --project / --shell, or provider arguments with agent_control off
+- `5`: named create refusal, or a value was rejected: --name, --cwd, --agent, an unknown --project / --shell, or provider arguments with agent_control off
 
 **Examples:**
 
@@ -4182,9 +4186,3 @@ sidecar worktree prune-sessions --plan --json
 sidecar worktree prune-sessions --project riversandroads --yes
 ```
 
-
-## Concurrent shell creation
-
-Distinct valid `sidecar create shell --project PROJECT --tab` requests can run concurrently across CLI, TUI, API, and agent processes. The shared core allocates and records each new identity under the shell manifest lock. Its returned session is authoritative; generated numbers may skip retained restore identities or names occupied by another project. Fresh creates never adopt a running session. Duplicate explicit display names refuse with `shell_name_in_use`; choose another name. Other create refusals are `shell_name_invalid`, `shell_create_failed`, and `shell_state`, with actionable messages. These refusals exit 5 and `--json` prints `{ "error": { "code": "…", "message": "…" } }`.
-
-Run `./scripts/concurrent-shell-create-proof.sh` to build and prove eight independent concurrent creates on ephemeral state and a private tmux server. It is bounded to 120 seconds and cleans up its own server and files.
