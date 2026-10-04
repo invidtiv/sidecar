@@ -4082,18 +4082,7 @@ worktree. A worktree session no registered project accounts for qualifies when
 its own start directory is gone, its parent is not, and its name is the one
 Sidecar derives from that directory. Anything Sidecar cannot verify is left alone.
 
---plan and --dry-run are aliases and change nothing. A prune requires --yes; it
-re-observes git and tmux, then immediately before each close re-checks that the
-worktree is still gone, that the session still starts where it was planned, and
-that none of its panes is working in a directory that exists (an agent follows a
-moved worktree), and closes the session by its tmux id. A session that fails a
-check is left alone and reported as changed. --session narrows the prune to named
-sessions after reviewing a plan. Closing one
-also closes the managed shells rooted in its worktree and moves their records to
-tombstones, exactly as `worktree delete` does, so `sidecar shell restore` can
-put a record back. Only sessions are closed, on this process's tmux server; git
-metadata and branches are not touched (use `git worktree prune` and
-`git branch -D` for those).
+--plan and --dry-run are aliases and change nothing. A prune requires --yes; it re-observes git and tmux, then before closing checks that the worktree is still gone and the session still starts where it was planned. Every pane directory must be positively missing while its parent exists. Blank, relative, unreadable, or incomplete evidence preserves the session. Associated managed shells rooted in the removed worktree undergo the same checks before any teardown; a live or unknown shell refuses that prune. Verified sessions close by tmux id, and shell records move to tombstones only if their observed incarnation is unchanged, so a replacement occupant or new record survives. `sidecar shell restore` can put a forgotten record back. --session narrows the prune to named sessions after reviewing a plan. Only sessions are closed, on this process's tmux server; git metadata and branches are not touched (use `git worktree prune` and `git branch -D` for those).
 
 Every registered project is observed whatever --project says, so a worktree
 another repository still lists is never mistaken for a removed one. --project

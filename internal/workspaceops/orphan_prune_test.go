@@ -6,7 +6,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"testing"
+	"time"
+
+	"github.com/marcus/sidecar/internal/shellstate"
 )
 
 type orphanStub struct {
@@ -163,6 +167,37 @@ func TestOrphanPaneListingPreservesUnknownLastPane(t *testing.T) {
 		t.Fatalf("read lost unknown final pane: %+v, %v", state, err)
 	}
 }
+
+func TestOrphanPaneListingPreservesLiteralCarriageReturn(t *testing.T) {
+	base := t.TempDir()
+	live := filepath.Join(base, "live\r")
+	if err := os.Mkdir(live, 0700); err != nil {
+		t.Fatal(err)
+	}
+	state, err := parseOrphanSession("sidecar-ws-repo-foo", "$7\t"+orphanRoot+"\t"+live+"\n")
+	if err != nil || len(state.PanePaths) != 1 || state.PanePaths[0] != live || PaneDirectoryMissing(state.PanePaths[0]) {
+		t.Fatalf("literal cwd was changed into missing-directory evidence: %+v, %v", state, err)
+	}
+}
+
+func TestReadOrphanSessionPreservesLiteralCarriageReturnLive(t *testing.T) {
+	if !TmuxInstalled() {
+		t.Skip("tmux not installed")
+	}
+	live := filepath.Join(t.TempDir(), "live\r")
+	if err := os.Mkdir(live, 0700); err != nil {
+		t.Fatal(err)
+	}
+	const name = "sidecar-ws-orphan-carriage-return"
+	if out, err := exec.Command("tmux", "new-session", "-d", "-s", name, "-c", live, "/bin/bash", "--noprofile", "--norc", "-i").CombinedOutput(); err != nil {
+		t.Fatalf("start private session: %v: %s", err, out)
+	}
+	t.Cleanup(func() { _ = exec.Command("tmux", "kill-session", "-t", "="+name).Run() })
+	state, err := readOrphanSession(t.Context(), name)
+	if err != nil || len(state.PanePaths) != 1 || CanonicalWorkPath(state.PanePaths[0]) != CanonicalWorkPath(live) || PaneDirectoryMissing(state.PanePaths[0]) {
+		t.Fatalf("live cwd did not survive tmux evidence parsing: %+v, %v", state, err)
+	}
+}
 func TestOrphanPaneListingRejectsIncompleteRows(t *testing.T) {
 	for _, listing := range []string{"$7\t" + orphanRoot + "\t" + orphanRoot + "\n$7\t" + orphanRoot + "\n", "$7\t" + orphanRoot + "\n$7\t" + orphanRoot + "\t" + orphanRoot + "\n"} {
 		if _, err := parseOrphanSession("sidecar-ws-repo-foo", listing); err == nil {
@@ -180,5 +215,124 @@ func TestPaneDirectoryMissingRequiresPositiveEvidence(t *testing.T) {
 	}
 	if !PaneDirectoryMissing(gone) {
 		t.Fatalf("removed directory %q with existing parent not missing", gone)
+	}
+}
+
+func TestPrunePreservesAssociatedShellsWithoutMissingPaneEvidence(t *testing.T) {
+	for _, pane := range []string{"", "relative", "existing", "no panes", "read failure", "missing id", "name reused", "unknown incarnation", "foreign namespace"} {
+		t.Run(pane, func(t *testing.T) {
+			project := t.TempDir()
+			root := filepath.Join(project, "removed")
+			name := "sidecar-sh-associated"
+			def := shellstate.Definition{TmuxName: name, DisplayName: "Associated shell", WorkDir: root, CreatedAt: time.Now()}
+			if pane == "unknown incarnation" {
+				def.CreatedAt = time.Time{}
+			}
+			if pane == "foreign namespace" {
+				def.Namespace = filepath.Join(t.TempDir(), "foreign.sock")
+			}
+			if err := shellstate.AddAtPath(shellManifestPath(t, project), def); err != nil {
+				t.Fatal(err)
+			}
+			stub := &orphanStub{alive: true, rootMissing: true}
+			stubOrphanTmux(t, stub)
+			forgetShellsInWorktree = ForgetShellsInWorktree
+			panePath := pane
+			if pane == "existing" {
+				panePath = t.TempDir() // the shell followed a moved worktree
+			}
+			if pane == "unknown incarnation" || pane == "foreign namespace" {
+				panePath = root // otherwise the directory evidence permits prune
+			}
+			readOrphanSession = func(_ context.Context, session string) (orphanSessionState, error) {
+				if session == name {
+					state := orphanSessionState{ID: "$8", Path: root, PanePaths: []string{panePath}}
+					switch pane {
+					case "no panes":
+						state.PanePaths = nil
+					case "read failure":
+						return orphanSessionState{}, errors.New("cannot inspect pane")
+					case "missing id":
+						state.ID, state.PanePaths = "", []string{root}
+					case "name reused":
+						state.Path, state.PanePaths = project, []string{root}
+					}
+					return state, nil
+				}
+				return orphanSessionState{ID: "$7", Path: root, PanePaths: []string{root}}, nil
+			}
+			oldDelete := deleteManagedShellForForget
+			deletes := 0
+			deleteManagedShellForForget = func(string, string, string) error { deletes++; return nil }
+			t.Cleanup(func() { deleteManagedShellForForget = oldDelete })
+			_, err := PruneOrphanedWorktreeSession(t.Context(), OrphanedSessionPrune{ProjectRoot: project, Root: root, Session: "sidecar-ws-removed", SessionPath: root})
+			if !errors.Is(err, ErrOrphanChanged) || deletes != 0 || len(stub.killed) != 0 {
+				t.Fatalf("prune reached associated shell teardown without missing cwd evidence: err=%v deletes=%d kills=%v", err, deletes, stub.killed)
+			}
+			assertNames(t, manifestNames(t, project), []string{name})
+		})
+	}
+}
+
+func TestPruneAssociatedShellsCarryVerifiedSnapshotIntoTeardown(t *testing.T) {
+	for _, scenario := range []string{"replacement tmux occupant", "new manifest row", "replacement manifest row", "already gone"} {
+		t.Run(scenario, func(t *testing.T) {
+			project := t.TempDir()
+			root := filepath.Join(project, "removed")
+			name := "sidecar-sh-associated"
+			recordShell(t, project, name, "Associated shell", root)
+			stub := &orphanStub{alive: true, rootMissing: true}
+			stubOrphanTmux(t, stub)
+			readOrphanSession = func(_ context.Context, session string) (orphanSessionState, error) {
+				if session == name {
+					// Mutations occur after the manifest snapshot was selected,
+					// while tmux inspection is returning its verified occupant.
+					switch scenario {
+					case "new manifest row":
+						recordShell(t, project, "sidecar-sh-new-live", "New live shell", root)
+					case "replacement manifest row":
+						path := shellManifestPath(t, project)
+						if err := shellstate.RemoveAtPath(path, shellstate.Identity{TmuxName: name}); err != nil {
+							t.Fatal(err)
+						}
+						if err := shellstate.AddAtPath(path, shellstate.Definition{TmuxName: name, DisplayName: "Replacement", WorkDir: root, CreatedAt: time.Now().Add(time.Hour)}); err != nil {
+							t.Fatal(err)
+						}
+					case "already gone":
+						return orphanSessionState{}, errOrphanSessionGone
+					}
+					// Any replacement tmux occupant is $9: only $8 was
+					// validated and a name-based kill would reach $9.
+					return orphanSessionState{ID: "$8", Path: root, PanePaths: []string{root}}, nil
+				}
+				return orphanSessionState{ID: "$7", Path: root, PanePaths: []string{root}}, nil
+			}
+			oldDelete := deleteManagedShellForForget
+			deleteManagedShellForForget = func(string, string, string) error {
+				t.Fatal("prune used a name-based kill rather than the verified session id")
+				return nil
+			}
+			t.Cleanup(func() { deleteManagedShellForForget = oldDelete })
+			_, err := PruneOrphanedWorktreeSession(t.Context(), OrphanedSessionPrune{ProjectRoot: project, Root: root, Session: "sidecar-ws-removed", SessionPath: root})
+			if scenario == "replacement manifest row" {
+				if !errors.Is(err, ErrOrphanChanged) || len(stub.killed) != 0 {
+					t.Fatalf("replacement record reached teardown: err=%v kills=%v", err, stub.killed)
+				}
+				assertNames(t, manifestNames(t, project), []string{name})
+				return
+			}
+			wantKills := []string{"$8", "$7"}
+			if scenario == "already gone" {
+				wantKills = []string{"$7"}
+			}
+			if err != nil || !slices.Equal(stub.killed, wantKills) {
+				t.Fatalf("snapshot prune: err=%v kills=%v, want %v", err, stub.killed, wantKills)
+			}
+			var wantNames []string
+			if scenario == "new manifest row" {
+				wantNames = []string{"sidecar-sh-new-live"}
+			}
+			assertNames(t, manifestNames(t, project), wantNames)
+		})
 	}
 }

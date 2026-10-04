@@ -176,3 +176,18 @@ func TestObserveWorktreeOrphansUnknownPaneNeverPermitsPrune(t *testing.T) {
 		})
 	}
 }
+
+func TestObserveWorktreeOrphansPreservesLiteralCarriageReturn(t *testing.T) {
+	base := t.TempDir()
+	repo, removed, live := filepath.Join(base, "repo"), filepath.Join(base, "repo-foo"), filepath.Join(base, "live\r")
+	for _, path := range []string{repo, live} {
+		if err := os.Mkdir(path, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stubOrphanEvidence(t, "sidecar-ws-repo-foo\t"+removed+"\t"+live+"\n", nil, map[string][]workspaceops.WorktreeState{repo: {{Path: repo}}})
+	plan := WorktreeOrphans(t.Context(), []Project{{Key: "repo", Path: repo, Worktrees: []string{removed}}}, ObserveOptions{})
+	if len(plan.Orphans) != 0 {
+		t.Fatalf("literal live cwd was changed into prune evidence: %+v", plan.Orphans)
+	}
+}

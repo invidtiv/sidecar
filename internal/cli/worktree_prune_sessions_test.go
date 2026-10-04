@@ -39,7 +39,7 @@ func TestWorktreePruneSessionsRealLifecycle(t *testing.T) {
 	writeRegisteredWorktree(t, stateDir, root, gone)
 	writeRegisteredWorktree(t, stateDir, root, kept)
 	writeProjectShells(t, stateDir, "demo",
-		shellstate.Definition{TmuxName: "sidecar-sh-gone", DisplayName: "Gone shell", WorkDir: gone},
+		shellstate.Definition{TmuxName: "sidecar-sh-gone", DisplayName: "Gone shell", WorkDir: gone, CreatedAt: time.Now()},
 		shellstate.Definition{TmuxName: "sidecar-sh-main", DisplayName: "Main shell", WorkDir: root},
 	)
 
@@ -256,7 +256,7 @@ func TestWorktreePruneSessionsSafetyCases(t *testing.T) {
 	// live shell whose name it prefixes. Closing the first must not reach the
 	// second.
 	writeProjectShells(t, stateDir, "demo",
-		shellstate.Definition{TmuxName: "sidecar-sh-repo-1", DisplayName: "dead", WorkDir: removed},
+		shellstate.Definition{TmuxName: "sidecar-sh-repo-1", DisplayName: "dead", WorkDir: removed, CreatedAt: time.Now()},
 		shellstate.Definition{TmuxName: "sidecar-sh-repo-10", DisplayName: "sibling", WorkDir: root},
 	)
 	startTestSession(t, "sidecar-sh-repo-10", root)

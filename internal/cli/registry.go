@@ -718,18 +718,7 @@ func worktreeCommand() *Command {
 			"worktree. A worktree session no registered project accounts for qualifies when\n" +
 			"its own start directory is gone, its parent is not, and its name is the one\n" +
 			"Sidecar derives from that directory. Anything Sidecar cannot verify is left alone.\n\n" +
-			"--plan and --dry-run are aliases and change nothing. A prune requires --yes; it\n" +
-			"re-observes git and tmux, then immediately before each close re-checks that the\n" +
-			"worktree is still gone, that the session still starts where it was planned, and\n" +
-			"that none of its panes is working in a directory that exists (an agent follows a\n" +
-			"moved worktree), and closes the session by its tmux id. A session that fails a\n" +
-			"check is left alone and reported as changed. --session narrows the prune to named\n" +
-			"sessions after reviewing a plan. Closing one\n" +
-			"also closes the managed shells rooted in its worktree and moves their records to\n" +
-			"tombstones, exactly as `worktree delete` does, so `sidecar shell restore` can\n" +
-			"put a record back. Only sessions are closed, on this process's tmux server; git\n" +
-			"metadata and branches are not touched (use `git worktree prune` and\n" +
-			"`git branch -D` for those).\n\n" +
+			"--plan and --dry-run are aliases and change nothing. A prune requires --yes; it re-observes git and tmux, then before closing checks that the worktree is still gone and the session still starts where it was planned. Every pane directory must be positively missing while its parent exists. Blank, relative, unreadable, or incomplete evidence preserves the session. Associated managed shells rooted in the removed worktree undergo the same checks before any teardown; a live or unknown shell refuses that prune. Verified sessions close by tmux id, and shell records move to tombstones only if their observed incarnation is unchanged, so a replacement occupant or new record survives. `sidecar shell restore` can put a forgotten record back. --session narrows the prune to named sessions after reviewing a plan. Only sessions are closed, on this process's tmux server; git metadata and branches are not touched (use `git worktree prune` and `git branch -D` for those).\n\n" +
 			"Every registered project is observed whatever --project says, so a worktree\n" +
 			"another repository still lists is never mistaken for a removed one. --project\n" +
 			"only narrows which orphans are reported and closed, and excludes sessions no\n" +

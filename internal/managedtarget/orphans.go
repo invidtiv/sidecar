@@ -83,7 +83,8 @@ func ObserveWorktreeOrphans(ctx context.Context, projects []Project, opts Observ
 	} else {
 		index := map[string]int{}
 		for _, line := range strings.Split(out, "\n") {
-			fields := strings.SplitN(strings.TrimRight(line, "\r"), "\t", 3)
+			// Local tmux output uses LF; a final CR is literal cwd evidence.
+			fields := strings.SplitN(line, "\t", 3)
 			name := strings.TrimSpace(fields[0])
 			if name == "" {
 				continue
