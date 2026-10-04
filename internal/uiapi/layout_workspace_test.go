@@ -1,6 +1,7 @@
 package uiapi
 
 import (
+	"context"
 	"encoding/json"
 	"net/url"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/marcus/sidecar/internal/contentservice"
 	"github.com/marcus/sidecar/internal/uirequest"
 )
 
@@ -28,6 +30,33 @@ func worktreeLayoutHarness(t *testing.T) (*harness, string, string, string) {
 		t.Fatal(err)
 	}
 	return h, root, worktree, root + ":worktree:" + worktree
+}
+
+func TestWorkspaceLayoutRejectsRootSwapDuringResolution(t *testing.T) {
+	h, root, worktree, workspace := worktreeLayoutHarness(t)
+	backup := worktree + "-original"
+	if err := os.Rename(worktree, backup); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(root, worktree); err != nil {
+		t.Fatal(err)
+	}
+	service := h.s.opts.Content.(*contentservice.Service)
+	service.Git = func(ctx context.Context, dir string, args ...string) ([]byte, error) {
+		// Membership lookup initially sees the alias. Restore the legitimate
+		// checkout before its Git validation: the earlier root must not survive.
+		if dir == worktree && args[0] == "rev-parse" {
+			if err := os.Remove(worktree); err != nil {
+				return nil, err
+			}
+			if err := os.Rename(backup, worktree); err != nil {
+				return nil, err
+			}
+		}
+		return exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...).Output()
+	}
+	r, body := h.localDo(req{method: "GET", path: "/api/v0/projects/content/layout?workspace=" + url.QueryEscape(workspace)})
+	expect(t, r, body, 403, "rejected")
 }
 
 func gitLayout(t *testing.T, root string, args ...string) {
@@ -174,5 +203,54 @@ func TestWorkspaceLayoutRelayUsesPublicScopeAndBoundaries(t *testing.T) {
 	request = postScreenRequest(t, h, worktree, uirequest.ActionLayout, uirequest.LayoutPayload{Mode: "get"}, "")
 	if ack := waitScreenAck(t, h, request); ack.Status != uirequest.StatusDeclined {
 		t.Fatal("removed workspace still relayed", ack)
+	}
+}
+
+func TestWorkspaceLayoutRefusesStaleGitRegistration(t *testing.T) {
+	for _, replacement := range []string{"directory", "unrelated-repository", "main-checkout-symlink"} {
+		t.Run(replacement, func(t *testing.T) {
+			h, root, worktree, workspace := worktreeLayoutHarness(t)
+			mainPath := "/api/v0/projects/content/layout"
+			_, mainETag := layoutRead(t, h, mainPath)
+			r, body := h.localDo(req{method: "PUT", path: mainPath, body: `{"layout":{"kind":"terminal","name":"main preference"}}`, header: map[string]string{"If-Match": mainETag}})
+			expect(t, r, body, 200, "")
+			_, mainETag = layoutRead(t, h, mainPath)
+			path := "/api/v0/projects/content/layout?workspace=" + url.QueryEscape(workspace)
+			_, etag := layoutRead(t, h, path)
+			r, body = h.localDo(req{method: "PUT", path: path, body: `{"layout":{"kind":"terminal","session":"sidecar-sh-content-1"}}`, header: map[string]string{"If-Match": etag}})
+			expect(t, r, body, 200, "")
+			c, id := screen(t, h)
+			worktreePresence(t, h, id, workspace)
+			request := postScreenRequest(t, h, worktree, uirequest.ActionLayout, uirequest.LayoutPayload{Mode: "get"}, "")
+			event := nextUIRequest(t, c)
+			// Deletion outside Git leaves the path in worktree list. Neither an
+			// unrelated directory nor a symlink to another root restores membership.
+			if err := os.RemoveAll(worktree); err != nil {
+				t.Fatal(err)
+			}
+			if replacement != "main-checkout-symlink" {
+				if err := os.Mkdir(worktree, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if replacement == "unrelated-repository" {
+					gitLayout(t, worktree, "init", "-q")
+				}
+			} else if err := os.Symlink(root, worktree); err != nil {
+				t.Fatal(err)
+			}
+			for _, method := range []string{"GET", "HEAD", "PUT"} {
+				r, body := h.localDo(req{method: method, path: path, body: `{"layout":null}`, header: map[string]string{"If-Match": etag}})
+				if r.StatusCode != 403 {
+					t.Errorf("stale registration %s: got %d, want 403: %s", method, r.StatusCode, body)
+				}
+			}
+			ackScreen(t, h, id, event, 409)
+			if ack := waitScreenAck(t, h, request); ack.Status != uirequest.StatusDeclined {
+				t.Fatal(ack)
+			}
+			if _, after := layoutRead(t, h, mainPath); after != mainETag {
+				t.Fatal("stale workspace changed the main preference")
+			}
+		})
 	}
 }
