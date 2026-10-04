@@ -43,10 +43,22 @@ func SocketPath() string {
 // this process is a fact about the outside world that several components need
 // (the pane inventory must never correlate a workspace row to it — a preview
 // bound to the hosting pane resizes the window sidecar itself draws in), and
-// the environment keeps that answer with no subprocess and no startup cost.
+// the environment keeps that answer with no subprocess. Differently spelled
+// socket paths need a file-identity check before the pane can be refused.
 func HostingPane() string {
-	if hostingSocket != "" && filepath.Clean(hostingSocket) != filepath.Clean(SocketPath()) {
-		return ""
+	if hostingSocket != "" {
+		addressedSocket := SocketPath()
+		if filepath.Clean(hostingSocket) != filepath.Clean(addressedSocket) {
+			// tmux resolves directory symlinks (notably /tmp -> /private/tmp
+			// on macOS) when publishing TMUX. Different spellings can still
+			// name the same server. Only consult file identity on this path;
+			// remembering the outer namespace remains free of startup I/O.
+			hosting, hostingErr := os.Stat(hostingSocket)
+			addressed, addressedErr := os.Stat(addressedSocket)
+			if hostingErr != nil || addressedErr != nil || !os.SameFile(hosting, addressed) {
+				return ""
+			}
+		}
 	}
 	return os.Getenv("TMUX_PANE")
 }
