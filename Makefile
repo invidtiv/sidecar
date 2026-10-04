@@ -150,6 +150,9 @@ GOLANGCI_LINT_VERSION ?= v2.13.1
 # GOWORK=off belongs on the version query too, not just the run: under the
 # dev go.work, `go list -m` answers for tasks and td as well and GOTOOLCHAIN
 # collapses to "go1.26.0 1.26.0 1.25.8" — three words where one is expected.
+# The runner lock is global under os.TempDir(), independent of the cache or
+# checkout. Allow parallel runners so worktree gates and hooks never contend
+# for it; this leaves the enabled linters and whole-tree coverage unchanged.
 lint lint-all lint-linux:
 	@got=$$(golangci-lint version 2>/dev/null | sed -n 's/^golangci-lint has version \([0-9.]*\).*/\1/p' | head -1); \
 	want=$(patsubst v%,%,$(GOLANGCI_LINT_VERSION)); \
@@ -161,7 +164,7 @@ lint lint-all lint-linux:
 		echo "golangci-lint v$$got != GitHub $(GOLANGCI_LINT_VERSION) (.github/workflows/go-ci.yml)"; \
 		exit 1; \
 	fi
-	GOOS=linux GOWORK=off GOTOOLCHAIN=go$(shell GOWORK=off go list -m -f '{{.GoVersion}}') golangci-lint run ./...
+	GOOS=linux GOWORK=off GOTOOLCHAIN=go$(shell GOWORK=off go list -m -f '{{.GoVersion}}') golangci-lint run --allow-parallel-runners ./...
 
 # Build for multiple platforms (local testing only — GoReleaser handles release builds)
 build-all:
