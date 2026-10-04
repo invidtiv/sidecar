@@ -317,3 +317,31 @@ func TestServeIsReadOnlyWithViewerRelay(t *testing.T) {
 		t.Fatal("serve wrote an ack file")
 	}
 }
+
+// A request pinned to a focused local API viewer belongs to that browser; the
+// remote viewer holding the shell's lease must not receive it as well.
+func TestRequestWatchDoesNotRelayAPIViewerPinnedRequests(t *testing.T) {
+	stateDir := t.TempDir()
+	dir := filepath.Join(stateDir, "requests")
+	w := &requestWatch{dir: dir, seen: map[string]struct{}{}}
+	writeRelayRequest(t, stateDir, "unpinned", "open", "sidecar-sh-1", "")
+	writeRelayRequest(t, stateDir, "pinned", "open", "sidecar-sh-1", "")
+	path := filepath.Join(dir, "pinned-open.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	raw["viewer"] = "api-viewer-example"
+	data, _ = json.Marshal(raw)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := w.drain(time.Now(), "host-1", "laptop-99", func(string) string { return "laptop-99" })
+	if len(out) != 1 || out[0].ID != "unpinned" {
+		t.Fatalf("relayed = %+v, want only the unpinned request", out)
+	}
+}
