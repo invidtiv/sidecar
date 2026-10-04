@@ -17,9 +17,10 @@ import (
 // FixtureBackend serves recorded resource data through the real server and
 // runs the real terminal protocol Service with a synthetic capture adapter.
 type FixtureBackend struct {
-	catalog mobileproto.CatalogSnapshot
-	Status  Status
-	targets map[string]mobileproto.TargetIdentity
+	catalog  mobileproto.CatalogSnapshot
+	Status   Status
+	targets  map[string]mobileproto.TargetIdentity
+	terminal mobile.EchoTerminal
 }
 
 // LoadFixtures requires a project-ordered sessions.json and status.json. Files
@@ -109,7 +110,7 @@ func (b *FixtureBackend) Sessions(_ context.Context, query mobileproto.CatalogQu
 func (b *FixtureBackend) ServeTerminal(ctx context.Context, input io.Reader, output io.Writer) error {
 	c := b.catalog
 	service, err := mobile.New(mobile.Config{Input: input, Output: output, Resolver: mobile.FixtureResolver(b.targets),
-		HubID: c.HubID, OwnerHostID: c.OwnerHostID, OwnerConfigGeneration: c.OwnerConfigGeneration, Terminal: &mobile.EchoTerminal{},
+		HubID: c.HubID, OwnerHostID: c.OwnerHostID, OwnerConfigGeneration: c.OwnerConfigGeneration, Terminal: &b.terminal,
 		Revalidator: func(_ context.Context, target mobile.ResolvedTarget) (mobile.ResolvedTarget, error) {
 			return target, nil
 		},

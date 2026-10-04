@@ -44,6 +44,10 @@ origin=http://fixture.example
 token=$(sc api pair --origin "$origin" --json | python3 -c 'import json,sys;print(json.load(sys.stdin)["token"])')
 ticket=$(curl -fsS -X POST -H "Origin: $origin" -H "Authorization: Bearer $token" -H 'Content-Type: application/json' -H 'X-Sidecar-Request: 1' -d '{}' "http://$tcp/api/v0/ws-tickets" | python3 -c 'import json,sys;print(json.load(sys.stdin)["ticket"])')
 timeout 40 "$root/proof" -url "ws://$tcp/api/v0/terminal?ticket=$ticket" -origin "$origin" -target fixture-echo -literal-echo -marker FIXTURE_ECHO
+# Tickets are single-use. Open a fresh negotiated v1 connection with WebSocket
+# compression, retaining the unchanged legacy-client journey above.
+ticket=$(curl -fsS -X POST -H "Origin: $origin" -H "Authorization: Bearer $token" -H 'Content-Type: application/json' -H 'X-Sidecar-Request: 1' -d '{}' "http://$tcp/api/v0/ws-tickets" | python3 -c 'import json,sys;print(json.load(sys.stdin)["ticket"])')
+timeout 40 "$root/proof" -url "ws://$tcp/api/v0/terminal?ticket=$ticket" -origin "$origin" -target fixture-echo -v1 -literal-echo -marker FIXTURE_V1_ECHO
 [ ! -e "$root/tmux-called" ]
 kill -TERM "$server_pid"
 wait "$server_pid"

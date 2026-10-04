@@ -88,71 +88,14 @@ type Service struct {
 	abortOnce                                      sync.Once
 	closeOnce                                      sync.Once
 	closeDone                                      chan struct{}
+	capabilitiesRequested                          bool
+	clientCaps                                     mobileproto.ClientCapabilities
+	viewer                                         mobileproto.Viewer
 }
 
 type targetState struct {
 	wire     mobileproto.Target
 	resolved ResolvedTarget
-}
-
-type safeEncoder struct {
-	mu      sync.Mutex
-	enc     *json.Encoder
-	queue   chan mobileproto.Response
-	err     error
-	done    chan struct{}
-	once    sync.Once
-	onError func(error)
-}
-
-func (e *safeEncoder) write(response mobileproto.Response) error {
-	if e.queue != nil {
-		e.mu.Lock()
-		err := e.err
-		e.mu.Unlock()
-		if err != nil {
-			return err
-		}
-		select {
-		case e.queue <- response:
-			return nil
-		default:
-			return fmt.Errorf("mobile service: outbound queue overflow")
-		}
-	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.enc.Encode(response)
-}
-
-func newSafeEncoder(output io.Writer) *safeEncoder {
-	e := &safeEncoder{enc: json.NewEncoder(output), queue: make(chan mobileproto.Response, mobileproto.OutboundQueueDepth), done: make(chan struct{})}
-	go func() {
-		defer close(e.done)
-		for response := range e.queue {
-			if err := e.enc.Encode(response); err != nil {
-				e.mu.Lock()
-				e.err = err
-				e.mu.Unlock()
-				if e.onError != nil {
-					e.onError(err)
-				}
-				return
-			}
-		}
-	}()
-	return e
-}
-
-func (e *safeEncoder) close() {
-	if e.queue == nil {
-		return
-	}
-	e.once.Do(func() { close(e.queue) })
-	select {
-	case <-e.done:
-	case <-time.After(500 * time.Millisecond):
-	}
 }
 
 func New(config Config) (*Service, error) {
@@ -161,6 +104,9 @@ func New(config Config) (*Service, error) {
 	}
 	if config.Manager == nil {
 		config.Manager = tty.NewControlManager()
+	}
+	if config.Terminal == nil {
+		config.Terminal = liveTerminal{manager: config.Manager}
 	}
 	instance, err := randomHandle("api")
 	if err != nil {
@@ -181,7 +127,9 @@ func New(config Config) (*Service, error) {
 		terminal:     make(chan struct{}),
 		closeDone:    make(chan struct{}),
 	}
+	s.out.mu.Lock()
 	s.out.onError = s.abort
+	s.out.mu.Unlock()
 	return s, nil
 }
 
@@ -234,8 +182,20 @@ func (s *Service) Run(ctx context.Context) error {
 				s.writeError(request.RequestID, mobileproto.ErrorInvalidRequest, "hello was already accepted", false)
 				continue
 			}
+			if err := mobileproto.ValidateClientHello(request.Capabilities, request.Viewer); err != nil {
+				s.writeError(request.RequestID, mobileproto.ErrorInvalidRequest, err.Error(), false)
+				continue
+			}
+			if request.Capabilities != nil {
+				s.capabilitiesRequested = true
+				s.clientCaps = *request.Capabilities
+			}
+			s.viewer = mobileproto.Viewer{Kind: "unknown", Label: "Sidecar viewer"}
+			if request.Viewer != nil {
+				s.viewer = *request.Viewer
+			}
 			handshake = true
-			caps := mobileproto.DefaultCapabilities()
+			caps := s.advertisedCapabilities()
 			s.emit(mobileproto.Response{Version: mobileproto.Version, Type: mobileproto.ResponseHello, RequestID: request.RequestID, APIInstance: s.instance, Capabilities: &caps})
 			continue
 		}
@@ -306,7 +266,7 @@ func (s *Service) handle(ctx context.Context, request mobileproto.Request) {
 	}
 	switch request.Type {
 	case mobileproto.RequestStatus:
-		caps := mobileproto.DefaultCapabilities()
+		caps := s.advertisedCapabilities()
 		s.emit(mobileproto.Response{Version: mobileproto.Version, Type: mobileproto.ResponseStatus, RequestID: request.RequestID, APIInstance: s.instance, Capabilities: &caps})
 	case mobileproto.RequestSessions:
 		s.sessions(ctx, request)
@@ -320,6 +280,14 @@ func (s *Service) handle(ctx context.Context, request mobileproto.Request) {
 		s.open(ctx, request, true)
 	case mobileproto.RequestControl:
 		s.control(ctx, request)
+	case mobileproto.RequestPresence:
+		s.presence(ctx, request)
+	case mobileproto.RequestPaste:
+		if !s.clientCaps.ServerPaste {
+			s.writeError(request.RequestID, mobileproto.ErrorUnsupported, "negotiate server_paste in hello", false)
+			return
+		}
+		s.inputBytes(ctx, request)
 	case mobileproto.RequestInput:
 		s.inputBytes(ctx, request)
 	case mobileproto.RequestResize:
@@ -706,11 +674,7 @@ func (s *Service) open(ctx context.Context, request mobileproto.Request, reconne
 		return
 	}
 	a := newAttachment(s, handle, request.AttachmentID, generation, target)
-	subscribe := func(r tty.ControlRequest) (CaptureSubscription, error) { return s.manager.Subscribe(r) }
-	if s.terminalBackend != nil {
-		subscribe = s.terminalBackend.Subscribe
-	}
-	sub, err := subscribe(tty.ControlRequest{Session: target.resolved.Session, Pane: target.resolved.Pane, Visible: true, Focused: true, Scrollback: 1,
+	sub, err := s.terminalBackend.Subscribe(tty.ControlRequest{Session: target.resolved.Session, Pane: target.resolved.Pane, Visible: true, Focused: true, Scrollback: 1,
 		FullMetadata: true, OnSnapshot: a.offerSnapshot, OnFallback: a.offerFailure})
 	if err != nil {
 		a.stopAttachment()
@@ -753,20 +717,21 @@ func (s *Service) control(ctx context.Context, request mobileproto.Request) {
 		return
 	}
 	owner := mobileOwnerID(a.handle, a.generation, request.OperationSequence)
+	if s.clientCaps.Presence || s.clientCaps.HolderLabels {
+		owner = a.ownerID
+	}
 	expected := tty.HeadlessTargetIdentity{ServerPID: a.target.resolved.ServerPID, SessionID: a.target.resolved.SessionID,
 		SessionCreated: a.target.resolved.SessionCreated, Session: a.target.resolved.Session, Pane: a.target.resolved.Pane,
 		Width: a.target.resolved.Width, Height: a.target.resolved.Height, PaneCount: a.target.resolved.PaneCount}
-	var geometry LeaseGeometry
-	var err error
-	if s.terminalBackend != nil {
-		geometry, err = s.terminalBackend.ClaimGeometry(expected, owner, request.Columns, request.Rows)
-	} else {
-		var live *tty.HeadlessGeometry
-		live, err = tty.NewHeadlessGeometry(s.manager, expected, owner)
-		if err == nil {
-			err = live.ClaimResize(request.Columns, request.Rows)
-		}
-		geometry = live
+	geometry, err := s.terminalBackend.Geometry(expected, owner)
+	if err == nil && s.clientCaps.HolderLabels {
+		err = geometry.SetHolderLabel(s.viewer.Kind, s.viewer.Label)
+	}
+	if err == nil {
+		err = geometry.ClaimResize(request.Columns, request.Rows)
+	}
+	if err == nil && s.clientCaps.Presence {
+		a.presenceGeometry = geometry
 	}
 	if err != nil {
 		s.writeError(request.RequestID, mobileproto.ErrorLease, err.Error(), true)
@@ -800,6 +765,10 @@ func (s *Service) control(ctx context.Context, request mobileproto.Request) {
 }
 
 func (s *Service) inputBytes(ctx context.Context, request mobileproto.Request) {
+	if s.clientCaps.Presence || request.Type == mobileproto.RequestPaste {
+		s.v1Input(ctx, request)
+		return
+	}
 	a, ok := s.operationAttachment(ctx, request, false)
 	if !ok {
 		return
@@ -863,6 +832,10 @@ func (s *Service) resize(ctx context.Context, request mobileproto.Request) {
 }
 
 func (s *Service) heartbeat(ctx context.Context, request mobileproto.Request) {
+	if s.clientCaps.Presence {
+		s.presence(ctx, request)
+		return
+	}
 	a, ok := s.operationAttachment(ctx, request, false)
 	if !ok {
 		return
@@ -964,6 +937,9 @@ func (s *Service) operationAttachment(ctx context.Context, request mobileproto.R
 		a.opMu.Unlock()
 		s.writeError(request.RequestID, mobileproto.ErrorOperationOrder, "last_output_sequence has not applied an authoritative frame for this reset generation", false)
 		return nil, false
+	}
+	if s.clientCaps.Presence && (request.Type == mobileproto.RequestPresence || request.Type == mobileproto.RequestHeartbeat || request.Type == mobileproto.RequestInput || request.Type == mobileproto.RequestPaste) {
+		return a, true
 	}
 	if entering {
 		if controlled {
@@ -1090,6 +1066,11 @@ type attachment struct {
 	opMu                                               sync.Mutex
 	latest                                             tty.ControlSnapshot
 	geometry                                           LeaseGeometry
+	presenceGeometry                                   LeaseGeometry
+	presenceState                                      *mobileproto.Presence
+	presenceAt                                         time.Time
+	holder                                             mobileproto.Holder
+	ownerID                                            string
 	control                                            bool
 	operationSequence, outputSequence, resetGeneration uint64
 	firstOutputForReset                                uint64
@@ -1112,6 +1093,12 @@ type CaptureSubscription interface {
 
 // LeaseGeometry is the slice of tty.HeadlessGeometry an attachment drives.
 type LeaseGeometry interface {
+	ClaimResize(width, height int) error
+	SetHolderLabel(kind, label string) error
+	Presence(focused, visible bool, idle time.Duration, width, height int, force bool) (bool, error)
+	ClaimInput(data []byte, width, height int, paste bool) error
+	Paste(data []byte) error
+	Holder() (kind, label string, err error)
 	Resize(width, height int) error
 	Heartbeat() error
 	SendLiteral(data []byte) error
@@ -1133,6 +1120,7 @@ const (
 func newAttachment(service *Service, handle, clientID string, generation uint64, target targetState) *attachment {
 	a := &attachment{service: service, handle: handle, clientID: clientID, generation: generation, target: target,
 		ready: make(chan struct{}), snapshots: make(chan queuedSnapshot, 1), failures: make(chan error, 1), stop: make(chan struct{}), stopped: make(chan struct{}), resetGeneration: 1}
+	a.ownerID = mobileOwnerID(handle, generation, 0)
 	go a.run()
 	return a
 }
@@ -1286,7 +1274,7 @@ func (a *attachment) publishQueued(observed queuedSnapshot) {
 		a.requestSnapshot()
 		return
 	}
-	vt, modes, err := normalizedFullFrame(snapshot)
+	vt, modes, err := normalizedFrame(snapshot, a.service.clientCaps.ResetFreeFrames)
 	if err != nil {
 		a.failLocked(mobileproto.ResetCaptureInvalid, err)
 		return
@@ -1359,7 +1347,7 @@ func (a *attachment) publishQueued(observed queuedSnapshot) {
 	if err := a.service.out.write(mobileproto.Response{Version: mobileproto.Version, Type: mobileproto.ResponseFrame,
 		AttachmentHandle: a.handle, AttachmentGeneration: a.generation, OutputSequence: sequence,
 		ResetGeneration: reset, FrameKind: "full", Geometry: &geometry, Modes: &modes, RenderVTBase64: encoded,
-		HistorySize: &historySize}); err == nil {
+		HistorySize: &historySize, ResetFree: a.service.clientCaps.ResetFreeFrames, Coalesced: a.service.clientCaps.CoalescedFrames}); err == nil {
 		a.mu.Lock()
 		a.reseedDelay = 0
 		if first == 0 && a.resetGeneration == reset && a.firstOutputForReset == 0 {
@@ -1459,6 +1447,7 @@ func (a *attachment) advanceResetLocked(reason string, revokeControl bool) {
 func (a *attachment) expirePresence() {
 	a.opMu.Lock()
 	defer a.opMu.Unlock()
+	a.updateHolderLocked()
 	a.mu.Lock()
 	geometry, controlled := a.geometry, a.control
 	a.mu.Unlock()
@@ -1511,9 +1500,20 @@ func (a *attachment) stopAttachment() {
 	})
 }
 
-// TerminalBackend is the capture/geometry seam for deterministic fixture terminals.
-// The live service defaults to ControlManager and HeadlessGeometry unchanged.
+// TerminalBackend is the capture/geometry seam for live and fixture terminals.
+// Geometry constructs a read-only handle; ownership changes only through the
+// LeaseGeometry operations, after the service has supplied negotiated labels.
 type TerminalBackend interface {
 	Subscribe(tty.ControlRequest) (CaptureSubscription, error)
-	ClaimGeometry(tty.HeadlessTargetIdentity, string, int, int) (LeaseGeometry, error)
+	Geometry(tty.HeadlessTargetIdentity, string) (LeaseGeometry, error)
+}
+
+// liveTerminal keeps tmux behind the same seam used by deterministic fixtures.
+type liveTerminal struct{ manager *tty.ControlManager }
+
+func (t liveTerminal) Subscribe(r tty.ControlRequest) (CaptureSubscription, error) {
+	return t.manager.Subscribe(r)
+}
+func (t liveTerminal) Geometry(expected tty.HeadlessTargetIdentity, owner string) (LeaseGeometry, error) {
+	return tty.NewHeadlessGeometry(t.manager, expected, owner)
 }

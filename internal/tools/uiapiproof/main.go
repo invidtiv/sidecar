@@ -30,6 +30,7 @@ import (
 type session struct {
 	conn   *websocket.Conn
 	number int
+	holder *mobileproto.Holder
 }
 
 func (s *session) call(ctx context.Context, request mobileproto.Request) (mobileproto.Response, []mobileproto.Response, error) {
@@ -69,6 +70,9 @@ func (s *session) read(ctx context.Context) (mobileproto.Response, error) {
 	}
 	var response mobileproto.Response
 	err = json.Unmarshal(data, &response)
+	if response.Holder != nil {
+		s.holder = response.Holder
+	}
 	return response, err
 }
 
@@ -85,6 +89,7 @@ func (s *session) frame(ctx context.Context, match func(mobileproto.Response) bo
 }
 
 func run() error {
+	v1 := flag.Bool("v1", false, "exercise negotiated presence, frame flags, input takeover and paste")
 	target := flag.String("target", "", "terminal target (a managed shell session)")
 	wsURL := flag.String("url", "", "WebSocket URL of /api/v0/terminal")
 	origin := flag.String("origin", "", "Origin header to send")
@@ -100,6 +105,9 @@ func run() error {
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
 	options := &websocket.DialOptions{HTTPHeader: http.Header{}}
+	if *v1 {
+		options.CompressionMode = websocket.CompressionContextTakeover
+	}
 	if *bearer != "" {
 		options.HTTPHeader.Set("Authorization", "Bearer "+*bearer)
 	}
@@ -120,6 +128,9 @@ func run() error {
 	conn.SetReadLimit(mobileproto.MaxLineBytes)
 	defer func() { _ = conn.CloseNow() }()
 	s := &session{conn: conn}
+	if *v1 {
+		return runV1(ctx, s, *target, *marker, *literalEcho)
+	}
 
 	if _, _, err := s.call(ctx, mobileproto.Request{Type: mobileproto.RequestHello}); err != nil {
 		return err

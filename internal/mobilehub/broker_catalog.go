@@ -150,6 +150,13 @@ func (r *CatalogRouter) Query(ctx context.Context, query mobileproto.CatalogQuer
 // This works across a fresh hub API process; no process-local catalog map is
 // treated as authority. The returned stream remains open for target resolve.
 func (r *CatalogRouter) Lookup(ctx context.Context, selector string, expected mobileproto.TargetIdentity) (BoundOwner, LineStream, TargetBinding, error) {
+	return r.LookupWithHello(ctx, selector, expected, nil, nil)
+}
+
+// LookupWithHello negotiates terminal options when opening the selected owner,
+// before the catalog query. A second hello on an established stream is invalid.
+func (r *CatalogRouter) LookupWithHello(ctx context.Context, selector string, expected mobileproto.TargetIdentity, capabilities *mobileproto.ClientCapabilities, viewer *mobileproto.Viewer) (BoundOwner, LineStream, TargetBinding, error) {
+	ctx = withOwnerHello(ctx, capabilities, viewer)
 	if strings.TrimSpace(selector) == "" || len(selector) > mobileproto.MaxTargetBytes || expected.HubID == "" || expected.OwnerHostID == "" {
 		return BoundOwner{}, nil, TargetBinding{}, fmt.Errorf("mobile hub: incomplete public target selection")
 	}

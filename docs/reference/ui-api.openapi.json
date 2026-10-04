@@ -39,10 +39,16 @@
           "changed_row_frames": {
             "type": "boolean"
           },
+          "coalesced_frames": {
+            "type": "boolean"
+          },
           "heartbeat_interval_ms": {
             "type": "integer"
           },
           "history_snapshots": {
+            "type": "boolean"
+          },
+          "holder_labels": {
             "type": "boolean"
           },
           "input": {
@@ -69,13 +75,22 @@
           "normalized_full_frames": {
             "type": "boolean"
           },
+          "presence": {
+            "type": "boolean"
+          },
           "presence_timeout_ms": {
             "type": "integer"
           },
           "reconnect": {
             "type": "boolean"
           },
+          "reset_free_frames": {
+            "type": "boolean"
+          },
           "resize": {
+            "type": "boolean"
+          },
+          "server_paste": {
             "type": "boolean"
           }
         },
@@ -447,6 +462,27 @@
         ],
         "type": "object"
       },
+      "ClientCapabilities": {
+        "additionalProperties": false,
+        "properties": {
+          "coalesced_frames": {
+            "type": "boolean"
+          },
+          "holder_labels": {
+            "type": "boolean"
+          },
+          "presence": {
+            "type": "boolean"
+          },
+          "reset_free_frames": {
+            "type": "boolean"
+          },
+          "server_paste": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
       "ClientInfo": {
         "additionalProperties": false,
         "properties": {
@@ -775,6 +811,22 @@
         ],
         "type": "object"
       },
+      "Holder": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "label"
+        ],
+        "type": "object"
+      },
       "ListenerInfo": {
         "additionalProperties": false,
         "properties": {
@@ -1027,6 +1079,34 @@
         ],
         "type": "object"
       },
+      "Presence": {
+        "additionalProperties": false,
+        "properties": {
+          "columns": {
+            "type": "integer"
+          },
+          "focused": {
+            "type": "boolean"
+          },
+          "idle_ms": {
+            "type": "integer"
+          },
+          "rows": {
+            "type": "integer"
+          },
+          "visible": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "focused",
+          "visible",
+          "idle_ms",
+          "columns",
+          "rows"
+        ],
+        "type": "object"
+      },
       "Request": {
         "additionalProperties": false,
         "properties": {
@@ -1035,6 +1115,9 @@
           },
           "attachment_id": {
             "type": "string"
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/ClientCapabilities"
           },
           "catalog_query": {
             "$ref": "#/components/schemas/CatalogQuery"
@@ -1060,6 +1143,9 @@
           "operation_sequence": {
             "type": "integer"
           },
+          "presence": {
+            "$ref": "#/components/schemas/Presence"
+          },
           "previous_attachment_generation": {
             "type": "integer"
           },
@@ -1080,6 +1166,9 @@
           },
           "version": {
             "type": "integer"
+          },
+          "viewer": {
+            "$ref": "#/components/schemas/Viewer"
           }
         },
         "required": [
@@ -1107,6 +1196,9 @@
           "catalog": {
             "$ref": "#/components/schemas/CatalogSnapshot"
           },
+          "coalesced": {
+            "type": "boolean"
+          },
           "control": {
             "type": "boolean"
           },
@@ -1125,6 +1217,9 @@
           "history_size": {
             "type": "integer"
           },
+          "holder": {
+            "$ref": "#/components/schemas/Holder"
+          },
           "modes": {
             "$ref": "#/components/schemas/Modes"
           },
@@ -1142,6 +1237,9 @@
           },
           "request_id": {
             "type": "string"
+          },
+          "reset_free": {
+            "type": "boolean"
           },
           "reset_generation": {
             "type": "integer"
@@ -1355,6 +1453,9 @@
           "display_name": {
             "type": "string"
           },
+          "holder": {
+            "$ref": "#/components/schemas/Holder"
+          },
           "owner_host_id": {
             "type": "string"
           },
@@ -1415,6 +1516,22 @@
         "required": [
           "ticket",
           "expires_at"
+        ],
+        "type": "object"
+      },
+      "Viewer": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "label"
         ],
         "type": "object"
       }

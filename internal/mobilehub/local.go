@@ -15,15 +15,16 @@ import (
 type LocalServiceFactory func(io.Reader, io.Writer) (*mobile.Service, error)
 
 type localStream struct {
-	input     *io.PipeWriter
-	cancel    context.CancelFunc
-	lines     chan []byte
-	done      chan struct{}
-	writeMu   sync.Mutex
-	stateMu   sync.Mutex
-	terminal  error
-	closing   bool
-	closeOnce sync.Once
+	input        *io.PipeWriter
+	cancel       context.CancelFunc
+	lines        *ownerLineQueue
+	helloRequest mobileproto.Request
+	done         chan struct{}
+	writeMu      sync.Mutex
+	stateMu      sync.Mutex
+	terminal     error
+	closing      bool
+	closeOnce    sync.Once
 }
 
 // StartLocal starts the hub machine's owning service in process, consumes and
@@ -44,13 +45,13 @@ func StartLocal(ctx context.Context, factory LocalServiceFactory) (LineStream, m
 		return nil, mobileproto.Response{}, err
 	}
 	ownerCtx, cancel := context.WithCancel(ctx)
-	stream := &localStream{input: input, cancel: cancel, lines: make(chan []byte, mobileproto.OutboundQueueDepth), done: make(chan struct{})}
+	stream := &localStream{input: input, cancel: cancel, lines: newOwnerLineQueue(ctx), helloRequest: ownerHelloRequest(ctx), done: make(chan struct{})}
 	go func() {
 		err := service.Run(ownerCtx)
 		_ = responses.CloseWithError(err)
 	}()
 	go stream.read(output)
-	request := mobileproto.Request{Version: mobileproto.Version, Type: mobileproto.RequestHello, RequestID: "hub-owner-hello"}
+	request := stream.helloRequest
 	data, _ := json.Marshal(request)
 	if err := stream.WriteLine(data); err != nil {
 		stream.Close()
@@ -77,15 +78,21 @@ func StartLocal(ctx context.Context, factory LocalServiceFactory) (LineStream, m
 
 func (s *localStream) read(output *io.PipeReader) {
 	defer close(s.done)
-	defer close(s.lines)
+	defer s.lines.close()
 	defer func() { _ = output.Close() }()
 	scanner := bufio.NewScanner(output)
 	scanner.Buffer(make([]byte, 64<<10), mobileproto.MaxLineBytes+1)
+	first := true
 	for scanner.Scan() {
 		line := append([]byte(nil), scanner.Bytes()...)
-		select {
-		case s.lines <- line:
-		default:
+		if first {
+			first = false
+			if err := ownerNegotiationError(s.helloRequest, line); err != nil {
+				s.fail(err)
+				break
+			}
+		}
+		if !s.lines.push(line) {
 			s.fail(ErrOwnerOutputOverflow)
 			return
 		}
@@ -121,18 +128,11 @@ func (s *localStream) ReadLine(ctx context.Context) ([]byte, error) {
 	if err := s.terminalError(); err != nil {
 		return nil, err
 	}
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case line, ok := <-s.lines:
-		if err := s.terminalError(); err != nil {
-			return nil, err
-		}
-		if !ok {
-			return nil, io.EOF
-		}
-		return line, nil
+	line, err := s.lines.read(ctx)
+	if terminal := s.terminalError(); terminal != nil {
+		return nil, terminal
 	}
+	return line, err
 }
 
 func (s *localStream) Close() {

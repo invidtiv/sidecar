@@ -1,6 +1,7 @@
 package tty
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -634,11 +635,28 @@ func hostAndPID() (string, int) {
 // restart draws a new PID, so without this every restart would meet its own
 // leftover lease and decline to resize until the staleness budget elapsed.
 func (k *leaseKeeper) defunct(token string) bool {
+	return leaseOwnerDefunct(token, k.selfHost, k.alive)
+}
+
+// leaseOwnerDefunct scopes PID liveness to the owning machine. A remote PID
+// must never be tested locally: its number can identify an unrelated process.
+func leaseOwnerDefunct(token, selfHost string, alive func(int) bool) bool {
 	host, pid, ok := splitInstanceID(leaseOwner(token))
-	if !ok || host != k.selfHost {
+	if !ok {
 		return false
 	}
-	return !k.alive(pid)
+	// Headless attachments append a per-attachment discriminator to the host.
+	// Strip only the exact marker written by mobileOwnerID; remote hosts still
+	// never use this machine's PID namespace as evidence.
+	if i := strings.LastIndex(host, "-mobile-"); i >= 0 && len(host[i+8:]) == 12 {
+		if _, err := hex.DecodeString(host[i+8:]); err == nil {
+			host = host[:i]
+		}
+	}
+	if host != selfHost {
+		return false
+	}
+	return !alive(pid)
 }
 
 // allow reports whether this instance may assert geometry on target, claiming or
