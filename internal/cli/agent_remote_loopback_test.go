@@ -387,17 +387,48 @@ func TestLoopbackStartupUsesTheTestDeadline(t *testing.T) {
 	if _, ok := t.Deadline(); !ok {
 		t.Skip("requires an enclosing test runner deadline")
 	}
-	h := &loopbackHost{t: t}
+	dir := t.TempDir()
+	argsPath := filepath.Join(dir, "startup-argv")
+	answer, err := json.Marshal(agentcontrol.Agent{Agent: agentcontrol.AgentState{
+		Kind: "codex", InteractiveReady: true, Evidence: "sidecar.composer_idle",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(dir, "fixture-sidecar")
+	writeFile(t, bin, fmt.Sprintf(`#!/bin/sh
+if [ "$4" = start ]; then printf '%%s\n' "$@" > %q; fi
+printf '%%s\n' %q
+`, argsPath, string(answer)))
+	if err := os.Chmod(bin, 0700); err != nil {
+		t.Fatal(err)
+	}
+	h := &loopbackHost{t: t, bin: bin, hostWork: dir, hostConfig: filepath.Join(dir, "config.json"), agentSession: "explicit-fixture"}
 	ctx, cancel := loopbackOperationContext(t)
 	defer cancel()
 	deadline, _ := ctx.Deadline()
 	before := time.Now()
-	got := h.operationTimeout()
+	h.startAgent()
 	after := time.Now()
-	// Bracket the calculation itself, so scheduler stalls on either side do
-	// not assert any elapsed-time performance target.
+	argv, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := strings.Split(strings.TrimSpace(string(argv)), "\n")
+	var got time.Duration
+	for i, arg := range args {
+		if arg == "--timeout" && i+1 < len(args) {
+			got, err = time.ParseDuration(args[i+1])
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	// Bracket the actual command invocation, so scheduler stalls on either
+	// side do not assert any elapsed-time performance target. Replacing the
+	// real start call's budget with a fixed 30s fails this contract.
 	if lower, upper := deadline.Sub(after), deadline.Sub(before); got < lower || got > upper {
-		t.Fatalf("fixture startup budget %s did not follow test deadline (%s..%s remaining)", got, lower, upper)
+		t.Fatalf("fixture startup budget %s did not follow test deadline (%s..%s remaining); argv=%q", got, lower, upper, args)
 	}
 }
 
