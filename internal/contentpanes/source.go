@@ -104,11 +104,12 @@ type DiffReadRequest struct {
 
 // DiffPayload is the typed diff body a shared viewer consumes.
 type DiffPayload struct {
-	Snapshot *workspacediff.Snapshot
-	Commit   *workspacediff.CommitDetail
-	RangeRaw string
-	FileRaw  string
-	FilePath string
+	Truncated bool
+	Snapshot  *workspacediff.Snapshot
+	Commit    *workspacediff.CommitDetail
+	RangeRaw  string
+	FileRaw   string
+	FilePath  string
 }
 
 // DiffReadResult is a typed Diff payload. NotModified completes an
@@ -280,11 +281,12 @@ func (LocalSource) LoadDiff(ctx context.Context, src SourceContext, req DiffRead
 	}
 	return DiffReadResult{
 		Value: DiffPayload{
-			Snapshot: doc.Snapshot,
-			Commit:   doc.Commit,
-			RangeRaw: doc.RangeRaw,
-			FileRaw:  doc.FileRaw,
-			FilePath: doc.FilePath,
+			Truncated: doc.DTO != nil && doc.DTO.Truncated,
+			Snapshot:  doc.Snapshot,
+			Commit:    doc.Commit,
+			RangeRaw:  doc.RangeRaw,
+			FileRaw:   doc.FileRaw,
+			FilePath:  doc.FilePath,
 		},
 		Revision:    doc.Revision,
 		NotModified: doc.NotModified,
@@ -512,7 +514,7 @@ func (l sourceDiffLoader) LoadRange(ctx context.Context, workdir string, t works
 		return workspacediff.RangeResult{}, err
 	}
 	files := workspacediff.ParseFiles(result.Value.RangeRaw)
-	return workspacediff.RangeResult{Raw: result.Value.RangeRaw, Files: files, Revision: result.Revision, NotModified: result.NotModified}, nil
+	return workspacediff.RangeResult{Truncated: result.Value.Truncated, Raw: result.Value.RangeRaw, Files: files, Revision: result.Revision, NotModified: result.NotModified}, nil
 }
 
 func (l sourceDiffLoader) LoadCommitFile(ctx context.Context, workdir, hash, path, parentHash, ifRevision string) (workspacediff.FileResult, error) {
@@ -527,7 +529,7 @@ func (l sourceDiffLoader) LoadCommitFile(ctx context.Context, workdir, hash, pat
 	if err != nil {
 		return workspacediff.FileResult{}, err
 	}
-	return workspacediff.FileResult{Path: path, Raw: result.Value.FileRaw, Revision: result.Revision, NotModified: result.NotModified}, nil
+	return workspacediff.FileResult{Truncated: result.Value.Truncated, Path: path, Raw: result.Value.FileRaw, Revision: result.Revision, NotModified: result.NotModified}, nil
 }
 
 func (l sourceDiffLoader) LoadWorkingTreeFile(ctx context.Context, workdir, path, ifRevision string) (workspacediff.FileResult, error) {
@@ -541,7 +543,7 @@ func (l sourceDiffLoader) LoadWorkingTreeFile(ctx context.Context, workdir, path
 	if err != nil {
 		return workspacediff.FileResult{}, err
 	}
-	return workspacediff.FileResult{Path: path, Raw: result.Value.FileRaw, Revision: result.Revision, NotModified: result.NotModified}, nil
+	return workspacediff.FileResult{Truncated: result.Value.Truncated, Path: path, Raw: result.Value.FileRaw, Revision: result.Revision, NotModified: result.NotModified}, nil
 }
 
 func (l sourceDiffLoader) sourceContext(workdir string) SourceContext {

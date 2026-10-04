@@ -271,22 +271,8 @@ func TestServiceRemoveCancelsSoundBeforeBlockedNativeLedger(t *testing.T) {
 		soundDone <- receipt
 	}()
 	waitSoundItems(t, hostSound, 1)
-	// Freeze playback until the blocked ledger and cancellation are established.
-	// A real 75ms timer can expire during setup on a busy machine, before Remove
-	// is even called, which does not test cancellation ordering.
-	timerDeadline := time.Now().Add(2 * time.Second)
-	for {
-		clock.mu.Lock()
-		waiting := clock.fn != nil
-		clock.mu.Unlock()
-		if waiting {
-			break
-		}
-		if time.Now().After(timerDeadline) {
-			t.Fatal("sound did not register its delayed playback timer")
-		}
-		runtime.Gosched()
-	}
+	// Hold playback until native ledger blocking and cancellation are established.
+	waitTimer(t, clock)
 
 	nativeStarted := make(chan struct{})
 	releaseNative := make(chan struct{})

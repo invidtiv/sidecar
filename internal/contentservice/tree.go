@@ -98,6 +98,14 @@ func (s *Service) treeWorkspace(ctx context.Context, ws Workspace, paths []strin
 }
 
 func (s *Service) treeWorkspaceRead(ctx context.Context, ws Workspace, paths []string, root *os.Root) (TreeResult, error) {
+	return s.treeWorkspaceOpen(ctx, ws, paths, root, nil)
+}
+
+func (s *Service) treeWorkspaceOpen(ctx context.Context, ws Workspace, paths []string, root *os.Root, open func(string) (*os.File, error)) (TreeResult, error) {
+	if open == nil && root != nil {
+		open = func(path string) (*os.File, error) { return root.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0) }
+	}
+
 	if len(paths) == 0 {
 		paths = []string{""}
 	}
@@ -109,7 +117,7 @@ func (s *Service) treeWorkspaceRead(ctx context.Context, ws Workspace, paths []s
 	if root == nil {
 		_ = ignore.LoadFile(filepath.Join(ws.Root, ".gitignore"))
 	} else {
-		file, err := root.OpenFile(".gitignore", os.O_RDONLY|syscall.O_NONBLOCK, 0)
+		file, err := open(".gitignore")
 		if err == nil {
 			info, err := file.Stat()
 			if err == nil && info.Mode().IsRegular() {
@@ -146,7 +154,7 @@ func (s *Service) treeWorkspaceRead(ctx context.Context, ws Workspace, paths []s
 			if path == "" {
 				path = "."
 			}
-			file, err := root.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+			file, err := open(path)
 			if err != nil {
 				if os.IsNotExist(err) || os.IsPermission(err) {
 					result.Dirs = append(result.Dirs, listTreeEntries(rel, nil, err, ignore))

@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
+
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/marcus/sidecar/internal/tty"
@@ -454,32 +456,68 @@ func TestIsIgnoredWatchPath(t *testing.T) {
 }
 
 func TestTreeWatcher_CoalescesBurst(t *testing.T) {
-	tmpDir := t.TempDir()
-	preview := filepath.Join(tmpDir, "preview.txt")
-	writeFile(t, preview, "x")
-
-	w := newTestWatcher(t)
-	w.SyncDirs([]string{tmpDir})
-	if err := w.SetPreviewFile(preview); err != nil {
-		t.Fatal(err)
+	// Deliver real fsnotify event shapes, but advance the quiet clock only
+	// after the whole burst has been consumed. Real filesystem writes can be
+	// scheduled more than one quiet period apart under parallel suite load.
+	dir := t.TempDir()
+	preview := filepath.Join(dir, "preview.txt")
+	raw := make(chan fsnotify.Event)
+	quietTicks := make(chan time.Time)
+	quietResets := make(chan time.Duration)
+	maxTicks := make(chan time.Time)
+	maxResets := make(chan time.Duration, 1)
+	w := &TreeWatcher{
+		fsWatcher: &fsnotify.Watcher{Events: raw, Errors: make(chan error)},
+		events:    make(chan FSEvent, 1), stop: make(chan struct{}), done: make(chan struct{}),
+		watched: map[string]bool{dir: true}, previewFile: preview,
 	}
-
-	// A burst of creates plus preview writes, all inside one quiet period.
+	go w.runWithTimers(
+		watchTimer{C: quietTicks, stop: func() {}, reset: func(d time.Duration) { quietResets <- d }},
+		watchTimer{C: maxTicks, stop: func() {}, reset: func(d time.Duration) { maxResets <- d }},
+	)
+	t.Cleanup(func() { close(w.stop); <-w.done })
 	for i := 0; i < 10; i++ {
-		writeFile(t, filepath.Join(tmpDir, "burst"+string(rune('0'+i))+".txt"), "x")
-		writeFile(t, preview, "change")
+		for _, event := range []fsnotify.Event{
+			{Name: filepath.Join(dir, "burst"+string(rune('0'+i))+".txt"), Op: fsnotify.Create},
+			{Name: preview, Op: fsnotify.Write},
+		} {
+			select {
+			case raw <- event:
+			case <-time.After(3 * time.Second):
+				t.Fatal("watcher stopped consuming the burst")
+			}
+			select {
+			case d := <-quietResets:
+				if d != watchQuietPeriod {
+					t.Fatalf("quiet reset = %v", d)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("watcher failed to arm the quiet clock")
+			}
+		}
 	}
-
+	if d := <-maxResets; d != watchMaxLatency {
+		t.Fatalf("max-latency reset = %v", d)
+	}
+	select {
+	case d := <-maxResets:
+		t.Fatalf("burst restarted max-latency clock: %v", d)
+	default:
+	}
+	select {
+	case ev := <-w.Events():
+		t.Fatalf("burst flushed before quiet: %+v", ev)
+	default:
+	}
+	quietTicks <- time.Now()
 	ev := waitForEvent(t, w)
-	if !ev.TreeChanged || !ev.PreviewChanged {
-		t.Errorf("coalesced event lost a flag: %+v", ev)
+	if !ev.TreeChanged || !ev.PreviewChanged || len(ev.Dirs) != 1 || ev.Dirs[0] != dir {
+		t.Fatalf("coalesced event lost flags or directories: %+v", ev)
 	}
-
-	// The burst must not queue up one event per write.
 	select {
 	case extra := <-w.Events():
-		t.Errorf("burst produced more than one event: %+v", extra)
-	case <-time.After(watchQuietPeriod + 400*time.Millisecond):
+		t.Fatalf("burst produced more than one event: %+v", extra)
+	default:
 	}
 }
 

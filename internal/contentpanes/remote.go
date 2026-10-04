@@ -340,7 +340,7 @@ func workspacediffIdentityWorkingTree() string {
 }
 
 func diffPayloadFromRead(result contentservice.ReadResult) DiffPayload {
-	payload := DiffPayload{}
+	payload := DiffPayload{Truncated: result.Truncated || (result.Diff != nil && result.Diff.Truncated)}
 	if result.Diff == nil {
 		return payload
 	}

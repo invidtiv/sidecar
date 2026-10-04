@@ -217,9 +217,12 @@ func (v *View) renderFileList(width, height, baseX, baseY int, opts RenderOpts) 
 		commits = nil
 	} else if v.Scope == ScopeCommits {
 		headerText = fmt.Sprintf("Commits vs %s (%d)", v.baseRef(), len(commits))
-	} else if v.Snapshot != nil && v.Snapshot.Truncated {
+	} else if v.Snapshot != nil && v.Snapshot.UntrackedOmitted > 0 {
 		headerText = fmt.Sprintf("Working Tree vs HEAD (%d) [untracked caps: %d files, %d B/file, %d B total; %d omitted]",
 			len(files), MaxUntrackedFiles, MaxUntrackedFileSize, MaxUntrackedTotalBytes, v.Snapshot.UntrackedOmitted)
+	}
+	if v.State == LoadStateTruncated {
+		headerText += " [truncated]"
 	}
 	if fileListActive {
 		sb.WriteString(styles.Title.Render(headerText))
@@ -373,6 +376,9 @@ func (v *View) renderDiffPane(width, height, baseX, baseY int, opts RenderOpts) 
 	name := v.selectedFileName()
 	var sb strings.Builder
 	headerStr := fmt.Sprintf("%s [%s]", name, v.viewModeLabel())
+	if v.State == LoadStateTruncated {
+		headerStr += " [truncated]"
+	}
 	if v.Focus == FocusDiff {
 		sb.WriteString(styles.Title.Render(headerStr))
 	} else {
@@ -533,6 +539,9 @@ func (v *View) renderCommitFileDiffPane(width, height, baseX, baseY int, opts Re
 	file := v.CommitDetail.Files[v.CommitFileCursor]
 	var sb strings.Builder
 	headerStr := fmt.Sprintf("%s [%s]", file.Path, v.viewModeLabel())
+	if v.CommitFileDiffTruncated {
+		headerStr += " [truncated]"
+	}
 	if v.Focus == FocusCommitDiff {
 		sb.WriteString(styles.Title.Render(headerStr))
 	} else {
@@ -685,6 +694,9 @@ func (v *View) aggregateText() string {
 		sb.WriteString(v.Snapshot.AggregateUncommitted)
 	}
 	if v.Snapshot.Truncated {
+		sb.WriteString("\n\nDiff truncated: remaining content omitted.")
+	}
+	if v.Snapshot.UntrackedOmitted > 0 {
 		fmt.Fprintf(&sb, "\n\nUntracked limits: %d files, %d bytes/file, %d bytes total; omitted %d files (%d bytes).",
 			MaxUntrackedFiles, MaxUntrackedFileSize, MaxUntrackedTotalBytes,
 			v.Snapshot.UntrackedOmitted, v.Snapshot.UntrackedBytesOmitted)

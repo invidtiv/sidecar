@@ -2,8 +2,6 @@ package tty
 
 import (
 	"errors"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -66,14 +64,19 @@ func TestParseCapturePaneRangeRejectsMetadata(t *testing.T) {
 }
 
 func TestCapturePaneRangeBoundedRefusesOversizedCommandOutput(t *testing.T) {
-	dir := t.TempDir()
-	tmux := filepath.Join(dir, "tmux")
-	if err := os.WriteFile(tmux, []byte("#!/bin/sh\nprintf '0\\n0123456789'\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", dir)
-	_, err := CapturePaneRangeBounded("%12", -1, 1, 4)
+	reader := strings.NewReader("0\n0123456789")
+	_, err := readCaptureRangeOutput(reader, 4)
 	if err == nil || !errors.Is(err, ErrCaptureRangeTooLarge) || !strings.Contains(err.Error(), "exceeds 4 bytes") {
 		t.Fatalf("bounded capture error = %v", err)
+	}
+	if reader.Len() != 7 {
+		t.Fatalf("bounded reader consumed past the overflow sentinel: %d bytes remain", reader.Len())
+	}
+}
+
+func TestCapturePaneRangeOutputAtLimitIsComplete(t *testing.T) {
+	output, err := readCaptureRangeOutput(strings.NewReader("1234"), 4)
+	if err != nil || string(output) != "1234" {
+		t.Fatalf("at-limit output = %q, %v", output, err)
 	}
 }

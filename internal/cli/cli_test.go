@@ -2,16 +2,19 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/shellstate"
+	"github.com/marcus/sidecar/internal/testenv"
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspaceops"
 )
@@ -429,15 +432,41 @@ func setupWorktreeCLI(t *testing.T, displayName string) (stateHome, stateDir, pr
 	return stateHome, stateDir, projectRoot, worktreeRoot, session, socket
 }
 
-// setupIsolatedCLI points state at a temp tree and clears TMUX so open
-// resolution cannot see a Sidecar shell.
+// setupIsolatedCLI owns both state and tmux isolation, even without TestMain.
 func setupIsolatedCLI(t *testing.T) (stateHome, stateDir string) {
 	t.Helper()
-	stateHome = t.TempDir()
+	// Keep the socket path below macOS's 103-byte bound.
+	var err error
+	stateHome, err = os.MkdirTemp("/tmp", "sc-cli-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(stateHome) })
 	t.Setenv("XDG_STATE_HOME", stateHome)
 	t.Setenv("SIDECAR_ISOLATED_STATE", "1")
 	t.Setenv("TMUX", "")
 	t.Setenv("TMUX_PANE", "")
+	tmuxDir := filepath.Join(stateHome, "tmux")
+	if err := os.MkdirAll(tmuxDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUX_TMPDIR", tmuxDir)
+	socket := testenv.SocketPath(tmuxDir)
+	t.Cleanup(func() {
+		if _, err := os.Stat(socket); err != nil {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "tmux", "-S", socket, "kill-server")
+		for _, item := range os.Environ() {
+			if !strings.HasPrefix(item, "TMUX=") && !strings.HasPrefix(item, "TMUX_PANE=") && !strings.HasPrefix(item, "TMUX_TMPDIR=") {
+				cmd.Env = append(cmd.Env, item)
+			}
+		}
+		cmd.Env = append(cmd.Env, "TMUX_TMPDIR="+tmuxDir)
+		_ = cmd.Run()
+	})
 	// Both isolation axes, not one. XDG_STATE_HOME moves the state tree;
 	// config.json and state.json are $HOME-based and only -config moves them
 	// (AGENTS.md, td-8d18de). Without this the config path still resolved into

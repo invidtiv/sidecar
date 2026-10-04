@@ -405,6 +405,7 @@ func (v *View) dropPaintedFile() {
 }
 
 func (v *View) clearCommitFileDiff() {
+	v.CommitFileDiffTruncated = false
 	v.CommitFileDiffRaw = ""
 	v.CommitFileDiffLoaded = false
 	v.CommitFileDiffErr = ""

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/marcus/sidecar/internal/workspacediff"
 )
@@ -204,5 +205,49 @@ func TestDiffParentNeverReachesGitAsAnOption(t *testing.T) {
 	}
 	if !strings.HasSuffix(res.Revision, ":"+oid) {
 		t.Fatalf("parent not resolved to an object id: %q", res.Revision)
+	}
+}
+
+func TestServiceOversizedDiffReportsTruncatedPrefix(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	root := t.TempDir()
+	initGitRepo(t, root)
+	base := commitContentRepo(t, root)
+	path := filepath.Join(root, "tracked.txt")
+	if err := os.WriteFile(path, []byte(strings.Repeat("changed line\n", 180000)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, params := range []ReadParams{
+		{Operation: OpWorkingTreeFile, Target: "wt", Path: "tracked.txt"},
+		{Operation: OpFullFile, Target: "wt", Path: "tracked.txt"},
+	} {
+		doc, err := ReadDiff(ctx, root, params)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !doc.DTO.Truncated {
+			t.Errorf("%s did not report truncation", params.Operation)
+		}
+	}
+	cmd := exec.CommandContext(ctx, "git", "-C", root, "commit", "-am", "large")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("commit: %s: %v", out, err)
+	}
+	for _, params := range []ReadParams{
+		{Operation: OpRange, Target: base + "..HEAD"},
+		{Operation: OpCommitFile, Target: "HEAD", Path: "tracked.txt"},
+		{Operation: OpFullFile, Target: "HEAD", Path: "tracked.txt"},
+	} {
+		doc, err := ReadDiff(ctx, root, params)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !doc.DTO.Truncated {
+			t.Errorf("%s did not report truncation", params.Operation)
+		}
+		if len(doc.RangeRaw) > workspacediff.MaxDiffBytes || len(doc.FileRaw) > workspacediff.MaxDiffBytes {
+			t.Errorf("%s exceeded patch cap", params.Operation)
+		}
 	}
 }

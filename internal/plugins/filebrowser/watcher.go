@@ -246,17 +246,40 @@ func isIgnoredWatchPath(path string) bool {
 	return false
 }
 
+// watchTimer is the timer seam for coalescing. Tests supply manually advanced
+// clocks so filesystem or process scheduling cannot stretch a synthetic burst.
+type watchTimer struct {
+	C     <-chan time.Time
+	stop  func()
+	reset func(time.Duration)
+}
+
+func newWatchTimer() watchTimer {
+	timer := time.NewTimer(time.Hour)
+	stop := func() {
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+	}
+	stop()
+	return watchTimer{C: timer.C, stop: stop, reset: func(duration time.Duration) { timer.Reset(duration) }}
+}
+
 // run processes filesystem events, coalescing bursts into a single pending event.
 func (w *TreeWatcher) run() {
+	w.runWithTimers(newWatchTimer(), newWatchTimer())
+}
+
+func (w *TreeWatcher) runWithTimers(quiet, maxLatency watchTimer) {
 	defer func() {
+		quiet.stop()
+		maxLatency.stop()
 		close(w.events)
 		close(w.done)
 	}()
-
-	quiet := time.NewTimer(time.Hour)
-	stopTimer(quiet)
-	maxLatency := time.NewTimer(time.Hour)
-	stopTimer(maxLatency)
 
 	var (
 		pending  FSEvent
@@ -266,8 +289,8 @@ func (w *TreeWatcher) run() {
 	)
 
 	flush := func() {
-		stopTimer(quiet)
-		stopTimer(maxLatency)
+		quiet.stop()
+		maxLatency.stop()
 		quietC, maxLatC = nil, nil
 		if !hasEvent {
 			return
@@ -296,11 +319,11 @@ func (w *TreeWatcher) run() {
 
 			// Restart the quiet period on every change; start the max-latency
 			// timer only once per batch so a busy directory still reports.
-			stopTimer(quiet)
-			quiet.Reset(watchQuietPeriod)
+			quiet.stop()
+			quiet.reset(watchQuietPeriod)
 			quietC = quiet.C
 			if !hasEvent {
-				maxLatency.Reset(watchMaxLatency)
+				maxLatency.reset(watchMaxLatency)
 				maxLatC = maxLatency.C
 			}
 			hasEvent = true
@@ -332,15 +355,6 @@ func (w *TreeWatcher) emit(ev FSEvent) {
 	default:
 	}
 	w.events <- ev
-}
-
-func stopTimer(t *time.Timer) {
-	if !t.Stop() {
-		select {
-		case <-t.C:
-		default:
-		}
-	}
 }
 
 // Events returns the channel of coalesced filesystem events. It is closed once

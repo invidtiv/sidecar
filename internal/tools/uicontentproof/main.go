@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -52,6 +53,28 @@ func run() error {
 		return data, response.Header.Get("ETag"), response.StatusCode, err
 	}
 	prefix := "/api/v0/projects/proof/"
+	// Ordinary project secrets remain user-viewable; Git administrative data
+	// is refused even for trusted Local callers. Never read a real credential.
+	if err := os.WriteFile(filepath.Join(*root, ".env"), []byte("PROOF=ordinary-content\n"), 0600); err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(filepath.Join(*root, ".env")) }()
+	for _, target := range []string{".git/config", ".git/HEAD"} {
+		data, _, code, err := request("GET", prefix+"content?kind=file&target="+url.QueryEscape(target), "", "")
+		if err != nil {
+			return err
+		}
+		if code != 403 {
+			return fmt.Errorf("git internals readable: %d %s", code, data)
+		}
+	}
+	data, _, code, err := request("GET", prefix+"content?kind=file&target=.env", "", "")
+	if err != nil {
+		return err
+	}
+	if code != 200 || !bytes.Contains(data, []byte("ordinary-content")) {
+		return fmt.Errorf("ordinary .env refused: %d %s", code, data)
+	}
 	for _, query := range []string{"kind=file&target=README.md", "kind=diff"} {
 		data, _, code, err := request("GET", prefix+"content?"+query, "", "")
 		if err != nil {
@@ -68,7 +91,69 @@ func run() error {
 			return fmt.Errorf("invalid DTO %s", data)
 		}
 	}
-	data, _, code, err := request("GET", prefix+"tree", "", "")
+
+	// Oversized patches must be truncated before response encoding for every
+	// operation, while retained rows continue to form a valid content DTO.
+	largePath := filepath.Join(*root, "large-proof.txt")
+	defer func() { _ = os.Remove(largePath) }()
+	git := func(args ...string) error {
+		all := append([]string{"-C", *root, "-c", "user.name=Proof", "-c", "user.email=proof@example.invalid"}, args...)
+		out, err := exec.CommandContext(ctx, "git", all...).CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("git proof: %s: %w", out, err)
+		}
+		return nil
+	}
+	if err = os.WriteFile(largePath, []byte("base\n"), 0600); err != nil {
+		return err
+	}
+	if err = git("add", "large-proof.txt"); err != nil {
+		return err
+	}
+	if err = git("commit", "-qm", "Large diff proof baseline"); err != nil {
+		return err
+	}
+	if err = os.WriteFile(largePath, []byte(strings.Repeat("changed line\n", 180000)), 0600); err != nil {
+		return err
+	}
+	checkLarge := func(operation, target string) error {
+		query := url.Values{"kind": {"diff"}, "operation": {operation}, "target": {target}, "path": {"large-proof.txt"}}
+		data, _, code, err := request("GET", prefix+"content?"+query.Encode(), "", "")
+		if err != nil {
+			return err
+		}
+		if code != 200 {
+			return fmt.Errorf("large %s: %d %s", operation, code, data)
+		}
+		var doc contentservice.ReadResult
+		if err = json.Unmarshal(data, &doc); err != nil {
+			return err
+		}
+		if !doc.ValidRemoteResult() || !doc.Truncated || doc.Diff == nil || !doc.Diff.Truncated {
+			return fmt.Errorf("large %s silently truncated or invalid", operation)
+		}
+		if len(data) > contentservice.MaxEncodedBytes {
+			return fmt.Errorf("large %s exceeded transport cap: %d", operation, len(data))
+		}
+		return nil
+	}
+	for _, operation := range []string{contentservice.OpWorkingTreeFile, contentservice.OpFullFile} {
+		if err = checkLarge(operation, "wt"); err != nil {
+			return err
+		}
+	}
+	if err = git("add", "large-proof.txt"); err != nil {
+		return err
+	}
+	if err = git("commit", "-qm", "Oversized diff proof"); err != nil {
+		return err
+	}
+	for _, item := range [][2]string{{contentservice.OpRange, "HEAD~1..HEAD"}, {contentservice.OpCommitFile, "HEAD"}, {contentservice.OpFullFile, "HEAD"}} {
+		if err = checkLarge(item[0], item[1]); err != nil {
+			return err
+		}
+	}
+	data, _, code, err = request("GET", prefix+"tree", "", "")
 	if err != nil {
 		return err
 	}
@@ -166,7 +251,7 @@ func run() error {
 	if code != 200 || !strings.Contains(string(data), "Live content") {
 		return fmt.Errorf("refetch %d %s", code, data)
 	}
-	fmt.Println("content proof: DTOs, root containment, tree, ETags, stale-write refusal, livewatch event and refetch PASS")
+	fmt.Println("content proof: DTOs, bounded oversized diff prefixes, root containment, Git internals refusal, .env read, tree, ETags, stale-write refusal, livewatch event and refetch PASS")
 	return nil
 }
 func main() {
