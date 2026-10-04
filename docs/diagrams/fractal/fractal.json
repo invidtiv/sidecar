@@ -189,7 +189,7 @@
     {
       "id": "ui-api-roadmap",
       "title": "UI API Roadmap: U1 to U4",
-      "description": "Implemented events and always-on service plus planned work on top of U0: contract spec, fixtures, presence geometry, v1 frames, workspace operations, per-viewer layouts and the viewer relay.",
+      "description": "Implemented events, always-on service, contract spec and fixtures on top of U0; planned presence geometry, v1 frames, workspace operations, per-viewer layouts and the viewer relay.",
       "expanded": ["api", "termproto", "cli"],
       "hide": ["tui", "plugins", "notifications", "remoting", "external", "uiclients", "user", "cli.agent_cmd", "cli.notify_cmd", "cli.dispatch", "cli.mobile_cmd", "api.local", "api.browser", "api.tailnet", "api.guards", "api.pairing", "api.origins", "api.endpoint", "termproto.hub"],
       "proposed": true,
