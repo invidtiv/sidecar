@@ -347,6 +347,10 @@ func (s *Server) Shutdown(ctx context.Context) error {
 				result = err
 			}
 		}
+		// Serve may not have registered a listener when Shutdown runs. Close
+		// every listener we own before releasing the state-tree lock, so a
+		// delayed Serve cannot unlink a successor's Unix socket afterward.
+		s.closeListeners()
 		done := make(chan struct{})
 		go func() { s.streams.Wait(); close(done) }()
 		select {

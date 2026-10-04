@@ -8,7 +8,7 @@ v0 is the U0 steel thread. It serves the Sessions catalog and the existing termi
 
 `sidecar api serve` is one long-running, headless process per user. It never starts, stops or restarts the tmux server. It holds one remote-host registry and catalog router for its lifetime, and gives each terminal connection its own protocol broker, which is the same per-stream model `sidecar mobile serve --stdio` uses.
 
-On start it writes `$STATE/api/endpoint.json` with mode 0600. `$STATE` is `config.StateDir()`. It removes the file on clean exit (SIGINT, SIGTERM, or executable replacement). A second `serve` refuses to start while the first is running: the server holds an exclusive lock on `$STATE/api/serve.lock` for its lifetime, the kernel drops the lock if the process dies, and the refusal names the PID recorded in `endpoint.json`. A client that finds an `endpoint.json` whose PID is not alive treats it as no server.
+On start it writes `$STATE/api/endpoint.json` with mode 0600. `$STATE` is `config.StateDir()`. It removes the file on clean exit (SIGINT, SIGTERM, or executable replacement). A second `serve` refuses to start while the first is running: the server holds an exclusive lock on `$STATE/api/serve.lock` for its lifetime, the kernel drops the lock if the process dies, and the refusal names the PID recorded in `endpoint.json`. A client that finds an `endpoint.json` whose PID is not alive treats it as no server. Shutdown closes every owned listener before releasing the lock, including listeners whose serving goroutine has not started, so delayed cleanup cannot unlink a successor socket.
 
 ```json
 {
