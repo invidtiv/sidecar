@@ -57,7 +57,7 @@ The status values are `queued`, `running`, `review`, `fixing`, `merged` and `blo
 | U1-e web app shell and Sessions | td-57a73e | sidecar-ui | Codex | U0-b | merged (sidecar-ui 8d183fc); Claude review fixed 6 UX defects |
 | U1-f SDK adopts v1 | td-820df7 | sidecar-ui | Codex | U1-a, U1-d | merged (sidecar-ui fdad866); Claude review fixed the paste-marker strip |
 | U1-g iOS adopts presence and events | td-fde8cf | sidecar-mobile | Codex | U1-a, U1-d | merged into sidecar-mobile main locally (not pushed). Claude review fixed 3 bugs, including tolerance for unknown event types. Device proof by Marcus; U1-g2 follow-up for UX |
-| U1-i persist browser sessions | td-165353 | sidecar | Codex | U1-a, U1-b merged (both touch internal/uiapi) | merged (7f2ce809). SDK adoption in Codex review (branch u1i-sdk @f336b7f) |
+| U1-i persist browser sessions | td-165353 | sidecar | Codex | U1-a, U1-b merged (both touch internal/uiapi) | merged: server 7f2ce809, SDK sidecar-ui 4a16fbf (the review fixed a P1 infinite reconnect on unknown event kinds) |
 | U1-e2 web app polish | td-71e0e5 | sidecar-ui | Codex | U1-e | merged (sidecar-ui 5e0ecb2) |
 | U1-c2 socket activation | td-11f799 | sidecar | Codex | U1-c | merged (7f684dc4). Review fixed an IPv4-mapped IPv6 and socket-type masquerade. The fake-supervisor proof refused 827 competing binds across a restart |
 | U1-g2 native follow-ups | td-468816 | sidecar-mobile | Codex | U1-g | running (Codex, ~/code/sidecar-mobile-u1g2-native): global alerts, banner instead of a modal, events liveness, fewer channel reopens |
