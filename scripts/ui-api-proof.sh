@@ -169,7 +169,7 @@ token=$(sc api pair --origin "$app" --json | python3 -c 'import json,sys; print(
 origins="$root/state/sidecar/api/origins.json"
 mode=$(stat -f '%Lp' "$origins" 2>/dev/null || stat -c '%a' "$origins")
 [ "$mode" = 600 ] || fail "origins.json mode $mode"
-if grep -q "$token" "$origins"; then fail "origins.json holds the plaintext token"; fi
+if grep -q -- "$token" "$origins"; then fail "origins.json holds the plaintext token"; fi
 ticket=$(curl -fsS -X POST -H "Origin: $app" -H "Authorization: Bearer $token" -H 'Content-Type: application/json' -H 'X-Sidecar-Request: 1' -d '{}' "$base/api/v0/ws-tickets" |
 	python3 -c 'import json,sys; print(json.load(sys.stdin)["ticket"])')
 echo "origin paired, ticket issued"
@@ -188,6 +188,8 @@ step "terminal round-trip over the WebSocket (bearer token, no Origin, as Node s
 
 step "terminal round-trip over the Local socket"
 "$root/uiapiproof" -socket "$api_sock" -url "ws://sidecar/api/v0/terminal" -target "$session" -marker UIAPI_LOCAL_PROOF > /dev/null
+step "negotiated v1 presence, reset-free/coalesced frames, holder, takeover and paste"
+"$root/uiapiproof" -url "ws://$tcp/api/v0/terminal" -bearer "$token" -target "$session" -marker UIAPI_V1_PROOF -v1
 local_get /api/v0/status | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["terminals"]==[], d["terminals"]; print("status ok: no open attachments")'
 
 step "revoke browser sessions without a restart (sidecar api pair --revoke-sessions)"

@@ -76,3 +76,26 @@ Screen-model frames (v1 item 2) can wait. On this machine, four busy agents cost
 - Whether the slow-socket abort fires on a real phone or tailnet link at about 2 MB/s.
 - Real agent output (Claude Code, Codex) instead of synthetic generators, and Marcus's real session count.
 - Whether `tailscaled` can open the 0600 tailnet socket (see the reference, "Listeners and trust").
+
+
+## U1-d compression measurement
+
+Recorded 2026-10-03 on the same aerie/tmux/Go stack, branch `u1d-presence`, after enabling terminal WebSocket `CompressionContextTakeover`. The client now has `-compression`; the script exposes `--compression`. Receive bytes are counted on the underlying socket before decompression, including WebSocket framing, rather than counting the decoded JSON. Both runs use legacy terminal behavior so the compression comparison excludes negotiated presence/render changes. No Tailscale configuration or live sessions are involved.
+
+```bash
+./scripts/ui-api-measure.sh --no-count --window 10 --keystrokes 100
+./scripts/ui-api-measure.sh --no-count --compression --window 10 --keystrokes 100
+```
+
+| Scenario | Compression | frames/s | actual socket KB/s | Sidecar CPU % of one core | tmux CPU % | echo p50 / p95 ms |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 busy: line output | off | 58.59 | 648.01 | 5.5 | 1.5 | |
+| 1 busy: line output | context takeover | 57.29 | 6.53 | 5.3 | 1.6 | |
+| 1 busy: 25 Hz redraw | off | 21.90 | 318.14 | 2.6 | 1.2 | |
+| 1 busy: 25 Hz redraw | context takeover | 21.60 | 21.46 | 2.6 | 1.2 | |
+| 4 busy + echo | off | 159.98 | 1921.28 | 15.6 | 5.0 | 13.45 / 15.30 |
+| 4 busy + echo | context takeover | 165.80 | 57.35 | 13.0 | 4.9 | 13.73 / 15.14 |
+| idle echo | off | | | | | 15.23 / 18.57 |
+| idle echo | context takeover | | | | | 15.21 / 17.21 |
+
+Four busy terminals used about **33.5 times fewer actual socket bytes** with compression. The earlier 47-times estimate used Go's default deflate estimator; the actual WebSocket library's compressor and framing produce a different result. No server CPU increase was observable in this pair; the measured net CPU difference was -2.6 percentage points for four busy terminals. These are short sequential loopback runs on a shared machine while other lanes build and test, not a controlled CPU benchmark. The apparent decrease must not be presented as an isolated compression CPU saving. Echo latency remained close to the same 13–14 ms floor. Tailnet latency, actual devices, real-agent output and browser selection behavior remain unverified here.
