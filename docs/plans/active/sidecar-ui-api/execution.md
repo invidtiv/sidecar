@@ -65,7 +65,7 @@ The status values are `queued`, `running`, `review`, `fixing`, `merged` and `blo
 | U2-b workspace resources and operations API | td-eb3d80 | sidecar | Codex | U2-a | review MERGE-READY (Codex; fixed 5 P1 delete and remote data-loss bugs); integrating main, then merge. U2-c must send expect_delete_state |
 | U2-c workspace UI | td-37a00e | sidecar-ui | Codex | U2-b | queued |
 | U3-a content and layouts API | td-f8784a | sidecar | Codex | U1-a | merged (05dd383b). Claude review fixed a HIGH arbitrary file write through the diff parent parameter (git --output), a watch fd-exhaustion cap, and an existence oracle through symlinks |
-| U3-b pane tree UI | td-cf59cd | sidecar-ui | Codex | U3-a, U1-f | running (Codex, ~/code/sidecar-ui-u3b-panes, branch u3b-panes) |
+| U3-b pane tree UI | td-cf59cd | sidecar-ui | Codex | U3-a, U1-f | review (Claude: security, XSS in markdown, and UX); branch u3b-panes @9556d32 |
 | U4 viewers agents can target | td-799dd6 | both | Codex | U3 | queued |
 
 U2-b onward are briefed below.
