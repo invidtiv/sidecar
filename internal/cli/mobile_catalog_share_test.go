@@ -264,6 +264,14 @@ func TestSharedCatalogReauthorizesEveryRequest(t *testing.T) {
 			t.Fatalf("warm shell row still advertises the pre-split identity: %+v (fresh %s/%s)", warm, fresh.AttachState, fresh.RefusalCode)
 		}
 	})
+	t.Run("worktree session reserved as a managed shell", func(t *testing.T) {
+		warm, fresh := warmCatalogAfter(t, false, func(f warmFixture) {
+			writeProjectShells(t, f.state, "p", shellstate.Definition{TmuxName: f.session, DisplayName: "Newly managed", Namespace: tmuxenv.Namespace(), CreatedAt: time.Now(), WorkDir: f.root})
+		})
+		if warm.AttachmentReady || warm.ExpectedTarget != nil {
+			t.Fatalf("warm worktree row still advertises %s on a session now reserved as a managed shell: %+v (fresh %s/%s)", warm.Target, warm, fresh.AttachState, fresh.RefusalCode)
+		}
+	})
 	t.Run("worktree candidate", func(t *testing.T) {
 		warm, fresh := warmCatalogAfterSplit(t, false)
 		if len(fresh.Candidates) != 2 {
@@ -280,11 +288,26 @@ func TestSharedCatalogReauthorizesEveryRequest(t *testing.T) {
 	})
 }
 
-// warmCatalogAfterSplit serves one row from a shared collection, splits its
-// only pane, and returns the row as a warm request and as a fresh catalog see
-// it. managedShell selects a managed-shell row; otherwise the row is the
-// project's main worktree reached through an unmanaged session in it.
+// warmFixture is what a change in warmCatalogAfter may act on.
+type warmFixture struct {
+	state, root, session string
+	tmux                 func(args ...string)
+}
+
+// warmCatalogAfterSplit is warmCatalogAfter with the row's only pane split.
 func warmCatalogAfterSplit(t *testing.T, managedShell bool) (warm, fresh mobileproto.CatalogRow) {
+	t.Helper()
+	return warmCatalogAfter(t, managedShell, func(f warmFixture) {
+		f.tmux("split-window", "-d", "-t", f.session, "-c", f.root, "sleep 120")
+	})
+}
+
+// warmCatalogAfter serves one ready row from a shared collection, applies
+// change (which must leave the server fence alone), and returns the row as a
+// warm request and as a fresh catalog see it; the fresh row must be refused.
+// managedShell selects a managed-shell row; otherwise the row is the project's
+// main worktree reached through an unmanaged session in it.
+func warmCatalogAfter(t *testing.T, managedShell bool, change func(warmFixture)) (warm, fresh mobileproto.CatalogRow) {
 	t.Helper()
 	testenv.RequireTmux(t)
 	_, state := setupIsolatedCLI(t)
@@ -348,9 +371,9 @@ func warmCatalogAfterSplit(t *testing.T, managedShell bool) (warm, fresh mobilep
 		t.Fatalf("live one-pane row not ready: %+v", first)
 	}
 	fence := tmuxServerIdentity()
-	tmux("split-window", "-d", "-t", session, "-c", root, "sleep 120")
+	change(warmFixture{state: state, root: root, session: session, tmux: tmux})
 	if tmuxServerIdentity() != fence {
-		t.Fatal("a split changed the server fence; the warm path would not be exercised")
+		t.Fatal("the change moved the server fence; the warm path would not be exercised")
 	}
 	warm = row(shared.Provider())
 	fresh = row(mobileCatalogProviderForProjects(env, projects))

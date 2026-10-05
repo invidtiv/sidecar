@@ -325,16 +325,17 @@ func newMobileCatalogCandidateResolver(input mobile.CatalogInput, collector work
 }
 
 // refreshWorktreeCandidates copies input with every worktree's terminal
-// candidates re-derived from panes, using the same roots and shell claims the
-// collection matched against. input itself is not modified.
+// candidates re-derived from panes, using the collection's project roots and
+// the shell reservations current now. input itself is not modified.
 func refreshWorktreeCandidates(input mobile.CatalogInput, collector workspaceinventory.Collector, panes []workspaceinventory.Pane) mobile.CatalogInput {
-	results := make([]workspaceinventory.ProjectResult, 0, len(input.Projects))
 	roots := make([]string, 0, len(input.Projects))
 	for _, project := range input.Projects {
-		results = append(results, project.Result)
 		roots = append(roots, project.Result.ProjectRoot)
 	}
-	refresh := collector.WithShellClaims(workspaceinventory.BuildShellClaims(results))
+	// Shell reservations are read now from the durable manifests, as the live
+	// candidate revalidation does: a session made a managed shell since the
+	// collection must no longer count as a worktree candidate.
+	refresh := collector.WithShellClaims(workspaceinventory.ConfiguredShellClaims(roots))
 	projects := make([]mobile.CatalogProject, len(input.Projects))
 	for i, project := range input.Projects {
 		workspaces := make([]workspaceinventory.Workspace, len(project.Result.Workspaces))
