@@ -96,6 +96,11 @@ func (b *mobileBackend) Workspace(ctx context.Context, project, host string, q m
 		}
 	}
 	snapshot.Sections = sections
+	if b.router != nil {
+		if err := b.adoptHubTerminalAuthority(ctx, q, &snapshot); err != nil {
+			return workspacewire.Workspace{}, err
+		}
+	}
 	failures := make([]mobileproto.CatalogFailure, 0)
 	for _, f := range snapshot.Failures {
 		if f.ID == canonicalMobileSourcePath(proj.Path) {
@@ -382,4 +387,45 @@ func (b *mobileBackend) WorkspaceInvalidation(ctx context.Context) (workspacewir
 		}
 	}
 	return event, nil
+}
+
+// adoptHubTerminalAuthority makes a workspace row attach the way the same row
+// in /sessions does. With remote hosts configured every terminal stream goes
+// through the hub broker, which accepts only the hub's public selectors and
+// identities; owner-local ones are refused as a changed identity. The rows keep
+// their local presentation and content selectors, which the hub strips. A row
+// the hub does not list as attachable is not attachable here either.
+func (b *mobileBackend) adoptHubTerminalAuthority(ctx context.Context, q mobileproto.CatalogQuery, snapshot *mobileproto.CatalogSnapshot) error {
+	public, err := b.Sessions(ctx, q)
+	if err != nil {
+		return err
+	}
+	adoptPublicTerminalAuthority(public, snapshot)
+	return nil
+}
+
+func adoptPublicTerminalAuthority(public mobileproto.CatalogSnapshot, snapshot *mobileproto.CatalogSnapshot) {
+	byID := map[string]mobileproto.CatalogRow{}
+	for _, section := range public.Sections {
+		for _, row := range section.Rows {
+			byID[row.ID] = row
+		}
+	}
+	for i := range snapshot.Sections {
+		rows := snapshot.Sections[i].Rows
+		for j := range rows {
+			row := &rows[j]
+			hubRow, ok := byID[hosts.ScopedKey(row.OwnerHostID, row.ID)]
+			if !ok || len(hubRow.Candidates) != len(row.Candidates) {
+				row.Target, row.ExpectedTarget, row.AttachmentReady = "", nil, false
+				row.Candidates = nil
+				continue
+			}
+			row.Target, row.ExpectedTarget, row.AttachmentReady = hubRow.Target, hubRow.ExpectedTarget, hubRow.AttachmentReady
+			for k := range row.Candidates {
+				row.Candidates[k].Selector = hubRow.Candidates[k].Selector
+				row.Candidates[k].ExpectedTarget = hubRow.Candidates[k].ExpectedTarget
+			}
+		}
+	}
 }
