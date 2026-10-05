@@ -158,7 +158,7 @@ func (r *CatalogRouter) Lookup(ctx context.Context, selector string, expected mo
 func (r *CatalogRouter) LookupWithHello(ctx context.Context, selector string, expected mobileproto.TargetIdentity, capabilities *mobileproto.ClientCapabilities, viewer *mobileproto.Viewer) (BoundOwner, LineStream, TargetBinding, error) {
 	ctx = withOwnerHello(ctx, capabilities, viewer)
 	if strings.TrimSpace(selector) == "" || len(selector) > mobileproto.MaxTargetBytes || expected.HubID == "" || expected.OwnerHostID == "" {
-		return BoundOwner{}, nil, TargetBinding{}, fmt.Errorf("mobile hub: incomplete public target selection")
+		return BoundOwner{}, nil, TargetBinding{}, ErrIncompleteTargetSelection
 	}
 	lookupCtx, cancelLookup := context.WithTimeout(ctx, r.queryTimeout)
 	defer cancelLookup()
@@ -170,7 +170,7 @@ func (r *CatalogRouter) LookupWithHello(ctx context.Context, selector string, ex
 		return BoundOwner{}, nil, TargetBinding{}, err
 	}
 	if expected.HubID != directory.Identity.HubID {
-		return BoundOwner{}, nil, TargetBinding{}, fmt.Errorf("mobile hub: public target belongs to another hub")
+		return BoundOwner{}, nil, TargetBinding{}, ErrTargetOtherHub
 	}
 	endpoint := findOnlineOwner(directory, expected.OwnerHostID)
 	if endpoint == nil && directoryHostState(directory, expected.OwnerHostID) == "connecting" {
@@ -186,13 +186,13 @@ func (r *CatalogRouter) LookupWithHello(ctx context.Context, selector string, ex
 				return BoundOwner{}, nil, TargetBinding{}, err
 			}
 			if expected.HubID != directory.Identity.HubID {
-				return BoundOwner{}, nil, TargetBinding{}, fmt.Errorf("mobile hub: public target belongs to another hub")
+				return BoundOwner{}, nil, TargetBinding{}, ErrTargetOtherHub
 			}
 			endpoint = findOnlineOwner(directory, expected.OwnerHostID)
 		}
 	}
 	if endpoint == nil {
-		return BoundOwner{}, nil, TargetBinding{}, fmt.Errorf("mobile hub: owning host is unavailable")
+		return BoundOwner{}, nil, TargetBinding{}, ErrOwnerUnavailable
 	}
 	ownerCtx, cancelOwner := catalogOwnerContext(lookupCtx, r.ownerTimeout, r.finalReserve)
 	defer cancelOwner()
@@ -215,7 +215,7 @@ func (r *CatalogRouter) LookupWithHello(ctx context.Context, selector string, ex
 	binding, ok := remapped.Bindings[selector]
 	if !ok || binding.PublicExpected != expected {
 		stream.Close()
-		return BoundOwner{}, nil, TargetBinding{}, fmt.Errorf("mobile hub: public target identity changed")
+		return BoundOwner{}, nil, TargetBinding{}, ErrTargetIdentityChanged
 	}
 	if err := owner.Validate(lookupCtx); err != nil {
 		stream.Close()

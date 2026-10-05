@@ -511,6 +511,31 @@ func TestOpenProjectFlagRefusesDuplicateLiveInstances(t *testing.T) {
 	}
 }
 
+// Records belong to the project, not to a screen, so two instances showing
+// it must not block reading them (the UI API's workspace read is shell list).
+func TestShellListProjectFlagIgnoresDuplicateLiveInstances(t *testing.T) {
+	_, stateDir := setupIsolatedCLI(t)
+	workDir := t.TempDir()
+	writeProjectMeta(t, stateDir, "sidecar", workDir)
+	child := startDummyProcess(t)
+	for _, pid := range []int{os.Getpid(), child} {
+		if err := uirequest.Announce(stateDir, uirequest.Instance{
+			PID: pid, ProjectKey: "sidecar", Project: "sidecar", WorkDir: workDir,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"shell", "list", "--project", "sidecar", "--json"}, &out, &errOut)
+	if !handled || code != 0 {
+		t.Fatalf("Run(shell list --project sidecar) = %v, %d; want true, 0 (stderr %q)", handled, code, errOut.String())
+	}
+	if !json.Valid(out.Bytes()) {
+		t.Fatalf("shell list output is not JSON: %q", out.String())
+	}
+}
+
 func TestOpenJSONIncludesResolvedDestination(t *testing.T) {
 	_, stateDir := setupIsolatedCLI(t)
 	workDir := t.TempDir()

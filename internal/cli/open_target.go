@@ -272,7 +272,17 @@ func resolveOpenDestination(ctx context.Context, stateDir, shellFlag, projectFla
 		}
 	}()
 	if shellFlag != "" || projectFlag != "" {
-		return resolveExplicitDestination(stateDir, shellFlag, projectFlag, register)
+		dest, err := resolveExplicitDestination(stateDir, shellFlag, projectFlag, register)
+		if err == nil && shellFlag == "" {
+			// open and layout land on one screen, so a project two instances
+			// show is ambiguous here. Records and create requests are not:
+			// they belong to the project, and every instance acknowledges them.
+			err = refuseDuplicateProjectInstances(stateDir, dest.Origin.ProjectKey)
+		}
+		if err != nil {
+			return openDestination{}, err
+		}
+		return dest, nil
 	}
 	if err := validateImplicitCaller(ctx, stateDir); err != nil {
 		return openDestination{}, err
@@ -337,9 +347,6 @@ func resolveExplicitDestination(stateDir, shellFlag, projectFlag string, registe
 		return destFromShell(hitProj, shell, workDir, uirequest.ResolvedShell), nil
 	}
 
-	if err := refuseDuplicateProjectInstances(stateDir, proj.Key); err != nil {
-		return openDestination{}, err
-	}
 	workDir := resolveTargetWorkDir(proj, "")
 	return destFromProject(proj, workDir, uirequest.ResolvedProject), nil
 }

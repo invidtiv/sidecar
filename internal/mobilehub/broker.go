@@ -282,11 +282,8 @@ func (r *brokerRun) request(request mobileproto.Request) error {
 		bound, stream, binding, err := r.router.LookupWithHello(ownerCtx, request.Target, *request.ExpectedTarget, r.capabilities, r.viewer)
 		if err != nil {
 			ownerCancel()
-			code := mobileproto.ErrorIdentityChanged
-			if errors.Is(err, ErrOwnerNegotiationUnsupported) {
-				code = mobileproto.ErrorUnsupported
-			}
-			return r.refuse(request.RequestID, code, err.Error(), false)
+			code, retry := lookupRefusal(err)
+			return r.refuse(request.RequestID, code, err.Error(), retry)
 		}
 		o := &brokerOwner{bound: bound, stream: stream, binding: binding, ctx: ownerCtx, cancel: ownerCancel}
 		r.owner = o

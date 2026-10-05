@@ -6,12 +6,41 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/marcus/sidecar/internal/mobile"
 	"github.com/marcus/sidecar/internal/mobileproto"
 )
 
 // ErrOwnerNegotiationUnsupported distinguishes an older owner's hello refusal
 // from a changed target or route. Never retry or silently downgrade the hello.
 var ErrOwnerNegotiationUnsupported = errors.New("owning service does not support requested terminal capabilities")
+
+// Target lookup refusals. Only a real identity mismatch tells the client the
+// terminal it listed is gone; an unreachable owner is a transient condition the
+// client retries, so the two must never share a wire code.
+var (
+	ErrIncompleteTargetSelection = errors.New("mobile hub: incomplete public target selection")
+	ErrTargetOtherHub            = errors.New("mobile hub: this terminal belongs to another hub; refresh the sessions list")
+	ErrTargetIdentityChanged     = errors.New("this terminal was replaced or restarted since the sessions list was loaded; refresh to reattach")
+	ErrOwnerUnavailable          = errors.New("the host that owns this terminal is unavailable; retrying")
+)
+
+// lookupRefusal maps a target lookup failure to its wire code and whether a
+// retry can succeed.
+func lookupRefusal(err error) (code string, retry bool) {
+	var resolveErr *mobile.ResolveError
+	switch {
+	case errors.Is(err, ErrOwnerNegotiationUnsupported):
+		return mobileproto.ErrorUnsupported, false
+	case errors.Is(err, ErrIncompleteTargetSelection):
+		return mobileproto.ErrorInvalidRequest, false
+	case errors.Is(err, ErrTargetIdentityChanged), errors.Is(err, ErrTargetOtherHub):
+		return mobileproto.ErrorIdentityChanged, false
+	case errors.As(err, &resolveErr) && resolveErr.Code != "":
+		return resolveErr.Code, resolveErr.Code != mobileproto.ErrorIdentityChanged && resolveErr.Code != mobileproto.ErrorNotFound
+	default:
+		return mobileproto.ErrorBackend, true
+	}
+}
 
 func ownerNegotiationError(request mobileproto.Request, line []byte) error {
 	if request.Capabilities == nil && request.Viewer == nil {

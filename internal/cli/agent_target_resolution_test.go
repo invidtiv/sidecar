@@ -318,7 +318,7 @@ func TestProjectFlagIgnoresHowManyInstancesShowTheProject(t *testing.T) {
 		}
 	}
 	// `open` still has to pick an instance, and still says so.
-	dest, err := resolveExplicitDestination(stateDir, "", "demo", resolveProjectOnly)
+	dest, err := resolveOpenDestination(context.Background(), stateDir, "", "demo", resolveProjectOnly)
 	if err == nil || !strings.Contains(err.Error(), "several Sidecar instances") {
 		t.Fatalf("open destination = %+v err=%v, want the instance refusal kept", dest, err)
 	}
