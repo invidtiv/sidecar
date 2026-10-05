@@ -15,7 +15,6 @@ import (
 	"github.com/marcus/sidecar/internal/agentremote"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/hosts"
-	"github.com/marcus/sidecar/internal/hostserve"
 	"github.com/marcus/sidecar/internal/mobileproto"
 	"github.com/marcus/sidecar/internal/uiapi"
 	"github.com/marcus/sidecar/internal/workspacewire"
@@ -83,9 +82,25 @@ func (b *mobileBackend) Workspace(ctx context.Context, project, host string, q m
 	if item.Key == "" {
 		return workspacewire.Workspace{}, &uiapi.OperationError{Code: "not_found", Message: "This project is no longer configured; refresh the projects list.", ExitCode: 3}
 	}
-	provider := mobileCatalogProviderForProjects(b.env, func() ([]hostserve.Project, error) {
-		return []hostserve.Project{{Name: item.Name, Path: proj.Path}}, nil
-	})
+	// The project's rows come from the same local collection /sessions reads
+	// (shared while it is fresh), filtered below. Attributing panes against
+	// every configured root, as /sessions does, keeps these rows identical to
+	// the hub rows useHubRows pairs them with.
+	provider := b.localCatalog()
+	// The shell records are an independent read; take them alongside the
+	// catalogs rather than after them.
+	type shellsResult struct {
+		records json.RawMessage
+		exit    int
+		err     error
+	}
+	shellsDone := make(chan shellsResult, 1)
+	go func() {
+		localEnv := b.env
+		localEnv.Ctx = ctx
+		records, exit, err := workspaceInvoke(localEnv, runShellList, []string{"--project", proj.Key, "--json"})
+		shellsDone <- shellsResult{records, exit, err}
+	}()
 	// In hub mode the public catalog is needed too; collect both at once.
 	type publicResult struct {
 		snapshot mobileproto.CatalogSnapshot
@@ -133,14 +148,12 @@ func (b *mobileBackend) Workspace(ctx context.Context, project, host string, q m
 		}
 	}
 	snapshot.Failures = failures
-	localEnv := b.env
-	localEnv.Ctx = ctx
-	records, exit, err := workspaceInvoke(localEnv, runShellList, []string{"--project", proj.Key, "--json"})
-	if err != nil {
-		return workspacewire.Workspace{}, workspaceInvocationError(exit, err)
+	listed := <-shellsDone
+	if listed.err != nil {
+		return workspacewire.Workspace{}, workspaceInvocationError(listed.exit, listed.err)
 	}
 	var shells workspacewire.ShellList
-	if err := json.Unmarshal(records, &shells); err != nil {
+	if err := json.Unmarshal(listed.records, &shells); err != nil {
 		return workspacewire.Workspace{}, err
 	}
 	result := workspacewire.Workspace{Project: item, Catalog: snapshot, Shells: shells.Shells}

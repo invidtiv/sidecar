@@ -34,6 +34,8 @@ func (b *mobileBackend) WatchCatalog(ctx context.Context) (<-chan struct{}, erro
 	}
 	changes := make(chan struct{}, 1)
 	signal := func() {
+		// Whatever changed, no request may reuse a collection that predates it.
+		b.invalidateCatalog()
 		select {
 		case changes <- struct{}{}:
 		default:

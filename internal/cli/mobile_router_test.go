@@ -45,7 +45,7 @@ func TestMobileDirectoryProviderReloadsConfigAndLocalOwnerAuthority(t *testing.T
 		t.Fatal(err)
 	}
 	env := Env{Ctx: context.Background(), FeatureOverrides: map[string]bool{}}
-	provider := mobileDirectoryProvider(env)
+	provider := mobileDirectoryProvider(env, nil)
 	first, err := provider(context.Background())
 	if err != nil {
 		t.Fatal(err)

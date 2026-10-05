@@ -143,11 +143,18 @@ func runMobileOwnerService(env Env) error {
 }
 
 func newMobileOwnerService(env Env, input io.Reader, output io.Writer) (*mobile.Service, error) {
+	return newMobileOwnerServiceWithCatalog(env, input, output, mobileCatalogProvider(env))
+}
+
+// newMobileOwnerServiceWithCatalog is newMobileOwnerService whose sessions
+// requests read catalog. Resolve, open and every target operation keep the
+// service's own fresh resolver either way.
+func newMobileOwnerServiceWithCatalog(env Env, input io.Reader, output io.Writer, catalog mobile.CatalogProvider) (*mobile.Service, error) {
 	host, _ := os.Hostname()
 	manager := tty.NewControlManager()
 	return mobile.New(mobile.Config{
 		Input: input, Output: output, HubID: host, OwnerHostID: "local:" + host,
-		OwnerConfigGeneration: mobileConfigGeneration(), Resolver: mobileResolver(env), Revalidator: mobileTargetRevalidator(env, manager), Catalog: mobileCatalogProvider(env), Manager: manager,
+		OwnerConfigGeneration: mobileConfigGeneration(), Resolver: mobileResolver(env), Revalidator: mobileTargetRevalidator(env, manager), Catalog: catalog, Manager: manager,
 		CaptureRevalidator:            mobileTargetRevalidator(env, nil),
 		OwnerConfigGenerationProvider: currentMobileConfigGeneration,
 	})
@@ -385,9 +392,15 @@ func mobileResolver(env Env) mobile.Resolver {
 	}
 }
 
+// newMobileCatalogShellResolver authorizes one catalog input's shell rows. The
+// input can be shared by concurrent requests, and shellTargetLookup memoizes
+// its scan in an unguarded map, so calls are serialized.
 func newMobileCatalogShellResolver(env Env, inspect func(context.Context, string) (tty.HeadlessTargetIdentity, error)) mobile.Resolver {
 	lookup := &shellTargetLookup{}
+	var mu sync.Mutex
 	return func(ctx context.Context, value string) (mobile.ResolvedTarget, error) {
+		mu.Lock()
+		defer mu.Unlock()
 		return resolveMobileCatalogShell(ctx, env, lookup, value, inspect)
 	}
 }
