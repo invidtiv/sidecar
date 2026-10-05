@@ -673,3 +673,75 @@ func TestCatalogRouterBoundsOwnersInFlight(t *testing.T) {
 		t.Fatalf("peak owners in flight = %d, want %d", got, maxConcurrentOwnerQueries)
 	}
 }
+
+// countingCloseStream counts owner streams the router has finished reading.
+type countingCloseStream struct {
+	LineStream
+	once  sync.Once
+	count *atomic.Int32
+}
+
+func (s *countingCloseStream) Close() {
+	s.LineStream.Close()
+	s.once.Do(func() { s.count.Add(1) })
+}
+
+// Completed catalogs waiting to be charged count against the owner slots too.
+// While the consumer is held before its first charge, no more than
+// maxConcurrentOwnerQueries owner catalogs can finish; the rest wait for a
+// slot instead of piling up uncharged in the result queue.
+func TestCatalogRouterBoundsUnchargedCatalogs(t *testing.T) {
+	const owners = 3 * maxConcurrentOwnerQueries
+	var completed atomic.Int32
+	paused, release := make(chan struct{}), make(chan struct{})
+	var pauseOnce sync.Once
+	beforeOwnerCharge = func() { pauseOnce.Do(func() { close(paused); <-release }) }
+	defer func() { beforeOwnerCharge = nil }()
+	directory := &fakeOwnerDirectory{snapshot: DirectorySnapshot{
+		Identity: mobile.CatalogIdentity{HubID: "hub", OwnerHostID: "local:hub", OwnerConfigGeneration: "hub-cfg"},
+		Validate: func(context.Context) error { return nil },
+	}}
+	for i := range owners {
+		id := fmt.Sprintf("owner-%d", i)
+		catalog := rawOwnerCatalog(id, "p", "shell")
+		catalog.Sections[0].Rows[0].DisplayName = strings.Repeat("a", 400<<10)
+		stream := &countingCloseStream{LineStream: newFakeCatalogLineStream(catalog), count: &completed}
+		directory.snapshot.Hosts = append(directory.snapshot.Hosts, mobileproto.CatalogHost{ID: id, State: "online"})
+		directory.snapshot.Endpoints = append(directory.snapshot.Endpoints, OwnerEndpoint{Host: mobileproto.CatalogHost{ID: id, State: "online"}, Bind: func(context.Context) (BoundOwner, error) {
+			return BoundOwner{Authority: CatalogAuthority{OwnerHostID: id, RegistrationFingerprint: id},
+				Start: func(context.Context) (LineStream, mobileproto.Response, error) {
+					caps := mobileproto.DefaultCapabilities()
+					return stream, mobileproto.Response{Version: mobileproto.Version, Type: mobileproto.ResponseHello, Capabilities: &caps}, nil
+				}, Validate: func(context.Context) error { return nil }}, nil
+		}})
+	}
+	router, _ := NewCatalogRouter(directory)
+	router.queryTimeout = 5 * time.Second
+	router.finalReserve = 10 * time.Millisecond
+	done := make(chan error, 1)
+	go func() {
+		_, err := router.Query(context.Background(), mobileproto.CatalogQuery{})
+		done <- err
+	}()
+	select {
+	case <-paused:
+	case <-time.After(3 * time.Second):
+		close(release)
+		<-done
+		t.Fatal("the consumer never reached its first charge")
+	}
+	// Give every owner that could finish the chance to.
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for completed.Load() < owners && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	got := completed.Load()
+	close(release)
+	err := <-done
+	if got > maxConcurrentOwnerQueries {
+		t.Fatalf("%d owner catalogs finished while the first awaited its charge; the bound is %d", got, maxConcurrentOwnerQueries)
+	}
+	if err == nil || !strings.Contains(err.Error(), "exceed protocol bounds") {
+		t.Fatalf("err = %v, want the aggregate byte overflow", err)
+	}
+}

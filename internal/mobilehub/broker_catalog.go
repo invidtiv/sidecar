@@ -76,10 +76,14 @@ func NewCatalogRouter(directory OwnerDirectory) (*CatalogRouter, error) {
 	return &CatalogRouter{directory: directory, ownerTimeout: OwnerCatalogTimeout, queryTimeout: CatalogQueryTimeout, finalReserve: catalogFinalReserve}, nil
 }
 
-// maxConcurrentOwnerQueries bounds how many owner catalogs one query reads at
-// once, and so how many owner responses can be in flight before the aggregate
-// budget has seen them.
+// maxConcurrentOwnerQueries bounds how many owner catalogs one query holds
+// outside the aggregate budget at once: being read, or read and not yet
+// charged.
 const maxConcurrentOwnerQueries = 8
+
+// beforeOwnerCharge, when set by a test, runs before each arrived catalog is
+// charged, to model a consumer delayed by encoding, GC or scheduling.
+var beforeOwnerCharge func()
 
 // Query obtains one current unfiltered Project snapshot from each online
 // owning service, then applies the phone's query once at the hub. Each owner
@@ -116,6 +120,9 @@ func (r *CatalogRouter) Query(ctx context.Context, query mobileproto.CatalogQuer
 		index    int
 		remapped RemappedCatalog
 		err      error
+		// slot says this result holds an owner slot, which the consumer
+		// releases only once the result is charged or discarded.
+		slot bool
 	}
 	asked := make([]bool, len(directory.Endpoints))
 	launched := 0
@@ -126,7 +133,10 @@ func (r *CatalogRouter) Query(ctx context.Context, query mobileproto.CatalogQuer
 		}
 	}
 	// Buffered for every owner, so an owner finishing after the query has
-	// returned never blocks.
+	// returned never blocks. A completed catalog keeps its owner's slot until
+	// the consumer has charged it, so the slots bound active reads and
+	// uncharged results together: at most maxConcurrentOwnerQueries catalogs
+	// exist outside the aggregate budget at any moment.
 	results := make(chan ownerResult, launched)
 	slots := make(chan struct{}, maxConcurrentOwnerQueries)
 	for i, endpoint := range directory.Endpoints {
@@ -136,13 +146,12 @@ func (r *CatalogRouter) Query(ctx context.Context, query mobileproto.CatalogQuer
 		go func(i int, endpoint OwnerEndpoint) {
 			select {
 			case slots <- struct{}{}:
-				defer func() { <-slots }()
 			case <-ownersCtx.Done():
 				results <- ownerResult{index: i, err: ownersCtx.Err()}
 				return
 			}
 			if err := ownersCtx.Err(); err != nil {
-				results <- ownerResult{index: i, err: err}
+				results <- ownerResult{index: i, err: err, slot: true}
 				return
 			}
 			ownerTimeout := r.ownerTimeout
@@ -153,14 +162,14 @@ func (r *CatalogRouter) Query(ctx context.Context, query mobileproto.CatalogQuer
 			defer cancelOwner()
 			owner, err := endpoint.Bind(ownerCtx)
 			if err != nil {
-				results <- ownerResult{index: i, err: err}
+				results <- ownerResult{index: i, err: err, slot: true}
 				return
 			}
 			remapped, stream, err := queryBoundOwner(ownerCtx, ownerCtx, directory.Identity, &owner, fmt.Sprintf("hub-catalog-%d", i))
 			if stream != nil {
 				stream.Close()
 			}
-			results <- ownerResult{index: i, remapped: remapped, err: err}
+			results <- ownerResult{index: i, remapped: remapped, err: err, slot: true}
 		}(i, endpoint)
 	}
 	retained := make([]*mobile.CatalogSource, len(directory.Endpoints))
@@ -170,7 +179,13 @@ func (r *CatalogRouter) Query(ctx context.Context, query mobileproto.CatalogQuer
 		result := <-results
 		if result.err != nil {
 			ownerErrs[result.index] = result.err
+			if result.slot {
+				<-slots
+			}
 			continue
+		}
+		if beforeOwnerCharge != nil {
+			beforeOwnerCharge()
 		}
 		rowCount, candidateCount := countCatalogSource(result.remapped.Source)
 		encoded, marshalErr := json.Marshal(result.remapped.Source.Snapshot)
@@ -185,6 +200,7 @@ func (r *CatalogRouter) Query(ctx context.Context, query mobileproto.CatalogQuer
 		}
 		source := result.remapped.Source
 		retained[result.index] = &source
+		<-slots // charged: the next owner may start
 	}
 	sources := make([]mobile.CatalogSource, 0, len(directory.Endpoints))
 	failures := append([]mobileproto.CatalogFailure(nil), directory.Failures...)
