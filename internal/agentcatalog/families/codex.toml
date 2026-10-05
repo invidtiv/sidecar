@@ -8,9 +8,12 @@ command = "codex"
 # codex-cli 0.160.0 --help and `resume --help`: bypass the shared background
 # server, whose startup environment cannot name a later Sidecar-managed shell.
 # Probe the installed CLI rather than assuming older versions accept this flag.
-help_supported_args = ["--no-daemon"]
+# codex --help: inline mode preserves terminal scrollback. Use it on shared
+# launch/resume paths without changing the user's own Codex configuration.
+help_supported_args = ["--no-daemon", "--no-alt-screen"]
 # --no-daemon is incompatible with a caller's explicit --remote endpoint.
-help_arg_conflicts = { "--no-daemon" = ["--remote"] }
+# An explicit Codex screen setting takes precedence over Sidecar's default.
+help_arg_conflicts = { "--no-daemon" = ["--remote"], "--no-alt-screen" = ["--config=tui.alternate_screen", "-c=tui.alternate_screen", "--config=tui", "-c=tui"] }
 skip_permissions_arg = "--dangerously-bypass-approvals-and-sandbox"
 resume_args = ["resume"]
 resume_kinds = ["id"]

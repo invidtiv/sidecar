@@ -6,6 +6,8 @@ All notable changes to sidecar are documented here.
 
 ### Features
 
+- Sidecar-launched and resumed Codex sessions default to inline mode when supported, preserving terminal scrollback without a per-launch flag. Explicit screen-mode arguments and custom launch commands retain their chosen behavior.
+
 - Start a selected inactive shell or existing worktree terminal through `sidecar shell start`, `sidecar worktree start`, and their UI API operations. Shells keep their recorded identity, agent metadata and restore policy; worktrees start in the existing checkout without creating another branch or rerunning setup. Unrelated session-name collisions refuse.
 
 ### Bug Fixes

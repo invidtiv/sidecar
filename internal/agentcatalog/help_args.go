@@ -73,9 +73,13 @@ func (f Family) supportedHelpArgs(workDir string, extra []string) ([]string, err
 		}
 	}
 	words := strings.Fields(help)
+	options := extra
+	if end := slices.Index(extra, "--"); end >= 0 {
+		options = extra[:end]
+	}
 	var args []string
 	for _, arg := range f.HelpSupportedArgs {
-		if slices.Contains(extra, arg) || conflictingHelpArg(extra, f.HelpArgConflicts[arg]) {
+		if slices.Contains(options, arg) || conflictingHelpArg(options, f.HelpArgConflicts[arg]) {
 			continue
 		}
 		for _, word := range words {
@@ -89,9 +93,32 @@ func (f Family) supportedHelpArgs(workDir string, extra []string) ([]string, err
 }
 
 func conflictingHelpArg(extra, conflicts []string) bool {
-	for _, arg := range extra {
+	for index, arg := range extra {
+		if arg == "--" {
+			break
+		}
 		for _, conflict := range conflicts {
 			if arg == conflict || strings.HasPrefix(arg, conflict+"=") {
+				return true
+			}
+			// A conflict such as --config=tui.alternate_screen names one key,
+			// not every use of --config. Accept separate, joined and attached
+			// short-option forms while leaving unrelated settings alone.
+			option, key, scoped := strings.Cut(conflict, "=")
+			if !scoped {
+				continue
+			}
+			var value string
+			switch {
+			case arg == option && index+1 < len(extra):
+				value = extra[index+1]
+			case strings.HasPrefix(arg, option+"="):
+				value = strings.TrimPrefix(arg, option+"=")
+			case len(option) == 2 && strings.HasPrefix(option, "-") && strings.HasPrefix(arg, option):
+				value = strings.TrimPrefix(arg, option)
+			}
+			selected, _, assigned := strings.Cut(value, "=")
+			if assigned && strings.TrimSpace(selected) == key {
 				return true
 			}
 		}

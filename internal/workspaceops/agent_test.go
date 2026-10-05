@@ -163,10 +163,10 @@ func TestResolveAgentCommandUsesConfiguredOverrideAndSkipFlag(t *testing.T) {
 }
 
 func TestLocalCodexIsolationPreservesOpaqueAndRemoteCommands(t *testing.T) {
-	testenv.ProviderHelp(t, "codex", "usage: codex\n  --no-daemon  Use this shell's environment\n")
+	testenv.ProviderHelp(t, "codex", "usage: codex\n  --no-daemon  Use this shell's environment\n  --no-alt-screen  Preserve scrollback\n")
 	dir := t.TempDir()
-	if got := ResolveAgentCommand(dir, "codex", nil, false); got != "codex --no-daemon" {
-		t.Fatalf("local command still shares the daemon: %q", got)
+	if got := ResolveAgentCommand(dir, "codex", nil, false); got != "codex --no-daemon --no-alt-screen" {
+		t.Fatalf("local command lost shell isolation or scrollback: %q", got)
 	}
 	if got := ResolveAgentCommandFromConfig("codex", nil, false); got != "codex" {
 		t.Fatalf("remote command used this machine's capability: %q", got)

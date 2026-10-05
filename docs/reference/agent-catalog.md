@@ -55,7 +55,7 @@ Every field is optional except `name` and `short` (and `id`, which defaults to t
 | `command` | string | The executable to launch. **A family with no command is detection-only**: Sidecar can recognise it running in a pane and never offers to start it. |
 | `launch_args` | array | Argv entries between the command and everything else, for a provider whose bare command is not the agent. Only `kiro` needs one (`kiro-cli chat`). |
 | `help_supported_args` | array | Optional global argv entries added to catalog launch and resume when the installed executable advertises them in `--help`. Probes run before provider start, are bounded, and cache successful results by executable identity. A failed probe refuses the launch; an older executable that does not advertise the flag keeps its previous argv. |
-| `help_arg_conflicts` | table | Lists caller options incompatible with an optional argument. An explicit conflicting option, including `--option=value`, suppresses that optional argument. |
+| `help_arg_conflicts` | table | Lists caller options incompatible with an optional argument. An explicit conflicting option, including `--option=value`, suppresses that optional argument. A keyed entry such as `--config=tui.alternate_screen` matches that setting in separate or joined option forms; unrelated settings do not suppress the default. |
 | `skip_permissions_arg` | string | One argv entry, appended when you turn on auto-approve. Leave it out when the provider has no such flag. |
 | `aliases` | array | Other identifiers naming this family: process spellings Sidecar may see in a pane, and a conversation adapter id that differs from the family id. |
 | `adapter_id` | string | The conversation-history adapter's registered id, when it differs from `id`. |
@@ -63,6 +63,12 @@ Every field is optional except `name` and `short` (and `id`, which defaults to t
 | `resume_kinds` | array | Which session references this family resumes from: `"id"`, `"path"`, or both. |
 
 `legacy = true` marks the compatibility bucket: launchable for a setting you already have, offered by nothing. Aider is the only bundled case.
+
+### Codex scrollback
+
+Sidecar's catalog starts and resumes Codex in inline mode by adding `--no-alt-screen` when the installed CLI advertises it. This preserves terminal scrollback in Sidecar, sidecar-ui and other viewers without changing `~/.codex/config.toml`. Existing sessions keep their current mode until restarted or resumed. Older Codex versions that do not advertise the option retain their previous launch arguments.
+
+An explicit screen setting takes precedence, for example `sidecar agent start SESSION --kind codex -- --config 'tui.alternate_screen="always"'`. To disable the inline default for every catalog launch and resume, place `help_supported_args = ["--no-daemon"]` in your `agents/codex.toml` overlay. Explicit `.sidecar-agent-start` and `plugins.workspace.agentStart` commands keep the mode chosen by their author. A Codex command typed directly into a shell uses Codex's own settings.
 
 ### The session value is always last
 

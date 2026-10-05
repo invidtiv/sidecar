@@ -410,8 +410,8 @@ func TestResumeIsAlwaysStructuredArgv(t *testing.T) {
 	}
 }
 
-func TestCodexResumeKeepsCurrentShellEnvironment(t *testing.T) {
-	testenv.ProviderHelp(t, "codex", "usage: codex\n  --no-daemon  Run in process\n")
+func TestCodexResumeKeepsCurrentShellEnvironmentAndScrollback(t *testing.T) {
+	testenv.ProviderHelp(t, "codex", "usage: codex\n  --no-daemon  Run in process\n  --no-alt-screen  Preserve scrollback\n")
 	ref := Ref{Kind: RefID, Value: "abc-def", Source: OfficialSourceFor("codex"), Reported: true}
 	for _, candidate := range []bool{false, true} {
 		var plan ResumePlan
@@ -421,7 +421,7 @@ func TestCodexResumeKeepsCurrentShellEnvironment(t *testing.T) {
 		} else {
 			plan, err = PlanResume("codex", ref)
 		}
-		if err != nil || strings.Join(plan.Argv, " ") != "codex --no-daemon resume abc-def" {
+		if err != nil || strings.Join(plan.Argv, " ") != "codex --no-daemon --no-alt-screen resume abc-def" {
 			t.Fatalf("candidate=%v plan=%v err=%v", candidate, plan.Argv, err)
 		}
 	}
