@@ -19,7 +19,7 @@ require (
 	github.com/ebitengine/purego v0.11.1
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/invopop/jsonschema v0.13.0
-	github.com/marcus/tasks v1.18.0
+	github.com/marcus/tasks v1.19.0
 	github.com/marcus/td v0.66.0
 	github.com/mattn/go-runewidth v0.0.23
 	github.com/mattn/go-sqlite3 v1.14.33

@@ -100,8 +100,8 @@ github.com/mailru/easyjson v0.7.7 h1:UGYAvKxe3sBsEDzO8ZeWOSlIQfWFlxbzLZe7hwFURr0
 github.com/mailru/easyjson v0.7.7/go.mod h1:xzfreul335JAWq5oZzymOObrkdz5UnU4kGfJJLY9Nlc=
 github.com/makeworld-the-better-one/dither/v2 v2.4.0 h1:Az/dYXiTcwcRSe59Hzw4RI1rSnAZns+1msaCXetrMFE=
 github.com/makeworld-the-better-one/dither/v2 v2.4.0/go.mod h1:VBtN8DXO7SNtyGmLiGA7IsFeKrBkQPze1/iAeM95arc=
-github.com/marcus/tasks v1.18.0 h1:urJNRRmaGO9HbA3SOFLCdYL48Ws4RTxF94xAO5eM5Dk=
-github.com/marcus/tasks v1.18.0/go.mod h1:g3oWZuevWgfT3a5nuNnaxmamQA+GYMC1UQTZLgXjhBQ=
+github.com/marcus/tasks v1.19.0 h1:Lf1dogdDTJtS4Gc2R0537OjxOcsNm0a3do/U84MhX7g=
+github.com/marcus/tasks v1.19.0/go.mod h1:g3oWZuevWgfT3a5nuNnaxmamQA+GYMC1UQTZLgXjhBQ=
 github.com/marcus/td v0.66.0 h1:PDj5uO+EhS7WX2PJ0KyF8P8QNuFf0C+lhaTSrEfMufY=
 github.com/marcus/td v0.66.0/go.mod h1:sUopsi4tj1biv6fSlsqYATOxz6Wmxb/dfTnh1F/wEu0=
 github.com/mattn/go-isatty v0.0.20 h1:xfD0iDuEKnDkl03q4limB+vH+GxLEtL/jb4xVJSWWEY=
