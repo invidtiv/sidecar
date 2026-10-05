@@ -177,7 +177,7 @@ func TestLoadDiffCapturesPinnedStrategyAcrossRefresh(t *testing.T) {
 	// otherwise-valid result must not replace current diff state.
 	p.refreshOperationID = "refresh-new"
 	p.update(RefreshDoneMsg{OperationScope: OperationScope{Epoch: 17, OperationID: "refresh-new"},
-		Snapshot: &RepoSnapshot{Key: "new-repo"}, Worktrees: []*Worktree{{Key: "new", RepoKey: "new-repo", Path: dir}}})
+		Snapshot: &RepoSnapshot{Key: "new-repo", CanonicalRoot: dir}, Worktrees: []*Worktree{{Key: "new", RepoKey: "new-repo", Path: dir}}})
 	p.diff.Error = "current"
 	p.update(loaded)
 	if p.diff.Error != "current" {

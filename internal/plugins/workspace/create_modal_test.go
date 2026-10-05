@@ -59,7 +59,8 @@ func TestValidateAndCreateWorktreeAcceptsSpacedName(t *testing.T) {
 
 func TestValidateAndCreateWorktreeRejectsEmptySlug(t *testing.T) {
 	p := New()
-	p.ctx = &plugin.Context{Epoch: 1}
+	root := t.TempDir()
+	p.ctx = &plugin.Context{Epoch: 1, WorkDir: root, ProjectRoot: root}
 	p.initCreateModalNamed("???")
 	if cmd := p.validateAndCreateWorktree(); cmd != nil {
 		t.Fatal("expected no command for empty slug")
@@ -71,7 +72,8 @@ func TestValidateAndCreateWorktreeRejectsEmptySlug(t *testing.T) {
 
 func TestValidateAndCreateWorktreeRequiresName(t *testing.T) {
 	p := New()
-	p.ctx = &plugin.Context{Epoch: 1}
+	root := t.TempDir()
+	p.ctx = &plugin.Context{Epoch: 1, WorkDir: root, ProjectRoot: root}
 	p.initCreateModalNamed("   ")
 	if cmd := p.validateAndCreateWorktree(); cmd != nil {
 		t.Fatal("expected no command for blank name")

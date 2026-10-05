@@ -43,13 +43,14 @@ func wsBodyPoint(t *testing.T, h *mouse.Handler) (int, int) {
 // several rows with a mid-list selection, so it would report movable.
 func wsModalPlugin(t *testing.T, height int, open func(p *Plugin) *modal.Modal) (*Plugin, *modal.Modal) {
 	t.Helper()
+	root := t.TempDir()
 	p := &Plugin{
 		viewMode:     ViewModeList,
 		mouseHandler: mouse.NewHandler(),
 		width:        120,
 		height:       height,
 		sidebarWidth: 40,
-		ctx:          &plugin.Context{WorkDir: t.TempDir(), Epoch: 1},
+		ctx:          &plugin.Context{WorkDir: root, ProjectRoot: root, Epoch: 1},
 	}
 	p.selection.Clear()
 	for i := range 10 {

@@ -184,6 +184,9 @@ func TestLiveShellFooterSaysDeleteNotKill(t *testing.T) {
 
 func TestAgentChoiceHidesAttachByDefault(t *testing.T) {
 	p := surfacePlugin(false)
+	root := t.TempDir()
+	p.ctx.WorkDir, p.ctx.ProjectRoot = root, root
+	p.worktrees[0].Path = root
 	p.agentChoiceWorktree = p.worktrees[0]
 	items := p.agentChoiceItems()
 	if len(items) != 1 || items[0].ID != "agent-choice-restart" {

@@ -30,7 +30,7 @@ import (
 func docPaneTestPlugin(t *testing.T, root string, shell bool) *Plugin {
 	t.Helper()
 	p := New()
-	p.ctx = &plugin.Context{WorkDir: root, Epoch: 17}
+	p.ctx = &plugin.Context{WorkDir: root, ProjectRoot: root, Epoch: 17}
 	p.width, p.height = 140, 36
 	p.sidebarVisible = false
 	p.activePane = PanePreview

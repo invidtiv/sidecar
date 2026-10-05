@@ -244,7 +244,8 @@ func TestWorkspaceHostPickerDataResolvesLikeTheCLI(t *testing.T) {
 func TestDisabledTerminalRowVisibleInVerticalList(t *testing.T) {
 	reason := "Two terminals are already on screen — close one first"
 	p := New()
-	p.ctx = &plugin.Context{WorkDir: t.TempDir(), Epoch: 1, Config: &config.Config{}}
+	root := t.TempDir()
+	p.ctx = &plugin.Context{WorkDir: root, ProjectRoot: root, Epoch: 1, Config: &config.Config{}}
 	p.width, p.height = 120, 36
 	opts := p.createOpenOpts(workspacecreate.KindTerminalSplit, true, "")
 	opts.AllowTerminalSplit = true
