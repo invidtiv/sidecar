@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/marcus/sidecar/internal/mobile"
@@ -77,8 +78,17 @@ func NewCatalogRouter(directory OwnerDirectory) (*CatalogRouter, error) {
 }
 
 // Query obtains one current unfiltered Project snapshot from each online
-// owning service, then applies the phone's query once at the hub. Owners are
-// visited sequentially, bounding live owner queues to one catalog stream.
+// owning service, then applies the phone's query once at the hub. Each owner
+// gets exactly one catalog stream, and the owners are asked concurrently, so
+// a slow or unreachable remote never delays the others. Results are merged in
+// directory order, so the composed catalog, its failures and its bounds checks
+// are the same as asking one owner after another.
+//
+// A remote owner is bounded by ownerTimeout so one SSH route cannot hold the
+// whole query. This machine's own owner is bounded only by the query's
+// deadline: its collection is local work, and cutting it at the remote bound
+// under load used to report the hub's own host offline with no rows while it
+// was merely busy.
 func (r *CatalogRouter) Query(ctx context.Context, query mobileproto.CatalogQuery) (mobileproto.CatalogSnapshot, error) {
 	queryCtx, cancelQuery := context.WithTimeout(ctx, r.queryTimeout)
 	defer cancelQuery()
@@ -89,56 +99,71 @@ func (r *CatalogRouter) Query(ctx context.Context, query mobileproto.CatalogQuer
 	if err := validateDirectorySnapshot(directory); err != nil {
 		return mobileproto.CatalogSnapshot{}, err
 	}
-	sources := make([]mobile.CatalogSource, 0, len(directory.Endpoints))
-	failures := append([]mobileproto.CatalogFailure(nil), directory.Failures...)
-	rows, candidates, sourceBytes := 0, 0, 0
+	type ownerResult struct {
+		asked    bool
+		remapped RemappedCatalog
+		err      error
+	}
+	results := make([]ownerResult, len(directory.Endpoints))
+	var wg sync.WaitGroup
 	for i, endpoint := range directory.Endpoints {
 		if strings.ToLower(endpoint.Host.State) != "online" {
 			continue
 		}
+		results[i].asked = true
 		if err := queryCtx.Err(); err != nil {
-			failures, err = appendOwnerFailure(failures, endpoint.Host, err)
+			results[i].err = err
+			continue
+		}
+		wg.Add(1)
+		go func(i int, endpoint OwnerEndpoint) {
+			defer wg.Done()
+			ownerTimeout := r.ownerTimeout
+			if endpoint.Host.Local {
+				ownerTimeout = r.queryTimeout
+			}
+			ownerCtx, cancelOwner := catalogOwnerContext(queryCtx, ownerTimeout, r.finalReserve)
+			defer cancelOwner()
+			owner, err := endpoint.Bind(ownerCtx)
+			if err != nil {
+				results[i].err = err
+				return
+			}
+			remapped, stream, err := queryBoundOwner(ownerCtx, ownerCtx, directory.Identity, &owner, fmt.Sprintf("hub-catalog-%d", i))
+			if stream != nil {
+				stream.Close()
+			}
+			results[i] = ownerResult{asked: true, remapped: remapped, err: err}
+		}(i, endpoint)
+	}
+	wg.Wait()
+	sources := make([]mobile.CatalogSource, 0, len(directory.Endpoints))
+	failures := append([]mobileproto.CatalogFailure(nil), directory.Failures...)
+	rows, candidates, sourceBytes := 0, 0, 0
+	for i, endpoint := range directory.Endpoints {
+		result := results[i]
+		if !result.asked {
+			continue
+		}
+		if result.err != nil {
+			failures, err = appendOwnerFailure(failures, endpoint.Host, result.err)
 			if err != nil {
 				return mobileproto.CatalogSnapshot{}, err
 			}
 			continue
 		}
-		ownerCtx, cancelOwner := catalogOwnerContext(queryCtx, r.ownerTimeout, r.finalReserve)
-		owner, err := endpoint.Bind(ownerCtx)
-		if err != nil {
-			cancelOwner()
-			failures, err = appendOwnerFailure(failures, endpoint.Host, err)
-			if err != nil {
-				return mobileproto.CatalogSnapshot{}, err
-			}
-			continue
-		}
-		remapped, stream, err := queryBoundOwner(ownerCtx, ownerCtx, directory.Identity, &owner, fmt.Sprintf("hub-catalog-%d", i))
-		cancelOwner()
-		if stream != nil {
-			stream.Close()
-		}
-		if err != nil {
-			failures, err = appendOwnerFailure(failures, endpoint.Host, err)
-			if err != nil {
-				return mobileproto.CatalogSnapshot{}, err
-			}
-			continue
-		}
-		rowCount, candidateCount := countCatalogSource(remapped.Source)
-		encoded, marshalErr := json.Marshal(remapped.Source.Snapshot)
+		rowCount, candidateCount := countCatalogSource(result.remapped.Source)
+		encoded, marshalErr := json.Marshal(result.remapped.Source.Snapshot)
 		if marshalErr != nil {
-			stream.Close()
 			return mobileproto.CatalogSnapshot{}, fmt.Errorf("mobile hub: encode owner catalog bounds: %w", marshalErr)
 		}
 		rows += rowCount
 		candidates += candidateCount
 		sourceBytes += len(encoded)
 		if rows > mobileproto.MaxCatalogRows || candidates > mobileproto.MaxCatalogCandidates || sourceBytes > composedCatalogBytes {
-			stream.Close()
 			return mobileproto.CatalogSnapshot{}, fmt.Errorf("mobile hub: combined owner catalogs exceed protocol bounds")
 		}
-		sources = append(sources, remapped.Source)
+		sources = append(sources, result.remapped.Source)
 	}
 	if err := directory.Validate(queryCtx); err != nil {
 		return mobileproto.CatalogSnapshot{}, err

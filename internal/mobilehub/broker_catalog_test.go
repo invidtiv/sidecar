@@ -51,6 +51,8 @@ type fakeCatalogLineStream struct {
 	writes   int
 	writeErr error
 	hang     bool
+	// delay answers the catalog request after this long, as a busy owner does.
+	delay time.Duration
 }
 
 type blockingWriteCatalogStream struct {
@@ -90,6 +92,10 @@ func (s *fakeCatalogLineStream) WriteLine(line []byte) error {
 	}
 	response := mobileproto.Response{Version: mobileproto.Version, Type: mobileproto.ResponseSessions, RequestID: request.RequestID, Catalog: &s.catalog}
 	data, _ := json.Marshal(response)
+	if s.delay > 0 {
+		time.AfterFunc(s.delay, func() { s.lines <- data })
+		return nil
+	}
 	s.lines <- data
 	return nil
 }
@@ -109,7 +115,7 @@ func (s *fakeCatalogLineStream) Close() {
 	s.mu.Unlock()
 }
 
-func TestCatalogRouterQueriesOwnersSequentiallyAndComposesOneSharedView(t *testing.T) {
+func TestCatalogRouterQueriesEachOwnerOnceAndComposesOneSharedView(t *testing.T) {
 	now := time.Now().UTC()
 	localRaw := rawOwnerCatalog("local-owner", "same", "local")
 	localRaw.ObservedAt = now.Format(time.RFC3339Nano)
@@ -531,4 +537,35 @@ func repeatedRawRows(template mobileproto.CatalogRow, count int) []mobileproto.C
 		rows[i] = row
 	}
 	return rows
+}
+
+// The trigger behind "this machine is offline" with no rows: a busy hub whose
+// own collection outran the remote-owner bound reported its local owner
+// failed. The local owner is bounded only by the query deadline, and the
+// owners run concurrently, so a slow remote neither steals the local budget
+// nor adds to the query's time.
+func TestCatalogRouterNeverTimesOutABusyLocalOwnerAtTheRemoteBound(t *testing.T) {
+	local := newFakeCatalogLineStream(rawOwnerCatalog("local-owner", "local", "local"))
+	local.delay = 60 * time.Millisecond
+	hung := newFakeCatalogLineStream(rawOwnerCatalog("remote-owner", "repo", "remote"))
+	hung.hang = true
+	router, _ := NewCatalogRouter(newFakeRouterDirectory(local, hung))
+	router.ownerTimeout = 20 * time.Millisecond
+	router.queryTimeout = 200 * time.Millisecond
+	router.finalReserve = 10 * time.Millisecond
+	started := time.Now()
+	snapshot, err := router.Query(context.Background(), mobileproto.CatalogQuery{})
+	elapsed := time.Since(started)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Total != 1 || snapshot.Sections[0].Rows[0].OwnerHostID != "local:hub" {
+		t.Fatalf("busy local owner lost its rows: %+v", snapshot)
+	}
+	if len(snapshot.Failures) != 1 || snapshot.Failures[0].ID != "book" {
+		t.Fatalf("failures = %+v, want only the hung remote", snapshot.Failures)
+	}
+	if elapsed >= 150*time.Millisecond {
+		t.Fatalf("owners were not asked concurrently: %s", elapsed)
+	}
 }
