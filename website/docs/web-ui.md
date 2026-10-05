@@ -11,7 +11,7 @@ Install [Sidecar](intro.md#quick-install) v1.16.0 or newer (`sidecar --version`;
 
 ## Install the reference UI
 
-You need [Node](https://nodejs.org/) 22 or newer and pnpm 10 (`corepack enable` provides pnpm with recent Node). Then:
+You need [Node](https://nodejs.org/) 22 or newer and [pnpm](https://pnpm.io/installation) 10 (`pnpm --version` to check). Then:
 
 ```sh
 git clone git@github.com:marcus/sidecar-ui.git
