@@ -16,6 +16,9 @@ All notable changes to sidecar are documented here.
 - **Project-page terminals attach with remote hosts configured.** Opening a local terminal from a project page resolves through the configured host hub instead of failing to attach.
 - **Temporary hub lookup failures keep retrying.** An unavailable or slow owner is reported as a retryable backend failure instead of a changed terminal identity.
 - **The API service starts and reports status on current macOS.** Launchd activation and status parsing handle the current macOS service output correctly.
+- **Reinstalling a running API service no longer leaves it stopped.** launchd finishes a bootout after `launchctl` returns, so an immediate bootstrap failed with "Input/output error". Install now waits for the old job to leave and retries that refusal briefly.
+- **A removed, disabled or non-serving remote host is a final answer, not an endless retry.** Only offline, connecting and unreachable owners are retried; a replaced route reads as a changed terminal.
+- **Sessions and project workspaces load in a fraction of the time.** The local catalog reads every pane in one batched tmux call, checks shell rows against one pane listing, indexes worktrees once, and runs Git 8-wide, so `sidecar mobile sessions --json` dropped from about 2.5 s to under 0.4 s and spawns roughly a third of the processes. The UI API shares one collection between concurrent requests while still authorizing every request against current panes and shell reservations, so `/sessions` and project workspaces answer in about 0.3-0.4 s cold. Concurrent requests no longer time the local host out and report it offline with an empty list. Owner catalogs are charged against the aggregate bounds as they arrive, with at most eight outside the budget at once. (td-67fc32)
 
 ## [v1.15.1] - 2026-09-30
 
