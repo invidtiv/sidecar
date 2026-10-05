@@ -46,7 +46,15 @@ SIDECAR_ISOLATED_STATE=1 XDG_STATE_HOME="$fixture_root/state" TMUX_TMPDIR="$fixt
   --fixtures testdata/ui-api/v0 --port 0 --ui /absolute/path/to/ui
 ```
 
-This uses a temporary config, state tree, and tmux namespace. Port 0 chooses an unused loopback port. In another shell, use the same config and `XDG_STATE_HOME` to run `sidecar api open`, or `sidecar api open --print` to get a pairing URL. After stopping the foreground server, remove only the temporary tree you created. The [fixture guide in the contract](https://github.com/marcus/sidecar/blob/main/docs/reference/ui-api.md#schemas-and-fixture-development) describes the recorded files and their limits.
+This uses a temporary config, state tree, and tmux namespace. Port 0 chooses an unused loopback port. To pair a browser, use a second shell with the same environment (the server prints its port; `api open` finds the server through the same state tree):
+
+```sh
+unset TMUX TMUX_PANE
+SIDECAR_ISOLATED_STATE=1 XDG_STATE_HOME="$fixture_root/state" TMUX_TMPDIR="$fixture_root/tmux" \
+  sidecar -config "$fixture_root/config.json" api open --print
+```
+
+Set `fixture_root` in that shell to the directory the first shell created. Open the printed URL in the browser you want to pair; it lands on your UI already paired. After stopping the foreground server, remove only the temporary tree you created. The [fixture guide in the contract](https://github.com/marcus/sidecar/blob/main/docs/reference/ui-api.md#schemas-and-fixture-development) describes the recorded files and their limits.
 
 ## Implement the three surfaces
 

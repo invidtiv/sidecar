@@ -7,13 +7,15 @@ description: Install a built Sidecar UI and run its API service at login.
 
 Sidecar can serve a built web UI and its API from one always-on per-user service. On macOS it uses launchd; on Linux it uses a systemd user service and socket. The service starts at login and leaves tmux sessions alone.
 
-Install [Sidecar](intro.md#quick-install), and make sure your version supports `sidecar api service install --ui`. The reference UI and its SDK are private for now, so the reference path below requires access to the `sidecar-ui` repository. Without that access, you can [build your own UI](build-your-own-ui.md) against the public API.
+Install [Sidecar](intro.md#quick-install) v1.16.0 or newer (`sidecar --version`; `sidecar api service install --help` should list `--ui`). The reference UI and its SDK live in the private repository `github.com/marcus/sidecar-ui` for now; ask the maintainer for access. Without access, you can [build your own UI](build-your-own-ui.md) against the public API.
 
 ## Install the reference UI
 
-With Node 22 or newer and pnpm 10 installed, run these commands from your `sidecar-ui` checkout:
+You need [Node](https://nodejs.org/) 22 or newer and pnpm 10 (`corepack enable` provides pnpm with recent Node). Then:
 
 ```sh
+git clone git@github.com:marcus/sidecar-ui.git
+cd sidecar-ui
 pnpm install --frozen-lockfile
 pnpm run install-local --service
 sidecar api open
