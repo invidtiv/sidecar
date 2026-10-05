@@ -58,9 +58,10 @@ func (b *FixtureBackend) loadContent(dir string) error {
 }
 
 func (b *FixtureBackend) LookupProject(_ context.Context, project, workspace string) (contentservice.Workspace, error) {
-	if project != "fixture-project" {
+	if project != "fixture-project" && (b.workspace == nil || project != b.workspace.Project.Name) {
 		return contentservice.Workspace{}, contentservice.Rejected("no fixture project %q", project)
 	}
+	project = "fixture-project"
 	root := "/workspace/fixture"
 	if b.workspace != nil {
 		root = b.workspace.Project.Path

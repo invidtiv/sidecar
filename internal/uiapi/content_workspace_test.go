@@ -91,6 +91,16 @@ func TestFixtureCatalogContentSelectorsUseMatchingRoutes(t *testing.T) {
 	if _, err := b.LookupProject(t.Context(), "fixture-project", "foreign"); err == nil {
 		t.Fatal("unknown fixture selector accepted")
 	}
+	// Routes accept the project's display name as well as its key, as the real server does.
+	if b.workspace == nil || b.workspace.Project.Name == "" || b.workspace.Project.Name == "fixture-project" {
+		t.Fatalf("fixture project needs a display name distinct from its key: %+v", b.workspace)
+	}
+	if ws, err := b.LookupProject(t.Context(), b.workspace.Project.Name, ""); err != nil || ws.Root != "/workspace/fixture" {
+		t.Fatalf("fixture project by name: %+v %v", ws, err)
+	}
+	if _, err := b.Workspace(t.Context(), b.workspace.Project.Name, "", mobileproto.CatalogQuery{}); err != nil {
+		t.Fatalf("fixture workspace by name: %v", err)
+	}
 	main, _ := layoutRead(t, h, "/api/v0/projects/fixture-project/layout")
 	legacy, _ := layoutRead(t, h, "/api/v0/projects/fixture-project/layout?workspace=fixture-shell")
 	if legacy.Layout == nil || main.Layout == nil || legacy.Layout.Name != main.Layout.Name {

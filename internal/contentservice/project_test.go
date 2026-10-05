@@ -3,6 +3,7 @@ package contentservice
 import (
 	"context"
 	"encoding/json"
+	"github.com/marcus/sidecar/internal/config"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -496,5 +497,38 @@ func TestShellWorkspaceResolvesDurableWorktree(t *testing.T) {
 	ws, err = svc.LookupProject(t.Context(), "demo", id)
 	if err != nil || ws.Root != canonical(root) {
 		t.Fatalf("legacy fallback: %+v %v", ws, err)
+	}
+}
+
+// GET /projects names a project by its key, which can differ from its display
+// name ("Vibes" is "vibes"). Content and layout routes accept either, so a
+// client never has to guess which one a route wants.
+func TestLookupProjectAcceptsTheProjectsKeyOrName(t *testing.T) {
+	root := t.TempDir()
+	other := t.TempDir()
+	cfg := config.Default()
+	cfg.Projects.List = []config.ProjectConfig{{Name: "Kindle frame", Path: root}, {Name: "notes", Path: other}}
+	svc := &Service{
+		LoadConfig: func() (*config.Config, error) { return cfg, nil },
+		ProjectKey: func(path string) string {
+			if canonical(path) == canonical(root) {
+				return "kindle-frame"
+			}
+			return "notes-key"
+		},
+	}
+	for _, name := range []string{"kindle-frame", "Kindle frame", canonical(root)} {
+		ws, err := svc.LookupProject(t.Context(), name, "")
+		if err != nil || ws.Root != canonical(root) {
+			t.Fatalf("LookupProject(%q) = %+v, %v; want the Kindle frame root", name, ws, err)
+		}
+	}
+	if _, err := svc.LookupProject(t.Context(), "kindle", ""); err == nil {
+		t.Fatal("an unknown selector resolved")
+	}
+	// A key that collides with another project's name is ambiguous, not a guess.
+	cfg.Projects.List[1].Name = "kindle-frame"
+	if _, err := svc.LookupProject(t.Context(), "kindle-frame", ""); err == nil {
+		t.Fatal("a key colliding with another project's name resolved")
 	}
 }

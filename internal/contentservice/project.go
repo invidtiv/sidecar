@@ -6,10 +6,12 @@ import (
 	"strings"
 
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/projectdir"
 )
 
-// LookupProject resolves an explicitly configured project and an optional
-// durable workspace belonging to it. No ambient current-project fallback.
+// LookupProject resolves an explicitly configured project, named by the key
+// GET /projects reports or its exact configured name, and an optional durable
+// workspace belonging to it. No ambient current-project fallback.
 func (s *Service) LookupProject(ctx context.Context, project, workspace string) (Workspace, error) {
 	projects, err := s.projects()
 	if err != nil {
@@ -17,7 +19,8 @@ func (s *Service) LookupProject(ctx context.Context, project, workspace string) 
 	}
 	var root string
 	for _, p := range projects {
-		if p.Name == project || canonical(config.ExpandPath(p.Path)) == project {
+		path := config.ExpandPath(p.Path)
+		if p.Name == project || s.projectKey(path) == project || canonical(path) == project {
 			if root != "" {
 				return Workspace{}, Rejected("project %q is ambiguous", project)
 			}
@@ -176,4 +179,16 @@ func projectRelative(raw string) (string, error) {
 		return "", err
 	}
 	return filepath.ToSlash(filepath.Clean(filepath.FromSlash(raw))), nil
+}
+
+// projectKey is the key GET /api/v0/projects reports for a configured path:
+// the base name of its state directory, or of the path when it has none yet.
+func (s *Service) projectKey(path string) string {
+	if s.ProjectKey != nil {
+		return s.ProjectKey(path)
+	}
+	if dir, ok := projectdir.Lookup(path); ok {
+		return filepath.Base(dir)
+	}
+	return filepath.Base(path)
 }

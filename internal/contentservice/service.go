@@ -27,6 +27,8 @@ type Service struct {
 	NewResourceManager func() (*pluginhost.Manager, error)
 	ListIssues         func(ctx context.Context, root string, limit int) ([]CatalogIssue, error)
 	ListNotes          func(ctx context.Context, root string, limit int) ([]CatalogNote, error)
+	// ProjectKey overrides how a configured path maps to its /projects key.
+	ProjectKey func(path string) string
 }
 
 // Default returns a Service bound to this process's config and state.

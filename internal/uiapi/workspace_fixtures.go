@@ -25,7 +25,7 @@ func projectsFromCatalog(c mobileproto.CatalogSnapshot) workspacewire.Projects {
 func fixtureWorkspace(c mobileproto.CatalogSnapshot, project string) (workspacewire.Workspace, error) {
 	result := workspacewire.Workspace{Shells: []workspacewire.ShellRecord{}}
 	for _, p := range projectsFromCatalog(c).Projects {
-		if p.Key == project {
+		if p.Key == project || p.Name == project {
 			result.Project = p
 			break
 		}
@@ -33,6 +33,7 @@ func fixtureWorkspace(c mobileproto.CatalogSnapshot, project string) (workspacew
 	if result.Project.Key == "" {
 		return result, &OperationError{Code: "project", Message: fmt.Sprintf("No project %q exists in these fixtures.", project), ExitCode: 3}
 	}
+	project = result.Project.Key
 	result.Catalog = c
 	result.Catalog.Sections = []mobileproto.CatalogSection{}
 	result.Catalog.Total = 0
