@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/marcus/sidecar/internal/tmuxformat"
 )
@@ -162,4 +163,54 @@ func parseHeadlessTargetIdentity(line, expectedSession, expectedPane string) (He
 		ServerPID: serverPID, SessionID: parts[1], SessionCreated: parts[2], Session: parts[3],
 		Pane: parts[4], Width: width, Height: height, PaneCount: paneCount,
 	}, nil
+}
+
+// HeadlessTargetSnapshot answers InspectHeadlessTarget for many sessions from
+// one server-wide listing, taken on first use. A catalog authorizes every
+// managed-shell row against the same instant anyway; asking tmux once per row
+// cost a client spawn each.
+//
+// list-panes -t SESSION lists the panes of that session's current window, so
+// the snapshot keeps only panes whose window is active in their session and
+// applies the same one-pane rule and parser. Anything the snapshot cannot
+// answer — the listing failed, or the session is absent from it — falls back
+// to InspectHeadlessTarget itself, which also yields its exact error.
+func HeadlessTargetSnapshot() func(context.Context, string) (HeadlessTargetIdentity, error) {
+	var (
+		once     sync.Once
+		sessions map[string][]string
+	)
+	return func(ctx context.Context, session string) (HeadlessTargetIdentity, error) {
+		once.Do(func() { sessions = listHeadlessTargets(ctx) })
+		lines, ok := sessions[session]
+		if !ok || strings.TrimSpace(session) == "" {
+			return InspectHeadlessTarget(ctx, session)
+		}
+		if len(lines) != 1 {
+			return HeadlessTargetIdentity{}, fmt.Errorf("mobile target: session %q has %d panes; select-one-pane layouts are not yet supported", session, len(lines))
+		}
+		return parseHeadlessTargetIdentity(lines[0], session, "")
+	}
+}
+
+// listHeadlessTargets groups active-window pane identities by session name.
+// A nil result means the listing is unavailable.
+func listHeadlessTargets(ctx context.Context) map[string][]string {
+	out, err := exec.CommandContext(ctx, "tmux", tmuxformat.ClientArgs("list-panes", "-a", "-F", "#{window_active}\t"+headlessTargetFormat)...).Output()
+	if err != nil {
+		return nil
+	}
+	sessions := make(map[string][]string)
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		active, identity, ok := strings.Cut(line, "\t")
+		if !ok || active != "1" {
+			continue
+		}
+		parts := strings.Split(identity, "\t")
+		if len(parts) < 4 || parts[3] == "" {
+			continue
+		}
+		sessions[parts[3]] = append(sessions[parts[3]], identity)
+	}
+	return sessions
 }

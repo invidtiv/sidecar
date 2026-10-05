@@ -588,9 +588,11 @@ func (c Collector) CollectProjectInventory(ctx context.Context, name, root strin
 	// metadata upgrades a row when it exists; its absence demotes the row to a
 	// plain workspace rather than hiding it. The Agents projection filters
 	// these out again, so the board sees exactly what it saw before.
+	// One read of the project's worktree records serves every worktree below.
+	records := projectdir.NewStateWorktreeIndex()
 	for _, wt := range parseWorktrees(string(out)) {
 		provider, taskID, displayName := "", "", ""
-		if stateDir, ok := lookupWorktree(root, wt.Path); ok {
+		if stateDir, ok := lookupWorktreeIn(records, root, wt.Path); ok {
 			if agentBytes, err := readRegularFile(filepath.Join(stateDir, "agent")); err == nil {
 				provider = strings.TrimSpace(string(agentBytes))
 			}
@@ -645,18 +647,83 @@ func (c Collector) RefreshProjectStatus(ctx context.Context, previous ProjectRes
 	for i := range result.Workspaces {
 		workspace := &result.Workspaces[i]
 		workspace.ObservedAt = now
-		var matches []Pane
-		switch workspace.Kind {
-		case KindWorktree:
-			matches = resolveWorktreePanes(*workspace, panesForPath(workspace.Path, allRoots, panes, c.reservedSessions))
-		case KindShell:
-			if workspace.Namespace != "" && workspace.Namespace == tmuxenv.Namespace() {
-				matches = panesForOwnedSession(workspace.TmuxName, workspace.ProjectRoot, allRoots, panes, c.shellOwners)
-			}
-		}
-		c.observeContext(ctx, workspace, matches, now)
+		c.observeContext(ctx, workspace, c.workspaceMatches(*workspace, allRoots, panes), now)
 	}
 	return result
+}
+
+// workspaceMatches is the live panes one workspace correlates to in a pane
+// listing. The status pass and PrefetchCaptures both ask it, so the panes a
+// prefetch reads are exactly the panes the status pass would capture.
+func (c Collector) workspaceMatches(workspace Workspace, allRoots []string, panes []Pane) []Pane {
+	switch workspace.Kind {
+	case KindWorktree:
+		return resolveWorktreePanes(workspace, panesForPath(workspace.Path, allRoots, panes, c.reservedSessions))
+	case KindShell:
+		if workspace.Namespace != "" && workspace.Namespace == tmuxenv.Namespace() {
+			return panesForOwnedSession(workspace.TmuxName, workspace.ProjectRoot, allRoots, panes, c.shellOwners)
+		}
+	}
+	return nil
+}
+
+// statusCaptureLines is how much of a pane the status pass reads.
+const statusCaptureLines = 80
+
+// statusCaptureTarget reports the one pane observeContext captures for these
+// matches: a single live pane. Absent, dead and ambiguous matches are never
+// captured, plain worktree or not.
+func statusCaptureTarget(matches []Pane) (string, bool) {
+	if len(matches) != 1 || matches[0].Dead {
+		return "", false
+	}
+	return matches[0].ID, true
+}
+
+// BatchCaptureFunc reads many panes at once. A target missing from the result
+// is captured on its own by the collector's ordinary Capture.
+type BatchCaptureFunc func(ctx context.Context, targets []string, lines int) map[string]string
+
+// PrefetchCaptures reads, in one batch, every pane the status pass over these
+// inventories would capture, and returns a collector whose captures answer
+// from that batch. Call it on the refresh collector that will run
+// RefreshProjectStatus (it must carry the same shell claims), with the same
+// roots and pane listing. The prefetched text is only ever read by the
+// returned collector, so it is exactly as fresh as the listing it came from;
+// a pane the batch could not read falls back to an individual capture.
+func (c Collector) PrefetchCaptures(ctx context.Context, results []ProjectResult, allRoots []string, panes []Pane, batch BatchCaptureFunc) Collector {
+	c = c.defaults()
+	if batch == nil {
+		return c
+	}
+	seen := make(map[string]bool)
+	var targets []string
+	for _, result := range results {
+		if result.Err != nil && len(result.Workspaces) == 0 {
+			continue
+		}
+		for _, workspace := range result.Workspaces {
+			if target, ok := statusCaptureTarget(c.workspaceMatches(workspace, allRoots, panes)); ok && !seen[target] {
+				seen[target] = true
+				targets = append(targets, target)
+			}
+		}
+	}
+	if len(targets) == 0 {
+		return c
+	}
+	prefetched := batch(ctx, targets, statusCaptureLines)
+	// The status pass reads only a capture's text, so a prefetched capture
+	// carries no geometry; any other caller of this collector's Capture with a
+	// different line count still reaches the original function.
+	capture := c.Capture
+	c.Capture = func(target string, lines int) (string, tty.PaneState, error) {
+		if text, ok := prefetched[target]; ok && lines == statusCaptureLines {
+			return text, tty.PaneState{}, nil
+		}
+		return capture(target, lines)
+	}
+	return c
 }
 
 func (c Collector) observe(workspace *Workspace, matches []Pane, now time.Time) {
@@ -691,7 +758,7 @@ func (c Collector) observeContext(ctx context.Context, workspace *Workspace, mat
 		workspace.PaneID, workspace.TmuxName = pane.ID, pane.Session
 		if pane.Dead {
 			input.Orphaned = true
-		} else if output, _, err := c.capturePane(ctx, pane.ID, 80); err != nil {
+		} else if output, _, err := c.capturePane(ctx, pane.ID, statusCaptureLines); err != nil {
 			if plainWorktree {
 				c.clearTracker(workspace.ID)
 				return
@@ -1079,6 +1146,14 @@ func lookupProject(root string) (string, bool) {
 		return dir, true
 	}
 	return projectdir.Lookup(canonical(root))
+}
+
+// lookupWorktreeIn is lookupWorktree answered from an index of the state tree.
+func lookupWorktreeIn(index *projectdir.WorktreeIndex, root, path string) (string, bool) {
+	if dir, ok := index.Lookup(root, path); ok {
+		return dir, true
+	}
+	return index.Lookup(canonical(root), canonical(path))
 }
 
 func lookupWorktree(root, path string) (string, bool) {

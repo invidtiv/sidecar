@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1370,5 +1371,73 @@ func TestOwningWorkspacePathUsesDeepestRootThroughSymlinks(t *testing.T) {
 		if got := OwningWorkspacePath(alias, root, roots); got != canonical(root) {
 			t.Fatalf("aliased main checkout mapped to %q, want %q", got, canonical(root))
 		}
+	}
+}
+
+// A prefetch reads exactly the panes the status pass captures, and the pass
+// over prefetched captures produces what the per-pane pass produces. A pane
+// the batch did not return falls back to the ordinary capture.
+func TestPrefetchCapturesMatchesPerPaneStatusPass(t *testing.T) {
+	stateBase := t.TempDir()
+	config.SetTestStateDir(stateBase)
+	t.Cleanup(config.ResetTestStateDir)
+	root := t.TempDir()
+	projectState, err := projectdir.ResolveWithBase(stateBase, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ns := tmuxenv.Namespace()
+	manifest := `{"version":1,"shells":[` +
+		`{"tmuxName":"agent","displayName":"Agent","namespace":"` + ns + `"},` +
+		`{"tmuxName":"dead","displayName":"Dead","namespace":"` + ns + `"},` +
+		`{"tmuxName":"plain","displayName":"Plain","namespace":"` + ns + `"}]}`
+	if err := os.WriteFile(filepath.Join(projectState, "shells.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	screens := map[string]string{"%1": "OpenAI Codex (v0.147.0)\n• Working (1s • esc to interrupt)", "%3": "$ "}
+	var direct []string
+	now := time.Date(2026, 10, 4, 21, 0, 0, 0, time.UTC)
+	runner := &fakeRunner{git: map[string]string{root: "worktree " + root + "\nbranch refs/heads/main\n"}}
+	base := Collector{Runner: runner, Now: func() time.Time { return now }, Capture: func(target string, _ int) (string, tty.PaneState, error) {
+		direct = append(direct, target)
+		return screens[target], tty.PaneState{}, nil
+	}}.HostPane("%none").WithDefaults()
+	inventory := base.CollectProjectInventory(context.Background(), "sidecar", root)
+	panes := []Pane{
+		{ID: "%1", Session: "agent", Path: root, Command: "node"},
+		{ID: "%2", Session: "dead", Path: root, Command: "zsh", Dead: true},
+		{ID: "%3", Session: "plain", Path: root, Command: "zsh"},
+	}
+	roots := []string{root}
+	claims := BuildShellClaims([]ProjectResult{inventory})
+
+	want := base.ForRefresh(1, claims).RefreshProjectStatus(context.Background(), inventory, roots, panes)
+	wantDirect := append([]string(nil), direct...)
+	direct = nil
+
+	var batched []string
+	refresh := base.ForRefresh(1, claims).PrefetchCaptures(context.Background(), []ProjectResult{inventory}, roots, panes,
+		func(_ context.Context, targets []string, lines int) map[string]string {
+			if lines != statusCaptureLines {
+				t.Fatalf("batch lines = %d", lines)
+			}
+			batched = append(batched, targets...)
+			return map[string]string{"%1": screens["%1"]} // %3 is left to the fallback
+		})
+	got := refresh.RefreshProjectStatus(context.Background(), inventory, roots, panes)
+
+	slices.Sort(batched)
+	slices.Sort(wantDirect)
+	if !reflect.DeepEqual(batched, wantDirect) {
+		t.Fatalf("batched %v, per-pane pass captured %v", batched, wantDirect)
+	}
+	if !reflect.DeepEqual(direct, []string{"%3"}) {
+		t.Fatalf("direct captures after prefetch = %v, want only the pane the batch missed", direct)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("prefetched pass differs\n got=%#v\nwant=%#v", got.Workspaces, want.Workspaces)
+	}
+	if agent, ok := shellNamed(got, "agent"); !ok || agent.Provider != "codex" {
+		t.Fatalf("agent shell = %#v", agent)
 	}
 }

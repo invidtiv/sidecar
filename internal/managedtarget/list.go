@@ -6,7 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
+	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/tmuxenv"
 	"github.com/marcus/sidecar/internal/workspaceops"
@@ -147,7 +149,8 @@ func Candidates(ctx context.Context, stateDir string, projects []Project) ([]Tar
 			claims[root] = rootClaim{proj: proj, manifest: manifest, tier: tier}
 		}
 	}
-	for _, proj := range projects {
+	discovered := discoverWorktreeRoots(ctx, projects)
+	for index, proj := range projects {
 		if ctx.Err() != nil {
 			break
 		}
@@ -174,17 +177,19 @@ func Candidates(ctx context.Context, stateDir string, projects []Project) ([]Tar
 			claim(root, proj, manifest, tierCreated)
 		}
 		claim(proj.Path, proj, manifest, tierCheckout)
-		for _, root := range discoveredWorktreeRoots(ctx, proj) {
+		for _, root := range discovered[index] {
 			claim(root, proj, manifest, tierDiscovered)
 		}
 	}
+	// Every root's display name comes from one read of the state tree.
+	names := projectdir.NewWorktreeIndex(stateDir)
 	for _, root := range roots {
 		c := claims[root]
 		priority := 1
 		if c.tier == tierDiscovered {
 			priority = 2
 		}
-		name, _ := workspaceops.LookupWorktreeDisplayName(stateDir, c.proj.Path, root)
+		name, _ := workspaceops.LookupWorktreeDisplayNameIn(names, c.proj.Path, root)
 		candidates = append(candidates, Target{
 			Host: "local", Project: c.proj.Key, ProjectRoot: c.proj.Path, Kind: KindWorktree,
 			Session: workspaceops.WorktreeSessionName(root, ""), Name: name, Namespace: tmuxenv.Namespace(),
@@ -192,6 +197,36 @@ func Candidates(ctx context.Context, stateDir string, projects []Project) ([]Tar
 		})
 	}
 	return candidates, nil
+}
+
+// discoveryWorkers bounds concurrent `git worktree list` runs. Claims are
+// still applied in project order afterwards, so concurrency changes only how
+// long discovery takes, never which project owns a root.
+const discoveryWorkers = 8
+
+// discoverWorktreeRoots runs discoveredWorktreeRoots for every project
+// concurrently and returns the roots indexed like projects.
+func discoverWorktreeRoots(ctx context.Context, projects []Project) [][]string {
+	discovered := make([][]string, len(projects))
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	for range min(discoveryWorkers, len(projects)) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for index := range jobs {
+				if ctx.Err() == nil && strings.TrimSpace(projects[index].Path) != "" {
+					discovered[index] = discoveredWorktreeRoots(ctx, projects[index])
+				}
+			}
+		}()
+	}
+	for index := range projects {
+		jobs <- index
+	}
+	close(jobs)
+	wg.Wait()
+	return discovered
 }
 
 func discoveredWorktreeRoots(ctx context.Context, proj Project) []string {

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/marcus/sidecar/internal/activitystore"
@@ -243,10 +244,10 @@ func mobileCatalogProviderForProjects(env Env, loadProjects func() ([]hostserve.
 		if err != nil {
 			return mobile.CatalogInput{}, err
 		}
-		// One target scan is enough to authorize every managed-shell row in
-		// this snapshot. The service resolver remains fresh for resolve/open
-		// and every later target operation.
-		input.Resolver = newMobileCatalogShellResolver(env, tty.InspectHeadlessTarget)
+		// One target scan and one tmux pane listing are enough to authorize
+		// every managed-shell row in this snapshot. The service resolver
+		// remains fresh for resolve/open and every later target operation.
+		input.Resolver = newMobileCatalogShellResolver(env, tty.HeadlessTargetSnapshot())
 		return input, nil
 	}
 }
@@ -279,12 +280,14 @@ func newMobileCatalogProvider(env Env, loadProjects func() ([]hostserve.Project,
 			return mobile.CatalogInput{}, &mobile.ResolveError{Code: mobileproto.ErrorOverflow, Message: "mobile catalog exceeds pane limit"}
 		}
 		roots := make([]string, 0, len(projects))
-		results := make([]workspaceinventory.ProjectResult, 0, len(projects))
 		for _, project := range projects {
 			roots = append(roots, project.Path)
-			results = append(results, collector.CollectProjectInventory(ctx, project.Name, project.Path))
 		}
+		results := collectMobileInventories(ctx, collector, projects)
 		refresh := collector.ForRefresh(4, workspaceinventory.BuildShellClaims(results))
+		// One tmux client reads every pane the status pass below would
+		// otherwise capture one process at a time.
+		refresh = refresh.PrefetchCaptures(ctx, results, roots, panes, tty.CapturePaneOutputs)
 		catalogProjects := make([]mobile.CatalogProject, 0, len(results))
 		for index, result := range results {
 			result = refresh.RefreshProjectStatus(ctx, result, roots, panes)
@@ -301,6 +304,34 @@ func newMobileCatalogProvider(env Env, loadProjects func() ([]hostserve.Project,
 		}
 		return input, nil
 	}
+}
+
+// mobileInventoryWorkers bounds concurrent per-project Git inventories. Each
+// is one short git subprocess; running them one after another made a
+// thirty-project catalog wait on thirty sequential process spawns.
+const mobileInventoryWorkers = 8
+
+// collectMobileInventories reads every project's Git and Sidecar inventory
+// concurrently and returns the results in project order.
+func collectMobileInventories(ctx context.Context, collector workspaceinventory.Collector, projects []hostserve.Project) []workspaceinventory.ProjectResult {
+	results := make([]workspaceinventory.ProjectResult, len(projects))
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	for range min(mobileInventoryWorkers, len(projects)) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for index := range jobs {
+				results[index] = collector.CollectProjectInventory(ctx, projects[index].Name, projects[index].Path)
+			}
+		}()
+	}
+	for index := range projects {
+		jobs <- index
+	}
+	close(jobs)
+	wg.Wait()
+	return results
 }
 
 type activityObservation struct {

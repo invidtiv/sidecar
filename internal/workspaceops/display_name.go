@@ -32,6 +32,16 @@ func LookupWorktreeDisplayName(stateDir, projectRoot, worktreePath string) (stri
 	return worktreeDisplayNameAt(dir, projectRoot, worktreePath)
 }
 
+// LookupWorktreeDisplayNameIn is LookupWorktreeDisplayName answered from an
+// index of the state tree, for callers that name many worktrees at once.
+func LookupWorktreeDisplayNameIn(index *projectdir.WorktreeIndex, projectRoot, worktreePath string) (string, error) {
+	dir, ok := index.Lookup(projectRoot, worktreePath)
+	if !ok {
+		return "", fmt.Errorf("current tmux session is not a registered Sidecar worktree agent")
+	}
+	return worktreeDisplayNameAt(dir, projectRoot, worktreePath)
+}
+
 func worktreeDisplayNameAt(dir, projectRoot, worktreePath string) (string, error) {
 	data, err := os.ReadFile(filepath.Join(dir, worktreeDisplayNameFile))
 	if err != nil && !os.IsNotExist(err) {
