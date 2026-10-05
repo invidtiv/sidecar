@@ -186,7 +186,7 @@ func TestForgetShellsInWorktreeReconcilesDuplicateRegistrations(t *testing.T) {
 }
 
 func TestDeleteWorktreeReportsIncompleteShellInventory(t *testing.T) {
-	for _, corruption := range []string{"metadata", "manifest"} {
+	for _, corruption := range []string{"metadata", "manifest", "rootless metadata"} {
 		t.Run(corruption, func(t *testing.T) {
 			oldStateDir := config.StateDir()
 			config.SetTestStateDir(t.TempDir())
@@ -197,10 +197,14 @@ func TestDeleteWorktreeReportsIncompleteShellInventory(t *testing.T) {
 			other := t.TempDir()
 			manifest := shellManifestPath(t, other)
 			target := manifest
-			if corruption == "metadata" {
+			data := []byte("invalid JSON")
+			if corruption != "manifest" {
 				target = filepath.Join(filepath.Dir(manifest), "meta.json")
 			}
-			if err := os.WriteFile(target, []byte("invalid JSON"), 0o644); err != nil {
+			if corruption == "rootless metadata" {
+				data = []byte(`{"path":""}`)
+			}
+			if err := os.WriteFile(target, data, 0o644); err != nil {
 				t.Fatal(err)
 			}
 			err := DeleteWorktree(context.Background(), WorktreeRemoval{RepoPath: root, ProjectRoot: root, Path: wt, Force: true})

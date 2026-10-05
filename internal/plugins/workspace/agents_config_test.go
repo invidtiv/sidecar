@@ -86,7 +86,8 @@ func TestGetDefaultCreateAgentType_ClampsToAllowlist(t *testing.T) {
 	cfg := config.Default()
 	cfg.Plugins.Workspace.DefaultAgentType = string(AgentCopilot)
 	cfg.Plugins.Workspace.Agents = []string{"grok", "claude"}
-	p := &Plugin{ctx: &plugin.Context{Config: cfg}}
+	root := t.TempDir()
+	p := &Plugin{ctx: &plugin.Context{Config: cfg, WorkDir: root, ProjectRoot: root}}
 	if got := p.getDefaultCreateAgentType(); got != AgentGrok {
 		t.Fatalf("default clamped = %q, want grok (first in allowlist)", got)
 	}

@@ -155,7 +155,8 @@ func TestInitCreateModalLoadsLastAgentAndAutoApprove(t *testing.T) {
 	}
 
 	p := New()
-	p.ctx = &plugin.Context{WorkDir: t.TempDir()}
+	root := t.TempDir()
+	p.ctx = &plugin.Context{WorkDir: root, ProjectRoot: root}
 	p.initCreateModalBase()
 	if p.createForm.Agent() != string(AgentCodex) {
 		t.Fatalf("agent = %q, want %q", p.createForm.Agent(), AgentCodex)
@@ -182,7 +183,8 @@ func TestCreateAgentChangeReloadsAutoApprove(t *testing.T) {
 	p := New()
 	p.width, p.height = 80, 40
 	p.mouseHandler = mouse.NewHandler()
-	p.ctx = &plugin.Context{}
+	root := t.TempDir()
+	p.ctx = &plugin.Context{WorkDir: root, ProjectRoot: root}
 	p.initCreateModalBase()
 	m, _ := renderCreateForm(t, p)
 	m.SetFocus(createAgentFieldID)
@@ -201,7 +203,8 @@ func TestCreateSlugHintHiddenWhenEqual(t *testing.T) {
 	p := New()
 	p.width, p.height = 80, 40
 	p.mouseHandler = mouse.NewHandler()
-	p.ctx = &plugin.Context{}
+	root := t.TempDir()
+	p.ctx = &plugin.Context{WorkDir: root, ProjectRoot: root}
 	p.initCreateModalNamed("auth-refresh")
 	_, view := renderCreateForm(t, p)
 	if strings.Contains(view, "git:") {
@@ -265,7 +268,8 @@ func TestCreateModalAgentComboKeepsIncrementalQuery(t *testing.T) {
 	p := New()
 	p.width, p.height = 80, 40
 	p.mouseHandler = mouse.NewHandler()
-	p.ctx = &plugin.Context{}
+	root := t.TempDir()
+	p.ctx = &plugin.Context{WorkDir: root, ProjectRoot: root}
 	p.initCreateModalBase()
 	m, _ := renderCreateForm(t, p)
 	m.SetFocus(createAgentFieldID)

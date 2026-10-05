@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/state"
 )
 
@@ -65,9 +66,9 @@ func TestExecuteAgentConfig_FreshStart(t *testing.T) {
 	if err := state.InitWithDir(t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
-	wt := &Worktree{Name: "test-wt", Path: "/tmp/test"}
+	wt := &Worktree{Name: "test-wt", Path: t.TempDir()}
 	p := &Plugin{
-		ctx:                  &plugin.Context{},
+		ctx:                  &plugin.Context{WorkDir: wt.Path, ProjectRoot: wt.Path},
 		agentConfigWorktree:  wt,
 		agentConfigIsRestart: false,
 		agentConfigAgentType: AgentClaude,
@@ -98,9 +99,9 @@ func TestExecuteAgentConfig_Restart(t *testing.T) {
 	if err := state.InitWithDir(t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
-	wt := &Worktree{Name: "test-wt", Path: "/tmp/test"}
+	wt := &Worktree{Name: "test-wt", Path: t.TempDir()}
 	p := &Plugin{
-		ctx:                  &plugin.Context{},
+		ctx:                  &plugin.Context{WorkDir: wt.Path, ProjectRoot: wt.Path},
 		agentConfigWorktree:  wt,
 		agentConfigIsRestart: true,
 		agentConfigAgentType: AgentCodex,
@@ -142,9 +143,13 @@ func TestOpenAgentConfigModalLoadsAutoApprove(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := New()
-	p.ctx = &plugin.Context{}
-	p.openAgentConfigModal(&Worktree{Name: "wt", Path: "/tmp"}, false)
+	root := t.TempDir()
+	p.ctx = &plugin.Context{WorkDir: root, ProjectRoot: root}
+	p.openAgentConfigModal(&Worktree{Name: "wt", Path: root}, false)
 	if !p.agentConfigSkipPerms {
 		t.Error("expected persisted auto-approve for claude")
+	}
+	if _, err := projectdir.ListRegistered(); err != nil {
+		t.Fatalf("opening agent config produced an invalid project registration: %v", err)
 	}
 }

@@ -75,10 +75,12 @@ func TestGetDefaultCreateAgentType_FromConfig(t *testing.T) {
 	cfg := config.Default()
 	cfg.Plugins.Workspace.DefaultAgentType = string(AgentOpenCode)
 
+	workDir := t.TempDir()
 	p := &Plugin{
 		ctx: &plugin.Context{
-			WorkDir: t.TempDir(),
-			Config:  cfg,
+			WorkDir:     workDir,
+			ProjectRoot: workDir,
+			Config:      cfg,
 		},
 	}
 
@@ -121,8 +123,9 @@ func TestGetDefaultCreateAgentType_InvalidFallback(t *testing.T) {
 
 	p := &Plugin{
 		ctx: &plugin.Context{
-			WorkDir: workDir,
-			Config:  cfg,
+			WorkDir:     workDir,
+			ProjectRoot: workDir,
+			Config:      cfg,
 		},
 	}
 
@@ -141,8 +144,9 @@ func TestInitCreateModalBase_UsesConfiguredDefaultAgent(t *testing.T) {
 
 	p := New()
 	p.ctx = &plugin.Context{
-		WorkDir: workDir,
-		Config:  cfg,
+		WorkDir:     workDir,
+		ProjectRoot: workDir,
+		Config:      cfg,
 	}
 
 	p.initCreateModalBase()
@@ -158,8 +162,9 @@ func TestResolveWorktreeAgentType_UsesConfigWhenNoSidecarFile(t *testing.T) {
 
 	p := &Plugin{
 		ctx: &plugin.Context{
-			WorkDir: workDir,
-			Config:  cfg,
+			WorkDir:     workDir,
+			ProjectRoot: workDir,
+			Config:      cfg,
 		},
 	}
 	wt := &Worktree{Path: workDir}
@@ -204,8 +209,9 @@ func TestResolveWorktreeAgentType_ClaudeFallback(t *testing.T) {
 
 	p := &Plugin{
 		ctx: &plugin.Context{
-			WorkDir: workDir,
-			Config:  cfg,
+			WorkDir:     workDir,
+			ProjectRoot: workDir,
+			Config:      cfg,
 		},
 	}
 	wt := &Worktree{Path: workDir}
