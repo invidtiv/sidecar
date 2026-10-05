@@ -2,11 +2,13 @@
 
 **Status:** S1, S2 and S3 are implemented and independently reviewed in the mobile repo (commits `0fb3763`, `e862a8a`, `01ccec3`, `cd89745`, `ab2806f`; 88 focused tests). S4's protocol note is in `docs/reference/mobile-protocol.md`. Open: the device proof in §5, including the rubber-band check added there. **Task:** td-9eecab (children td-85712c, td-af3ffe, td-c882df closed). **Parent:** [Sidecar mobile](../sidecar-mobile.md), execution in [execution.md](execution.md). **Desktop authority this mirrors:** [Consistent terminal scroll](../../implemented/consistent-terminal-scroll.md) and the shared rule in `internal/tty/wheel.go` and `internal/tty/wheel_route.go`. **Verified against:** sidecar `f5fc0248`, sidecar-mobile `05c68b5`. Every file:line below was read in those trees.
 
+**2026-10-05 correction (td-a11c76):** remove the alternate-screen cursor-key fallback. Swipes must scroll actual terminal history or an application that explicitly accepts mouse wheel reports. Without either, they send no input. The updated routing and protocol contract below supersede the original arrow behavior; physical gesture proof remains distinct from local installation.
+
 ## 0. The one-paragraph answer
 
 On the phone, a person controlling a Claude Code session cannot see anything above the visible grid. The reason is not a missing transport: the frame already reports `mouse_any`, `mouse_sgr` and `alternate_screen`, the `input` request already delivers raw bytes to `tmux send-keys`, and the client already encodes SGR wheel reports and forwards them, but only for a two-finger drag, one report per row of finger travel, each report as its own serialized request with a full acknowledgement round trip, no momentum, and a command buffer that fails the whole session when a fast gesture overflows it. The fix is the desktop's rule carried to touch: **who owns a scroll gesture is a property of the pane, decided from the authoritative frame modes, never from the gesture or the app's name.** A one-finger drag over a pane whose application has asked for mouse reports becomes wheel notches, coalesced and paced exactly as the desktop paces a trackpad flick, with at most one scroll request in flight. A drag over a plain shell keeps doing what it does today: it never sends bytes, and it opens the bounded owner History snapshot. The server changes only in documentation.
 
-## 1. What exists today
+## 1. Original baseline and wire contract
 
 ### 1.1 Facts on the wire
 
@@ -18,11 +20,11 @@ The `input` request carries base64 bytes bounded by `MaxInputBytes` = 64 KiB (`p
 
 `tty.RouteWheel` (`internal/tty/wheel.go:55`) gives a notch to the application only when the host may write, the app has asked for mouse reports, the pointer is on a pane cell, and no escape modifier is held; everything else scrolls the host's own window. `WheelBurst` (`wheel.go:103-141`) coalesces a flick: held-back delta is never dropped, it rides out with the next flush; once a flush has been forwarded to the pane, later flushes of the same gesture space themselves at least `WheelPaneDebounce` = 30 ms apart (`wheel.go:93`, td-b8c54e); a flush sends at most `MaxWheelNotchesPerFlush` = 10 reports (`wheel.go:29`); all reports of one flush go out in one `send-keys` (`SendSGRWheel`, `internal/tty/session.go:335`). `WheelNotches` (`wheel.go:242`) divides a line delta by `mouse.WheelScrollLines` = 3 because the application applies its own lines per notch. Encoding: `\x1b[<64;col;rowM` up, `\x1b[<65;col;rowM` down, press form only.
 
-### 1.3 The mobile client
+### 1.3 The mobile client baseline
 
-All paths are in `App/LiveTerminalViewport.swift` of the mobile repo.
+Except for the updated Route rule, this subsection records the original implementation before S1–S3. All paths are in `App/LiveTerminalViewport.swift` of the mobile repo.
 
-- **Route.** `sidecarTerminalScrollRoute(mouseReporting:alternateScreen:)` (`:47-53`) answers `.remoteWheel`, `.applicationArrows` (alternate screen without mouse: arrow keys), or `.unavailable` (normal buffer). It reads only the authoritative modes of the last applied frame. This is the correct rule and it stays.
+- **Route.** `sidecarTerminalScrollRoute(mouseReporting:alternateScreen:)` (`:47-53`) answers `.remoteWheel` when mouse reporting is enabled and `.unavailable` otherwise. It reads only the authoritative modes of the last applied frame. Alternate-screen state alone never authorizes input for a swipe.
 - **Two-finger vertical pan** (`installTerminalScrollGesture`, `:99-107`; `handleTerminalScroll`, `:174-189`) quantizes cumulative translation to lines at one line per cell height (`SidecarTerminalScrollAccumulator`, `:56-73`) and calls `sendScroll` (`:239-259`) on every `.changed` event that crosses a cell. `sendMouseWheel` (`:261-284`) emits one report per line, so one row of finger travel is one notch, and the application then applies its own lines per notch on top.
 - **One-finger vertical pan** (`handleOneFingerPan`, `:195-232`): the route is fixed at `.began`. Keyboard focused: a 12 pt downward drag resigns first responder and does nothing else. Keyboard hidden on a normal buffer with History available: a downward drag requests History once. Otherwise ignored. Over a mouse-reporting or alternate-screen pane, one finger does nothing.
 - **Delivery.** `onScrollInput` → `TerminalViewportContainer.sendInput` (`:493-500`) → `LiveSessionModel.sendInput` (`App/LiveSessionModel.swift:205-226`) → `LiveCommandBuffer.append(.input(data))`. The buffer holds 64 commands and 256 KiB (`App/LiveLifecycleFence.swift:53-56`), `drainCommands` (`LiveSessionModel.swift:480-538`) sends one command and awaits its acknowledgement before the next, and an overflow fails the session (`LiveSessionModel.swift:468-478`). The only coalescing anywhere is `replacePendingResize` (`LiveLifecycleFence.swift:72-79`).
@@ -50,13 +52,13 @@ The older harness in the second row asks for neither mouse reports nor the alter
 
 > **Law 2. A forwarded notch is input, coalesced before the wire.** Every forwarded flush is one `input` request carrying every report of that flush, paced at least 30 ms apart, capped at 10 notches, with at most one scroll request in flight and at most one scroll flush pending in the command buffer. Held-back notches ride out with the next flush; they are never dropped and never fail the session.
 
-> **Law 3. A pane that has not asked for the wheel never receives scroll bytes.** The normal-buffer route stays `.unavailable`: one finger keeps opening the bounded owner History snapshot, exactly as approved under td-3fb657, and zero input requests are produced. Nothing here adds client-side scrollback.
+> **Law 3. A pane that has not asked for the wheel never receives scroll bytes.** Both buffers route `.unavailable` without mouse reporting: a normal buffer keeps opening the bounded owner History snapshot, exactly as approved under td-3fb657, and an alternate screen has no gesture scrollback. Zero input requests are produced. Nothing here adds client-side scrollback.
 
 > **Law 4. The natural gesture scrolls; the explicit gesture stays.** One finger scrolls a pane that owns the wheel. The two-finger gesture keeps working unchanged as the always-available explicit form.
 
 ### 2.1 Gesture to notches
 
-One notch per `linesPerNotch` × cell height of finger travel, with `linesPerNotch` = 3 to match `mouse.WheelScrollLines`: the application applies its own lines per notch, so one row of travel per notch makes content run about three times faster than the finger. The existing accumulator keeps its remainder semantics (a 7 pt then 10 pt drag at a 16 pt cell must not emit a line; `native-keyboard-review.md`). `.applicationArrows` stays at one arrow per cell height because an arrow is one line. The constant is a named tuning value with a device check in §5, not a hard-coded literal.
+One notch per `linesPerNotch` × cell height of finger travel, with `linesPerNotch` = 3 to match `mouse.WheelScrollLines`: the application applies its own lines per notch, so one row of travel per notch makes content run about three times faster than the finger. The existing accumulator keeps its remainder semantics (a 7 pt then 10 pt drag at a 16 pt cell must not emit a line; `native-keyboard-review.md`). The constant is a named tuning value with a device check in §5, not a hard-coded literal.
 
 ### 2.2 Coalescing and pacing: `SidecarScrollBurst`
 
@@ -69,7 +71,7 @@ Below it, the command buffer gains `mergePendingScroll`: when the tail command o
 | Pane route | Keyboard focused | One-finger vertical drag |
 |---|---|---|
 | `.remoteWheel` | either | scrolls the application (this plan) |
-| `.applicationArrows` | either | arrows to the application, finger-tracked, no momentum (this plan) |
+| `.unavailable` (alternate screen) | either | no input, no History request |
 | `.unavailable` (normal buffer) | focused | dismiss the keyboard (unchanged) |
 | `.unavailable` (normal buffer) | hidden | downward drag opens History once (unchanged) |
 | any | control not held | nothing is sent; unchanged |
@@ -80,7 +82,7 @@ Gesture arbitration: SwiftTerm's own single-finger pan recognizers stay disabled
 
 ### 2.4 Momentum
 
-`.remoteWheel` only. On `.ended`, take the recognizer's vertical velocity and run a decay animator on `CADisplayLink` with UIScrollView's normal deceleration rate (0.998 per millisecond), feeding synthetic translation into the same accumulator and burst. It stops when velocity falls below half a cell per second, after 1.5 s, when control is lost, when the route stops being `.remoteWheel`, or when a new touch lands. Momentum never applies to `.applicationArrows`: arrows are keystrokes, and a decaying tail of arrows into vim or less would keep moving a cursor after the finger left.
+`.remoteWheel` only. On `.ended`, take the recognizer's vertical velocity and run a decay animator on `CADisplayLink` with UIScrollView's normal deceleration rate (0.998 per millisecond), feeding synthetic translation into the same accumulator and burst. It stops when velocity falls below half a cell per second, after 1.5 s, when control is lost, when the route stops being `.remoteWheel`, or when a new touch lands. No cursor keys are synthesized for scrolling, during a drag or after the finger lifts.
 
 ### 2.5 Interplay with frames and fences
 
@@ -120,7 +122,7 @@ Unit, in the mobile repo's focused viewport and model suites:
 - Burst: a held event carries its notches into the next flush; a flush never exceeds 10 notches; forwarded flushes of one gesture are at least 30 ms apart; a reversal nets to one direction; `reset()` on control loss drops pending notches; a route change to `.unavailable` sends nothing.
 - Buffer: a second scroll flush merges into a pending one and the buffer's command count does not grow; a keystroke between two flushes is not reordered; a resize still coalesces as before.
 - Routing: the §2.3 table, row by row, including "normal buffer, keyboard hidden, downward drag requests History exactly once and produces zero input bytes" (the existing td-3fb657 tests must keep passing unchanged).
-- Encoding: SGR and legacy reports unchanged from today's tests; a flush of N notches encodes N reports in one `Data`.
+- Encoding: alternate-screen gestures without mouse reporting produce no cursor-key bytes; queued wheel flushes are dropped if mouse reporting turns off before drain. SGR and legacy reports unchanged from today's tests; a flush of N notches encodes N reports in one `Data`.
 - Momentum: a decay from a known velocity produces a bounded, monotone notch series and stops at the thresholds in §2.4.
 
 Live, on a personal device against a Claude Code 2.1.x pane on the hub, with the same isolation rules as every other mobile proof:
@@ -137,3 +139,4 @@ Live, on a personal device against a Claude Code 2.1.x pane on the hub, with the
 - **One finger over a wheel-owning pane with the keyboard up scrolls rather than dismisses** (§2.3). Implemented as recommended; keyboard dismissal on those panes is UIKit's interactive drag into the keyboard and the header keyboard button. The explicit 12 pt swipe-down dismissal remains on normal-buffer panes.
 - **Momentum shipped in the first delivery** for `.remoteWheel` only.
 - **`linesPerNotch` = 3** is the shipped default, pending the §5 device check.
+- **Swipes never send cursor keys** (2026-10-05, td-a11c76). Codex interprets Up/Down as prompt navigation, so alternate-screen state alone is insufficient. Inline Codex sessions use owner History; alternate-screen sessions without mouse reporting ignore scrolling.
