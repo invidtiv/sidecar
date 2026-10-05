@@ -30,19 +30,20 @@ type SocketStatus struct {
 }
 
 type Status struct {
-	Socket    SocketStatus `json:"socket"`
-	Manager   string       `json:"manager"`
-	Label     string       `json:"label"`
-	File      string       `json:"file"`
-	Installed bool         `json:"installed"`
-	Loaded    bool         `json:"loaded"`
-	Running   bool         `json:"running"`
-	PID       int          `json:"pid"`
-	Version   string       `json:"version"`
-	UIDir     string       `json:"ui_dir"`
-	LastExit  *Exit        `json:"last_exit"`
-	Log       string       `json:"log"`
-	Message   string       `json:"message"`
+	Socket        SocketStatus `json:"socket"`
+	Manager       string       `json:"manager"`
+	Label         string       `json:"label"`
+	File          string       `json:"file"`
+	Installed     bool         `json:"installed"`
+	Loaded        bool         `json:"loaded"`
+	Running       bool         `json:"running"`
+	PID           int          `json:"pid"`
+	Version       string       `json:"version"`
+	UIDir         *string      `json:"ui_dir"`
+	UIConfigError string       `json:"ui_config_error,omitempty"`
+	LastExit      *Exit        `json:"last_exit"`
+	Log           string       `json:"log"`
+	Message       string       `json:"message"`
 }
 
 // Manager is the service-manager seam. Tests and headless callers inject it.

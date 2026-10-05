@@ -529,7 +529,9 @@ func runAPIStatus(env Env, args []string) int {
 		return 1
 	}
 	_, _ = fmt.Fprintf(env.Stdout, "Sidecar UI API v%d, server %s, pid %d, up since %s\n", status.APIVersion, status.ServerVersion, status.PID, status.StartedAt.Local().Format(time.RFC3339))
-	printAPIUIDir(env, status.UIDir)
+	if status.UIDir != nil {
+		printAPIUIDir(env, *status.UIDir)
+	}
 	for _, listener := range status.Listeners {
 		line := fmt.Sprintf("  %-8s %s %s", listener.Name, listener.Network, listener.Address)
 		if listener.Host != "" {

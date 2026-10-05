@@ -86,3 +86,51 @@ func TestSaveAPIUIDirRejectsBrokenConfigWithoutWriting(t *testing.T) {
 		}
 	}
 }
+
+func TestConfigSavesPreserveSymlinkAndTargetMode(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "actual", "config.json")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte(`{"api":{"uiDir":"old"},"prompts":{"keep":true}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "config.json")
+	if err := os.Symlink("actual/config.json", link); err != nil {
+		t.Fatal(err)
+	}
+	SetTestConfigPath(link)
+	t.Cleanup(ResetTestConfigPath)
+	for _, save := range []func() error{
+		func() error { return SaveAPIUIDir("/tmp/new-ui") },
+		func() error { return SaveUI(func(ui *UIConfig) { ui.ShowClock = false }) },
+	} {
+		before, err := os.Stat(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := save(); err != nil {
+			t.Fatal(err)
+		}
+		info, err := os.Lstat(link)
+		if err != nil || info.Mode()&os.ModeSymlink == 0 {
+			t.Fatalf("lost config symlink: %v %v", info, err)
+		}
+		after, err := os.Stat(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if after.Mode().Perm() != 0o600 || os.SameFile(before, after) {
+			t.Fatal("target was not replaced atomically with preserved mode")
+		}
+		cfg, err := Load()
+		if err != nil || cfg.API.UIDir != "/tmp/new-ui" {
+			t.Fatalf("target not updated: %+v %v", cfg, err)
+		}
+		entries, err := os.ReadDir(filepath.Dir(target))
+		if err != nil || len(entries) != 1 {
+			t.Fatalf("temp files leaked: %v %v", entries, err)
+		}
+	}
+}

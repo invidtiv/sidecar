@@ -94,10 +94,14 @@ func runAPIService(env Env, args []string) int {
 			return 1
 		}
 	}
-	cfg, err := config.Load()
-	if err != nil {
-		cliErrf(env.Stderr, "load API config: %v; fix %s and retry\n", err, config.ConfigPath())
-		return 1
+	var configuredUI *string
+	if args[0] == "install" {
+		cfg, err := config.Load()
+		if err != nil {
+			cliErrf(env.Stderr, "load API config: %v; fix %s and retry\n", err, config.ConfigPath())
+			return 1
+		}
+		configuredUI = &cfg.API.UIDir
 	}
 	manager, err := apiServiceManager(env)
 	if err != nil {
@@ -128,7 +132,7 @@ func runAPIService(env Env, args []string) int {
 				cliErrf(env.Stderr, "save UI directory: %v; check %s and retry\n", err, config.ConfigPath())
 				return 1
 			}
-			cfg.API.UIDir = uiDir
+			configuredUI = &uiDir
 		}
 		err = manager.Install(ctx)
 	case "uninstall":
@@ -144,13 +148,27 @@ func runAPIService(env Env, args []string) int {
 		return 1
 	}
 	apiServiceVersion(ctx, env, &status)
-	status.UIDir = cfg.API.UIDir
+	status.UIDir = configuredUI
+	if args[0] == "status" {
+		if cfg, err := config.Load(); err == nil {
+			status.UIDir = &cfg.API.UIDir
+		} else {
+			status.UIConfigError = fmt.Sprintf("load API config: %v; fix %s and retry", err, config.ConfigPath())
+		}
+	}
 	if flags.bools["--json"] {
 		return writeCLIJSON(env, status)
 	}
 	_, _ = fmt.Fprintf(env.Stdout, "%s\n%s: installed=%t loaded=%t running=%t pid=%d version=%s\n", status.Message, status.Manager, status.Installed, status.Loaded, status.Running, status.PID, status.Version)
 	_, _ = fmt.Fprintf(env.Stdout, "Browser socket: installed=%t loaded=%t listening=%t\n", status.Socket.Installed, status.Socket.Loaded, status.Socket.Listening)
-	printAPIUIDir(env, status.UIDir)
+	if status.UIDir != nil {
+		printAPIUIDir(env, *status.UIDir)
+	} else {
+		_, _ = fmt.Fprintln(env.Stdout, "UI directory: unknown")
+	}
+	if status.UIConfigError != "" {
+		_, _ = fmt.Fprintln(env.Stdout, status.UIConfigError)
+	}
 	if status.LastExit != nil {
 		_, _ = fmt.Fprintf(env.Stdout, "Last exit: code=%d signal=%s\n", status.LastExit.Code, status.LastExit.Signal)
 	}

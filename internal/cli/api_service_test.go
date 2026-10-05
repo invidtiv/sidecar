@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -13,6 +14,47 @@ import (
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/uiapi"
 )
+
+func TestAPIServiceBrokenConfigStillAllowsStatusAndUninstall(t *testing.T) {
+	apiStateTree(t, t.TempDir())
+	fake := fakeAPIService(t)
+	seed := []byte(`{"api":`)
+	if err := os.WriteFile(config.ConfigPath(), seed, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"status"}, {"status", "--json"}, {"uninstall"}, {"uninstall", "--json"}} {
+		code, out, stderr := runAPICLI(t, append([]string{"api", "service"}, args...)...)
+		if code != 0 {
+			t.Fatalf("%v: %d %s %s", args, code, out, stderr)
+		}
+		if args[0] == "status" {
+			if len(args) == 1 && (!strings.Contains(out, "UI directory: unknown") || !strings.Contains(out, "load API config")) {
+				t.Fatalf("missing config detail: %s", out)
+			}
+			if len(args) == 2 {
+				var status apiservice.Status
+				if err := json.Unmarshal([]byte(out), &status); err != nil {
+					t.Fatal(err)
+				}
+				if status.UIDir != nil || status.UIConfigError == "" || !strings.Contains(out, `"ui_dir":null`) {
+					t.Fatalf("missing unknown/detail: %s", out)
+				}
+			}
+		} else if strings.Contains(out, "load API config") {
+			t.Fatalf("uninstall loaded config: %s", out)
+		}
+	}
+	if strings.Join(fake.calls, ",") != "status,status,uninstall,status,uninstall,status" {
+		t.Fatalf("manager calls: %v", fake.calls)
+	}
+	if code, _, stderr := runAPICLI(t, "api", "service", "install"); code != 1 || !strings.Contains(stderr, "load API config") {
+		t.Fatalf("install: %d %s", code, stderr)
+	}
+	after, err := os.ReadFile(config.ConfigPath())
+	if err != nil || string(after) != string(seed) {
+		t.Fatalf("changed broken config: %s %v", after, err)
+	}
+}
 
 type fakeAPIManager struct {
 	status        apiservice.Status

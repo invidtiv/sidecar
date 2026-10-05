@@ -3055,6 +3055,9 @@
               "null"
             ]
           },
+          "ui_configured": {
+            "type": "boolean"
+          },
           "ui_dir": {
             "type": "string"
           }
@@ -3063,7 +3066,7 @@
           "api_version",
           "api_instance",
           "server_version",
-          "ui_dir",
+          "ui_configured",
           "pid",
           "started_at",
           "listeners",
@@ -7470,6 +7473,7 @@
     },
     "/api/v0/status": {
       "get": {
+        "description": "Server status. ui_configured is available on every listener; ui_dir is included only on the trusted Local socket and omitted on Browser and Tailnet.",
         "operationId": "status_get",
         "responses": {
           "200": {
@@ -7510,6 +7514,7 @@
         "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there."
       },
       "head": {
+        "description": "Server status. ui_configured is available on every listener; ui_dir is included only on the trusted Local socket and omitted on Browser and Tailnet.",
         "operationId": "status_get_head",
         "responses": {
           "200": {

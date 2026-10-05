@@ -416,7 +416,8 @@ type Status struct {
 	APIVersion    int            `json:"api_version"`
 	APIInstance   string         `json:"api_instance"`
 	ServerVersion string         `json:"server_version"`
-	UIDir         string         `json:"ui_dir"`
+	UIDir         *string        `json:"ui_dir,omitempty"`
+	UIConfigured  bool           `json:"ui_configured"`
 	PID           int            `json:"pid"`
 	StartedAt     time.Time      `json:"started_at"`
 	Listeners     []ListenerInfo `json:"listeners"`
@@ -430,9 +431,10 @@ func (s *Server) status() Status {
 		status := *s.opts.FixtureStatus
 		status.Listeners = append([]ListenerInfo(nil), s.listeners...)
 		status.Clients, status.Terminals = clients, terminals
-		status.UIDir = s.opts.UIDir
+		status.UIDir = &s.opts.UIDir
+		status.UIConfigured = s.opts.UIDir != ""
 		return status
 	}
 	return Status{APIVersion: APIVersion, APIInstance: s.instance, ServerVersion: s.opts.Version, PID: os.Getpid(),
-		StartedAt: s.startedAt, UIDir: s.opts.UIDir, Listeners: append([]ListenerInfo(nil), s.listeners...), Clients: clients, Terminals: terminals}
+		StartedAt: s.startedAt, UIDir: &s.opts.UIDir, UIConfigured: s.opts.UIDir != "", Listeners: append([]ListenerInfo(nil), s.listeners...), Clients: clients, Terminals: terminals}
 }

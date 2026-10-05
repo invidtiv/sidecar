@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -714,6 +715,48 @@ func TestTailnetIdentityHeaderHonoredOnlyOnTailnet(t *testing.T) {
 	session := h.pairBrowser()
 	response, data = h.tailnetDo(req{path: "/api/v0/hello", header: map[string]string{"Authorization": "Bearer " + session}})
 	expect(t, response, data, http.StatusUnauthorized, CodeUnauthenticated)
+}
+
+func TestStatusUIDirIsLocalOnly(t *testing.T) {
+	for _, configured := range []bool{false, true} {
+		t.Run(fmt.Sprintf("configured=%t", configured), func(t *testing.T) {
+			ui := ""
+			if configured {
+				ui = t.TempDir()
+				if err := os.WriteFile(filepath.Join(ui, "index.html"), []byte("UI"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			h := newHarness(t, func(o *Options) { o.UIDir = ui })
+			token := h.pairBrowser()
+			for name, do := range map[string]func(req) (*http.Response, []byte){"local": h.localDo, "browser": h.browserDo, "tailnet": h.tailnetDo} {
+				r, body := do(req{path: "/api/v0/status", header: map[string]string{"Authorization": "Bearer " + token, tailscaleLoginHead: testTailnetLogin}})
+				if r.StatusCode != http.StatusOK {
+					t.Fatalf("%s: %d %s", name, r.StatusCode, body)
+				}
+				var status map[string]json.RawMessage
+				if err := json.Unmarshal(body, &status); err != nil {
+					t.Fatal(err)
+				}
+				var gotConfigured bool
+				if err := json.Unmarshal(status["ui_configured"], &gotConfigured); err != nil || gotConfigured != configured {
+					t.Fatalf("%s configured: %s %v", name, body, err)
+				}
+				_, hasPath := status["ui_dir"]
+				if hasPath != (name == "local") {
+					t.Fatalf("%s path exposure: %s", name, body)
+				}
+				if name == "local" {
+					var got string
+					if err := json.Unmarshal(status["ui_dir"], &got); err != nil || got != ui {
+						t.Fatalf("local dir: %s %v", body, err)
+					}
+				} else if ui != "" && bytes.Contains(body, []byte(ui)) {
+					t.Fatalf("%s leaked home path: %s", name, body)
+				}
+			}
+		})
+	}
 }
 
 func TestSessionsMapsQueryAndEncodesLikeTheCLI(t *testing.T) {

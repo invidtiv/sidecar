@@ -13,6 +13,8 @@ The reference web UI, TypeScript SDK, and web components exist in the separate `
 
 Run `sidecar api spec --json` to discover the generated OpenAPI 3.1 resources and the terminal and events schemas under `x-streams`. This command needs no running server or tmux. Read [docs/reference/ui-api.md](https://github.com/marcus/sidecar/blob/main/docs/reference/ui-api.md) for listener rules, pairing, ordering, refusals, content boundaries, and viewer relay. Read [mobile-protocol.md](https://github.com/marcus/sidecar/blob/main/docs/reference/mobile-protocol.md) for the terminal protocol, identity, geometry, and reconnect rules. The schemas describe serialization; the written contracts supply the behavioral rules.
 
+Status exposes `ui_configured` on every listener. Only the trusted Local socket includes `ui_dir`; browser clients do not receive the server's filesystem path.
+
 Use `GET /api/v0/hello` to discover the running server's capabilities. Terminal envelopes retain protocol version 0 while negotiating additive v1 capabilities. Require the capability you use rather than assuming every server has it.
 
 ## Choose a transport and credential

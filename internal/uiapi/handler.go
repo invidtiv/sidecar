@@ -408,8 +408,12 @@ func (s *Server) handleHello(w http.ResponseWriter, _ *http.Request, _ caller) {
 	writeJSON(w, http.StatusOK, s.hello())
 }
 
-func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request, _ caller) {
-	writeJSON(w, http.StatusOK, s.status())
+func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request, c caller) {
+	status := s.status()
+	if c.listener != ListenerLocal {
+		status.UIDir = nil
+	}
+	writeJSON(w, http.StatusOK, status)
 }
 
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request, _ caller) {

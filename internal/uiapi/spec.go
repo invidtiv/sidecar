@@ -109,6 +109,7 @@ func Spec() ([]byte, error) {
 	add("/api/v0/hello", "get", "", "Hello", all, false)
 	add("/api/v0/sessions", "get", "", "CatalogSnapshot", all, false)
 	add("/api/v0/status", "get", "", "Status", all, false)
+	paths["/api/v0/status"].(map[string]any)["get"].(map[string]any)["description"] = "Server status. ui_configured is available on every listener; ui_dir is included only on the trusted Local socket and omitted on Browser and Tailnet."
 	add(contentRoute, "get", "", "ContentReadResult", all, false)
 	add(treeRoute, "get", "", "ContentTreeResult", all, false)
 	add(layoutRoute, "get", "", "LayoutDocument", all, false)
