@@ -45,7 +45,8 @@ func (n *Native) Status(ctx context.Context) (Status, error) {
 		} else {
 			status.Loaded = true
 			parseLaunchd(string(output), &status)
-			status.Socket.Loaded = strings.Contains(string(output), "sockets = {") && strings.Contains(string(output), "browser = {")
+			status.Socket.Loaded = strings.Contains(string(output), "sockets = {") &&
+				(strings.Contains(string(output), "browser = {") || strings.Contains(string(output), `"browser" = {`))
 			status.Socket.Listening = status.Socket.Loaded
 		}
 	} else {
@@ -95,8 +96,14 @@ func (n *Native) Status(ctx context.Context) (Status, error) {
 	return status, nil
 }
 
+// parseLaunchd reads only the job's own top-level keys. Nested dictionaries
+// repeat names such as `state` (each socket reports `state = active`), and
+// reading those would overwrite the job's state.
 func parseLaunchd(output string, status *Status) {
 	for _, line := range strings.Split(output, "\n") {
+		if !strings.HasPrefix(line, "\t") || strings.HasPrefix(line, "\t\t") {
+			continue
+		}
 		key, value, ok := strings.Cut(strings.TrimSpace(line), " = ")
 		if !ok {
 			continue

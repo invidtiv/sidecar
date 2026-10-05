@@ -241,3 +241,65 @@ func TestServiceActivationFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// launchd on recent macOS binds an activated Unix socket in its own private
+// directory and moves it to SockPathName, so the descriptor reports the
+// bind-time path. The launchd name is accepted only when the configured path
+// demonstrably reaches the inherited listener.
+func TestValidateActivatedAcceptsMovedLaunchdSocketOnlyWhenItServesThePath(t *testing.T) {
+	root, err := os.MkdirTemp("/tmp", "sc-mv-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(root) }()
+	if err := os.MkdirAll(Dir(root), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	localPath := filepath.Join(Dir(root), localSocketName)
+	bindPath := filepath.Join(root, "local")
+	moved, err := net.Listen("unix", bindPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = moved.Close() }()
+	moved.(*net.UnixListener).SetUnlinkOnClose(false)
+	if err := os.Rename(bindPath, localPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(localPath, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	opts := Options{StateDir: root}
+	if _, err := validateActivated(opts, []apiservice.ActivatedListener{{Listener: moved}}); err == nil {
+		t.Fatal("accepted an unnamed socket whose address is not the Local path")
+	}
+	got, err := validateActivated(opts, []apiservice.ActivatedListener{{Name: "local", Listener: moved}})
+	if err != nil || got[ListenerLocal] != moved {
+		t.Fatalf("validateActivated(moved launchd socket) = %v, %v; want it as Local", got, err)
+	}
+
+	// A named descriptor whose path is served by some other socket is refused.
+	if err := os.Remove(localPath); err != nil {
+		t.Fatal(err)
+	}
+	other, err := net.Listen("unix", localPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = other.Close() }()
+	if err := os.Chmod(localPath, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		for {
+			conn, err := other.Accept()
+			if err != nil {
+				return
+			}
+			_ = conn.Close()
+		}
+	}()
+	if _, err := validateActivated(opts, []apiservice.ActivatedListener{{Name: "local", Listener: moved}}); err == nil {
+		t.Fatal("accepted a named socket that does not serve the Local path")
+	}
+}

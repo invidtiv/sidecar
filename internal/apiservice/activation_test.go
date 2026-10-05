@@ -202,12 +202,12 @@ func TestSocketStatusAndLegacyMigration(t *testing.T) {
 				call := command + " " + strings.Join(args, " ")
 				calls = append(calls, call)
 				if command == "launchctl" && args[0] == "print" {
-					text := "state = running\n pid = 42\n"
+					text := "\tstate = running\n\tpid = 42\n"
 					if stopped {
-						text = "state = waiting\n"
+						text = "\tstate = waiting\n"
 					}
 					if !legacy {
-						text += "sockets = {\n browser = {\n }\n }\n"
+						text += "\tsockets = {\n\t\t\"browser\" = {\n\t\t\tstate = active\n\t\t}\n\t}\n"
 					}
 					return []byte(text), nil
 				}

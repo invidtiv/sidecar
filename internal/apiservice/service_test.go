@@ -27,7 +27,7 @@ func (f *fakeRunner) run(_ context.Context, command string, args ...string) ([]b
 		if !f.loaded {
 			return []byte("Could not find service com.haplab.sidecar.api in domain for user gui: 501"), errors.New("exit 113")
 		}
-		return []byte("state = running\n pid = 42\n last exit code = 7\n sockets = {\n browser = {\n passive = 1\n }\n }\n"), nil
+		return []byte(launchctlPrintRunning), nil
 	}
 	if strings.Contains(call, " show ") {
 		if strings.Contains(call, SocketUnit) && f.loaded {
@@ -195,9 +195,23 @@ func TestStableExecutablePreservesLinksButNeverSelectsAnotherBuild(t *testing.T)
 		t.Fatalf("selected another build: %s", got)
 	}
 }
+
+// launchctlPrintRunning is the shape `launchctl print` produces on macOS 27:
+// tab-indented, quoted socket names, and nested dictionaries that repeat
+// `state` and `path`.
+const launchctlPrintRunning = "gui/501/com.haplab.sidecar.api = {\n" +
+	"\tactive count = 1\n\tstate = running\n\n\tprogram = /bin/sidecar\n\truns = 16\n\tpid = 42\n\tlast exit code = 7\n\n" +
+	"\tsockets = {\n\t\t\"local\" = {\n\t\t\ttype = stream\n\t\t\tpath = /s/api.sock\n\t\t\tsockets = {\n\t\t\t\tstate = active\n\t\t\t}\n\t\t}\n" +
+	"\t\t\"browser\" = {\n\t\t\ttype = stream\n\t\t\tsockets = {\n\t\t\t\tstate = active\n\t\t\t}\n\t\t}\n\t}\n}\n"
+
 func TestParseManagerStatus(t *testing.T) {
+	running := Status{}
+	parseLaunchd(launchctlPrintRunning, &running)
+	if !running.Running || running.PID != 42 || !reflect.DeepEqual(running.LastExit, &Exit{Code: 7}) {
+		t.Fatalf("nested socket state overrode the job: %+v", running)
+	}
 	status := Status{}
-	parseLaunchd("state = waiting\nlast terminating signal = SIGTERM\n", &status)
+	parseLaunchd("gui/501/x = {\n\tstate = waiting\n\tlast terminating signal = SIGTERM\n}\n", &status)
 	if status.Running || !reflect.DeepEqual(status.LastExit, &Exit{Signal: "SIGTERM"}) {
 		t.Fatalf("%+v", status)
 	}
