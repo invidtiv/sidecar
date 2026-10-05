@@ -3,6 +3,7 @@ package workspaceops
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -161,7 +162,7 @@ func TestReadOrphanSessionIsExactAndRecognisesGone(t *testing.T) {
 }
 
 func TestOrphanPaneListingPreservesUnknownLastPane(t *testing.T) {
-	listing := "$7\t" + orphanRoot + "\t" + orphanRoot + "\n$7\t" + orphanRoot + "\t\n"
+	listing := "$7|" + orphanRoot + "|" + orphanRoot + "\n$7|" + orphanRoot + "|\n"
 	state, err := parseOrphanSession("sidecar-ws-repo-foo", listing)
 	if err != nil || len(state.PanePaths) != 2 || state.PanePaths[1] != "" {
 		t.Fatalf("read lost unknown final pane: %+v, %v", state, err)
@@ -174,7 +175,7 @@ func TestOrphanPaneListingPreservesLiteralCarriageReturn(t *testing.T) {
 	if err := os.Mkdir(live, 0700); err != nil {
 		t.Fatal(err)
 	}
-	state, err := parseOrphanSession("sidecar-ws-repo-foo", "$7\t"+orphanRoot+"\t"+live+"\n")
+	state, err := parseOrphanSession("sidecar-ws-repo-foo", "$7|"+orphanRoot+"|"+base+"/live\\r\n")
 	if err != nil || len(state.PanePaths) != 1 || state.PanePaths[0] != live || PaneDirectoryMissing(state.PanePaths[0]) {
 		t.Fatalf("literal cwd was changed into missing-directory evidence: %+v, %v", state, err)
 	}
@@ -184,22 +185,26 @@ func TestReadOrphanSessionPreservesLiteralCarriageReturnLive(t *testing.T) {
 	if !TmuxInstalled() {
 		t.Skip("tmux not installed")
 	}
-	live := filepath.Join(t.TempDir(), "live\r")
-	if err := os.Mkdir(live, 0700); err != nil {
-		t.Fatal(err)
-	}
-	const name = "sidecar-ws-orphan-carriage-return"
-	if out, err := exec.Command("tmux", "new-session", "-d", "-s", name, "-c", live, "/bin/bash", "--noprofile", "--norc", "-i").CombinedOutput(); err != nil {
-		t.Fatalf("start private session: %v: %s", err, out)
-	}
-	t.Cleanup(func() { _ = exec.Command("tmux", "kill-session", "-t", "="+name).Run() })
-	state, err := readOrphanSession(t.Context(), name)
-	if err != nil || len(state.PanePaths) != 1 || CanonicalWorkPath(state.PanePaths[0]) != CanonicalWorkPath(live) || PaneDirectoryMissing(state.PanePaths[0]) {
-		t.Fatalf("live cwd did not survive tmux evidence parsing: %+v, %v", state, err)
+	for _, name := range []string{"live\r", `live\r`, "live|$HOME\\\t行", "live\n$7|/removed|/removed", "live\x1b\x7f"} {
+		t.Run(fmt.Sprintf("bytes-%x", []byte(name)), func(t *testing.T) {
+			live := filepath.Join(t.TempDir(), name)
+			if err := os.MkdirAll(live, 0700); err != nil {
+				t.Fatal(err)
+			}
+			const name = "sidecar-ws-orphan-carriage-return"
+			if out, err := exec.Command("tmux", "new-session", "-d", "-s", name, "-c", live, "/bin/bash", "--noprofile", "--norc", "-i").CombinedOutput(); err != nil {
+				t.Fatalf("start private session: %v: %s", err, out)
+			}
+			t.Cleanup(func() { _ = exec.Command("tmux", "kill-session", "-t", "="+name).Run() })
+			state, err := readOrphanSession(t.Context(), name)
+			if err != nil || len(state.PanePaths) != 1 || CanonicalWorkPath(state.PanePaths[0]) != CanonicalWorkPath(live) || PaneDirectoryMissing(state.PanePaths[0]) {
+				t.Fatalf("live cwd did not survive tmux evidence parsing: %+v, %v", state, err)
+			}
+		})
 	}
 }
 func TestOrphanPaneListingRejectsIncompleteRows(t *testing.T) {
-	for _, listing := range []string{"$7\t" + orphanRoot + "\t" + orphanRoot + "\n$7\t" + orphanRoot + "\n", "$7\t" + orphanRoot + "\n$7\t" + orphanRoot + "\t" + orphanRoot + "\n"} {
+	for _, listing := range []string{"$7|" + orphanRoot + "|" + orphanRoot + "\n$7|" + orphanRoot + "\n", "$7|" + orphanRoot + "\n$7|" + orphanRoot + "|" + orphanRoot + "\n"} {
 		if _, err := parseOrphanSession("sidecar-ws-repo-foo", listing); err == nil {
 			t.Fatalf("incomplete pane row accepted: %q", listing)
 		}

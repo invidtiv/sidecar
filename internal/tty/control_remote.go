@@ -809,16 +809,26 @@ func controlQuote(s string) string {
 	if isPlainControlWord(s) {
 		return s
 	}
-	if !strings.Contains(s, "'") {
+	if !strings.Contains(s, "'") && strings.IndexFunc(s, func(r rune) bool { return r < 32 || r == 127 }) < 0 {
 		return "'" + s + "'"
 	}
 	// Inside double quotes tmux expands $ and backticks and honours
-	// backslashes, so all four are neutralised. A newline cannot be escaped in
-	// either quoting form, so it is stripped: the transport rejects multiline
-	// commands outright, and this keeps controlQuote's own contract — one word
-	// — true on its own rather than relying on that check.
-	replacer := strings.NewReplacer(`\`, `\\`, `"`, `\"`, `$`, `\$`, "`", "\\`", "\n", "", "\r", "")
-	return `"` + replacer.Replace(s) + `"`
+	// backslashes, so all four are neutralised. tmux's parser accepts octal
+	// escapes in double quotes, keeping literal control bytes off the wire
+	// without changing values or introducing another control command line.
+	replacer := strings.NewReplacer(`\`, `\\`, `"`, `\"`, `$`, `\$`, "`", "\\`")
+	quoted := replacer.Replace(s)
+	var word strings.Builder
+	word.WriteByte('"')
+	for _, b := range []byte(quoted) {
+		if b < 32 || b == 127 {
+			fmt.Fprintf(&word, "\\%03o", b)
+		} else {
+			word.WriteByte(b)
+		}
+	}
+	word.WriteByte('"')
+	return word.String()
 }
 
 // isPlainControlWord reports whether s can go on a tmux command line unquoted.

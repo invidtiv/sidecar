@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strings"
 	"sync"
+
+	"github.com/marcus/sidecar/internal/tmuxformat"
 )
 
 // This file is the presentation-neutral worktree deletion path. Every surface
@@ -723,8 +725,8 @@ var readOrphanSession = func(ctx context.Context, session string) (orphanSession
 	// `=name:` and not `=name`: list-panes takes a window target, and there a
 	// bare `=pro` still resolves the session `probe`. The trailing colon makes
 	// tmux parse the name as an exact session.
-	cmd := exec.CommandContext(ctx, "tmux", "list-panes", "-s", "-t", "="+session+":",
-		"-F", "#{session_id}\t#{session_path}\t#{pane_current_path}")
+	cmd := exec.CommandContext(ctx, "tmux", tmuxformat.ClientArgs("list-panes", "-s", "-t", "="+session+":",
+		"-F", tmuxformat.RecordFields("session_id", "session_path", "pane_current_path"))...)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -740,10 +742,10 @@ var readOrphanSession = func(ctx context.Context, session string) (orphanSession
 
 func parseOrphanSession(session, listing string) (orphanSessionState, error) {
 	var state orphanSessionState
-	// tmux's local stdout terminates rows with LF. A CR before that LF may
-	// belong to the literal directory name and must not become false absence.
+	// Quote every field at the tmux boundary: versions disagree about raw C0
+	// output, and literal tabs/newlines in a directory must not split evidence.
 	for _, line := range strings.Split(strings.TrimSuffix(listing, "\n"), "\n") {
-		fields := strings.SplitN(line, "\t", 3)
+		fields := tmuxformat.Split(line)
 		if len(fields) != 3 || fields[0] == "" || fields[1] == "" {
 			return state, fmt.Errorf("read session %s: incomplete pane evidence", session)
 		}

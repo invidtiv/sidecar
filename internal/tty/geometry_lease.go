@@ -406,12 +406,12 @@ func (tmuxLeaseStore) read(target string) (string, string, bool) {
 		return "", "", false
 	}
 	out, err := exec.Command("tmux", tmuxformat.ClientArgs("display-message", "-t", target, "-p",
-		"#{session_name}\t#{"+leaseOptionName+"}\t#{"+headlessHolderOwner+"}\t#{"+headlessHolderKind+"}\t#{"+headlessHolderLabel+"}")...).Output()
+		tmuxformat.RecordFields("session_name", leaseOptionName, headlessHolderOwner, headlessHolderKind, headlessHolderLabel))...).Output()
 	if err != nil {
 		return "", "", false
 	}
-	fields := strings.SplitN(strings.TrimRight(string(out), "\r\n"), "\t", 5)
-	if len(fields) < 2 || fields[0] == "" {
+	fields := tmuxformat.Split(strings.TrimSuffix(string(out), "\n"))
+	if len(fields) != 5 || fields[0] == "" {
 		return "", "", false
 	}
 	session, token := fields[0], strings.TrimSpace(fields[1])

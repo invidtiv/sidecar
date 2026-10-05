@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/marcus/sidecar/internal/tmuxformat"
 )
 
 const (
@@ -286,7 +288,7 @@ func (g *HeadlessGeometry) presenceTransaction(observed, next, layoutGuard strin
 func (g *HeadlessGeometry) Holder() (kind, label string, err error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	command := "display-message -t " + controlQuote(g.expected.Pane) + " -p " + controlQuote("#{pid}\t#{session_id}\t#{session_created}\t#{session_name}\t#{pane_id}\t#{"+leaseOptionName+"}\t#{"+headlessHolderOwner+"}\t#{"+headlessHolderKind+"}\t#{"+headlessHolderLabel+"}")
+	command := "display-message -t " + controlQuote(g.expected.Pane) + " -p " + controlQuote(tmuxformat.RecordFields("pid", "session_id", "session_created", "session_name", "pane_id", leaseOptionName, headlessHolderOwner, headlessHolderKind, headlessHolderLabel))
 	responses, err := g.manager.requestControlBatch(g.expected.Session, command)
 	if err != nil {
 		return "", "", err
@@ -294,7 +296,7 @@ func (g *HeadlessGeometry) Holder() (kind, label string, err error) {
 	if len(responses) != 1 || len(responses[0].Lines) != 1 {
 		return "", "", fmt.Errorf("tmux control: holder response missing")
 	}
-	parts := strings.Split(responses[0].Lines[0], "\t")
+	parts := tmuxformat.Split(responses[0].Lines[0])
 	if len(parts) != 9 || parts[0] != strconv.Itoa(g.expected.ServerPID) || parts[1] != g.expected.SessionID || parts[2] != g.expected.SessionCreated || parts[3] != g.expected.Session || parts[4] != g.expected.Pane {
 		return "", "", fmt.Errorf("tmux control: holder identity changed")
 	}

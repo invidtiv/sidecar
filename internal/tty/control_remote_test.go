@@ -1104,11 +1104,12 @@ func TestRemoteExitRetainsControlUntilLeaseUnsetCompletes(t *testing.T) {
 
 func TestControlQuoteHandlesEveryQuotingShape(t *testing.T) {
 	cases := map[string]string{
-		"%3":          "%3", // plain word, left alone
-		"proj-claude": "proj-claude",
-		"with space":  "'with space'",
-		"semi;colon":  "'semi;colon'",
-		"it's":        `"it's"`, // cannot single-quote; tmux has no escape inside ''
+		"%3":             "%3", // plain word, left alone
+		"proj-claude":    "proj-claude",
+		"with space":     "'with space'",
+		"semi;colon":     "'semi;colon'",
+		"it's":           `"it's"`, // cannot single-quote; tmux has no escape inside ''
+		"line\nnext\r\t": `"line\012next\015\011"`,
 	}
 	for input, want := range cases {
 		if got := controlQuote(input); got != want {

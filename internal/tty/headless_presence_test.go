@@ -207,7 +207,7 @@ func TestHeadlessHolderMetadataMustBelongToCurrentOwner(t *testing.T) {
 			done <- err
 		}()
 		read := waitForControlCommand(t, channel, "@sidecar-holder-label", 0)
-		respondHeadless(read, []string{strings.Join([]string{"42", "$3", "1700000000", "mobile", "%7", tc.token, tc.metadataOwner, tc.kind, tc.label}, "\t")}, nil)
+		respondHeadless(read, []string{strings.Join([]string{"42", "$3", "1700000000", "mobile", "%7", tc.token, tc.metadataOwner, tc.kind, tc.label}, "|")}, nil)
 		if err := <-done; err != nil {
 			t.Fatal(err)
 		}

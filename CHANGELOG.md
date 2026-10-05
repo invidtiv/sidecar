@@ -12,6 +12,7 @@ All notable changes to sidecar are documented here.
 
 ### Bug Fixes
 
+- **Tmux metadata reads preserve literal labels and paths across supported versions.** Terminal holder labels keep dollar signs and backslashes on tmux 3.4, and orphan-session pruning reads paths containing tabs, newlines or carriage returns without mistaking escaped output for a missing directory.
 - **Project workspace reads work when two TUIs show the project.** Reading a project's workspace no longer refuses just because more than one TUI has it open.
 - **Project-page terminals attach with remote hosts configured.** Opening a local terminal from a project page resolves through the configured host hub instead of failing to attach.
 - **Temporary hub lookup failures keep retrying.** An unavailable or slow owner is reported as a retryable backend failure instead of a changed terminal identity.

@@ -12,7 +12,7 @@ import (
 // command, expand a format, or come back changed.
 func TestHolderLabelCannotInjectTmuxCommandsAgainstPrivateTmux(t *testing.T) {
 	srv := startPasteTmux(t)
-	t.Setenv("TMUX", "")
+	t.Setenv("TMUX", srv.sock+",0,0")
 	t.Setenv("TMUX_PANE", "")
 	srv.startSink("labels", true)
 	run := func(args ...string) string { return strings.TrimSpace(srv.run(args...)) }
@@ -39,6 +39,7 @@ func TestHolderLabelCannotInjectTmuxCommandsAgainstPrivateTmux(t *testing.T) {
 		`\"; set-option -g @inj4 yes ; "`,
 		`} ; set-option -g @inj5 yes ; {`,
 		`#{pid} $HOME ~ ${HOME} ` + "`id`",
+		`$HOME \$HOME \\044 | '" #{pid} 行 🦉`,
 		`x \; set-option -g @inj6 yes`,
 		`;`,
 		`-t`,
@@ -62,6 +63,13 @@ func TestHolderLabelCannotInjectTmuxCommandsAgainstPrivateTmux(t *testing.T) {
 		kind, got, e := g.Holder()
 		if e != nil || kind != "browser" || got != label {
 			t.Fatalf("label %q came back as %q %q: %v", label, kind, got, e)
+		}
+		if session, _, exists := (tmuxLeaseStore{}).read(pane); !exists || session != "labels" {
+			t.Fatalf("desktop holder read failed: %q %v", session, exists)
+		}
+		stored, ok := geometryHolders.Load("labels")
+		if !ok || stored.(geometryHolder).label != label {
+			t.Fatalf("desktop holder label = %#v, want %q", stored, label)
 		}
 	}
 	for i := 1; i <= 6; i++ {

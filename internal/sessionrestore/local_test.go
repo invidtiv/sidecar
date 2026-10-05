@@ -41,13 +41,20 @@ func TestPrefillInputEmptyRealShells(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux unavailable")
 	}
-	for _, shell := range []struct{ name, command string }{{"bash", "/bin/bash --norc"}, {"zsh", "/bin/zsh -f"}} {
-		if _, err := os.Stat(strings.Fields(shell.command)[0]); err != nil {
+	for _, shell := range []struct {
+		name string
+		argv []string
+	}{{"bash", []string{"/bin/bash", "--noprofile", "--norc", "-i"}}, {"zsh", []string{"/bin/zsh", "-f", "-i"}}} {
+		if _, err := os.Stat(shell.argv[0]); err != nil {
 			continue
 		}
 		t.Run(shell.name, func(t *testing.T) {
 			t.Setenv("TMUX", "")
 			t.Setenv("TMUX_PANE", "")
+			// A bash command wrapper discards inherited PS1 before starting
+			// the fixture. Keep bash as tmux's default shell so this test also
+			// covers hosts where a single command string would lose the prompt.
+			t.Setenv("SHELL", "/bin/bash")
 			dir, err := os.MkdirTemp("/tmp", "scpf")
 			if err != nil {
 				t.Fatal(err)
@@ -57,9 +64,12 @@ func TestPrefillInputEmptyRealShells(t *testing.T) {
 			socket := tmuxenv.SocketPath()
 			_ = os.MkdirAll(filepath.Dir(socket), 0700)
 			name := "prefill-" + shell.name
-			if out, err := exec.Command("tmux", "new-session", "-d", "-s", name,
-				"-e", "PS1="+prefillTestPrompt, "-e", "PROMPT="+prefillTestPrompt,
-				"-e", "PROMPT_COMMAND=", "-e", "RPROMPT=", "-e", "RPS1=", "-e", "EDITOR=emacs", "-e", "VISUAL=emacs", "-e", "TERM=xterm-256color", shell.command).CombinedOutput(); err != nil {
+			args := []string{"-f", "/dev/null", "new-session", "-d", "-s", name,
+				"-e", "PS1=" + prefillTestPrompt, "-e", "PROMPT=" + prefillTestPrompt,
+				"-e", "PROMPT_COMMAND=", "-e", "RPROMPT=", "-e", "RPS1=", "-e", "EDITOR=emacs", "-e", "VISUAL=emacs", "-e", "TERM=xterm-256color"}
+			// Multiple command arguments make tmux exec the shell directly.
+			args = append(args, shell.argv...)
+			if out, err := exec.Command("tmux", args...).CombinedOutput(); err != nil {
 				t.Fatalf("start: %v: %s", err, out)
 			}
 			t.Cleanup(func() { _ = exec.Command("tmux", "-S", socket, "kill-server").Run() })

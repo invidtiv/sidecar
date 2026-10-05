@@ -2,6 +2,7 @@
 package tmuxformat
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 )
@@ -34,6 +35,26 @@ func Fields(names ...string) string {
 		out.WriteByte('}')
 	}
 	return out.String()
+}
+
+// RecordFields produces one printable record, including when values contain
+// literal line breaks or control bytes. Quote before substituting so literal
+// backslash-octal text remains distinct from an encoded byte. Dollars also need
+// octal encoding: older tmux output adds a backslash to them after formatting.
+// The format itself contains C0 regex bytes; control-mode callers must quote
+// those bytes with tmux command-parser escapes rather than strip them.
+func RecordFields(names ...string) string {
+	modifiers := []string{`s/\\\$/\\044/`}
+	for b := 1; b < 32; b++ {
+		modifiers = append(modifiers, fmt.Sprintf("s/%c/\\\\%03o/", b, b))
+	}
+	modifiers = append(modifiers, "s/\x7f/\\\\177/")
+	prefix := "#{" + strings.Join(modifiers, ";") + ":"
+	fields := make([]string, len(names))
+	for i, name := range names {
+		fields[i] = prefix + Fields(name) + "}"
+	}
+	return strings.Join(fields, Separator)
 }
 
 // Split separates and unescapes output produced by Fields.

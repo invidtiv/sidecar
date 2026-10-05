@@ -191,7 +191,7 @@ func TestHeadlessMultiPaneClaimResizesAndVerifiesTheSelectedPane(t *testing.T) {
 	go func() { done <- geometry.ClaimResize(46, 23) }()
 	owner := waitForControlCommand(t, channel, "#{session_created}", 0)
 	respondHeadless(owner, []string{"42\t$3\t1700000000\tmobile\t%7\t"}, nil)
-	layout := waitForControlCommand(t, channel, "#{window_id}\t#{window_width}", 0)
+	layout := waitForControlCommand(t, channel, "#{window_id}\\011#{window_width}", 0)
 	respondHeadless(layout, []string{"42\t$3\t1700000000\tmobile\t%7\t@1\t80\t24\t39\t24\t2"}, nil)
 	claim := waitForControlCommand(t, channel, "if-shell", 0)
 	if !strings.Contains(claim.text, "resize-window -t %7 -x 87 -y 23") || !strings.Contains(claim.text, "resize-pane -t %7 -x 46 -y 23") {
@@ -201,7 +201,7 @@ func TestHeadlessMultiPaneClaimResizesAndVerifiesTheSelectedPane(t *testing.T) {
 		t.Fatalf("multi-pane claim did not bind the observed layout: %q", claim.text)
 	}
 	respondHeadlessCommand(channel, claim.text, controlResponse{Lines: []string{headlessOwnerSuccess}})
-	verified := waitForControlCommand(t, channel, "#{window_id}\t#{window_width}", 1)
+	verified := waitForControlCommand(t, channel, "#{window_id}\\011#{window_width}", 1)
 	respondHeadless(verified, []string{"42\t$3\t1700000000\tmobile\t%7\t@1\t87\t23\t46\t23\t2"}, nil)
 	if err := <-done; err != nil {
 		t.Fatal(err)
@@ -218,11 +218,11 @@ func TestHeadlessMultiPaneClaimRefusesUnacceptedPaneGeometry(t *testing.T) {
 	go func() { done <- geometry.ClaimResize(46, 23) }()
 	owner := waitForControlCommand(t, channel, "#{session_created}", 0)
 	respondHeadless(owner, []string{"42\t$3\t1700000000\tmobile\t%7\t"}, nil)
-	layout := waitForControlCommand(t, channel, "#{window_id}\t#{window_width}", 0)
+	layout := waitForControlCommand(t, channel, "#{window_id}\\011#{window_width}", 0)
 	respondHeadless(layout, []string{"42\t$3\t1700000000\tmobile\t%7\t@1\t80\t24\t39\t24\t2"}, nil)
 	claim := waitForControlCommand(t, channel, "if-shell", 0)
 	respondHeadlessCommand(channel, claim.text, controlResponse{Lines: []string{headlessOwnerSuccess}})
-	verified := waitForControlCommand(t, channel, "#{window_id}\t#{window_width}", 1)
+	verified := waitForControlCommand(t, channel, "#{window_id}\\011#{window_width}", 1)
 	respondHeadless(verified, []string{"42\t$3\t1700000000\tmobile\t%7\t@1\t87\t23\t45\t23\t2"}, nil)
 	cleanup := waitForControlCommand(t, channel, "set-option -u", 0)
 	respondHeadlessCommand(channel, cleanup.text, controlResponse{Lines: []string{headlessOwnerSuccess}})
@@ -241,7 +241,7 @@ func TestHeadlessMultiPaneClaimRefusesLayoutChangeAtMutation(t *testing.T) {
 	go func() { done <- geometry.ClaimResize(46, 23) }()
 	owner := waitForControlCommand(t, channel, "#{session_created}", 0)
 	respondHeadless(owner, []string{"42\t$3\t1700000000\tmobile\t%7\t"}, nil)
-	layout := waitForControlCommand(t, channel, "#{window_id}\t#{window_width}", 0)
+	layout := waitForControlCommand(t, channel, "#{window_id}\\011#{window_width}", 0)
 	respondHeadless(layout, []string{"42\t$3\t1700000000\tmobile\t%7\t@1\t80\t24\t39\t24\t2"}, nil)
 	claim := waitForControlCommand(t, channel, "if-shell", 0)
 	if !strings.Contains(claim.text, "@1|80|24|39|24|2") {
