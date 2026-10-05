@@ -24,6 +24,14 @@ func TestAttachmentValidation(t *testing.T) {
 		}},
 		{name: "selector control", mutate: func(n *state.PaneLayoutJSON) { n.Attachment.Selector = "opaque\x1b" }},
 		{name: "identity control", mutate: func(n *state.PaneLayoutJSON) { n.Attachment.ExpectedTarget.Pane = "%1\u0085" }},
+		{name: "hub-scoped identity", mutate: func(n *state.PaneLayoutJSON) {
+			n.Attachment.ExpectedTarget.OwnerHostID = "local:aerie"
+			n.Attachment.ExpectedTarget.WorkspaceID = "local:aerie\x1fsidecar"
+		}, valid: true},
+		{name: "scope separator elsewhere", mutate: func(n *state.PaneLayoutJSON) { n.Attachment.ExpectedTarget.Session = "a\x1fb" }},
+		{name: "two scope separators", mutate: func(n *state.PaneLayoutJSON) { n.Attachment.ExpectedTarget.WorkspaceID = "a\x1fb\x1fc" }},
+		{name: "empty scope side", mutate: func(n *state.PaneLayoutJSON) { n.Attachment.ExpectedTarget.WorkspaceID = "\x1fsidecar" }},
+		{name: "other control in scoped key", mutate: func(n *state.PaneLayoutJSON) { n.Attachment.ExpectedTarget.WorkspaceID = "aerie\x1fside\x1bcar" }},
 		{name: "missing identity", mutate: func(n *state.PaneLayoutJSON) { n.Attachment.ExpectedTarget = mobileproto.TargetIdentity{} }},
 		{name: "passive leaf", mutate: func(n *state.PaneLayoutJSON) { n.Kind = "doc"; n.Tabs = []state.PaneDocTabJSON{{Path: "README.md"}} }},
 		{name: "no session", mutate: func(n *state.PaneLayoutJSON) { n.Session = "" }},

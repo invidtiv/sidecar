@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"unicode"
 	"unicode/utf8"
@@ -199,12 +200,27 @@ func validateAttachment(a *state.PaneAttachmentJSON) error {
 		return fmt.Errorf("attachment selector needs 1..%d UTF-8 bytes", mobileproto.MaxTargetBytes)
 	}
 	t := a.ExpectedTarget
-	for _, value := range []string{a.Selector, t.HubID, t.OwnerHostID, t.OwnerConfigGeneration, t.WorkspaceID, t.WorkspaceKind, t.Session, t.Pane, t.ServerIncarnation, t.TargetGeneration} {
+	for _, value := range []string{a.Selector, t.HubID, scopedKeyText(t.OwnerHostID), t.OwnerConfigGeneration, scopedKeyText(t.WorkspaceID), t.WorkspaceKind, t.Session, t.Pane, t.ServerIncarnation, t.TargetGeneration} {
 		if value == "" || !utf8.ValidString(value) || stringsControl(value) {
 			return fmt.Errorf("attachment needs complete UTF-8 identity fields without control characters")
 		}
 	}
 	return nil
+}
+
+// scopedKeyText allows the one unit separator (\x1f) a hub puts between a host
+// and its key (hosts.ScopedKey), which /sessions rows carry in owner_host_id
+// and workspace_id. It starts no terminal sequence; every other control
+// character is still refused, and so is an empty side.
+func scopedKeyText(value string) string {
+	host, key, ok := strings.Cut(value, "\x1f")
+	if !ok {
+		return value
+	}
+	if host == "" || key == "" {
+		return ""
+	}
+	return host + "/" + key
 }
 func stringsControl(value string) bool {
 	for _, r := range value {
