@@ -76,6 +76,19 @@ func (b *mobileBackend) Workspace(ctx context.Context, project, host string, q m
 	provider := mobileCatalogProviderForProjects(b.env, func() ([]hostserve.Project, error) {
 		return []hostserve.Project{{Name: item.Name, Path: proj.Path}}, nil
 	})
+	// In hub mode the public catalog is needed too; collect both at once.
+	type publicResult struct {
+		snapshot mobileproto.CatalogSnapshot
+		err      error
+	}
+	var publicDone chan publicResult
+	if b.router != nil {
+		publicDone = make(chan publicResult, 1)
+		go func() {
+			public, err := b.Sessions(ctx, q)
+			publicDone <- publicResult{public, err}
+		}()
+	}
 	snapshot, err := queryLocalMobileCatalogFrom(ctx, b.env, q, provider)
 	if err != nil {
 		return workspacewire.Workspace{}, err
@@ -96,10 +109,12 @@ func (b *mobileBackend) Workspace(ctx context.Context, project, host string, q m
 		}
 	}
 	snapshot.Sections = sections
-	if b.router != nil {
-		if err := b.adoptHubTerminalAuthority(ctx, q, &snapshot); err != nil {
-			return workspacewire.Workspace{}, err
+	if publicDone != nil {
+		public := <-publicDone
+		if public.err != nil {
+			return workspacewire.Workspace{}, public.err
 		}
+		adoptPublicTerminalAuthority(public.snapshot, &snapshot)
 	}
 	failures := make([]mobileproto.CatalogFailure, 0)
 	for _, f := range snapshot.Failures {
@@ -389,21 +404,12 @@ func (b *mobileBackend) WorkspaceInvalidation(ctx context.Context) (workspacewir
 	return event, nil
 }
 
-// adoptHubTerminalAuthority makes a workspace row attach the way the same row
+// adoptPublicTerminalAuthority makes a workspace row attach the way the same row
 // in /sessions does. With remote hosts configured every terminal stream goes
 // through the hub broker, which accepts only the hub's public selectors and
 // identities; owner-local ones are refused as a changed identity. The rows keep
 // their local presentation and content selectors, which the hub strips. A row
 // the hub does not list as attachable is not attachable here either.
-func (b *mobileBackend) adoptHubTerminalAuthority(ctx context.Context, q mobileproto.CatalogQuery, snapshot *mobileproto.CatalogSnapshot) error {
-	public, err := b.Sessions(ctx, q)
-	if err != nil {
-		return err
-	}
-	adoptPublicTerminalAuthority(public, snapshot)
-	return nil
-}
-
 func adoptPublicTerminalAuthority(public mobileproto.CatalogSnapshot, snapshot *mobileproto.CatalogSnapshot) {
 	byID := map[string]mobileproto.CatalogRow{}
 	for _, section := range public.Sections {
