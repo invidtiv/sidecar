@@ -666,7 +666,8 @@ func worktreeCommand() *Command {
 			"or run from the project or one of its worktrees.\n\n" +
 			"--plan and --dry-run are aliases. They read the same confirmation facts without\n" +
 			"changing git, tmux, Sidecar state, or a pending-creation journal: target identity,\n" +
-			"dirtiness, remote-branch availability, cleanup choices, and the pinned HEAD OID.\n" +
+			"dirtiness, affected managed shells across all projects, remote-branch availability,\n" +
+			"cleanup choices, and the pinned HEAD OID.\n" +
 			"A real deletion always requires --yes. For a plan-first deletion, use the returned\n" +
 			"absolute path as TARGET and pass its branch and headOid back with --expect-branch\n" +
 			"and --expect-head-oid. Both expectations are required together, so a branch rename\n" +
@@ -675,7 +676,9 @@ func worktreeCommand() *Command {
 			"and every file being removed, including ignored work. Unverifiable plans have an empty\n" +
 			"deleteState and cannot be used for state-fenced deletion.\n\n" +
 			"Deleting closes the Sidecar worktree session and any managed shells rooted in the\n" +
-			"worktree before removing its directory, then forgets those shell records. A dirty\n" +
+			"worktree across all registered projects before removing its directory, then forgets\n" +
+			"those shell records. Shells on another tmux socket retain their records and produce\n" +
+			"warnings; no other server is contacted. A dirty\n" +
 			"worktree is force-removed only after --yes, matching the warning and decision in\n" +
 			"the TUI confirmation. --delete-local-branch and --delete-remote-branch are explicit\n" +
 			"counterparts to its unchecked branch-cleanup boxes; the default is to keep both.\n" +

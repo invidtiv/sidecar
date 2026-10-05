@@ -126,9 +126,20 @@ type WorktreeDeletePlan struct {
 	DeleteLocalBranch    bool                       `json:"deleteLocalBranch"`
 	DeleteRemoteBranch   bool                       `json:"deleteRemoteBranch"`
 	PendingCreation      bool                       `json:"pendingCreation"`
+	ManagedShells        []WorktreeDeleteShell      `json:"managedShells,omitempty"`
 	PendingCreationPlan  *workspaceops.WorktreePlan `json:"-"`
 	ExpectedDeleteState  string                     `json:"-"`
 	ResolvedWorktreePath string                     `json:"-"`
+}
+
+// WorktreeDeleteShell identifies a shell affected by removing this checkout.
+type WorktreeDeleteShell struct {
+	ProjectRoot string `json:"projectRoot"`
+	Session     string `json:"session"`
+	DisplayName string `json:"displayName"`
+	WorkDir     string `json:"workDir"`
+	Namespace   string `json:"namespace,omitempty"`
+	CanClose    bool   `json:"canClose"`
 }
 type WorktreeDeleted struct {
 	Status   string             `json:"status"`

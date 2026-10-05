@@ -134,6 +134,10 @@ func deleteManagedShell(projectRoot, sessionName, namespace string, forget func(
 	if err != nil {
 		return err
 	}
+	return deleteManagedShellAtPath(projectDir, sessionName, namespace, forget)
+}
+
+func deleteManagedShellAtPath(projectDir, sessionName, namespace string, forget func(string) error) error {
 	if forget == nil {
 		forget = func(string) error {
 			return shellstate.RemoveAtPath(filepath.Join(projectDir, "shells.json"), shellstate.Identity{TmuxName: sessionName, Namespace: namespace})

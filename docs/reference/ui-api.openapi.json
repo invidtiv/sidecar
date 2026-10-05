@@ -4069,6 +4069,15 @@
           "headOid": {
             "type": "string"
           },
+          "managedShells": {
+            "items": {
+              "$ref": "#/components/schemas/WorktreeDeleteShell"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "name": {
             "type": "string"
           },
@@ -4095,6 +4104,37 @@
           "deleteLocalBranch",
           "deleteRemoteBranch",
           "pendingCreation"
+        ],
+        "type": "object"
+      },
+      "WorktreeDeleteShell": {
+        "additionalProperties": false,
+        "properties": {
+          "canClose": {
+            "type": "boolean"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "projectRoot": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          },
+          "workDir": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectRoot",
+          "session",
+          "displayName",
+          "workDir",
+          "canClose"
         ],
         "type": "object"
       },

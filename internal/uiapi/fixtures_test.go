@@ -141,6 +141,7 @@ func TestUIAPIFixtureCorpus(t *testing.T) {
 	}
 
 	deletion := workspacewire.WorktreeDeletePlan{Project: project.Key, Name: plan.DisplayName, Path: plan.Path, Branch: plan.Branch, HeadOID: plan.SourceOID, DeleteState: strings.Repeat("b", 64), BranchOID: plan.SourceOID, Dirtiness: "dirty"}
+	deletion.ManagedShells = []workspacewire.WorktreeDeleteShell{{ProjectRoot: "/workspace/another-project", Session: "fixture-cross-project", DisplayName: "Cross-project shell", WorkDir: plan.Path, CanClose: true}}
 	target := agentcontrol.Target{Host: "local", Project: project.Key, Session: "fixture-new", PaneID: "%1"}
 	state := agentcontrol.AgentState{Kind: "codex", Status: agentcontrol.StatusIdle, Freshness: "fresh", InteractiveReady: true, CapturedAt: now}
 	exchanges := values["workspace-operations.json"].([]any)

@@ -500,6 +500,42 @@ type EquivalentProject struct {
 	Registered string
 }
 
+// ListRegistered inventories every project manifest without creating state.
+// Unlike best-effort lookups, destructive callers need to know when inventory
+// is incomplete: corrupt or unreadable registrations must not disappear silently.
+func ListRegistered() ([]EquivalentProject, error) {
+	return ListRegisteredWithBase(config.StateDir())
+}
+
+// ListRegisteredWithBase is the read-only form for an explicit state directory.
+func ListRegisteredWithBase(base string) ([]EquivalentProject, error) {
+	projectsDir := filepath.Join(base, "projects")
+	entries, err := os.ReadDir(projectsDir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read project registry: %w", err)
+	}
+	var projects []EquivalentProject
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		dir := filepath.Join(projectsDir, entry.Name())
+		meta, err := readMeta(dir)
+		if err != nil {
+			return nil, fmt.Errorf("read project registration %s: %w", dir, err)
+		}
+		registered, valid := registrationRoot(meta)
+		if !valid {
+			return nil, fmt.Errorf("project registration %s has no root", dir)
+		}
+		projects = append(projects, EquivalentProject{Dir: dir, Registered: registered})
+	}
+	return projects, nil
+}
+
 // LookupEquivalent finds every registry entry for projectRoot, including ones
 // registered under another spelling of the same directory: a symlinked
 // checkout, or macOS's /var for /private/var. It never creates anything.

@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/tmuxenv"
@@ -128,8 +130,48 @@ func ShellsRootedIn(defs []shellstate.Definition, root string) []shellstate.Defi
 	return out
 }
 
-// ForgetShellsInWorktree closes every managed shell of projectRoot that is
-// rooted in worktreePath: the manifest row goes, and so does the tmux session.
+// WorktreeShell is an affected managed shell and the project manifest owning it.
+type WorktreeShell struct {
+	ProjectRoot string
+	Definition  shellstate.Definition
+	CanClose    bool
+	projectDir  string
+}
+
+// ListShellsInWorktree finds shells rooted in the removed directory across all
+// registered projects. The worktree's project does not own every shell started
+// inside it: an agent may have opened it from another project's workspace.
+func ListShellsInWorktree(worktreePath string) ([]WorktreeShell, error) {
+	return ListShellsInWorktreeWithStateDir(config.StateDir(), worktreePath)
+}
+
+// ListShellsInWorktreeWithStateDir is the read-only inventory for an explicit
+// state directory, shared by deletion planning and execution.
+func ListShellsInWorktreeWithStateDir(stateDir, worktreePath string) ([]WorktreeShell, error) {
+	if strings.TrimSpace(worktreePath) == "" {
+		return nil, nil
+	}
+	projects, err := projectdir.ListRegisteredWithBase(stateDir)
+	if err != nil {
+		return nil, err
+	}
+	var selected []WorktreeShell
+	for _, project := range projects {
+		defs, err := shellstate.ListAtPath(filepath.Join(project.Dir, "shells.json"))
+		if err != nil {
+			return nil, fmt.Errorf("read shells for project %s: %w", project.Registered, err)
+		}
+		for _, def := range ShellsRootedIn(defs, worktreePath) {
+			canClose := def.Namespace == "" || CanonicalWorkPath(def.Namespace) == CanonicalWorkPath(tmuxenv.Namespace())
+			selected = append(selected, WorktreeShell{ProjectRoot: project.Registered, Definition: def, CanClose: canClose, projectDir: project.Dir})
+		}
+	}
+	return selected, nil
+}
+
+// ForgetShellsInWorktree closes every managed shell rooted in worktreePath on
+// this tmux server, across all projects: the manifest row and tmux session go.
+// Shells recorded on another socket stay recorded and produce a warning.
 //
 // Killing the sessions is the point, not a side effect. A shell whose working
 // directory has been deleted is orphaned in exactly the way td-a66836 fixed for
@@ -148,27 +190,22 @@ func ShellsRootedIn(defs []shellstate.Definition, root string) []shellstate.Defi
 // It is reached through DeleteWorktree rather than called beside it: the
 // forgetting is part of removing a worktree, not a step a caller has to
 // remember, which is what stops one surface growing it and another not.
-func ForgetShellsInWorktree(projectRoot, worktreePath string) error {
-	if strings.TrimSpace(projectRoot) == "" || strings.TrimSpace(worktreePath) == "" {
-		return nil
+func ForgetShellsInWorktree(_ string, worktreePath string) error {
+	selected, err := ListShellsInWorktree(worktreePath)
+	if err != nil {
+		return err
 	}
-	// A lookup, not Resolve: forgetting must never register a project. A root
-	// spelled differently from the registered one would otherwise create a
-	// second, empty project directory and report its shells closed. The
-	// equivalent-path lookup still finds the project when the caller holds
-	// git's spelling of a symlinked checkout. An unregistered project has no
-	// manifest, so there is nothing to forget.
 	var errs []error
-	for _, project := range projectdir.LookupEquivalent(projectRoot) {
-		defs, err := shellstate.ListAtPath(filepath.Join(project.Dir, "shells.json"))
-		if err != nil {
-			errs = append(errs, err)
+	for _, shell := range selected {
+		def := shell.Definition
+		if !shell.CanClose {
+			errs = append(errs, fmt.Errorf("shell %s in project %s is on another tmux socket; retained its record and did not close it", def.TmuxName, shell.ProjectRoot))
 			continue
 		}
-		for _, def := range ShellsRootedIn(defs, worktreePath) {
-			if err := deleteManagedShellForForget(project.Registered, def.TmuxName, def.Namespace); err != nil {
-				errs = append(errs, err)
-			}
+		// Use the inventoried directory directly. Resolving the root again can
+		// select another manifest when older installs have duplicate registrations.
+		if err := deleteManagedShellForForget(shell.projectDir, def.TmuxName, def.Namespace, def.CreatedAt); err != nil {
+			errs = append(errs, fmt.Errorf("shell %s in project %s: %w", def.TmuxName, shell.ProjectRoot, err))
 		}
 	}
 	return errors.Join(errs...)
@@ -176,7 +213,11 @@ func ForgetShellsInWorktree(projectRoot, worktreePath string) error {
 
 // deleteManagedShellForForget is indirected so tests can exercise the selection
 // rule and the ordering without a tmux server.
-var deleteManagedShellForForget = DeleteManagedShell
+var deleteManagedShellForForget = func(projectDir, sessionName, namespace string, observedAt time.Time) error {
+	return deleteManagedShellAtPath(projectDir, sessionName, namespace, func(string) error {
+		return shellstate.RemoveIfUnchangedAtPath(filepath.Join(projectDir, "shells.json"), shellstate.Identity{TmuxName: sessionName, Namespace: namespace}, observedAt)
+	})
+}
 
 // forgetShellsInWorktree is indirected so DeleteWorktree's tests can exercise
 // the removal ordering without a manifest or a tmux server.

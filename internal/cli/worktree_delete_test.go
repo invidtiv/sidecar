@@ -163,6 +163,12 @@ func TestWorktreeDeletePlanAndExecuteRealLifecycle(t *testing.T) {
 		shellstate.Definition{TmuxName: "sidecar-sh-topic", DisplayName: "Topic shell", WorkDir: worktree},
 		shellstate.Definition{TmuxName: "sidecar-sh-main", DisplayName: "Main shell", WorkDir: root},
 	)
+	otherRoot := t.TempDir()
+	writeProjectMeta(t, stateDir, "other", otherRoot)
+	writeProjectShells(t, stateDir, "other",
+		shellstate.Definition{TmuxName: "sidecar-sh-other-topic", DisplayName: "Cross-project shell", WorkDir: filepath.Join(worktree, "internal")},
+		shellstate.Definition{TmuxName: "sidecar-sh-other-main", DisplayName: "Other main", WorkDir: otherRoot},
+	)
 	tmuxLog := installAbsentTmux(t)
 
 	if err := os.WriteFile(filepath.Join(worktree, "uncommitted.txt"), []byte("keep warning honest\n"), 0o644); err != nil {
@@ -205,6 +211,9 @@ func TestWorktreeDeletePlanAndExecuteRealLifecycle(t *testing.T) {
 	if !strings.HasPrefix(planned.Plan.Dirtiness, "dirty") || !planned.Plan.DeleteLocalBranch || planned.Plan.DeleteRemoteBranch || !planned.Plan.PendingCreation {
 		t.Fatalf("plan choices = %+v", planned.Plan)
 	}
+	if len(planned.Plan.ManagedShells) != 2 || planned.Plan.ManagedShells[1].Session != "sidecar-sh-other-topic" || planned.Plan.ManagedShells[1].ProjectRoot != otherRoot || !planned.Plan.ManagedShells[1].CanClose {
+		t.Fatalf("affected shell inventory = %+v", planned.Plan.ManagedShells)
+	}
 	assertPathExists(t, worktree)
 	assertPathExists(t, journalPath)
 	if got := gitOutputForTest(t, root, "show-ref", "--verify", "refs/heads/topic"); got == "" {
@@ -223,7 +232,7 @@ func TestWorktreeDeletePlanAndExecuteRealLifecycle(t *testing.T) {
 	if !handled || code != 0 || errOut.Len() != 0 {
 		t.Fatalf("human dry-run = handled %v code %d stdout %q stderr %q", handled, code, out.String(), errOut.String())
 	}
-	for _, want := range []string{"HEAD OID: " + headOID, "Remote branch exists: false", "Delete local branch: true", "No changes made"} {
+	for _, want := range []string{"HEAD OID: " + headOID, "Remote branch exists: false", "Delete local branch: true", "Managed shell: sidecar-sh-other-topic in " + otherRoot, "No changes made"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("human dry-run missing %q:\n%s", want, out.String())
 		}
@@ -266,6 +275,10 @@ func TestWorktreeDeletePlanAndExecuteRealLifecycle(t *testing.T) {
 	if len(defs) != 1 || defs[0].TmuxName != "sidecar-sh-main" {
 		t.Fatalf("live shell records = %+v, want only main shell", defs)
 	}
+	otherDefs, err := shellstate.ListAtPath(filepath.Join(stateDir, "projects", "other", "shells.json"))
+	if err != nil || len(otherDefs) != 1 || otherDefs[0].TmuxName != "sidecar-sh-other-main" {
+		t.Fatalf("cross-project records = %+v, %v", otherDefs, err)
+	}
 	tombs, err := shellstate.ListTombstonesAtPath(manifestPath)
 	if err != nil || len(tombs) != 1 || tombs[0].TmuxName != "sidecar-sh-topic" {
 		t.Fatalf("tombstones = %+v, %v", tombs, err)
@@ -275,7 +288,7 @@ func TestWorktreeDeletePlanAndExecuteRealLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	logText := string(logData)
-	for _, session := range []string{"sidecar-sh-topic", workspaceops.WorktreeSessionName(worktree, "")} {
+	for _, session := range []string{"sidecar-sh-topic", "sidecar-sh-other-topic", workspaceops.WorktreeSessionName(worktree, "")} {
 		if !strings.Contains(logText, "kill-session -t ="+session) {
 			t.Errorf("tmux teardown did not name %q; log:\n%s", session, logText)
 		}

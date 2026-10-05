@@ -263,7 +263,7 @@ func TestPrunePreservesAssociatedShellsWithoutMissingPaneEvidence(t *testing.T) 
 			}
 			oldDelete := deleteManagedShellForForget
 			deletes := 0
-			deleteManagedShellForForget = func(string, string, string) error { deletes++; return nil }
+			deleteManagedShellForForget = func(string, string, string, time.Time) error { deletes++; return nil }
 			t.Cleanup(func() { deleteManagedShellForForget = oldDelete })
 			_, err := PruneOrphanedWorktreeSession(t.Context(), OrphanedSessionPrune{ProjectRoot: project, Root: root, Session: "sidecar-ws-removed", SessionPath: root})
 			if !errors.Is(err, ErrOrphanChanged) || deletes != 0 || len(stub.killed) != 0 {
@@ -308,7 +308,7 @@ func TestPruneAssociatedShellsCarryVerifiedSnapshotIntoTeardown(t *testing.T) {
 				return orphanSessionState{ID: "$7", Path: root, PanePaths: []string{root}}, nil
 			}
 			oldDelete := deleteManagedShellForForget
-			deleteManagedShellForForget = func(string, string, string) error {
+			deleteManagedShellForForget = func(string, string, string, time.Time) error {
 				t.Fatal("prune used a name-based kill rather than the verified session id")
 				return nil
 			}

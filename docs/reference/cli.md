@@ -4167,7 +4167,8 @@ or run from the project or one of its worktrees.
 
 --plan and --dry-run are aliases. They read the same confirmation facts without
 changing git, tmux, Sidecar state, or a pending-creation journal: target identity,
-dirtiness, remote-branch availability, cleanup choices, and the pinned HEAD OID.
+dirtiness, affected managed shells across all projects, remote-branch availability,
+cleanup choices, and the pinned HEAD OID.
 A real deletion always requires --yes. For a plan-first deletion, use the returned
 absolute path as TARGET and pass its branch and headOid back with --expect-branch
 and --expect-head-oid. Both expectations are required together, so a branch rename
@@ -4177,7 +4178,9 @@ and every file being removed, including ignored work. Unverifiable plans have an
 deleteState and cannot be used for state-fenced deletion.
 
 Deleting closes the Sidecar worktree session and any managed shells rooted in the
-worktree before removing its directory, then forgets those shell records. A dirty
+worktree across all registered projects before removing its directory, then forgets
+those shell records. Shells on another tmux socket retain their records and produce
+warnings; no other server is contacted. A dirty
 worktree is force-removed only after --yes, matching the warning and decision in
 the TUI confirmation. --delete-local-branch and --delete-remote-branch are explicit
 counterparts to its unchecked branch-cleanup boxes; the default is to keep both.

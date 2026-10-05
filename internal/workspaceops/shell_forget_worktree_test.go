@@ -238,12 +238,12 @@ func TestDeleteWorktreeRemovesTheShellsAndTheWorktreeInThatOrder(t *testing.T) {
 	// left running in a directory that has already gone.
 	var order []string
 	restore := deleteManagedShellForForget
-	deleteManagedShellForForget = func(projectRoot, sessionName, namespace string) error {
+	deleteManagedShellForForget = func(projectRoot, sessionName, namespace string, observedAt time.Time) error {
 		if _, err := os.Stat(wt); err != nil {
 			t.Errorf("%s was closed after the worktree directory was removed", sessionName)
 		}
 		order = append(order, sessionName)
-		return restore(projectRoot, sessionName, namespace)
+		return restore(projectRoot, sessionName, namespace, observedAt)
 	}
 	t.Cleanup(func() { deleteManagedShellForForget = restore })
 
@@ -265,12 +265,14 @@ func TestDeleteWorktreeRemovesTheShellsAndTheWorktreeInThatOrder(t *testing.T) {
 	assertNames(t, manifestNames(t, root), []string{"sidecar-sh-in-repo"})
 }
 
-// A caller that has no owning project must not have the delete fail, and must
-// not have anything forgotten.
-func TestDeleteWorktreeIsInertWithoutAProjectRoot(t *testing.T) {
+// The removed path determines affected shells even when the caller has no
+// owning project manifest (for example, a failed creation rollback).
+func TestDeleteWorktreeReconcilesShellsWithoutAProjectRoot(t *testing.T) {
 	root := throwawayRepo(t)
 	wt := filepath.Join(t.TempDir(), "feature")
 	git(t, root, "worktree", "add", "-q", "-b", "feature", wt)
+	other := t.TempDir()
+	recordShell(t, other, "sidecar-sh-no-owner", "Other project", wt)
 
 	err := DeleteWorktree(context.Background(), WorktreeRemoval{
 		RepoPath: root, Path: wt, Branch: "feature", Force: true,
@@ -278,4 +280,5 @@ func TestDeleteWorktreeIsInertWithoutAProjectRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeleteWorktree with no project root: %v", err)
 	}
+	assertNames(t, manifestNames(t, other), nil)
 }

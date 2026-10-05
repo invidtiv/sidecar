@@ -264,6 +264,19 @@ func resolveWorktreeDeletePlan(ctx context.Context, env Env, project registeredP
 		HasRemoteBranch: hasRemote, DeleteLocalBranch: confirmation.DeleteLocal, DeleteRemoteBranch: confirmation.DeleteRemoteBranch(),
 		ResolvedWorktreePath: state.Path,
 	}
+	shells, err := workspaceops.ListShellsInWorktreeWithStateDir(env.StateDir, state.Path)
+	if err != nil {
+		return worktreeDeletePlan{}, &worktreeDeletePlanError{
+			err: fmt.Errorf("inspect managed shells before deletion: %w", err), code: "inventory", exitCode: 1,
+		}
+	}
+	for _, shell := range shells {
+		def := shell.Definition
+		plan.ManagedShells = append(plan.ManagedShells, workspacewire.WorktreeDeleteShell{
+			ProjectRoot: shell.ProjectRoot, Session: def.TmuxName, DisplayName: def.DisplayName,
+			WorkDir: def.WorkDir, Namespace: def.Namespace, CanClose: shell.CanClose,
+		})
+	}
 	if _, ok := projectdir.LookupWorktreeWithBase(env.StateDir, project.Path, state.Path); ok {
 		repoKey, keyErr := workspaceops.RepoKeyForPath(ctx, project.Path)
 		worktreeKey, worktreeKeyErr := projectdir.WorktreeKey(state.Path)
@@ -393,6 +406,13 @@ func writeWorktreeDeletePlan(env Env, plan worktreeDeletePlan) int {
 	_, _ = fmt.Fprintf(env.Stdout, "  Remote branch exists: %t\n", plan.HasRemoteBranch)
 	_, _ = fmt.Fprintf(env.Stdout, "  Delete local branch: %t\n", plan.DeleteLocalBranch)
 	_, _ = fmt.Fprintf(env.Stdout, "  Delete remote branch: %t\n", plan.DeleteRemoteBranch)
+	for _, shell := range plan.ManagedShells {
+		action := "close"
+		if !shell.CanClose {
+			action = "retain and warn (another tmux socket)"
+		}
+		_, _ = fmt.Fprintf(env.Stdout, "  Managed shell: %s in %s — %s\n", shell.Session, shell.ProjectRoot, action)
+	}
 	if plan.PendingCreation {
 		_, _ = fmt.Fprintln(env.Stdout, "  Pending creation journal: clear after successful deletion")
 	}

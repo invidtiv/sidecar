@@ -252,6 +252,8 @@ func (s *State) warningSection() modal.Section {
 				sb.WriteString(dim("  • " + UnknownDirtinessLine))
 			}
 		}
+		sb.WriteString("\n")
+		sb.WriteString(dim("  • Close shells here across all projects"))
 		return modal.RenderedSection{Content: sb.String()}
 	}, nil)
 }

@@ -161,12 +161,9 @@ func (e *WorktreeIdentityError) Unwrap() error {
 type WorktreeRemoval struct {
 	// RepoPath is a surviving checkout the git commands run from.
 	RepoPath string
-	// ProjectRoot is the owning project — the manifest whose shells rooted in
-	// this worktree are forgotten and closed as part of the removal
-	// (td-f017b9). It is not RepoPath: on the project surface the git commands
-	// run from the current worktree while the manifest belongs to the project,
-	// and on the global browser the two happen to coincide. Empty means the
-	// caller has no manifest to reconcile.
+	// ProjectRoot is the owning project. Shell teardown inventories every
+	// registered project's manifest because shells from other projects can
+	// also be rooted inside this worktree (td-17b5e2).
 	ProjectRoot string
 	// Path is the worktree to remove.
 	Path string

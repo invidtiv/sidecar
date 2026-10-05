@@ -129,7 +129,16 @@
         "hasRemoteBranch": false,
         "deleteLocalBranch": false,
         "deleteRemoteBranch": false,
-        "pendingCreation": false
+        "pendingCreation": false,
+        "managedShells": [
+          {
+            "projectRoot": "/workspace/another-project",
+            "session": "fixture-cross-project",
+            "displayName": "Cross-project shell",
+            "workDir": "/workspace/feature",
+            "canClose": true
+          }
+        ]
       }
     }
   },
@@ -157,7 +166,16 @@
         "hasRemoteBranch": false,
         "deleteLocalBranch": false,
         "deleteRemoteBranch": false,
-        "pendingCreation": false
+        "pendingCreation": false,
+        "managedShells": [
+          {
+            "projectRoot": "/workspace/another-project",
+            "session": "fixture-cross-project",
+            "displayName": "Cross-project shell",
+            "workDir": "/workspace/feature",
+            "canClose": true
+          }
+        ]
       }
     }
   },

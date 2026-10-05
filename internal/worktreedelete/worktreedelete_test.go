@@ -32,7 +32,7 @@ func TestConfirmationNamesTheWorktreeAndItsConsequences(t *testing.T) {
 	view := render(t, s)
 
 	for _, want := range []string{Title, "feature", "feature-branch", "/tmp/feature",
-		"This will:", "Remove the working directory", DirtyLine,
+		"This will:", "Remove the working directory", DirtyLine, "Close shells here across all projects",
 		"Delete local branch", " Delete ", " Cancel "} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("confirmation is missing %q:\n%s", want, view)
