@@ -197,11 +197,21 @@ func TestSocketStatusAndLegacyMigration(t *testing.T) {
 			manager, _ := testManager(t, platform)
 			legacy := true
 			stopped := false
+			gone := false
 			calls := []string{}
 			manager.options.Run = func(_ context.Context, command string, args ...string) ([]byte, error) {
 				call := command + " " + strings.Join(args, " ")
 				calls = append(calls, call)
+				if command == "launchctl" && args[0] == "bootout" {
+					gone = true
+				}
+				if command == "launchctl" && args[0] == "bootstrap" {
+					gone = false
+				}
 				if command == "launchctl" && args[0] == "print" {
+					if gone {
+						return []byte("Could not find service com.haplab.sidecar.api in domain for user gui: 501"), errors.New("exit 113")
+					}
 					text := "\tstate = running\n\tpid = 42\n"
 					if stopped {
 						text = "\tstate = waiting\n"

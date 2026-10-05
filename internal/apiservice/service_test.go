@@ -216,3 +216,37 @@ func TestParseManagerStatus(t *testing.T) {
 		t.Fatalf("%+v", status)
 	}
 }
+
+// Reinstalling a loaded job: launchd finishes a bootout after the command
+// returns, and bootstrapping the label before then fails with EIO (5).
+func TestReinstallWaitsForLaunchdToReleaseTheOldJob(t *testing.T) {
+	manager, _ := testManager(t, "darwin")
+	bootedOut, prints, bootstraps := false, 0, 0
+	manager.options.Run = func(_ context.Context, command string, args ...string) ([]byte, error) {
+		switch args[0] {
+		case "print":
+			if !bootedOut {
+				return []byte(launchctlPrintRunning), nil
+			}
+			prints++
+			if prints < 3 { // still tearing down
+				return []byte("\tstate = running\n\tpid = 42\n"), nil
+			}
+			return []byte("Could not find service com.haplab.sidecar.api in domain for user gui: 501"), errors.New("exit 113")
+		case "bootout":
+			bootedOut = true
+		case "bootstrap":
+			bootstraps++
+			if bootstraps == 1 {
+				return []byte("Bootstrap failed: 5: Input/output error"), errors.New("exit status 5")
+			}
+		}
+		return nil, nil
+	}
+	if err := manager.Install(t.Context()); err != nil {
+		t.Fatalf("Install over a loaded job = %v; want it to wait out the bootout", err)
+	}
+	if prints < 3 || bootstraps != 2 {
+		t.Fatalf("prints=%d bootstraps=%d; want a wait for the old job and one EIO retry", prints, bootstraps)
+	}
+}

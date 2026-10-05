@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 const Label = "com.haplab.sidecar.api"
@@ -160,7 +161,7 @@ func (n *Native) Install(ctx context.Context) error {
 		if _, err := n.command(ctx, "enable", n.target()); err != nil {
 			return err
 		}
-		_, err = n.command(ctx, "bootstrap", n.domain(), n.file)
+		err = n.bootstrap(ctx)
 	} else {
 		if _, err := n.command(ctx, "--user", "daemon-reload"); err != nil {
 			return err
@@ -168,6 +169,47 @@ func (n *Native) Install(ctx context.Context) error {
 		_, err = n.command(ctx, "--user", "enable", "--now", SocketUnit, Unit)
 	}
 	return err
+}
+
+// launchd tears a booted-out job down asynchronously, and bootstrapping the
+// same label before it is gone fails with "5: Input/output error". Wait for
+// the old job to leave, then retry that one transient refusal briefly.
+const (
+	launchdSettleTimeout = 10 * time.Second
+	launchdSettlePoll    = 100 * time.Millisecond
+)
+
+func (n *Native) bootstrap(ctx context.Context) error {
+	deadline := time.Now().Add(launchdSettleTimeout)
+	for {
+		output, err := n.options.Run(ctx, "launchctl", "print", n.target())
+		if err != nil && strings.Contains(string(output), "Could not find service") || time.Now().After(deadline) {
+			break
+		}
+		if !sleepContext(ctx, launchdSettlePoll) {
+			return ctx.Err()
+		}
+	}
+	for {
+		_, err := n.command(ctx, "bootstrap", n.domain(), n.file)
+		if err == nil || !strings.Contains(err.Error(), "Bootstrap failed: 5:") || time.Now().After(deadline) {
+			return err
+		}
+		if !sleepContext(ctx, launchdSettlePoll) {
+			return ctx.Err()
+		}
+	}
+}
+
+func sleepContext(ctx context.Context, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 func (n *Native) domain() string { return fmt.Sprintf("gui/%d", n.options.UID) }
