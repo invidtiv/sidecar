@@ -118,7 +118,22 @@ func ObserveWorktreeOrphans(ctx context.Context, projects []Project, opts Observ
 	if !suspect && !needRoots {
 		return obs
 	}
-	for _, proj := range projects {
+	// One git listing per project, run concurrently; the inventories are
+	// still recorded in project order below.
+	type listing struct {
+		states []workspaceops.WorktreeState
+		ok     bool
+	}
+	listings := make([]listing, len(projects))
+	forEachProject(len(projects), func(index int) {
+		if strings.TrimSpace(projects[index].Path) == "" || ctx.Err() != nil {
+			return
+		}
+		if states, err := listWorktreeStates(ctx, projects[index].Path); err == nil {
+			listings[index] = listing{states: states, ok: true}
+		}
+	})
+	for index, proj := range projects {
 		if strings.TrimSpace(proj.Path) == "" {
 			continue
 		}
@@ -126,11 +141,7 @@ func ObserveWorktreeOrphans(ctx context.Context, projects []Project, opts Observ
 		// decision's "every listing answered" rule can only see inventories
 		// that are present, so leaving it out would read as an answer.
 		inv := shellliveness.WorktreeInventory{ProjectRoot: workspaceops.CanonicalWorkPath(proj.Path)}
-		if ctx.Err() != nil {
-			obs.Inventories = append(obs.Inventories, inv)
-			continue
-		}
-		if states, err := listWorktreeStates(ctx, proj.Path); err == nil {
+		if states, ok := listings[index].states, listings[index].ok; ok {
 			inv.Answered = true
 			for _, state := range states {
 				if state.Bare || state.Path == "" {

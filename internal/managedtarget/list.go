@@ -208,25 +208,34 @@ const discoveryWorkers = 8
 // concurrently and returns the roots indexed like projects.
 func discoverWorktreeRoots(ctx context.Context, projects []Project) [][]string {
 	discovered := make([][]string, len(projects))
+	forEachProject(len(projects), func(index int) {
+		if ctx.Err() == nil && strings.TrimSpace(projects[index].Path) != "" {
+			discovered[index] = discoveredWorktreeRoots(ctx, projects[index])
+		}
+	})
+	return discovered
+}
+
+// forEachProject calls fn for each index in [0, count) on at most
+// discoveryWorkers goroutines and returns when every call has. Callers write
+// results into their own index, so the output order is the input order.
+func forEachProject(count int, fn func(index int)) {
 	jobs := make(chan int)
 	var wg sync.WaitGroup
-	for range min(discoveryWorkers, len(projects)) {
+	for range min(discoveryWorkers, count) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for index := range jobs {
-				if ctx.Err() == nil && strings.TrimSpace(projects[index].Path) != "" {
-					discovered[index] = discoveredWorktreeRoots(ctx, projects[index])
-				}
+				fn(index)
 			}
 		}()
 	}
-	for index := range projects {
+	for index := range count {
 		jobs <- index
 	}
 	close(jobs)
 	wg.Wait()
-	return discovered
 }
 
 func discoveredWorktreeRoots(ctx context.Context, proj Project) []string {
