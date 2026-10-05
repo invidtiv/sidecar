@@ -211,6 +211,12 @@ func (b *mobileBackend) WorkspaceOperation(ctx context.Context, project string, 
 	if err != nil {
 		return nil, 2, &uiapi.OperationError{Code: "invalid_request", Message: err.Error(), ExitCode: 2}
 	}
+	// The HTTP adapter emits a workspace invalidation as soon as this returns.
+	// Its refetch must see the mutation, including partial failures, rather than
+	// reusing the shared collection from before the command ran.
+	if c.Operation != "worktrees/plan" && c.Operation != "worktrees/delete-plan" {
+		defer b.invalidateCatalog()
+	}
 	if c.Host != "" && c.Host != "local" {
 		if c.Operation == "agents/prompt" {
 			client := agentremote.Client{HostID: c.Host, Project: project, ExactTargets: true, Run: func(ctx context.Context, host string, args []string, out any) error {
