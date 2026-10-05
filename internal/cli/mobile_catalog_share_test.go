@@ -252,14 +252,40 @@ func TestCatalogShellResolverDoesNotMemoizeACanceledScan(t *testing.T) {
 	}
 }
 
-// Sharing a collection must not share its authorization. After the live shell
-// is split (no socket, config or watcher change), a warm request reuses the
+// Sharing a collection must not share its authorization. After a live pane is
+// split (no socket, config or watcher change), a warm request reuses the
 // collected inventory but authorizes against tmux as it is now, so it refuses
-// the shell as a fresh catalog does and never advertises the old identity.
-// (The refusal's wording can differ: the shared inventory still saw one pane,
-// so the current resolver refuses the layout rather than the inventory
-// reporting two matches.)
+// the row as a fresh catalog does and never advertises the old identity. The
+// refusal's wording can differ: the shared inventory still saw one pane.
 func TestSharedCatalogReauthorizesEveryRequest(t *testing.T) {
+	t.Run("managed shell", func(t *testing.T) {
+		warm, fresh := warmCatalogAfterSplit(t, true)
+		if warm.AttachmentReady || warm.ExpectedTarget != nil {
+			t.Fatalf("warm shell row still advertises the pre-split identity: %+v (fresh %s/%s)", warm, fresh.AttachState, fresh.RefusalCode)
+		}
+	})
+	t.Run("worktree candidate", func(t *testing.T) {
+		warm, fresh := warmCatalogAfterSplit(t, false)
+		if len(fresh.Candidates) != 2 {
+			t.Fatalf("fresh worktree row should list both panes: %+v", fresh)
+		}
+		if warm.AttachmentReady || warm.ExpectedTarget != nil {
+			t.Fatalf("warm worktree row still advertises its pre-split candidate %s: %+v (fresh %s/%s)", warm.Target, warm, fresh.AttachState, fresh.RefusalCode)
+		}
+		for _, candidate := range warm.Candidates {
+			if candidate.ExpectedTarget.Pane != "" {
+				t.Fatalf("warm worktree row authorized candidate %+v", candidate)
+			}
+		}
+	})
+}
+
+// warmCatalogAfterSplit serves one row from a shared collection, splits its
+// only pane, and returns the row as a warm request and as a fresh catalog see
+// it. managedShell selects a managed-shell row; otherwise the row is the
+// project's main worktree reached through an unmanaged session in it.
+func warmCatalogAfterSplit(t *testing.T, managedShell bool) (warm, fresh mobileproto.CatalogRow) {
+	t.Helper()
 	testenv.RequireTmux(t)
 	_, state := setupIsolatedCLI(t)
 	config.SetTestStateDir(state)
@@ -270,8 +296,11 @@ func TestSharedCatalogReauthorizesEveryRequest(t *testing.T) {
 	}
 	initGitRepo(t, root)
 	writeProjectMeta(t, state, "p", root)
-	session := "sidecar-sh-warm"
-	writeProjectShells(t, state, "p", shellstate.Definition{TmuxName: session, DisplayName: "Live", Namespace: tmuxenv.Namespace(), CreatedAt: time.Now(), WorkDir: root})
+	session := "plain-worktree-session"
+	if managedShell {
+		session = "sidecar-sh-warm"
+		writeProjectShells(t, state, "p", shellstate.Definition{TmuxName: session, DisplayName: "Live", Namespace: tmuxenv.Namespace(), CreatedAt: time.Now(), WorkDir: root})
+	}
 	socket := tmuxenv.SocketPath()
 	if err := os.MkdirAll(filepath.Dir(socket), 0o700); err != nil {
 		t.Fatal(err)
@@ -298,38 +327,37 @@ func TestSharedCatalogReauthorizesEveryRequest(t *testing.T) {
 		})
 	host, _ := os.Hostname()
 	identity := mobile.CatalogIdentity{HubID: host, OwnerHostID: "local:" + host, OwnerConfigGeneration: "g"}
-	shellRow := func(provider mobile.CatalogProvider) mobileproto.CatalogRow {
+	row := func(provider mobile.CatalogProvider) mobileproto.CatalogRow {
 		t.Helper()
 		snapshot, err := mobile.QueryCatalog(context.Background(), provider, mobileResolver(env), mobileproto.CatalogQuery{}, identity)
 		if err != nil {
 			t.Fatal(err)
 		}
 		for _, section := range snapshot.Sections {
-			for _, row := range section.Rows {
-				if row.Session == session && row.WorkspaceKind == "shell" {
-					return row
+			for _, r := range section.Rows {
+				if managedShell && r.Session == session && r.WorkspaceKind == "shell" ||
+					!managedShell && r.WorkspaceKind == "worktree" && r.ProjectID == canonicalMobileSourcePath(root) {
+					return r
 				}
 			}
 		}
-		t.Fatalf("no row for %s in %+v", session, snapshot)
+		t.Fatalf("no row in %+v", snapshot)
 		return mobileproto.CatalogRow{}
 	}
-	if first := shellRow(shared.Provider()); !first.AttachmentReady {
-		t.Fatalf("live one-pane shell not ready: %+v", first)
+	if first := row(shared.Provider()); !first.AttachmentReady {
+		t.Fatalf("live one-pane row not ready: %+v", first)
 	}
 	fence := tmuxServerIdentity()
 	tmux("split-window", "-d", "-t", session, "-c", root, "sleep 120")
 	if tmuxServerIdentity() != fence {
 		t.Fatal("a split changed the server fence; the warm path would not be exercised")
 	}
-	warm := shellRow(shared.Provider())
-	fresh := shellRow(mobileCatalogProviderForProjects(env, projects))
+	warm = row(shared.Provider())
+	fresh = row(mobileCatalogProviderForProjects(env, projects))
 	if fresh.AttachmentReady {
-		t.Fatalf("fresh catalog accepted the split shell: %+v", fresh)
+		t.Fatalf("fresh catalog accepted the split row: %+v", fresh)
 	}
-	if warm.AttachmentReady || warm.ExpectedTarget != nil || warm.Target != "" && warm.AttachState == "ready" {
-		t.Fatalf("warm row still advertises the pre-split identity: %+v (fresh %s/%s)", warm, fresh.AttachState, fresh.RefusalCode)
-	}
+	return warm, fresh
 }
 
 // Shared Git discovery runs under its own context: a caller that gives up

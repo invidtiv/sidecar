@@ -271,12 +271,83 @@ func mobileCatalogCollectorForProjects(env Env, loadProjects func() ([]hostserve
 //
 // discovery, when set, answers the scan's Git worktree discovery from the
 // collection the input came from; manifests and tmux are still read here.
+//
+// Worktree candidate rows get the same treatment: the candidate resolver
+// re-derives every worktree's terminal candidates from one tmux pane listing
+// taken by this projection, so a candidate the collection saw is advertised
+// only if the same candidate set still exists.
 func authorizeMobileCatalogInput(env Env, input mobile.CatalogInput, discovery *worktreeDiscovery) mobile.CatalogInput {
 	lookup := &shellTargetLookup{}
 	if discovery != nil {
 		lookup.discover = discovery.Discover
 	}
 	input.Resolver = newMobileCatalogShellResolverWith(env, lookup, tty.HeadlessTargetSnapshot())
+	input.CandidateResolver = newMobileCatalogCandidateResolver(input, workspaceinventory.Collector{}.WithDefaults())
+	return input
+}
+
+// newMobileCatalogCandidateResolver resolves worktree candidate selectors
+// against input's workspaces with their terminal candidates refreshed from one
+// pane listing, taken on first use. Serialized; the listing is this
+// resolver's alone.
+func newMobileCatalogCandidateResolver(input mobile.CatalogInput, collector workspaceinventory.Collector) mobile.Resolver {
+	host, _ := os.Hostname()
+	ownerHostID := "local:" + host
+	var (
+		mu        sync.Mutex
+		refreshed *mobile.CatalogInput
+		listErr   error
+	)
+	return func(ctx context.Context, selector string) (mobile.ResolvedTarget, error) {
+		mu.Lock()
+		if refreshed == nil && listErr == nil {
+			panes, err := collector.ListPanes(ctx)
+			if err != nil {
+				err = fmt.Errorf("refresh terminal candidate panes: %w", err)
+				if ctx.Err() != nil {
+					// A canceled caller's listing is not an answer to keep.
+					mu.Unlock()
+					return mobile.ResolvedTarget{}, err
+				}
+				listErr = err
+			} else {
+				current := refreshWorktreeCandidates(input, collector, panes)
+				refreshed = &current
+			}
+		}
+		current, err := refreshed, listErr
+		mu.Unlock()
+		if err != nil {
+			return mobile.ResolvedTarget{}, err
+		}
+		return mobile.ResolveCatalogCandidate(ctx, *current, ownerHostID, selector, tty.InspectHeadlessPane)
+	}
+}
+
+// refreshWorktreeCandidates copies input with every worktree's terminal
+// candidates re-derived from panes, using the same roots and shell claims the
+// collection matched against. input itself is not modified.
+func refreshWorktreeCandidates(input mobile.CatalogInput, collector workspaceinventory.Collector, panes []workspaceinventory.Pane) mobile.CatalogInput {
+	results := make([]workspaceinventory.ProjectResult, 0, len(input.Projects))
+	roots := make([]string, 0, len(input.Projects))
+	for _, project := range input.Projects {
+		results = append(results, project.Result)
+		roots = append(roots, project.Result.ProjectRoot)
+	}
+	refresh := collector.WithShellClaims(workspaceinventory.BuildShellClaims(results))
+	projects := make([]mobile.CatalogProject, len(input.Projects))
+	for i, project := range input.Projects {
+		workspaces := make([]workspaceinventory.Workspace, len(project.Result.Workspaces))
+		for j, workspace := range project.Result.Workspaces {
+			if workspace.Kind == workspaceinventory.KindWorktree {
+				workspace = refresh.RefreshWorktreeTerminalCandidates(workspace, roots, panes)
+			}
+			workspaces[j] = workspace
+		}
+		project.Result.Workspaces = workspaces
+		projects[i] = project
+	}
+	input.Projects = projects
 	return input
 }
 
