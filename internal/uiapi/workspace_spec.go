@@ -10,7 +10,7 @@ import (
 )
 
 func workspaceSpecTypes(values map[string]any) {
-	for name, value := range map[string]any{"Projects": workspacewire.Projects{}, "Workspace": workspacewire.Workspace{}, "WorkspaceEvent": workspacewire.WorkspaceEvent{}, "WorkspaceCommand": WorkspaceCommand{}, "ShellCreated": workspacewire.ShellCreated{}, "ShellRenamed": shellstate.RenameResult{}, "ShellDeleted": workspacewire.ShellDeleted{}, "ShellRestored": workspacewire.ShellRestored{}, "WorktreePlan": workspaceops.WorktreePlan{}, "WorktreeCreated": workspacewire.WorktreeCreated{}, "WorktreeDeleted": workspacewire.WorktreeDeleted{}, "Agent": agentcontrol.Agent{}, "PromptResult": agentcontrol.PromptResult{}, "AgentError": agentcontrol.ErrorEnvelope{}} {
+	for name, value := range map[string]any{"SessionStarted": workspacewire.SessionStarted{}, "Projects": workspacewire.Projects{}, "Workspace": workspacewire.Workspace{}, "WorkspaceEvent": workspacewire.WorkspaceEvent{}, "WorkspaceCommand": WorkspaceCommand{}, "ShellCreated": workspacewire.ShellCreated{}, "ShellRenamed": shellstate.RenameResult{}, "ShellDeleted": workspacewire.ShellDeleted{}, "ShellRestored": workspacewire.ShellRestored{}, "WorktreePlan": workspaceops.WorktreePlan{}, "WorktreeCreated": workspacewire.WorktreeCreated{}, "WorktreeDeleted": workspacewire.WorktreeDeleted{}, "Agent": agentcontrol.Agent{}, "PromptResult": agentcontrol.PromptResult{}, "AgentError": agentcontrol.ErrorEnvelope{}} {
 		values[name] = value
 	}
 }
@@ -32,7 +32,7 @@ func workspaceSpec(schemas, paths map[string]any, add func(string, string, strin
 	}
 	params = append(params, hostParam)
 	paths["/api/v0/projects/{project}/workspace"].(map[string]any)["get"].(map[string]any)["parameters"] = params
-	responses := map[string]string{"shells/create": "ShellCreated", "shells/rename": "ShellRenamed", "shells/delete": "ShellDeleted", "shells/restore": "ShellRestored", "worktrees/plan": "WorktreePlan", "worktrees/create": "WorktreeCreated", "worktrees/rename": "ShellRenamed", "worktrees/delete-plan": "WorktreeDeleted", "worktrees/delete": "WorktreeDeleted", "agents/start": "Agent", "agents/prompt": "PromptResult"}
+	responses := map[string]string{"shells/start": "SessionStarted", "worktrees/start": "SessionStarted", "shells/create": "ShellCreated", "shells/rename": "ShellRenamed", "shells/delete": "ShellDeleted", "shells/restore": "ShellRestored", "worktrees/plan": "WorktreePlan", "worktrees/create": "WorktreeCreated", "worktrees/rename": "ShellRenamed", "worktrees/delete-plan": "WorktreeDeleted", "worktrees/delete": "WorktreeDeleted", "agents/start": "Agent", "agents/prompt": "PromptResult"}
 	command := schemas["WorkspaceCommand"].(map[string]any)
 	properties := command["properties"].(map[string]any)
 	for op, fields := range workspaceOperationFields {

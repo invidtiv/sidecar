@@ -2,6 +2,12 @@
 
 All notable changes to sidecar are documented here.
 
+## [Unreleased]
+
+### Features
+
+- Start a selected inactive shell or existing worktree terminal through `sidecar shell start`, `sidecar worktree start`, and their UI API operations. Shells keep their recorded identity, agent metadata and restore policy; worktrees start in the existing checkout without creating another branch or rerunning setup. Unrelated session-name collisions refuse.
+
 ## [v1.16.0] - 2026-10-05
 
 ### Features

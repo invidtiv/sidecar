@@ -4012,6 +4012,41 @@ sidecar shell send --target sidecar-ws-sidecar-fix-auth --run "go test ./..."
 sidecar shell send --target sidecar-sh-sidecar-2 --type "git push" --json
 ```
 
+### `sidecar shell start`
+
+Start an inactive shell terminal
+
+Exact managed shell identity; restores its terminal while retaining the record.
+A running terminal is returned unchanged. No previous agent conversation is resumed.
+
+
+```
+Usage: sidecar shell start SESSION [--project NAME] [--json]
+```
+
+**Options:**
+
+- `--project NAME`: Owning project key or path
+- `--shell NAME`: Resolve the owning project from a registered shell
+- `--json`: Write a structured session result
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: started or already running
+- `1`: project or state resolution failed
+- `2`: usage error
+- `3`: no matching record or worktree
+- `4`: start refused or failed
+- `5`: unknown project or shell
+
+**Examples:**
+
+```bash
+# Start the selected terminal without creating a new identity
+sidecar shell start SESSION --project sidecar --json
+```
+
 ## `sidecar terminal-links`
 
 Inspect terminal resource providers
@@ -4282,5 +4317,40 @@ Usage: sidecar worktree prune-sessions [--project NAME] [--session NAME]... [--p
 sidecar worktree prune-sessions --plan --json
 # close one project's orphaned sessions
 sidecar worktree prune-sessions --project riversandroads --yes
+```
+
+### `sidecar worktree start`
+
+Start an inactive worktree terminal
+
+Absolute existing linked worktree path; starts its session without recreating the checkout.
+A running terminal is returned unchanged. No previous agent conversation is resumed.
+
+
+```
+Usage: sidecar worktree start PATH [--project NAME] [--json]
+```
+
+**Options:**
+
+- `--project NAME`: Owning project key or path
+- `--shell NAME`: Resolve the owning project from a registered shell
+- `--json`: Write a structured session result
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: started or already running
+- `1`: project or state resolution failed
+- `2`: usage error
+- `3`: no matching record or worktree
+- `4`: start refused or failed
+- `5`: unknown project or shell
+
+**Examples:**
+
+```bash
+# Start the selected terminal without creating a new identity
+sidecar worktree start PATH --project sidecar --json
 ```
 

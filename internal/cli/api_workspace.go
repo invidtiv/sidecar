@@ -284,6 +284,12 @@ func workspaceCommandArgs(project string, c uiapi.WorkspaceCommand) ([]string, f
 	case "shells/restore":
 		args = []string{"shell", "restore"}
 		run = runShellRestore
+	case "shells/start":
+		args = []string{"shell", "start"}
+		run = runShellStart
+	case "worktrees/start":
+		args = []string{"worktree", "start"}
+		run = runWorktreeStart
 	case "worktrees/plan", "worktrees/create":
 		args = []string{"create", "worktree", "--wait", "0"}
 		run = runCreateWorktree
@@ -307,7 +313,7 @@ func workspaceCommandArgs(project string, c uiapi.WorkspaceCommand) ([]string, f
 		}
 	case "shells/rename", "worktrees/rename":
 		args = append(args, "--", c.Name)
-	case "shells/restore":
+	case "shells/restore", "shells/start", "worktrees/start":
 		args = append(args, "--", c.Target)
 	case "worktrees/plan", "worktrees/create":
 		if c.Base != "" {
@@ -399,7 +405,7 @@ func (r workspaceRemoteResult) ValidRemoteResult() bool {
 	if json.Unmarshal(r.Data, &fields) != nil {
 		return false
 	}
-	required := map[string][]string{"shells/create": {"shell", "placement"}, "shells/rename": {"shell", "name", "changed"}, "worktrees/rename": {"shell", "name", "changed"}, "shells/delete": {"shell", "status", "deleted"}, "shells/restore": {"shell", "status"}, "worktrees/plan": {"sourceOid", "branch", "path"}, "worktrees/create": {"path", "branch", "setup"}, "worktrees/delete-plan": {"status", "plan"}, "worktrees/delete": {"status", "deleted", "plan"}, "agents/start": {"target", "agent"}, "agents/prompt": {"target", "receipt"}}[r.Operation]
+	required := map[string][]string{"shells/create": {"shell", "placement"}, "shells/start": {"shell", "project", "status"}, "worktrees/start": {"shell", "project", "status"}, "shells/rename": {"shell", "name", "changed"}, "worktrees/rename": {"shell", "name", "changed"}, "shells/delete": {"shell", "status", "deleted"}, "shells/restore": {"shell", "status"}, "worktrees/plan": {"sourceOid", "branch", "path"}, "worktrees/create": {"path", "branch", "setup"}, "worktrees/delete-plan": {"status", "plan"}, "worktrees/delete": {"status", "deleted", "plan"}, "agents/start": {"target", "agent"}, "agents/prompt": {"target", "receipt"}}[r.Operation]
 	if len(required) == 0 {
 		return false
 	}

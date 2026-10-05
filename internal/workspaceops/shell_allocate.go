@@ -119,13 +119,7 @@ func (s Service) createAllocatedShell(spec ManagedShellSpec) (ShellResult, error
 	})
 	if err != nil {
 		if created || result.allocationToken != "" {
-			cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Second)
-			defer cancel()
-			output, err := allocationCommand(cleanupCtx, "show-environment", "-t", "="+result.SessionName, allocationTokenEnv).Output()
-			owned := err == nil && strings.TrimSpace(string(output)) == allocationTokenEnv+"="+result.allocationToken
-			if owned {
-				_ = allocationCommand(cleanupCtx, "kill-session", "-t", "="+result.SessionName).Run()
-			}
+			cleanupAllocatedShell(result)
 		}
 		var named *ShellCreateError
 		if errors.As(err, &named) {
@@ -203,4 +197,18 @@ func createFreshShell(ctx context.Context, spec ShellSpec) (ShellResult, bool, e
 	out, _ := allocationCommand(ctx, "list-panes", "-t", "="+spec.SessionName, "-F", "#{pane_id}").Output()
 	result.PaneID = strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0])
 	return result, true, ctx.Err()
+}
+
+// Only the allocation carrying our private ownership token may be rolled back.
+func cleanupAllocatedShell(result ShellResult) {
+	if result.allocationToken == "" {
+		return
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	output, err := allocationCommand(cleanupCtx, "show-environment", "-t", "="+result.SessionName, allocationTokenEnv).Output()
+	owned := err == nil && strings.TrimSpace(string(output)) == allocationTokenEnv+"="+result.allocationToken
+	if owned {
+		_ = allocationCommand(cleanupCtx, "kill-session", "-t", "="+result.SessionName).Run()
+	}
 }

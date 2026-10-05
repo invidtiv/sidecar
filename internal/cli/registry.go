@@ -322,7 +322,7 @@ func RootCommand() *Command {
 		Summary: "Manage Sidecar shell records and the current shell's name",
 		Usage:   "sidecar shell <command>",
 		Long:    "List, forget, restore, and delete this project's shells; read or rename a shell; and send a command into one.",
-		Sub:     []*Command{deleteCmd, forgetCmd, listCmd, nameCmd, renameCmd, restoreCmd, sendCmd},
+		Sub:     []*Command{deleteCmd, forgetCmd, listCmd, nameCmd, renameCmd, restoreCmd, sendCmd, recordedSessionStartCommand("shell", runShellStart)},
 		Run:     runShellRoot,
 	}
 
@@ -772,7 +772,7 @@ func worktreeCommand() *Command {
 		Summary: "Manage Sidecar-visible git worktrees",
 		Usage:   "sidecar worktree <command>",
 		Long:    "Plan and perform worktree lifecycle operations through Sidecar's shared core.",
-		Sub:     []*Command{deleteCmd, pruneSessionsCmd},
+		Sub:     []*Command{deleteCmd, pruneSessionsCmd, recordedSessionStartCommand("worktree", runWorktreeStart)},
 		Run:     runWorktreeRoot,
 	}
 }

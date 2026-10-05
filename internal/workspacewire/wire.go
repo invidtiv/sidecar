@@ -32,6 +32,11 @@ type ShellInfo struct {
 	Session     string `json:"session"`
 	WorkDir     string `json:"workDir"`
 }
+type SessionStarted struct {
+	Shell   ShellInfo `json:"shell"`
+	Project string    `json:"project"`
+	Status  string    `json:"status"`
+}
 type ShellCreated struct {
 	AgentStart *AgentStartResult `json:"agent_start,omitempty"`
 	Shell      ShellInfo         `json:"shell"`

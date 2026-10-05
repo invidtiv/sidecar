@@ -16,6 +16,36 @@
     }
   },
   {
+    "path": "/api/v0/projects/fixture-project/shells/start",
+    "request": {
+      "target": "fixture-new"
+    },
+    "response": {
+      "shell": {
+        "displayName": "New shell",
+        "session": "fixture-new",
+        "workDir": "/workspace/fixture"
+      },
+      "project": "fixture-project",
+      "status": "started"
+    }
+  },
+  {
+    "path": "/api/v0/projects/fixture-project/worktrees/start",
+    "request": {
+      "target": "/workspace/feature"
+    },
+    "response": {
+      "shell": {
+        "displayName": "Feature",
+        "session": "fixture-worktree",
+        "workDir": "/workspace/feature"
+      },
+      "project": "fixture-project",
+      "status": "started"
+    }
+  },
+  {
     "path": "/api/v0/projects/fixture-project/shells/rename",
     "request": {
       "target": "fixture-new",

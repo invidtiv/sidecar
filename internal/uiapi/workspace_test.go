@@ -40,6 +40,11 @@ func TestWorkspaceRoutesScopeGuardsAndValidation(t *testing.T) {
 		status   int
 	}{
 		{"shells/create", `{"name":"New"}`, 200},
+		{"shells/start", `{"target":"managed"}`, 200},
+		{"shells/start", `{}`, 400},
+		{"worktrees/start", `{"target":"/checkout"}`, 200},
+		{"worktrees/start", `{}`, 400},
+		{"worktrees/start", `{"target":"/checkout","name":"feature"}`, 400},
 		{"shells/create", `{} {}`, 400},
 		{"shells/create", `null`, 400},
 		{"shells/rename", `{"target":"managed","name":"Review"}`, 200},

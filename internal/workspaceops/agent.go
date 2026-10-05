@@ -277,6 +277,7 @@ type AgentLaunchSpec struct {
 	SessionName, WorkDir, DisplayName, AgentType, AgentCommand, TaskID string
 	Env                                                                map[string]string
 	StartAgent                                                         bool
+	RequireNew                                                         bool
 }
 
 type AgentLaunchResult struct {
@@ -303,7 +304,10 @@ func launchWorktreeSession(ctx context.Context, spec AgentLaunchSpec, runner Tmu
 	if spec.SessionName == "" || spec.WorkDir == "" {
 		return result, fmt.Errorf("session name and worktree path are required")
 	}
-	if _, err := runner.Run(ctx, "has-session", "-t", spec.SessionName); err == nil {
+	if _, err := runner.Run(ctx, "has-session", "-t", "="+spec.SessionName); err == nil {
+		if spec.RequireNew {
+			return result, fmt.Errorf("session %q is already occupied", spec.SessionName)
+		}
 		result.Reconnected = true
 		result.PaneID = paneIDWithRunner(ctx, spec.SessionName, runner)
 		if err := record(spec.SessionName, spec.WorkDir, spec.DisplayName, spec.AgentType); err != nil {

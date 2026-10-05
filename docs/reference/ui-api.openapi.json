@@ -2836,6 +2836,26 @@
         ],
         "type": "object"
       },
+      "SessionStarted": {
+        "additionalProperties": false,
+        "properties": {
+          "project": {
+            "type": "string"
+          },
+          "shell": {
+            "$ref": "#/components/schemas/ShellInfo"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "shell",
+          "project",
+          "status"
+        ],
+        "type": "object"
+      },
       "SessionToken": {
         "additionalProperties": false,
         "properties": {
@@ -4382,6 +4402,22 @@
         ],
         "type": "object"
       },
+      "shells_startRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "target": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "target"
+        ],
+        "type": "object"
+      },
       "worktrees_createRequest": {
         "additionalProperties": false,
         "properties": {
@@ -4512,6 +4548,22 @@
         "required": [
           "target",
           "name"
+        ],
+        "type": "object"
+      },
+      "worktrees_startRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "target": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "target"
         ],
         "type": "object"
       }
@@ -6397,6 +6449,102 @@
         "x-scope": "workspace:write"
       }
     },
+    "/api/v0/projects/{project}/shells/start": {
+      "post": {
+        "description": "Calls the owning CLI's shared workspace operation. X-Sidecar-Exit-Code retains its exit status. A failed create can return its partial creation result; a failed prompt retains the CLI error receipt. Do not replay uncertain writes.",
+        "operationId": "projects_{project}_shells_start_post",
+        "parameters": [
+          {
+            "description": "Required on Browser and Tailnet; not on Local.",
+            "in": "header",
+            "name": "X-Sidecar-Request",
+            "required": false,
+            "schema": {
+              "const": "1",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Configured owning project key or root path, encoded as one path segment; never a hub-scoped catalog project_id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/shells_startRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionStarted"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "X-Sidecar-Exit-Code": {
+                "description": "Original owning CLI exit status; absent for HTTP admission refusals.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ErrorBody"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Named refusal; see ui-api.md for status codes and remedies",
+            "headers": {
+              "X-Sidecar-Exit-Code": {
+                "description": "Original owning CLI exit status; absent for HTTP admission refusals.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there.",
+        "x-required-scope": "workspace:write",
+        "x-scope": "workspace:write"
+      }
+    },
     "/api/v0/projects/{project}/tree": {
       "get": {
         "operationId": "projects_{project}_tree_get",
@@ -7200,6 +7348,102 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ShellRenamed"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "X-Sidecar-Exit-Code": {
+                "description": "Original owning CLI exit status; absent for HTTP admission refusals.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ErrorBody"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Named refusal; see ui-api.md for status codes and remedies",
+            "headers": {
+              "X-Sidecar-Exit-Code": {
+                "description": "Original owning CLI exit status; absent for HTTP admission refusals.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there.",
+        "x-required-scope": "workspace:write",
+        "x-scope": "workspace:write"
+      }
+    },
+    "/api/v0/projects/{project}/worktrees/start": {
+      "post": {
+        "description": "Calls the owning CLI's shared workspace operation. X-Sidecar-Exit-Code retains its exit status. A failed create can return its partial creation result; a failed prompt retains the CLI error receipt. Do not replay uncertain writes.",
+        "operationId": "projects_{project}_worktrees_start_post",
+        "parameters": [
+          {
+            "description": "Required on Browser and Tailnet; not on Local.",
+            "in": "header",
+            "name": "X-Sidecar-Request",
+            "required": false,
+            "schema": {
+              "const": "1",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Configured owning project key or root path, encoded as one path segment; never a hub-scoped catalog project_id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/worktrees_startRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionStarted"
                 }
               }
             },

@@ -54,11 +54,13 @@ func (e *OperationError) Error() string { return e.Message }
 
 var workspaceOperationFields = map[string][]string{
 	"shells/create":         {"name"},
+	"shells/start":          {"target"},
 	"shells/rename":         {"target", "name"},
 	"shells/delete":         {"target"},
 	"shells/restore":        {"target"},
 	"worktrees/plan":        {"name", "base"},
 	"worktrees/create":      {"name", "base", "confirm", "expect_source_oid"},
+	"worktrees/start":       {"target"},
 	"worktrees/rename":      {"target", "name"},
 	"worktrees/delete-plan": {"target", "delete_local_branch", "delete_remote_branch"},
 	"worktrees/delete":      {"target", "confirm", "expect_head_oid", "expect_branch", "expect_delete_state", "delete_local_branch", "delete_remote_branch"},
