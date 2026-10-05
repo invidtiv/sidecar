@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/marcus/sidecar/internal/mobile"
@@ -77,12 +76,23 @@ func NewCatalogRouter(directory OwnerDirectory) (*CatalogRouter, error) {
 	return &CatalogRouter{directory: directory, ownerTimeout: OwnerCatalogTimeout, queryTimeout: CatalogQueryTimeout, finalReserve: catalogFinalReserve}, nil
 }
 
+// maxConcurrentOwnerQueries bounds how many owner catalogs one query reads at
+// once, and so how many owner responses can be in flight before the aggregate
+// budget has seen them.
+const maxConcurrentOwnerQueries = 8
+
 // Query obtains one current unfiltered Project snapshot from each online
 // owning service, then applies the phone's query once at the hub. Each owner
-// gets exactly one catalog stream, and the owners are asked concurrently, so
-// a slow or unreachable remote never delays the others. Results are merged in
-// directory order, so the composed catalog, its failures and its bounds checks
-// are the same as asking one owner after another.
+// gets exactly one catalog stream. Owners are asked concurrently, at most
+// maxConcurrentOwnerQueries at a time, so a slow or unreachable remote never
+// delays the others; the composed catalog and its failures are still in
+// directory order.
+//
+// The aggregate row, candidate and encoded-byte bounds are charged as each
+// owner's catalog arrives, before it is retained. Charges only grow, so the
+// first arrival that overflows makes the overflow certain: the query cancels
+// every owner still running and refuses at once rather than holding the
+// request, and every retained catalog, until the slowest owner answers.
 //
 // A remote owner is bounded by ownerTimeout so one SSH route cannot hold the
 // whole query. This machine's own owner is bounded only by the query's
@@ -99,57 +109,67 @@ func (r *CatalogRouter) Query(ctx context.Context, query mobileproto.CatalogQuer
 	if err := validateDirectorySnapshot(directory); err != nil {
 		return mobileproto.CatalogSnapshot{}, err
 	}
+	// ownersCtx ends every owner still running once the outcome is decided.
+	ownersCtx, cancelOwners := context.WithCancel(queryCtx)
+	defer cancelOwners()
 	type ownerResult struct {
-		asked    bool
+		index    int
 		remapped RemappedCatalog
 		err      error
 	}
-	results := make([]ownerResult, len(directory.Endpoints))
-	var wg sync.WaitGroup
+	asked := make([]bool, len(directory.Endpoints))
+	launched := 0
 	for i, endpoint := range directory.Endpoints {
-		if strings.ToLower(endpoint.Host.State) != "online" {
+		if strings.EqualFold(endpoint.Host.State, "online") {
+			asked[i] = true
+			launched++
+		}
+	}
+	// Buffered for every owner, so an owner finishing after the query has
+	// returned never blocks.
+	results := make(chan ownerResult, launched)
+	slots := make(chan struct{}, maxConcurrentOwnerQueries)
+	for i, endpoint := range directory.Endpoints {
+		if !asked[i] {
 			continue
 		}
-		results[i].asked = true
-		if err := queryCtx.Err(); err != nil {
-			results[i].err = err
-			continue
-		}
-		wg.Add(1)
 		go func(i int, endpoint OwnerEndpoint) {
-			defer wg.Done()
+			select {
+			case slots <- struct{}{}:
+				defer func() { <-slots }()
+			case <-ownersCtx.Done():
+				results <- ownerResult{index: i, err: ownersCtx.Err()}
+				return
+			}
+			if err := ownersCtx.Err(); err != nil {
+				results <- ownerResult{index: i, err: err}
+				return
+			}
 			ownerTimeout := r.ownerTimeout
 			if endpoint.Host.Local {
 				ownerTimeout = r.queryTimeout
 			}
-			ownerCtx, cancelOwner := catalogOwnerContext(queryCtx, ownerTimeout, r.finalReserve)
+			ownerCtx, cancelOwner := catalogOwnerContext(ownersCtx, ownerTimeout, r.finalReserve)
 			defer cancelOwner()
 			owner, err := endpoint.Bind(ownerCtx)
 			if err != nil {
-				results[i].err = err
+				results <- ownerResult{index: i, err: err}
 				return
 			}
 			remapped, stream, err := queryBoundOwner(ownerCtx, ownerCtx, directory.Identity, &owner, fmt.Sprintf("hub-catalog-%d", i))
 			if stream != nil {
 				stream.Close()
 			}
-			results[i] = ownerResult{asked: true, remapped: remapped, err: err}
+			results <- ownerResult{index: i, remapped: remapped, err: err}
 		}(i, endpoint)
 	}
-	wg.Wait()
-	sources := make([]mobile.CatalogSource, 0, len(directory.Endpoints))
-	failures := append([]mobileproto.CatalogFailure(nil), directory.Failures...)
+	retained := make([]*mobile.CatalogSource, len(directory.Endpoints))
+	ownerErrs := make([]error, len(directory.Endpoints))
 	rows, candidates, sourceBytes := 0, 0, 0
-	for i, endpoint := range directory.Endpoints {
-		result := results[i]
-		if !result.asked {
-			continue
-		}
+	for range launched {
+		result := <-results
 		if result.err != nil {
-			failures, err = appendOwnerFailure(failures, endpoint.Host, result.err)
-			if err != nil {
-				return mobileproto.CatalogSnapshot{}, err
-			}
+			ownerErrs[result.index] = result.err
 			continue
 		}
 		rowCount, candidateCount := countCatalogSource(result.remapped.Source)
@@ -163,7 +183,23 @@ func (r *CatalogRouter) Query(ctx context.Context, query mobileproto.CatalogQuer
 		if rows > mobileproto.MaxCatalogRows || candidates > mobileproto.MaxCatalogCandidates || sourceBytes > composedCatalogBytes {
 			return mobileproto.CatalogSnapshot{}, fmt.Errorf("mobile hub: combined owner catalogs exceed protocol bounds")
 		}
-		sources = append(sources, result.remapped.Source)
+		source := result.remapped.Source
+		retained[result.index] = &source
+	}
+	sources := make([]mobile.CatalogSource, 0, len(directory.Endpoints))
+	failures := append([]mobileproto.CatalogFailure(nil), directory.Failures...)
+	for i, endpoint := range directory.Endpoints {
+		if !asked[i] {
+			continue
+		}
+		if ownerErrs[i] != nil {
+			failures, err = appendOwnerFailure(failures, endpoint.Host, ownerErrs[i])
+			if err != nil {
+				return mobileproto.CatalogSnapshot{}, err
+			}
+			continue
+		}
+		sources = append(sources, *retained[i])
 	}
 	if err := directory.Validate(queryCtx); err != nil {
 		return mobileproto.CatalogSnapshot{}, err

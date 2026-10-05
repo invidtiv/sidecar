@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -53,6 +55,10 @@ type fakeCatalogLineStream struct {
 	hang     bool
 	// delay answers the catalog request after this long, as a busy owner does.
 	delay time.Duration
+	// answerAfter, when set, holds the answer until it is closed.
+	answerAfter <-chan struct{}
+	// requested is closed when the catalog request arrives, when set.
+	requested chan struct{}
 }
 
 type blockingWriteCatalogStream struct {
@@ -87,11 +93,18 @@ func (s *fakeCatalogLineStream) WriteLine(line []byte) error {
 		return errors.New("unexpected owner request")
 	}
 	s.writes++
+	if s.requested != nil && s.writes == 1 {
+		close(s.requested)
+	}
 	if s.hang {
 		return nil
 	}
 	response := mobileproto.Response{Version: mobileproto.Version, Type: mobileproto.ResponseSessions, RequestID: request.RequestID, Catalog: &s.catalog}
 	data, _ := json.Marshal(response)
+	if s.answerAfter != nil {
+		go func() { <-s.answerAfter; s.lines <- data }()
+		return nil
+	}
 	if s.delay > 0 {
 		time.AfterFunc(s.delay, func() { s.lines <- data })
 		return nil
@@ -553,9 +566,7 @@ func TestCatalogRouterNeverTimesOutABusyLocalOwnerAtTheRemoteBound(t *testing.T)
 	router.ownerTimeout = 20 * time.Millisecond
 	router.queryTimeout = 200 * time.Millisecond
 	router.finalReserve = 10 * time.Millisecond
-	started := time.Now()
 	snapshot, err := router.Query(context.Background(), mobileproto.CatalogQuery{})
-	elapsed := time.Since(started)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -565,7 +576,100 @@ func TestCatalogRouterNeverTimesOutABusyLocalOwnerAtTheRemoteBound(t *testing.T)
 	if len(snapshot.Failures) != 1 || snapshot.Failures[0].ID != "book" {
 		t.Fatalf("failures = %+v, want only the hung remote", snapshot.Failures)
 	}
-	if elapsed >= 150*time.Millisecond {
-		t.Fatalf("owners were not asked concurrently: %s", elapsed)
+}
+
+// The local owner answers only once the remote owner has received its own
+// request. Asking one owner after another can never satisfy that: the local
+// owner would wait for a request that is not sent until it has answered.
+func TestCatalogRouterAsksOwnersConcurrently(t *testing.T) {
+	remoteAsked := make(chan struct{})
+	local := newFakeCatalogLineStream(rawOwnerCatalog("local-owner", "local", "local"))
+	local.answerAfter = remoteAsked
+	remote := newFakeCatalogLineStream(rawOwnerCatalog("remote-owner", "repo", "remote"))
+	remote.requested = remoteAsked
+	router, _ := NewCatalogRouter(newFakeRouterDirectory(local, remote))
+	router.ownerTimeout = time.Second
+	router.queryTimeout = 2 * time.Second
+	snapshot, err := router.Query(context.Background(), mobileproto.CatalogQuery{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Total != 2 || len(snapshot.Failures) != 0 {
+		t.Fatalf("concurrent owners = %+v", snapshot)
+	}
+}
+
+// Two owners that already exceed the aggregate row bound make the overflow
+// certain. The query refuses at once and cancels the owner still running,
+// instead of retaining both catalogs until a hung owner's deadline.
+func TestCatalogRouterRefusesCertainOverflowWithoutWaitingForOtherOwners(t *testing.T) {
+	first := rawOwnerCatalog("local-owner", "local", "local")
+	first.Sections[0].Rows = repeatedRawRows(first.Sections[0].Rows[0], mobileproto.MaxCatalogRows/2+1)
+	first.Total = len(first.Sections[0].Rows)
+	second := rawOwnerCatalog("remote-owner", "remote", "remote")
+	second.Sections[0].Rows = repeatedRawRows(second.Sections[0].Rows[0], mobileproto.MaxCatalogRows/2+1)
+	second.Total = len(second.Sections[0].Rows)
+	directory := newFakeRouterDirectory(newFakeCatalogLineStream(first), newFakeCatalogLineStream(second))
+	hung := newFakeCatalogLineStream(rawOwnerCatalog("third-owner", "other", "other"))
+	hung.hang = true
+	directory.snapshot.Hosts = append(directory.snapshot.Hosts, mobileproto.CatalogHost{ID: "third", State: "online"})
+	directory.snapshot.Endpoints = append(directory.snapshot.Endpoints, fakeCatalogEndpoint("third", "third-registration", hung))
+	router, _ := NewCatalogRouter(directory)
+	router.ownerTimeout = 2 * time.Second
+	router.queryTimeout = 4 * time.Second
+	router.finalReserve = 10 * time.Millisecond
+	started := time.Now()
+	_, err := router.Query(context.Background(), mobileproto.CatalogQuery{})
+	if err == nil || !strings.Contains(err.Error(), "exceed protocol bounds") {
+		t.Fatalf("err = %v, want the aggregate overflow", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("certain overflow waited %s for a hung owner", elapsed)
+	}
+}
+
+// No more than maxConcurrentOwnerQueries owner catalogs are ever being read at
+// once, however many owners are online.
+func TestCatalogRouterBoundsOwnersInFlight(t *testing.T) {
+	var active, peak atomic.Int32
+	release := make(chan struct{})
+	directory := &fakeOwnerDirectory{snapshot: DirectorySnapshot{
+		Identity: mobile.CatalogIdentity{HubID: "hub", OwnerHostID: "local:hub", OwnerConfigGeneration: "hub-cfg"},
+		Validate: func(context.Context) error { return nil },
+	}}
+	for i := range 3 * maxConcurrentOwnerQueries {
+		id := fmt.Sprintf("owner-%d", i)
+		directory.snapshot.Hosts = append(directory.snapshot.Hosts, mobileproto.CatalogHost{ID: id, State: "online"})
+		directory.snapshot.Endpoints = append(directory.snapshot.Endpoints, OwnerEndpoint{Host: mobileproto.CatalogHost{ID: id, State: "online"}, Bind: func(ctx context.Context) (BoundOwner, error) {
+			now := active.Add(1)
+			defer active.Add(-1)
+			for {
+				old := peak.Load()
+				if now <= old || peak.CompareAndSwap(old, now) {
+					break
+				}
+			}
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
+			return BoundOwner{}, errors.New("owner unavailable")
+		}})
+	}
+	router, _ := NewCatalogRouter(directory)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = router.Query(context.Background(), mobileproto.CatalogQuery{})
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for active.Load() < maxConcurrentOwnerQueries && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(20 * time.Millisecond)
+	close(release)
+	<-done
+	if got := peak.Load(); got != maxConcurrentOwnerQueries {
+		t.Fatalf("peak owners in flight = %d, want %d", got, maxConcurrentOwnerQueries)
 	}
 }

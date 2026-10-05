@@ -242,21 +242,35 @@ func mobileCatalogProvider(env Env) mobile.CatalogProvider {
 }
 
 func mobileCatalogProviderForProjects(env Env, loadProjects func() ([]hostserve.Project, error)) mobile.CatalogProvider {
-	seed := activitystore.Load(filepath.Join(env.StateDir, activitystore.FileName), time.Now())
-	collector := workspaceinventory.Collector{}.WithDefaults()
-	collector = collector.SeedTrackers(seed)
-	provider := newMobileCatalogProvider(env, loadProjects, collector, seed, time.Now)
+	collect := mobileCatalogCollectorForProjects(env, loadProjects)
 	return func(ctx context.Context) (mobile.CatalogInput, error) {
-		input, err := provider(ctx)
+		input, err := collect(ctx)
 		if err != nil {
 			return mobile.CatalogInput{}, err
 		}
-		// One target scan and one tmux pane listing are enough to authorize
-		// every managed-shell row in this snapshot. The service resolver
-		// remains fresh for resolve/open and every later target operation.
-		input.Resolver = newMobileCatalogShellResolver(env, tty.HeadlessTargetSnapshot())
-		return input, nil
+		return authorizeMobileCatalogInput(env, input), nil
 	}
+}
+
+// mobileCatalogCollectorForProjects collects the inventory half of a catalog
+// input: projects, workspaces, live panes and the candidate resolver bound to
+// that exact observation. It carries no shell-row authorization state, so one
+// collection can be shared and authorized separately by each request.
+func mobileCatalogCollectorForProjects(env Env, loadProjects func() ([]hostserve.Project, error)) mobile.CatalogProvider {
+	seed := activitystore.Load(filepath.Join(env.StateDir, activitystore.FileName), time.Now())
+	collector := workspaceinventory.Collector{}.WithDefaults()
+	collector = collector.SeedTrackers(seed)
+	return newMobileCatalogProvider(env, loadProjects, collector, seed, time.Now)
+}
+
+// authorizeMobileCatalogInput gives one projection of input its own shell-row
+// authorization state: one managed-target scan and one tmux pane listing,
+// taken when this projection first authorizes a row and never shared with
+// another request. The service resolver remains fresh for resolve/open and
+// every later target operation.
+func authorizeMobileCatalogInput(env Env, input mobile.CatalogInput) mobile.CatalogInput {
+	input.Resolver = newMobileCatalogShellResolver(env, tty.HeadlessTargetSnapshot())
+	return input
 }
 
 func newMobileCatalogProvider(env Env, loadProjects func() ([]hostserve.Project, error), collector workspaceinventory.Collector, seed map[string]agentactivity.Tracker, now func() time.Time) mobile.CatalogProvider {
@@ -392,9 +406,10 @@ func mobileResolver(env Env) mobile.Resolver {
 	}
 }
 
-// newMobileCatalogShellResolver authorizes one catalog input's shell rows. The
-// input can be shared by concurrent requests, and shellTargetLookup memoizes
-// its scan in an unguarded map, so calls are serialized.
+// newMobileCatalogShellResolver authorizes one catalog projection's shell rows
+// from one memoized managed-target scan. shellTargetLookup memoizes in an
+// unguarded map, so calls are serialized, and it never memoizes a scan its
+// caller canceled (see shellTargetLookup.scan).
 func newMobileCatalogShellResolver(env Env, inspect func(context.Context, string) (tty.HeadlessTargetIdentity, error)) mobile.Resolver {
 	lookup := &shellTargetLookup{}
 	var mu sync.Mutex

@@ -2,13 +2,12 @@ package cli
 
 import (
 	"context"
-	"fmt"
-	"os"
 	"sync"
 	"time"
 
 	"github.com/marcus/sidecar/internal/mobile"
 	"github.com/marcus/sidecar/internal/tmuxenv"
+	"github.com/marcus/sidecar/internal/tmuxserver"
 )
 
 const (
@@ -36,15 +35,18 @@ type catalogFence struct {
 // machine the pile-up was slow enough to push the local owner past its catalog
 // deadline and report this machine offline.
 //
-// Sharing changes nothing a collection produces. Every collection is a fresh
-// provider (fresh activity seed, fresh target scans), exactly as an unshared
-// request would build. A request reuses a collection only when it is in flight
-// or started within sharedCatalogMaxAge, no invalidation has arrived since it
-// started, and the owner config generation and tmux server still match. The
-// rows are then authorized and projected per request, and every identity in
-// them is still checked fresh when a target is resolved or opened.
+// Only collected inventory is shared. Every collection is a fresh provider
+// (fresh activity seed), exactly as an unshared request would build. A request
+// reuses a collection only when it is in flight or started within
+// sharedCatalogMaxAge, no invalidation has arrived since it started, and the
+// owner config generation and tmux server still match. Each request then gets
+// its own authorization state from authorize (a fresh managed-target scan and
+// tmux pane listing), so a row is advertised attachable only if the current
+// resolver accepts it; every identity is checked fresh again when a target is
+// resolved or opened.
 type sharedCatalog struct {
 	newProvider func() mobile.CatalogProvider
+	authorize   func(mobile.CatalogInput) mobile.CatalogInput
 	fence       func(context.Context) (catalogFence, error)
 	now         func() time.Time
 	maxAge      time.Duration
@@ -63,8 +65,14 @@ type catalogFlight struct {
 	err     error
 }
 
-func newSharedCatalog(newProvider func() mobile.CatalogProvider) *sharedCatalog {
-	return &sharedCatalog{newProvider: newProvider, fence: currentCatalogFence, now: time.Now, maxAge: sharedCatalogMaxAge}
+// newSharedCatalog shares what newProvider collects and runs authorize on
+// every request's copy. newProvider must return only immutable collected data;
+// anything that decides authority now belongs in authorize.
+func newSharedCatalog(newProvider func() mobile.CatalogProvider, authorize func(mobile.CatalogInput) mobile.CatalogInput) *sharedCatalog {
+	if authorize == nil {
+		authorize = func(input mobile.CatalogInput) mobile.CatalogInput { return input }
+	}
+	return &sharedCatalog{newProvider: newProvider, authorize: authorize, fence: currentCatalogFence, now: time.Now, maxAge: sharedCatalogMaxAge}
 }
 
 // Invalidate retires every collection started before this call. Requests that
@@ -86,7 +94,11 @@ func (c *sharedCatalog) input(ctx context.Context) (mobile.CatalogInput, error) 
 	if err != nil {
 		// Without the evidence a reuse needs, collect for this caller alone;
 		// its own generation checks report the underlying failure.
-		return c.newProvider()(ctx)
+		input, err := c.newProvider()(ctx)
+		if err != nil {
+			return mobile.CatalogInput{}, err
+		}
+		return c.authorize(input), nil
 	}
 	c.mu.Lock()
 	flight := c.current
@@ -98,7 +110,10 @@ func (c *sharedCatalog) input(ctx context.Context) (mobile.CatalogInput, error) 
 	c.mu.Unlock()
 	select {
 	case <-flight.done:
-		return flight.input, flight.err
+		if flight.err != nil {
+			return mobile.CatalogInput{}, flight.err
+		}
+		return c.authorize(flight.input), nil
 	case <-ctx.Done():
 		return mobile.CatalogInput{}, ctx.Err()
 	}
@@ -133,15 +148,8 @@ func currentCatalogFence(ctx context.Context) (catalogFence, error) {
 }
 
 // tmuxServerIdentity names the server behind this process's socket by the
-// socket file's modification time, which tmux sets when it binds the socket
-// and never touches afterwards (attach state changes the mode, not the
-// mtime): a restarted server binds a new socket file. An absent socket is its
-// own identity.
+// socket file's device, inode and modification time (see
+// tmuxserver.SocketBinding): a restarted server binds a new socket file.
 func tmuxServerIdentity() string {
-	path := tmuxenv.SocketPath()
-	info, err := os.Stat(path)
-	if err != nil {
-		return path + "\x00absent"
-	}
-	return fmt.Sprintf("%s\x00%d", path, info.ModTime().UnixNano())
+	return tmuxserver.SocketBinding(tmuxenv.SocketPath())
 }

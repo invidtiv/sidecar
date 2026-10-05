@@ -249,6 +249,12 @@ func (l *shellTargetLookup) scan(env Env, shellFlag, projectFlag string, globalE
 		return s
 	}
 	s := buildShellTargetScan(env, shellFlag, projectFlag, globalExplicit)
+	// A scan cut short by its caller's context answers nothing about the
+	// projects it skipped. It is this caller's answer only, never memoized for
+	// a later call that would read "not found" into the gap.
+	if env.Ctx != nil && env.Ctx.Err() != nil {
+		return s
+	}
 	if l.scans == nil {
 		l.scans = map[string]*shellTargetScan{}
 	}

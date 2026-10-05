@@ -181,6 +181,11 @@ func Candidates(ctx context.Context, stateDir string, projects []Project) ([]Tar
 			claim(root, proj, manifest, tierDiscovered)
 		}
 	}
+	// A canceled scan skipped projects; returning what it reached would read
+	// as "those projects own nothing".
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	// Every root's display name comes from one read of the state tree.
 	names := projectdir.NewWorktreeIndex(stateDir)
 	for _, root := range roots {

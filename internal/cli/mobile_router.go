@@ -89,7 +89,9 @@ func newMobileBackend(ctx context.Context, env Env) (*mobileBackend, error) {
 	if err != nil {
 		return nil, err
 	}
-	backend := &mobileBackend{env: env, catalog: newSharedCatalog(func() mobile.CatalogProvider { return mobileCatalogProvider(env) })}
+	backend := &mobileBackend{env: env, catalog: newSharedCatalog(
+		func() mobile.CatalogProvider { return mobileCatalogCollectorForProjects(env, configuredProjects) },
+		func(input mobile.CatalogInput) mobile.CatalogInput { return authorizeMobileCatalogInput(env, input) })}
 	if !remoteHostsEnabled(env, cfg) || len(cfg.Hosts.List) == 0 {
 		return backend, nil
 	}

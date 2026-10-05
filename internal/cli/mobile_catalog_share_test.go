@@ -3,12 +3,22 @@ package cli
 import (
 	"context"
 	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/hostserve"
 	"github.com/marcus/sidecar/internal/mobile"
+	"github.com/marcus/sidecar/internal/mobileproto"
+	"github.com/marcus/sidecar/internal/shellstate"
+	"github.com/marcus/sidecar/internal/testenv"
+	"github.com/marcus/sidecar/internal/tmuxenv"
+	"github.com/marcus/sidecar/internal/tty"
 )
 
 type shareHarness struct {
@@ -39,7 +49,7 @@ func newShareHarness() *shareHarness {
 			}
 			return mobile.CatalogInput{ObservedAt: time.Unix(int64(n), 0)}, nil
 		}
-	})
+	}, nil)
 	h.catalog.fence = func(context.Context) (catalogFence, error) {
 		h.fenceMu.Lock()
 		defer h.fenceMu.Unlock()
@@ -191,5 +201,130 @@ func TestSharedCatalogSurvivesTheStartingRequestLeaving(t *testing.T) {
 	close(h.release)
 	if got := <-second; got != 1 || h.calls.Load() != 1 {
 		t.Fatalf("remaining request got %d after %d collections", got, h.calls.Load())
+	}
+}
+
+// A caller that cancels while the managed-target scan is still running must
+// not leave a partial scan behind: the same resolver, asked again by a healthy
+// caller, finds the live shell.
+func TestCatalogShellResolverDoesNotMemoizeACanceledScan(t *testing.T) {
+	_, state := setupIsolatedCLI(t)
+	root := t.TempDir()
+	writeProjectMeta(t, state, "p", root)
+	writeProjectShells(t, state, "p", shellstate.Definition{TmuxName: "sidecar-sh-cancel", DisplayName: "Live", Namespace: tmuxenv.Namespace(), CreatedAt: time.Now(), WorkDir: root})
+	// The first git call (worktree discovery) blocks until killed; later ones
+	// answer at once.
+	bin := t.TempDir()
+	started := filepath.Join(t.TempDir(), "started")
+	script := "#!/bin/sh\nif [ ! -e \"$SCAN_STARTED\" ]; then\n  : > \"$SCAN_STARTED\"\n  exec sleep 120\nfi\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("SCAN_STARTED", started)
+	inspect := func(_ context.Context, session string) (tty.HeadlessTargetIdentity, error) {
+		return tty.HeadlessTargetIdentity{ServerPID: 42, SessionID: "$1", SessionCreated: "10", Session: session, Pane: "%1", Width: 80, Height: 24, PaneCount: 1}, nil
+	}
+	resolver := newMobileCatalogShellResolver(Env{StateDir: state}, inspect)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := resolver(ctx, "sidecar-sh-cancel")
+		done <- err
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(started); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the authorization scan never started git")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	<-done
+	if _, err := resolver(context.Background(), "sidecar-sh-cancel"); err != nil {
+		t.Fatalf("healthy caller inherited the canceled scan: %v", err)
+	}
+}
+
+// Sharing a collection must not share its authorization. After the live shell
+// is split (no socket, config or watcher change), a warm request reuses the
+// collected inventory but authorizes against tmux as it is now, so it refuses
+// the shell as a fresh catalog does and never advertises the old identity.
+// (The refusal's wording can differ: the shared inventory still saw one pane,
+// so the current resolver refuses the layout rather than the inventory
+// reporting two matches.)
+func TestSharedCatalogReauthorizesEveryRequest(t *testing.T) {
+	testenv.RequireTmux(t)
+	_, state := setupIsolatedCLI(t)
+	config.SetTestStateDir(state)
+	t.Cleanup(config.ResetTestStateDir)
+	root := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	initGitRepo(t, root)
+	writeProjectMeta(t, state, "p", root)
+	session := "sidecar-sh-warm"
+	writeProjectShells(t, state, "p", shellstate.Definition{TmuxName: session, DisplayName: "Live", Namespace: tmuxenv.Namespace(), CreatedAt: time.Now(), WorkDir: root})
+	socket := tmuxenv.SocketPath()
+	if err := os.MkdirAll(filepath.Dir(socket), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	tmux := func(args ...string) {
+		t.Helper()
+		if out, err := exec.Command("tmux", append([]string{"-f", "/dev/null", "-S", socket}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("tmux %v: %v %s", args, err, out)
+		}
+	}
+	tmux("new-session", "-d", "-s", session, "-c", root, "-x", "80", "-y", "24", "sleep 120")
+	if err := os.MkdirAll(filepath.Dir(config.ConfigPath()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(config.ConfigPath(), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := Env{StateDir: state}
+	projects := func() ([]hostserve.Project, error) { return []hostserve.Project{{Name: "P", Path: root}}, nil }
+	shared := newSharedCatalog(
+		func() mobile.CatalogProvider { return mobileCatalogCollectorForProjects(env, projects) },
+		func(input mobile.CatalogInput) mobile.CatalogInput { return authorizeMobileCatalogInput(env, input) })
+	host, _ := os.Hostname()
+	identity := mobile.CatalogIdentity{HubID: host, OwnerHostID: "local:" + host, OwnerConfigGeneration: "g"}
+	shellRow := func(provider mobile.CatalogProvider) mobileproto.CatalogRow {
+		t.Helper()
+		snapshot, err := mobile.QueryCatalog(context.Background(), provider, mobileResolver(env), mobileproto.CatalogQuery{}, identity)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, section := range snapshot.Sections {
+			for _, row := range section.Rows {
+				if row.Session == session && row.WorkspaceKind == "shell" {
+					return row
+				}
+			}
+		}
+		t.Fatalf("no row for %s in %+v", session, snapshot)
+		return mobileproto.CatalogRow{}
+	}
+	if first := shellRow(shared.Provider()); !first.AttachmentReady {
+		t.Fatalf("live one-pane shell not ready: %+v", first)
+	}
+	fence := tmuxServerIdentity()
+	tmux("split-window", "-d", "-t", session, "-c", root, "sleep 120")
+	if tmuxServerIdentity() != fence {
+		t.Fatal("a split changed the server fence; the warm path would not be exercised")
+	}
+	warm := shellRow(shared.Provider())
+	fresh := shellRow(mobileCatalogProviderForProjects(env, projects))
+	if fresh.AttachmentReady {
+		t.Fatalf("fresh catalog accepted the split shell: %+v", fresh)
+	}
+	if warm.AttachmentReady || warm.ExpectedTarget != nil || warm.Target != "" && warm.AttachState == "ready" {
+		t.Fatalf("warm row still advertises the pre-split identity: %+v (fresh %s/%s)", warm, fresh.AttachState, fresh.RefusalCode)
 	}
 }
