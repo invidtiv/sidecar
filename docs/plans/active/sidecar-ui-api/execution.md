@@ -47,6 +47,17 @@ U0 to U4 are merged in every repo. What is still open:
 - **Friction and bug tickets:** see the table at the end (label `ui-api-friction`). The notable ones are td-17b5e2 (worktree delete orphans cross-project shells), td-00b64e (shell list/rename resolve the project from env), td-f9306b (no rename history), and td-35d3c5 (fixture worktree identity).
 - **Not pushed:** Sidecar main is not pushed (AGENTS.md: push only when asked), and neither is sidecar-mobile main. sidecar-ui main is pushed (private).
 
+### Daily-use readiness (2026-10-04/05, epic td-778992)
+
+The UI is installed as an always-on service on aerie and was made ready for daily work. Every lane below had an independent review (Codex and fresh-context Claude reviewers, several passes each) before merge.
+
+- **Server fixes (Sidecar main, td-8893e8):** project workspace reads no longer refuse when two TUIs show the project (td-f0f340); hub-mode project workspaces and `?host=` remote workspaces return the hub's own rows plus owner content selectors, so their terminals attach; hub lookup refusals separate transient owners (retryable `backend`) from removed, disabled or unsupported ones; the launchd service starts on current macOS (activated Unix sockets report a bind-time path, now proved by a token probe) and `service status` parses `launchctl print` correctly; reinstalling a running service waits for launchd to release the old job; saved layouts accept hub-scoped (U+001F) identities.
+- **Catalog speed (td-67fc32):** batched tmux capture, one pane listing per catalog, worktree index, Git 8-wide, concurrent owners with a bounded aggregate budget, shared collection with per-request authorization. Live: `/sessions` 2.2-4.3 s to about 0.4 s, project workspace 4-8 s to about 0.4 s; the transient "local host offline" catalog under concurrent load is gone.
+- **Setup and docs (td-96fa2b):** `sidecar api service install --ui DIR`, an API-only root page, `pnpm run install-local [--service]` in sidecar-ui (marked builds, atomic `current`), docs site pages "Use the web UI" and "Build your own Sidecar UI".
+- **sidecar-ui resilience (td-a0713d):** terminals recover after identity changes, saved panes rebind (including layouts saved before hub routing), catalog rows survive a transient host failure for a grace period, mutations are never retried blindly, no toasts while unpaired.
+- **sidecar-ui desktop shell (td-96dc53):** one collapsible rail that re-scopes in place for a project, filters behind a menu, minimal pane chrome, instant search; spec in sidecar-ui `docs/design/desktop-shell.md`.
+- **Open:** td-70ecc7 (sidecar-ui e2e load flakes); the SDK opens a fresh pairing proof per stream (three on page load); release v1.16.0 and pushes await Marcus.
+
 ## Lanes
 
 The status values are `queued`, `running`, `review`, `fixing`, `merged` and `blocked`.
