@@ -88,7 +88,10 @@ func validateActivated(opts Options, activated []apiservice.ActivatedListener) (
 	return inherited, nil
 }
 
-const activationProbeTimeout = 2 * time.Second
+const (
+	activationProbeTimeout    = 2 * time.Second
+	activationProbeClientWait = 250 * time.Millisecond
+)
 
 // unixPathReaches proves that dialing path arrives at listener by sending a
 // random token through it. Connections that arrive first without the token
@@ -122,7 +125,13 @@ func unixPathReaches(listener net.Listener, path string, timeout time.Duration) 
 		if err != nil {
 			return false
 		}
-		_ = conn.SetReadDeadline(deadline)
+		// The probe writes its token at once. Anything slower is an early
+		// client, which must not spend the probe's whole budget.
+		readBy := time.Now().Add(activationProbeClientWait)
+		if readBy.After(deadline) {
+			readBy = deadline
+		}
+		_ = conn.SetReadDeadline(readBy)
 		got := make([]byte, len(token))
 		_, readErr := io.ReadFull(conn, got)
 		_ = conn.Close()

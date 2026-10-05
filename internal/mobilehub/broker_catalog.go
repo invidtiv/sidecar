@@ -192,7 +192,7 @@ func (r *CatalogRouter) LookupWithHello(ctx context.Context, selector string, ex
 		}
 	}
 	if endpoint == nil {
-		return BoundOwner{}, nil, TargetBinding{}, ErrOwnerUnavailable
+		return BoundOwner{}, nil, TargetBinding{}, ownerUnavailable(directoryHostState(directory, expected.OwnerHostID))
 	}
 	ownerCtx, cancelOwner := catalogOwnerContext(lookupCtx, r.ownerTimeout, r.finalReserve)
 	defer cancelOwner()

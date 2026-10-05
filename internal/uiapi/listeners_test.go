@@ -303,3 +303,31 @@ func TestValidateActivatedAcceptsMovedLaunchdSocketOnlyWhenItServesThePath(t *te
 		t.Fatal("accepted a named socket that does not serve the Local path")
 	}
 }
+
+// launchd queues clients that connect before the service starts. An idle one
+// accepted ahead of the probe must not exhaust the probe's budget.
+func TestActivationProbeSurvivesAnIdleClientQueuedFirst(t *testing.T) {
+	root, err := os.MkdirTemp("/tmp", "sc-idle-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(root) }()
+	bind, path := filepath.Join(root, "bind"), filepath.Join(root, "api.sock")
+	listener, err := net.Listen("unix", bind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = listener.Close() }()
+	listener.(*net.UnixListener).SetUnlinkOnClose(false)
+	if err := os.Rename(bind, path); err != nil {
+		t.Fatal(err)
+	}
+	client, err := net.Dial("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = client.Close() }()
+	if !unixPathReaches(listener, path, activationProbeTimeout) {
+		t.Fatal("a queued idle client made the correct inherited listener fail validation")
+	}
+}

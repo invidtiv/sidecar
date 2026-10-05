@@ -48,8 +48,18 @@ func (b *mobileBackend) Workspace(ctx context.Context, project, host string, q m
 		args := []string{"workspace", "list", "--project", project, "--json"}
 		args = appendCatalogArgs(args, q)
 		var result workspacewire.Workspace
-		err := b.workspaceRemote(ctx, host, args, &result)
-		return result, err
+		if err := b.workspaceRemote(ctx, host, args, &result); err != nil {
+			return result, err
+		}
+		if b.router != nil {
+			public, err := b.Sessions(ctx, q)
+			if err != nil {
+				return workspacewire.Workspace{}, err
+			}
+			useHubRows(public, host, &result.Catalog)
+			result.Catalog.Generation = workspaceGeneration(result)
+		}
+		return result, nil
 	}
 	projects, err := loadRegisteredProjects(b.env.StateDir)
 	if err != nil {
@@ -114,7 +124,7 @@ func (b *mobileBackend) Workspace(ctx context.Context, project, host string, q m
 		if public.err != nil {
 			return workspacewire.Workspace{}, public.err
 		}
-		adoptPublicTerminalAuthority(public.snapshot, &snapshot)
+		useHubRows(public.snapshot, localCatalogHostID(public.snapshot), &snapshot)
 	}
 	failures := make([]mobileproto.CatalogFailure, 0)
 	for _, f := range snapshot.Failures {
@@ -134,7 +144,13 @@ func (b *mobileBackend) Workspace(ctx context.Context, project, host string, q m
 		return workspacewire.Workspace{}, err
 	}
 	result := workspacewire.Workspace{Project: item, Catalog: snapshot, Shells: shells.Shells}
-	// Workspace generation includes tombstones, unlike the terminal catalog.
+	result.Catalog.Generation = workspaceGeneration(result)
+	return result, nil
+}
+
+// workspaceGeneration digests the workspace, including tombstones, unlike the
+// terminal catalog, and ignoring observation times.
+func workspaceGeneration(result workspacewire.Workspace) string {
 	stable := result
 	stable.Catalog.Generation = ""
 	stable.Catalog.ObservedAt = ""
@@ -146,8 +162,7 @@ func (b *mobileBackend) Workspace(ctx context.Context, project, host string, q m
 		}
 	}
 	data, _ := json.Marshal(stable)
-	result.Catalog.Generation = fmt.Sprintf("%x", sha256.Sum256(data))
-	return result, nil
+	return fmt.Sprintf("%x", sha256.Sum256(data))
 }
 func appendCatalogArgs(args []string, q mobileproto.CatalogQuery) []string {
 	if q.Sort != "" {
@@ -404,13 +419,15 @@ func (b *mobileBackend) WorkspaceInvalidation(ctx context.Context) (workspacewir
 	return event, nil
 }
 
-// adoptPublicTerminalAuthority makes a workspace row attach the way the same row
-// in /sessions does. With remote hosts configured every terminal stream goes
-// through the hub broker, which accepts only the hub's public selectors and
-// identities; owner-local ones are refused as a changed identity. The rows keep
-// their local presentation and content selectors, which the hub strips. A row
-// the hub does not list as attachable is not attachable here either.
-func adoptPublicTerminalAuthority(public mobileproto.CatalogSnapshot, snapshot *mobileproto.CatalogSnapshot) {
+// useHubRows makes workspace rows attach exactly as the same rows in /sessions
+// do. With remote hosts configured, every terminal stream goes through the hub
+// broker, which accepts only the hub's public selectors and identities, so a
+// row is replaced by the hub's own row for it: one observation, internally
+// consistent, with its candidate set as the hub saw it. Only the owner's
+// content selectors are carried over, because the hub strips them and project
+// content needs them; candidates take theirs by exact session and pane. A row
+// the hub does not list keeps its presentation but cannot attach.
+func useHubRows(public mobileproto.CatalogSnapshot, ownerHubID string, snapshot *mobileproto.CatalogSnapshot) {
 	byID := map[string]mobileproto.CatalogRow{}
 	for _, section := range public.Sections {
 		for _, row := range section.Rows {
@@ -419,19 +436,42 @@ func adoptPublicTerminalAuthority(public mobileproto.CatalogSnapshot, snapshot *
 	}
 	for i := range snapshot.Sections {
 		rows := snapshot.Sections[i].Rows
-		for j := range rows {
-			row := &rows[j]
-			hubRow, ok := byID[hosts.ScopedKey(row.OwnerHostID, row.ID)]
-			if !ok || len(hubRow.Candidates) != len(row.Candidates) {
-				row.Target, row.ExpectedTarget, row.AttachmentReady = "", nil, false
-				row.Candidates = nil
+		for j, raw := range rows {
+			hubRow, ok := byID[hosts.ScopedKey(ownerHubID, raw.ID)]
+			if ownerHubID == "" || !ok {
+				rows[j].Target, rows[j].ExpectedTarget, rows[j].AttachmentReady = "", nil, false
+				rows[j].Candidates, rows[j].CandidateGeneration = nil, ""
 				continue
 			}
-			row.Target, row.ExpectedTarget, row.AttachmentReady = hubRow.Target, hubRow.ExpectedTarget, hubRow.AttachmentReady
-			for k := range row.Candidates {
-				row.Candidates[k].Selector = hubRow.Candidates[k].Selector
-				row.Candidates[k].ExpectedTarget = hubRow.Candidates[k].ExpectedTarget
+			hubRow.ContentWorkspaceID = raw.ContentWorkspaceID
+			hubRow.Candidates = append([]mobileproto.CatalogCandidate(nil), hubRow.Candidates...)
+			for k := range hubRow.Candidates {
+				hubRow.Candidates[k].ContentWorkspaceID = ""
+				for _, rawCandidate := range raw.Candidates {
+					if rawCandidate.Session == hubRow.Candidates[k].Session && rawCandidate.Pane == hubRow.Candidates[k].Pane {
+						hubRow.Candidates[k].ContentWorkspaceID = rawCandidate.ContentWorkspaceID
+						break
+					}
+				}
 			}
+			rows[j] = hubRow
 		}
 	}
+	snapshot.HubID, snapshot.OwnerHostID, snapshot.OwnerConfigGeneration = public.HubID, public.OwnerHostID, public.OwnerConfigGeneration
+	snapshot.Hosts = nil
+	for _, host := range public.Hosts {
+		if host.ID == ownerHubID {
+			snapshot.Hosts = append(snapshot.Hosts, host)
+		}
+	}
+}
+
+// localCatalogHostID is the hub's ID for this machine's own owner.
+func localCatalogHostID(public mobileproto.CatalogSnapshot) string {
+	for _, host := range public.Hosts {
+		if host.Local {
+			return host.ID
+		}
+	}
+	return ""
 }

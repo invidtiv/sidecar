@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/marcus/sidecar/internal/hosts"
 	"github.com/marcus/sidecar/internal/mobile"
 	"github.com/marcus/sidecar/internal/mobileproto"
 )
@@ -22,7 +23,22 @@ var (
 	ErrTargetOtherHub            = errors.New("mobile hub: this terminal belongs to another hub; refresh the sessions list")
 	ErrTargetIdentityChanged     = errors.New("this terminal was replaced or restarted since the sessions list was loaded; refresh to reattach")
 	ErrOwnerUnavailable          = errors.New("the host that owns this terminal is unavailable; retrying")
+	ErrOwnerRemoved              = errors.New("the host that owns this terminal is no longer configured; refresh the sessions list")
+	ErrOwnerNotServing           = errors.New("the host that owns this terminal is disabled or cannot serve terminals; enable or upgrade it in Sidecar")
 )
+
+// ownerUnavailable separates an owner that may come back (offline, connecting,
+// unreachable) from one that will not without a configuration change.
+func ownerUnavailable(state string) error {
+	switch state {
+	case "":
+		return ErrOwnerRemoved
+	case string(hosts.StateDisabled), "unsupported":
+		return fmt.Errorf("%w (%s)", ErrOwnerNotServing, state)
+	default:
+		return ErrOwnerUnavailable
+	}
+}
 
 // lookupRefusal maps a target lookup failure to its wire code and whether a
 // retry can succeed.
@@ -33,8 +49,12 @@ func lookupRefusal(err error) (code string, retry bool) {
 		return mobileproto.ErrorUnsupported, false
 	case errors.Is(err, ErrIncompleteTargetSelection):
 		return mobileproto.ErrorInvalidRequest, false
-	case errors.Is(err, ErrTargetIdentityChanged), errors.Is(err, ErrTargetOtherHub):
+	case errors.Is(err, ErrTargetIdentityChanged), errors.Is(err, ErrTargetOtherHub), errors.Is(err, hosts.ErrMobileRouteChanged):
 		return mobileproto.ErrorIdentityChanged, false
+	case errors.Is(err, ErrOwnerRemoved):
+		return mobileproto.ErrorNotFound, false
+	case errors.Is(err, ErrOwnerNotServing), errors.Is(err, hosts.ErrMobileRouteUnsupported):
+		return mobileproto.ErrorUnsupported, false
 	case errors.As(err, &resolveErr) && resolveErr.Code != "":
 		return resolveErr.Code, resolveErr.Code != mobileproto.ErrorIdentityChanged && resolveErr.Code != mobileproto.ErrorNotFound
 	default:
