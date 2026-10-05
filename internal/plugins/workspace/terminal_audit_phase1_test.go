@@ -396,7 +396,9 @@ func installSuccessfulFakeTmux(t *testing.T) string {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "tmux.log")
 	script := filepath.Join(dir, "tmux")
-	body := "#!/bin/sh\n/bin/echo \"$@\" >> \"$TMUX_TEST_LOG\"\nexit 0\n"
+	// A tmux format argument may contain literal record-encoding patterns
+	// with line breaks. Log one row per invocation, not per argument line.
+	body := "#!/bin/sh\nprintf '%s' \"$*\" | /usr/bin/tr '\\n\\r' '  ' >> \"$TMUX_TEST_LOG\"\nprintf '\\n' >> \"$TMUX_TEST_LOG\"\nexit 0\n"
 	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
 		t.Fatal(err)
 	}
