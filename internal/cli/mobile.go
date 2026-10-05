@@ -248,7 +248,7 @@ func mobileCatalogProviderForProjects(env Env, loadProjects func() ([]hostserve.
 		if err != nil {
 			return mobile.CatalogInput{}, err
 		}
-		return authorizeMobileCatalogInput(env, input), nil
+		return authorizeMobileCatalogInput(env, input, nil), nil
 	}
 }
 
@@ -268,8 +268,15 @@ func mobileCatalogCollectorForProjects(env Env, loadProjects func() ([]hostserve
 // taken when this projection first authorizes a row and never shared with
 // another request. The service resolver remains fresh for resolve/open and
 // every later target operation.
-func authorizeMobileCatalogInput(env Env, input mobile.CatalogInput) mobile.CatalogInput {
-	input.Resolver = newMobileCatalogShellResolver(env, tty.HeadlessTargetSnapshot())
+//
+// discovery, when set, answers the scan's Git worktree discovery from the
+// collection the input came from; manifests and tmux are still read here.
+func authorizeMobileCatalogInput(env Env, input mobile.CatalogInput, discovery *worktreeDiscovery) mobile.CatalogInput {
+	lookup := &shellTargetLookup{}
+	if discovery != nil {
+		lookup.discover = discovery.Discover
+	}
+	input.Resolver = newMobileCatalogShellResolverWith(env, lookup, tty.HeadlessTargetSnapshot())
 	return input
 }
 
@@ -411,7 +418,10 @@ func mobileResolver(env Env) mobile.Resolver {
 // unguarded map, so calls are serialized, and it never memoizes a scan its
 // caller canceled (see shellTargetLookup.scan).
 func newMobileCatalogShellResolver(env Env, inspect func(context.Context, string) (tty.HeadlessTargetIdentity, error)) mobile.Resolver {
-	lookup := &shellTargetLookup{}
+	return newMobileCatalogShellResolverWith(env, &shellTargetLookup{}, inspect)
+}
+
+func newMobileCatalogShellResolverWith(env Env, lookup *shellTargetLookup, inspect func(context.Context, string) (tty.HeadlessTargetIdentity, error)) mobile.Resolver {
 	var mu sync.Mutex
 	return func(ctx context.Context, value string) (mobile.ResolvedTarget, error) {
 		mu.Lock()

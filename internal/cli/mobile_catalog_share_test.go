@@ -13,6 +13,7 @@ import (
 
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/hostserve"
+	"github.com/marcus/sidecar/internal/managedtarget"
 	"github.com/marcus/sidecar/internal/mobile"
 	"github.com/marcus/sidecar/internal/mobileproto"
 	"github.com/marcus/sidecar/internal/shellstate"
@@ -292,7 +293,9 @@ func TestSharedCatalogReauthorizesEveryRequest(t *testing.T) {
 	projects := func() ([]hostserve.Project, error) { return []hostserve.Project{{Name: "P", Path: root}}, nil }
 	shared := newSharedCatalog(
 		func() mobile.CatalogProvider { return mobileCatalogCollectorForProjects(env, projects) },
-		func(input mobile.CatalogInput) mobile.CatalogInput { return authorizeMobileCatalogInput(env, input) })
+		func(input mobile.CatalogInput, discovery *worktreeDiscovery) mobile.CatalogInput {
+			return authorizeMobileCatalogInput(env, input, discovery)
+		})
 	host, _ := os.Hostname()
 	identity := mobile.CatalogIdentity{HubID: host, OwnerHostID: "local:" + host, OwnerConfigGeneration: "g"}
 	shellRow := func(provider mobile.CatalogProvider) mobileproto.CatalogRow {
@@ -326,5 +329,33 @@ func TestSharedCatalogReauthorizesEveryRequest(t *testing.T) {
 	}
 	if warm.AttachmentReady || warm.ExpectedTarget != nil || warm.Target != "" && warm.AttachState == "ready" {
 		t.Fatalf("warm row still advertises the pre-split identity: %+v (fresh %s/%s)", warm, fresh.AttachState, fresh.RefusalCode)
+	}
+}
+
+// Shared Git discovery runs under its own context: a caller that gives up
+// mid-discovery gets nothing, and the next caller gets the complete answer
+// from the same run rather than a truncated one.
+func TestWorktreeDiscoverySurvivesACanceledCaller(t *testing.T) {
+	bin := t.TempDir()
+	calls := filepath.Join(t.TempDir(), "calls")
+	script := "#!/bin/sh\necho x >> \"$DISCOVERY_CALLS\"\nsleep 0.3\nprintf 'worktree /repo\\nHEAD 0\\nbranch refs/heads/main\\n\\nworktree /repo-feature\\nHEAD 0\\nbranch refs/heads/feature\\n'\n"
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("DISCOVERY_CALLS", calls)
+	discovery := newWorktreeDiscovery()
+	project := managedtarget.Project{Key: "repo", Path: t.TempDir()}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if roots := discovery.Discover(ctx, project); roots != nil {
+		t.Fatalf("canceled caller got %v", roots)
+	}
+	roots := discovery.Discover(context.Background(), project)
+	if len(roots) != 2 {
+		t.Fatalf("healthy caller got %v, want both worktrees", roots)
+	}
+	if data, _ := os.ReadFile(calls); len(data) != 2 {
+		t.Fatalf("git ran %d times, want once", len(data)/2)
 	}
 }

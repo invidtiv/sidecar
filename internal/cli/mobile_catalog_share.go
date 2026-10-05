@@ -40,13 +40,15 @@ type catalogFence struct {
 // reuses a collection only when it is in flight or started within
 // sharedCatalogMaxAge, no invalidation has arrived since it started, and the
 // owner config generation and tmux server still match. Each request then gets
-// its own authorization state from authorize (a fresh managed-target scan and
-// tmux pane listing), so a row is advertised attachable only if the current
-// resolver accepts it; every identity is checked fresh again when a target is
-// resolved or opened.
+// its own authorization state from authorize (a fresh managed-target scan of
+// the shell manifests and registered worktrees, and a fresh tmux pane
+// listing), so a row is advertised attachable only if the current resolver
+// accepts it; only that scan's Git worktree discovery is shared with the
+// collection. Every identity is checked fresh again when a target is resolved
+// or opened.
 type sharedCatalog struct {
 	newProvider func() mobile.CatalogProvider
-	authorize   func(mobile.CatalogInput) mobile.CatalogInput
+	authorize   func(mobile.CatalogInput, *worktreeDiscovery) mobile.CatalogInput
 	fence       func(context.Context) (catalogFence, error)
 	now         func() time.Time
 	maxAge      time.Duration
@@ -62,15 +64,18 @@ type catalogFlight struct {
 	fence   catalogFence
 	started time.Time
 	input   mobile.CatalogInput
-	err     error
+	// discovery is this collection's Git worktree discovery, shared by the
+	// requests that authorize against it.
+	discovery *worktreeDiscovery
+	err       error
 }
 
 // newSharedCatalog shares what newProvider collects and runs authorize on
 // every request's copy. newProvider must return only immutable collected data;
 // anything that decides authority now belongs in authorize.
-func newSharedCatalog(newProvider func() mobile.CatalogProvider, authorize func(mobile.CatalogInput) mobile.CatalogInput) *sharedCatalog {
+func newSharedCatalog(newProvider func() mobile.CatalogProvider, authorize func(mobile.CatalogInput, *worktreeDiscovery) mobile.CatalogInput) *sharedCatalog {
 	if authorize == nil {
-		authorize = func(input mobile.CatalogInput) mobile.CatalogInput { return input }
+		authorize = func(input mobile.CatalogInput, _ *worktreeDiscovery) mobile.CatalogInput { return input }
 	}
 	return &sharedCatalog{newProvider: newProvider, authorize: authorize, fence: currentCatalogFence, now: time.Now, maxAge: sharedCatalogMaxAge}
 }
@@ -98,12 +103,12 @@ func (c *sharedCatalog) input(ctx context.Context) (mobile.CatalogInput, error) 
 		if err != nil {
 			return mobile.CatalogInput{}, err
 		}
-		return c.authorize(input), nil
+		return c.authorize(input, newWorktreeDiscovery()), nil
 	}
 	c.mu.Lock()
 	flight := c.current
 	if !c.reusable(flight, fence) {
-		flight = &catalogFlight{done: make(chan struct{}), epoch: c.epoch, fence: fence, started: c.now()}
+		flight = &catalogFlight{done: make(chan struct{}), epoch: c.epoch, fence: fence, started: c.now(), discovery: newWorktreeDiscovery()}
 		c.current = flight
 		go c.collect(context.WithoutCancel(ctx), flight)
 	}
@@ -113,7 +118,7 @@ func (c *sharedCatalog) input(ctx context.Context) (mobile.CatalogInput, error) 
 		if flight.err != nil {
 			return mobile.CatalogInput{}, flight.err
 		}
-		return c.authorize(flight.input), nil
+		return c.authorize(flight.input, flight.discovery), nil
 	case <-ctx.Done():
 		return mobile.CatalogInput{}, ctx.Err()
 	}

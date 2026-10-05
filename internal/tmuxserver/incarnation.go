@@ -215,3 +215,21 @@ func ParsePID(field string) (int, bool) {
 // was verified to expand in list-sessions on an isolated socket (td-e27291).
 // Do not use #{session_id}: those restart from $0 on a new server.
 const ListSessionsFormat = "#{session_name}\t#{pid}"
+
+// SocketBinding names the socket file a server bound at path by its device,
+// inode and modification time, with one stat and no subprocess. Unlike String
+// it ignores ctime, which tmux changes whenever the attached-client set
+// changes; device, inode and mtime are set when the server binds the socket
+// and are new when a replacement server binds it again. A missing or
+// unreadable socket is reported as such, so two such observations still
+// compare equal and differ from any bound socket.
+func SocketBinding(path string) string {
+	info, err := os.Stat(path)
+	if err != nil {
+		return path + "\x00absent"
+	}
+	if st, ok := info.Sys().(*syscall.Stat_t); ok {
+		return fmt.Sprintf("%s\x00%d:%d:%d", path, st.Dev, st.Ino, info.ModTime().UnixNano())
+	}
+	return fmt.Sprintf("%s\x00%d", path, info.ModTime().UnixNano())
+}

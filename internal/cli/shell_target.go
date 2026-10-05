@@ -102,6 +102,9 @@ func findShellTarget(env Env, target, shellFlag, projectFlag string, globalExpli
 // is gone.
 type shellTargetLookup struct {
 	scans map[string]*shellTargetScan
+	// discover, when set, supplies Git worktree discovery for the scan (see
+	// managedtarget.CandidatesWith); nil asks Git directly.
+	discover managedtarget.DiscoverFunc
 	// caller memoizes the project the calling shell belongs to; the empty
 	// string after resolution means "none", and resolved says the lookup ran.
 	caller         string
@@ -248,7 +251,7 @@ func (l *shellTargetLookup) scan(env Env, shellFlag, projectFlag string, globalE
 	if s, ok := l.scans[key]; ok {
 		return s
 	}
-	s := buildShellTargetScan(env, shellFlag, projectFlag, globalExplicit)
+	s := buildShellTargetScan(env, shellFlag, projectFlag, globalExplicit, l.discover)
 	// A scan cut short by its caller's context answers nothing about the
 	// projects it skipped. It is this caller's answer only, never memoized for
 	// a later call that would read "not found" into the gap.
@@ -262,12 +265,12 @@ func (l *shellTargetLookup) scan(env Env, shellFlag, projectFlag string, globalE
 	return s
 }
 
-func buildShellTargetScan(env Env, shellFlag, projectFlag string, globalExplicit bool) *shellTargetScan {
+func buildShellTargetScan(env Env, shellFlag, projectFlag string, globalExplicit bool, discover managedtarget.DiscoverFunc) *shellTargetScan {
 	projects, code, err := scanProjects(env, shellFlag, projectFlag, globalExplicit)
 	if err != nil {
 		return &shellTargetScan{code: code, err: err}
 	}
-	candidates, err := managedTargetCandidates(env, projects)
+	candidates, err := managedtarget.CandidatesWith(env.Ctx, env.StateDir, toManagedProjects(projects), discover)
 	if err != nil {
 		return &shellTargetScan{code: 1, err: err}
 	}

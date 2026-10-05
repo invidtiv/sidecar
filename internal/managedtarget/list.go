@@ -117,6 +117,21 @@ func projectManifestPath(proj Project) string {
 // project claims it: created worktree, then the project's own checkout, then
 // the first project that merely discovered it through Git.
 func Candidates(ctx context.Context, stateDir string, projects []Project) ([]Target, error) {
+	return CandidatesWith(ctx, stateDir, projects, nil)
+}
+
+// DiscoverFunc lists the Git worktree roots of one project, as
+// DiscoverWorktreeRoots does. A caller that scans many times over one
+// observation can supply a memoized one.
+type DiscoverFunc func(ctx context.Context, proj Project) []string
+
+// CandidatesWith is Candidates with the Git worktree discovery supplied by the
+// caller; nil means DiscoverWorktreeRoots. Manifests and registered worktrees
+// are always read fresh.
+func CandidatesWith(ctx context.Context, stateDir string, projects []Project, discover DiscoverFunc) ([]Target, error) {
+	if discover == nil {
+		discover = DiscoverWorktreeRoots
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -149,7 +164,7 @@ func Candidates(ctx context.Context, stateDir string, projects []Project) ([]Tar
 			claims[root] = rootClaim{proj: proj, manifest: manifest, tier: tier}
 		}
 	}
-	discovered := discoverWorktreeRoots(ctx, projects)
+	discovered := discoverWorktreeRoots(ctx, projects, discover)
 	for index, proj := range projects {
 		if ctx.Err() != nil {
 			break
@@ -209,13 +224,13 @@ func Candidates(ctx context.Context, stateDir string, projects []Project) ([]Tar
 // long discovery takes, never which project owns a root.
 const discoveryWorkers = 8
 
-// discoverWorktreeRoots runs discoveredWorktreeRoots for every project
+// discoverWorktreeRoots runs discover for every project
 // concurrently and returns the roots indexed like projects.
-func discoverWorktreeRoots(ctx context.Context, projects []Project) [][]string {
+func discoverWorktreeRoots(ctx context.Context, projects []Project, discover DiscoverFunc) [][]string {
 	discovered := make([][]string, len(projects))
 	forEachProject(len(projects), func(index int) {
 		if ctx.Err() == nil && strings.TrimSpace(projects[index].Path) != "" {
-			discovered[index] = discoveredWorktreeRoots(ctx, projects[index])
+			discovered[index] = discover(ctx, projects[index])
 		}
 	})
 	return discovered
@@ -243,7 +258,9 @@ func forEachProject(count int, fn func(index int)) {
 	wg.Wait()
 }
 
-func discoveredWorktreeRoots(ctx context.Context, proj Project) []string {
+// DiscoverWorktreeRoots is every non-bare worktree Git lists for proj, or nil
+// when Git cannot answer.
+func DiscoverWorktreeRoots(ctx context.Context, proj Project) []string {
 	if proj.Path == "" {
 		return nil
 	}

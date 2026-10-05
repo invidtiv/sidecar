@@ -141,3 +141,33 @@ func TestHeadlessTargetSnapshotMatchesInspect(t *testing.T) {
 		}
 	}
 }
+
+// A pane in copy mode and a retained dead pane batch to the same bytes a
+// single capture reads, including content that imitates the framing.
+func TestCapturePaneOutputsMatchesCopyModeAndDeadPanes(t *testing.T) {
+	run := privateTmuxServer(t)
+	run("new-session", "-d", "-s", "modes", "-x", "80", "-y", "24", "/bin/sh", "-c", "printf 'first\\nsidecar-capture-lookalike 1\\nsecond\\n'; sleep 120")
+	live := run("display-message", "-p", "-t", "modes", "#{pane_id}")
+	run("set-option", "-g", "remain-on-exit", "on")
+	dead := run("new-window", "-d", "-P", "-F", "#{pane_id}", "-t", "modes", "/bin/sh", "-c", "printf 'dead pane\\n'; exit 0")
+	deadline := time.Now().Add(3 * time.Second)
+	for run("display-message", "-p", "-t", dead, "#{pane_dead}") != "1" {
+		if time.Now().After(deadline) {
+			t.Fatal("pane did not become dead")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	run("copy-mode", "-t", live)
+	for _, lines := range []int{0, 80} {
+		got := CapturePaneOutputs(context.Background(), []string{live, dead}, lines)
+		for _, pane := range []string{live, dead} {
+			want, err := CapturePaneOutput(pane, lines)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if text, ok := got[pane]; !ok || text != want {
+				t.Fatalf("lines=%d pane %s: batch=%q single=%q", lines, pane, text, want)
+			}
+		}
+	}
+}
