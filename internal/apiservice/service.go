@@ -39,6 +39,7 @@ type Status struct {
 	Running   bool         `json:"running"`
 	PID       int          `json:"pid"`
 	Version   string       `json:"version"`
+	UIDir     string       `json:"ui_dir"`
 	LastExit  *Exit        `json:"last_exit"`
 	Log       string       `json:"log"`
 	Message   string       `json:"message"`

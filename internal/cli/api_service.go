@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"time"
 
@@ -42,7 +43,7 @@ func apiExecutablePath() (string, error) {
 
 func apiServiceCommand() *Command {
 	command := &Command{Name: "service", Summary: "Manage the per-user UI API service", Usage: "sidecar api service <install|uninstall|status> [--json]",
-		Long: "Use launchd on macOS or a systemd user service/socket pair on Linux. install starts the API at login, uninstall stops only the API service and removes its definition. The manager holds the browser port across binary upgrades. No command changes tmux. The server reads api.uiDir from config on every start. On Linux use this command; Homebrew cannot generate socket units. On macOS use either this command or brew services to manage the service, not both.", Run: runAPIService}
+		Long: "Use launchd on macOS or a systemd user service/socket pair on Linux. install starts the API at login, uninstall stops only the API service and removes its definition. The manager holds the browser port across binary upgrades. No command changes tmux. install --ui DIR saves an absolute UI directory containing index.html as api.uiDir; --ui \"\" clears it. Omit --ui to keep the configured directory. The server reads api.uiDir on every start. On Linux use this command; Homebrew cannot generate socket units. On macOS use either this command or brew services to manage the service, not both.", Run: runAPIService}
 	for _, name := range []string{"install", "uninstall", "status"} {
 		summary := map[string]string{"install": "Install and start the API service", "uninstall": "Stop and remove the API service", "status": "Inspect the API service manager"}[name]
 		command.Sub = append(command.Sub, &Command{Name: name, Summary: summary, Usage: "sidecar api service " + name + " [--json]",
@@ -50,6 +51,13 @@ func apiServiceCommand() *Command {
 			ExitCodes: []ExitCode{{Code: 0, Summary: "success (status succeeds even when not installed or stopped)"}, {Code: 1, Summary: "manager or service operation failed; follow the message"}, {Code: 2, Summary: "usage error"}},
 			Examples:  []Example{{Command: "sidecar api service " + name + " --json"}},
 			Agent:     AgentDoc{Invocation: "sidecar api service " + name + " --json", Summary: summary}, Mutates: name != "status"})
+		if name == "install" {
+			sub := command.Sub[len(command.Sub)-1]
+			sub.Usage = "sidecar api service install [--ui DIR] [--json]"
+			sub.Long = command.Long
+			sub.Flags = append(sub.Flags, Flag{Name: "--ui", Arg: "DIR", Summary: "Save the built UI directory (must contain index.html); an empty value clears it"})
+			sub.Examples = append(sub.Examples, Example{Command: "sidecar api service install --ui ~/.local/share/sidecar/ui/current"})
+		}
 	}
 	return command
 }
@@ -69,10 +77,27 @@ func runAPIService(env Env, args []string) int {
 		_, _ = fmt.Fprint(env.Stdout, RenderHelp(sub))
 		return 0
 	}
-	flags, err := parseAPIFlags(args[1:], []string{"--json"}, nil)
+	var valueFlags []string
+	if args[0] == "install" {
+		valueFlags = []string{"--ui"}
+	}
+	flags, err := parseAPIFlags(args[1:], []string{"--json"}, valueFlags)
 	if err != nil {
 		cliErrf(env.Stderr, "%v\n\n%s", err, RenderHelp(sub))
 		return 2
+	}
+	uiDir, setUI := flags.values["--ui"]
+	if setUI && uiDir != "" {
+		uiDir, err = validateAPIUIDir(uiDir)
+		if err != nil {
+			cliErrln(env.Stderr, err)
+			return 1
+		}
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		cliErrf(env.Stderr, "load API config: %v; fix %s and retry\n", err, config.ConfigPath())
+		return 1
 	}
 	manager, err := apiServiceManager(env)
 	if err != nil {
@@ -98,6 +123,13 @@ func runAPIService(env Env, args []string) int {
 			cliErrln(env.Stderr, err)
 			return 1
 		}
+		if setUI {
+			if err := config.SaveAPIUIDir(uiDir); err != nil {
+				cliErrf(env.Stderr, "save UI directory: %v; check %s and retry\n", err, config.ConfigPath())
+				return 1
+			}
+			cfg.API.UIDir = uiDir
+		}
 		err = manager.Install(ctx)
 	case "uninstall":
 		err = manager.Uninstall(ctx)
@@ -112,15 +144,44 @@ func runAPIService(env Env, args []string) int {
 		return 1
 	}
 	apiServiceVersion(ctx, env, &status)
+	status.UIDir = cfg.API.UIDir
 	if flags.bools["--json"] {
 		return writeCLIJSON(env, status)
 	}
 	_, _ = fmt.Fprintf(env.Stdout, "%s\n%s: installed=%t loaded=%t running=%t pid=%d version=%s\n", status.Message, status.Manager, status.Installed, status.Loaded, status.Running, status.PID, status.Version)
 	_, _ = fmt.Fprintf(env.Stdout, "Browser socket: installed=%t loaded=%t listening=%t\n", status.Socket.Installed, status.Socket.Loaded, status.Socket.Listening)
+	printAPIUIDir(env, status.UIDir)
 	if status.LastExit != nil {
 		_, _ = fmt.Fprintf(env.Stdout, "Last exit: code=%d signal=%s\n", status.LastExit.Code, status.LastExit.Signal)
 	}
 	return 0
+}
+
+func validateAPIUIDir(dir string) (string, error) {
+	abs, err := filepath.Abs(config.ExpandPath(dir))
+	if err == nil {
+		var root *os.Root
+		root, err = os.OpenRoot(abs)
+		if err == nil {
+			defer func() { _ = root.Close() }()
+			var info os.FileInfo
+			info, err = root.Stat("index.html")
+			if err == nil && !info.Mode().IsRegular() {
+				err = fmt.Errorf("index.html must be a regular file")
+			}
+		}
+	}
+	if err != nil {
+		return "", fmt.Errorf("--ui %q must be a built UI directory containing index.html: %w; build your UI first, then run `sidecar api service install --ui DIR` with its output directory", dir, err)
+	}
+	return abs, nil
+}
+
+func printAPIUIDir(env Env, dir string) {
+	if dir == "" {
+		dir = "none (API only)"
+	}
+	_, _ = fmt.Fprintf(env.Stdout, "UI directory: %s\n", dir)
 }
 
 func apiServiceVersion(ctx context.Context, env Env, status *apiservice.Status) {

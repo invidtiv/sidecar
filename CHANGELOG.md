@@ -8,6 +8,15 @@ All notable changes to sidecar are documented here.
 
 - **A UI API for web and embedded clients.** `sidecar api serve` exposes the Sessions catalog and live terminals over HTTP and WebSocket, so a web UI, a component embedded in another app, or an agent with curl can use them. It listens on a Unix socket in the state directory for local agents and the CLI, on `127.0.0.1` for browsers, and with `--tailnet` on a second socket for `tailscale serve`, trusting only allowed tailnet logins. Browsers pair once with `sidecar api open`, and other origins with `sidecar api pair --origin URL`. Host, Origin and mutation guards are always on, and only paired origins get CORS. Each terminal WebSocket is one mobile protocol v0 stream, served exactly as `sidecar mobile serve --stdio` serves stdin, and `GET /api/v0/sessions` returns the same document as `sidecar mobile sessions --json`. `sidecar api status` shows who is connected and who holds terminal control. The wire contract is `docs/reference/ui-api.md`. (td-ba925d)
 
+- **Set up an always-on web UI without editing config.** `sidecar api service install --ui DIR` validates and saves a built UI directory before starting the service; `--ui ""` clears it. Service and API status show the UI directory in text and JSON. An API-only server serves a helpful setup page, and the public docs explain web UI installation and how agents can build their own client against the resources, events, terminal, and viewer relay contracts. The private reference UI adds `pnpm run install-local` with atomic build switching and an optional `--service` step. (td-96fa2b)
+
+### Bug Fixes
+
+- **Project workspace reads work when two TUIs show the project.** Reading a project's workspace no longer refuses just because more than one TUI has it open.
+- **Project-page terminals attach with remote hosts configured.** Opening a local terminal from a project page resolves through the configured host hub instead of failing to attach.
+- **Temporary hub lookup failures keep retrying.** An unavailable or slow owner is reported as a retryable backend failure instead of a changed terminal identity.
+- **The API service starts and reports status on current macOS.** Launchd activation and status parsing handle the current macOS service output correctly.
+
 ## [v1.15.1] - 2026-09-30
 
 ### Bug Fixes

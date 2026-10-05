@@ -265,6 +265,47 @@ func mergePluginsSection(existing json.RawMessage, managed savePluginsConfig) (j
 	return json.Marshal(merged)
 }
 
+// SaveAPIUIDir validates the current config and updates only api.uiDir. It uses
+// the same writer as Save while preserving all other keys, including API keys
+// newer than this binary.
+func SaveAPIUIDir(dir string) error {
+	if _, err := Load(); err != nil {
+		return err
+	}
+	path := ConfigPath()
+	raw := make(map[string]json.RawMessage)
+	if data, err := os.ReadFile(path); err == nil {
+		if err := json.Unmarshal(data, &raw); err != nil {
+			return err
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if raw == nil {
+		raw = make(map[string]json.RawMessage)
+	}
+	api := make(map[string]json.RawMessage)
+	if existing := raw["api"]; len(existing) > 0 {
+		if err := json.Unmarshal(existing, &api); err != nil {
+			return fmt.Errorf("read api config: %w", err)
+		}
+	}
+	if api == nil {
+		api = make(map[string]json.RawMessage)
+	}
+	if dir == "" {
+		delete(api, "uiDir")
+	} else {
+		api["uiDir"], _ = json.Marshal(dir)
+	}
+	encoded, err := json.Marshal(api)
+	if err != nil {
+		return err
+	}
+	raw["api"] = encoded
+	return writeConfigMap(path, raw)
+}
+
 // Save writes the config to ~/.config/sidecar/config.json, preserving
 // any keys it doesn't manage (e.g. "prompts").
 func Save(cfg *Config) error {
@@ -336,6 +377,14 @@ func Save(cfg *Config) error {
 			return fmt.Errorf("marshal %s: %w", key, err)
 		}
 		raw[key] = b
+	}
+
+	return writeConfigMap(path, raw)
+}
+
+func writeConfigMap(path string, raw map[string]json.RawMessage) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
 	}
 
 	data, err := json.MarshalIndent(raw, "", "  ")

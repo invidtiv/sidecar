@@ -4,6 +4,7 @@
 const sidebars = {
   tutorialSidebar: [
     'intro',
+    'web-ui',
     {
       type: 'category',
       label: 'Core Plugins',
@@ -44,6 +45,7 @@ const sidebars = {
       collapsed: false,
       items: [
         'plugins',
+        'build-your-own-ui',
       ],
     },
     {

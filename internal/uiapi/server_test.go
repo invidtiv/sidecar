@@ -812,6 +812,15 @@ func TestStaticUIWithSPAFallbackAndNoUIPage(t *testing.T) {
 	expect(t, response, data, http.StatusNotFound, CodeNotFound)
 
 	plain := newHarness(t)
+	response, data = plain.browserDo(req{path: "/"})
+	for _, want := range []string{"API is running", "sidecar api service install --ui DIR", "https://sidecar.haplab.com/docs/build-your-own-ui"} {
+		if response.StatusCode != http.StatusOK || !bytes.Contains(data, []byte(want)) {
+			t.Fatalf("no-UI root: %d %q", response.StatusCode, data)
+		}
+	}
+	if response.Header.Get("Content-Type") != "text/html; charset=utf-8" || bytes.Contains(data, []byte("<script")) {
+		t.Fatalf("no-UI HTML: %v %q", response.Header, data)
+	}
 	response, data = plain.browserDo(req{path: "/anything"})
 	if response.StatusCode != http.StatusOK || !bytes.Contains(data, []byte("sidecar api open")) {
 		t.Fatalf("no-UI page: %d %q", response.StatusCode, data)

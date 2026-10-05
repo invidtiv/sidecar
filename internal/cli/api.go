@@ -80,7 +80,7 @@ func apiCommand() *Command {
 	}
 	status := &Command{
 		Name: "status", Summary: "Report the running UI API server", Usage: "sidecar api status [--json]",
-		Long:      "Read the status route over the local socket: listeners, connected clients, and open terminal attachments with whether each holds control. Exits 1 when no server is running.",
+		Long:      "Read the status route over the local socket: UI directory, listeners, connected clients, and open terminal attachments with whether each holds control. Exits 1 when no server is running.",
 		Flags:     []Flag{jsonFlag, help},
 		ExitCodes: []ExitCode{{Code: 0, Summary: "success"}, {Code: 1, Summary: "no server running"}, {Code: 2, Summary: "usage error"}},
 		Examples:  []Example{{Command: "sidecar api status"}, {Command: "sidecar api status --json"}},
@@ -529,6 +529,7 @@ func runAPIStatus(env Env, args []string) int {
 		return 1
 	}
 	_, _ = fmt.Fprintf(env.Stdout, "Sidecar UI API v%d, server %s, pid %d, up since %s\n", status.APIVersion, status.ServerVersion, status.PID, status.StartedAt.Local().Format(time.RFC3339))
+	printAPIUIDir(env, status.UIDir)
 	for _, listener := range status.Listeners {
 		line := fmt.Sprintf("  %-8s %s %s", listener.Name, listener.Network, listener.Address)
 		if listener.Host != "" {

@@ -3054,12 +3054,16 @@
               "array",
               "null"
             ]
+          },
+          "ui_dir": {
+            "type": "string"
           }
         },
         "required": [
           "api_version",
           "api_instance",
           "server_version",
+          "ui_dir",
           "pid",
           "started_at",
           "listeners",

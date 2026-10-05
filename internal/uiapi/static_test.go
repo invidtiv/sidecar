@@ -8,6 +8,38 @@ import (
 	"testing"
 )
 
+func TestStaticUIAtomicCurrentSymlinkSwitch(t *testing.T) {
+	parent := t.TempDir()
+	for _, name := range []string{"old", "new"} {
+		if err := os.Mkdir(filepath.Join(parent, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(parent, name, "index.html"), []byte(name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	current := filepath.Join(parent, "current")
+	if err := os.Symlink("old", current); err != nil {
+		t.Fatal(err)
+	}
+	h := newHarness(t, func(o *Options) { o.UIDir = current })
+	for _, name := range []string{"old", "new"} {
+		if name == "new" {
+			next := filepath.Join(parent, "next")
+			if err := os.Symlink("new", next); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Rename(next, current); err != nil {
+				t.Fatal(err)
+			}
+		}
+		r, body := h.browserDo(req{path: "/"})
+		if r.StatusCode != http.StatusOK || string(body) != name {
+			t.Fatalf("%s: %d %s", name, r.StatusCode, body)
+		}
+	}
+}
+
 func TestStaticUIReplacedDirectoryUnderRunningServer(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "build")
 	writeBuild := func(text string) {

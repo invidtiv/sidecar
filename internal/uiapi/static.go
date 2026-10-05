@@ -82,10 +82,11 @@ code { font: 14px ui-monospace, monospace; background: #f3f4f6; padding: 0.1rem 
 </head>
 <body>
 <h1>Sidecar API</h1>
-<p>This is the Sidecar UI API (v0). No UI is being served from this address.</p>
-<p>To use a web UI, start the server with <code>sidecar api serve --ui DIR</code>, where DIR is a built UI such as the reference app in <code>~/code/sidecar-ui</code>. Then run <code>sidecar api open</code> to pair this browser and open it.</p>
+<p>The Sidecar UI API is running. No UI directory is configured.</p>
+<p>To serve your built web UI at login, run <code>sidecar api service install --ui DIR</code>, where DIR contains your UI's <code>index.html</code>. Stop a foreground API server before installing the service. Then run <code>sidecar api open</code> to pair this browser and open it.</p>
+<p>For a foreground server, use <code>sidecar api serve --ui DIR</code>.</p>
 <p>To embed Sidecar in another app, pair its origin with <code>sidecar api pair --origin URL</code>.</p>
-<p>The API lives under <code>/api/v0/</code>. Its contract is <code>docs/reference/ui-api.md</code> in the Sidecar repository.</p>
+<p>The API lives under <code>/api/v0/</code>. Learn how to <a href="https://sidecar.haplab.com/docs/build-your-own-ui">build your own Sidecar UI</a> or <a href="https://sidecar.haplab.com/docs/web-ui">use the web UI</a>.</p>
 </body>
 </html>
 `

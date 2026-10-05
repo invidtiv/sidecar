@@ -5,27 +5,95 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/marcus/sidecar/internal/apiservice"
+	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/uiapi"
 )
 
 type fakeAPIManager struct {
-	status  apiservice.Status
-	calls   []string
-	failure error
+	status        apiservice.Status
+	calls         []string
+	failure       error
+	beforeInstall func()
 }
 
 func (f *fakeAPIManager) Install(context.Context) error {
 	f.calls = append(f.calls, "install")
+	if f.beforeInstall != nil {
+		f.beforeInstall()
+	}
 	if f.failure != nil {
 		return f.failure
 	}
 	f.status.Installed = true
 	f.status.Loaded = true
 	return nil
+}
+
+func TestAPIServiceInstallUIAndStatus(t *testing.T) {
+	apiStateTree(t, t.TempDir())
+	fake := fakeAPIService(t)
+	ui := t.TempDir()
+	if err := os.WriteFile(filepath.Join(ui, "index.html"), []byte("UI"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	relative, err := filepath.Rel(cwd, ui)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake.beforeInstall = func() {
+		cfg, err := config.Load()
+		if err != nil || cfg.API.UIDir != ui {
+			t.Fatalf("config must be saved before install: %+v %v", cfg, err)
+		}
+	}
+	if code, out, stderr := runAPICLI(t, "api", "service", "install", "--ui", relative, "--json"); code != 0 || !strings.Contains(out, `"ui_dir":`+quoteJSON(t, ui)) {
+		t.Fatalf("install: %d %s %s", code, out, stderr)
+	}
+	for _, args := range [][]string{{"status"}, {"status", "--json"}, {"install"}} {
+		if code, out, stderr := runAPICLI(t, append([]string{"api", "service"}, args...)...); code != 0 || !strings.Contains(out, ui) {
+			t.Fatalf("%v: %d %s %s", args, code, out, stderr)
+		}
+	}
+	fake.beforeInstall = nil
+	if code, out, stderr := runAPICLI(t, "api", "service", "install", "--ui", "", "--json"); code != 0 || !strings.Contains(out, `"ui_dir":""`) {
+		t.Fatalf("clear: %d %s %s", code, out, stderr)
+	}
+	cfg, err := config.Load()
+	if err != nil || cfg.API.UIDir != "" {
+		t.Fatalf("clear config: %+v %v", cfg, err)
+	}
+}
+
+func TestAPIServiceInvalidUIDoesNotWriteOrInstall(t *testing.T) {
+	apiStateTree(t, t.TempDir())
+	fake := fakeAPIService(t)
+	before, err := os.ReadFile(config.ConfigPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	empty := t.TempDir()
+	if err := os.Mkdir(filepath.Join(empty, "index.html"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{filepath.Join(t.TempDir(), "missing"), t.TempDir(), empty, config.ConfigPath()} {
+		code, _, stderr := runAPICLI(t, "api", "service", "install", "--ui", dir)
+		if code != 1 || !strings.Contains(stderr, "build your UI first") {
+			t.Fatalf("%s: %d %s", dir, code, stderr)
+		}
+	}
+	after, err := os.ReadFile(config.ConfigPath())
+	if err != nil || string(before) != string(after) || len(fake.calls) != 0 {
+		t.Fatalf("invalid UI mutated config/manager: %v %v", err, fake.calls)
+	}
 }
 func (f *fakeAPIManager) Uninstall(context.Context) error {
 	f.calls = append(f.calls, "uninstall")
@@ -72,7 +140,7 @@ func TestAPIServiceCLIUsage(t *testing.T) {
 			t.Fatalf("help: %d %s", code, out)
 		}
 	}
-	for _, args := range [][]string{{"nope"}, {"status", "--unknown"}, {"install", "unexpected"}} {
+	for _, args := range [][]string{{"nope"}, {"status", "--unknown"}, {"status", "--ui", ""}, {"uninstall", "--ui", ""}, {"install", "--ui"}, {"install", "unexpected"}} {
 		if code, _, _ := runAPICLI(t, append([]string{"api", "service"}, args...)...); code != 2 {
 			t.Fatalf("usage: %v => %d", args, code)
 		}
@@ -81,16 +149,42 @@ func TestAPIServiceCLIUsage(t *testing.T) {
 		t.Fatalf("usage called manager: %v", fake.calls)
 	}
 }
+
+func TestAPIServiceUIPreservesSymlinkPath(t *testing.T) {
+	apiStateTree(t, t.TempDir())
+	fakeAPIService(t)
+	build := t.TempDir()
+	if err := os.WriteFile(filepath.Join(build, "index.html"), []byte("UI"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	current := filepath.Join(t.TempDir(), "current")
+	if err := os.Symlink(build, current); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, stderr := runAPICLI(t, "api", "service", "install", "--ui", current); code != 0 {
+		t.Fatalf("symlink: %d %s", code, stderr)
+	}
+	cfg, err := config.Load()
+	if err != nil || cfg.API.UIDir != current {
+		t.Fatalf("resolved away current: %+v %v", cfg, err)
+	}
+}
 func TestAPIServiceRefusesForegroundServerAndReportsManagedVersion(t *testing.T) {
 	state := apiStateTree(t, t.TempDir())
 	fake := fakeAPIService(t)
+	if err := config.SaveAPIUIDir("/tmp/existing-ui"); err != nil {
+		t.Fatal(err)
+	}
 	server, err := uiapi.Start(uiapi.Options{StateDir: state, Port: 0, Backend: staticAPIBackend{}, Version: "managed-test"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = server.Shutdown(context.Background()) })
-	if code, _, stderr := runAPICLI(t, "api", "service", "install"); code != 1 || !strings.Contains(stderr, "outside this service") {
+	if code, _, stderr := runAPICLI(t, "api", "service", "install", "--ui", ""); code != 1 || !strings.Contains(stderr, "outside this service") {
 		t.Fatalf("foreground refused: %d %s", code, stderr)
+	}
+	if cfg, err := config.Load(); err != nil || cfg.API.UIDir != "/tmp/existing-ui" {
+		t.Fatalf("foreground refusal changed UI config: %+v %v", cfg, err)
 	}
 	for _, call := range fake.calls {
 		if call == "install" {

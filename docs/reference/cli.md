@@ -1041,7 +1041,7 @@ sidecar api serve --tailnet
 
 Manage the per-user UI API service
 
-Use launchd on macOS or a systemd user service/socket pair on Linux. install starts the API at login, uninstall stops only the API service and removes its definition. The manager holds the browser port across binary upgrades. No command changes tmux. The server reads api.uiDir from config on every start. On Linux use this command; Homebrew cannot generate socket units. On macOS use either this command or brew services to manage the service, not both.
+Use launchd on macOS or a systemd user service/socket pair on Linux. install starts the API at login, uninstall stops only the API service and removes its definition. The manager holds the browser port across binary upgrades. No command changes tmux. install --ui DIR saves an absolute UI directory containing index.html as api.uiDir; --ui "" clears it. Omit --ui to keep the configured directory. The server reads api.uiDir on every start. On Linux use this command; Homebrew cannot generate socket units. On macOS use either this command or brew services to manage the service, not both.
 
 ```
 Usage: sidecar api service <install|uninstall|status> [--json]
@@ -1051,14 +1051,17 @@ Usage: sidecar api service <install|uninstall|status> [--json]
 
 Install and start the API service
 
+Use launchd on macOS or a systemd user service/socket pair on Linux. install starts the API at login, uninstall stops only the API service and removes its definition. The manager holds the browser port across binary upgrades. No command changes tmux. install --ui DIR saves an absolute UI directory containing index.html as api.uiDir; --ui "" clears it. Omit --ui to keep the configured directory. The server reads api.uiDir on every start. On Linux use this command; Homebrew cannot generate socket units. On macOS use either this command or brew services to manage the service, not both.
+
 ```
-Usage: sidecar api service install [--json]
+Usage: sidecar api service install [--ui DIR] [--json]
 ```
 
 **Options:**
 
 - `--json`: Write service and socket state, PID, version and last exit as JSON
 - `-h, --help`: Show this help
+- `--ui DIR`: Save the built UI directory (must contain index.html); an empty value clears it
 
 **Exit codes:**
 
@@ -1070,6 +1073,7 @@ Usage: sidecar api service install [--json]
 
 ```bash
 sidecar api service install --json
+sidecar api service install --ui ~/.local/share/sidecar/ui/current
 ```
 
 #### `sidecar api service uninstall`
@@ -1126,7 +1130,7 @@ sidecar api service status --json
 
 Report the running UI API server
 
-Read the status route over the local socket: listeners, connected clients, and open terminal attachments with whether each holds control. Exits 1 when no server is running.
+Read the status route over the local socket: UI directory, listeners, connected clients, and open terminal attachments with whether each holds control. Exits 1 when no server is running.
 
 ```
 Usage: sidecar api status [--json]

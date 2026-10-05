@@ -46,6 +46,28 @@ func TestAPICommandsWithoutAServer(t *testing.T) {
 	}
 }
 
+func TestAPIStatusReportsServedUIDir(t *testing.T) {
+	state := apiStateTree(t, t.TempDir())
+	ui := t.TempDir()
+	if err := os.WriteFile(ui+"/index.html", []byte("UI"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	server, err := uiapi.Start(uiapi.Options{StateDir: state, Port: 0, Backend: staticAPIBackend{}, UIDir: ui})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = server.Shutdown(context.Background()) })
+	for _, args := range [][]string{{"api", "status"}, {"api", "status", "--json"}} {
+		code, out, stderr := runAPICLI(t, args...)
+		if code != 0 || !strings.Contains(out, ui) {
+			t.Fatalf("%v: %d %s %s", args, code, out, stderr)
+		}
+		if len(args) == 3 && !strings.Contains(out, `"ui_dir":`) {
+			t.Fatalf("missing field: %s", out)
+		}
+	}
+}
+
 func TestAPICommandUsageErrors(t *testing.T) {
 	apiStateTree(t, t.TempDir())
 	for _, args := range [][]string{
