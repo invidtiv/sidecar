@@ -325,6 +325,20 @@ func Serve(ctx context.Context, opts Options) error {
 		Capture: instrumented,
 		Now:     opts.Now,
 	}.WithDefaults()
+	// With the real tmux capture, each cycle reads every status pane through
+	// one tmux client instead of one client per pane. The batch feeds the
+	// previews exactly as the per-pane decorator does; a pane it misses falls
+	// back to that decorator. An injected Capture keeps the per-pane path.
+	var batchCapture workspaceinventory.BatchCaptureFunc
+	if opts.Capture == nil {
+		batchCapture = func(ctx context.Context, targets []string, lines int) map[string]string {
+			captured := tty.CapturePaneOutputs(ctx, targets, lines)
+			for target, text := range captured {
+				previews.put(target, text)
+			}
+			return captured
+		}
+	}
 
 	// One tracker for the life of the connection. It is the reap's memory —
 	// which shells this serve has seen alive, under which server, and when each
@@ -450,6 +464,7 @@ func Serve(ctx context.Context, opts Options) error {
 		}
 		claims := workspaceinventory.BuildShellClaims(ordered)
 		refresh := collector.ForRefresh(opts.MaxCaptures, claims)
+		refresh = refresh.PrefetchCaptures(ctx, ordered, roots, panes, batchCapture)
 
 		previewBudget := opts.SnapshotPreviewBytes
 		// The observation set handed to the tracker has to be complete every
