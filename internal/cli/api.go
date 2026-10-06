@@ -45,7 +45,7 @@ func apiCommand() *Command {
 	jsonFlag := Flag{Name: "--json", Summary: "Write one structured result object to stdout", Bool: true}
 	serve := &Command{
 		Name: "serve", Summary: "Serve the UI API on this machine", Usage: "sidecar api serve [--port N] [--ui DIR] [--fixtures DIR] [--tailnet] [--tailnet-port N] [--json]",
-		Long: "Run the UI API server in the foreground until interrupted. It listens on a Unix socket in the state directory (local agents and the CLI, no auth), on 127.0.0.1 for browsers (paired with `sidecar api open` or `sidecar api pair`), and with --tailnet on a second Unix socket for `tailscale serve`, trusting only allowed tailnet logins (config api.tailnetLogins, default the node owner). " +
+		Long: "Run the UI API server in the foreground until interrupted. It listens on a Unix socket in the state directory (local agents and the CLI, no auth), on 127.0.0.1 for browsers (paired with `sidecar api open` or `sidecar api pair`), and with --tailnet on a second Unix socket for `tailscale serve`, trusting only allowed tailnet logins (config api.tailnetLogins, default the node owner). Set config api.tailnetHTTPSPort to use a dedicated public HTTPS port instead of 443. " +
 			"It records itself in $STATE/api/endpoint.json and refuses to start while another server owns the same state tree. It never starts or stops tmux. Each terminal WebSocket is one mobile protocol v0 stream, served exactly as `sidecar mobile serve --stdio` serves stdin. --fixtures requires SIDECAR_ISOLATED_STATE=1 and temporary XDG_STATE_HOME and -config paths; it refuses real state/config paths, including symlink aliases. " +
 			"--tailnet prints the `tailscale serve` command to run; it never changes Tailscale configuration. --tailnet-port N serves the tailnet listener on a dedicated loopback port instead, for a tailscaled that cannot open a 0600 user socket; any local process or OS user can reach that port and claim an allowed tailnet login, so use it only on a machine where every local user and process is already trusted. --json writes the endpoint object as one line once every listener is bound.",
 		Flags: []Flag{{Name: "--port", Arg: "N", Summary: "Browser listener port on 127.0.0.1 (default 7861; 0 picks a free port)"},
@@ -320,7 +320,11 @@ func apiTailnetOptions(ctx context.Context, port int) (*uiapi.TailnetOptions, er
 	if len(logins) == 0 {
 		return nil, errors.New("--tailnet found no owner login for this node; set api.tailnetLogins in the Sidecar config")
 	}
-	return &uiapi.TailnetOptions{Host: identity.Host, Logins: logins, Port: port}, nil
+	options := &uiapi.TailnetOptions{Host: identity.Host, Logins: logins, Port: port, HTTPSPort: cfg.API.TailnetHTTPSPort}
+	if _, err := options.HTTPSURL(); err != nil {
+		return nil, err
+	}
+	return options, nil
 }
 
 // tailnetPortWarning says what --tailnet-port gives up. The Tailnet listener
@@ -330,14 +334,19 @@ func apiTailnetOptions(ctx context.Context, port int) (*uiapi.TailnetOptions, er
 const tailnetPortWarning = "Warning: any local process or OS user can reach this port and claim an allowed tailnet login, which drives your terminals. Use --tailnet-port only where every local user and process is already trusted."
 
 func printTailnetHint(endpoint uiapi.Endpoint, tailnet *uiapi.TailnetOptions, out io.Writer) {
+	publicURL, _ := tailnet.HTTPSURL()
+	httpsFlag := ""
+	if tailnet.HTTPSPort != 0 && tailnet.HTTPSPort != 443 {
+		httpsFlag = fmt.Sprintf(" --https=%d", tailnet.HTTPSPort)
+	}
 	if endpoint.TailnetTCP != "" {
-		_, _ = fmt.Fprintf(out, "  tailnet  %s (https://%s; logins %s)\nExpose it on the tailnet with:\n  tailscale serve --bg http://%s\n%s\n",
-			endpoint.TailnetTCP, tailnet.Host, strings.Join(tailnet.Logins, ", "), endpoint.TailnetTCP, tailnetPortWarning)
+		_, _ = fmt.Fprintf(out, "  tailnet  %s (%s; logins %s)\nExpose it on the tailnet with:\n  tailscale serve --bg%s http://%s\n%s\n",
+			endpoint.TailnetTCP, publicURL, strings.Join(tailnet.Logins, ", "), httpsFlag, endpoint.TailnetTCP, tailnetPortWarning)
 		return
 	}
-	_, _ = fmt.Fprintf(out, "  tailnet  %s (https://%s; logins %s)\nExpose it on the tailnet with:\n  tailscale serve --bg unix:%s\n"+
-		"If tailscaled cannot open that 0600 socket (a sandboxed Tailscale build), restart with --tailnet-port N and run:\n  tailscale serve --bg http://127.0.0.1:N\n",
-		endpoint.TailnetSocket, tailnet.Host, strings.Join(tailnet.Logins, ", "), endpoint.TailnetSocket)
+	_, _ = fmt.Fprintf(out, "  tailnet  %s (%s; logins %s)\nExpose it on the tailnet with:\n  tailscale serve --bg%s unix:%s\n"+
+		"If tailscaled cannot open that 0600 socket (a sandboxed Tailscale build), restart with --tailnet-port N and run:\n  tailscale serve --bg%s http://127.0.0.1:N\n",
+		endpoint.TailnetSocket, publicURL, strings.Join(tailnet.Logins, ", "), httpsFlag, endpoint.TailnetSocket, httpsFlag)
 }
 
 func apiLocalClient(env Env) (*uiapi.LocalClient, int) {

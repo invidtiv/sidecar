@@ -59,6 +59,8 @@ type APIConfig struct {
 	// TailnetLogins are the Tailscale logins trusted on the Tailnet listener.
 	// Empty means the login that owns the local Tailscale node.
 	TailnetLogins []string `json:"tailnetLogins,omitempty"`
+	// TailnetHTTPSPort is the public Tailscale Serve HTTPS port; zero uses 443.
+	TailnetHTTPSPort int `json:"tailnetHTTPSPort,omitempty"`
 }
 
 // The values detection.remoteManifests takes, besides an arbitrary catalog URL.

@@ -168,13 +168,19 @@ func TestAPITailnetOptionsDefaultToTheNodeOwner(t *testing.T) {
 		t.Fatalf("options = %+v, %v", options, err)
 	}
 	// Configured logins replace the default.
-	cfg := `{"api":{"tailnetLogins":["a@example.com"," b@example.com "]}}`
+	cfg := `{"api":{"tailnetLogins":["a@example.com"," b@example.com "],"tailnetHTTPSPort":7861}}`
 	if err := os.WriteFile(config.ConfigPath(), []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	options, err = apiTailnetOptions(context.Background(), 7862)
-	if err != nil || strings.Join(options.Logins, ",") != "a@example.com,b@example.com" || options.Port != 7862 {
+	if err != nil || strings.Join(options.Logins, ",") != "a@example.com,b@example.com" || options.Port != 7862 || options.HTTPSPort != 7861 {
 		t.Fatalf("configured options = %+v, %v", options, err)
+	}
+	if err := os.WriteFile(config.ConfigPath(), []byte(`{"api":{"tailnetHTTPSPort":-1}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := apiTailnetOptions(context.Background(), 0); err == nil || !strings.Contains(err.Error(), "tailnetHTTPSPort") {
+		t.Fatalf("invalid port: %v", err)
 	}
 }
 
@@ -199,6 +205,15 @@ func TestTailnetHintWarnsOnlyForTheLoopbackPort(t *testing.T) {
 	printTailnetHint(uiapi.Endpoint{TailnetSocket: "/tmp/s/tailnet.sock"}, tailnet, &out)
 	if !strings.Contains(out.String(), "unix:/tmp/s/tailnet.sock") || strings.Contains(out.String(), "Warning") {
 		t.Fatalf("socket hint = %q", out.String())
+	}
+}
+
+func TestDedicatedTailnetHTTPSPortHint(t *testing.T) {
+	tailnet := &uiapi.TailnetOptions{Host: "node.example.ts.net", Logins: []string{"owner@example.com"}, HTTPSPort: 7861}
+	var out bytes.Buffer
+	printTailnetHint(uiapi.Endpoint{TailnetSocket: "/tmp/s/tailnet.sock"}, tailnet, &out)
+	if !strings.Contains(out.String(), "https://node.example.ts.net:7861") || !strings.Contains(out.String(), "tailscale serve --bg --https=7861 unix:/tmp/s/tailnet.sock") {
+		t.Fatalf("hint = %q", out.String())
 	}
 }
 

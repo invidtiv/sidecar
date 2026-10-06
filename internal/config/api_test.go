@@ -11,11 +11,11 @@ func TestAPIUIDirLoadsAndSurvivesConfigSave(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	SetTestConfigPath(path)
 	t.Cleanup(ResetTestConfigPath)
-	if err := os.WriteFile(path, []byte(`{"api":{"uiDir":"/tmp/ui bundle","tailnetLogins":["owner@example.com"]}}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"api":{"uiDir":"/tmp/ui bundle","tailnetLogins":["owner@example.com"],"tailnetHTTPSPort":7861}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := Load()
-	if err != nil || cfg.API.UIDir != "/tmp/ui bundle" {
+	if err != nil || cfg.API.TailnetHTTPSPort != 7861 || cfg.API.UIDir != "/tmp/ui bundle" {
 		t.Fatalf("loaded API: %+v %v", cfg, err)
 	}
 	// A UI preference write must preserve the user-authored API section.
@@ -23,7 +23,7 @@ func TestAPIUIDirLoadsAndSurvivesConfigSave(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg, err = Load()
-	if err != nil || cfg.API.UIDir != "/tmp/ui bundle" {
+	if err != nil || cfg.API.TailnetHTTPSPort != 7861 || cfg.API.UIDir != "/tmp/ui bundle" {
 		t.Fatalf("saved API: %+v %v", cfg, err)
 	}
 }
@@ -32,7 +32,7 @@ func TestSaveAPIUIDirPreservesOtherSettingsAndClears(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	SetTestConfigPath(path)
 	t.Cleanup(ResetTestConfigPath)
-	seed := `{"api":{"uiDir":"old","tailnetLogins":["owner@example.com"],"future":{"enabled":true}},"prompts":{"custom":"keep"},"ui":{"showClock":false,"futureUI":"keep"}}`
+	seed := `{"api":{"uiDir":"old","tailnetLogins":["owner@example.com"],"tailnetHTTPSPort":7861,"future":{"enabled":true}},"prompts":{"custom":"keep"},"ui":{"showClock":false,"futureUI":"keep"}}`
 	if err := os.WriteFile(path, []byte(seed), 0o600); err != nil {
 		t.Fatal(err)
 	}

@@ -1141,3 +1141,71 @@ func TestTerminalStatusTracksControl(t *testing.T) {
 		t.Fatal("closed attachment still open")
 	}
 }
+
+func TestDedicatedTailnetHTTPSPortGuards(t *testing.T) {
+	h := newHarness(t, func(o *Options) { o.Tailnet.HTTPSPort = 7861 })
+	host := testTailnetHost + ":7861"
+	origin := "https://" + host
+	for _, tc := range []struct {
+		name, host, origin, login string
+		status                    int
+		code                      string
+	}{
+		{"owner", host, origin, testTailnetLogin, 200, ""},
+		{"same-origin GET", host, "", testTailnetLogin, 200, ""},
+		{"no login", host, origin, "", 401, CodeUnauthenticated},
+		{"other login", host, origin, "other@example.com", 403, "tailnet_login_refused"},
+		{"bare host", testTailnetHost, "", testTailnetLogin, 421, CodeHostRefused},
+		{"standard HTTPS host", testTailnetHost + ":443", "", testTailnetLogin, 421, CodeHostRefused},
+		{"different port", testTailnetHost + ":7862", "", testTailnetLogin, 421, CodeHostRefused},
+		{"foreign host", "evil.example:7861", "", testTailnetLogin, 421, CodeHostRefused},
+		{"svc origin", host, "https://" + testTailnetHost, testTailnetLogin, 403, CodeOriginRefused},
+		{"HTTP origin", host, "http://" + host, testTailnetLogin, 403, CodeOriginRefused},
+		{"other HTTPS port", host, "https://" + testTailnetHost + ":7862", testTailnetLogin, 403, CodeOriginRefused},
+		{"foreign origin", host, "https://evil.example:7861", testTailnetLogin, 403, CodeOriginRefused},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, b := h.tailnetDo(req{path: "/api/v0/hello", host: tc.host, header: map[string]string{"Origin": tc.origin, tailscaleLoginHead: tc.login}})
+			expect(t, r, b, tc.status, tc.code)
+			if tc.status == 421 && !strings.Contains(string(b), origin) {
+				t.Fatalf("wrong canonical origin: %s", b)
+			}
+		})
+	}
+	for _, path := range []string{eventsPath, "/api/v0/terminal"} {
+		for _, tc := range []struct {
+			origin, login string
+			code          websocket.StatusCode
+		}{
+			{origin, "", CloseUnauthenticated},
+			{"https://" + testTailnetHost, testTailnetLogin, CloseOriginRefused},
+			{"https://evil.example", testTailnetLogin, CloseOriginRefused},
+		} {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			c, _, err := websocket.Dial(ctx, "ws://"+host+path, &websocket.DialOptions{HTTPClient: h.tailnet, HTTPHeader: http.Header{"Origin": {tc.origin}, tailscaleLoginHead: {tc.login}}})
+			if err != nil {
+				cancel()
+				t.Fatal(err)
+			}
+			_, _, err = c.Read(ctx)
+			_ = c.CloseNow()
+			cancel()
+			if websocket.CloseStatus(err) != tc.code {
+				t.Fatalf("%s origin %q: %v", path, tc.origin, err)
+			}
+		}
+	}
+	r, b := h.tailnetDo(req{method: "POST", path: "/api/v0/ws-tickets", host: host, body: "{}", header: mutationHeaders(origin, map[string]string{tailscaleLoginHead: testTailnetLogin})})
+	expect(t, r, b, 200, "")
+	r, b = h.tailnetDo(req{method: "POST", path: "/api/v0/ws-tickets", host: host, body: "{}", header: map[string]string{"Origin": origin, tailscaleLoginHead: testTailnetLogin, "Content-Type": "application/json"}})
+	expect(t, r, b, 403, CodeMutationRefused)
+}
+
+func TestTailnetHTTPSPortValidation(t *testing.T) {
+	for _, port := range []int{-1, 65536} {
+		_, err := Start(Options{StateDir: shortTempDir(t), Port: 0, Backend: newFakeBackend(), Tailnet: &TailnetOptions{Host: testTailnetHost, Logins: []string{testTailnetLogin}, HTTPSPort: port}})
+		if err == nil || !strings.Contains(err.Error(), "tailnetHTTPSPort") {
+			t.Fatalf("port %d: %v", port, err)
+		}
+	}
+}

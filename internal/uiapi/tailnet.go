@@ -60,3 +60,16 @@ func ParseTailscaleStatus(data []byte) (TailnetIdentity, error) {
 	}
 	return identity, nil
 }
+
+// HTTPSURL returns the exact public origin protected by the Tailnet listener.
+// The configured port does not change the listener's Unix socket or bind address.
+func (o TailnetOptions) HTTPSURL() (string, error) {
+	if o.HTTPSPort < 0 || o.HTTPSPort > 65535 {
+		return "", errors.New("api.tailnetHTTPSPort must be a number from 1 to 65535, or 0 for the default 443")
+	}
+	host := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(o.Host), "."))
+	if o.HTTPSPort != 0 && o.HTTPSPort != 443 {
+		host += ":" + strconv.Itoa(o.HTTPSPort)
+	}
+	return "https://" + host, nil
+}

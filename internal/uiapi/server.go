@@ -54,6 +54,9 @@ type TailnetOptions struct {
 	Host string
 	// Logins are the Tailscale logins trusted on this listener.
 	Logins []string
+	// HTTPSPort is the public Tailscale Serve HTTPS port, not a local bind.
+	// Zero uses the existing standard-port Host and Origin guards.
+	HTTPSPort int
 	// Port, when non-zero, serves the Tailnet listener on a dedicated loopback
 	// TCP port instead of the Unix socket, for a tailscaled that cannot open a
 	// 0600 user socket.
@@ -265,10 +268,20 @@ func (s *Server) listenTailnet(opts TailnetOptions, inherited net.Listener) erro
 	if len(opts.Logins) == 0 {
 		return errors.New("ui api: the tailnet listener needs at least one allowed login; set api.tailnetLogins")
 	}
+	publicURL, err := opts.HTTPSURL()
+	if err != nil {
+		return err
+	}
 	s.tailnetHosts = map[string]bool{opts.Host: true}
 	s.tailnetOrigins = map[string]bool{"https://" + opts.Host: true, "http://" + opts.Host: true}
 	for _, port := range []string{"443", "80"} {
 		s.tailnetHosts[opts.Host+":"+port] = true
+	}
+	if opts.HTTPSPort != 0 && opts.HTTPSPort != 443 {
+		// A dedicated port is a separate origin: do not trust a page served
+		// by another application on the node's standard HTTP/HTTPS ports.
+		s.tailnetHosts = map[string]bool{strings.TrimPrefix(publicURL, "https://"): true}
+		s.tailnetOrigins = map[string]bool{publicURL: true}
 	}
 	s.tailnetLogins = map[string]bool{}
 	for _, login := range opts.Logins {

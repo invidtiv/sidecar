@@ -362,7 +362,8 @@ func (h *listenerHandler) originAllowed(origin string) bool {
 
 func (h *listenerHandler) canonicalBase() string {
 	if h.kind == ListenerTailnet && h.s.opts.Tailnet != nil {
-		return "https://" + h.s.opts.Tailnet.Host
+		publicURL, _ := h.s.opts.Tailnet.HTTPSURL()
+		return publicURL
 	}
 	return h.s.BrowserURL()
 }
