@@ -12,6 +12,8 @@ All notable changes to sidecar are documented here.
 
 ### Bug Fixes
 
+- **Project shells stay live inside tmux without a locale.** Launching Sidecar through a persistent SSH/mosh tmux wrapper no longer marks running shells offline or hides their terminal output.
+
 - Workspace API mutations retire the shared catalog before notifying viewers, so newly created worktrees appear and restarted terminals become attachable on the immediate refresh. Failed operations also invalidate because they may have partially changed the workspace.
 
 ## [v1.16.0] - 2026-10-05

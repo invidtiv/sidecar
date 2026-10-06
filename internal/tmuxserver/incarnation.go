@@ -14,6 +14,7 @@ import (
 	"syscall"
 
 	"github.com/marcus/sidecar/internal/tmuxenv"
+	"github.com/marcus/sidecar/internal/tmuxformat"
 )
 
 // Incarnation is an opaque comparable identity of one tmux server process.
@@ -214,7 +215,9 @@ func ParsePID(field string) (int, bool) {
 // name and the server pid in one invocation. #{pid} is server-scoped and
 // was verified to expand in list-sessions on an isolated socket (td-e27291).
 // Do not use #{session_id}: those restart from $0 on a new server.
-const ListSessionsFormat = "#{session_name}\t#{pid}"
+// Use the shared printable field encoding: locale-free tmux clients replace
+// raw tabs with underscores, silently making every session unrecognizable.
+var ListSessionsFormat = tmuxformat.Fields("session_name", "pid")
 
 // SocketBinding names the socket file a server bound at path by its device,
 // inode and modification time, with one stat and no subprocess. Unlike String

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/marcus/sidecar/internal/testenv"
+	"github.com/marcus/sidecar/internal/tmuxformat"
 )
 
 func TestMain(m *testing.M) {
@@ -18,6 +19,9 @@ func TestMain(m *testing.M) {
 // addressed: TestMain uses testenv.IsolateTmux.
 func TestListSessionsPIDFormatResolves(t *testing.T) {
 	testenv.RequireTmux(t)
+	for _, name := range []string{"LANG", "LC_ALL", "LC_CTYPE"} {
+		t.Setenv(name, "")
+	}
 	session := "tmuxserver-pid-probe"
 	if out, err := exec.Command("tmux", "new-session", "-d", "-s", session).CombinedOutput(); err != nil {
 		t.Fatalf("new-session on isolated socket: %v (%s)", err, out)
@@ -26,15 +30,16 @@ func TestListSessionsPIDFormatResolves(t *testing.T) {
 		_ = exec.Command("tmux", "kill-session", "-t", session).Run()
 	})
 
-	out, err := exec.Command("tmux", "list-sessions", "-F", ListSessionsFormat).Output()
+	out, err := exec.Command("tmux", tmuxformat.ClientArgs("list-sessions", "-F", ListSessionsFormat)...).Output()
 	if err != nil {
 		t.Fatalf("list-sessions -F %q: %v", ListSessionsFormat, err)
 	}
 	line := strings.TrimSpace(string(out))
-	name, pidField, ok := strings.Cut(line, "\t")
-	if !ok {
-		t.Fatalf("list-sessions output %q has no tab; #{pid} did not expand as a separate field", line)
+	fields := tmuxformat.Split(line)
+	if len(fields) != 2 {
+		t.Fatalf("list-sessions output %q has %d fields; want session and pid", line, len(fields))
 	}
+	name, pidField := fields[0], fields[1]
 	if name != session {
 		t.Fatalf("session name = %q, want %q", name, session)
 	}

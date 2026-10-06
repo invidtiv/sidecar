@@ -23,6 +23,7 @@ import (
 	"github.com/marcus/sidecar/internal/shellliveness"
 	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/tmuxenv"
+	"github.com/marcus/sidecar/internal/tmuxformat"
 	"github.com/marcus/sidecar/internal/tmuxserver"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
@@ -273,7 +274,7 @@ func shellDiscoveryPattern(workDir string) *regexp.Regexp {
 // not a listing.
 func discoverTmuxSessionNamesForWorkDir(workDir string) ([]string, tmuxserver.Incarnation, error) {
 	socket := tmuxserver.Socket()
-	cmd := exec.Command("tmux", "list-sessions", "-F", tmuxserver.ListSessionsFormat)
+	cmd := exec.Command("tmux", tmuxformat.ClientArgs("list-sessions", "-F", tmuxserver.ListSessionsFormat)...)
 	output, err := cmd.Output()
 	if err != nil {
 		if tmuxReportedNoServer(err) {
@@ -291,8 +292,11 @@ func discoverTmuxSessionNamesForWorkDir(workDir string) ([]string, tmuxserver.In
 		if line == "" {
 			continue
 		}
-		name, pidField, _ := strings.Cut(line, "\t")
-		name = strings.TrimSpace(name)
+		fields := tmuxformat.Split(line)
+		if len(fields) != 2 {
+			continue
+		}
+		name, pidField := fields[0], fields[1]
 		if pid, ok := tmuxserver.ParsePID(pidField); ok && serverPID == 0 {
 			serverPID = pid
 		}
