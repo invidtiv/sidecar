@@ -61,6 +61,9 @@ type APIConfig struct {
 	TailnetLogins []string `json:"tailnetLogins,omitempty"`
 	// TailnetHTTPSPort is the public Tailscale Serve HTTPS port; zero uses 443.
 	TailnetHTTPSPort int `json:"tailnetHTTPSPort,omitempty"`
+	// BrowserProxyOrigin is one HTTPS reverse-proxy origin using browser pairing,
+	// never identity headers, on the existing loopback Browser listener.
+	BrowserProxyOrigin string `json:"browserProxyOrigin,omitempty"`
 }
 
 // The values detection.remoteManifests takes, besides an arbitrary catalog URL.

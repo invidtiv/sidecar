@@ -675,6 +675,7 @@ func mergeConfig(cfg *Config, raw *rawConfig) {
 	if raw.API != nil {
 		cfg.API.UIDir = raw.API.UIDir
 		cfg.API.TailnetHTTPSPort = raw.API.TailnetHTTPSPort
+		cfg.API.BrowserProxyOrigin = raw.API.BrowserProxyOrigin
 		for _, login := range raw.API.TailnetLogins {
 			if login = strings.TrimSpace(login); login != "" {
 				cfg.API.TailnetLogins = append(cfg.API.TailnetLogins, login)

@@ -941,15 +941,16 @@ sidecar api events --stdio --sort activity --show-idle-sessions false
 
 Pair this machine's browser and open the UI
 
-Ask the running server for a single-use pairing link (valid for 60 seconds) and open it in the default browser. The code rides in the link's fragment, so it never appears in a request line; the pairing page registers a non-extractable WebCrypto key in that origin's IndexedDB and goes to --path. Only the public key persists on the server, with a 30-day sliding expiry and a 180-day absolute cap. The browser signs a fresh nonce after each restart to obtain a 15-minute memory-only bearer; legacy localStorage tokens are cleared. Pairing again leaves other tabs valid. --print writes the link instead of opening it.
+Ask the running server for a single-use pairing link (valid for 60 seconds) and open it in the default browser. The code rides in the link's fragment, so it never appears in a request line; the pairing page registers a non-extractable WebCrypto key in that origin's IndexedDB and goes to --path. Only the public key persists on the server, with a 30-day sliding expiry and a 180-day absolute cap. The browser signs a fresh nonce after each restart to obtain a 15-minute memory-only bearer; legacy localStorage tokens are cleared. Pairing again leaves other tabs valid. --print writes the link instead of opening it. --proxy uses the running server's configured api.browserProxyOrigin so you can pair a remote browser through the HTTPS proxy.
 
 ```
-Usage: sidecar api open [--print] [--path P]
+Usage: sidecar api open [--print] [--proxy] [--path P]
 ```
 
 **Options:**
 
 - `--print`: Print the pairing URL instead of opening a browser
+- `--proxy`: Use the configured HTTPS browser proxy origin
 - `--path P`: Path to land on after pairing (default /)
 - `-h, --help`: Show this help
 

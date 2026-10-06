@@ -267,3 +267,34 @@ func TestAPIPairCombinedScopeSpellings(t *testing.T) {
 		}
 	}
 }
+
+func TestAPIOpenProxyPrint(t *testing.T) {
+	state := apiStateTree(t, t.TempDir())
+	const origin = "https://node.example.ts.net:7861"
+	server, err := uiapi.Start(uiapi.Options{StateDir: state, Port: 0, Backend: staticAPIBackend{}, BrowserProxyOrigin: origin})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = server.Shutdown(context.Background()) })
+	code, out, stderr := runAPICLI(t, "api", "open", "--proxy", "--print", "--path", "/s/x")
+	if code != 0 || !strings.HasPrefix(out, origin+"/pair#code=") || !strings.Contains(out, "next=%2Fs%2Fx") {
+		t.Fatalf("proxy open: %d %s", code, stderr)
+	}
+	code, out, _ = runAPICLI(t, "api", "open", "--print")
+	if code != 0 || !strings.HasPrefix(out, server.BrowserURL()+"/pair#code=") {
+		t.Fatal("default local pairing origin changed")
+	}
+}
+
+func TestAPIOpenProxyNeedsConfiguredOrigin(t *testing.T) {
+	state := apiStateTree(t, t.TempDir())
+	server, err := uiapi.Start(uiapi.Options{StateDir: state, Port: 0, Backend: staticAPIBackend{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = server.Shutdown(context.Background()) })
+	code, out, stderr := runAPICLI(t, "api", "open", "--proxy", "--print")
+	if code != 1 || out != "" || !strings.Contains(stderr, "browserProxyOrigin") {
+		t.Fatalf("unconfigured proxy: %d %s", code, stderr)
+	}
+}

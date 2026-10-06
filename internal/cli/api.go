@@ -60,9 +60,9 @@ func apiCommand() *Command {
 		Mutates:   true, Run: runAPIServe,
 	}
 	open := &Command{
-		Name: "open", Summary: "Pair this machine's browser and open the UI", Usage: "sidecar api open [--print] [--path P]",
-		Long:      "Ask the running server for a single-use pairing link (valid for 60 seconds) and open it in the default browser. The code rides in the link's fragment, so it never appears in a request line; the pairing page registers a non-extractable WebCrypto key in that origin's IndexedDB and goes to --path. Only the public key persists on the server, with a 30-day sliding expiry and a 180-day absolute cap. The browser signs a fresh nonce after each restart to obtain a 15-minute memory-only bearer; legacy localStorage tokens are cleared. Pairing again leaves other tabs valid. --print writes the link instead of opening it.",
-		Flags:     []Flag{{Name: "--print", Summary: "Print the pairing URL instead of opening a browser", Bool: true}, {Name: "--path", Arg: "P", Summary: "Path to land on after pairing (default /)"}, help},
+		Name: "open", Summary: "Pair this machine's browser and open the UI", Usage: "sidecar api open [--print] [--proxy] [--path P]",
+		Long:      "Ask the running server for a single-use pairing link (valid for 60 seconds) and open it in the default browser. The code rides in the link's fragment, so it never appears in a request line; the pairing page registers a non-extractable WebCrypto key in that origin's IndexedDB and goes to --path. Only the public key persists on the server, with a 30-day sliding expiry and a 180-day absolute cap. The browser signs a fresh nonce after each restart to obtain a 15-minute memory-only bearer; legacy localStorage tokens are cleared. Pairing again leaves other tabs valid. --print writes the link instead of opening it. --proxy uses the running server's configured api.browserProxyOrigin so you can pair a remote browser through the HTTPS proxy.",
+		Flags:     []Flag{{Name: "--print", Summary: "Print the pairing URL instead of opening a browser", Bool: true}, {Name: "--proxy", Summary: "Use the configured HTTPS browser proxy origin", Bool: true}, {Name: "--path", Arg: "P", Summary: "Path to land on after pairing (default /)"}, help},
 		ExitCodes: []ExitCode{{Code: 0, Summary: "success"}, {Code: 1, Summary: "no server running or the server refused"}, {Code: 2, Summary: "usage error"}},
 		Examples:  []Example{{Command: "sidecar api open"}, {Command: "sidecar api open --print"}},
 		Run:       runAPIOpen,
@@ -263,7 +263,7 @@ func runAPIServe(env Env, args []string) int {
 		defer live.Close()
 		backend = live
 	}
-	server, err := uiapi.Start(uiapi.Options{StateDir: env.StateDir, Port: port, UIDir: uiDir, Tailnet: tailnet,
+	server, err := uiapi.Start(uiapi.Options{StateDir: env.StateDir, Port: port, UIDir: uiDir, Tailnet: tailnet, BrowserProxyOrigin: cfg.API.BrowserProxyOrigin,
 		Backend: backend, Version: buildinfo.Version(), FixtureStatus: fixtureStatus, Inherited: inherited})
 	if err != nil {
 		cliErrln(env.Stderr, err)
@@ -372,7 +372,7 @@ func runAPIOpen(env Env, args []string) int {
 		_, _ = fmt.Fprint(env.Stdout, RenderHelp(cmd))
 		return 0
 	}
-	flags, err := parseAPIFlags(args, []string{"--print"}, []string{"--path"})
+	flags, err := parseAPIFlags(args, []string{"--print", "--proxy"}, []string{"--path"})
 	if err != nil {
 		cliErrf(env.Stderr, "%v\n\n%s", err, RenderHelp(cmd))
 		return 2
@@ -383,10 +383,22 @@ func runAPIOpen(env Env, args []string) int {
 	}
 	ctx, cancel := apiContext(env)
 	defer cancel()
+	if flags.bools["--proxy"] && client.Endpoint.BrowserProxyOrigin == "" {
+		cliErrln(env.Stderr, "The running server has no api.browserProxyOrigin; configure it and restart the API first.")
+		return 1
+	}
 	pairing, err := client.PairingCode(ctx, flags.values["--path"])
 	if err != nil {
 		cliErrln(env.Stderr, err)
 		return 1
+	}
+	if flags.bools["--proxy"] {
+		localOrigin := "http://" + client.Endpoint.TCP
+		if !strings.HasPrefix(pairing.URL, localOrigin+"/pair#") {
+			cliErrln(env.Stderr, "The server returned an unexpected pairing URL.")
+			return 1
+		}
+		pairing.URL = client.Endpoint.BrowserProxyOrigin + strings.TrimPrefix(pairing.URL, localOrigin)
 	}
 	if flags.bools["--print"] {
 		_, _ = fmt.Fprintln(env.Stdout, pairing.URL)

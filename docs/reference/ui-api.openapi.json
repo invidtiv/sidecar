@@ -1260,6 +1260,9 @@
           "api_version": {
             "type": "integer"
           },
+          "browser_proxy_origin": {
+            "type": "string"
+          },
           "pid": {
             "type": "integer"
           },

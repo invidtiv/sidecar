@@ -21,15 +21,16 @@ const (
 // Endpoint is $STATE/api/endpoint.json: how local CLI verbs and SDK users
 // find the one running server.
 type Endpoint struct {
-	PID           int       `json:"pid"`
-	Version       string    `json:"version"`
-	APIVersion    int       `json:"api_version"`
-	APIInstance   string    `json:"api_instance"`
-	StartedAt     time.Time `json:"started_at"`
-	UnixSocket    string    `json:"unix_socket"`
-	TCP           string    `json:"tcp"`
-	TailnetSocket string    `json:"tailnet_socket,omitempty"`
-	TailnetTCP    string    `json:"tailnet_tcp,omitempty"`
+	PID                int       `json:"pid"`
+	Version            string    `json:"version"`
+	APIVersion         int       `json:"api_version"`
+	APIInstance        string    `json:"api_instance"`
+	StartedAt          time.Time `json:"started_at"`
+	UnixSocket         string    `json:"unix_socket"`
+	TCP                string    `json:"tcp"`
+	BrowserProxyOrigin string    `json:"browser_proxy_origin,omitempty"`
+	TailnetSocket      string    `json:"tailnet_socket,omitempty"`
+	TailnetTCP         string    `json:"tailnet_tcp,omitempty"`
 }
 
 // Dir is where the API keeps its sockets, endpoint and paired origins.

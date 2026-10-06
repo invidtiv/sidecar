@@ -70,15 +70,16 @@ type Options struct {
 	// success; the caller closes them on failure. Nil discovers manager sockets.
 	Inherited []apiservice.ActivatedListener
 	// Port is the Browser listener's loopback port; 0 picks a free one.
-	Port          int
-	UIDir         string
-	Tailnet       *TailnetOptions
-	Backend       Backend
-	Content       ContentBackend
-	Version       string
-	FixtureStatus *Status
-	Now           func() time.Time
-	Logf          func(format string, args ...any)
+	Port               int
+	BrowserProxyOrigin string
+	UIDir              string
+	Tailnet            *TailnetOptions
+	Backend            Backend
+	Content            ContentBackend
+	Version            string
+	FixtureStatus      *Status
+	Now                func() time.Time
+	Logf               func(format string, args ...any)
 	// KeepaliveInterval and KeepaliveTimeout govern terminal WebSocket pings;
 	// zero means 30s and 15s.
 	KeepaliveInterval time.Duration
@@ -156,6 +157,13 @@ func Start(opts Options) (*Server, error) {
 	}
 	if opts.Port < 0 || opts.Port > 65535 {
 		return nil, fmt.Errorf("ui api: port %d is out of range", opts.Port)
+	}
+	if opts.BrowserProxyOrigin != "" {
+		origin, err := NormalizeOrigin(opts.BrowserProxyOrigin)
+		if err != nil || !strings.HasPrefix(origin, "https://") {
+			return nil, errors.New("api.browserProxyOrigin must be one HTTPS origin, with no path, query, fragment or credentials")
+		}
+		opts.BrowserProxyOrigin = origin
 	}
 	if opts.Now == nil {
 		opts.Now = time.Now
@@ -238,10 +246,14 @@ func Start(opts Options) (*Server, error) {
 	port := strconv.Itoa(s.browserPort)
 	s.browserHosts = map[string]bool{"127.0.0.1:" + port: true, "localhost:" + port: true}
 	s.browserOrigins = map[string]bool{"http://127.0.0.1:" + port: true, "http://localhost:" + port: true}
+	if opts.BrowserProxyOrigin != "" {
+		s.browserHosts[strings.TrimPrefix(opts.BrowserProxyOrigin, "https://")] = true
+		s.browserOrigins[opts.BrowserProxyOrigin] = true
+	}
 	s.addListener(ListenerBrowser, browser, ListenerInfo{Name: ListenerBrowser, Network: "tcp", Address: browser.Addr().String()})
 
 	s.endpoint = Endpoint{PID: os.Getpid(), Version: opts.Version, APIVersion: APIVersion, APIInstance: s.instance,
-		StartedAt: s.startedAt, UnixSocket: localPath, TCP: browser.Addr().String()}
+		StartedAt: s.startedAt, UnixSocket: localPath, TCP: browser.Addr().String(), BrowserProxyOrigin: opts.BrowserProxyOrigin}
 
 	if opts.Tailnet != nil {
 		if err := s.listenTailnet(*opts.Tailnet, inherited[ListenerTailnet]); err != nil {
