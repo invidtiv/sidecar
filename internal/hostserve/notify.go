@@ -31,7 +31,8 @@ import (
 //   - The host does not deliver, claim, or record a receipt. It says what
 //     happened; the viewer decides whether its user needs to hear about it.
 type notifier struct {
-	tracker notify.LaneTracker
+	onEvents func(notify.LaneEvents)
+	tracker  notify.LaneTracker
 	// keys maps the tracker's own notification ID to the wire key that was
 	// sent for it, so leaving the blocked lane can withdraw the right event.
 	// The viewer never sees a tracker ID: it derives its local record ID from
@@ -66,6 +67,9 @@ func (n *notifier) observe(obs []notify.LaneObservation, now time.Time) []hostpr
 	// saw begin.
 	out := n.settleInherited(obs)
 	events := n.tracker.Observe(obs, now)
+	if n.onEvents != nil && !events.Empty() {
+		n.onEvents(events)
+	}
 	if events.Empty() {
 		return out
 	}

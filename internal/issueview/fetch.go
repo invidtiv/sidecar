@@ -14,7 +14,34 @@ import (
 
 // Data holds one td issue plus the related rows the card needs to render
 // and navigate: children (subtasks), parent, siblings, and recent logs.
+type Handoff struct {
+	Timestamp string   `json:"timestamp"`
+	Session   string   `json:"session"`
+	Done      []string `json:"done"`
+	Remaining []string `json:"remaining"`
+	Decisions []string `json:"decisions"`
+	Uncertain []string `json:"uncertain"`
+}
+type Review struct {
+	ID              string `json:"id"`
+	Decision        string `json:"decision"`
+	ReviewerSession string `json:"reviewer_session"`
+	Summary         string `json:"summary"`
+	CreatedAt       string `json:"created_at"`
+	RequestedBy     string `json:"requested_by"`
+	Superseded      bool   `json:"superseded"`
+	SelfReview      bool   `json:"self_review"`
+	ReviewedBy      string `json:"reviewed_by"`
+}
 type Data struct {
+	Dependencies             []string `json:"-"`
+	Blockers                 []string `json:"-"`
+	Handoff                  *Handoff `json:"handoff"`
+	ReviewHistory            []Review `json:"review_history"`
+	ImplementerSession       string   `json:"implementer_session"`
+	ReviewerSession          string   `json:"reviewer_session"`
+	ReviewRequestedBySession string   `json:"review_requested_by_session"`
+
 	ID          string   `json:"id"`
 	Title       string   `json:"title"`
 	Status      string   `json:"status"`
@@ -161,6 +188,34 @@ func showIssueContext(ctx context.Context, workDir, issueID string) (*Data, erro
 	var data Data
 	if err := json.Unmarshal(out, &data); err != nil {
 		return nil, err
+	}
+	depCmd := exec.CommandContext(ctx, "td", "dep", issueID, "--json")
+	depCmd.Dir = workDir
+	configureReadOnlyTd(depCmd)
+	if raw, err := depCmd.Output(); err == nil {
+		var deps struct {
+			Dependencies []string `json:"dependencies"`
+		}
+		if json.Unmarshal(raw, &deps) == nil {
+			data.Dependencies = deps.Dependencies
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	for _, id := range data.Dependencies {
+		cmd := exec.CommandContext(ctx, "td", "show", id, "--json")
+		cmd.Dir = workDir
+		configureReadOnlyTd(cmd)
+
+		raw, err := cmd.Output()
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		var dep Ref
+		if err != nil || json.Unmarshal(raw, &dep) != nil || dep.Status != "closed" && dep.Status != "rejected" {
+			data.Blockers = append(data.Blockers, id)
+		}
 	}
 	return &data, nil
 }

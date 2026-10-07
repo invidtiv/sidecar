@@ -318,3 +318,31 @@ func TestOpenUnfocusedAPIViewerKeepsRemoteLeaseRelay(t *testing.T) {
 		t.Fatalf("request pinned to an unfocused API viewer: %+v", req)
 	}
 }
+
+func TestOpenLiveViewerTimeoutIsHonestAndCancels(t *testing.T) {
+	_, stateDir := setupIsolatedCLI(t)
+	root := t.TempDir()
+	writeProjectMeta(t, stateDir, "sidecar", root)
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("source\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := uirequest.WriteAPIViewer(stateDir, uirequest.APIViewer{Instance: "api-viewer-live", PID: os.Getpid(), Focused: true, Capabilities: []string{uirequest.APIViewerRelay}, ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"open", "--project", "sidecar", "README.md:1", "--wait", "90ms", "--json"}, &out, &errOut)
+	if !handled || code != 5 || !strings.Contains(errOut.String(), "connected viewer") || strings.Contains(errOut.String(), "no running") {
+		t.Fatalf("code=%d out=%s stderr=%s", code, out.String(), errOut.String())
+	}
+	var result uirequest.Result
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Reason != "viewer_timeout" || result.Delivered != 0 {
+		t.Fatalf("false result: %+v", result)
+	}
+	files, _ := filepath.Glob(filepath.Join(stateDir, "requests", "*-open.json"))
+	if len(files) != 0 {
+		t.Fatalf("timed out requests still queued: %v", files)
+	}
+}

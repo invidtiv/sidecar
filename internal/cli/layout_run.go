@@ -70,6 +70,7 @@ func runLayout(env Env, payload uirequest.LayoutPayload, jsonOutput bool, destFl
 		Action:    uirequest.ActionLayout,
 		Payload:   encoded,
 	}
+	prepareViewerRequest(env.StateDir, &req, waitDuration)
 	if _, err := uirequest.WriteRequest(env.StateDir, req); err != nil {
 		cliErrln(env.Stderr, err)
 		return 1
@@ -87,9 +88,16 @@ func runLayout(env Env, payload uirequest.LayoutPayload, jsonOutput bool, destFl
 			time.Sleep(30 * time.Millisecond)
 		}
 	}
-	_ = uirequest.Cleanup(env.StateDir, req.ID, req.Action)
+	acks = finishViewerWait(env.StateDir, req, acks)
 
 	if len(acks) == 0 {
+		if req.Viewer != "" {
+			if jsonOutput {
+				_ = json.NewEncoder(env.Stdout).Encode(map[string]any{"reason": "viewer_timeout", "results": []any{}})
+			}
+			cliErrln(env.Stderr, "the connected viewer did not acknowledge before the deadline; the request was cancelled (viewer_timeout)")
+			return 5
+		}
 		switch {
 		case dest.Origin.Sessions:
 			cliErrln(env.Stderr, "no running Sidecar instance is showing the Sessions surface")
@@ -197,7 +205,7 @@ func runLayoutGet(env Env, args []string) int {
 	help := RenderHelp(cmd)
 
 	jsonOutput := false
-	waitDuration := 1200 * time.Millisecond
+	waitDuration := 6 * time.Second
 	var dest layoutDestFlags
 
 	for i := 0; i < len(args); i++ {
@@ -233,7 +241,7 @@ func runLayoutApply(env Env, args []string) int {
 	help := RenderHelp(cmd)
 
 	jsonOutput := false
-	waitDuration := 1200 * time.Millisecond
+	waitDuration := 6 * time.Second
 	var dest layoutDestFlags
 	var panes []uirequest.LayoutPane
 	specColumns := json.RawMessage(nil)
@@ -341,7 +349,7 @@ func runLayoutMove(env Env, args []string) int {
 	help := RenderHelp(cmd)
 
 	jsonOutput := false
-	waitDuration := 1200 * time.Millisecond
+	waitDuration := 6 * time.Second
 	var dest layoutDestFlags
 	move := uirequest.LayoutMove{}
 

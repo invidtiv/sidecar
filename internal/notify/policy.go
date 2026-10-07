@@ -84,7 +84,7 @@ func ResolveDelivery(n Notification, cfg ResolvedConfig, runtime RuntimeContext)
 func decideChannel(mode config.DeliveryMode, sourceOn, available bool, n Notification, cfg ResolvedConfig, runtime RuntimeContext, now time.Time) ChannelDecision {
 	// Dismissal is authoritative lifecycle state, not a policy preference.
 	// Even an explicit provider test must never resurrect a dismissed record.
-	if n.Dismissed() {
+	if n.Dismissed() || n.Read() {
 		return ChannelDecision{Reason: ReasonCancelled}
 	}
 	if mode == config.DeliveryOff {

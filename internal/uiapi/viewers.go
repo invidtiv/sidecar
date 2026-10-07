@@ -56,10 +56,11 @@ type UIRequestEvent struct {
 	ExpiresAt  time.Time      `json:"expires_at"`
 }
 type ViewerAckRequest struct {
-	ViewerID string           `json:"viewer_id"`
-	ID       string           `json:"id"`
-	Status   uirequest.Status `json:"status"`
-	Reason   string           `json:"reason,omitempty"`
+	Line     *uirequest.LineAck `json:"line,omitempty"`
+	ViewerID string             `json:"viewer_id"`
+	ID       string             `json:"id"`
+	Status   uirequest.Status   `json:"status"`
+	Reason   string             `json:"reason,omitempty"`
 }
 type ViewerAckResponse struct {
 	Document LayoutDocument `json:"document"`
@@ -67,14 +68,15 @@ type ViewerAckResponse struct {
 }
 
 type apiScreen struct {
-	id        string
-	caller    caller
-	presence  ViewerPresenceRequest
-	ws        contentservice.Workspace
-	updated   time.Time
-	focusedAt uint64
-	out       chan EventMessage
-	pending   map[string]*viewerPlan
+	id            string
+	caller        caller
+	presence      ViewerPresenceRequest
+	ws            contentservice.Workspace
+	updated       time.Time
+	focusedAt     uint64
+	out           chan EventMessage
+	pending       map[string]*viewerPlan
+	notifications map[string]uirequest.Request
 }
 type viewerRelay struct {
 	mu      sync.Mutex
@@ -116,11 +118,20 @@ func (s *Server) registerViewer(c caller) (*apiScreen, error) {
 						return
 					}
 					if m, ok := msg.(uirequest.RequestMsg); ok {
-						s.relayUIRequest(m.Request)
+						if m.Request.Action == uirequest.ActionNotify {
+							s.relayNotification(m.Request)
+						} else {
+							s.relayUIRequest(m.Request)
+						}
 					}
 				case <-tick.C:
 					s.viewer.mu.Lock()
 					for _, v := range s.viewer.screens {
+						for id, req := range v.notifications {
+							if _, err := os.Stat(uirequest.RequestPath(s.opts.StateDir, id, req.Action)); err != nil || time.Since(req.CreatedAt) > uirequest.DefaultTTL {
+								delete(v.notifications, id)
+							}
+						}
 						for id, plan := range v.pending {
 							_, err := os.Stat(uirequest.RequestPath(s.opts.StateDir, id, plan.event.Action))
 							if err != nil || !plan.event.ExpiresAt.After(time.Now()) || s.holderLocked() != v {
@@ -244,7 +255,7 @@ func (s *Server) declineViewer(req uirequest.Request, reason string) {
 // clientReason bounds a viewer's free-text decline reason before the CLI
 // prints it to an agent or a terminal: control characters (escape sequences,
 // OSC 52 clipboard writes) are dropped and the text is capped.
-func clientReason(reason string) string {
+func cleanClientText(reason string) string {
 	reason = strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) {
 			return -1
@@ -262,8 +273,10 @@ func clientReason(reason string) string {
 	if strings.TrimSpace(reason) == "" {
 		return "the API viewer declined the pane request"
 	}
-	return "the API viewer declined: " + reason
+	return reason
 }
+
+func clientReason(reason string) string { return "the API viewer declined: " + cleanClientText(reason) }
 
 func (s *Server) relayUIRequest(req uirequest.Request) {
 	if req.Viewer == "" || (req.Action != uirequest.ActionOpen && req.Action != uirequest.ActionLayout) {
@@ -338,40 +351,58 @@ func (s *Server) handleViewerAck(w http.ResponseWriter, r *http.Request, c calle
 		writeError(w, 409, "request_unavailable", "The request is unknown or already acknowledged; do not replay it.")
 		return
 	}
-	delete(v.pending, a.ID)
-	if _, err := os.Stat(uirequest.RequestPath(s.opts.StateDir, a.ID, plan.event.Action)); err != nil || !plan.event.ExpiresAt.After(time.Now()) || s.holderLocked() != v {
-		s.declineViewer(plan.event.Request, "the pane request expired or its viewer lost focus; retry it")
-		writeError(w, 409, "request_unavailable", "The request expired or the viewer lost focus; do not replay it.")
-		return
-	}
-	if a.Status == uirequest.StatusDeclined {
-		s.declineViewer(plan.event.Request, clientReason(a.Reason))
-		writeJSON(w, 200, ViewerAckResponse{Document: plan.event.Document, ETag: plan.event.ETag})
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-	defer cancel()
-	if err := s.validateViewerWorkspace(ctx, v, plan.root); err != nil {
-		s.declineViewer(plan.event.Request, err.Error())
-		writeError(w, 409, "content_changed", err.Error())
-		return
-	}
-	host := &viewerLayoutHost{s: s, ctx: ctx, v: v}
-	if err := host.validateSaved(plan.event.Document.Layout); err != nil {
-		s.declineViewer(plan.event.Request, err.Error())
-		writeError(w, 409, "content_changed", err.Error())
-		return
-	}
-	store := viewerlayout.FileStore{Dir: filepath.Join(s.dir, "layouts")}
-	doc, etag, err := store.Put(c.client, plan.root, plan.event.ETag, plan.event.Document)
+	err := uirequest.WithRequestLock(s.opts.StateDir, a.ID, plan.event.Action, func() error {
+		delete(v.pending, a.ID)
+		if _, err := os.Stat(uirequest.RequestPath(s.opts.StateDir, a.ID, plan.event.Action)); err != nil || !plan.event.ExpiresAt.After(time.Now()) || s.holderLocked() != v {
+			s.declineViewer(plan.event.Request, "the pane request expired or its viewer lost focus; retry it")
+			writeError(w, 409, "request_unavailable", "The request expired or the viewer lost focus; do not replay it.")
+			return nil
+		}
+		if a.Status == uirequest.StatusDeclined {
+			s.declineViewer(plan.event.Request, clientReason(a.Reason))
+			writeJSON(w, 200, ViewerAckResponse{Document: plan.event.Document, ETag: plan.event.ETag})
+			return nil
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		if err := s.validateViewerWorkspace(ctx, v, plan.root); err != nil {
+			s.declineViewer(plan.event.Request, err.Error())
+			writeError(w, 409, "content_changed", err.Error())
+			return nil
+		}
+		host := &viewerLayoutHost{s: s, ctx: ctx, v: v}
+		if err := host.validateSaved(plan.event.Document.Layout); err != nil {
+			s.declineViewer(plan.event.Request, err.Error())
+			writeError(w, 409, "content_changed", err.Error())
+			return nil
+		}
+		store := viewerlayout.FileStore{Dir: filepath.Join(s.dir, "layouts")}
+		doc, etag, err := store.Put(c.client, plan.root, plan.event.ETag, plan.event.Document)
+		if err != nil {
+			s.declineViewer(plan.event.Request, "the viewer layout changed; read it again before retrying")
+			writeError(w, 409, "layout_changed", err.Error())
+			return nil
+		}
+		if requested := plan.event.Request.Target.Line; requested > 0 {
+			plan.ack.Line = &uirequest.LineAck{Requested: requested, Reason: "the viewer did not confirm source-line navigation"}
+			if a.Line != nil && a.Line.Requested == requested {
+				plan.ack.Line.Applied = a.Line.Applied
+				if a.Line.Reason != "" {
+					plan.ack.Line.Reason = cleanClientText(a.Line.Reason)
+				}
+				if a.Line.Applied {
+					plan.ack.Line.Reason = ""
+				}
+			}
+		}
+		if err := uirequest.WriteAck(s.opts.StateDir, a.ID, plan.event.Action, plan.ack); err != nil {
+			writeContentError(w, err)
+			return nil
+		}
+		writeJSON(w, 200, ViewerAckResponse{Document: doc, ETag: etag})
+		return nil
+	})
 	if err != nil {
-		s.declineViewer(plan.event.Request, "the viewer layout changed; read it again before retrying")
-		writeError(w, 409, "layout_changed", err.Error())
-		return
-	}
-	if err := uirequest.WriteAck(s.opts.StateDir, a.ID, plan.event.Action, plan.ack); err != nil {
 		writeContentError(w, err)
-		return
 	}
-	writeJSON(w, 200, ViewerAckResponse{Document: doc, ETag: etag})
 }

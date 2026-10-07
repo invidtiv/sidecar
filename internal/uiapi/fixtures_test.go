@@ -21,6 +21,7 @@ import (
 	"github.com/marcus/sidecar/internal/contentservice"
 	"github.com/marcus/sidecar/internal/mobile"
 	"github.com/marcus/sidecar/internal/mobileproto"
+	notification "github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/uirequest"
@@ -59,6 +60,7 @@ func TestUIAPIFixtureCorpus(t *testing.T) {
 		})
 	}
 	values := map[string]any{
+		"notifications-exchange.json": []any{NotificationSnapshot{Notifications: []notification.Notification{{ID: "ntf-fixture", Source: notification.SourceAgent, Title: "Build finished", CreatedAt: now, ExpiresAt: timePointer(now.Add(12 * time.Second)), Targets: []notification.Target{{Kind: notification.TargetFile, Value: "README.md", Line: 40, Project: "fixture-project"}}}}, Unread: 1, ToastIDs: []string{"ntf-fixture"}, DeliveryIDs: []string{}, Delivery: map[string]notification.DeliveryDecision{}}, NotificationReceiptRequest{ID: "ntf-fixture", Channel: "toast"}, NotificationClaimResponse{Claimed: true}, NotificationReceiptResponse{Delivered: true}},
 		"viewer-exchange.json": []any{
 			EventMessage{Type: "hello", Seq: 1, APIInstance: "api_fixture", ServerVersion: "fixture", Capabilities: []string{"catalog", "attention", "terminals", "workspace", "content", "uiRequestRelayV1", "shutdown"}},
 			EventMessage{Type: "viewer", Seq: 2, Viewer: &ViewerIdentity{ID: "api-viewer-fixture", Capability: "uiRequestRelayV1"}},
@@ -470,3 +472,5 @@ func fixtureBrowserPublicKey() BrowserPublicKey {
 // Fixed valid P-256 vector for the synthetic generator-point public key and
 // the fixed nonce/timestamp above. This is example material, never a credential.
 const fixtureBrowserSignature = "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpYaO0QJAFWXamzPiK7epCFH5TubNJwuXLt-rtW_T7JfBw"
+
+func timePointer(t time.Time) *time.Time { return &t }

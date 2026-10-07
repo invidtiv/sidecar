@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 	"github.com/marcus/sidecar/internal/hosts"
 	"github.com/marcus/sidecar/internal/hostserve"
 	"github.com/marcus/sidecar/internal/livewatch"
+	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/tmuxformat"
 	"github.com/marcus/sidecar/internal/tty"
@@ -68,7 +70,36 @@ func (b *mobileBackend) WatchCatalog(ctx context.Context) (<-chan struct{}, erro
 			go func(done chan struct{}, observed []hostserve.Project, runCtx context.Context) {
 				defer close(done)
 				var previous [32]byte
-				err := hostserve.Serve(runCtx, hostserve.Options{ObservationOnly: true, Out: io.Discard, Projects: observed, OnSnapshot: func(snapshot hostproto.Snapshot) {
+				aliases := map[string]string{}
+				err := hostserve.Serve(runCtx, hostserve.Options{ObservationOnly: true, Out: io.Discard, Projects: observed, OnNotifications: func(events notify.LaneEvents) {
+					if cfg, err := config.Load(); err == nil {
+						notify.ApplyConfig(cfg.Notifications)
+					}
+					store, err := notify.Open(b.env.StateDir)
+					if err != nil {
+						log.Printf("API notification store: %v", err)
+						return
+					}
+					defer func() { _ = store.Close() }()
+					for _, n := range events.Post {
+						result, err := store.Post(n)
+						if err != nil {
+							log.Printf("API notification post: %v", err)
+						} else if n.Transition != nil && n.Transition.Class == notify.TransitionWaiting && result.ID != n.ID {
+							aliases[n.ID] = result.ID
+						}
+					}
+					for _, id := range events.Dismiss {
+						canonical := id
+						if aliases[id] != "" {
+							canonical = aliases[id]
+						}
+						if err := store.Dismiss(canonical); err != nil {
+							log.Printf("API notification withdrawal: %v", err)
+						}
+						delete(aliases, id)
+					}
+				}, OnSnapshot: func(snapshot hostproto.Snapshot) {
 					current := catalogObservationDigest(snapshot)
 					if current != previous {
 						previous = current

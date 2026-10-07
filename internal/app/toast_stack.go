@@ -5,9 +5,11 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/reveal"
+	"github.com/marcus/sidecar/internal/uirequest"
 )
 
 // The toast column (design frames 1b and 1h). Three things live here and they
@@ -53,6 +55,9 @@ func revealTick(seq int) tea.Cmd {
 // toastStacks is the column as the store and the re-show slot describe it,
 // newest lead on top. It is pure: two calls in the same frame agree.
 func (m Model) toastStacks(now time.Time) []notify.Stack {
+	if v, ok := uirequest.ReadAPIViewer(config.StateDir(), now); ok && v.Focused {
+		return nil
+	}
 	layout := notify.StackToasts(m.notificationCache, now, notify.DefaultSlots)
 	stacks := layout.Stacks
 	// A re-show ("view details" from the centre) is the user asking for one

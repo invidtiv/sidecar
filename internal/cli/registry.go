@@ -148,7 +148,7 @@ func RootCommand() *Command {
 			{Code: 1, Summary: "tmux, ambiguity, or state failure"},
 			{Code: 2, Summary: "usage error"},
 			{Code: 3, Summary: "--target names no session this project owns, or one recorded on a different tmux server"},
-			{Code: 5, Summary: "an unknown --project or --shell"},
+			{Code: 5, Summary: "an unknown --project or --shell, or connected viewer acknowledgement timeout (viewer_timeout)"},
 		},
 		Examples: []Example{
 			{Command: "sidecar shell send --target sidecar-sh-sidecar-2 --run \"claude\"", Description: "start an agent in an existing shell"},
@@ -182,7 +182,7 @@ func RootCommand() *Command {
 			{Code: 0, Summary: "success"},
 			{Code: 1, Summary: "state failure"},
 			{Code: 2, Summary: "usage error"},
-			{Code: 5, Summary: "an unknown --project or --shell"},
+			{Code: 5, Summary: "an unknown --project or --shell, or connected viewer acknowledgement timeout (viewer_timeout)"},
 		},
 		Examples: []Example{
 			{Command: "sidecar shell list"},
@@ -218,7 +218,7 @@ func RootCommand() *Command {
 			{Code: 0, Summary: "forgotten, or already forgotten"},
 			{Code: 1, Summary: "not found, or state failure"},
 			{Code: 2, Summary: "usage error"},
-			{Code: 5, Summary: "an unknown --project or --shell"},
+			{Code: 5, Summary: "an unknown --project or --shell, or connected viewer acknowledgement timeout (viewer_timeout)"},
 		},
 		Examples: []Example{
 			{Command: "sidecar shell forget sidecar-sh-sidecar-1"},
@@ -303,7 +303,7 @@ func RootCommand() *Command {
 			{Code: 0, Summary: "restored, or already live"},
 			{Code: 1, Summary: "not found, or state failure"},
 			{Code: 2, Summary: "usage error"},
-			{Code: 5, Summary: "an unknown --project or --shell"},
+			{Code: 5, Summary: "an unknown --project or --shell, or connected viewer acknowledgement timeout (viewer_timeout)"},
 		},
 		Examples: []Example{
 			{Command: "sidecar shell restore sidecar-sh-sidecar-1"},
@@ -556,7 +556,7 @@ func RootCommand() *Command {
 			{Name: "--sessions", Arg: "[=ROW]", Summary: "Target the global Sessions surface (optional row as --sessions=ID)"},
 			{Name: "--split", Arg: "auto|right|below", Summary: "Where to place a new pane (default auto)"},
 			{Name: "--at", Arg: "COL[.ROW]", Summary: "Place at an explicit grid cell (1-based); a requirement, mutually exclusive with --split"},
-			{Name: "--wait", Arg: "DURATION", Summary: "Time to wait for instances to acknowledge (default 1200ms; 0 = fire and forget)"},
+			{Name: "--wait", Arg: "DURATION", Summary: "Time to wait for instances to acknowledge (default 6s; 0 = fire and forget)"},
 			{Name: "--json", Summary: "Write one structured result object to stdout", Bool: true},
 			{Name: "--help", Short: "-h", Summary: "Show this help", Bool: true},
 		},
@@ -567,7 +567,7 @@ func RootCommand() *Command {
 			{Code: 2, Summary: "usage or validation error"},
 			{Code: 3, Summary: "no running instance, or several running with no target"},
 			{Code: 4, Summary: "an instance declined (too small to split, row not on screen, or the lease holder cannot receive pane requests)"},
-			{Code: 5, Summary: "an unknown --project or --shell"},
+			{Code: 5, Summary: "an unknown --project or --shell, or connected viewer acknowledgement timeout (viewer_timeout)"},
 		},
 		Examples: []Example{
 			{Command: "sidecar open internal/cli/cli.go", Description: "file, in a split beside the terminal"},
@@ -1003,7 +1003,7 @@ func notifyCommand() *Command {
 		Usage:   "sidecar notify <command>",
 		Long: "Sidecar's notification surface: a toast in the running instance, an entry in the\n" +
 			"notification centre, and a count in the header until the user reads it.",
-		Sub: []*Command{configCmd, dismissCmd, listCmd, postCmd, sourceCmd, statusCmd, testCmd},
+		Sub: []*Command{configCmd, dismissCmd, listCmd, postCmd, sourceCmd, statusCmd, testCmd, {Name: "read", Summary: "Mark a notification read", Usage: "sidecar notify read <id> [--json]", Args: ArgSpec{Min: 1, Max: 1}, Flags: []Flag{{Name: "--json", Summary: "Write a structured result", Bool: true}, {Name: "--help", Short: "-h", Summary: "Show this help", Bool: true}}, ExitCodes: []ExitCode{{Code: 0, Summary: "success"}, {Code: 1, Summary: "notification store failed or id not found"}, {Code: 2, Summary: "usage error"}}, Examples: []Example{{Command: "sidecar notify read ntf-123 --json"}}, Run: runNotifyRead, Mutates: true}},
 		Run: runNotifyRoot,
 	}
 }

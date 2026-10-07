@@ -1988,7 +1988,7 @@ Usage: sidecar layout apply (--spec '<json>' | --pane '<json>' [--pane '<json>' 
 - `--shell NAME`: Target a registered shell by display name or tmux name
 - `--project NAME`: Target a project's Workspaces surface (slug, basename, or path)
 - `--sessions [ROW]`: Target the global Sessions surface (optional row by ID or display name)
-- `--wait DURATION`: Time to wait for instances to acknowledge (default 1200ms)
+- `--wait DURATION`: Time to wait for instances to acknowledge (default 6s)
 - `--json`: Write one structured result object to stdout
 - `-h, --help`: Show this help
 
@@ -1999,7 +1999,7 @@ Usage: sidecar layout apply (--spec '<json>' | --pane '<json>' [--pane '<json>' 
 - `2`: usage or validation error
 - `3`: no running instance
 - `4`: declined host-side; the reason names the first violation (off-screen, unfit, or the lease holder cannot receive pane requests)
-- `5`: an unknown --project or --shell
+- `5`: an unknown --project or --shell, or connected viewer acknowledgement timeout (viewer_timeout)
 
 **Examples:**
 
@@ -2050,7 +2050,7 @@ Usage: sidecar layout get [--json] [--sessions [ROW]]
 - `--shell NAME`: Target a registered shell by display name or tmux name
 - `--project NAME`: Target a project's Workspaces surface (slug, basename, or path)
 - `--sessions [ROW]`: Target the global Sessions surface (optional row by ID or display name)
-- `--wait DURATION`: Time to wait for instances to acknowledge (default 1200ms)
+- `--wait DURATION`: Time to wait for instances to acknowledge (default 6s)
 - `--json`: Write the layout payload itself to stdout
 - `-h, --help`: Show this help
 
@@ -2061,7 +2061,7 @@ Usage: sidecar layout get [--json] [--sessions [ROW]]
 - `2`: usage error
 - `3`: no running instance
 - `4`: declined: the origin shell is not on screen, or the lease holder cannot receive pane requests
-- `5`: an unknown --project or --shell
+- `5`: an unknown --project or --shell, or connected viewer acknowledgement timeout (viewer_timeout)
 
 **Examples:**
 
@@ -2122,7 +2122,7 @@ Usage: sidecar layout move (CELL | --focused) --to (CELL | COLUMN | left|right|u
 - `--shell NAME`: Target a registered shell by display name or tmux name
 - `--project NAME`: Target a project's Workspaces surface (slug, basename, or path)
 - `--sessions [ROW]`: Target the global Sessions surface (optional row by ID or display name)
-- `--wait DURATION`: Time to wait for instances to acknowledge (default 1200ms)
+- `--wait DURATION`: Time to wait for instances to acknowledge (default 6s)
 - `--json`: Write one structured result object to stdout
 - `-h, --help`: Show this help
 
@@ -2133,7 +2133,7 @@ Usage: sidecar layout move (CELL | --focused) --to (CELL | COLUMN | left|right|u
 - `2`: usage error
 - `3`: no running instance
 - `4`: declined host-side; the reason names the refusal (off-screen, unfit, or the lease holder cannot receive pane requests)
-- `5`: an unknown --project or --shell
+- `5`: an unknown --project or --shell, or connected viewer acknowledgement timeout (viewer_timeout)
 
 **Examples:**
 
@@ -2532,6 +2532,31 @@ sidecar notify test --channel all --event waiting --json
 sidecar notify test --channel native --source td --json
 ```
 
+### `sidecar notify read`
+
+Mark a notification read
+
+```
+Usage: sidecar notify read <id> [--json]
+```
+
+**Options:**
+
+- `--json`: Write a structured result
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: success
+- `1`: notification store failed or id not found
+- `2`: usage error
+
+**Examples:**
+
+```bash
+sidecar notify read ntf-123 --json
+```
+
 ## `sidecar open`
 
 Show a file, a td issue, a note, a git diff, a plugin resource, or a plugin collection in a split pane
@@ -2594,7 +2619,7 @@ Usage: sidecar open [options] [<target>]
 - `--sessions [=ROW]`: Target the global Sessions surface (optional row as --sessions=ID)
 - `--split auto|right|below`: Where to place a new pane (default auto)
 - `--at COL[.ROW]`: Place at an explicit grid cell (1-based); a requirement, mutually exclusive with --split
-- `--wait DURATION`: Time to wait for instances to acknowledge (default 1200ms; 0 = fire and forget)
+- `--wait DURATION`: Time to wait for instances to acknowledge (default 6s; 0 = fire and forget)
 - `--json`: Write one structured result object to stdout
 - `-h, --help`: Show this help
 
@@ -2605,7 +2630,7 @@ Usage: sidecar open [options] [<target>]
 - `2`: usage or validation error
 - `3`: no running instance, or several running with no target
 - `4`: an instance declined (too small to split, row not on screen, or the lease holder cannot receive pane requests)
-- `5`: an unknown --project or --shell
+- `5`: an unknown --project or --shell, or connected viewer acknowledgement timeout (viewer_timeout)
 
 **Examples:**
 
@@ -3796,7 +3821,7 @@ Usage: sidecar shell forget [--json] <tmux-name>
 - `0`: forgotten, or already forgotten
 - `1`: not found, or state failure
 - `2`: usage error
-- `5`: an unknown --project or --shell
+- `5`: an unknown --project or --shell, or connected viewer acknowledgement timeout (viewer_timeout)
 
 **Examples:**
 
@@ -3831,7 +3856,7 @@ Usage: sidecar shell list [--json]
 - `0`: success
 - `1`: state failure
 - `2`: usage error
-- `5`: an unknown --project or --shell
+- `5`: an unknown --project or --shell, or connected viewer acknowledgement timeout (viewer_timeout)
 
 **Examples:**
 
@@ -3951,7 +3976,7 @@ Usage: sidecar shell restore [--json] <tmux-name>
 - `0`: restored, or already live
 - `1`: not found, or state failure
 - `2`: usage error
-- `5`: an unknown --project or --shell
+- `5`: an unknown --project or --shell, or connected viewer acknowledgement timeout (viewer_timeout)
 
 **Examples:**
 
@@ -4001,7 +4026,7 @@ Usage: sidecar shell send --target SESSION (--run COMMAND | --type COMMAND) [--p
 - `1`: tmux, ambiguity, or state failure
 - `2`: usage error
 - `3`: --target names no session this project owns, or one recorded on a different tmux server
-- `5`: an unknown --project or --shell
+- `5`: an unknown --project or --shell, or connected viewer acknowledgement timeout (viewer_timeout)
 
 **Examples:**
 

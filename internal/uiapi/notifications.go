@@ -1,0 +1,326 @@
+package uiapi
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"os"
+	"path/filepath"
+	"time"
+
+	"github.com/fsnotify/fsnotify"
+	"github.com/marcus/sidecar/internal/config"
+	notification "github.com/marcus/sidecar/internal/notify"
+	"github.com/marcus/sidecar/internal/notifydelivery"
+	"github.com/marcus/sidecar/internal/uirequest"
+)
+
+const notificationsPath = "/api/v0/notifications"
+const notificationSettingsPath = notificationsPath + "/settings"
+const notificationReadPath = notificationsPath + "/read"
+const notificationDismissPath = notificationsPath + "/dismiss"
+const notificationClaimPath = notificationsPath + "/claim"
+const notificationReceiptPath = notificationsPath + "/receipt"
+
+type NotificationSnapshot struct {
+	Notifications []notification.Notification              `json:"notifications"`
+	Unread        int                                      `json:"unread"`
+	ToastIDs      []string                                 `json:"toast_ids"`
+	DeliveryIDs   []string                                 `json:"delivery_ids"`
+	Delivery      map[string]notification.DeliveryDecision `json:"delivery"`
+}
+type NotificationMutation struct {
+	ID string `json:"id"`
+}
+type NotificationReceiptRequest struct {
+	Channel   string `json:"channel,omitempty"`
+	Succeeded *bool  `json:"succeeded,omitempty"`
+	Error     string `json:"error,omitempty"`
+	ID        string `json:"id"`
+	ViewerID  string `json:"viewer_id,omitempty"`
+}
+type NotificationClaimResponse struct {
+	Claimed bool `json:"claimed"`
+}
+type NotificationReceiptResponse struct {
+	Delivered bool `json:"delivered"`
+}
+
+func notificationSettings() (config.NotificationsConfig, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return config.NotificationsConfig{}, err
+	}
+	return cfg.Notifications, nil
+}
+func (s *Server) notificationSnapshot(c caller) (NotificationSnapshot, error) {
+	all, err := notification.ReadAll(notification.Path(s.opts.StateDir))
+	if err != nil {
+		return NotificationSnapshot{}, err
+	}
+	cfg, err := notificationSettings()
+	if err != nil {
+		return NotificationSnapshot{}, err
+	}
+	rules := notification.ResolveConfig(cfg)
+	out := NotificationSnapshot{Notifications: notification.Active(all), Unread: notification.UnreadCount(all), ToastIDs: []string{}, DeliveryIDs: []string{}, Delivery: map[string]notification.DeliveryDecision{}}
+	s.viewer.mu.Lock()
+	holder := s.holderLocked()
+	foreground := holder != nil && holder.caller.client == c.client
+	s.viewer.mu.Unlock()
+	now := time.Now()
+	for _, n := range out.Notifications {
+		if notification.MayToast(n, now) && rules.SourceRule(n.Source).Toast {
+			out.ToastIDs = append(out.ToastIDs, n.ID)
+		}
+		out.Delivery[n.ID] = notification.ResolveDelivery(n, rules, notification.RuntimeContext{Now: now, Foreground: foreground, Discovered: true, Capabilities: notification.CapabilitySet{Native: true, Sound: true}})
+		if decision := out.Delivery[n.ID]; decision.Native.Deliver || decision.Sound.Deliver {
+			out.DeliveryIDs = append(out.DeliveryIDs, n.ID)
+		}
+	}
+	return out, nil
+}
+func (s *Server) handleNotifications(w http.ResponseWriter, r *http.Request, c caller) {
+	out, err := s.notificationSnapshot(c)
+	if err != nil {
+		writeContentError(w, err)
+		return
+	}
+	writeJSON(w, 200, out)
+}
+func (s *Server) handleNotificationSettings(w http.ResponseWriter, r *http.Request, c caller) {
+	if r.Method == http.MethodPut {
+		var input config.NotificationsConfig
+		if !decodeBody(w, r, &input) {
+			return
+		}
+		if err := config.ValidateNotifications(input, config.ConfigPath()); err != nil {
+			writeError(w, 400, CodeInvalidRequest, err.Error())
+			return
+		}
+		if err := config.SaveNotifications(func(cfg *config.NotificationsConfig) { *cfg = input }); err != nil {
+			writeContentError(w, err)
+			return
+		}
+		notification.ApplyConfig(input)
+		// Existing TUI consumers reload the same config through the public request bus.
+		_, _ = uirequest.WriteRequest(s.opts.StateDir, uirequest.Request{ID: uirequest.NewRequestID(), Action: uirequest.ActionConfigReload})
+	}
+	cfg, err := notificationSettings()
+	if err != nil {
+		writeContentError(w, err)
+		return
+	}
+	writeJSON(w, 200, cfg)
+}
+func (s *Server) handleNotificationMutation(w http.ResponseWriter, r *http.Request, c caller) {
+	var input NotificationMutation
+	if !decodeBody(w, r, &input) {
+		return
+	}
+	if input.ID == "" {
+		writeError(w, 400, CodeInvalidRequest, "id is required")
+		return
+	}
+	store, err := notification.Open(s.opts.StateDir)
+	if err != nil {
+		writeContentError(w, err)
+		return
+	}
+	defer func() { _ = store.Close() }()
+	if r.URL.Path == notificationReadPath {
+		err = store.MarkRead(input.ID)
+	} else {
+		err = store.Dismiss(input.ID)
+	}
+	if errors.Is(err, notification.ErrNotFound) {
+		writeError(w, 404, CodeNotFound, "Notification not found.")
+		return
+	}
+	if err != nil {
+		writeContentError(w, err)
+		return
+	}
+	s.handleNotifications(w, r, c)
+}
+func (s *Server) handleNotificationReceipt(w http.ResponseWriter, r *http.Request, c caller) {
+	var input NotificationReceiptRequest
+	if !decodeBody(w, r, &input) {
+		return
+	}
+	if input.Channel == "" {
+		input.Channel = "toast"
+	}
+	if input.Channel != "toast" && input.Channel != "native" && input.Channel != "sound" {
+		writeError(w, 400, CodeInvalidRequest, "channel must be toast, native or sound")
+		return
+	}
+	snapshot, err := s.notificationSnapshot(c)
+	if err != nil {
+		writeContentError(w, err)
+		return
+	}
+	found := false
+	for _, n := range snapshot.Notifications {
+		if n.ID == input.ID {
+			found = true
+		}
+	}
+	if !found {
+		writeError(w, 404, CodeNotFound, "Notification not found.")
+		return
+	}
+	owner := "browser:" + c.client
+	ledger, err := notifydelivery.Open(s.opts.StateDir)
+	if err != nil {
+		writeContentError(w, err)
+		return
+	}
+	defer func() { _ = ledger.Close() }()
+	if r.URL.Path == notificationClaimPath {
+		eligible := false
+		if input.Channel == "toast" {
+			for _, id := range snapshot.ToastIDs {
+				if id == input.ID {
+					eligible = true
+				}
+			}
+		} else {
+			d := snapshot.Delivery[input.ID]
+			eligible = input.Channel == "native" && d.Native.Deliver || input.Channel == "sound" && d.Sound.Deliver
+		}
+		if !eligible {
+			writeJSON(w, 200, NotificationClaimResponse{})
+			return
+		}
+		won, _, err := ledger.Claim(input.ID, input.Channel, owner, time.Now(), 15*time.Second)
+		if err != nil {
+			writeContentError(w, err)
+			return
+		}
+		writeJSON(w, 200, NotificationClaimResponse{Claimed: won})
+		return
+	}
+	if input.Error != "" {
+		input.Error = cleanClientText(input.Error)
+	}
+	succeeded := input.Succeeded == nil || *input.Succeeded
+	if err = ledger.Complete(input.ID, input.Channel, notifydelivery.Receipt{Owner: owner, Provider: "browser", Succeeded: succeeded, Error: input.Error}); err != nil {
+		writeError(w, 409, "claim_unavailable", "Claim this delivery before reporting its result.")
+		return
+	}
+	if input.Channel == "toast" && succeeded {
+		s.viewer.mu.Lock()
+		defer s.viewer.mu.Unlock()
+		v := s.holderLocked()
+		if v != nil && v.caller.client == c.client && (input.ViewerID == "" || input.ViewerID == v.id) {
+			for id, req := range v.notifications {
+				var n notification.Notification
+				_ = json.Unmarshal(req.Payload, &n)
+				if n.ID == input.ID {
+					_ = uirequest.WithRequestLock(s.opts.StateDir, id, req.Action, func() error {
+						if _, err := os.Stat(uirequest.RequestPath(s.opts.StateDir, id, req.Action)); err != nil {
+							return nil
+						}
+						return uirequest.WriteAck(s.opts.StateDir, id, req.Action, uirequest.Ack{Instance: v.id, PID: s.endpoint.PID, Host: uirequest.HostName(), Surface: "browser", Status: uirequest.StatusOpened})
+					})
+					delete(v.notifications, id)
+				}
+			}
+		}
+	}
+	writeJSON(w, 200, NotificationReceiptResponse{Delivered: succeeded})
+}
+
+// Watch filesystem invalidations and send coalesced authoritative snapshots.
+// Browser clients neither poll nor interpret the append-only log.
+func (s *Server) watchNotifications(ctx context.Context, c caller, pending *eventPending) (func(), error) {
+	if !s.hasScope(c, ScopeContentRead) && !s.hasScope(c, ScopeUIControl) {
+		return func() {}, nil
+	}
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return nil, err
+	}
+	for _, dir := range []string{s.opts.StateDir, filepath.Dir(config.ConfigPath())} {
+		if err = watcher.Add(dir); err != nil {
+			_ = watcher.Close()
+			return nil, err
+		}
+	}
+	refresh := func() {
+		out, err := s.notificationSnapshot(c)
+		if err != nil {
+			pending.put(EventMessage{Type: "error", Error: &ErrorDetail{Code: CodeBackend, Message: err.Error()}})
+			return
+		}
+		pending.put(EventMessage{Type: "notifications", Notifications: &out})
+	}
+	refresh()
+	done := make(chan struct{})
+	watchCtx, cancel := context.WithCancel(ctx)
+	go func() {
+		defer close(done)
+		defer func() { _ = watcher.Close() }()
+		for {
+			select {
+			case <-watchCtx.Done():
+				return
+			case event, ok := <-watcher.Events:
+				if !ok {
+					return
+				}
+				if event.Name == notification.Path(s.opts.StateDir) || event.Name == config.ConfigPath() {
+					refresh()
+				}
+			case err, ok := <-watcher.Errors:
+				if !ok {
+					return
+				}
+				pending.put(EventMessage{Type: "error", Error: &ErrorDetail{Code: CodeBackend, Message: err.Error()}})
+			}
+		}
+	}()
+	return func() { cancel(); <-done }, nil
+}
+
+func (s *Server) relayNotification(req uirequest.Request) {
+	s.viewer.mu.Lock()
+	defer s.viewer.mu.Unlock()
+	v := s.viewer.screens[req.Viewer]
+	if v == nil || s.holderLocked() != v {
+		return
+	}
+	// Notification posting is global to this machine; delivery is addressed to its active screen.
+	store, err := notification.Open(s.opts.StateDir)
+	if err != nil {
+		return
+	}
+	defer func() { _ = store.Close() }()
+	if req.Target.Value != "" {
+		all, _ := store.List()
+		for _, n := range all {
+			if n.ID == req.Target.Value && notification.MayDismiss(n, notification.Origin{TmuxSession: req.Origin.TmuxSession, WorkDir: req.Origin.WorkDir, ProjectKey: req.Origin.ProjectKey}) {
+				_ = store.Dismiss(n.ID)
+				_ = uirequest.WriteAck(s.opts.StateDir, req.ID, req.Action, uirequest.Ack{Instance: v.id, Host: uirequest.HostName(), PID: s.endpoint.PID, Status: uirequest.StatusOpened})
+				return
+			}
+		}
+		return
+	}
+	var n notification.Notification
+	if json.Unmarshal(req.Payload, &n) != nil || n.ID == "" {
+		return
+	}
+	_, err = store.Post(n)
+	if err != nil {
+		return
+	}
+	if v.notifications == nil {
+		v.notifications = map[string]uirequest.Request{}
+	}
+	if len(v.notifications) < 128 {
+		v.notifications[req.ID] = req
+	}
+}

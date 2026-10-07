@@ -54,6 +54,12 @@ func (s *Server) routeTable() map[string]*route {
 	local := []Listener{ListenerLocal}
 	remote := []Listener{ListenerBrowser, ListenerTailnet}
 	routes := map[string]*route{
+		notificationsPath:          {methods: map[string]routeFunc{http.MethodGet: s.handleNotifications}},
+		notificationSettingsPath:   {methods: map[string]routeFunc{http.MethodGet: s.handleNotificationSettings, http.MethodPut: s.handleNotificationSettings}},
+		notificationReadPath:       {methods: map[string]routeFunc{http.MethodPost: s.handleNotificationMutation}},
+		notificationDismissPath:    {methods: map[string]routeFunc{http.MethodPost: s.handleNotificationMutation}},
+		notificationClaimPath:      {methods: map[string]routeFunc{http.MethodPost: s.handleNotificationReceipt}},
+		notificationReceiptPath:    {methods: map[string]routeFunc{http.MethodPost: s.handleNotificationReceipt}},
 		viewerPresencePath:         {methods: map[string]routeFunc{http.MethodPost: s.handleViewerPresence}},
 		viewerAckPath:              {methods: map[string]routeFunc{http.MethodPost: s.handleViewerAck}},
 		contentRoute:               {methods: map[string]routeFunc{http.MethodGet: s.handleContent}},
@@ -199,6 +205,15 @@ func (h *listenerHandler) dispatch(w http.ResponseWriter, r *http.Request, c cal
 	if !rt.public && r.URL.Path != "/api/v0/hello" && r.URL.Path != "/api/v0/ws-tickets" {
 		if template, _ := projectContentRoute(r.URL.Path); template == "" {
 			scope := ScopeFull
+			if strings.HasPrefix(r.URL.Path, notificationsPath) {
+				scope = ScopeUIControl
+				if r.Method == http.MethodGet {
+					scope = ScopeContentRead
+					if h.s.hasScope(c, ScopeUIControl) {
+						scope = ScopeUIControl
+					}
+				}
+			}
 			if r.URL.Path == viewerPresencePath || r.URL.Path == viewerAckPath {
 				scope = ScopeUIControl
 			}

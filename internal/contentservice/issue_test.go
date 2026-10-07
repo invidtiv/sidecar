@@ -63,6 +63,7 @@ func TestServiceIssueReadRoundTripAndNotModified(t *testing.T) {
 	id := canonical(root) + ":worktree:" + canonical(root)
 	data := &issueview.Data{
 		ID: "td-a4dd72", Title: "Host issue", Status: "open",
+		Dependencies: []string{"td-dep"}, Blockers: []string{"td-dep"}, Handoff: &issueview.Handoff{Done: []string{"implemented"}}, ReviewHistory: []issueview.Review{{ID: "rev-1", Decision: "approved", ReviewerSession: "review-1"}}, ReviewerSession: "review-1",
 		Parent:   &issueview.Ref{ID: "td-parent", Title: "Epic"},
 		Children: []issueview.Ref{{ID: "td-child", Title: "Child"}},
 		Logs:     []issueview.Log{{Message: "hello"}},
@@ -81,6 +82,9 @@ func TestServiceIssueReadRoundTripAndNotModified(t *testing.T) {
 	read, err := svc.Read(context.Background(), id, KindIssue, OpCard, "td-a4dd72", "")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(read.Issue.Dependencies) != 1 || len(read.Issue.Blockers) != 1 || read.Issue.Handoff == nil || len(read.Issue.ReviewHistory) != 1 || read.Issue.ReviewerSession != "review-1" {
+		t.Fatalf("issue lifecycle dropped: %+v", read.Issue)
 	}
 	if !read.ValidRemoteResult() || read.Issue == nil || read.Issue.Title != "Host issue" {
 		t.Fatalf("read = %+v", read)

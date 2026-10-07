@@ -61,9 +61,10 @@ type AttentionEvent struct {
 // EventMessage is one text frame (or one JSONL line on the CLI bridge).
 // Seq starts at 1 with hello, increases on delivery, and resets on reconnect.
 type EventMessage struct {
+	Notifications *NotificationSnapshot         `json:"notifications,omitempty"`
 	Viewer        *ViewerIdentity               `json:"viewer,omitempty"`
 	UIRequest     *UIRequestEvent               `json:"ui_request,omitempty"`
-	Type          string                        `json:"type" jsonschema:"enum=hello,enum=catalog,enum=attention,enum=terminals,enum=workspace,enum=content,enum=viewer,enum=ui_request,enum=error,enum=shutdown"`
+	Type          string                        `json:"type" jsonschema:"enum=hello,enum=catalog,enum=attention,enum=terminals,enum=workspace,enum=content,enum=viewer,enum=ui_request,enum=notifications,enum=error,enum=shutdown"`
 	Seq           uint64                        `json:"seq" jsonschema:"minimum=1"`
 	APIVersion    int                           `json:"api_version" jsonschema:"enum=0"`
 	APIInstance   string                        `json:"api_instance,omitempty"`
@@ -143,6 +144,10 @@ func eventQuery(values url.Values) (mobileproto.CatalogQuery, error) {
 	copy.Del("ticket")
 	copy.Del("content")
 	copy.Del("viewer")
+	copy.Del("notifications")
+	if len(values["notifications"]) > 1 || values.Has("notifications") && values.Get("notifications") != "1" {
+		return mobileproto.CatalogQuery{}, fmt.Errorf("notifications must be 1")
+	}
 	if len(values["viewer"]) > 1 || values.Has("viewer") && values.Get("viewer") != uirequest.APIViewerRelay {
 		return mobileproto.CatalogQuery{}, fmt.Errorf("viewer must be uiRequestRelayV1")
 	}
@@ -216,7 +221,7 @@ func (h *listenerHandler) serveEvents(w http.ResponseWriter, r *http.Request) {
 		_ = conn.Close(CloseOriginRefused, "This credential needs content:read to watch content.")
 		return
 	}
-	h.s.runEvents(conn, client, c, query, refs, r.URL.Query().Has("viewer"))
+	h.s.runEvents(conn, client, c, query, refs, r.URL.Query().Has("viewer"), r.URL.Query().Get("notifications") == "1")
 }
 
 // eventPending separates collection from socket writes. State is latest-wins;
@@ -226,6 +231,7 @@ type eventPending struct {
 	mu             sync.Mutex
 	wake           chan struct{}
 	catalog        *EventMessage
+	notifications  *EventMessage
 	terminals      *EventMessage
 	workspace      *EventMessage
 	attention      map[string]EventMessage
@@ -241,6 +247,8 @@ func newEventPending() *eventPending {
 func (p *eventPending) put(m EventMessage) {
 	p.mu.Lock()
 	switch m.Type {
+	case "notifications":
+		p.notifications = &m
 	case "catalog":
 		p.catalog = &m
 	case "terminals":
@@ -282,6 +290,10 @@ func (p *eventPending) take() []EventMessage {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	out := make([]EventMessage, 0, 3+len(p.attention))
+	if p.notifications != nil {
+		out = append(out, *p.notifications)
+		p.notifications = nil
+	}
 	if p.catalog != nil {
 		out = append(out, *p.catalog)
 		p.catalog = nil
@@ -356,7 +368,7 @@ func attentionChanges(before, after *mobileproto.CatalogSnapshot, now time.Time)
 	return out
 }
 
-func (s *Server) runEvents(conn *websocket.Conn, client *trackedClient, c caller, query mobileproto.CatalogQuery, refs []ContentRef, viewer bool) {
+func (s *Server) runEvents(conn *websocket.Conn, client *trackedClient, c caller, query mobileproto.CatalogQuery, refs []ContentRef, viewer bool, notifications bool) {
 	s.startCatalogEvents()
 	catalogChanges, unsubscribe := s.catalogEvents.subscribe()
 	defer unsubscribe()
@@ -410,7 +422,15 @@ func (s *Server) runEvents(conn *websocket.Conn, client *trackedClient, c caller
 		return
 	}
 	defer stop()
-	if err := write(EventMessage{Type: "hello", APIInstance: s.instance, ServerVersion: s.opts.Version, Capabilities: []string{"catalog", "attention", "terminals", "workspace", "content", "uiRequestRelayV1", "shutdown"}}); err != nil {
+	if notifications {
+		stopNotifications, err := s.watchNotifications(ctx, c, pending)
+		if err != nil {
+			_ = conn.Close(websocket.StatusInternalError, "The notification watcher could not start.")
+			return
+		}
+		defer stopNotifications()
+	}
+	if err := write(EventMessage{Type: "hello", APIInstance: s.instance, ServerVersion: s.opts.Version, Capabilities: []string{"catalog", "attention", "terminals", "workspace", "content", "uiRequestRelayV1", "notifications", "shutdown"}}); err != nil {
 		return
 	}
 	if s.eventErr != nil {

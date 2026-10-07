@@ -1197,7 +1197,9 @@ func (o deliveryOutcome) explain() string {
 // itself.
 func notifyDeliver(env Env, req uirequest.Request) (bool, deliveryOutcome) {
 	instances, err := uirequest.ListInstances(env.StateDir)
-	if err != nil || len(instances) == 0 {
+	viewer, liveViewer := uirequest.ReadAPIViewer(env.StateDir, time.Now())
+	liveViewer = liveViewer && viewer.Focused && viewer.HasCapability(uirequest.APIViewerRelay)
+	if (err != nil || len(instances) == 0) && !liveViewer {
 		return false, deliveryNoInstance
 	}
 	req.ID = uirequest.NewRequestID()
@@ -1207,9 +1209,15 @@ func notifyDeliver(env Env, req uirequest.Request) (bool, deliveryOutcome) {
 	if _, err := uirequest.WriteRequest(env.StateDir, req); err != nil {
 		return false, deliveryWriteFailed
 	}
-	defer func() { _ = uirequest.Cleanup(env.StateDir, req.ID, req.Action) }()
+	defer func() {
+		_ = uirequest.WithRequestLock(env.StateDir, req.ID, req.Action, func() error { return uirequest.Cleanup(env.StateDir, req.ID, req.Action) })
+	}()
 
-	deadline := time.Now().Add(notifyWait)
+	wait := notifyWait
+	if liveViewer {
+		wait = 6 * time.Second
+	}
+	deadline := time.Now().Add(wait)
 	for time.Now().Before(deadline) {
 		acks, err := uirequest.ReadAcks(env.StateDir, req.ID, req.Action)
 		if err == nil {
@@ -1218,7 +1226,11 @@ func notifyDeliver(env Env, req uirequest.Request) (bool, deliveryOutcome) {
 					return true, deliveryTaken
 				}
 			}
-			if len(acks) >= len(instances) {
+			expected := len(instances)
+			if liveViewer {
+				expected = 1
+			}
+			if len(acks) >= expected {
 				// Every instance answered and none took it.
 				return false, deliveryDeclined
 			}
@@ -1255,4 +1267,42 @@ func originForRequest(o notify.Origin) uirequest.Origin {
 		WorkDir:     o.WorkDir,
 		PID:         os.Getpid(),
 	}
+}
+
+// Mark-read has the same global user authority as the centre's UI control scope.
+func runNotifyRead(env Env, args []string) int {
+	jsonOutput := false
+	id := ""
+	for _, arg := range args {
+		if arg == "--json" {
+			jsonOutput = true
+		} else if isHelp(arg) {
+			_, _ = fmt.Fprint(env.Stdout, "sidecar notify read <id> [--json]\n")
+			return 0
+		} else if id == "" {
+			id = arg
+		} else {
+			cliErrln(env.Stderr, "expected one notification id")
+			return 2
+		}
+	}
+	if id == "" {
+		cliErrln(env.Stderr, "expected a notification id")
+		return 2
+	}
+	store, err := notify.Open(env.StateDir)
+	if err != nil {
+		cliErrln(env.Stderr, err)
+		return 1
+	}
+	defer func() { _ = store.Close() }()
+	if err = store.MarkRead(id); err != nil {
+		cliErrln(env.Stderr, err)
+		return 1
+	}
+	if jsonOutput {
+		return writeNotifyJSON(env, notifyResult{Action: "read", ID: id})
+	}
+	_, _ = fmt.Fprintf(env.Stdout, "Marked %s read.\n", id)
+	return 0
 }

@@ -13,7 +13,29 @@ import (
 // IssueDTO is the explicit wire form of one issue card. Parent, children,
 // siblings, logs, and owner are named fields so a json:"-" graph cannot
 // silently drop related rows.
+type IssueHandoffDTO = issueview.Handoff
+
+// Review DTO uses the UI API camelCase vocabulary.
+type IssueReviewDTO struct {
+	ID              string `json:"id"`
+	Decision        string `json:"decision"`
+	ReviewerSession string `json:"reviewerSession,omitempty"`
+	Summary         string `json:"summary,omitempty"`
+	CreatedAt       string `json:"createdAt,omitempty"`
+	RequestedBy     string `json:"requestedBy,omitempty"`
+	Superseded      bool   `json:"superseded"`
+	SelfReview      bool   `json:"selfReview"`
+	ReviewedBy      string `json:"reviewedBy,omitempty"`
+}
 type IssueDTO struct {
+	Dependencies             []string         `json:"dependencies,omitempty"`
+	Blockers                 []string         `json:"blockers,omitempty"`
+	Handoff                  *IssueHandoffDTO `json:"handoff,omitempty"`
+	ReviewHistory            []IssueReviewDTO `json:"reviewHistory,omitempty"`
+	ImplementerSession       string           `json:"implementerSession,omitempty"`
+	ReviewerSession          string           `json:"reviewerSession,omitempty"`
+	ReviewRequestedBySession string           `json:"reviewRequestedBySession,omitempty"`
+
 	ID          string         `json:"id"`
 	Title       string         `json:"title,omitempty"`
 	Status      string         `json:"status,omitempty"`
@@ -155,6 +177,7 @@ func issueDTOFrom(data *issueview.Data, owner *issueview.Owner) *IssueDTO {
 		return nil
 	}
 	dto := &IssueDTO{
+		Dependencies: append([]string(nil), data.Dependencies...), Blockers: append([]string(nil), data.Blockers...), Handoff: data.Handoff, ImplementerSession: data.ImplementerSession, ReviewerSession: data.ReviewerSession, ReviewRequestedBySession: data.ReviewRequestedBySession,
 		ID:          data.ID,
 		Title:       data.Title,
 		Status:      data.Status,
@@ -171,6 +194,9 @@ func issueDTOFrom(data *issueview.Data, owner *issueview.Owner) *IssueDTO {
 		Parent:      issueRefFrom(data.Parent),
 		Children:    issueRefsFrom(data.Children),
 		Siblings:    issueRefsFrom(data.Siblings),
+	}
+	for _, r := range data.ReviewHistory {
+		dto.ReviewHistory = append(dto.ReviewHistory, IssueReviewDTO{ID: r.ID, Decision: r.Decision, ReviewerSession: r.ReviewerSession, Summary: r.Summary, CreatedAt: r.CreatedAt, RequestedBy: r.RequestedBy, Superseded: r.Superseded, SelfReview: r.SelfReview, ReviewedBy: r.ReviewedBy})
 	}
 	if owner != nil && owner.Root != "" {
 		dto.Owner = &IssueOwnerDTO{Name: owner.Name, Root: owner.Root}
@@ -214,6 +240,7 @@ func IssueFromDTO(dto *IssueDTO) (*issueview.Data, *issueview.Owner) {
 		return nil, nil
 	}
 	data := &issueview.Data{
+		Dependencies: append([]string(nil), dto.Dependencies...), Blockers: append([]string(nil), dto.Blockers...), Handoff: dto.Handoff, ImplementerSession: dto.ImplementerSession, ReviewerSession: dto.ReviewerSession, ReviewRequestedBySession: dto.ReviewRequestedBySession,
 		ID:          dto.ID,
 		Title:       dto.Title,
 		Status:      dto.Status,
@@ -230,6 +257,9 @@ func IssueFromDTO(dto *IssueDTO) (*issueview.Data, *issueview.Owner) {
 		Parent:      issueRefTo(dto.Parent),
 		Children:    issueRefsTo(dto.Children),
 		Siblings:    issueRefsTo(dto.Siblings),
+	}
+	for _, r := range dto.ReviewHistory {
+		data.ReviewHistory = append(data.ReviewHistory, issueview.Review{ID: r.ID, Decision: r.Decision, ReviewerSession: r.ReviewerSession, Summary: r.Summary, CreatedAt: r.CreatedAt, RequestedBy: r.RequestedBy, Superseded: r.Superseded, SelfReview: r.SelfReview, ReviewedBy: r.ReviewedBy})
 	}
 	var owner *issueview.Owner
 	if dto.Owner != nil && dto.Owner.Root != "" {

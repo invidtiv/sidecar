@@ -70,8 +70,8 @@ func TestLoadIssueDisablesSyncAndAnalyticsForEveryTdRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimSpace(string(logged)), "\n")
-	if len(lines) != 3 {
-		t.Fatalf("td invocations = %d, want show, child tree, parent tree:\n%s", len(lines), logged)
+	if len(lines) != 4 {
+		t.Fatalf("td invocations = %d, want show, dependencies, child tree, parent tree:\n%s", len(lines), logged)
 	}
 	for _, line := range lines {
 		fields := strings.SplitN(line, "|", 5)

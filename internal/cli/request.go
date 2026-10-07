@@ -218,7 +218,7 @@ func runRequestAck(env Env, args []string) int {
 		cliErrln(env.Stderr, err)
 		return 1
 	}
-	result := uirequest.AckResult{ID: id, Action: uirequest.Action(action), Status: ack.Status, Reason: reason, Surface: surface, Pane: ack.Pane, ItemsVersion: ack.ItemsVersion, Items: ack.Items, Layout: ack.Layout}
+	result := uirequest.AckResult{ID: id, Action: uirequest.Action(action), Line: ack.Line, Status: ack.Status, Reason: reason, Surface: surface, Pane: ack.Pane, ItemsVersion: ack.ItemsVersion, Items: ack.Items, Layout: ack.Layout}
 	if err := json.NewEncoder(env.Stdout).Encode(result); err != nil {
 		cliErrln(env.Stderr, err)
 		return 1

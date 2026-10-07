@@ -1,0 +1,38 @@
+[
+  {
+    "notifications": [
+      {
+        "id": "ntf-fixture",
+        "source": "agent",
+        "title": "Build finished",
+        "targets": [
+          {
+            "kind": "file",
+            "value": "README.md",
+            "line": 40,
+            "project": "fixture-project"
+          }
+        ],
+        "createdAt": "2026-10-03T00:00:00Z",
+        "expiresAt": "2026-10-03T00:00:12Z",
+        "origin": {}
+      }
+    ],
+    "unread": 1,
+    "toast_ids": [
+      "ntf-fixture"
+    ],
+    "delivery_ids": [],
+    "delivery": {}
+  },
+  {
+    "channel": "toast",
+    "id": "ntf-fixture"
+  },
+  {
+    "claimed": true
+  },
+  {
+    "delivered": true
+  }
+]

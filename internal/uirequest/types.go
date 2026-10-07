@@ -568,6 +568,7 @@ type Request struct {
 
 // AckResult is the machine contract for `sidecar request ack --json`.
 type AckResult struct {
+	Line         *LineAck        `json:"line,omitempty"`
 	ID           string          `json:"id"`
 	Action       Action          `json:"action"`
 	Status       Status          `json:"status"`
@@ -584,8 +585,16 @@ func (r AckResult) ValidRemoteResult() bool {
 	return r.ID != "" && r.Action != "" && r.Status != ""
 }
 
+// LineAck reports the viewer's observed source navigation outcome.
+type LineAck struct {
+	Requested int    `json:"requested"`
+	Applied   bool   `json:"applied"`
+	Reason    string `json:"reason,omitempty"`
+}
+
 // Ack is the acknowledgement written by each Sidecar instance handling a request.
 type Ack struct {
+	Line     *LineAck  `json:"line,omitempty"`
 	Instance string    `json:"instance"`
 	Host     string    `json:"host"`
 	PID      int       `json:"pid"`
@@ -650,12 +659,14 @@ const (
 
 // Result is the consolidated outcome presented to the agent or caller.
 type Result struct {
-	Action    Action `json:"action"`
-	Target    Target `json:"target"`
-	Shell     string `json:"shell"`
-	Name      string `json:"name"`
-	Project   string `json:"project"`
-	Resolved  string `json:"resolved"`
-	Delivered int    `json:"delivered"`
-	Results   []Ack  `json:"results"`
+	Reason    string   `json:"reason,omitempty"`
+	Line      *LineAck `json:"line,omitempty"`
+	Action    Action   `json:"action"`
+	Target    Target   `json:"target"`
+	Shell     string   `json:"shell"`
+	Name      string   `json:"name"`
+	Project   string   `json:"project"`
+	Resolved  string   `json:"resolved"`
+	Delivered int      `json:"delivered"`
+	Results   []Ack    `json:"results"`
 }

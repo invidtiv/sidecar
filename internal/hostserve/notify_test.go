@@ -350,3 +350,58 @@ func TestLaneObservationsSkipRowsWithoutAnAgent(t *testing.T) {
 		t.Errorf("context = %q", obs[0].Context)
 	}
 }
+
+func TestObservationOnlyLaneCallbacksPersistWithoutTUI(t *testing.T) {
+	t.Setenv("SIDECAR_ISOLATED_STATE", "1")
+	store, err := notify.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	runner := &fakeRunner{}
+	project := liveProject(t, runner)
+	var out strings.Builder
+	opts := baseOptions(&out, runner, stepClock(time.Now(), 200*time.Millisecond))
+	opts.ObservationOnly = true
+	opts.Projects = []Project{project}
+	opts.Cycles = 6
+	opts.NotifyDebounce = time.Nanosecond
+	opts.LivePoll = time.Millisecond
+	opts.ReadyPoll = time.Millisecond
+	opts.IdlePoll = time.Millisecond
+	cycle := 0
+	opts.Capture = func(string, int) (string, tty.PaneState, error) {
+		cycle++
+		if cycle <= 2 {
+			return workingScreen, tty.PaneState{}, nil
+		}
+		if cycle <= 4 {
+			return blockedScreen, tty.PaneState{}, nil
+		}
+		return workingScreen, tty.PaneState{}, nil
+	}
+	received := 0
+	opts.OnNotifications = func(events notify.LaneEvents) {
+		received += len(events.Post)
+		for _, n := range events.Post {
+			if _, err := store.Post(n); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, id := range events.Dismiss {
+			if err := store.Dismiss(id); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := Serve(context.Background(), opts); err != nil {
+		t.Fatal(err)
+	}
+	all, err := store.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if received != 1 || len(all) != 1 || !all[0].Dismissed() {
+		t.Fatalf("headless lane lifecycle not filed/withdrawn: received=%d all=%+v", received, all)
+	}
+}

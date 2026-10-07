@@ -175,7 +175,7 @@ func TestSpecDocumentsEventsStreamAndSharedCatalogQuery(t *testing.T) {
 	var catalogParams []any
 	for _, p := range params[2:] {
 		name := p.(map[string]any)["name"]
-		if name != "content" && name != "viewer" {
+		if name != "content" && name != "viewer" && name != "notifications" {
 			catalogParams = append(catalogParams, p)
 		}
 	}

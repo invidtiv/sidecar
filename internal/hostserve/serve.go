@@ -189,6 +189,8 @@ type Options struct {
 	// is the same window the local surfaces settle on, so a remote agent and a
 	// local one have to hold a state for equally long to be worth saying.
 	NotifyDebounce time.Duration
+	// OnNotifications receives the shared local LaneTracker outcomes. Headless observers can file them without decoding presentation wire events.
+	OnNotifications func(notify.LaneEvents)
 
 	// Cycles bounds how many collection cycles run before Serve returns. Zero
 	// means run until the context is cancelled. A measurement harness sets it
@@ -346,6 +348,7 @@ func Serve(ctx context.Context, opts Options) error {
 	// "seen alive" means exactly what shellliveness says it means.
 	liveness := shellliveness.NewTracker()
 	notifier := newNotifier(opts.NotifyDebounce)
+	notifier.onEvents = opts.OnNotifications
 	encoder := hostproto.NewEncoder(opts.Out)
 	encoder.SetClock(opts.Now)
 

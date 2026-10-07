@@ -25,7 +25,7 @@ func runOpen(env Env, args []string) int {
 	splitSet := false
 	atCell := ""
 	atSeen := false
-	waitDuration := 1200 * time.Millisecond
+	waitDuration := 6 * time.Second
 	lineNo := 0
 	shellFlag := ""
 	projectFlag := ""
@@ -376,6 +376,7 @@ func runOpen(env Env, args []string) int {
 		Options:   options,
 	}
 
+	prepareViewerRequest(env.StateDir, &req, waitDuration)
 	_, err = uirequest.WriteRequest(env.StateDir, req)
 	if err != nil {
 		cliErrln(env.Stderr, err)
@@ -403,9 +404,18 @@ func runOpen(env Env, args []string) int {
 		time.Sleep(30 * time.Millisecond)
 	}
 
-	_ = uirequest.Cleanup(env.StateDir, req.ID, req.Action)
+	acks = finishViewerWait(env.StateDir, req, acks)
 
 	if len(acks) == 0 {
+		if req.Viewer != "" {
+			if jsonOutput {
+				result := openResult(req, dest, nil)
+				result.Reason = "viewer_timeout"
+				_ = json.NewEncoder(env.Stdout).Encode(result)
+			}
+			cliErrln(env.Stderr, "the connected viewer did not acknowledge before the deadline; the request was cancelled (viewer_timeout)")
+			return 5
+		}
 		if jsonOutput {
 			_ = json.NewEncoder(env.Stdout).Encode(openResult(req, dest, nil))
 		}
@@ -468,11 +478,37 @@ func runOpen(env Env, args []string) int {
 	} else {
 		_, _ = fmt.Fprintf(env.Stdout, "Queued %s for %q; it opens when the user selects that shell.\n", label, shellLabel)
 	}
+	if hasOpened && target.Line > 0 {
+		for _, ack := range acks {
+			if ack.Line != nil && ack.Line.Applied {
+				_, _ = fmt.Fprintf(env.Stdout, "Scrolled to line %d.\n", target.Line)
+				return 0
+			}
+		}
+		why := "the surface did not confirm source-line navigation"
+		for _, ack := range acks {
+			if ack.Line != nil && ack.Line.Reason != "" {
+				why = ack.Line.Reason
+			}
+		}
+		_, _ = fmt.Fprintf(env.Stdout, "Line %d was not applied: %s.\n", target.Line, why)
+	}
 	return 0
 }
 
 func openResult(req uirequest.Request, dest openDestination, acks []uirequest.Ack) uirequest.Result {
+	var line *uirequest.LineAck
+	if req.Target.Line > 0 {
+		line = &uirequest.LineAck{Requested: req.Target.Line, Reason: "the surface did not confirm source-line navigation"}
+		for _, ack := range acks {
+			if ack.Line != nil {
+				line = ack.Line
+				break
+			}
+		}
+	}
 	return uirequest.Result{
+		Line:      line,
 		Action:    req.Action,
 		Target:    req.Target,
 		Shell:     dest.Origin.TmuxSession,

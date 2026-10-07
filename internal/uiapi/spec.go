@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/invopop/jsonschema"
+	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/contentservice"
 	"github.com/marcus/sidecar/internal/layoutreport"
 	"github.com/marcus/sidecar/internal/mobileproto"
@@ -17,6 +18,7 @@ import (
 func Spec() ([]byte, error) {
 	schemas := map[string]any{}
 	values := map[string]any{
+		"NotificationSnapshot": NotificationSnapshot{}, "NotificationMutation": NotificationMutation{}, "NotificationReceiptRequest": NotificationReceiptRequest{}, "NotificationReceiptResponse": NotificationReceiptResponse{}, "NotificationClaimResponse": NotificationClaimResponse{}, "NotificationsConfig": config.NotificationsConfig{},
 		"ContentReadResult": contentservice.ReadResult{}, "ContentTreeResult": contentservice.TreeResult{}, "ContentRef": ContentRef{}, "LayoutDocument": LayoutDocument{},
 		"ViewerLayoutReport": layoutreport.Report{}, "ViewerPresenceRequest": ViewerPresenceRequest{}, "ViewerPresenceResponse": ViewerPresenceResponse{}, "ViewerAckRequest": ViewerAckRequest{}, "ViewerAckResponse": ViewerAckResponse{},
 		"Hello": Hello{}, "Status": Status{}, "Endpoint": Endpoint{}, "ErrorBody": ErrorBody{},
@@ -120,6 +122,27 @@ func Spec() ([]byte, error) {
 		delete(op, "x-required-scope")
 		op["x-required-scopes-any-of"] = []string{ScopeContentRead, ScopeUIControl}
 	}
+	add(notificationsPath, "get", "", "NotificationSnapshot", all, false)
+	add(notificationSettingsPath, "get", "", "NotificationsConfig", all, false)
+	add(notificationSettingsPath, "put", "NotificationsConfig", "NotificationsConfig", all, false)
+	add(notificationReadPath, "post", "NotificationMutation", "NotificationSnapshot", all, false)
+	add(notificationDismissPath, "post", "NotificationMutation", "NotificationSnapshot", all, false)
+	add(notificationClaimPath, "post", "NotificationReceiptRequest", "NotificationClaimResponse", all, false)
+	add(notificationReceiptPath, "post", "NotificationReceiptRequest", "NotificationReceiptResponse", all, false)
+	for _, path := range []string{notificationsPath, notificationSettingsPath, notificationReadPath, notificationDismissPath, notificationReceiptPath, notificationClaimPath} {
+		for method, op := range paths[path].(map[string]any) {
+			scope := ScopeUIControl
+			if method == "get" {
+				scope = ScopeContentRead
+			}
+			op.(map[string]any)["x-required-scope"] = scope
+			if method == "get" {
+				delete(op.(map[string]any), "x-required-scope")
+				op.(map[string]any)["x-required-scopes-any-of"] = []string{ScopeContentRead, ScopeUIControl}
+			}
+		}
+	}
+
 	add(viewerPresencePath, "post", "ViewerPresenceRequest", "ViewerPresenceResponse", all, false)
 	add(viewerAckPath, "post", "ViewerAckRequest", "ViewerAckResponse", all, false)
 	for _, path := range []string{viewerPresencePath, viewerAckPath} {
@@ -163,6 +186,7 @@ func Spec() ([]byte, error) {
 	paths[eventsPath] = streamOperation("events", all)
 	events := paths[eventsPath].(map[string]any)["get"].(map[string]any)
 	events["parameters"] = append(events["parameters"].([]any), params...)
+	events["parameters"] = append(events["parameters"].([]any), map[string]any{"name": "notifications", "in": "query", "schema": map[string]any{"type": "string", "enum": []string{"1"}}, "description": "Subscribe to notification centre snapshots; requires content:read or ui:control."})
 	events["parameters"] = append(events["parameters"].([]any), map[string]any{"name": "viewer", "in": "query", "schema": map[string]any{"type": "string", "enum": []string{"uiRequestRelayV1"}}, "description": "Register this events connection as a screen viewer; requires full or ui:control. Receive viewer identity, report focused/visible presence, acknowledge each ui_request via HTTP. No reconnect replay."})
 	events["parameters"] = append(events["parameters"].([]any), map[string]any{"name": "content", "in": "query", "schema": map[string]any{"type": "array", "items": map[string]any{"type": "string", "contentMediaType": "application/json", "contentSchema": schemaRef("ContentRef")}, "maxItems": 32}, "style": "form", "explode": true, "description": "JSON reference for each open content pane; reconnect to change the set. Requires content:read."})
 	paths["/pair"] = map[string]any{"get": map[string]any{"operationId": "pair_page", "security": []any{}, "x-listeners": []string{"browser"}, "responses": map[string]any{"200": map[string]any{"description": "Pairing page, consumes no code", "content": map[string]any{"text/html": map[string]any{"schema": map[string]any{"type": "string"}}}}}}}
@@ -251,6 +275,9 @@ func streamOperation(name string, listeners []string) map[string]any {
 // Agent control and mobile both define Target and Error. Package identity is
 // part of their schema name so map iteration cannot overwrite either contract.
 func workspaceSchemaName(t reflect.Type) string {
+	if strings.HasSuffix(t.PkgPath(), "/notify") {
+		return "Notification" + t.Name()
+	}
 	if strings.HasSuffix(t.PkgPath(), "/uirequest") {
 		return "UIRequest" + t.Name()
 	}
