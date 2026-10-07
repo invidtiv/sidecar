@@ -79,11 +79,12 @@ type apiScreen struct {
 	notifications map[string]uirequest.Request
 }
 type viewerRelay struct {
-	mu      sync.Mutex
-	once    sync.Once
-	screens map[string]*apiScreen
-	serial  uint64
-	workers sync.WaitGroup
+	mu                    sync.Mutex
+	once                  sync.Once
+	screens               map[string]*apiScreen
+	serial                uint64
+	notificationConsumers map[string]int
+	workers               sync.WaitGroup
 }
 type viewerPlan struct {
 	event  UIRequestEvent
@@ -200,6 +201,9 @@ func (s *Server) publishViewerLocked() {
 	}
 	record := uirequest.APIViewer{PID: os.Getpid(), Focused: focused, ExpiresAt: time.Now().Add(2 * time.Second), Capabilities: []string{uirequest.APIViewerRelay}}
 	if winner != nil {
+		if s.viewer.notificationConsumers[winner.caller.client] > 0 {
+			record.Capabilities = append(record.Capabilities, uirequest.APIViewerNotifications)
+		}
 		record.Instance = winner.id
 	}
 	if err := uirequest.WriteAPIViewer(s.opts.StateDir, record); err != nil {
@@ -374,6 +378,11 @@ func (s *Server) handleViewerAck(w http.ResponseWriter, r *http.Request, c calle
 		if err := host.validateSaved(plan.event.Document.Layout); err != nil {
 			s.declineViewer(plan.event.Request, err.Error())
 			writeError(w, 409, "content_changed", err.Error())
+			return nil
+		}
+		if _, err := os.Stat(uirequest.RequestPath(s.opts.StateDir, a.ID, plan.event.Action)); err != nil || !plan.event.ExpiresAt.After(time.Now()) {
+			s.declineViewer(plan.event.Request, "the pane request expired during validation; retry it")
+			writeError(w, 409, "request_unavailable", "The request expired during validation; do not replay it.")
 			return nil
 		}
 		store := viewerlayout.FileStore{Dir: filepath.Join(s.dir, "layouts")}

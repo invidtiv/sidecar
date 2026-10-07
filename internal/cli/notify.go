@@ -1195,10 +1195,10 @@ func (o deliveryOutcome) explain() string {
 // it, and why not when it did not. No announced instance means no request is
 // written at all: there is nobody to answer, and the caller writes the log
 // itself.
-func notifyDeliver(env Env, req uirequest.Request) (bool, deliveryOutcome) {
+func notifyDeliver(env Env, req uirequest.Request) (delivered bool, outcome deliveryOutcome) {
 	instances, err := uirequest.ListInstances(env.StateDir)
 	viewer, liveViewer := uirequest.ReadAPIViewer(env.StateDir, time.Now())
-	liveViewer = liveViewer && viewer.Focused && viewer.HasCapability(uirequest.APIViewerRelay)
+	liveViewer = liveViewer && viewer.Focused && viewer.HasCapability(uirequest.APIViewerNotifications)
 	if (err != nil || len(instances) == 0) && !liveViewer {
 		return false, deliveryNoInstance
 	}
@@ -1210,7 +1210,19 @@ func notifyDeliver(env Env, req uirequest.Request) (bool, deliveryOutcome) {
 		return false, deliveryWriteFailed
 	}
 	defer func() {
-		_ = uirequest.WithRequestLock(env.StateDir, req.ID, req.Action, func() error { return uirequest.Cleanup(env.StateDir, req.ID, req.Action) })
+		_ = uirequest.WithRequestLock(env.StateDir, req.ID, req.Action, func() error {
+			if !delivered {
+				acks, _ := uirequest.ReadAcks(env.StateDir, req.ID, req.Action)
+				for _, ack := range acks {
+					if ack.Status == uirequest.StatusOpened {
+						delivered = true
+						outcome = deliveryTaken
+						break
+					}
+				}
+			}
+			return uirequest.Cleanup(env.StateDir, req.ID, req.Action)
+		})
 	}()
 
 	wait := notifyWait

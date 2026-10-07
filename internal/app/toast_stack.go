@@ -55,7 +55,7 @@ func revealTick(seq int) tea.Cmd {
 // toastStacks is the column as the store and the re-show slot describe it,
 // newest lead on top. It is pure: two calls in the same frame agree.
 func (m Model) toastStacks(now time.Time) []notify.Stack {
-	if v, ok := uirequest.ReadAPIViewer(config.StateDir(), now); ok && v.Focused {
+	if v, ok := uirequest.ReadAPIViewer(config.StateDir(), now); ok && v.Focused && v.HasCapability(uirequest.APIViewerNotifications) {
 		return nil
 	}
 	layout := notify.StackToasts(m.notificationCache, now, notify.DefaultSlots)

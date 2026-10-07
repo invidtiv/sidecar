@@ -7,10 +7,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/mobileproto"
 	notification "github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/notifydelivery"
 	"github.com/marcus/sidecar/internal/uirequest"
@@ -63,6 +65,7 @@ func (s *Server) notificationSnapshot(c caller) (NotificationSnapshot, error) {
 	if err != nil {
 		return NotificationSnapshot{}, err
 	}
+	s.projectNotificationTargets(all)
 	rules := notification.ResolveConfig(cfg)
 	out := NotificationSnapshot{Notifications: notification.Active(all), Unread: notification.UnreadCount(all), ToastIDs: []string{}, DeliveryIDs: []string{}, Delivery: map[string]notification.DeliveryDecision{}}
 	s.viewer.mu.Lock()
@@ -289,7 +292,7 @@ func (s *Server) relayNotification(req uirequest.Request) {
 	s.viewer.mu.Lock()
 	defer s.viewer.mu.Unlock()
 	v := s.viewer.screens[req.Viewer]
-	if v == nil || s.holderLocked() != v {
+	if v == nil || s.holderLocked() != v || s.viewer.notificationConsumers[v.caller.client] == 0 {
 		return
 	}
 	// Notification posting is global to this machine; delivery is addressed to its active screen.
@@ -323,4 +326,143 @@ func (s *Server) relayNotification(req uirequest.Request) {
 	if len(v.notifications) < 128 {
 		v.notifications[req.ID] = req
 	}
+}
+
+// Project notification locators from their producing workspace. Public catalog
+// selectors are copied unchanged; origin paths never select the reader's project.
+func (s *Server) projectNotificationTargets(all []notification.Notification) {
+	needed := false
+	for _, n := range all {
+		if len(n.Targets) > 0 {
+			needed = true
+			break
+		}
+	}
+	if !needed {
+		return
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		for i := range all {
+			all[i].Targets = append([]notification.Target(nil), all[i].Targets...)
+			for j := range all[i].Targets {
+				target := &all[i].Targets[j]
+				if target.Kind == notification.TargetFile || target.Kind == notification.TargetIssue || target.Kind == notification.TargetCommit {
+					target.RoutingError = "The notification owning workspace configuration is unavailable."
+				}
+			}
+		}
+		return
+	}
+	ctx, cancel := context.WithTimeout(s.ctx, 2*time.Second)
+	defer cancel()
+	showIdle := true
+	catalog, catalogErr := s.opts.Backend.Sessions(ctx, mobileproto.CatalogQuery{Sort: "project", ShowIdleSessions: &showIdle})
+	var rows []mobileproto.CatalogRow
+	for _, section := range catalog.Sections {
+		rows = append(rows, section.Rows...)
+	}
+	for i := range all {
+		n := &all[i]
+		n.Targets = append([]notification.Target(nil), n.Targets...)
+		for j := range n.Targets {
+			target := &n.Targets[j]
+			if target.Kind != notification.TargetFile && target.Kind != notification.TargetIssue && target.Kind != notification.TargetCommit {
+				continue
+			}
+			project, workspace, root := "", "", ""
+			if target.Project != "" {
+				for _, p := range cfg.Projects.List {
+					if p.Name == target.Project || filepath.Base(p.Path) == target.Project {
+						if project != "" {
+							project = ""
+							break
+						}
+						project = p.Name
+						root = p.Path
+					}
+				}
+			} else if catalogErr == nil {
+				best := -1
+				ambiguous := false
+				for _, row := range rows {
+					if n.Origin.HostID != "" && n.Origin.HostID != row.OwnerHostID {
+						continue
+					}
+					if n.Origin.HostID == "" && !catalogOwnerLocal(catalog, row.OwnerHostID) {
+						continue
+					}
+					if n.Origin.TmuxSession != "" && n.Origin.TmuxSession != row.Session {
+						continue
+					}
+					if row.Path == "" || n.Origin.WorkDir == "" {
+						continue
+					}
+					rel, err := filepath.Rel(filepath.Clean(row.Path), filepath.Clean(n.Origin.WorkDir))
+					if err != nil || rel == ".." || strings.HasPrefix(rel, "../") {
+						continue
+					}
+					if len(row.Path) == best && (project != row.ProjectName || workspace != row.ContentWorkspaceID) {
+						ambiguous = true
+					}
+					if len(row.Path) > best {
+						ambiguous = false
+						best = len(row.Path)
+						project = row.ProjectName
+						workspace = row.ContentWorkspaceID
+						root = row.Path
+					}
+				}
+				if ambiguous {
+					target.RoutingError = "The notification origin matches multiple workspaces; choose an explicit project target."
+					continue
+				}
+				if project == "" && n.Origin.HostID == "" && n.Origin.TmuxSession == "" {
+					for _, p := range cfg.Projects.List {
+						rel, err := filepath.Rel(p.Path, n.Origin.WorkDir)
+						if err == nil && n.Origin.WorkDir != "" && rel != ".." && !strings.HasPrefix(rel, "../") && len(p.Path) > len(root) {
+							project = p.Name
+							root = p.Path
+						}
+					}
+				}
+			}
+			if project == "" {
+				target.RoutingError = "The notification's owning workspace is unavailable; choose an explicit project target."
+				continue
+			}
+			ws, err := s.contentBackend().LookupProject(ctx, project, workspace)
+			if err != nil {
+				target.RoutingError = "The notification's owning workspace is no longer available."
+				continue
+			}
+			if target.Project == "" && filepath.Clean(ws.Root) != filepath.Clean(root) {
+				target.RoutingError = "The notification owning workspace no longer matches its origin."
+				continue
+			}
+			if target.Project == "" && target.Kind == notification.TargetFile && n.Origin.WorkDir != "" {
+				path := target.Value
+				if !filepath.IsAbs(path) {
+					path = filepath.Join(n.Origin.WorkDir, path)
+				}
+				rel, err := filepath.Rel(ws.Root, path)
+				if err != nil || rel == ".." || strings.HasPrefix(rel, "../") {
+					target.RoutingError = "The file target leaves its owning workspace."
+					continue
+				}
+				target.Value = filepath.ToSlash(rel)
+			}
+			target.Project = project
+			target.Workspace = workspace
+			target.RoutingError = ""
+		}
+	}
+}
+func catalogOwnerLocal(catalog mobileproto.CatalogSnapshot, id string) bool {
+	for _, host := range catalog.Hosts {
+		if host.ID == id {
+			return host.Local
+		}
+	}
+	return id == ""
 }

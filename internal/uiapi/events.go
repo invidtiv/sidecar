@@ -422,7 +422,23 @@ func (s *Server) runEvents(conn *websocket.Conn, client *trackedClient, c caller
 		return
 	}
 	defer stop()
-	if notifications {
+	if notifications && (s.hasScope(c, ScopeContentRead) || s.hasScope(c, ScopeUIControl)) {
+		s.viewer.mu.Lock()
+		if s.viewer.notificationConsumers == nil {
+			s.viewer.notificationConsumers = map[string]int{}
+		}
+		s.viewer.notificationConsumers[c.client]++
+		s.publishViewerLocked()
+		s.viewer.mu.Unlock()
+		defer func() {
+			s.viewer.mu.Lock()
+			s.viewer.notificationConsumers[c.client]--
+			if s.viewer.notificationConsumers[c.client] == 0 {
+				delete(s.viewer.notificationConsumers, c.client)
+			}
+			s.publishViewerLocked()
+			s.viewer.mu.Unlock()
+		}()
 		stopNotifications, err := s.watchNotifications(ctx, c, pending)
 		if err != nil {
 			_ = conn.Close(websocket.StatusInternalError, "The notification watcher could not start.")

@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/terminallink"
@@ -292,5 +294,55 @@ func TestNotifyPostRefusesAMalformedTarget(t *testing.T) {
 	all, _ := notify.ReadAll(notify.Path(env.StateDir))
 	if len(all) != 0 {
 		t.Fatalf("a refused post must store nothing, got %d records", len(all))
+	}
+}
+
+// A receipt can arrive after the final poll while timeout cleanup waits for the
+// delivery writer's lock. The final read and cleanup must report that receipt.
+func TestNotifyDeliveryReadsCommittedReceiptAtTimeoutBoundary(t *testing.T) {
+	env, _, _ := notifyEnv(t)
+	if err := uirequest.Announce(env.StateDir, uirequest.Instance{PID: os.Getpid(), WorkDir: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	type result struct {
+		delivered bool
+		outcome   deliveryOutcome
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		delivered, outcome := notifyDeliver(env, uirequest.Request{Action: uirequest.ActionNotify})
+		resultCh <- result{delivered, outcome}
+	}()
+	var req uirequest.Request
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		paths, _ := filepath.Glob(filepath.Join(env.StateDir, "requests", "*.json"))
+		if len(paths) > 0 {
+			req, _ = uirequest.ReadRequest(paths[0])
+			if req.ID != "" {
+				break
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if req.ID == "" {
+		t.Fatal("request was not posted")
+	}
+	if err := uirequest.WithRequestLock(env.StateDir, req.ID, req.Action, func() error {
+		time.Sleep(notifyWait + 100*time.Millisecond)
+		return uirequest.WriteAck(env.StateDir, req.ID, req.Action, uirequest.Ack{Instance: "boundary", Status: uirequest.StatusOpened})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-resultCh:
+		if !got.delivered || got.outcome != deliveryTaken {
+			t.Fatalf("committed receipt lost: %+v", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("delivery did not finish after receipt")
+	}
+	if _, err := os.Stat(uirequest.RequestPath(env.StateDir, req.ID, req.Action)); !os.IsNotExist(err) {
+		t.Fatalf("request not cleaned up: %v", err)
 	}
 }

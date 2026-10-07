@@ -162,10 +162,12 @@ const (
 
 // Target is one actionable reference carried by a notification.
 type Target struct {
-	Kind    TargetKind `json:"kind"`
-	Value   string     `json:"value"`
-	Line    int        `json:"line,omitempty"`
-	Project string     `json:"project,omitempty"`
+	Workspace    string     `json:"workspace,omitempty"`
+	RoutingError string     `json:"routing_error,omitempty"`
+	Kind         TargetKind `json:"kind"`
+	Value        string     `json:"value"`
+	Line         int        `json:"line,omitempty"`
+	Project      string     `json:"project,omitempty"`
 }
 
 // Origin identifies who posted a notification, so a CLI caller can dismiss its

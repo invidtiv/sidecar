@@ -1,14 +1,19 @@
 package uiapi
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"github.com/marcus/sidecar/internal/agentstatus"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/contentservice"
+	"github.com/marcus/sidecar/internal/mobileproto"
 	notification "github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/viewerlayout"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -231,5 +236,111 @@ func TestNotificationStreamSeesSharedLaneNeedsInputAndDoneWithoutTUI(t *testing.
 		if event.Type == "notifications" && len(event.Notifications.Notifications) == 1 && event.Notifications.Notifications[0].Transition.Class == notification.TransitionDone {
 			break
 		}
+	}
+}
+
+type delayedNotificationContent struct {
+	ContentBackend
+	delay atomic.Bool
+}
+
+func (b *delayedNotificationContent) LookupProject(ctx context.Context, project, workspace string) (contentservice.Workspace, error) {
+	if b.delay.Load() {
+		time.Sleep(100 * time.Millisecond)
+	}
+	return b.ContentBackend.LookupProject(ctx, project, workspace)
+}
+func TestAPIViewerExpiryDuringAckValidationDoesNotCommit(t *testing.T) {
+	isolatedNotificationConfig(t)
+	h, root := viewerHarness(t)
+	seedScreen(t, h, root)
+	c, id := screen(t, h)
+	presence(t, h, id, true)
+	request := postScreenRequest(t, h, root, uirequest.ActionOpen, nil, "readme.md")
+	event := nextUIRequest(t, c)
+	store := viewerlayout.FileStore{Dir: filepath.Join(h.s.dir, "layouts")}
+	_, before, _ := store.Get("local", root)
+	h.s.viewer.mu.Lock()
+	h.s.viewer.screens[id].pending[event.ID].event.ExpiresAt = time.Now().Add(40 * time.Millisecond)
+	h.s.viewer.mu.Unlock()
+	delayed := &delayedNotificationContent{ContentBackend: h.s.opts.Content}
+	delayed.delay.Store(true)
+	h.s.opts.Content = delayed
+	ackScreen(t, h, id, event, 409)
+	_, after, _ := store.Get("local", root)
+	if before != after {
+		t.Fatal("expired during validation but committed")
+	}
+	if ack := waitScreenAck(t, h, request); ack.Status != uirequest.StatusDeclined {
+		t.Fatal(ack)
+	}
+}
+func TestNotificationToastOwnerRequiresActualSubscribedConsumer(t *testing.T) {
+	isolatedNotificationConfig(t)
+	h, root := viewerHarness(t)
+	seedScreen(t, h, root)
+	_, id := screen(t, h)
+	presence(t, h, id, true)
+	v, ok := uirequest.ReadAPIViewer(h.state, time.Now())
+	if !ok || v.HasCapability(uirequest.APIViewerNotifications) {
+		t.Fatal("legacy screen suppressed toasts")
+	}
+	c := dialEvents(t, h, "?notifications=1", nil, true)
+	_ = readEvent(t, c)
+	v, ok = uirequest.ReadAPIViewer(h.state, time.Now())
+	if !ok || !v.HasCapability(uirequest.APIViewerNotifications) {
+		t.Fatal("subscribed toast owner absent")
+	}
+	_ = c.CloseNow()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		v, _ = uirequest.ReadAPIViewer(h.state, time.Now())
+		if !v.HasCapability(uirequest.APIViewerNotifications) {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("closed consumer retained toast ownership")
+}
+
+type notificationTargetContent struct {
+	ContentBackend
+	roots map[string]string
+}
+
+func (b *notificationTargetContent) LookupProject(_ context.Context, project, workspace string) (contentservice.Workspace, error) {
+	root := b.roots[project+"\x00"+workspace]
+	if root == "" {
+		return contentservice.Workspace{}, fmt.Errorf("missing workspace")
+	}
+	return contentservice.Workspace{Root: root}, nil
+}
+func TestNotificationTargetsUseOriginLinkedWorkspaceAndRefuseMissingOrigin(t *testing.T) {
+	isolatedNotificationConfig(t)
+	main, linked := t.TempDir(), t.TempDir()
+	raw, _ := json.Marshal(map[string]any{"projects": map[string]any{"list": []map[string]string{{"name": "Project alias", "path": main}}}})
+	if err := os.WriteFile(config.ConfigPath(), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	selector := "opaque-content-selector"
+	content := &notificationTargetContent{roots: map[string]string{"Project alias\x00": main, "Project alias\x00" + selector: linked}}
+	h := newHarness(t, func(o *Options) { o.Content = content })
+	h.backend.snapshot = mobileproto.CatalogSnapshot{Hosts: []mobileproto.CatalogHost{{ID: "local", Local: true}}, Sections: []mobileproto.CatalogSection{{Rows: []mobileproto.CatalogRow{{ID: "linked", OwnerHostID: "local", ProjectName: "Project alias", Path: linked, Session: "private-session", ContentWorkspaceID: selector}}}}}
+	all := []notification.Notification{{Origin: notification.Origin{WorkDir: filepath.Join(linked, "src"), TmuxSession: "private-session"}, Targets: []notification.Target{{Kind: notification.TargetFile, Value: "main.go", Line: 7}}}, {Origin: notification.Origin{WorkDir: "/deleted-worktree", TmuxSession: "gone-session"}, Targets: []notification.Target{{Kind: notification.TargetFile, Value: "main.go"}}}}
+	h.s.projectNotificationTargets(all)
+	got := all[0].Targets[0]
+	if got.Project != "Project alias" || got.Workspace != selector || got.Value != "src/main.go" || got.Line != 7 || got.RoutingError != "" {
+		t.Fatalf("origin authority lost: %+v", got)
+	}
+	if all[1].Targets[0].RoutingError == "" || all[1].Targets[0].Project != "" {
+		t.Fatal("missing origin silently retargeted")
+	}
+
+	// A linked row without a usable selector must never become the main checkout.
+	h.backend.snapshot.Sections[0].Rows[0].ContentWorkspaceID = ""
+	missingSelector := []notification.Notification{{Origin: notification.Origin{WorkDir: linked, TmuxSession: "private-session"}, Targets: []notification.Target{{Kind: notification.TargetFile, Value: "main.go"}}}}
+	h.s.projectNotificationTargets(missingSelector)
+	if missingSelector[0].Targets[0].RoutingError == "" {
+		t.Fatal("missing linked selector silently retargeted to main checkout")
 	}
 }

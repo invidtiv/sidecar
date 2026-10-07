@@ -21,6 +21,7 @@ type APIViewer struct {
 }
 
 const APIViewerRelay = "uiRequestRelayV1"
+const APIViewerNotifications = "notificationToastsV1"
 
 func ReadAPIViewer(stateDir string, now time.Time) (APIViewer, bool) {
 	if config.AssertIsolatedPath(stateDir) != nil {

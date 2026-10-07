@@ -2283,7 +2283,13 @@
           "project": {
             "type": "string"
           },
+          "routing_error": {
+            "type": "string"
+          },
           "value": {
+            "type": "string"
+          },
+          "workspace": {
             "type": "string"
           }
         },
