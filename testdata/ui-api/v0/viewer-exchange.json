@@ -12,6 +12,7 @@
       "workspace",
       "content",
       "uiRequestRelayV1",
+      "notifications",
       "shutdown"
     ]
   },

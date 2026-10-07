@@ -336,6 +336,11 @@ func TestNotificationTargetsUseOriginLinkedWorkspaceAndRefuseMissingOrigin(t *te
 		t.Fatal("missing origin silently retargeted")
 	}
 
+	qualified := []notification.Notification{{Targets: []notification.Target{{Kind: notification.TargetFile, Project: main, Value: "README.md"}}}}
+	h.s.projectNotificationTargets(qualified)
+	if got := qualified[0].Targets[0]; got.Project != "Project alias" || got.Workspace != "" || got.RoutingError != "" {
+		t.Fatalf("documented absolute project qualifier refused: %+v", got)
+	}
 	// A linked row without a usable selector must never become the main checkout.
 	h.backend.snapshot.Sections[0].Rows[0].ContentWorkspaceID = ""
 	missingSelector := []notification.Notification{{Origin: notification.Origin{WorkDir: linked, TmuxSession: "private-session"}, Targets: []notification.Target{{Kind: notification.TargetFile, Value: "main.go"}}}}
@@ -343,4 +348,23 @@ func TestNotificationTargetsUseOriginLinkedWorkspaceAndRefuseMissingOrigin(t *te
 	if missingSelector[0].Targets[0].RoutingError == "" {
 		t.Fatal("missing linked selector silently retargeted to main checkout")
 	}
+}
+
+func TestNotificationCapabilityNegotiatesFromHTTPHello(t *testing.T) {
+	isolatedNotificationConfig(t)
+	h := newHarness(t)
+	response, data := h.localDo(req{path: "/api/v0/hello"})
+	if response.StatusCode != 200 {
+		t.Fatalf("hello: %d %s", response.StatusCode, data)
+	}
+	var hello Hello
+	if err := json.Unmarshal(data, &hello); err != nil {
+		t.Fatal(err)
+	}
+	for _, cap := range hello.Capabilities {
+		if cap == "notifications" {
+			return
+		}
+	}
+	t.Fatalf("HTTP hello cannot negotiate notifications: %v", hello.Capabilities)
 }

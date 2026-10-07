@@ -432,7 +432,7 @@ func (s *Server) beginStream() bool {
 
 func (s *Server) hello() Hello {
 	return Hello{APIVersion: APIVersion, APIInstance: s.instance, ServerVersion: s.opts.Version,
-		Capabilities: []string{"sessions", "status", "terminal", "ws_tickets", "events", "projects", "workspace", "workspace_operations", "content", "layouts", "uiRequestRelayV1"},
+		Capabilities: []string{"sessions", "status", "terminal", "ws_tickets", "events", "projects", "workspace", "workspace_operations", "content", "layouts", "uiRequestRelayV1", "notifications"},
 		Terminal:     TerminalProtocol{Protocol: "mobile", Version: mobileproto.Version}}
 }
 

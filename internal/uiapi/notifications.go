@@ -373,7 +373,7 @@ func (s *Server) projectNotificationTargets(all []notification.Notification) {
 			project, workspace, root := "", "", ""
 			if target.Project != "" {
 				for _, p := range cfg.Projects.List {
-					if p.Name == target.Project || filepath.Base(p.Path) == target.Project {
+					if p.Name == target.Project || filepath.Base(p.Path) == target.Project || filepath.IsAbs(target.Project) && filepath.Clean(p.Path) == filepath.Clean(target.Project) {
 						if project != "" {
 							project = ""
 							break
