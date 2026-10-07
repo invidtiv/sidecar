@@ -520,7 +520,10 @@ func TestRelayedOpenAfterBindAcksNotSilence(t *testing.T) {
 	}
 }
 
-func TestBindRemoteDestinationClaimsLiveSessionLeases(t *testing.T) {
+// Bind claims every live session of the bound project and does not consult the
+// current holder first; a foreign lease on a sibling is overridden. The override
+// and the host's reclaim-by-typing are proven in internal/tty.
+func TestBindRemoteDestinationClaimsEveryLiveSiblingSession(t *testing.T) {
 	if err := state.InitWithDir(t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
@@ -537,6 +540,7 @@ func TestBindRemoteDestinationClaimsLiveSessionLeases(t *testing.T) {
 			Key: "/home/me/sidecar",
 			Workspaces: []workspaceinventory.Workspace{
 				{Kind: workspaceinventory.KindShell, Name: "live", TmuxName: "sidecar-claude", Live: true},
+				{Kind: workspaceinventory.KindShell, Name: "sibling", TmuxName: "sidecar-codex", Live: true},
 				{Kind: workspaceinventory.KindShell, Name: "dead", TmuxName: "sidecar-old", Live: false},
 			},
 		}},
@@ -547,8 +551,8 @@ func TestBindRemoteDestinationClaimsLiveSessionLeases(t *testing.T) {
 	claimGeometryLease = func(target string) { claimed = append(claimed, target) }
 
 	_ = m.bindRemoteDestination(Destination{HostID: "aerie", ProjectKey: "/home/me/sidecar", ProjectName: "Sidecar"})
-	if len(claimed) != 1 || claimed[0] != "sidecar-claude" {
-		t.Fatalf("claimed = %v, want [sidecar-claude]", claimed)
+	if len(claimed) != 2 || claimed[0] != "sidecar-claude" || claimed[1] != "sidecar-codex" {
+		t.Fatalf("claimed = %v, want every live sibling [sidecar-claude sidecar-codex]", claimed)
 	}
 }
 
