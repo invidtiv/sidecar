@@ -5,11 +5,18 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
+	"github.com/coder/websocket/wsjson"
+	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/hostproto"
 	"github.com/marcus/sidecar/internal/hosts"
+	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/uiapi"
 )
 
@@ -102,5 +109,108 @@ func TestCatalogObservationDigestIgnoresClockAndPreviewButTracksFacts(t *testing
 	after := remoteCatalogObservationDigest(hosts.Update{HostID: "host", Incarnation: 1, Snapshot: &snap, Health: hosts.Health{State: hosts.StateUnreachable}})
 	if before == after {
 		t.Fatal("host disconnect invisible")
+	}
+}
+
+// The API observes real forwarded outcomes even when the host snapshot is unchanged.
+// Store authority, opt-in and dedupe are shared with the TUI, and sockets see the centre.
+func TestAPIRemoteUpdateReachesNotificationSnapshotAndLiveEvents(t *testing.T) {
+	state := apiStateTree(t, t.TempDir())
+	configDir := t.TempDir()
+	configPath := filepath.Join(configDir, "config.json")
+	config.SetTestConfigPath(configPath)
+	t.Cleanup(config.ResetTestConfigPath)
+	if err := os.WriteFile(configPath, []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	b := &mobileBackend{env: Env{StateDir: state}}
+	aliases := map[string]string{}
+	now := time.Now().UTC()
+	event := hostproto.NotifyEvent{Key: "waiting-key", OccurredAt: now, Class: hostproto.NotifyWaiting, Source: "waiting", Title: "Remote needs input", Sticky: true, Origin: hostproto.NotifyOrigin{ItemID: "item", ProjectKey: "/remote/root", Session: "same-name", Path: "/remote/root"}}
+	update := hosts.Update{HostID: "remote-A", Notify: []hostproto.NotifyEvent{event}}
+	if err := b.persistRemoteNotifications(update, aliases); err != nil {
+		t.Fatal(err)
+	}
+	if all, _ := notify.ReadAll(notify.Path(state)); len(all) != 0 {
+		t.Fatal("managed SSH opt-out created records")
+	}
+	if err := config.SaveNotifications(func(cfg *config.NotificationsConfig) { cfg.SSH.ManagedHosts = true }); err != nil {
+		t.Fatal(err)
+	}
+	server, err := uiapi.Start(uiapi.Options{StateDir: state, Port: 0, Backend: staticAPIBackend{}, Version: "remote-notify-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = server.Shutdown(context.Background()) }()
+	client := uiapi.NewLocalClientForSocket(server.Endpoint())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, "ws://sidecar.local/api/v0/events?notifications=1", &websocket.DialOptions{HTTPClient: client.HTTPClient()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "") }()
+	readSnapshot := func(count int) uiapi.NotificationSnapshot {
+		t.Helper()
+		for {
+			var message uiapi.EventMessage
+			if err := wsjson.Read(ctx, conn, &message); err != nil {
+				t.Fatal(err)
+			}
+			if message.Notifications != nil && len(message.Notifications.Notifications) == count {
+				return *message.Notifications
+			}
+		}
+	}
+	_ = readSnapshot(0)
+	if err := b.persistRemoteNotifications(update, aliases); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := readSnapshot(1)
+	if n := snapshot.Notifications[0]; n.ID != notify.RemoteID("remote-A", event.Key) || n.Origin.HostID != "remote-A" || n.Origin.TmuxSession != "same-name" || n.Origin.ProjectKey != "root" {
+		t.Fatalf("owning host/project lost: %+v", n)
+	}
+	if err := b.persistRemoteNotifications(update, aliases); err != nil {
+		t.Fatal(err)
+	}
+	duplicate := event
+	duplicate.Key = "other-observer-key"
+	if err := b.persistRemoteNotifications(hosts.Update{HostID: "remote-A", Notify: []hostproto.NotifyEvent{duplicate}}, aliases); err != nil {
+		t.Fatal(err)
+	}
+	var viaHTTP uiapi.NotificationSnapshot
+	if err := client.Do(ctx, http.MethodGet, "/api/v0/notifications", nil, &viaHTTP); err != nil {
+		t.Fatal(err)
+	}
+	if len(viaHTTP.Notifications) != 1 {
+		t.Fatalf("duplicate forwarded alert: %+v", viaHTTP)
+	}
+	// The same session and event key on another host are a different owner.
+	if err := b.persistRemoteNotifications(hosts.Update{HostID: "remote-B", Notify: []hostproto.NotifyEvent{event}}, aliases); err != nil {
+		t.Fatal(err)
+	}
+	_ = readSnapshot(2)
+	if err := b.persistRemoteNotifications(hosts.Update{HostID: "remote-A", Notify: []hostproto.NotifyEvent{{Withdraws: duplicate.Key}}}, aliases); err != nil {
+		t.Fatal(err)
+	}
+	snapshot = readSnapshot(1)
+	if snapshot.Notifications[0].Origin.HostID != "remote-B" {
+		t.Fatal("withdrawal crossed host authority")
+	}
+	if err := b.persistRemoteNotifications(hosts.Update{HostID: "remote-B", Notify: []hostproto.NotifyEvent{{WithdrawsTransition: true, Class: event.Class, Origin: event.Origin}}}, aliases); err != nil {
+		t.Fatal(err)
+	}
+	_ = readSnapshot(0)
+	stale := event
+	stale.Key = "stale-key"
+	stale.OccurredAt = now.Add(-notify.LiveEventGrace - time.Second)
+	if err := b.persistRemoteNotifications(hosts.Update{HostID: "remote-A", Notify: []hostproto.NotifyEvent{stale}}, aliases); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Do(ctx, http.MethodGet, "/api/v0/notifications", nil, &viaHTTP); err != nil {
+		t.Fatal(err)
+	}
+	if len(viaHTTP.Notifications) != 0 || len(aliases) != 0 {
+		t.Fatalf("stale replay or retained wait aliases: %+v %v", viaHTTP, aliases)
 	}
 }

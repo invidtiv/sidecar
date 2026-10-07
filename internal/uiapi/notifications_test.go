@@ -368,3 +368,21 @@ func TestNotificationCapabilityNegotiatesFromHTTPHello(t *testing.T) {
 	}
 	t.Fatalf("HTTP hello cannot negotiate notifications: %v", hello.Capabilities)
 }
+
+func TestNotificationRemoteSessionTargetUsesExactOwningCatalogIdentity(t *testing.T) {
+	isolatedNotificationConfig(t)
+	h := newHarness(t)
+	h.backend.snapshot = mobileproto.CatalogSnapshot{Hosts: []mobileproto.CatalogHost{{ID: "local", Local: true}, {ID: "remote"}}, Sections: []mobileproto.CatalogSection{{Rows: []mobileproto.CatalogRow{{ID: "local-opaque", OwnerHostID: "local", Session: "same-name", Path: "/remote/root"}, {ID: "remote-opaque", OwnerHostID: "remote", Session: "same-name", Path: "/remote/root", ProjectName: "Remote alias", ContentWorkspaceID: "opaque-remote-workspace"}}}}}
+	all := []notification.Notification{{Origin: notification.Origin{HostID: "remote", TmuxSession: "same-name", WorkDir: "/remote/root/src"}, Transition: &notification.TransitionMetadata{Class: notification.TransitionWaiting}}}
+	h.s.projectNotificationTargets(all)
+	target := all[0].Targets[0]
+	if target.Value != "remote-opaque" || target.Project != "Remote alias" || target.Workspace != "opaque-remote-workspace" || target.RoutingError != "" {
+		t.Fatalf("remote authority lost: %+v", target)
+	}
+	h.backend.snapshot.Sections[0].Rows = h.backend.snapshot.Sections[0].Rows[:1]
+	all[0].Targets = nil
+	h.s.projectNotificationTargets(all)
+	if all[0].Targets[0].RoutingError == "" {
+		t.Fatal("missing remote session silently selected local namesake")
+	}
+}

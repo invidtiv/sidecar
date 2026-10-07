@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/hostnotify"
 	"github.com/marcus/sidecar/internal/hostproto"
 	"github.com/marcus/sidecar/internal/hosts"
 	"github.com/marcus/sidecar/internal/hostserve"
@@ -120,6 +121,7 @@ func (b *mobileBackend) WatchCatalog(ctx context.Context) (<-chan struct{}, erro
 			remote = ch
 			go func() {
 				previous := make(map[string]string)
+				aliases := make(map[string]string)
 				for {
 					select {
 					case <-ctx.Done():
@@ -127,6 +129,11 @@ func (b *mobileBackend) WatchCatalog(ctx context.Context) (<-chan struct{}, erro
 					case update, ok := <-b.registry.Updates():
 						if !ok {
 							return
+						}
+						// Live transitions are independent of snapshot digests. An otherwise
+						// unchanged host update must still reach the centre.
+						if err := b.persistRemoteNotifications(update, aliases); err != nil {
+							log.Printf("API remote notifications: %v", err)
 						}
 						digest := remoteCatalogObservationDigest(update)
 						if previous[update.HostID] == digest {
@@ -243,4 +250,27 @@ func (b *mobileBackend) workspaceWatchTargets(projects []hostserve.Project) []li
 		targets = append(targets, livewatch.File(filepath.Join(dir, "shells.json")))
 	}
 	return targets
+}
+
+// persistRemoteNotifications consumes authenticated live events, never synthesizing
+// transitions from catalog state or replaying a reconnect baseline.
+func (b *mobileBackend) persistRemoteNotifications(update hosts.Update, aliases map[string]string) error {
+	if len(update.Notify) == 0 {
+		return nil
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	events := hostnotify.Adapt(update, cfg.Notifications.SSH.ManagedHosts, time.Now().UTC())
+	if len(events.Post)+len(events.Dismiss)+len(events.DismissTransitions) == 0 {
+		return nil
+	}
+	notify.ApplyConfig(cfg.Notifications)
+	store, err := notify.Open(b.env.StateDir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = store.Close() }()
+	return hostnotify.Apply(store, events, aliases)
 }

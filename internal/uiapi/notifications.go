@@ -333,7 +333,7 @@ func (s *Server) relayNotification(req uirequest.Request) {
 func (s *Server) projectNotificationTargets(all []notification.Notification) {
 	needed := false
 	for _, n := range all {
-		if len(n.Targets) > 0 {
+		if len(n.Targets) > 0 || n.Transition != nil && n.Origin.TmuxSession != "" {
 			needed = true
 			break
 		}
@@ -365,6 +365,38 @@ func (s *Server) projectNotificationTargets(all []notification.Notification) {
 	for i := range all {
 		n := &all[i]
 		n.Targets = append([]notification.Target(nil), n.Targets...)
+		if len(n.Targets) == 0 && n.Transition != nil && n.Origin.TmuxSession != "" {
+			target := notification.Target{Kind: notification.TargetSession, Value: n.Origin.TmuxSession, RoutingError: "The notification owning session is unavailable or ambiguous."}
+			var chosen *mobileproto.CatalogRow
+			best := -1
+			ambiguous := false
+			if catalogErr == nil {
+				for _, row := range rows {
+					if row.Session != n.Origin.TmuxSession || n.Origin.HostID != "" && row.OwnerHostID != n.Origin.HostID || n.Origin.HostID == "" && !catalogOwnerLocal(catalog, row.OwnerHostID) {
+						continue
+					}
+					rel, err := filepath.Rel(row.Path, n.Origin.WorkDir)
+					if row.Path == "" || n.Origin.WorkDir == "" || err != nil || rel == ".." || strings.HasPrefix(rel, "../") {
+						continue
+					}
+					if len(row.Path) > best {
+						copy := row
+						chosen = &copy
+						best = len(row.Path)
+						ambiguous = false
+					} else if len(row.Path) == best && chosen != nil && chosen.ID != row.ID {
+						ambiguous = true
+					}
+				}
+			}
+			if chosen != nil && !ambiguous {
+				target.Value = chosen.ID
+				target.Project = chosen.ProjectName
+				target.Workspace = chosen.ContentWorkspaceID
+				target.RoutingError = ""
+			}
+			n.Targets = append(n.Targets, target)
+		}
 		for j := range n.Targets {
 			target := &n.Targets[j]
 			if target.Kind != notification.TargetFile && target.Kind != notification.TargetIssue && target.Kind != notification.TargetCommit {
