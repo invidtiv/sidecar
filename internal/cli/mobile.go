@@ -135,11 +135,71 @@ func runMobileServe(env Env, args []string) int {
 }
 
 func runMobileOwnerService(env Env) error {
+	ctx := env.Ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	// SSH can leave a pipe open after an exec channel disappears. Also
+	// observe the original exec parent, without inspecting any other process.
+	parent := os.Getppid()
+	go monitorMobileOwnerParent(ctx, parent, os.Getppid, time.Second, cancel)
 	service, err := newMobileOwnerService(env, env.Stdin, env.Stdout)
 	if err != nil {
 		return err
 	}
-	return service.Run(env.Ctx)
+	return runMobileOwnerUntilClosed(ctx, service.Run, service.TransportDone(), 3*time.Second)
+}
+
+func monitorMobileOwnerParent(ctx context.Context, parent int, currentParent func() int, interval time.Duration, cancel context.CancelFunc) {
+	if parent <= 1 {
+		cancel()
+		return
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if currentParent() != parent {
+				cancel()
+				return
+			}
+		}
+	}
+}
+
+// The stdio process must leave after its transport does, even when an adapter
+// ignores cancellation. main exits when this runner returns; no process-wide
+// watchdog is installed for in-process HTTP terminal services.
+func runMobileOwnerUntilClosed(ctx context.Context, run func(context.Context) error, transportDone <-chan struct{}, grace time.Duration) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- run(runCtx) }()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		cancel()
+	case <-transportDone:
+		// Let Run finish the last complete request before cancelling it.
+	}
+	timer := time.NewTimer(grace)
+	defer timer.Stop()
+	select {
+	case err := <-done:
+		return err
+	case <-timer.C:
+		cancel()
+		return fmt.Errorf("mobile owner: shutdown exceeded %s after transport or context closed", grace)
+	}
 }
 
 func newMobileOwnerService(env Env, input io.Reader, output io.Writer) (*mobile.Service, error) {

@@ -126,6 +126,9 @@ func (b *mobileBackend) Close() {
 		stop()
 		<-done
 	}
+	if b.directory != nil {
+		b.directory.Close()
+	}
 	if b.registry != nil {
 		b.registry.Stop()
 	}

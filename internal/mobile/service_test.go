@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -139,11 +140,12 @@ func TestResolveRequiresExpectedIdentityForCandidateSelector(t *testing.T) {
 func TestRequestScannerStopsWhenContextCancelsWithQueuedInput(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	scanner := bufio.NewScanner(strings.NewReader("first\nsecond\n"))
-	lines := make(chan []byte)
+	lines := make(chan []byte, 8)
 	done := make(chan error, 1)
 	terminal := make(chan struct{})
-	go scanMobileRequests(ctx, scanner, lines, terminal, done)
 	cancel()
+	var queued atomic.Int64
+	go func() { done <- scanMobileRequests(ctx, scanner, lines, terminal, &queued) }()
 	select {
 	case err := <-done:
 		if !errors.Is(err, context.Canceled) {

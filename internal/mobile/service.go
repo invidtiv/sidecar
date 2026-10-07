@@ -15,6 +15,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/marcus/sidecar/internal/mobileproto"
@@ -26,6 +27,8 @@ const (
 	maxResolvedTargets = 64
 	maxAttachments     = 8
 	recentRequestIDs   = 256
+	shutdownTimeout    = time.Second
+	inboundQueueBytes  = 16 << 20
 )
 
 type ResolvedTarget struct {
@@ -88,6 +91,8 @@ type Service struct {
 	abortOnce                                      sync.Once
 	closeOnce                                      sync.Once
 	closeDone                                      chan struct{}
+	transportDone                                  chan struct{}
+	transportOnce                                  sync.Once
 	capabilitiesRequested                          bool
 	clientCaps                                     mobileproto.ClientCapabilities
 	viewer                                         mobileproto.Viewer
@@ -123,9 +128,10 @@ func New(config Config) (*Service, error) {
 		manager:               config.Manager, terminalBackend: config.Terminal, instance: instance, hubID: config.HubID,
 		ownerHostID: config.OwnerHostID, configGeneration: config.OwnerConfigGeneration,
 		targets: make(map[string]targetState), attachments: make(map[string]*attachment),
-		seenRequests: make(map[string]struct{}),
-		terminal:     make(chan struct{}),
-		closeDone:    make(chan struct{}),
+		seenRequests:  make(map[string]struct{}),
+		terminal:      make(chan struct{}),
+		closeDone:     make(chan struct{}),
+		transportDone: make(chan struct{}),
 	}
 	s.out.mu.Lock()
 	s.out.onError = s.abort
@@ -142,9 +148,18 @@ func (s *Service) Run(ctx context.Context) error {
 	}()
 	scanner := bufio.NewScanner(s.in)
 	scanner.Buffer(make([]byte, 64<<10), mobileproto.MaxLineBytes)
-	lines := make(chan []byte)
+	lines := make(chan []byte, mobileproto.OutboundQueueDepth)
+	var queuedBytes atomic.Int64
 	scanDone := make(chan error, 1)
-	go scanMobileRequests(runCtx, scanner, lines, s.terminal, scanDone)
+	go func() {
+		defer s.transportEnded()
+		defer close(lines)
+		err := scanMobileRequests(runCtx, scanner, lines, s.terminal, &queuedBytes)
+		scanDone <- err
+		if err != nil {
+			s.abort(err)
+		}
+	}()
 	handshake := false
 	for {
 		var line []byte
@@ -157,8 +172,21 @@ func (s *Service) Run(ctx context.Context) error {
 			if err != nil {
 				return fmt.Errorf("mobile service: read JSONL: %w", err)
 			}
-			return nil
-		case line = <-lines:
+			// EOF may arrive while complete requests remain buffered. Finish
+			// them in order before returning the final response.
+			scanDone = nil
+			continue
+		case received, ok := <-lines:
+			if !ok {
+				if scanDone != nil {
+					if err := <-scanDone; err != nil {
+						return fmt.Errorf("mobile service: read JSONL: %w", err)
+					}
+				}
+				return nil
+			}
+			line = received
+			queuedBytes.Add(-int64(len(line)))
 		}
 		request, err := decodeRequest(line)
 		if err != nil {
@@ -203,20 +231,28 @@ func (s *Service) Run(ctx context.Context) error {
 	}
 }
 
-func scanMobileRequests(ctx context.Context, scanner *bufio.Scanner, lines chan<- []byte, terminal <-chan struct{}, done chan<- error) {
+func scanMobileRequests(ctx context.Context, scanner *bufio.Scanner, lines chan<- []byte, terminal <-chan struct{}, queuedBytes *atomic.Int64) error {
 	for scanner.Scan() {
 		line := append([]byte(nil), scanner.Bytes()...)
 		select {
-		case lines <- line:
 		case <-ctx.Done():
-			done <- ctx.Err()
-			return
+			return ctx.Err()
 		case <-terminal:
-			done <- fmt.Errorf("mobile service: outbound transport unavailable")
-			return
+			return fmt.Errorf("mobile service: outbound transport unavailable")
+		default:
+		}
+		if queuedBytes.Add(int64(len(line))) > inboundQueueBytes {
+			queuedBytes.Add(-int64(len(line)))
+			return fmt.Errorf("mobile service: inbound byte budget exceeded")
+		}
+		select {
+		case lines <- line:
+		default:
+			queuedBytes.Add(-int64(len(line)))
+			return fmt.Errorf("mobile service: inbound queue overflow")
 		}
 	}
-	done <- scanner.Err()
+	return scanner.Err()
 }
 
 func decodeRequest(line []byte) (mobileproto.Request, error) {
@@ -969,26 +1005,49 @@ func (s *Service) removeAttachment(handle string) {
 
 func (s *Service) closeAll() {
 	s.closeOnce.Do(func() {
-		s.mu.Lock()
-		list := make([]*attachment, 0, len(s.attachments))
-		for _, a := range s.attachments {
-			list = append(list, a)
-		}
-		s.attachments = make(map[string]*attachment)
-		s.mu.Unlock()
-		for _, a := range list {
-			a.stopAttachment()
-		}
-		if s.manager != nil {
-			s.manager.Stop()
-		}
-		if s.closeDone != nil {
-			close(s.closeDone)
-		}
+		// Neither attachment nor backend teardown is guaranteed to return.
+		// Keep sync.Once itself nonblocking so concurrent callers share the
+		// same bounded wait, even when cleanup is already stuck.
+		go func() {
+			s.mu.Lock()
+			list := make([]*attachment, 0, len(s.attachments))
+			for _, a := range s.attachments {
+				list = append(list, a)
+			}
+			s.attachments = make(map[string]*attachment)
+			s.mu.Unlock()
+			for _, a := range list {
+				a.stopAttachment()
+			}
+			if s.manager != nil {
+				s.manager.Stop()
+			}
+			if s.closeDone != nil {
+				close(s.closeDone)
+			}
+		}()
 	})
 	if s.closeDone != nil {
-		<-s.closeDone
+		timer := time.NewTimer(shutdownTimeout)
+		defer timer.Stop()
+		select {
+		case <-s.closeDone:
+		case <-timer.C:
+		}
 	}
+}
+
+// TransportDone closes independently of request handling or backend teardown.
+// A process runner can bound its lifetime after stdin EOF or an output failure,
+// including when an in-flight backend call does not honor cancellation.
+func (s *Service) TransportDone() <-chan struct{} { return s.transportDone }
+
+func (s *Service) transportEnded() {
+	s.transportOnce.Do(func() {
+		if s.transportDone != nil {
+			close(s.transportDone)
+		}
+	})
 }
 
 func (s *Service) resolveFailure(requestID string, err error) {
@@ -1015,6 +1074,7 @@ func (s *Service) emit(response mobileproto.Response) bool {
 
 func (s *Service) abort(error) {
 	s.abortOnce.Do(func() {
+		s.transportEnded()
 		if s.terminal != nil {
 			close(s.terminal)
 		}

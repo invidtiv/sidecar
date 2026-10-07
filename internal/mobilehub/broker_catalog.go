@@ -27,6 +27,9 @@ type BoundOwner struct {
 	// the owner's defaults match its own.
 	Capabilities mobileproto.Capabilities
 	Start        func(context.Context) (LineStream, mobileproto.Response, error)
+	// CatalogStart leases the directory's warm catalog-only connection. Target
+	// lookup uses Start so terminal hello and attachment state stay private.
+	CatalogStart func(context.Context) (LineStream, mobileproto.Response, error)
 	Validate     func(context.Context) error
 }
 
@@ -164,6 +167,9 @@ func (r *CatalogRouter) Query(ctx context.Context, query mobileproto.CatalogQuer
 			if err != nil {
 				results <- ownerResult{index: i, err: err, slot: true}
 				return
+			}
+			if owner.CatalogStart != nil {
+				owner.Start = owner.CatalogStart
 			}
 			remapped, stream, err := queryBoundOwner(ownerCtx, ownerCtx, directory.Identity, &owner, fmt.Sprintf("hub-catalog-%d", i))
 			if stream != nil {

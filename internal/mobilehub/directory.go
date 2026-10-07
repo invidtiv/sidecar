@@ -38,6 +38,7 @@ type RegistryDirectory struct {
 	lifetime context.Context
 	registry directoryRegistry
 	current  DirectoryProvider
+	pool     *catalogOwnerPool
 }
 
 const directoryReadinessPoll = 25 * time.Millisecond
@@ -71,8 +72,11 @@ func newRegistryDirectory(lifetime context.Context, registry directoryRegistry, 
 	if lifetime == nil || registry == nil || current == nil {
 		return nil, fmt.Errorf("mobile hub: registry directory requires lifetime, registry and current config")
 	}
-	return &RegistryDirectory{lifetime: lifetime, registry: registry, current: current}, nil
+	return &RegistryDirectory{lifetime: lifetime, registry: registry, current: current, pool: newCatalogOwnerPool(lifetime, registry)}, nil
 }
+
+// Close retires every warm catalog connection held by this directory.
+func (d *RegistryDirectory) Close() { d.pool.close() }
 
 func (d *RegistryDirectory) Snapshot(ctx context.Context) (DirectorySnapshot, error) {
 	current, err := d.current(ctx)
@@ -90,6 +94,7 @@ func (d *RegistryDirectory) Snapshot(ctx context.Context) (DirectorySnapshot, er
 		}
 	}
 	d.registry.Sync(d.lifetime, enabled)
+	d.pool.reconcile(enabled)
 	d.registry.MarkStaleIfQuiet()
 
 	snapshot := DirectorySnapshot{Identity: current.Identity, Hosts: make([]mobileproto.CatalogHost, 0, len(current.Remotes)+1),
@@ -146,6 +151,8 @@ func (d *RegistryDirectory) Snapshot(ctx context.Context) (DirectorySnapshot, er
 			return BoundOwner{Authority: CatalogAuthority{OwnerHostID: hostID, RegistrationFingerprint: authority.RegistrationFingerprint},
 				Start: func(startCtx context.Context) (LineStream, mobileproto.Response, error) {
 					return StartOwner(startCtx, d.registry, authority)
+				}, CatalogStart: func(startCtx context.Context) (LineStream, mobileproto.Response, error) {
+					return d.pool.acquire(startCtx, authority)
 				}, Validate: func(context.Context) error {
 					d.registry.MarkStaleIfQuiet()
 					return d.registry.ValidateMobileRoute(authority)
