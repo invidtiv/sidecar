@@ -272,5 +272,14 @@ func (b *mobileBackend) persistRemoteNotifications(update hosts.Update, aliases 
 		return err
 	}
 	defer func() { _ = store.Close() }()
-	return hostnotify.Apply(store, events, aliases)
+	// A host may withdraw an old wait and announce a new episode in one
+	// update. Apply the wire order so that withdrawal cannot retire the new wait.
+	now := time.Now().UTC()
+	for _, event := range update.Notify {
+		next := hostnotify.Adapt(hosts.Update{HostID: update.HostID, Notify: []hostproto.NotifyEvent{event}}, cfg.Notifications.SSH.ManagedHosts, now)
+		if err := hostnotify.Apply(store, next, aliases); err != nil {
+			return err
+		}
+	}
+	return nil
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/hostnotify"
 	"github.com/marcus/sidecar/internal/hostproto"
 	"github.com/marcus/sidecar/internal/hosts"
 	"github.com/marcus/sidecar/internal/notify"
@@ -212,5 +213,32 @@ func TestAPIRemoteUpdateReachesNotificationSnapshotAndLiveEvents(t *testing.T) {
 	}
 	if len(viaHTTP.Notifications) != 0 || len(aliases) != 0 {
 		t.Fatalf("stale replay or retained wait aliases: %+v %v", viaHTTP, aliases)
+	}
+	// A reconnect withdrawal and a subsequent new episode can share one update.
+	old, ok := hostnotify.Notification("remote-C", event, time.Now().UTC())
+	if !ok {
+		t.Fatal("old event setup refused")
+	}
+	old.CreatedAt = time.Now().Add(-30 * time.Second)
+	store, err := notify.Open(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Post(old); err != nil {
+		t.Fatal(err)
+	}
+	_ = store.Close()
+	next := event
+	next.Key = "new-episode"
+	next.Title = "A new remote wait"
+	next.OccurredAt = time.Now().UTC()
+	if err := b.persistRemoteNotifications(hosts.Update{HostID: "remote-C", Notify: []hostproto.NotifyEvent{{WithdrawsTransition: true, Class: event.Class, Origin: event.Origin}, next}}, aliases); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Do(ctx, http.MethodGet, "/api/v0/notifications", nil, &viaHTTP); err != nil {
+		t.Fatal(err)
+	}
+	if len(viaHTTP.Notifications) != 1 || viaHTTP.Notifications[0].Title != next.Title {
+		t.Fatalf("withdrawal retired the new episode: %+v", viaHTTP)
 	}
 }
