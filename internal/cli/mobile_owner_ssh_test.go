@@ -112,7 +112,10 @@ func TestMobileOwnerSSHControlMasterTransportLoss(t *testing.T) {
 			var pids []int
 			for i := 0; i < 4; i++ {
 				pidPath := filepath.Join(root, fmt.Sprintf("%s-%d.pid", drop, i))
-				remote := "echo $$ > " + quote(pidPath) + "; exec env -u TMUX -u TMUX_PANE XDG_STATE_HOME=" + quote(filepath.Join(root, "state")) + " TMUX_TMPDIR=" + quote(filepath.Join(root, "tmux")) + " SIDECAR_ISOLATED_STATE=1 " + quote(bin) + " -config " + quote(filepath.Join(root, "config.json")) + " mobile serve --stdio --owner-only"
+				// sshd's non-login PATH may omit Homebrew's tmux. This private
+				// server uses the test's tool paths, as the production registry
+				// does through its configured login shell.
+				remote := "echo $$ > " + quote(pidPath) + "; exec env -u TMUX -u TMUX_PANE PATH=" + quote(os.Getenv("PATH")) + " XDG_STATE_HOME=" + quote(filepath.Join(root, "state")) + " TMUX_TMPDIR=" + quote(filepath.Join(root, "tmux")) + " SIDECAR_ISOLATED_STATE=1 " + quote(bin) + " -config " + quote(filepath.Join(root, "config.json")) + " mobile serve --stdio --owner-only"
 				cmd := ssh(target, remote)
 				input, err := cmd.StdinPipe()
 				if err != nil {
