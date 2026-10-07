@@ -188,3 +188,111 @@ func TestWorktreeIndexProjectMetadataIsOneInvocationSnapshot(t *testing.T) {
 		t.Fatalf("new invocation missed new metadata: %q,%v", got, ok)
 	}
 }
+
+func TestPathSnapshotMatchesCanonicalFallback(t *testing.T) {
+	root := t.TempDir()
+	directory := filepath.Join(root, "actual")
+	if err := os.Mkdir(directory, 0755); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(root, "file")
+	if err := os.WriteFile(file, []byte("file"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	links := map[string]string{
+		"absolute": directory,
+		"relative": "actual",
+		"chain":    "relative",
+		"broken":   "absent-target",
+		"loop-a":   "loop-b",
+		"loop-b":   "loop-a",
+	}
+	for name, target := range links {
+		if err := os.Symlink(target, filepath.Join(root, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	paths := make(pathSnapshot)
+	for _, path := range []string{root, directory, file, filepath.Join(file, "child"),
+		filepath.Join(root, "missing", "many", "levels", "first"), filepath.Join(root, "missing", "many", "levels", "second"),
+		filepath.Join(root, "absolute"), filepath.Join(root, "relative"), filepath.Join(root, "chain"),
+		filepath.Join(root, "chain", "missing", "child"), filepath.Join(root, "broken"),
+		filepath.Join(root, "broken", "child"), filepath.Join(root, "loop-a"), filepath.Join(root, "loop-b", "child"), ""} {
+		t.Run(path, func(t *testing.T) {
+			got := paths.resolve(path)
+			want := resolvedPath(path)
+			info, _ := os.Stat(path)
+			if got.canonical != want || (got.info == nil) != (info == nil) || info != nil && !os.SameFile(got.info, info) {
+				t.Fatalf("snapshot(%q) canonical=%q info=%v; linear canonical=%q info=%v", path, got.canonical, got.info, want, info)
+			}
+		})
+	}
+	// Relative input is normalized by Abs, as in resolvedPath. Avoid Chdir so
+	// this test cannot change other concurrent tests' process-wide directory.
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	relative, err := filepath.Rel(cwd, filepath.Join(root, "chain", "missing", "child"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := paths.resolve(relative).canonical, resolvedPath(relative); got != want {
+		t.Fatalf("relative snapshot=%q linear=%q", got, want)
+	}
+}
+
+func TestWorktreeIndexNewQueriedAliasDoesNotReuseRetargetedAncestor(t *testing.T) {
+	base, work := t.TempDir(), t.TempDir()
+	first, second := filepath.Join(work, "first"), filepath.Join(work, "second")
+	for _, root := range []string{first, second} {
+		if err := os.Mkdir(root, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	alias := filepath.Join(work, "alias")
+	if err := os.Symlink(first, alias); err != nil {
+		t.Fatal(err)
+	}
+	wt := filepath.Join(work, "worktree")
+	registered := filepath.Join(alias, "missing", "registered")
+	writeIndexedProject(t, base, "original", registered, resolvedPath(registered), wt)
+	index := NewWorktreeIndex(base)
+	index.Lookup(filepath.Join(alias, "other"), wt) // load original ancestor
+	if err := os.Remove(alias); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(second, alias); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := index.Lookup(registered, wt)
+	want, wantOK := LookupWorktreeWithBase(base, registered, wt)
+	if ok || got != want || ok != wantOK {
+		t.Fatalf("fresh queried alias borrowed old manifest: index=%q,%v linear=%q,%v", got, ok, want, wantOK)
+	}
+}
+
+func TestWorktreeIndexCachedInodeDoesNotFollowMovedRegistration(t *testing.T) {
+	base, work := t.TempDir(), t.TempDir()
+	first, moved := filepath.Join(work, "first"), filepath.Join(work, "moved")
+	if err := os.Mkdir(first, 0755); err != nil {
+		t.Fatal(err)
+	}
+	wt := filepath.Join(work, "worktree")
+	writeIndexedProject(t, base, "original", first, resolvedPath(first), wt)
+	index := NewWorktreeIndex(base)
+	if _, ok := index.Lookup(first, wt); !ok {
+		t.Fatal("initial registration missing")
+	}
+	if err := os.Rename(first, moved); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(first, 0755); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := index.Lookup(moved, wt)
+	want, wantOK := LookupWorktreeWithBase(base, moved, wt)
+	if ok || got != want || ok != wantOK {
+		t.Fatalf("moved inode borrowed path-anchored registration: index=%q,%v linear=%q,%v", got, ok, want, wantOK)
+	}
+}

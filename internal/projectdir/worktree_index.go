@@ -40,6 +40,57 @@ type indexedProjectRoot struct {
 	info      os.FileInfo
 }
 
+type indexedPath struct {
+	canonical string
+	info      os.FileInfo
+}
+
+// pathSnapshot resolves each component once. A missing ancestor proves that
+// its descendants are missing too, so stale sibling registrations share that
+// answer instead of repeatedly walking all ancestors with EvalSymlinks.
+type pathSnapshot map[string]indexedPath
+
+func (paths pathSnapshot) resolve(path string) indexedPath {
+	if path == "" {
+		return indexedPath{}
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		info, _ := os.Stat(path)
+		return indexedPath{canonical: resolvedPath(path), info: info}
+	}
+	if cached, ok := paths[abs]; ok {
+		return cached
+	}
+	parent := filepath.Dir(abs)
+	canonical := abs
+	if parent != abs {
+		ancestor := paths.resolve(parent)
+		canonical = filepath.Join(ancestor.canonical, filepath.Base(abs))
+		if ancestor.info == nil || !ancestor.info.IsDir() {
+			missing := indexedPath{canonical: canonical}
+			paths[abs] = missing
+			return missing
+		}
+	}
+	info, err := os.Lstat(canonical)
+	if err != nil {
+		info = nil
+	} else if info.Mode()&os.ModeSymlink != 0 {
+		// Symlink targets may be absolute, relative or chains. Retain the
+		// standard resolver's loop/broken-link behavior at this real seam.
+		if target, err := filepath.EvalSymlinks(canonical); err == nil {
+			canonical = filepath.Clean(target)
+			info, _ = os.Stat(canonical)
+		} else {
+			info = nil
+		}
+	}
+	result := indexedPath{canonical: canonical, info: info}
+	paths[abs] = result
+	return result
+}
+
 type projectLookup struct {
 	dir string
 	ok  bool
@@ -84,6 +135,7 @@ func (x *WorktreeIndex) lookupProject(projectRoot string) projectLookup {
 	if !x.loaded {
 		x.loaded = true
 		entries, _ := os.ReadDir(filepath.Join(x.base, "projects"))
+		paths := make(pathSnapshot)
 		for _, entry := range entries {
 			if !entry.IsDir() {
 				continue
@@ -97,18 +149,28 @@ func (x *WorktreeIndex) lookupProject(projectRoot string) projectLookup {
 			if !valid {
 				continue
 			}
-			info, _ := os.Stat(root)
-			x.roots = append(x.roots, indexedProjectRoot{dir: dir, spelling: meta.Path, canonical: resolvedPath(root), info: info})
+			identity := paths.resolve(root)
+			x.roots = append(x.roots, indexedProjectRoot{dir: dir, spelling: meta.Path, canonical: identity.canonical, info: identity.info})
 		}
 	}
 	if projectRoot == "" {
 		return projectLookup{}
 	}
-	want := resolvedPath(projectRoot)
-	info, _ := os.Stat(projectRoot)
+	// A newly queried spelling gets fresh filesystem identity: sharing the
+	// registration snapshot here could lend an old manifest through an alias
+	// retargeted after another root populated the index.
+	identity := make(pathSnapshot).resolve(projectRoot)
+	want, info := identity.canonical, identity.info
 	var equivalent projectLookup
 	for _, root := range x.roots {
-		matches := root.canonical == want || root.info != nil && info != nil && root.info.IsDir() && info.IsDir() && os.SameFile(root.info, info)
+		matches := root.canonical == want
+		if !matches && root.info != nil && info != nil && root.info.IsDir() && info.IsDir() && os.SameFile(root.info, info) {
+			// Filesystem identity proves case aliases only while the anchored
+			// registration still names that directory. A captured inode must
+			// not lend its manifest to a directory moved to another path.
+			current, err := os.Stat(root.canonical)
+			matches = err == nil && current.IsDir() && os.SameFile(current, info)
+		}
 		if !matches {
 			continue
 		}
