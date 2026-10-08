@@ -30,6 +30,13 @@ type Store interface {
 	Post(n Notification) (PostResult, error)
 	MarkRead(id string) error
 	Dismiss(id string) error
+	// MarkReadMany and DismissMany apply one mark to many records as a single
+	// change, so marking a group or clearing the centre is one write (one
+	// watcher wake, one snapshot) rather than one per record. Ids the store
+	// does not hold, and records already in the requested state, are skipped:
+	// the goal state already holds for them. They return the ids they changed.
+	MarkReadMany(ids []string) ([]string, error)
+	DismissMany(ids []string) ([]string, error)
 	// List returns every retained notification, newest first.
 	List() ([]Notification, error)
 	// Sweep drops dismissed notifications past the retention window and
@@ -325,19 +332,29 @@ func (s *JSONLStore) rewrite() error {
 }
 
 func (s *JSONLStore) append(ev event) error {
-	data, err := json.Marshal(ev)
-	if err != nil {
-		return err
+	return s.appendAll([]event{ev})
+}
+
+// appendAll writes every event in one write call, so a batch is one change to
+// the file rather than one per record.
+func (s *JSONLStore) appendAll(evs []event) error {
+	var buf []byte
+	for _, ev := range evs {
+		data, err := json.Marshal(ev)
+		if err != nil {
+			return err
+		}
+		buf = append(append(buf, data...), '\n')
 	}
 	f, err := os.OpenFile(s.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = f.Close() }()
-	if _, err := f.Write(append(data, '\n')); err != nil {
+	if _, err := f.Write(buf); err != nil {
 		return err
 	}
-	s.events++
+	s.events += len(evs)
 	return nil
 }
 
@@ -414,41 +431,69 @@ func (s *JSONLStore) Dismiss(id string) error {
 }
 
 func (s *JSONLStore) mark(id string, kind eventKind) error {
+	_, err := s.markMany([]string{id}, kind, true)
+	return err
+}
+
+// MarkReadMany implements Store.
+func (s *JSONLStore) MarkReadMany(ids []string) ([]string, error) {
+	return s.markMany(ids, eventRead, false)
+}
+
+// DismissMany implements Store.
+func (s *JSONLStore) DismissMany(ids []string) ([]string, error) {
+	return s.markMany(ids, eventDismissed, false)
+}
+
+// markMany appends one event per record that changes, in one write under one
+// lock. strict reports an unknown id as ErrNotFound (the single-record
+// contract); otherwise unknown ids are skipped.
+func (s *JSONLStore) markMany(ids []string, kind eventKind, strict bool) ([]string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	return s.withFileLock(func() error {
+	var changed []string
+	err := s.withFileLock(func() error {
 		if err := s.reload(); err != nil {
 			return err
 		}
-		n, ok := s.records[id]
-		if !ok {
-			return fmt.Errorf("%w: %s", ErrNotFound, id)
-		}
-		if kind == eventRead && n.ReadAt != nil {
-			return nil
-		}
-		if kind == eventDismissed && n.DismissedAt != nil {
-			return nil
-		}
 		at := time.Now().UTC()
-		if err := s.append(event{Event: kind, At: at, ID: id}); err != nil {
+		var events []event
+		seen := map[string]bool{}
+		for _, id := range ids {
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			n, ok := s.records[id]
+			if !ok {
+				if strict {
+					return fmt.Errorf("%w: %s", ErrNotFound, id)
+				}
+				continue
+			}
+			if kind == eventRead && n.ReadAt != nil || kind == eventDismissed && n.DismissedAt != nil {
+				continue
+			}
+			events = append(events, event{Event: kind, At: at, ID: id})
+			changed = append(changed, id)
+		}
+		if len(events) == 0 {
+			return nil
+		}
+		if err := s.appendAll(events); err != nil {
+			changed = nil
 			return err
 		}
-		switch kind {
-		case eventRead:
-			n.ReadAt = &at
-		case eventDismissed:
-			n.DismissedAt = &at
-			// Dismissing implies seen: an unread counter that keeps counting a
-			// notification the user has thrown away is a bug, not a feature.
-			if n.ReadAt == nil {
-				n.ReadAt = &at
-			}
+		for _, ev := range events {
+			s.apply(ev)
 		}
-		s.records[id] = n
 		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	return changed, nil
 }
 
 // Get returns one record.

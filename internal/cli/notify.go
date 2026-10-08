@@ -996,45 +996,61 @@ func runNotifyDismiss(env Env, args []string) int {
 			positional = append(positional, arg)
 		}
 	}
-	if len(positional) != 1 {
-		cliErrf(env.Stderr, "notify dismiss requires exactly one notification id\n\n%s", help)
+	if len(positional) == 0 {
+		cliErrf(env.Stderr, "notify dismiss requires at least one notification id\n\n%s", help)
 		return 2
 	}
-	id := positional[0]
 
 	all, err := notify.ReadAll(notify.Path(env.StateDir))
 	if err != nil {
 		cliErrln(env.Stderr, err)
 		return 1
 	}
-	var target notify.Notification
-	found := false
+	byID := make(map[string]notify.Notification, len(all))
 	for _, n := range all {
-		if n.ID == id {
-			target, found = n, true
-			break
+		byID[n.ID] = n
+	}
+	// Every id is checked before anything changes, so a batch with one bad id
+	// dismisses nothing rather than half of what was asked.
+	caller := notifyOrigin(env)
+	var ids []string
+	seen := map[string]bool{}
+	for _, id := range positional {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		target, found := byID[id]
+		if !found {
+			cliErrf(env.Stderr, "no notification with id %q\n", id)
+			return 3
+		}
+		if !notify.MayDismiss(target, caller) {
+			cliErrf(env.Stderr, "notification %s was posted by another caller; a caller may only dismiss its own\n", id)
+			return 4
+		}
+		ids = append(ids, id)
+	}
+
+	results := make([]notifyResult, 0, len(ids))
+	var undelivered []string
+	for _, id := range ids {
+		delivered, _ := notifyDeliver(env, notifyDismissRequest(caller, id))
+		results = append(results, notifyResult{Action: "dismiss", ID: id, Delivered: delivered})
+		if !delivered {
+			undelivered = append(undelivered, id)
 		}
 	}
-	if !found {
-		cliErrf(env.Stderr, "no notification with id %q\n", id)
-		return 3
-	}
-	caller := notifyOrigin(env)
-	if !notify.MayDismiss(target, caller) {
-		cliErrf(env.Stderr, "notification %s was posted by another caller; a caller may only dismiss its own\n", id)
-		return 4
-	}
 
-	delivered, _ := notifyDeliver(env, notifyDismissRequest(caller, id))
-
-	if !delivered {
+	if len(undelivered) > 0 {
 		store, err := notify.Open(env.StateDir)
 		if err != nil {
 			cliErrln(env.Stderr, err)
 			return 1
 		}
 		defer func() { _ = store.Close() }()
-		if err := store.Dismiss(id); err != nil {
+		// One store change for the whole batch: one watcher wake, one snapshot.
+		if _, err := store.DismissMany(undelivered); err != nil {
 			cliErrln(env.Stderr, err)
 			return 1
 		}
@@ -1043,17 +1059,26 @@ func runNotifyDismiss(env Env, args []string) int {
 			if ctx == nil {
 				ctx = context.Background()
 			}
-			if err := env.NotificationDelivery.Remove(ctx, target); err != nil {
-				cliErrln(env.Stderr, err)
-				return 1
+			for _, id := range undelivered {
+				if err := env.NotificationDelivery.Remove(ctx, byID[id]); err != nil {
+					cliErrln(env.Stderr, err)
+					return 1
+				}
 			}
 		}
 	}
 
-	if jsonOutput {
-		return writeNotifyJSON(env, notifyResult{Action: "dismiss", ID: id, Delivered: delivered})
+	for _, res := range results {
+		if jsonOutput {
+			// One object per id: a single id prints exactly what it always has,
+			// several print JSONL.
+			if code := writeNotifyJSON(env, res); code != 0 {
+				return code
+			}
+			continue
+		}
+		_, _ = fmt.Fprintf(env.Stdout, "Dismissed %s.\n", res.ID)
 	}
-	_, _ = fmt.Fprintf(env.Stdout, "Dismissed %s.\n", id)
 	return 0
 }
 

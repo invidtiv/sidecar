@@ -2138,11 +2138,17 @@
         "properties": {
           "id": {
             "type": "string"
+          },
+          "ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           }
         },
-        "required": [
-          "id"
-        ],
         "type": "object"
       },
       "NotificationNotification": {

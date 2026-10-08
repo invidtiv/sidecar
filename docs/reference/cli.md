@@ -2353,15 +2353,18 @@ sidecar notify config set --ssh-terminal ghostty
 
 ### `sidecar notify dismiss`
 
-Dismiss a notification you posted
+Dismiss notifications you posted
 
-Dismiss one notification. A caller may only dismiss notifications it posted:
-identity is the Sidecar shell you are in, or failing that the working directory,
-so the notification you posted a moment ago is dismissible and the user's own
-and other agents' are not.
+Dismiss one or more notifications. A caller may only dismiss notifications it
+posted: identity is the Sidecar shell you are in, or failing that the working
+directory, so the notification you posted a moment ago is dismissible and the
+user's own and other agents' are not.
+
+Several ids are checked first and dismissed together: if any id is unknown or
+not yours, nothing is dismissed. --json writes one result object per id.
 
 ```
-Usage: sidecar notify dismiss [--json] <id>
+Usage: sidecar notify dismiss [--json] <id> [<id>...]
 ```
 
 **Options:**
@@ -2381,6 +2384,7 @@ Usage: sidecar notify dismiss [--json] <id>
 
 ```bash
 sidecar notify dismiss ntf-06215f4b1a2c3-9f1e2d3c
+sidecar notify dismiss --json ntf-06215f4b1a2c3-9f1e2d3c ntf-06215f4b1a2c4-0a1b2c3d
 ```
 
 ### `sidecar notify list`

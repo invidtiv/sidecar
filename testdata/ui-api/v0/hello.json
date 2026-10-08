@@ -15,7 +15,8 @@
     "layouts",
     "uiRequestRelayV1",
     "notifications",
-    "file_search"
+    "file_search",
+    "notifications_batch"
   ],
   "terminal": {
     "protocol": "mobile",

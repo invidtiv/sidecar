@@ -346,3 +346,68 @@ func TestNotifyDeliveryReadsCommittedReceiptAtTimeoutBoundary(t *testing.T) {
 		t.Fatalf("request not cleaned up: %v", err)
 	}
 }
+
+// Several ids are validated before anything changes, then dismissed together;
+// --json writes one result object per id.
+func TestNotifyDismissManyIsAllOrNothing(t *testing.T) {
+	env, out, errOut := notifyEnv(t)
+	for _, title := range []string{"first", "second"} {
+		if code := runNotifyPost(env, []string{title}); code != 0 {
+			t.Fatalf("post: %d %q", code, errOut.String())
+		}
+	}
+	store, err := notify.Open(env.StateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Post(notify.Notification{ID: "ntf-theirs", Source: notify.SourceAgent, Title: "theirs", Origin: notify.Origin{TmuxSession: "sidecar-sh-someone-else"}}); err != nil {
+		t.Fatal(err)
+	}
+	_ = store.Close()
+	all, _ := notify.ReadAll(notify.Path(env.StateDir))
+	var mine []string
+	for _, n := range all {
+		if n.Title == "first" || n.Title == "second" {
+			mine = append(mine, n.ID)
+		}
+	}
+	if len(mine) != 2 {
+		t.Fatalf("posted = %+v", all)
+	}
+	if code := runNotifyDismiss(env, []string{mine[0], "ntf-theirs"}); code != 4 {
+		t.Fatalf("mixed batch = %d, want 4", code)
+	}
+	if code := runNotifyDismiss(env, []string{mine[0], "ntf-missing"}); code != 3 {
+		t.Fatalf("batch with unknown id = %d, want 3", code)
+	}
+	if active := notify.Active(mustReadAll(t, env)); len(active) != 3 {
+		t.Fatalf("a refused batch changed state: %+v", active)
+	}
+	out.Reset()
+	if code := runNotifyDismiss(env, []string{"--json", mine[0], mine[1], mine[0]}); code != 0 {
+		t.Fatalf("batch = %d, stderr %q", code, errOut.String())
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("--json lines = %q", out.String())
+	}
+	for i, line := range lines {
+		var res notifyResult
+		if err := json.Unmarshal([]byte(line), &res); err != nil || res.Action != "dismiss" || res.ID != mine[i] {
+			t.Fatalf("line %d = %q (%v)", i, line, err)
+		}
+	}
+	active := notify.Active(mustReadAll(t, env))
+	if len(active) != 1 || active[0].ID != "ntf-theirs" {
+		t.Fatalf("active after batch = %+v", active)
+	}
+}
+
+func mustReadAll(t *testing.T, env Env) []notify.Notification {
+	t.Helper()
+	all, err := notify.ReadAll(notify.Path(env.StateDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return all
+}

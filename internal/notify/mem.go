@@ -45,21 +45,43 @@ func (s *MemStore) MarkRead(id string) error { return s.mark(id, false) }
 func (s *MemStore) Dismiss(id string) error { return s.mark(id, true) }
 
 func (s *MemStore) mark(id string, dismiss bool) error {
+	_, err := s.markMany([]string{id}, dismiss, true)
+	return err
+}
+
+// MarkReadMany implements Store.
+func (s *MemStore) MarkReadMany(ids []string) ([]string, error) { return s.markMany(ids, false, false) }
+
+// DismissMany implements Store.
+func (s *MemStore) DismissMany(ids []string) ([]string, error) { return s.markMany(ids, true, false) }
+
+func (s *MemStore) markMany(ids []string, dismiss, strict bool) ([]string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	n, ok := s.records[id]
-	if !ok {
-		return fmt.Errorf("%w: %s", ErrNotFound, id)
+	if strict {
+		for _, id := range ids {
+			if _, ok := s.records[id]; !ok {
+				return nil, fmt.Errorf("%w: %s", ErrNotFound, id)
+			}
+		}
 	}
 	at := time.Now().UTC()
-	if n.ReadAt == nil {
-		n.ReadAt = &at
+	var changed []string
+	for _, id := range ids {
+		n, ok := s.records[id]
+		if !ok || dismiss && n.DismissedAt != nil || !dismiss && n.ReadAt != nil {
+			continue
+		}
+		if n.ReadAt == nil {
+			n.ReadAt = &at
+		}
+		if dismiss {
+			n.DismissedAt = &at
+		}
+		s.records[id] = n
+		changed = append(changed, id)
 	}
-	if dismiss && n.DismissedAt == nil {
-		n.DismissedAt = &at
-	}
-	s.records[id] = n
-	return nil
+	return changed, nil
 }
 
 // List implements Store.

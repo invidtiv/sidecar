@@ -2,6 +2,7 @@ package notify
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -398,5 +399,72 @@ func TestConcurrentStoresDoNotClobber(t *testing.T) {
 	}
 	if len(onDisk) != 1 || onDisk[0].ID != posted.ID {
 		t.Fatalf("sweep clobbered the log: %+v", onDisk)
+	}
+}
+
+// A group or "clear all" is one change to the log: every record lands in one
+// write, already-dismissed and unknown ids are skipped rather than failing the
+// batch, and the result survives a reopen. Both stores honour the same rule.
+func TestDismissManyIsOneWriteAndSkipsSettledIDs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	s, err := OpenPath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for i := 0; i < 4; i++ {
+		posted, err := s.Post(Notification{Source: SourceAgent, Title: "n"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, posted.ID)
+	}
+	if err := s.Dismiss(ids[0]); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadFile(path)
+	changed, err := s.DismissMany([]string{ids[0], ids[1], "ntf-missing", ids[2], ids[1]})
+	if err != nil {
+		t.Fatalf("DismissMany: %v", err)
+	}
+	if strings.Join(changed, ",") != ids[1]+","+ids[2] {
+		t.Fatalf("changed = %v, want %v", changed, ids[1:3])
+	}
+	after, _ := os.ReadFile(path)
+	if got := strings.Count(string(after[len(before):]), "\n"); got != 2 {
+		t.Fatalf("batch appended %d lines, want 2", got)
+	}
+	reopened, err := OpenPath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	all, _ := reopened.List()
+	active := Active(all)
+	if len(active) != 1 || active[0].ID != ids[3] {
+		t.Fatalf("active after batch = %+v", active)
+	}
+	for _, n := range all {
+		if n.Dismissed() && !n.Read() {
+			t.Fatalf("dismissed %s is still unread", n.ID)
+		}
+	}
+	if changed, err := reopened.DismissMany([]string{ids[1]}); err != nil || len(changed) != 0 {
+		t.Fatalf("repeat batch changed %v, %v", changed, err)
+	}
+	if err := reopened.Dismiss("ntf-missing"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("single dismiss of an unknown id = %v, want ErrNotFound", err)
+	}
+
+	mem := NewMemStore()
+	a, _ := mem.Post(Notification{Source: SourceAgent, Title: "a"})
+	b, _ := mem.Post(Notification{Source: SourceAgent, Title: "b"})
+	if changed, err := mem.MarkReadMany([]string{a.ID, "ntf-missing"}); err != nil || len(changed) != 1 {
+		t.Fatalf("mem MarkReadMany = %v, %v", changed, err)
+	}
+	if changed, err := mem.DismissMany([]string{a.ID, b.ID}); err != nil || len(changed) != 2 {
+		t.Fatalf("mem DismissMany = %v, %v", changed, err)
+	}
+	if list, _ := mem.List(); len(Active(list)) != 0 {
+		t.Fatalf("mem active after batch = %+v", Active(list))
 	}
 }

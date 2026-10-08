@@ -938,17 +938,19 @@ func notifyCommand() *Command {
 
 	dismissCmd := &Command{
 		Name:    "dismiss",
-		Summary: "Dismiss a notification you posted",
-		Usage:   "sidecar notify dismiss [--json] <id>",
-		Long: "Dismiss one notification. A caller may only dismiss notifications it posted:\n" +
-			"identity is the Sidecar shell you are in, or failing that the working directory,\n" +
-			"so the notification you posted a moment ago is dismissible and the user's own\n" +
-			"and other agents' are not.",
+		Summary: "Dismiss notifications you posted",
+		Usage:   "sidecar notify dismiss [--json] <id> [<id>...]",
+		Long: "Dismiss one or more notifications. A caller may only dismiss notifications it\n" +
+			"posted: identity is the Sidecar shell you are in, or failing that the working\n" +
+			"directory, so the notification you posted a moment ago is dismissible and the\n" +
+			"user's own and other agents' are not.\n\n" +
+			"Several ids are checked first and dismissed together: if any id is unknown or\n" +
+			"not yours, nothing is dismissed. --json writes one result object per id.",
 		Flags: []Flag{
 			{Name: "--json", Summary: "Write one structured result object to stdout", Bool: true},
 			{Name: "--help", Short: "-h", Summary: "Show this help", Bool: true},
 		},
-		Args: ArgSpec{Min: 1, Max: 1, Description: "The notification id from post or list"},
+		Args: ArgSpec{Min: 1, Max: -1, Description: "Notification ids from post or list"},
 		ExitCodes: []ExitCode{
 			{Code: 0, Summary: "dismissed"},
 			{Code: 1, Summary: "state failure"},
@@ -958,9 +960,10 @@ func notifyCommand() *Command {
 		},
 		Examples: []Example{
 			{Command: "sidecar notify dismiss ntf-06215f4b1a2c3-9f1e2d3c"},
+			{Command: "sidecar notify dismiss --json ntf-06215f4b1a2c3-9f1e2d3c ntf-06215f4b1a2c4-0a1b2c3d"},
 		},
 		Agent: AgentDoc{
-			Invocation: "sidecar notify dismiss <id>",
+			Invocation: "sidecar notify dismiss <id> [<id>...]",
 			Summary:    "Take back a notification you posted once it no longer matters",
 		},
 		Mutates: true,

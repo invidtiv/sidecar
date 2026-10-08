@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -32,9 +33,19 @@ type NotificationSnapshot struct {
 	DeliveryIDs   []string                                 `json:"delivery_ids"`
 	Delivery      map[string]notification.DeliveryDecision `json:"delivery"`
 }
+
+// NotificationMutation names the records to mark read or dismiss. Send id for
+// one record (an unknown id is 404) or ids for a batch applied as one change:
+// a batch skips unknown and already-settled ids, because the goal state holds
+// for them. Servers advertising the notifications_batch capability accept ids.
 type NotificationMutation struct {
-	ID string `json:"id"`
+	ID  string   `json:"id,omitempty"`
+	IDs []string `json:"ids,omitempty"`
 }
+
+// maxNotificationBatch bounds one mutation; the request body cap bounds it too.
+const maxNotificationBatch = 2000
+
 type NotificationReceiptRequest struct {
 	Channel   string `json:"channel,omitempty"`
 	Succeeded *bool  `json:"succeeded,omitempty"`
@@ -122,9 +133,24 @@ func (s *Server) handleNotificationMutation(w http.ResponseWriter, r *http.Reque
 	if !decodeBody(w, r, &input) {
 		return
 	}
-	if input.ID == "" {
-		writeError(w, 400, CodeInvalidRequest, "id is required")
+	batch := input.IDs != nil
+	ids := input.IDs
+	if input.ID != "" {
+		ids = append(ids, input.ID)
+	}
+	if len(ids) == 0 {
+		writeError(w, 400, CodeInvalidRequest, "id or ids is required")
 		return
+	}
+	if len(ids) > maxNotificationBatch {
+		writeError(w, 400, CodeInvalidRequest, fmt.Sprintf("Send at most %d ids per request.", maxNotificationBatch))
+		return
+	}
+	for _, id := range ids {
+		if id == "" {
+			writeError(w, 400, CodeInvalidRequest, "ids must not be empty")
+			return
+		}
 	}
 	store, err := notification.Open(s.opts.StateDir)
 	if err != nil {
@@ -132,9 +158,14 @@ func (s *Server) handleNotificationMutation(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	defer func() { _ = store.Close() }()
-	if r.URL.Path == notificationReadPath {
+	switch {
+	case batch && r.URL.Path == notificationReadPath:
+		_, err = store.MarkReadMany(ids)
+	case batch:
+		_, err = store.DismissMany(ids)
+	case r.URL.Path == notificationReadPath:
 		err = store.MarkRead(input.ID)
-	} else {
+	default:
 		err = store.Dismiss(input.ID)
 	}
 	if errors.Is(err, notification.ErrNotFound) {

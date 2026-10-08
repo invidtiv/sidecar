@@ -386,3 +386,73 @@ func TestNotificationRemoteSessionTargetUsesExactOwningCatalogIdentity(t *testin
 		t.Fatal("missing remote session silently selected local namesake")
 	}
 }
+
+// Clearing a group is one request and one store change: the response is the
+// settled snapshot, the events socket pushes one snapshot without the group,
+// unknown ids are skipped, the single-id form keeps its 404, and HTTP hello
+// advertises the capability so clients can fall back on older servers.
+func TestNotificationBatchDismissIsOneChange(t *testing.T) {
+	isolatedNotificationConfig(t)
+	h, _ := viewerHarness(t)
+	store, err := notification.Open(h.state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for i := 0; i < 5; i++ {
+		n := notification.Notification{ID: notification.NewID(), Source: notification.SourceSystem, Title: fmt.Sprintf("n%d", i), CreatedAt: time.Now()}
+		if _, err := store.Post(n); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, n.ID)
+	}
+	c := dialEvents(t, h, "?notifications=1", nil, true)
+	for {
+		event := readEvent(t, c)
+		if event.Type == "notifications" && len(event.Notifications.Notifications) == 5 {
+			break
+		}
+	}
+	body, _ := json.Marshal(NotificationMutation{IDs: []string{ids[0], ids[1], ids[2], "ntf-gone"}})
+	r, b := h.localDo(req{method: "POST", path: notificationDismissPath, body: string(body)})
+	expect(t, r, b, 200, "")
+	var snapshot NotificationSnapshot
+	if err := json.Unmarshal(b, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Notifications) != 2 || snapshot.Unread != 2 {
+		t.Fatalf("batch response = %+v", snapshot)
+	}
+	pushed := readEvent(t, c)
+	for pushed.Type != "notifications" {
+		pushed = readEvent(t, c)
+	}
+	if len(pushed.Notifications.Notifications) != 2 {
+		t.Fatalf("pushed after batch = %+v", pushed)
+	}
+	body, _ = json.Marshal(NotificationMutation{IDs: []string{ids[3]}})
+	r, b = h.localDo(req{method: "POST", path: notificationReadPath, body: string(body)})
+	expect(t, r, b, 200, "")
+	if err := json.Unmarshal(b, &snapshot); err != nil || snapshot.Unread != 1 {
+		t.Fatalf("batch read = %+v %v", snapshot, err)
+	}
+	r, b = h.localDo(req{method: "POST", path: notificationDismissPath, body: `{"id":"ntf-gone"}`})
+	expect(t, r, b, 404, CodeNotFound)
+	r, b = h.localDo(req{method: "POST", path: notificationDismissPath, body: `{"ids":[]}`})
+	expect(t, r, b, 400, CodeInvalidRequest)
+	r, b = h.localDo(req{method: "POST", path: notificationDismissPath, body: `{"ids":[""]}`})
+	expect(t, r, b, 400, CodeInvalidRequest)
+
+	r, b = h.localDo(req{path: "/api/v0/hello"})
+	expect(t, r, b, 200, "")
+	var hello Hello
+	if err := json.Unmarshal(b, &hello); err != nil {
+		t.Fatal(err)
+	}
+	for _, capability := range hello.Capabilities {
+		if capability == "notifications_batch" {
+			return
+		}
+	}
+	t.Fatalf("HTTP hello does not advertise notifications_batch: %v", hello.Capabilities)
+}
