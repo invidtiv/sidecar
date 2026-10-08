@@ -30,6 +30,8 @@ The 60-second `sidecar api open` link remains, demoted to a convenience for the 
 
 In scope: any website the owner visits (CSRF, DNS rebinding, cross-origin WebSocket); any device on the LAN or tailnet (unsolicited requests, request flooding, racing a legitimate request, passive sniffing); other local OS users (loopback access, port takeover while Sidecar is stopped, already documented in the reference). Out of scope: an attacker who already has a shell as the owner; a user who clicks through a certificate warning on a network an attacker controls (see Phase C's limit).
 
+Tailscale identity (Phase B) identifies a device, not a person. Any process, container or VM on an untagged device of an allowed login can drive the API, and outside a browser it can send any `Origin`, so the Origin and mutation guards stop web pages, not software on that device. This is accepted, and it is the same trust model as the serve-mode Tailnet listener, where `tailscale serve` vouches for the same device with a header. A device allowlist is deferred; recording the approving device on Phase A approvals is a follow-up after both phases merge.
+
 ## Phase A: approve a new browser from a trusted surface (td-ba7a17)
 
 Works on the existing Browser listener (localhost and `api.browserProxyOrigin`), and later on the LAN listener. It does not widen the Tailnet listener: a login that is not allowed there is still refused, though an allowed Tailnet login may act as an approver.
@@ -71,6 +73,8 @@ The `access_request` notification appears like any other. Activating it opens an
 - Independent security review of the diff.
 
 ## Phase B: Tailscale identity as zero-click access (td-accec4)
+
+**Phase status:** implemented and security-reviewed on its branch, pending merge. The direct listener, its admission rules and the setting `api.tailnetMode` are described in the [reference](../../reference/ui-api.md#direct-mode).
 
 ### What the probe established (aerie, 2026-10-08, Tailscale 1.102.4 standalone macOS build)
 
