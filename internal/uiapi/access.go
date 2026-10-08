@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -30,6 +31,7 @@ const (
 	maxAccessCodeFailures      = 5
 	accessCodeFailureWindow    = time.Minute
 	maxDeviceLabelRunes        = 64
+	accessReplaceInterval      = time.Second
 	accessCodeLength           = 6
 	accessCodeAlphabet         = "0123456789ABCDEFGHJKMNPQRSTVWXYZ" // Crockford base32
 	approvedViaLink            = "link"
@@ -69,6 +71,16 @@ type accessRequest struct {
 
 func (r *accessRequest) info() AccessRequestInfo {
 	return AccessRequestInfo{RequestID: r.id, Label: r.label, Origin: r.origin, Address: r.address, CreatedAt: r.created.UTC(), ExpiresAt: r.expires.UTC()}
+}
+
+// MultipleWaiting is the plain warning shown when more than one browser is
+// waiting: every request can look identical, so the code on the person's own
+// screen is the only thing that tells them apart.
+func MultipleWaiting(n int) string {
+	if n < 2 {
+		return ""
+	}
+	return fmt.Sprintf("%d browsers are waiting; make sure the code is the one on your screen.", n)
 }
 
 // NormalizeAccessCode turns what a person typed into the canonical code:
@@ -129,7 +141,7 @@ func cleanDeviceLabel(label string) string {
 			}
 			continue
 		}
-		if unicode.IsSpace(r) {
+		if unicode.IsSpace(r) || blankFiller(r) {
 			space = true
 			continue
 		}
@@ -144,7 +156,32 @@ func cleanDeviceLabel(label string) string {
 		out = string([]rune(out)[:maxDeviceLabelRunes])
 		out = strings.TrimRight(out, " ")
 	}
+	if !hasVisibleRune(out) {
+		// Only combining marks or fillers: it would show as nothing, which is
+		// no name at all.
+		return ""
+	}
 	return out
+}
+
+// blankFiller reports letters that render as blank space (Hangul and
+// halfwidth fillers, the blank Braille pattern) though Unicode does not call
+// them spaces.
+func blankFiller(r rune) bool {
+	switch r {
+	case '\u115F', '\u1160', '\u3164', '\uFFA0', '\u2800':
+		return true
+	}
+	return false
+}
+
+func hasVisibleRune(s string) bool {
+	for _, r := range s {
+		if !unicode.IsSpace(r) && !unicode.In(r, unicode.Mn, unicode.Me) {
+			return true
+		}
+	}
+	return false
 }
 
 // mayApprove is who may list, approve and deny access requests and manage
@@ -155,6 +192,11 @@ func mayApprove(c caller) bool {
 	switch c.auth {
 	case "local", "session", "tailnet":
 		return true
+	case "ticket":
+		// A browser opens its streams with a ticket; the ticket carries the
+		// client that bought it. A browser session or tailnet login is an
+		// approver, a paired origin ("origin:") is not.
+		return strings.HasPrefix(c.client, "session:") || strings.HasPrefix(c.client, "tailnet:")
 	}
 	return false
 }
@@ -198,24 +240,57 @@ func validApprovedVia(via string) bool {
 	return false
 }
 
-// admitAccessRequest applies the outstanding-request limits to a new request
-// from address. A pending request for the same registration is replaced, so
-// it does not count.
-func admitAccessRequest(pending []*accessRequest, address, registration string) error {
-	total, fromAddress := 0, 0
+// accessEvictions applies the outstanding-request limits to a new request
+// from address. A new request is never refused for capacity: when its
+// address already holds the per-address limit, or the server holds the total
+// limit, the oldest pending request in that bucket is evicted instead (its
+// browser's poll reports expired and asks again). Someone nearby can race a
+// request in, but cannot shut everyone else out. Behind a proxy every request
+// has the proxy's address and shares one bucket. pending is oldest first; a
+// pending request for the same registration is replaced, so it is not
+// counted here.
+func accessEvictions(pending []*accessRequest, address, registration string) []*accessRequest {
+	var others, sameAddress []*accessRequest
 	for _, r := range pending {
 		if r.registration == registration {
 			continue
 		}
-		total++
+		others = append(others, r)
 		if r.address == address {
-			fromAddress++
+			sameAddress = append(sameAddress, r)
 		}
 	}
-	if total >= maxPendingAccessRequests || fromAddress >= maxPendingAccessPerAddress {
-		return errTooManyOutstanding
+	var evicted []*accessRequest
+	gone := map[*accessRequest]bool{}
+	for len(sameAddress) >= maxPendingAccessPerAddress {
+		evicted = append(evicted, sameAddress[0])
+		gone[sameAddress[0]] = true
+		sameAddress = sameAddress[1:]
 	}
-	return nil
+	remaining := len(others) - len(evicted)
+	for _, r := range others {
+		if remaining < maxPendingAccessRequests {
+			break
+		}
+		if !gone[r] {
+			evicted = append(evicted, r)
+			gone[r] = true
+			remaining--
+		}
+	}
+	return evicted
+}
+
+// replacementTooSoon reports whether the same browser asked again too soon
+// after its pending request. Replacement skips the capacity limits, so it is
+// rate-limited instead.
+func replacementTooSoon(pending []*accessRequest, registration string, now time.Time) bool {
+	for _, r := range pending {
+		if r.registration == registration && now.Sub(r.created) < accessReplaceInterval {
+			return true
+		}
+	}
+	return false
 }
 
 // recentFailures keeps the wrong-code failures inside the window.
@@ -301,11 +376,17 @@ func (a *authStore) createAccessRequest(origin, address, label string, key Brows
 	now := a.now()
 	a.pruneAccessLocked(now)
 	pending := a.pendingAccessLocked()
-	if err := admitAccessRequest(pending, address, registration); err != nil {
-		return AccessRequestCreated{}, AccessRequestInfo{}, err
+	if replacementTooSoon(pending, registration, now) {
+		return AccessRequestCreated{}, AccessRequestInfo{}, errTooManyOutstanding
+	}
+	for _, r := range accessEvictions(pending, address, registration) {
+		r.status, r.settled = accessStatusExpired, now
 	}
 	used := map[string]bool{}
 	for _, r := range pending {
+		if r.status != accessStatusPending {
+			continue
+		}
 		if r.registration == registration {
 			// The same browser asked again (a reload); its earlier request
 			// is superseded rather than left to count against the limits.
@@ -413,6 +494,19 @@ func (a *authStore) sweepAccess() int {
 	defer a.mu.Unlock()
 	a.pruneAccessLocked(a.now())
 	return len(a.pendingAccessLocked())
+}
+
+// nextAccessExpiry is when the earliest pending request expires.
+func (a *authStore) nextAccessExpiry() (time.Time, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	var next time.Time
+	for _, r := range a.pendingAccessLocked() {
+		if next.IsZero() || r.expires.Before(next) {
+			next = r.expires
+		}
+	}
+	return next, !next.IsZero()
 }
 
 func (a *authStore) pendingAccessCount() int {

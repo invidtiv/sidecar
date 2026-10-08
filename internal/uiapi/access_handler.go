@@ -21,6 +21,10 @@ const (
 	devicesPath        = "/api/v0/pairing/sessions"
 	devicePath         = devicesPath + "/{id}"
 	maxPairingItemID   = 128
+	// accessNoteRecheck is how often a new request may look at the store to
+	// see whether the live access notification was dismissed by hand.
+	accessNoteRecheck = 5 * time.Second
+	accessSweepSlack  = 100 * time.Millisecond
 )
 
 // pairingItemRoute maps /api/v0/pairing/requests/<id> and
@@ -133,7 +137,7 @@ func (s *Server) handleCreateAccessRequest(w http.ResponseWriter, r *http.Reques
 	}
 	created, info, err := s.auth.createAccessRequest(c.origin, requestAddress(r), body.Label, body.PublicKey)
 	if errors.Is(err, errTooManyOutstanding) {
-		writeError(w, http.StatusTooManyRequests, CodeTooMany, fmt.Sprintf("Too many browsers are waiting for approval (at most %d, and %d from one address); wait for one to be approved or to expire.", maxPendingAccessRequests, maxPendingAccessPerAddress))
+		writeError(w, http.StatusTooManyRequests, CodeTooMany, "This browser asked for access less than a second ago; wait a second, then ask again.")
 		return
 	}
 	if err != nil {
@@ -142,7 +146,7 @@ func (s *Server) handleCreateAccessRequest(w http.ResponseWriter, r *http.Reques
 	}
 	s.accessSignals.publish(info)
 	s.postAccessNotification(info)
-	s.scheduleAccessSweep()
+	s.armAccessSweep()
 	writeJSON(w, http.StatusOK, created)
 }
 
@@ -191,7 +195,15 @@ func (s *Server) handleApproveAccess(w http.ResponseWriter, r *http.Request, c c
 		writeError(w, http.StatusBadRequest, CodeInvalidRequest, "An access code is six letters and digits, like K7Q-4MX; type the code the new browser shows.")
 		return
 	}
+	// The caller was authenticated before its body arrived. Admission is
+	// decided here, under the same lock revocation takes, so a credential
+	// revoked while its request was in flight cannot let a browser in.
 	s.credentialMu.Lock()
+	if !s.callerLive(c) {
+		s.credentialMu.Unlock()
+		writeError(w, http.StatusUnauthorized, CodeUnauthenticated, revokedSessionReason)
+		return
+	}
 	approval, err := s.auth.approveAccess(c.client, code, via)
 	s.credentialMu.Unlock()
 	switch {
@@ -218,7 +230,14 @@ func (s *Server) handleDenyAccess(w http.ResponseWriter, r *http.Request, c call
 	if !decodeBody(w, r, &body) {
 		return
 	}
+	s.credentialMu.Lock()
+	if !s.callerLive(c) {
+		s.credentialMu.Unlock()
+		writeError(w, http.StatusUnauthorized, CodeUnauthenticated, revokedSessionReason)
+		return
+	}
 	denial, err := s.auth.denyAccess(body.RequestID)
+	s.credentialMu.Unlock()
 	if err != nil {
 		writeError(w, http.StatusNotFound, CodeAccessNotFound, "No pending access request has that id; list them with `sidecar api requests`.")
 		return
@@ -250,6 +269,10 @@ func (s *Server) handleRevokeDevice(w http.ResponseWriter, r *http.Request, c ca
 	_, id := pairingItemRoute(r.URL.Path)
 	s.credentialMu.Lock()
 	defer s.credentialMu.Unlock()
+	if !s.callerLive(c) {
+		writeError(w, http.StatusUnauthorized, CodeUnauthenticated, revokedSessionReason)
+		return
+	}
 	found, err := s.auth.revokeDevice(id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, CodeBackend, fmt.Sprintf("Could not save the device revocation: %v.", err))
@@ -269,12 +292,20 @@ func (s *Server) handleRevokeDevice(w http.ResponseWriter, r *http.Request, c ca
 func (s *Server) postAccessNotification(info AccessRequestInfo) {
 	s.accessMu.Lock()
 	defer s.accessMu.Unlock()
+	now := s.opts.Now()
+	// While this server's notification is live it already stands for this
+	// request too. Only look at the store (which takes its file lock) now and
+	// then, to notice that the person dismissed it by hand.
+	if s.accessNoteID != "" && now.Sub(s.accessNoteChecked) < accessNoteRecheck {
+		return
+	}
 	store, err := notification.Open(s.opts.StateDir)
 	if err != nil {
 		s.opts.Logf("access request notification: %v", err)
 		return
 	}
 	defer func() { _ = store.Close() }()
+	s.accessNoteChecked = now
 	if s.accessNoteID != "" {
 		if n, ok := store.Get(s.accessNoteID); ok && !n.Dismissed() {
 			return
@@ -298,15 +329,17 @@ func (s *Server) postAccessNotification(info AccessRequestInfo) {
 // afterAccessChange withdraws the access notification once nothing is
 // pending.
 func (s *Server) afterAccessChange() {
-	if s.auth.pendingAccessCount() == 0 {
-		s.withdrawAccessNotification()
-	}
+	s.withdrawAccessNotification(false)
 }
 
-func (s *Server) withdrawAccessNotification() {
+// withdrawAccessNotification dismisses the live access notification when no
+// request is pending, or always with force (shutdown: requests die with this
+// process). The pending check is made under accessMu, so a request that
+// arrives between the caller's change and this check keeps its notification.
+func (s *Server) withdrawAccessNotification(force bool) {
 	s.accessMu.Lock()
 	defer s.accessMu.Unlock()
-	if s.accessNoteID == "" {
+	if s.accessNoteID == "" || (!force && s.auth.pendingAccessCount() != 0) {
 		return
 	}
 	store, err := notification.Open(s.opts.StateDir)
@@ -352,17 +385,47 @@ func (s *Server) withdrawStaleAccessNotifications() {
 	}
 }
 
-// scheduleAccessSweep expires requests on time even when nobody polls or
-// lists them, so the notification is withdrawn when the last one lapses.
-func (s *Server) scheduleAccessSweep() {
-	time.AfterFunc(accessRequestTTL+time.Second, s.sweepAccess)
+// armAccessSweep keeps one timer armed for the earliest pending expiry, so
+// requests expire on time even when nobody polls or lists them and the
+// notification is withdrawn when the last one lapses.
+func (s *Server) armAccessSweep() {
+	next, ok := s.auth.nextAccessExpiry()
+	s.sweepMu.Lock()
+	defer s.sweepMu.Unlock()
+	if !ok || s.ctx.Err() != nil {
+		return
+	}
+	if s.sweepTimer != nil && !s.sweepAt.After(next) {
+		return // already armed for this expiry or an earlier one
+	}
+	if s.sweepTimer != nil {
+		s.sweepTimer.Stop()
+	}
+	delay := next.Sub(s.opts.Now()) + accessSweepSlack
+	if delay < 0 {
+		delay = 0
+	}
+	s.sweepAt = next
+	s.sweepTimer = time.AfterFunc(delay, s.sweepAccess)
 }
 
 func (s *Server) sweepAccess() {
+	s.sweepMu.Lock()
+	s.sweepTimer, s.sweepAt = nil, time.Time{}
+	s.sweepMu.Unlock()
 	if s.ctx.Err() != nil {
 		return
 	}
-	if s.auth.sweepAccess() == 0 {
-		s.withdrawAccessNotification()
+	s.auth.sweepAccess()
+	s.withdrawAccessNotification(false)
+	s.armAccessSweep()
+}
+
+func (s *Server) stopAccessSweep() {
+	s.sweepMu.Lock()
+	defer s.sweepMu.Unlock()
+	if s.sweepTimer != nil {
+		s.sweepTimer.Stop()
+		s.sweepTimer = nil
 	}
 }

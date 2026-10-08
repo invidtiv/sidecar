@@ -85,6 +85,9 @@ type Options struct {
 	// zero means 30s and 15s.
 	KeepaliveInterval time.Duration
 	KeepaliveTimeout  time.Duration
+	// RequestReadTimeout bounds how long a non-stream request may take to
+	// deliver its body after its headers. Zero means 10 seconds.
+	RequestReadTimeout time.Duration
 	// KeepaliveStallTimeout bounds how long a blocked inbound pump may excuse
 	// missing pongs. Zero means one minute.
 	KeepaliveStallTimeout time.Duration
@@ -138,9 +141,14 @@ type Server struct {
 	// accessSignals carries new access requests to approvers' events
 	// streams. accessMu orders the access notification's post and
 	// withdrawal; accessNoteID is the live one, if any.
-	accessSignals accessEvents
-	accessMu      sync.Mutex
-	accessNoteID  string
+	accessSignals     accessEvents
+	accessMu          sync.Mutex
+	accessNoteID      string
+	accessNoteChecked time.Time
+	// sweepTimer fires at sweepAt, the earliest pending request's expiry.
+	sweepMu    sync.Mutex
+	sweepTimer *time.Timer
+	sweepAt    time.Time
 }
 
 // ListenerInfo describes one bound listener in status.
@@ -385,6 +393,15 @@ func (s *Server) closeListeners() {
 	}
 }
 
+func (s *Server) requestReadTimeout() time.Duration {
+	if s.opts.RequestReadTimeout > 0 {
+		return s.opts.RequestReadTimeout
+	}
+	return defaultRequestReadTimeout
+}
+
+const defaultRequestReadTimeout = 10 * time.Second
+
 // Endpoint is what this server recorded in endpoint.json.
 func (s *Server) Endpoint() Endpoint { return s.endpoint }
 
@@ -424,7 +441,8 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		}
 		// Pending access requests die with this process; so does their
 		// notification.
-		s.withdrawAccessNotification()
+		s.stopAccessSweep()
+		s.withdrawAccessNotification(true)
 		removeEndpoint(s.dir, s.instance)
 		releaseLock(s.lock)
 		s.closeStatic()

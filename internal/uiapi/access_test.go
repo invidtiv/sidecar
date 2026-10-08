@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -266,47 +267,90 @@ func TestAccessRequestRoutesKeepTheExchangeGuards(t *testing.T) {
 	expect(t, r, b, http.StatusForbidden, CodeNotServedHere)
 }
 
-func TestAccessRequestLimitsAndReplacement(t *testing.T) {
+// A new request is never refused for capacity: the oldest pending request in
+// the full bucket is evicted instead, so a neighbour can race but not block.
+func TestAccessRequestLimitsEvictInsteadOfRefusing(t *testing.T) {
 	h := newHarness(t)
 	_, first := h.requestAccess("one")
+	h.clock.Advance(time.Millisecond)
 	_, pub := browserTestKey(t)
-	h.requestAccessWithKey(pub, "two")
-	_, third := browserTestKey(t)
-	body, _ := json.Marshal(AccessRequestCreate{PublicKey: third})
-	r, b := h.browserDo(req{method: http.MethodPost, path: accessRequestsPath, body: string(body), header: mutationHeaders(h.ownOrigin(), nil)})
-	expect(t, r, b, http.StatusTooManyRequests, CodeTooMany)
-	// The same browser asking again replaces its earlier request instead of
-	// counting against the limit; the superseded request reports expired.
-	again := h.requestAccessWithKey(pub, "two again")
-	if again.Code == "" {
-		t.Fatal("replacement refused")
+	second := h.requestAccessWithKey(pub, "two")
+	h.clock.Advance(time.Millisecond)
+	// A third request from the same address (every proxied request is
+	// 127.0.0.1) is admitted; the oldest from that address is evicted.
+	_, third := h.requestAccess("three")
+	if status := h.accessStatus(first); status.Status != accessStatusExpired {
+		t.Fatalf("evicted request polls %+v", status)
 	}
-	if got := h.s.auth.listAccessRequests(); len(got) != 2 {
-		t.Fatalf("pending = %+v", got)
+	r, b := h.localApprove(first.Code)
+	expect(t, r, b, http.StatusNotFound, CodeAccessCodeInvalid)
+	pending := h.s.auth.listAccessRequests()
+	if len(pending) != 2 || pending[0].RequestID != second.RequestID || pending[1].RequestID != third.RequestID {
+		t.Fatalf("pending = %+v", pending)
 	}
-	// Approving frees a slot.
-	r, b = h.localApprove(first.Code)
-	expect(t, r, b, http.StatusOK, "")
-	h.requestAccessWithKey(third, "three")
 
-	// The total limit, across addresses, through the store.
-	store := newAuthStore(time.Now)
+	// The same browser asking again replaces its earlier request, but not
+	// faster than once a second.
+	body, _ := json.Marshal(AccessRequestCreate{PublicKey: pub})
+	r, b = h.browserDo(req{method: http.MethodPost, path: accessRequestsPath, body: string(body), header: mutationHeaders(h.ownOrigin(), nil)})
+	expect(t, r, b, http.StatusTooManyRequests, CodeTooMany)
+	h.clock.Advance(accessReplaceInterval)
+	again := h.requestAccessWithKey(pub, "two again")
+	if status := h.accessStatus(second); status.Status != accessStatusExpired {
+		t.Fatalf("superseded request polls %+v", status)
+	}
+	if got := h.s.auth.listAccessRequests(); len(got) != 2 || got[1].RequestID != again.RequestID {
+		t.Fatalf("pending after replacement = %+v", got)
+	}
+
+	// The total limit, across addresses, through the store: the 17th evicts
+	// the oldest anywhere.
+	clock := &fakeClock{now: time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)}
+	store := newAuthStore(clock.Now)
+	var ids []string
 	for i := 0; i < maxPendingAccessRequests; i++ {
 		_, pub := browserTestKey(t)
-		if _, _, err := store.createAccessRequest("http://127.0.0.1:1", "10.0.0."+string(rune('a'+i)), "", pub); err != nil {
+		created, _, err := store.createAccessRequest("http://127.0.0.1:1", fmt.Sprintf("10.0.0.%d", i), "", pub)
+		if err != nil {
 			t.Fatalf("request %d: %v", i, err)
 		}
+		ids = append(ids, created.RequestID)
+		clock.Advance(time.Millisecond)
 	}
 	_, pub17 := browserTestKey(t)
-	if _, _, err := store.createAccessRequest("http://127.0.0.1:1", "10.0.1.1", "", pub17); err != errTooManyOutstanding {
-		t.Fatalf("17th request: %v", err)
+	if _, _, err := store.createAccessRequest("http://127.0.0.1:1", "10.0.1.1", "", pub17); err != nil {
+		t.Fatalf("17th request refused: %v", err)
+	}
+	if got := store.pendingAccessCount(); got != maxPendingAccessRequests {
+		t.Fatalf("pending = %d", got)
+	}
+	if store.access[ids[0]].status != accessStatusExpired || store.access[ids[1]].status != accessStatusPending {
+		t.Fatal("the 17th request did not evict exactly the oldest")
 	}
 	codes := map[string]bool{}
-	for _, r := range store.access {
+	for _, r := range store.pendingAccessLocked() {
 		if codes[r.code] {
 			t.Fatal("two pending requests share a code")
 		}
 		codes[r.code] = true
+	}
+}
+
+func TestAccessEvictionRule(t *testing.T) {
+	at := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	req := func(id, address string) *accessRequest {
+		at = at.Add(time.Second)
+		return &accessRequest{id: id, address: address, registration: "reg-" + id, created: at, status: accessStatusPending}
+	}
+	a, b, c := req("a", "1"), req("b", "1"), req("c", "2")
+	if got := accessEvictions([]*accessRequest{a, b, c}, "1", "reg-new"); len(got) != 1 || got[0] != a {
+		t.Fatalf("per-address eviction = %v", got)
+	}
+	if got := accessEvictions([]*accessRequest{a, b, c}, "1", "reg-a"); len(got) != 0 {
+		t.Fatalf("a replacement evicts nothing: %v", got)
+	}
+	if got := accessEvictions([]*accessRequest{a, c}, "3", "reg-new"); len(got) != 0 {
+		t.Fatalf("room to spare evicts nothing: %v", got)
 	}
 }
 
