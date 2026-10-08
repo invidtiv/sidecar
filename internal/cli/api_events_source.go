@@ -154,6 +154,8 @@ func (b *mobileBackend) WatchCatalog(ctx context.Context) (<-chan struct{}, erro
 				return
 			case <-remote:
 				signal()
+			case <-b.terminalChanges:
+				signal()
 			case <-watch.Signals():
 				signal()
 				// Project changes replace only this read-only local observer.

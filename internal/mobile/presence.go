@@ -62,12 +62,18 @@ func (s *Service) presence(ctx context.Context, r mobileproto.Request) {
 	}
 	g, err := a.ensurePresenceGeometry()
 	if err != nil {
+		if a.endIfExitedLocked(ctx) {
+			return
+		}
 		s.writeError(r.RequestID, mobileproto.ErrorBackend, err.Error(), true)
 		return
 	}
 	owned, err := g.Presence(p.Focused, p.Visible, time.Duration(p.IdleMS)*time.Millisecond, p.Columns, p.Rows, false)
 	if err != nil {
 		a.loseControlLocked()
+		if a.endIfExitedLocked(ctx) {
+			return
+		}
 		s.writeError(r.RequestID, mobileproto.ErrorLease, err.Error(), true)
 		return
 	}
@@ -135,6 +141,9 @@ func (s *Service) v1Input(ctx context.Context, r mobileproto.Request) {
 	if s.clientCaps.Presence {
 		g, e := a.ensurePresenceGeometry()
 		if e != nil {
+			if a.endIfExitedLocked(ctx) {
+				return
+			}
 			s.writeError(r.RequestID, mobileproto.ErrorBackend, e.Error(), true)
 			return
 		}
@@ -148,6 +157,9 @@ func (s *Service) v1Input(ctx context.Context, r mobileproto.Request) {
 	}
 	if err != nil {
 		a.loseControlLocked()
+		if a.endIfExitedLocked(ctx) {
+			return
+		}
 		s.writeError(r.RequestID, mobileproto.ErrorLease, err.Error(), true)
 		return
 	}

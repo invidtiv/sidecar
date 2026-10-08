@@ -11,6 +11,7 @@ import (
 // ClientCapabilities opts into additive v1 behavior while retaining envelope
 // version 0 for existing SSH and WebSocket clients. Omitted bits stay legacy.
 type ClientCapabilities struct {
+	TerminalEnded   bool `json:"terminal_ended,omitempty"`
 	Presence        bool `json:"presence,omitempty"`
 	ResetFreeFrames bool `json:"reset_free_frames,omitempty"`
 	CoalescedFrames bool `json:"coalesced_frames,omitempty"`
@@ -39,6 +40,7 @@ type Presence struct {
 
 func SupportedCapabilities() Capabilities {
 	c := DefaultCapabilities()
+	c.TerminalEnded = true
 	c.Presence, c.ResetFreeFrames, c.CoalescedFrames, c.ServerPaste, c.HolderLabels = true, true, true, true, true
 	return c
 }

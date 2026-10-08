@@ -79,7 +79,7 @@ func TestUIAPIFixtureCorpus(t *testing.T) {
 			notificationSettingsOptions(true),
 			ErrorBody{Error: ErrorDetail{Code: CodeInvalidRequest, Message: "notifications.quietHours.start: must be HH:MM", Field: "quietHours.start"}},
 		},
-		"hello.json":         Hello{APIVersion: 0, APIInstance: "api_fixture", ServerVersion: "fixture", Capabilities: []string{"sessions", "status", "terminal", "ws_tickets", "events", "projects", "workspace", "workspace_operations", "content", "layouts", "uiRequestRelayV1", "notifications", "file_search", "notifications_batch"}, Terminal: TerminalProtocol{Protocol: "mobile", Version: 0}},
+		"hello.json":         Hello{APIVersion: 0, APIInstance: "api_fixture", ServerVersion: "fixture", Capabilities: []string{"sessions", "status", "terminal", "terminal_ended", "ws_tickets", "events", "projects", "workspace", "workspace_operations", "content", "layouts", "uiRequestRelayV1", "notifications", "file_search", "notifications_batch"}, Terminal: TerminalProtocol{Protocol: "mobile", Version: 0}},
 		"sessions.json":      catalog,
 		"file-search.json":   contentservice.FileSearchResult{Root: "/workspace/fixture", Query: "read", Results: []contentservice.FileSearchMatch{{Path: "README.md", Positions: []int{0, 1, 2, 3}, Score: 134}}},
 		"content-file.json":  contentservice.ReadResult{Kind: "file", Operation: "document", Workspace: "fixture-project", Display: "README.md", Path: "/workspace/fixture/README.md", Revision: "fixture-file-v1", Content: "# Fixture project\n\nA Markdown pane.\n"},

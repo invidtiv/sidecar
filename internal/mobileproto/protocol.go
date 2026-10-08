@@ -57,6 +57,8 @@ const (
 	ResponseHeartbeat   = "heartbeat"
 	ResponseReleased    = "released"
 	ResponseClosed      = "closed"
+	ResponseEnded       = "ended"
+	EndExited           = "exited"
 	ResponseFrame       = "frame"
 	ResponseReset       = "reset"
 	ResponseError       = "error"
@@ -324,6 +326,7 @@ type Modes struct {
 }
 
 type Capabilities struct {
+	TerminalEnded        bool `json:"terminal_ended,omitempty"`
 	Presence             bool `json:"presence,omitempty"`
 	ResetFreeFrames      bool `json:"reset_free_frames,omitempty"`
 	CoalescedFrames      bool `json:"coalesced_frames,omitempty"`
@@ -378,6 +381,7 @@ type Response struct {
 	Coalesced            bool             `json:"coalesced,omitempty"`
 	Holder               *Holder          `json:"holder,omitempty"`
 	Reason               string           `json:"reason,omitempty"`
+	ExitStatus           *int             `json:"exit_status,omitempty"`
 	Error                *Error           `json:"error,omitempty"`
 }
 

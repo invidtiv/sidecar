@@ -21,7 +21,8 @@ type LineStream interface {
 // BoundOwner is one current owner route. Start and Validate must remain bound
 // to the same runtime client and stable registration represented by Authority.
 type BoundOwner struct {
-	Authority CatalogAuthority
+	sameProcess bool // Set only by the directory's local owner endpoint.
+	Authority   CatalogAuthority
 	// Capabilities is populated from this stream's validated owner hello.
 	// The public broker uses the observed limits and timing; it never assumes
 	// the owner's defaults match its own.
@@ -283,6 +284,7 @@ func (r *CatalogRouter) LookupWithHello(ctx context.Context, selector string, ex
 	if err != nil {
 		return BoundOwner{}, nil, TargetBinding{}, err
 	}
+	owner.sameProcess = endpoint.Host.Local
 	remapped, stream, err := queryBoundOwner(ownerCtx, ctx, directory.Identity, &owner, "hub-target-lookup")
 	if err != nil {
 		if stream != nil {
@@ -346,7 +348,22 @@ func queryBoundOwner(operationCtx, streamCtx context.Context, hubIdentity mobile
 	}
 	startCtx, cancelStart := context.WithCancel(streamCtx)
 	stopStartupDeadline := context.AfterFunc(operationCtx, cancelStart)
-	stream, hello, err := owner.Start(startCtx)
+	// End events are optional. Discover support with the established hello
+	// shape first: older owners strictly reject unknown capability fields.
+	// An older owner keeps this stream; a capable owner gets a fresh stream
+	// with the opt-in on its first (and only) hello.
+	options, _ := startCtx.Value(ownerHelloKey{}).(ownerHelloOptions)
+	probeCtx := startCtx
+	if !owner.sameProcess && options.capabilities != nil && options.capabilities.TerminalEnded {
+		legacy := *options.capabilities
+		legacy.TerminalEnded = false
+		probeCtx = withOwnerHello(startCtx, &legacy, options.viewer)
+	}
+	stream, hello, err := owner.Start(probeCtx)
+	if err == nil && probeCtx != startCtx && hello.Capabilities != nil && hello.Capabilities.TerminalEnded {
+		stream.Close()
+		stream, hello, err = owner.Start(startCtx)
+	}
 	if err != nil {
 		stopStartupDeadline()
 		cancelStart()

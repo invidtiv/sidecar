@@ -17,6 +17,7 @@ var controlPanePattern = regexp.MustCompile(`^%[0-9]+$`)
 // connection. It supplies bootstrap/recovery presentation and independent
 // semantic or diagnostic evidence after an output or layout notification.
 type ControlSnapshot struct {
+	PaneDead    bool
 	Session     string
 	Pane        string
 	Output      string
@@ -1385,7 +1386,7 @@ const captureFullMetadataFields = "#{cursor_x},#{cursor_y},#{cursor_flag},#{pane
 	"#{history_size},#{mouse_any_flag},#{alternate_on},#{mouse_sgr_flag},#{bracket_paste_flag}," +
 	"#{keypad_cursor_flag},#{keypad_flag},#{wrap_flag},#{origin_flag},#{insert_flag}," +
 	"#{scroll_region_upper},#{scroll_region_lower},#{cursor_shape},#{cursor_blinking}," +
-	"#{pid},#{session_id},#{session_created},#{client_discarded},#{pane_current_command},#{pane_title}"
+	"#{pid},#{session_id},#{session_created},#{client_discarded},#{pane_dead},#{pane_dead_status},#{pane_current_command},#{pane_title}"
 
 func buildControlCaptureCommands(pane string, scrollback int) (metadata, capture string, err error) {
 	return buildControlCaptureCommandsLayout(pane, scrollback, ScreenCompareEnabled())
@@ -1468,7 +1469,7 @@ func parseControlSnapshotMode(session, pane string, scrollback int, lines []stri
 		limit = 12
 	}
 	if full {
-		limit = 25
+		limit = 27
 	}
 	parts := strings.SplitN(strings.TrimSpace(lines[0]), ",", limit)
 	// Fields past the sixth are optional so a metadata line produced before they
@@ -1498,6 +1499,9 @@ func parseControlSnapshotMode(session, pane string, scrollback int, lines []stri
 	if expanded {
 		clientDiscardedIndex = 22
 		commandIndex, titleIndex = 23, 24
+		if len(parts) >= 27 {
+			commandIndex, titleIndex = 25, 26
+		}
 	} else if extended && len(parts) >= 12 {
 		clientDiscardedIndex = 9
 		commandIndex, titleIndex = 10, 11
@@ -1523,6 +1527,7 @@ func parseControlSnapshotMode(session, pane string, scrollback int, lines []stri
 	captureRows := len(lines) - 1
 	paneRows := min(max(height, 0), captureRows)
 	snapshot := ControlSnapshot{
+		PaneDead:       full && len(parts) >= 27 && tmuxFormatBool(parts[23]),
 		Session:        session,
 		Pane:           pane,
 		Output:         strings.Join(lines[1:], "\n"),

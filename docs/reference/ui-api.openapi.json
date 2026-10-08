@@ -437,6 +437,9 @@
           },
           "server_paste": {
             "type": "boolean"
+          },
+          "terminal_ended": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -854,6 +857,9 @@
             "type": "boolean"
           },
           "server_paste": {
+            "type": "boolean"
+          },
+          "terminal_ended": {
             "type": "boolean"
           }
         },
@@ -3332,6 +3338,9 @@
           },
           "error": {
             "$ref": "#/components/schemas/Error"
+          },
+          "exit_status": {
+            "type": "integer"
           },
           "frame_kind": {
             "type": "string"

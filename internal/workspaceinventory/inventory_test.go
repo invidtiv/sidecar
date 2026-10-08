@@ -1441,3 +1441,36 @@ func TestPrefetchCapturesMatchesPerPaneStatusPass(t *testing.T) {
 		t.Fatalf("agent shell = %#v", agent)
 	}
 }
+
+type emptyServerRunner struct {
+	sessions string
+	err      error
+}
+
+func (r emptyServerRunner) Output(_ context.Context, _ string, args ...string) ([]byte, error) {
+	for _, arg := range args {
+		if arg == "list-sessions" {
+			return []byte(r.sessions), r.err
+		}
+	}
+	return []byte("no current target\n"), fmt.Errorf("exit status 1")
+}
+
+func TestListPanesConfirmsEmptyRunningServer(t *testing.T) {
+	for _, tc := range []struct {
+		name, sessions string
+		err            error
+		empty          bool
+	}{
+		{name: "empty", empty: true},
+		{name: "live-session", sessions: "still-live\n"},
+		{name: "failed-confirmation", err: fmt.Errorf("unreachable")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			panes, err := (Collector{Runner: emptyServerRunner{sessions: tc.sessions, err: tc.err}}).ListPanes(context.Background())
+			if (err == nil) != tc.empty || len(panes) != 0 {
+				t.Fatalf("panes=%+v err=%v", panes, err)
+			}
+		})
+	}
+}

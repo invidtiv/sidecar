@@ -209,13 +209,25 @@ func newMobileOwnerService(env Env, input io.Reader, output io.Writer) (*mobile.
 // newMobileOwnerServiceWithCatalog is newMobileOwnerService whose sessions
 // requests read catalog. Resolve, open and every target operation keep the
 // service's own fresh resolver either way.
-func newMobileOwnerServiceWithCatalog(env Env, input io.Reader, output io.Writer, catalog mobile.CatalogProvider) (*mobile.Service, error) {
+func newMobileOwnerServiceWithCatalog(env Env, input io.Reader, output io.Writer, catalog mobile.CatalogProvider, onEnded ...func()) (*mobile.Service, error) {
 	host, _ := os.Hostname()
 	manager := tty.NewControlManager()
+	observeEnd := mobileTerminalEndObserver(env)
 	return mobile.New(mobile.Config{
 		Input: input, Output: output, HubID: host, OwnerHostID: "local:" + host,
 		OwnerConfigGeneration: mobileConfigGeneration(), Resolver: mobileResolver(env), Revalidator: mobileTargetRevalidator(env, manager), Catalog: catalog, Manager: manager,
-		CaptureRevalidator:            mobileTargetRevalidator(env, nil),
+		CaptureRevalidator: mobileTargetRevalidator(env, nil),
+		EndObserver: func(ctx context.Context, target mobile.ResolvedTarget) (*mobile.TerminalEnd, error) {
+			end, err := observeEnd(ctx, target)
+			if err == nil && end != nil {
+				for _, signal := range onEnded {
+					if signal != nil {
+						signal()
+					}
+				}
+			}
+			return end, err
+		},
 		OwnerConfigGenerationProvider: currentMobileConfigGeneration,
 	})
 }

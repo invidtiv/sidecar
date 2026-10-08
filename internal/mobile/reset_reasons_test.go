@@ -67,6 +67,9 @@ func TestServiceEmitsOnlyDocumentedResetReasons(t *testing.T) {
 			if !ok || pkg.Name != "mobileproto" {
 				return // a field carrying a chosen reason, such as observed.discontinuity
 			}
+			if e.Sel.Name == "EndExited" {
+				return
+			} // End reasons are distinct from reset reasons.
 			value, ok := constants[e.Sel.Name]
 			if !ok {
 				t.Errorf("%s: reset reason mobileproto.%s is not a Reset* string constant", position, e.Sel.Name)

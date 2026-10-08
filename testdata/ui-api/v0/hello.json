@@ -6,6 +6,7 @@
     "sessions",
     "status",
     "terminal",
+    "terminal_ended",
     "ws_tickets",
     "events",
     "projects",

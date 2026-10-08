@@ -44,6 +44,12 @@ type ResolveError struct{ Code, Message string }
 func (e *ResolveError) Error() string { return e.Message }
 
 type Resolver func(context.Context, string) (ResolvedTarget, error)
+
+// TerminalEnd is positive owner evidence that the pane process has exited.
+// An unavailable/replaced server is not an end; its shells remain restorable.
+type TerminalEnd struct{ ExitStatus *int }
+type TerminalEndObserver func(context.Context, ResolvedTarget) (*TerminalEnd, error)
+
 type TargetRevalidator func(context.Context, ResolvedTarget) (ResolvedTarget, error)
 type HistoryCapturer func(target string, start, end, maxBytes int) (tty.CaptureRange, error)
 type OwnerConfigGenerationProvider func(context.Context) (string, error)
@@ -53,6 +59,7 @@ type OwnerConfigGenerationProvider func(context.Context) (string, error)
 type CatalogQuerier func(context.Context, mobileproto.CatalogQuery) (mobileproto.CatalogSnapshot, error)
 
 type Config struct {
+	EndObserver TerminalEndObserver
 	Input       io.Reader
 	Output      io.Writer
 	Resolver    Resolver
@@ -70,6 +77,7 @@ type Config struct {
 }
 
 type Service struct {
+	endObserver                                    TerminalEndObserver
 	in                                             io.Reader
 	out                                            *safeEncoder
 	resolve                                        Resolver
@@ -122,7 +130,7 @@ func New(config Config) (*Service, error) {
 		historyCapture = tty.CapturePaneRangeBounded
 	}
 	s := &Service{
-		in: config.Input, out: newSafeEncoder(config.Output), resolve: config.Resolver, revalidateTarget: config.Revalidator, captureRevalidateTarget: config.CaptureRevalidator, catalog: config.Catalog, catalogQuery: config.CatalogQuery,
+		endObserver: config.EndObserver, in: config.Input, out: newSafeEncoder(config.Output), resolve: config.Resolver, revalidateTarget: config.Revalidator, captureRevalidateTarget: config.CaptureRevalidator, catalog: config.Catalog, catalogQuery: config.CatalogQuery,
 		historyCapture:        historyCapture,
 		ownerConfigGeneration: config.OwnerConfigGenerationProvider,
 		manager:               config.Manager, terminalBackend: config.Terminal, instance: instance, hubID: config.HubID,
@@ -770,6 +778,9 @@ func (s *Service) control(ctx context.Context, request mobileproto.Request) {
 		a.presenceGeometry = geometry
 	}
 	if err != nil {
+		if a.endIfExitedLocked(ctx) {
+			return
+		}
 		s.writeError(request.RequestID, mobileproto.ErrorLease, err.Error(), true)
 		return
 	}
@@ -820,6 +831,9 @@ func (s *Service) inputBytes(ctx context.Context, request mobileproto.Request) {
 	a.mu.Unlock()
 	if err := geometry.SendLiteral(data); err != nil {
 		a.loseControlLocked()
+		if a.endIfExitedLocked(ctx) {
+			return
+		}
 		s.writeError(request.RequestID, mobileproto.ErrorLease, err.Error(), true)
 		return
 	}
@@ -845,6 +859,9 @@ func (s *Service) resize(ctx context.Context, request mobileproto.Request) {
 	a.mu.Unlock()
 	if err := geometry.Resize(request.Columns, request.Rows); err != nil {
 		a.loseControlLocked()
+		if a.endIfExitedLocked(ctx) {
+			return
+		}
 		s.writeError(request.RequestID, mobileproto.ErrorLease, err.Error(), true)
 		return
 	}
@@ -882,6 +899,9 @@ func (s *Service) heartbeat(ctx context.Context, request mobileproto.Request) {
 	a.mu.Unlock()
 	if err := geometry.Heartbeat(); err != nil {
 		a.loseControlLocked()
+		if a.endIfExitedLocked(ctx) {
+			return
+		}
 		s.writeError(request.RequestID, mobileproto.ErrorLease, err.Error(), true)
 		return
 	}
@@ -910,6 +930,9 @@ func (s *Service) release(ctx context.Context, request mobileproto.Request) {
 	// Control is revoked either way. Like every other refused mutation, a
 	// failed release leaves operation_sequence where it was.
 	if err := geometry.Release(); err != nil {
+		if a.endIfExitedLocked(ctx) {
+			return
+		}
 		s.writeError(request.RequestID, mobileproto.ErrorBackend, err.Error(), true)
 		return
 	}
@@ -946,6 +969,10 @@ func (s *Service) operationAttachment(ctx context.Context, request mobileproto.R
 	if err := s.revalidate(ctx, a.target); err != nil {
 		a.loseControlLocked()
 		a.opMu.Unlock()
+		if a.endIfExited() {
+			go a.stopAttachment()
+			return nil, false
+		}
 		s.resolveFailure(request.RequestID, err)
 		return nil, false
 	}
@@ -1297,6 +1324,10 @@ func (a *attachment) run() {
 			}
 		case snapshot := <-a.snapshots:
 			a.publishQueued(snapshot)
+			if snapshot.snapshot.PaneDead && a.endIfExited() {
+				go a.stopAttachment()
+				return
+			}
 		case <-ticker.C:
 			a.expirePresence()
 		}
@@ -1440,6 +1471,9 @@ func snapshotGeometryChanged(first, second tty.ControlSnapshot) bool {
 // idle pane. The request is delayed with a capped backoff: a source that keeps
 // failing produces one reset per attempt, never a tight loop of them.
 func (a *attachment) captureFailed(err error) bool {
+	if a.endIfExited() {
+		return true
+	}
 	a.opMu.Lock()
 	if refusal := a.targetRefusal(); refusal != nil {
 		a.loseControlLocked()
@@ -1487,6 +1521,11 @@ func (a *attachment) targetRefusal() *ResolveError {
 }
 
 func (a *attachment) failLocked(reason string, err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), captureRevalidateTimeout)
+	defer cancel()
+	if a.endIfExitedLocked(ctx) {
+		return
+	}
 	a.advanceResetLocked(reason, true)
 	a.service.writeError("", mobileproto.ErrorBackend, err.Error(), true)
 }
@@ -1576,4 +1615,40 @@ func (t liveTerminal) Subscribe(r tty.ControlRequest) (CaptureSubscription, erro
 }
 func (t liveTerminal) Geometry(expected tty.HeadlessTargetIdentity, owner string) (LeaseGeometry, error) {
 	return tty.NewHeadlessGeometry(t.manager, expected, owner)
+}
+
+// endIfExited runs only after tmux's output/layout/exit signal. It uses fresh,
+// independent owner evidence, never the capture connection that just failed.
+func (a *attachment) endIfExited() bool {
+	if a.service.endObserver == nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), captureRevalidateTimeout)
+	defer cancel()
+	a.opMu.Lock()
+	defer a.opMu.Unlock()
+	return a.endIfExitedLocked(ctx)
+}
+
+func (a *attachment) endIfExitedLocked(ctx context.Context) bool {
+	if a.service.endObserver == nil {
+		return false
+	}
+	end, err := a.service.endObserver(ctx, a.target.resolved)
+	if err != nil || end == nil {
+		return false
+	}
+	if _, live := a.service.attachment(a.handle); !live {
+		return true
+	}
+	a.loseControlLocked()
+	a.service.removeAttachment(a.handle)
+	go a.stopAttachment()
+	if a.service.clientCaps.TerminalEnded {
+		a.service.emit(mobileproto.Response{Version: mobileproto.Version, Type: mobileproto.ResponseEnded,
+			AttachmentHandle: a.handle, AttachmentGeneration: a.generation, Reason: mobileproto.EndExited, ExitStatus: end.ExitStatus})
+	} else {
+		a.service.writeError("", mobileproto.ErrorNotFound, "the terminal process exited", false)
+	}
+	return true
 }

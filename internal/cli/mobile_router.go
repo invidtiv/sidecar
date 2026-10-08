@@ -70,12 +70,13 @@ func queryMobileCatalog(env Env, query mobileproto.CatalogQuery) (mobileproto.Ca
 // Whether remote hosts route through the hub is decided once, at construction,
 // from the configuration then in force.
 type mobileBackend struct {
-	env         Env
-	registry    *hosts.Registry
-	directory   *mobilehub.RegistryDirectory
-	router      *mobilehub.CatalogRouter
-	broker      *mobilehub.ProtocolBroker
-	initialWait sync.Once
+	terminalChanges chan struct{}
+	env             Env
+	registry        *hosts.Registry
+	directory       *mobilehub.RegistryDirectory
+	router          *mobilehub.CatalogRouter
+	broker          *mobilehub.ProtocolBroker
+	initialWait     sync.Once
 	// catalog is the one local collection concurrent requests share; see
 	// sharedCatalog. Every local catalog this backend serves reads it.
 	catalog     *sharedCatalog
@@ -89,7 +90,7 @@ func newMobileBackend(ctx context.Context, env Env) (*mobileBackend, error) {
 	if err != nil {
 		return nil, err
 	}
-	backend := &mobileBackend{env: env, catalog: newSharedCatalog(
+	backend := &mobileBackend{env: env, terminalChanges: make(chan struct{}, 1), catalog: newSharedCatalog(
 		func() mobile.CatalogProvider { return mobileCatalogCollectorForProjects(env, configuredProjects) },
 		func(input mobile.CatalogInput, discovery *worktreeDiscovery) mobile.CatalogInput {
 			return authorizeMobileCatalogInput(env, input, discovery)
@@ -97,7 +98,7 @@ func newMobileBackend(ctx context.Context, env Env) (*mobileBackend, error) {
 	if !remoteHostsEnabled(env, cfg) || len(cfg.Hosts.List) == 0 {
 		return backend, nil
 	}
-	registry, directory, router, err := newMobileCatalogRouter(ctx, env, backend.catalog.Provider())
+	registry, directory, router, err := newMobileCatalogRouter(ctx, env, backend.catalog.Provider(), backend.terminalEnded)
 	if err != nil {
 		return nil, err
 	}
@@ -139,7 +140,7 @@ func (b *mobileBackend) Close() {
 // a fresh broker run routes it to the owning Sidecar.
 func (b *mobileBackend) ServeTerminal(ctx context.Context, input io.Reader, output io.Writer) error {
 	if b.broker == nil {
-		service, err := newMobileOwnerServiceWithCatalog(b.env, input, output, b.localCatalog())
+		service, err := newMobileOwnerServiceWithCatalog(b.env, input, output, b.localCatalog(), b.terminalEnded)
 		if err != nil {
 			return err
 		}
@@ -205,9 +206,9 @@ func queryLocalMobileCatalogFrom(ctx context.Context, env Env, query mobileproto
 	return snapshot, nil
 }
 
-func newMobileCatalogRouter(ctx context.Context, env Env, catalog mobile.CatalogProvider) (*hosts.Registry, *mobilehub.RegistryDirectory, *mobilehub.CatalogRouter, error) {
+func newMobileCatalogRouter(ctx context.Context, env Env, catalog mobile.CatalogProvider, onEnded ...func()) (*hosts.Registry, *mobilehub.RegistryDirectory, *mobilehub.CatalogRouter, error) {
 	registry := hosts.NewRegistry(hosts.ClientOptions{})
-	directory, err := mobilehub.NewRegistryDirectory(ctx, registry, mobileDirectoryProvider(env, catalog))
+	directory, err := mobilehub.NewRegistryDirectory(ctx, registry, mobileDirectoryProvider(env, catalog, onEnded...))
 	if err != nil {
 		registry.Stop()
 		return nil, nil, nil, err
@@ -222,7 +223,7 @@ func newMobileCatalogRouter(ctx context.Context, env Env, catalog mobile.Catalog
 
 // mobileDirectoryProvider describes this hub's owners. The local owner serves
 // its catalog from catalog; nil gives each local stream a private collection.
-func mobileDirectoryProvider(env Env, catalog mobile.CatalogProvider) mobilehub.DirectoryProvider {
+func mobileDirectoryProvider(env Env, catalog mobile.CatalogProvider, onEnded ...func()) mobilehub.DirectoryProvider {
 	if catalog == nil {
 		catalog = mobileCatalogProvider(env)
 	}
@@ -246,7 +247,7 @@ func mobileDirectoryProvider(env Env, catalog mobile.CatalogProvider) mobilehub.
 			return mobilehub.BoundOwner{Authority: mobilehub.CatalogAuthority{OwnerHostID: localHostID, RegistrationFingerprint: localRegistration},
 				Start: func(startCtx context.Context) (mobilehub.LineStream, mobileproto.Response, error) {
 					return mobilehub.StartLocal(startCtx, func(input io.Reader, output io.Writer) (*mobile.Service, error) {
-						return newMobileOwnerServiceWithCatalog(env, input, output, catalog)
+						return newMobileOwnerServiceWithCatalog(env, input, output, catalog, onEnded...)
 					})
 				}, Validate: func(validateCtx context.Context) error {
 					current, err := currentMobileConfigGeneration(validateCtx)
@@ -293,4 +294,14 @@ func mobileRegisteredOwners(cfg *config.Config) []mobilehub.RegisteredOwner {
 func localMobileRegistrationFingerprint(hostname string) string {
 	sum := sha256.Sum256([]byte(strings.Join([]string{"local-mobile-owner", hostname, config.ConfigPath()}, "\x00")))
 	return hex.EncodeToString(sum[:16])
+}
+
+// Retained dead panes have no manifest edit to watch. A proven owner end
+// invalidates their collection and wakes the same bounded catalog event path.
+func (b *mobileBackend) terminalEnded() {
+	b.invalidateCatalog()
+	select {
+	case b.terminalChanges <- struct{}{}:
+	default:
+	}
 }

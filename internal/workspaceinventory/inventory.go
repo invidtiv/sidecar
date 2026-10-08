@@ -477,6 +477,15 @@ func (c Collector) ListPanes(ctx context.Context) ([]Pane, error) {
 			(strings.Contains(message, "error connecting to") && strings.Contains(message, "no such file")) {
 			return nil, nil
 		}
+		// With exit-empty off, tmux keeps an empty server running but
+		// list-panes reports no current target. Confirm a successful empty
+		// session inventory rather than treating that generic error as absence.
+		if strings.Contains(message, "no current target") {
+			sessions, listErr := c.Runner.Output(ctx, "tmux", tmuxformat.ClientArgs("list-sessions", "-F", "#{session_name}")...)
+			if listErr == nil && strings.TrimSpace(string(sessions)) == "" {
+				return nil, nil
+			}
+		}
 		return nil, err
 	}
 	var panes []Pane

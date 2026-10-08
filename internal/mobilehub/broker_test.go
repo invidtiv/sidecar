@@ -107,6 +107,10 @@ func (s *brokerTestStream) WriteLine(line []byte) error {
 	s.mu.Lock()
 	s.requests = append(s.requests, q)
 	s.mu.Unlock()
+	if "async:"+q.Type == s.hold {
+		s.held <- struct{}{}
+		return nil
+	}
 	if q.Type == s.hold {
 		s.held <- struct{}{}
 		select {
@@ -844,5 +848,81 @@ func TestProtocolBrokerOwnerEOFInvalidatesBeforeBlockedEventDelivery(t *testing.
 	case <-finished:
 	case <-time.After(time.Second):
 		t.Fatal("owner reader did not terminate")
+	}
+}
+
+func TestProtocolBrokerForwardsNegotiatedTerminalEnd(t *testing.T) {
+	owner := newBrokerTestOwner("raw-owner")
+	owner.caps = mobileproto.SupportedCapabilities()
+	r := newBrokerRig(t, brokerTestRouter(t, owner), mobileproto.Request{Capabilities: &mobileproto.ClientCapabilities{TerminalEnded: true, Presence: true}, Viewer: &mobileproto.Viewer{Kind: "browser", Label: "Shell exit test"}})
+	row := r.catalog().Sections[0].Rows[0]
+	_, opened := r.open(row)
+	stream := owner.latest(t)
+	owner.mu.Lock()
+	probe := owner.streams[len(owner.streams)-2]
+	probeHello, activeHello := owner.hellos[len(owner.hellos)-2], owner.hellos[len(owner.hellos)-1]
+	owner.mu.Unlock()
+	select {
+	case <-probe.done:
+	default:
+		t.Fatal("capable owner probe was not closed")
+	}
+	if probeHello.Capabilities == nil || probeHello.Capabilities.TerminalEnded || !probeHello.Capabilities.Presence || activeHello.Capabilities == nil || !activeHello.Capabilities.TerminalEnded || !activeHello.Capabilities.Presence || probeHello.Viewer == nil || activeHello.Viewer == nil || *probeHello.Viewer != *activeHello.Viewer {
+		t.Fatal("optional end probing altered established capabilities or viewer")
+	}
+	status := 7
+	data, _ := json.Marshal(mobileproto.Response{Version: 0, Type: mobileproto.ResponseEnded, AttachmentHandle: "same-raw-attachment", AttachmentGeneration: opened.AttachmentGeneration, Reason: mobileproto.EndExited, ExitStatus: &status})
+	stream.lines <- data
+	ended := r.next(mobileproto.ResponseEnded)
+	if ended.AttachmentHandle != opened.AttachmentHandle || ended.AttachmentGeneration != opened.AttachmentGeneration || ended.ExitStatus == nil || *ended.ExitStatus != 7 || ended.Reason != mobileproto.EndExited {
+		t.Fatalf("ended=%+v", ended)
+	}
+	// The route remains usable, but its attachment has been finalized.
+	r.send(mobileproto.Request{Type: mobileproto.RequestHeartbeat, RequestID: "after-ended", AttachmentHandle: opened.AttachmentHandle, OperationSequence: 1, LastOutputSequence: 1, LastResetGeneration: 1})
+	refusal := r.next(mobileproto.ResponseError)
+	if refusal.Error == nil || refusal.Error.Code != mobileproto.ErrorAttachment {
+		t.Fatalf("refusal=%+v", refusal)
+	}
+}
+
+func TestProtocolBrokerEndCancelsPendingOperationAndLateAcknowledgement(t *testing.T) {
+	owner := newBrokerTestOwner("raw-owner")
+	owner.caps = mobileproto.SupportedCapabilities()
+	owner.hold = "async:heartbeat"
+	r := newBrokerRig(t, brokerTestRouter(t, owner), mobileproto.Request{Capabilities: &mobileproto.ClientCapabilities{TerminalEnded: true}})
+	row := r.catalog().Sections[0].Rows[0]
+	_, opened := r.open(row)
+	stream := owner.latest(t)
+	r.send(mobileproto.Request{Type: mobileproto.RequestHeartbeat, RequestID: "inflight", AttachmentHandle: opened.AttachmentHandle, OperationSequence: 1, LastOutputSequence: 1, LastResetGeneration: 1})
+	select {
+	case <-stream.held:
+	case <-time.After(time.Second):
+		t.Fatal("owner operation not held")
+	}
+	data, _ := json.Marshal(mobileproto.Response{Version: 0, Type: mobileproto.ResponseEnded, AttachmentHandle: "same-raw-attachment", AttachmentGeneration: opened.AttachmentGeneration, Reason: mobileproto.EndExited})
+	stream.lines <- data
+	r.next(mobileproto.ResponseEnded)
+	recorded := stream.recorded()
+	pending := recorded[len(recorded)-1]
+	stream.push(mobileproto.Response{Version: 0, Type: mobileproto.ResponseHeartbeat, RequestID: pending.RequestID, AttachmentHandle: pending.AttachmentHandle, AttachmentGeneration: opened.AttachmentGeneration, OperationSequence: 1})
+	// This request only becomes readable once the outstanding operation is clear.
+	r.send(mobileproto.Request{Type: mobileproto.RequestStatus, RequestID: "still-usable"})
+	r.next(mobileproto.ResponseStatus)
+}
+
+func TestProtocolBrokerOptionalTerminalEndKeepsOlderOwnerCompatible(t *testing.T) {
+	owner := newBrokerTestOwner("legacy-owner")
+	r := newBrokerRig(t, brokerTestRouter(t, owner), mobileproto.Request{Capabilities: &mobileproto.ClientCapabilities{TerminalEnded: true}})
+	row := r.catalog().Sections[0].Rows[0]
+	_, opened := r.open(row)
+	if opened.AttachmentHandle == "" {
+		t.Fatal("legacy owner did not open")
+	}
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	for _, hello := range owner.hellos {
+		if hello.Capabilities != nil && hello.Capabilities.TerminalEnded {
+			t.Fatal("new capability sent to strict older owner")
+		}
 	}
 }

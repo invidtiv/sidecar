@@ -49,6 +49,7 @@ type brokerOwner struct {
 	publicAttachment, rawAttachment string
 	clientAttachmentID              string
 	attachmentGeneration            uint64
+	endedRequestID                  string
 }
 
 func (o *brokerOwner) close() {
@@ -340,6 +341,7 @@ func (r *brokerRun) request(request mobileproto.Request) error {
 }
 
 func brokerCompatibleCapabilities(c mobileproto.Capabilities) bool {
+	c.TerminalEnded = false
 	c.Presence, c.ResetFreeFrames, c.CoalescedFrames, c.ServerPaste, c.HolderLabels = false, false, false, false, false
 	return c == mobileproto.DefaultCapabilities()
 }
@@ -380,10 +382,14 @@ func (r *brokerRun) receive(event brokerEvent) error {
 	if response.Version != mobileproto.Version || response.APIInstance != "" || response.Capabilities != nil || response.Catalog != nil {
 		return errors.New("invalid owning service response envelope")
 	}
+	if response.RequestID != "" && response.RequestID == o.endedRequestID {
+		o.endedRequestID = ""
+		return nil // The end superseded this exact in-flight request on this owner.
+	}
 	async := response.RequestID == ""
 	var request mobileproto.Request
 	if async {
-		if response.Type != mobileproto.ResponseFrame && response.Type != mobileproto.ResponseReset && response.Type != mobileproto.ResponseError && response.Type != mobileproto.ResponseHolder {
+		if response.Type != mobileproto.ResponseFrame && response.Type != mobileproto.ResponseReset && response.Type != mobileproto.ResponseError && response.Type != mobileproto.ResponseHolder && response.Type != mobileproto.ResponseEnded {
 			return errors.New("unexpected asynchronous owner response")
 		}
 	} else {
@@ -409,6 +415,13 @@ func (r *brokerRun) receive(event brokerEvent) error {
 	}
 	if response.Error != nil {
 		return errors.New("owner response combines success and error")
+	}
+	if response.Type == mobileproto.ResponseEnded {
+		if r.capabilities == nil || !r.capabilities.TerminalEnded || !async || response.Reason != mobileproto.EndExited || response.ResetGeneration != 0 || response.OutputSequence != 0 || response.OperationSequence != 0 || response.Geometry != nil || response.Control || response.Holder != nil || (response.ExitStatus != nil && (*response.ExitStatus < 0 || *response.ExitStatus > 255)) {
+			return errors.New("invalid or unnegotiated owner terminal end")
+		}
+	} else if response.ExitStatus != nil {
+		return errors.New("exit status outside terminal end")
 	}
 	if response.Holder != nil {
 		empty := response.Holder.Kind == "" && response.Holder.Label == ""
@@ -500,7 +513,12 @@ func (r *brokerRun) receive(event brokerEvent) error {
 	if err := r.emit(response, o, nil); err != nil {
 		return err
 	}
-	if response.Type == mobileproto.ResponseClosed {
+	if response.Type == mobileproto.ResponseClosed || response.Type == mobileproto.ResponseEnded {
+		if response.Type == mobileproto.ResponseEnded && r.pending != nil && r.pending.request.AttachmentHandle == o.rawAttachment {
+			r.pending.timeout.Stop()
+			o.endedRequestID = r.pending.rawID
+			r.pending = nil
+		}
 		o.rawAttachment, o.publicAttachment = "", ""
 		o.clientAttachmentID = ""
 		o.attachmentGeneration = 0
