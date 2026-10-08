@@ -2,10 +2,13 @@ package contentservice
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/marcus/sidecar/internal/noteview"
 )
 
 // td-e4be7d: every API content read holds its per-client slot until the
@@ -42,5 +45,13 @@ func TestDefaultLookupNoteStopsWhenCancelled(t *testing.T) {
 	}
 	if elapsed := time.Since(started); elapsed > 5*time.Second {
 		t.Fatalf("cancelled note lookup took %v", elapsed)
+	}
+}
+
+// A cancelled note read surfaces as cancellation, not as a refusal of the note.
+func TestReadNoteKeepsCancellationDistinctFromRefusal(t *testing.T) {
+	s := &Service{LookupNote: func(context.Context, string, string) (*noteview.Data, error) { return nil, context.DeadlineExceeded }}
+	if _, err := s.readNoteAt(context.Background(), t.TempDir(), "nt-abc123", ""); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want context.DeadlineExceeded", err)
 	}
 }

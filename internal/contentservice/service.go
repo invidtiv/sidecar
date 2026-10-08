@@ -2,6 +2,7 @@ package contentservice
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"strconv"
 	"time"
@@ -42,7 +43,12 @@ func defaultGit(ctx context.Context, dir string, args ...string) ([]byte, error)
 	// process) holding stdout. Every API read holds its per-client content
 	// slot until this returns, so bound the wait after git exits or is killed.
 	cmd.WaitDelay = gitWaitDelay
-	return cmd.Output()
+	out, err := cmd.Output()
+	if errors.Is(err, exec.ErrWaitDelay) && ctx.Err() == nil {
+		// Git succeeded and its output is complete; only a helper lingered.
+		err = nil
+	}
+	return out, err
 }
 
 // gitWaitDelay bounds how long a git call waits for inherited descriptors.

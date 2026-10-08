@@ -3,6 +3,7 @@ package noteview
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -54,7 +55,7 @@ func LookupContext(ctx context.Context, workDir, noteID string) (*Data, error) {
 func loadNote(ctx context.Context, workDir, noteID string) (*Data, error) {
 	cmd := exec.CommandContext(ctx, "td", "-w", workDir, "--json", "note", "show", noteID)
 	configureReadOnlyTd(cmd)
-	out, err := cmd.Output()
+	out, err := tdOutput(ctx, cmd)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -105,4 +106,15 @@ func reverseLines(s string) []string {
 		lines[i], lines[j] = lines[j], lines[i]
 	}
 	return lines
+}
+
+// tdOutput runs a read-only td command. When td exits successfully but a
+// helper it started still holds stdout, WaitDelay ends the wait with
+// exec.ErrWaitDelay; the output is complete then, so it is not a failure.
+func tdOutput(ctx context.Context, cmd *exec.Cmd) ([]byte, error) {
+	out, err := cmd.Output()
+	if errors.Is(err, exec.ErrWaitDelay) && ctx.Err() == nil {
+		err = nil
+	}
+	return out, err
 }

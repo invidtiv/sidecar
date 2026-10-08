@@ -47,3 +47,23 @@ func TestLookupContextDoesNotWaitForInheritedStdout(t *testing.T) {
 		t.Fatalf("cancelled note read waited %v for an inherited stdout", elapsed)
 	}
 }
+
+// A td that answered and exited successfully, leaving a helper holding its
+// stdout, has given its complete answer: the read succeeds after the bounded
+// wait rather than failing or hanging.
+func TestLookupContextSucceedsWhenAHelperOutlivesTd(t *testing.T) {
+	dir := t.TempDir()
+	script := "#!/bin/sh\n" + `printf '{"id":"nt-abc123","title":"T","content":"c"}\n'` + "\nsleep 30 &\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(dir, "td"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	started := time.Now()
+	data, err := LookupContext(context.Background(), t.TempDir(), "nt-abc123")
+	if err != nil || data == nil || data.ID != "nt-abc123" {
+		t.Fatalf("LookupContext = %#v, %v", data, err)
+	}
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Fatalf("read waited %v for a lingering helper", elapsed)
+	}
+}

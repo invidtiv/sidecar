@@ -3,6 +3,7 @@ package workspacediff
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -143,6 +144,9 @@ func gitOutputBytes(ctx context.Context, dir string, args ...string) ([]byte, er
 	// A helper inheriting git's output must not outlive a cancelled API read.
 	cmd.WaitDelay = time.Second
 	out, err := cmd.CombinedOutput()
+	if errors.Is(err, exec.ErrWaitDelay) && ctx.Err() == nil {
+		err = nil // Git succeeded; only a helper holding its output lingered.
+	}
 	if err != nil {
 		return nil, fmt.Errorf("git %s in %s: %s: %w", strings.Join(args, " "), dir, strings.TrimSpace(string(out)), err)
 	}
