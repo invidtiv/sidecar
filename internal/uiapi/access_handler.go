@@ -286,7 +286,7 @@ func (s *Server) postAccessNotification(info AccessRequestInfo) {
 	}
 	n := notification.Notification{ID: notification.NewID(), Source: notification.SourceAccessRequest, Severity: notification.SeverityWarning,
 		Title: "A browser is asking for access",
-		Body:  fmt.Sprintf("%s at %s (%s) wants to sign in. Approve it with the code it shows: open this notification, or run `sidecar api approve CODE`.", who, info.Address, info.Origin)}
+		Body:  fmt.Sprintf("%s at %s wants to sign in through %s. Open this notification and type the code it shows, or run sidecar api approve CODE.", who, info.Address, info.Origin)}
 	result, err := store.Post(n)
 	if err != nil {
 		s.opts.Logf("access request notification: %v", err)

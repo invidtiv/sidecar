@@ -12,6 +12,7 @@ import (
 	"time"
 
 	notification "github.com/marcus/sidecar/internal/notify"
+	"github.com/marcus/sidecar/internal/terminallink"
 )
 
 // requestAccess does what the SDK does for a browser with no registration.
@@ -585,6 +586,10 @@ func TestAccessNotificationCoalescesAndWithdraws(t *testing.T) {
 	notes := h.accessNotifications()
 	if len(notes) != 1 || !strings.Contains(notes[0].Body, `"Safari on macOS"`) || strings.Contains(notes[0].Body, first.Code) {
 		t.Fatalf("notifications = %+v", notes)
+	}
+	// Activating it means approving; nothing in it is a jump target.
+	if ctas := notification.CallsToAction(notes[0], terminallink.Options{}); len(ctas) != 0 {
+		t.Fatalf("the access notification offers calls to action: %+v", ctas)
 	}
 	_, second := h.requestAccess("")
 	if notes := h.accessNotifications(); len(notes) != 1 {
