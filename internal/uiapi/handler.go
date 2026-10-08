@@ -88,6 +88,9 @@ type listenerHandler struct {
 	s      *Server
 	kind   Listener
 	routes map[string]*route
+	// direct is set on the direct-mode Tailnet listener, where identity comes
+	// from the connection rather than a header.
+	direct *tailnetDirect
 }
 
 func (h *listenerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -98,6 +101,13 @@ func (h *listenerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		h.dispatch(w, r, caller{listener: ListenerLocal, auth: "local"})
 		return
+	}
+	if h.direct != nil {
+		// Identify the connection before reading anything else from it.
+		var admitted bool
+		if r, admitted = h.direct.admit(w, r); !admitted {
+			return
+		}
 	}
 	if !h.hostAllowed(r.Host) {
 		writeError(w, http.StatusMisdirectedRequest, CodeHostRefused, fmt.Sprintf("This server does not answer to host %q; use %s.", r.Host, h.canonicalBase()))
@@ -318,11 +328,18 @@ func (s *Server) callerLive(c caller) bool {
 }
 
 func (h *listenerHandler) tailnetLogin(r *http.Request) (login, code, message string) {
-	login = strings.TrimSpace(r.Header.Get(tailscaleLoginHead))
-	if login == "" {
+	if h.direct != nil {
+		// Direct mode ignores Tailscale-User-Login: the login is the one
+		// whois gave for this connection's source address.
+		peer, ok := tailnetPeerFrom(r.Context())
+		if !ok {
+			return "", CodeUnauthenticated, "This connection has no tailnet identity."
+		}
+		login = peer.Login
+	} else if login = strings.TrimSpace(r.Header.Get(tailscaleLoginHead)); login == "" {
 		return "", CodeUnauthenticated, "Reach this listener through `tailscale serve`, which identifies your tailnet login."
 	}
-	if !h.s.tailnetLogins[login] {
+	if !h.s.tailnetTrustSnapshot().logins[login] {
 		return "", CodeLoginRefused, fmt.Sprintf("Tailnet login %q is not allowed; add it to api.tailnetLogins in the Sidecar config.", login)
 	}
 	return login, "", ""
@@ -358,7 +375,7 @@ func (h *listenerHandler) hostAllowed(host string) bool {
 	case ListenerBrowser:
 		return h.s.browserHosts[host]
 	case ListenerTailnet:
-		return h.s.tailnetHosts[strings.ToLower(host)]
+		return h.s.tailnetTrustSnapshot().hosts[strings.ToLower(host)]
 	}
 	return true
 }
@@ -368,7 +385,7 @@ func (h *listenerHandler) ownOrigin(origin string) bool {
 	case ListenerBrowser:
 		return h.s.browserOrigins[origin]
 	case ListenerTailnet:
-		return h.s.tailnetOrigins[origin]
+		return h.s.tailnetTrustSnapshot().origins[origin]
 	}
 	return false
 }
@@ -378,9 +395,8 @@ func (h *listenerHandler) originAllowed(origin string) bool {
 }
 
 func (h *listenerHandler) canonicalBase() string {
-	if h.kind == ListenerTailnet && h.s.opts.Tailnet != nil {
-		publicURL, _ := h.s.opts.Tailnet.HTTPSURL()
-		return publicURL
+	if h.kind == ListenerTailnet {
+		return h.s.tailnetTrustSnapshot().publicURL
 	}
 	return h.s.BrowserURL()
 }

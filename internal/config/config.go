@@ -59,8 +59,14 @@ type APIConfig struct {
 	// TailnetLogins are the Tailscale logins trusted on the Tailnet listener.
 	// Empty means the login that owns the local Tailscale node.
 	TailnetLogins []string `json:"tailnetLogins,omitempty"`
-	// TailnetHTTPSPort is the public Tailscale Serve HTTPS port; zero uses 443.
+	// TailnetHTTPSPort is the Tailnet listener's public HTTPS port. In direct
+	// mode it is bound on the node's tailnet addresses and zero means 7861; in
+	// serve mode it is the Tailscale Serve port and zero means 443.
 	TailnetHTTPSPort int `json:"tailnetHTTPSPort,omitempty"`
+	// TailnetMode is how --tailnet reaches the tailnet: "direct" (the default)
+	// binds the tailnet address with Tailscale identity per connection;
+	// "serve" is the Unix socket a `tailscale serve` proxy targets.
+	TailnetMode string `json:"tailnetMode,omitempty"`
 	// BrowserProxyOrigin is one HTTPS reverse-proxy origin using browser pairing,
 	// never identity headers, on the existing loopback Browser listener.
 	BrowserProxyOrigin string `json:"browserProxyOrigin,omitempty"`

@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -44,18 +45,20 @@ func apiCommand() *Command {
 	help := Flag{Name: "--help", Short: "-h", Summary: "Show this help", Bool: true}
 	jsonFlag := Flag{Name: "--json", Summary: "Write one structured result object to stdout", Bool: true}
 	serve := &Command{
-		Name: "serve", Summary: "Serve the UI API on this machine", Usage: "sidecar api serve [--port N] [--ui DIR] [--fixtures DIR] [--tailnet] [--tailnet-port N] [--json]",
-		Long: "Run the UI API server in the foreground until interrupted. It listens on a Unix socket in the state directory (local agents and the CLI, no auth), on 127.0.0.1 for browsers (paired with `sidecar api open` or `sidecar api pair`), and with --tailnet on a second Unix socket for `tailscale serve`, trusting only allowed tailnet logins (config api.tailnetLogins, default the node owner). Set config api.tailnetHTTPSPort to use a dedicated public HTTPS port instead of 443. " +
-			"It records itself in $STATE/api/endpoint.json and refuses to start while another server owns the same state tree. It never starts or stops tmux. Each terminal WebSocket is one mobile protocol v0 stream, served exactly as `sidecar mobile serve --stdio` serves stdin. --fixtures requires SIDECAR_ISOLATED_STATE=1 and temporary XDG_STATE_HOME and -config paths; it refuses real state/config paths, including symlink aliases. " +
-			"--tailnet prints the `tailscale serve` command to run; it never changes Tailscale configuration. --tailnet-port N serves the tailnet listener on a dedicated loopback port instead, for a tailscaled that cannot open a 0600 user socket; any local process or OS user can reach that port and claim an allowed tailnet login, so use it only on a machine where every local user and process is already trusted. --json writes the endpoint object as one line once every listener is bound.",
+		Name: "serve", Summary: "Serve the UI API on this machine", Usage: "sidecar api serve [--port N] [--ui DIR] [--fixtures DIR] [--tailnet] [--tailnet-mode direct|serve] [--tailnet-port N] [--json]",
+		Long: "Run the UI API server in the foreground until interrupted. It listens on a Unix socket in the state directory (local agents and the CLI, no auth) and on 127.0.0.1 for browsers (paired with `sidecar api open` or `sidecar api pair`). --tailnet adds the Tailnet listener, trusting only allowed tailnet logins (config api.tailnetLogins, default the node owner). " +
+			"In direct mode, the default (config api.tailnetMode or --tailnet-mode), Sidecar binds this node's tailnet addresses itself on api.tailnetHTTPSPort (default 7861), serves HTTPS with a `tailscale cert` certificate, and identifies each connection with `tailscale whois`: only an allowed login's untagged devices get in, connections from this machine's own tailnet address are refused, and Tailscale-User-Login headers are ignored. No `tailscale serve` route is needed; one that holds the same port is refused with the command that removes it. When Tailscale is down or its addresses change, it retries in the background and `sidecar api status` reports the state. " +
+			"Serve mode (--tailnet-mode serve) instead creates a second Unix socket for `tailscale serve`, which vouches for the login with a header, and prints the `tailscale serve` command to run; there api.tailnetHTTPSPort is the public Serve port (default 443). Neither mode changes Tailscale configuration. --tailnet-port N (serve mode only) serves that listener on a dedicated loopback port instead, for a tailscaled that cannot open a 0600 user socket; any local process or OS user can reach that port and claim an allowed tailnet login, so use it only on a machine where every local user and process is already trusted. " +
+			"It records itself in $STATE/api/endpoint.json and refuses to start while another server owns the same state tree. It never starts or stops tmux. Each terminal WebSocket is one mobile protocol v0 stream, served exactly as `sidecar mobile serve --stdio` serves stdin. --fixtures requires SIDECAR_ISOLATED_STATE=1 and temporary XDG_STATE_HOME and -config paths; it refuses real state/config paths, including symlink aliases. --json writes the endpoint object as one line once every listener is bound.",
 		Flags: []Flag{{Name: "--port", Arg: "N", Summary: "Browser listener port on 127.0.0.1 (default 7861; 0 picks a free port)"},
 			{Name: "--fixtures", Arg: "DIR", Summary: "Serve recorded Sessions/status and deterministic echo terminals without tmux"},
 			{Name: "--ui", Arg: "DIR", Summary: "Serve a built UI from DIR (overrides config api.uiDir), with index.html as the fallback for app routes"},
-			{Name: "--tailnet", Summary: "Also serve the tailnet listener for tailscale serve", Bool: true},
-			{Name: "--tailnet-port", Arg: "N", Summary: "Serve the tailnet listener on this loopback port instead of a Unix socket"},
+			{Name: "--tailnet", Summary: "Also serve the Tailnet listener (direct mode unless api.tailnetMode says serve)", Bool: true},
+			{Name: "--tailnet-mode", Arg: "MODE", Summary: "direct (bind the tailnet address, the default) or serve (a socket for tailscale serve); implies --tailnet"},
+			{Name: "--tailnet-port", Arg: "N", Summary: "Serve mode: serve the tailnet listener on this loopback port instead of a Unix socket"},
 			{Name: "--json", Summary: "Write the endpoint object as one JSON line once listening", Bool: true}, help},
 		ExitCodes: []ExitCode{{Code: 0, Summary: "stopped normally"}, {Code: 1, Summary: "could not start, or a listener failed"}, {Code: 2, Summary: "usage error"}},
-		Examples:  []Example{{Command: "sidecar api serve"}, {Command: "sidecar api serve --ui ~/code/sidecar-ui/apps/sidecar-ui/build"}, {Command: "sidecar api serve --tailnet"}},
+		Examples:  []Example{{Command: "sidecar api serve"}, {Command: "sidecar api serve --ui ~/code/sidecar-ui/apps/sidecar-ui/build"}, {Command: "sidecar api serve --tailnet"}, {Command: "sidecar api serve --tailnet-mode serve"}},
 		Agent:     AgentDoc{Invocation: "sidecar api serve", Summary: "Serve Sessions and live terminals over HTTP and WebSocket for a web UI"},
 		Mutates:   true, Run: runAPIServe,
 	}
@@ -167,7 +170,7 @@ func runAPIServe(env Env, args []string) int {
 		_, _ = fmt.Fprint(env.Stdout, RenderHelp(cmd))
 		return 0
 	}
-	flags, err := parseAPIFlags(args, []string{"--tailnet", "--json"}, []string{"--port", "--ui", "--tailnet-port", "--fixtures"})
+	flags, err := parseAPIFlags(args, []string{"--tailnet", "--json"}, []string{"--port", "--ui", "--tailnet-port", "--tailnet-mode", "--fixtures"})
 	if err != nil {
 		cliErrf(env.Stderr, "%v\n\n%s", err, RenderHelp(cmd))
 		return 2
@@ -192,7 +195,18 @@ func runAPIServe(env Env, args []string) int {
 			return 1
 		}
 	}
-	withTailnet := flags.bools["--tailnet"] || tailnetPort > 0
+	var explicitMode uiapi.TailnetMode
+	if raw, ok := flags.values["--tailnet-mode"]; ok {
+		if explicitMode, err = uiapi.ParseTailnetMode(raw); err != nil {
+			cliErrf(env.Stderr, "--tailnet-mode must be direct or serve\n\n%s", RenderHelp(cmd))
+			return 2
+		}
+	}
+	if explicitMode == uiapi.TailnetModeDirect && tailnetPort > 0 {
+		cliErrf(env.Stderr, "--tailnet-port is the serve-mode loopback fallback; direct mode binds the tailnet address itself\n\n%s", RenderHelp(cmd))
+		return 2
+	}
+	withTailnet := flags.bools["--tailnet"] || tailnetPort > 0 || explicitMode != ""
 
 	// As for `mobile serve`: an inherited TMUX would address the hosting
 	// server instead of the configured Sidecar namespace.
@@ -205,18 +219,23 @@ func runAPIServe(env Env, args []string) int {
 	ctx, stop := signal.NotifyContext(base, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	var tailnet *uiapi.TailnetOptions
-	if withTailnet {
-		tailnet, err = apiTailnetOptions(ctx, tailnetPort)
-		if err != nil {
-			cliErrln(env.Stderr, err)
-			return 1
-		}
-	}
 	cfg, err := config.Load()
 	if err != nil {
 		cliErrf(env.Stderr, "load API config: %v; fix %s and retry\n", err, config.ConfigPath())
 		return 1
+	}
+	var tailnet *uiapi.TailnetOptions
+	if withTailnet {
+		mode, modeErr := resolveTailnetMode(explicitMode, cfg.API.TailnetMode, tailnetPort)
+		if modeErr != nil {
+			cliErrln(env.Stderr, modeErr)
+			return 1
+		}
+		tailnet, err = apiTailnetOptions(ctx, tailnetPort, mode)
+		if err != nil {
+			cliErrln(env.Stderr, err)
+			return 1
+		}
 	}
 	uiDir := cfg.API.UIDir
 	if explicit, ok := flags.values["--ui"]; ok {
@@ -264,7 +283,7 @@ func runAPIServe(env Env, args []string) int {
 		backend = live
 	}
 	server, err := uiapi.Start(uiapi.Options{StateDir: env.StateDir, Port: port, UIDir: uiDir, Tailnet: tailnet, BrowserProxyOrigin: cfg.API.BrowserProxyOrigin,
-		Backend: backend, Version: buildinfo.Version(), FixtureStatus: fixtureStatus, Inherited: inherited})
+		Backend: backend, Version: buildinfo.Version(), FixtureStatus: fixtureStatus, Inherited: inherited, Logf: apiServeLogf(env.Stderr)})
 	if err != nil {
 		cliErrln(env.Stderr, err)
 		return 1
@@ -273,12 +292,16 @@ func runAPIServe(env Env, args []string) int {
 	if flags.bools["--json"] {
 		data, _ := json.Marshal(endpoint)
 		_, _ = fmt.Fprintln(env.Stdout, string(data))
-		if tailnet != nil {
+		if tailnet != nil && tailnet.Mode == uiapi.TailnetModeDirect {
+			printTailnetDirect(server.TailnetStatus(), env.Stderr)
+		} else if tailnet != nil {
 			printTailnetHint(endpoint, tailnet, env.Stderr)
 		}
 	} else {
 		_, _ = fmt.Fprintf(env.Stdout, "Sidecar UI API v%d serving (pid %d)\n  local    %s\n  browser  %s\n", uiapi.APIVersion, endpoint.PID, endpoint.UnixSocket, server.BrowserURL())
-		if tailnet != nil {
+		if tailnet != nil && tailnet.Mode == uiapi.TailnetModeDirect {
+			printTailnetDirect(server.TailnetStatus(), env.Stdout)
+		} else if tailnet != nil {
 			printTailnetHint(endpoint, tailnet, env.Stdout)
 		}
 		_, _ = fmt.Fprintln(env.Stdout, "Pair a browser with `sidecar api open`. Press Ctrl-C to stop.")
@@ -302,7 +325,55 @@ func runAPIServe(env Env, args []string) int {
 	return code
 }
 
-func apiTailnetOptions(ctx context.Context, port int) (*uiapi.TailnetOptions, error) {
+// resolveTailnetMode picks the Tailnet listener's mode: the flag, then
+// api.tailnetMode, then serve when only the serve-mode --tailnet-port was
+// given, and otherwise direct.
+func resolveTailnetMode(explicit uiapi.TailnetMode, configured string, tailnetPort int) (uiapi.TailnetMode, error) {
+	mode := explicit
+	if mode == "" && configured != "" {
+		parsed, err := uiapi.ParseTailnetMode(configured)
+		if err != nil {
+			return "", fmt.Errorf("api.tailnetMode must be \"direct\" or \"serve\", not %q; fix %s and retry", configured, config.ConfigPath())
+		}
+		mode = parsed
+	}
+	if mode == "" {
+		mode = uiapi.TailnetModeDirect
+		if tailnetPort > 0 {
+			mode = uiapi.TailnetModeServe
+		}
+	}
+	if mode == uiapi.TailnetModeDirect && tailnetPort > 0 {
+		return "", errors.New("--tailnet-port is the serve-mode loopback fallback, but api.tailnetMode is direct; drop --tailnet-port or pass --tailnet-mode serve")
+	}
+	return mode, nil
+}
+
+// apiServeLogf writes server log lines (Tailnet listener state changes among
+// them) to stderr, which the service manager keeps in its log.
+func apiServeLogf(out io.Writer) func(string, ...any) {
+	var mu sync.Mutex
+	return func(format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		_, _ = fmt.Fprintf(out, "sidecar api: "+format+"\n", args...)
+	}
+}
+
+func apiTailnetOptions(ctx context.Context, port int, mode uiapi.TailnetMode) (*uiapi.TailnetOptions, error) {
+	if mode == uiapi.TailnetModeDirect {
+		// Direct mode discovers the node, and its owner when no logins are
+		// configured, in the background, so Tailscale being down at start
+		// delays only the Tailnet listener.
+		cfg, err := config.Load()
+		if err != nil {
+			return nil, err
+		}
+		if cfg.API.TailnetHTTPSPort < 0 || cfg.API.TailnetHTTPSPort > 65535 {
+			return nil, errors.New("api.tailnetHTTPSPort must be a number from 1 to 65535, or 0 for the default 7861")
+		}
+		return &uiapi.TailnetOptions{Mode: uiapi.TailnetModeDirect, Logins: append([]string(nil), cfg.API.TailnetLogins...), HTTPSPort: cfg.API.TailnetHTTPSPort}, nil
+	}
 	identityCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	identity, err := apiTailnetIdentity(identityCtx)
@@ -320,7 +391,7 @@ func apiTailnetOptions(ctx context.Context, port int) (*uiapi.TailnetOptions, er
 	if len(logins) == 0 {
 		return nil, errors.New("--tailnet found no owner login for this node; set api.tailnetLogins in the Sidecar config")
 	}
-	options := &uiapi.TailnetOptions{Host: identity.Host, Logins: logins, Port: port, HTTPSPort: cfg.API.TailnetHTTPSPort}
+	options := &uiapi.TailnetOptions{Mode: uiapi.TailnetModeServe, Host: identity.Host, Logins: logins, Port: port, HTTPSPort: cfg.API.TailnetHTTPSPort}
 	if _, err := options.HTTPSURL(); err != nil {
 		return nil, err
 	}
@@ -332,6 +403,23 @@ func apiTailnetOptions(ctx context.Context, port int) (*uiapi.TailnetOptions, er
 // 0600 socket; nothing stops another local process from sending that header
 // to a loopback port.
 const tailnetPortWarning = "Warning: any local process or OS user can reach this port and claim an allowed tailnet login, which drives your terminals. Use --tailnet-port only where every local user and process is already trusted."
+
+// printTailnetDirect reports the direct-mode listener as Start left it: up,
+// or why not yet and that it keeps retrying.
+func printTailnetDirect(status *uiapi.TailnetStatus, out io.Writer) {
+	if status == nil {
+		return
+	}
+	if status.State == uiapi.TailnetStateListening {
+		_, _ = fmt.Fprintf(out, "  tailnet  %s (direct on %s; logins %s)\n", status.Origin, strings.Join(status.Addresses, ", "), strings.Join(status.Logins, ", "))
+		return
+	}
+	message := status.Message
+	if message == "" {
+		message = "still starting; check `sidecar api status`."
+	}
+	_, _ = fmt.Fprintf(out, "  tailnet  %s (direct): %s\n", status.State, message)
+}
 
 func printTailnetHint(endpoint uiapi.Endpoint, tailnet *uiapi.TailnetOptions, out io.Writer) {
 	publicURL, _ := tailnet.HTTPSURL()
@@ -559,6 +647,22 @@ func runAPIStatus(env Env, args []string) int {
 			line += " (" + listener.Host + ")"
 		}
 		_, _ = fmt.Fprintln(env.Stdout, line)
+	}
+	if tailnet := status.Tailnet; tailnet != nil {
+		line := fmt.Sprintf("Tailnet (%s): %s", tailnet.Mode, tailnet.State)
+		if tailnet.Origin != "" {
+			line += " " + tailnet.Origin
+		}
+		if len(tailnet.Logins) > 0 {
+			line += "; logins " + strings.Join(tailnet.Logins, ", ")
+		}
+		if tailnet.CertificateExpiresAt != nil {
+			line += "; certificate until " + tailnet.CertificateExpiresAt.Local().Format(time.RFC3339)
+		}
+		_, _ = fmt.Fprintln(env.Stdout, line)
+		if tailnet.Message != "" {
+			_, _ = fmt.Fprintln(env.Stdout, "  "+tailnet.Message)
+		}
 	}
 	_, _ = fmt.Fprintf(env.Stdout, "%d connected client(s)\n", len(status.Clients))
 	for _, client := range status.Clients {
