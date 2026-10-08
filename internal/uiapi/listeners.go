@@ -50,6 +50,17 @@ func validateActivated(opts Options, activated []apiservice.ActivatedListener) (
 			// hands it a Tailnet descriptor.
 			tailnetSocket := opts.Tailnet != nil && opts.Tailnet.Port == 0 && opts.Tailnet.Mode != TailnetModeDirect
 			path := address.Name
+			if opts.Tailnet != nil && opts.Tailnet.Mode == TailnetModeDirect && (item.Name == string(ListenerTailnet) || path == tailnetPath) {
+				// A service definition written for serve mode still declares
+				// the Tailnet socket. Direct mode never serves it, and a
+				// socket left unserved grants nothing, so close it rather
+				// than refuse to start: an upgrade must not take the API down.
+				_ = item.Listener.Close()
+				if opts.Logf != nil {
+					opts.Logf("ui api: ignoring the service manager's Tailnet socket %s: direct mode binds the tailnet address itself. Run `sidecar api service install` to refresh the service definition.", address)
+				}
+				continue
+			}
 			switch {
 			case path == localPath:
 				kind = ListenerLocal

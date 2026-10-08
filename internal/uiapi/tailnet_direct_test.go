@@ -741,11 +741,24 @@ func TestActivatedListenersInDirectMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = tailnet.Close() }()
-	if _, err := validateActivated(opts, []apiservice.ActivatedListener{{Name: "tailnet", Listener: tailnet}}); err == nil {
-		t.Fatal("direct mode accepted a manager Tailnet socket")
+	// A service definition written for serve mode still hands over its
+	// Tailnet socket. Direct mode closes and ignores it instead of refusing
+	// to start, so an upgrade does not take the API down; it never serves it.
+	got, err := validateActivated(opts, []apiservice.ActivatedListener{{Name: "browser", Listener: browser}, {Name: "local", Listener: local}, {Name: "tailnet", Listener: tailnet}})
+	if err != nil || got[ListenerBrowser] == nil || got[ListenerLocal] == nil || got[ListenerTailnet] != nil {
+		t.Fatalf("direct mode with a leftover Tailnet socket = %v, %v; want it ignored", got, err)
 	}
-	if _, err := validateActivated(opts, []apiservice.ActivatedListener{{Listener: tailnet}}); err == nil {
-		t.Fatal("direct mode accepted an unnamed Tailnet socket")
+	if conn, err := net.Dial("unix", tailnetPath); err == nil {
+		_ = conn.Close()
+		t.Fatal("the ignored Tailnet socket still accepts connections")
+	}
+	unnamed, err := listenPrivateUnix(tailnetPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = unnamed.Close() }()
+	if got, err := validateActivated(opts, []apiservice.ActivatedListener{{Listener: unnamed}}); err != nil || got[ListenerTailnet] != nil {
+		t.Fatalf("direct mode with an unnamed Tailnet socket = %v, %v; want it ignored", got, err)
 	}
 }
 
