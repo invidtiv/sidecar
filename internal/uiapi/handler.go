@@ -316,7 +316,7 @@ func (h *listenerHandler) authenticate(w http.ResponseWriter, r *http.Request, c
 	}
 	token, present := bearerToken(r)
 	if !present {
-		writeError(w, http.StatusUnauthorized, CodeUnauthenticated, "Send Authorization: Bearer with this browser's session token (pair it with `sidecar api open`) or a paired origin's token.")
+		writeError(w, http.StatusUnauthorized, CodeUnauthenticated, "Send Authorization: Bearer with this browser's session token (ask for access from Sidecar's UI, or pair with `sidecar api open`) or a paired origin's token.")
 		return c, false
 	}
 	resolved, result := h.s.resolveBearer(token, c.origin)

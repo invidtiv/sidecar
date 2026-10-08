@@ -268,7 +268,7 @@ func (a *authStore) issueBrowserProof(origin, id string) (SessionProofChallenge,
 	return SessionProofChallenge{Nonce: nonce, Timestamp: proof.timestamp, ExpiresAt: proof.expires}, nil
 }
 
-var errBrowserProofInvalid = errors.New("browser key proof is invalid, expired or revoked; pair again with `sidecar api open`")
+var errBrowserProofInvalid = errors.New("browser key proof is invalid, expired or revoked; ask for access again from Sidecar's UI, or run `sidecar api open` on the host")
 
 func (a *authStore) verifyBrowserProof(origin string, req SessionProofRequest) (SessionToken, error) {
 	a.mu.Lock()
