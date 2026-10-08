@@ -177,6 +177,20 @@ func runAPIService(env Env, args []string) int {
 		cliErrln(env.Stderr, err)
 		return 1
 	}
+	// launchd and systemd start the job a moment after install returns. Wait
+	// briefly for it so install reports the service it started, not a false
+	// "not running" from the instant before the process exists.
+	for deadline := time.Now().Add(apiServiceStartWait); args[0] == "install" && !status.Running && time.Now().Before(deadline); {
+		select {
+		case <-ctx.Done():
+			deadline = time.Time{}
+			continue
+		case <-time.After(250 * time.Millisecond):
+		}
+		if next, err := manager.Status(ctx); err == nil {
+			status = next
+		}
+	}
 	apiServiceVersion(ctx, env, &status)
 	status.UIDir = configuredUI
 	if args[0] == "status" {
@@ -254,6 +268,10 @@ func apiServiceVersion(ctx context.Context, env Env, status *apiservice.Status) 
 		status.Version = observed.ServerVersion
 	}
 }
+
+// apiServiceStartWait bounds how long install waits for the started service
+// to report running. Tests shorten it.
+var apiServiceStartWait = 5 * time.Second
 
 // definitionRunsTailnet reports whether an installed launchd plist or systemd
 // unit starts the server with a Tailnet flag (--tailnet, --tailnet-mode or

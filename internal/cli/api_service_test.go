@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/marcus/sidecar/internal/apiservice"
 	"github.com/marcus/sidecar/internal/config"
@@ -61,6 +62,10 @@ type fakeAPIManager struct {
 	calls         []string
 	failure       error
 	beforeInstall func()
+	// startsAfter makes the job report running only after this many status
+	// reads following install, the way launchd starts it a moment later.
+	startsAfter  int
+	sinceInstall int
 }
 
 func (f *fakeAPIManager) Install(context.Context) error {
@@ -73,6 +78,7 @@ func (f *fakeAPIManager) Install(context.Context) error {
 	}
 	f.status.Installed = true
 	f.status.Loaded = true
+	f.sinceInstall = 0
 	return nil
 }
 
@@ -147,12 +153,18 @@ func (f *fakeAPIManager) Uninstall(context.Context) error {
 }
 func (f *fakeAPIManager) Status(context.Context) (apiservice.Status, error) {
 	f.calls = append(f.calls, "status")
+	if f.startsAfter > 0 && f.status.Installed {
+		if f.sinceInstall++; f.sinceInstall > f.startsAfter {
+			f.status.Running, f.status.PID = true, 4242
+		}
+	}
 	return f.status, nil
 }
 func fakeAPIService(t *testing.T) *fakeAPIManager {
 	t.Helper()
-	previous := apiServiceManager
-	t.Cleanup(func() { apiServiceManager = previous })
+	previous, previousWait := apiServiceManager, apiServiceStartWait
+	t.Cleanup(func() { apiServiceManager, apiServiceStartWait = previous, previousWait })
+	apiServiceStartWait = 0
 	fake := &fakeAPIManager{status: apiservice.Status{Manager: "fake", Message: "Not installed; run `sidecar api service install`."}}
 	apiServiceManager = func(Env) (apiservice.Manager, error) { return fake, nil }
 	return fake
@@ -356,5 +368,17 @@ func TestDefinitionRunsTailnet(t *testing.T) {
 		if got := definitionRunsTailnet([]byte(text)); got != want {
 			t.Errorf("definitionRunsTailnet(%q) = %v, want %v", text, got, want)
 		}
+	}
+}
+
+// install reports the service it started, not the instant before the
+// manager spawned it.
+func TestAPIServiceInstallWaitsForTheServiceToStart(t *testing.T) {
+	apiStateTree(t, t.TempDir())
+	fake := fakeAPIService(t)
+	apiServiceStartWait = 3 * time.Second
+	fake.startsAfter = 2
+	if code, out, stderr := runAPICLI(t, "api", "service", "install"); code != 0 || !strings.Contains(out, "running=true pid=4242") {
+		t.Fatalf("install: %d %s %s", code, out, stderr)
 	}
 }
