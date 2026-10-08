@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"syscall"
 	"time"
 	"unicode"
@@ -28,15 +29,19 @@ const (
 // Label, ApprovedVia and ApprovedAt describe the device for the device list:
 // the label is what the browser claimed when it asked for access, and
 // ApprovedVia names the surface that let it in (see approvedVia).
+// ApprovedDevice is the tailnet device an allowed login approved from, set
+// only with a tailnet: ApprovedVia on the direct listener. It is omitted when
+// empty, so a version-2 store without it reads unchanged.
 type session struct {
-	PublicKey   BrowserPublicKey `json:"public_key"`
-	Origin      string           `json:"origin"`
-	Label       string           `json:"label"`
-	ApprovedVia string           `json:"approved_via"`
-	ApprovedAt  time.Time        `json:"approved_at"`
-	CreatedAt   time.Time        `json:"created_at"`
-	LastUsedAt  time.Time        `json:"last_used_at"`
-	ExpiresAt   time.Time        `json:"expires_at"`
+	PublicKey      BrowserPublicKey `json:"public_key"`
+	Origin         string           `json:"origin"`
+	Label          string           `json:"label"`
+	ApprovedVia    string           `json:"approved_via"`
+	ApprovedDevice string           `json:"approved_device,omitempty"`
+	ApprovedAt     time.Time        `json:"approved_at"`
+	CreatedAt      time.Time        `json:"created_at"`
+	LastUsedAt     time.Time        `json:"last_used_at"`
+	ExpiresAt      time.Time        `json:"expires_at"`
 }
 
 type sessionsFile struct {
@@ -210,12 +215,14 @@ func readSessionSnapshot(path string) (map[string]session, os.FileInfo, error) {
 		if err != nil || origin != s.Origin || keyErr != nil || id != browserRegistrationID(s.Origin, s.PublicKey) || s.CreatedAt.IsZero() || s.LastUsedAt.Before(s.CreatedAt) || !s.ExpiresAt.Equal(sessionExpiry(s)) {
 			return corrupt("invalid public key, origin or registration timestamps")
 		}
-		if !validApprovedVia(s.ApprovedVia) || s.ApprovedAt.IsZero() || !storedLabelValid(s.Label) {
+		if !validApprovedVia(s.ApprovedVia) || s.ApprovedAt.IsZero() || !storedLabelValid(s.Label) || !storedLabelValid(s.ApprovedDevice) ||
+			(s.ApprovedDevice != "" && !strings.HasPrefix(s.ApprovedVia, approvedViaTailnetPrefix)) {
 			return corrupt("invalid device label or approval record")
 		}
 		// Re-clean rather than compare: a later, stricter sanitizer must
 		// tidy old labels, not refuse the whole store.
 		s.Label = cleanDeviceLabel(s.Label)
+		s.ApprovedDevice = cleanDeviceLabel(s.ApprovedDevice)
 		stored.Registrations[id] = s
 	}
 	if stored.Version == 1 {

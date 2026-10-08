@@ -105,12 +105,15 @@ type AccessApproveRequest struct {
 
 // AccessApproval is the approved request and the registration it created.
 type AccessApproval struct {
-	RequestID      string    `json:"request_id"`
-	RegistrationID string    `json:"registration_id"`
-	Label          string    `json:"label"`
-	Origin         string    `json:"origin"`
-	Address        string    `json:"address"`
-	ApprovedVia    string    `json:"approved_via"`
+	RequestID      string `json:"request_id"`
+	RegistrationID string `json:"registration_id"`
+	Label          string `json:"label"`
+	Origin         string `json:"origin"`
+	Address        string `json:"address"`
+	ApprovedVia    string `json:"approved_via"`
+	// ApprovedDevice is the tailnet device an allowed login approved from
+	// (direct mode only), as Tailscale names it.
+	ApprovedDevice string    `json:"approved_device,omitempty"`
 	ApprovedAt     time.Time `json:"approved_at"`
 }
 
@@ -128,15 +131,18 @@ type AccessDenial struct {
 // Device is one browser registration in GET /api/v0/pairing/sessions.
 // current marks the caller's own registration.
 type Device struct {
-	ID          string    `json:"id"`
-	Origin      string    `json:"origin"`
-	Label       string    `json:"label"`
-	ApprovedVia string    `json:"approved_via"`
-	ApprovedAt  time.Time `json:"approved_at"`
-	CreatedAt   time.Time `json:"created_at"`
-	LastUsedAt  time.Time `json:"last_used_at"`
-	ExpiresAt   time.Time `json:"expires_at"`
-	Current     bool      `json:"current"`
+	ID          string `json:"id"`
+	Origin      string `json:"origin"`
+	Label       string `json:"label"`
+	ApprovedVia string `json:"approved_via"`
+	// ApprovedDevice is the tailnet device an allowed login approved this
+	// browser from (direct mode only), as Tailscale names it.
+	ApprovedDevice string    `json:"approved_device,omitempty"`
+	ApprovedAt     time.Time `json:"approved_at"`
+	CreatedAt      time.Time `json:"created_at"`
+	LastUsedAt     time.Time `json:"last_used_at"`
+	ExpiresAt      time.Time `json:"expires_at"`
+	Current        bool      `json:"current"`
 }
 
 // DeviceList is GET /api/v0/pairing/sessions.

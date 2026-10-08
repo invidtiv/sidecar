@@ -83,6 +83,8 @@ func (a *authStore) registerBrowser(origin string, key BrowserPublicKey, label s
 type registrationApproval struct {
 	label string
 	via   string
+	// device is the tailnet device the approver acted from, if any.
+	device string
 }
 
 // upsertRegistrationLocked creates or refreshes the registration for exactly
@@ -121,6 +123,10 @@ func (a *authStore) upsertRegistrationLocked(origin string, key BrowserPublicKey
 			s.Label = label
 		}
 		s.ApprovedVia, s.ApprovedAt = approval.via, now
+		s.ApprovedDevice = ""
+		if strings.HasPrefix(approval.via, approvedViaTailnetPrefix) {
+			s.ApprovedDevice = cleanDeviceLabel(approval.device)
+		}
 		s.ExpiresAt = sessionExpiry(s)
 		records[id] = s
 		return true

@@ -204,7 +204,7 @@ func (s *Server) handleApproveAccess(w http.ResponseWriter, r *http.Request, c c
 		writeError(w, http.StatusUnauthorized, CodeUnauthenticated, revokedSessionReason)
 		return
 	}
-	approval, err := s.auth.approveAccess(c.client, code, via)
+	approval, err := s.auth.approveAccess(c.client, code, via, approvingDevice(c))
 	s.credentialMu.Unlock()
 	switch {
 	case errors.Is(err, errAccessAttempts):

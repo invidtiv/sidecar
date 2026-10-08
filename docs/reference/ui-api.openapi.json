@@ -11,6 +11,9 @@
             "format": "date-time",
             "type": "string"
           },
+          "approved_device": {
+            "type": "string"
+          },
           "approved_via": {
             "type": "string"
           },
@@ -1187,6 +1190,9 @@
         "properties": {
           "approved_at": {
             "format": "date-time",
+            "type": "string"
+          },
+          "approved_device": {
             "type": "string"
           },
           "approved_via": {

@@ -229,6 +229,15 @@ func approvedVia(c caller, surface string) (string, error) {
 	return "", errors.New("this caller may not approve access")
 }
 
+// approvingDevice is the tailnet device a direct-listener approver acted
+// from, as Tailscale's whois named it; empty for every other approver.
+func approvingDevice(c caller) string {
+	if c.auth != "tailnet" {
+		return ""
+	}
+	return cleanDeviceLabel(c.device)
+}
+
 func validApprovedVia(via string) bool {
 	switch {
 	case via == approvedViaLink, via == approvedViaCLI, via == approvedViaTUI:
@@ -447,7 +456,7 @@ func (a *authStore) listAccessRequests() []AccessRequestInfo {
 // the registration for that request's public key and origin. Wrong codes
 // count against approver; once it has five in a minute every attempt,
 // right or wrong, is refused until the window passes.
-func (a *authStore) approveAccess(approver, code, via string) (AccessApproval, error) {
+func (a *authStore) approveAccess(approver, code, via, device string) (AccessApproval, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	now := a.now()
@@ -480,14 +489,14 @@ func (a *authStore) approveAccess(approver, code, via string) (AccessApproval, e
 		}
 		return AccessApproval{}, errAccessCodeInvalid
 	}
-	id, err := a.upsertRegistrationLocked(match.origin, match.publicKey, registrationApproval{label: match.label, via: via})
+	id, err := a.upsertRegistrationLocked(match.origin, match.publicKey, registrationApproval{label: match.label, via: via, device: device})
 	if err != nil {
 		return AccessApproval{}, err
 	}
 	match.status, match.settled, match.approvedBy = accessStatusApproved, now, via
 	// Report the registration as stored, so the device list agrees.
 	stored := a.sessions[id]
-	return AccessApproval{RequestID: match.id, RegistrationID: id, Label: stored.Label, Origin: match.origin, Address: match.address, ApprovedVia: stored.ApprovedVia, ApprovedAt: stored.ApprovedAt.UTC()}, nil
+	return AccessApproval{RequestID: match.id, RegistrationID: id, Label: stored.Label, Origin: match.origin, Address: match.address, ApprovedVia: stored.ApprovedVia, ApprovedDevice: stored.ApprovedDevice, ApprovedAt: stored.ApprovedAt.UTC()}, nil
 }
 
 // denyAccess refuses one pending request by id.
@@ -544,7 +553,7 @@ func (a *authStore) listDevices(current string) ([]Device, error) {
 		if !now.Before(s.ExpiresAt) {
 			continue
 		}
-		out = append(out, Device{ID: id, Origin: s.Origin, Label: s.Label, ApprovedVia: s.ApprovedVia, ApprovedAt: s.ApprovedAt.UTC(),
+		out = append(out, Device{ID: id, Origin: s.Origin, Label: s.Label, ApprovedVia: s.ApprovedVia, ApprovedDevice: s.ApprovedDevice, ApprovedAt: s.ApprovedAt.UTC(),
 			CreatedAt: s.CreatedAt.UTC(), LastUsedAt: s.LastUsedAt.UTC(), ExpiresAt: s.ExpiresAt.UTC(), Current: current != "" && sessionClient(id) == current})
 	}
 	sort.Slice(out, func(i, j int) bool {

@@ -118,6 +118,18 @@
           "last_used_at": "2026-10-03T00:00:30Z",
           "expires_at": "2026-11-02T00:00:30Z",
           "current": true
+        },
+        {
+          "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "origin": "http://127.0.0.1:7861",
+          "label": "Safari on iOS",
+          "approved_via": "tailnet:owner@example.com",
+          "approved_device": "marcusbook-pro",
+          "approved_at": "2026-10-03T00:00:30Z",
+          "created_at": "2026-10-03T00:00:30Z",
+          "last_used_at": "2026-10-03T00:00:30Z",
+          "expires_at": "2026-11-02T00:00:30Z",
+          "current": false
         }
       ]
     }

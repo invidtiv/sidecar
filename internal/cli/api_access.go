@@ -65,7 +65,7 @@ func apiAccessCommands() []*Command {
 	}
 	devices := &Command{
 		Name: "devices", Summary: "List browsers that can sign in, or revoke one", Usage: "sidecar api devices [--json] | sidecar api devices revoke ID [--json]",
-		Long:      "List the browsers registered with the running UI API, most recently used first: device id, the name the browser claimed when it asked, its origin, how it was approved (link for `sidecar api open`, cli, tui, browser:<device> or tailnet:<login>) and when, and when it was last used. Registrations expire 30 days after last use and at most 180 days after creation. `sidecar api devices revoke ID` signs one out.",
+		Long:      "List the browsers registered with the running UI API, most recently used first: device id, the name the browser claimed when it asked, its origin, how it was approved (link for `sidecar api open`, cli, tui, browser:<device> or tailnet:<login>, with the tailnet device the login approved from when Sidecar knows it, as in `tailnet:me@example.com from laptop`) and when, and when it was last used. Registrations expire 30 days after last use and at most 180 days after creation. `sidecar api devices revoke ID` signs one out.",
 		Flags:     []Flag{jsonFlag, help},
 		ExitCodes: apiAccessExitCodes,
 		Examples:  []Example{{Command: "sidecar api devices"}, {Command: "sidecar api devices --json"}, {Command: "sidecar api devices revoke 3f9a1c2b7d4e"}},
@@ -282,11 +282,20 @@ func runAPIDevices(env Env, args []string) int {
 		return 0
 	}
 	for _, d := range list.Devices {
-		_, _ = fmt.Fprintf(env.Stdout, "  %s  %s  %s  approved via %s %s, last used %s\n", shortDeviceID(d.ID), deviceName(d.Label), d.Origin, d.ApprovedVia,
+		_, _ = fmt.Fprintf(env.Stdout, "  %s  %s  %s  approved via %s %s, last used %s\n", shortDeviceID(d.ID), deviceName(d.Label), d.Origin, approvalSource(d),
 			d.ApprovedAt.Local().Format(time.RFC3339), d.LastUsedAt.Local().Format(time.RFC3339))
 	}
 	_, _ = fmt.Fprintln(env.Stdout, "Sign one out with: sidecar api devices revoke ID")
 	return 0
+}
+
+// approvalSource is approved_via, with the tailnet device an allowed login
+// approved from when Sidecar knows it ("tailnet:me@example.com from laptop").
+func approvalSource(d uiapi.Device) string {
+	if d.ApprovedDevice == "" {
+		return d.ApprovedVia
+	}
+	return fmt.Sprintf("%s from %s", d.ApprovedVia, d.ApprovedDevice)
 }
 
 func shortDeviceID(id string) string {

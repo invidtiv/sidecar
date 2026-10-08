@@ -149,3 +149,12 @@ func TestAPIAccessVerbsAgainstARunningServer(t *testing.T) {
 		t.Fatalf("devices after revoke: %d %q", code, stdout)
 	}
 }
+
+func TestApprovalSourceNamesTheTailnetDevice(t *testing.T) {
+	if got := approvalSource(uiapi.Device{ApprovedVia: "tailnet:me@example.com", ApprovedDevice: "marcusbook-pro"}); got != "tailnet:me@example.com from marcusbook-pro" {
+		t.Fatalf("tailnet source = %q", got)
+	}
+	if got := approvalSource(uiapi.Device{ApprovedVia: "cli"}); got != "cli" {
+		t.Fatalf("cli source = %q", got)
+	}
+}

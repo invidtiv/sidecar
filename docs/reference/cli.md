@@ -964,7 +964,7 @@ sidecar api deny Xk3vQ0pL9aBcDeFg
 
 List browsers that can sign in, or revoke one
 
-List the browsers registered with the running UI API, most recently used first: device id, the name the browser claimed when it asked, its origin, how it was approved (link for `sidecar api open`, cli, tui, browser:<device> or tailnet:<login>) and when, and when it was last used. Registrations expire 30 days after last use and at most 180 days after creation. `sidecar api devices revoke ID` signs one out.
+List the browsers registered with the running UI API, most recently used first: device id, the name the browser claimed when it asked, its origin, how it was approved (link for `sidecar api open`, cli, tui, browser:<device> or tailnet:<login>, with the tailnet device the login approved from when Sidecar knows it, as in `tailnet:me@example.com from laptop`) and when, and when it was last used. Registrations expire 30 days after last use and at most 180 days after creation. `sidecar api devices revoke ID` signs one out.
 
 ```
 Usage: sidecar api devices [--json] | sidecar api devices revoke ID [--json]

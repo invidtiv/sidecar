@@ -472,8 +472,9 @@ func TestAccessApproversAndPairedOriginRefusal(t *testing.T) {
 	r, b = h.tailnetDo(req{method: http.MethodPost, path: accessApprovePath, body: string(body), header: login})
 	expect(t, r, b, http.StatusOK, "")
 	_ = json.Unmarshal(b, &approval)
-	if approval.ApprovedVia != "tailnet:"+testTailnetLogin {
-		t.Fatalf("approved_via = %q", approval.ApprovedVia)
+	if approval.ApprovedVia != "tailnet:"+testTailnetLogin || approval.ApprovedDevice != "" {
+		// Serve mode knows the login from a header, but not the device.
+		t.Fatalf("approved_via = %q, approved_device = %q", approval.ApprovedVia, approval.ApprovedDevice)
 	}
 	// Without a credential nobody lists or approves.
 	r, b = h.browserDo(req{path: accessRequestsPath})
