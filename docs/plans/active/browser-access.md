@@ -79,7 +79,7 @@ The `access_request` notification appears like any other. Activating it opens an
 ### What the probe established (aerie, 2026-10-08, Tailscale 1.102.4 standalone macOS build)
 
 - `tailscale serve` cannot proxy to a Unix socket on this build in any location or mode: the Sidecar Tailnet socket, a 0600 or 0666 socket under `/private/tmp`, `/tmp` and the state directory all return `502`, while a TCP target on the same Serve port returns `200`. The existing socket-based Tailnet listener is therefore unusable with the standalone macOS app, which is why aerie proxies Serve to the Browser listener with `api.browserProxyOrigin`.
-- A user process can bind the node's tailnet address directly (`100.89.245.23:<port>`), serve TLS with a certificate from `tailscale cert <magicdns>` (a real, publicly trusted certificate for the MagicDNS name), and see each peer's true tailnet address. `tailscale whois --json <peer-ip>` maps it to the owning login and device: a request from MarcusBook arrived from `100.117.87.108` and resolved to `marcus@vorwaller.net on marcusbook-pro`. A request from aerie itself arrives from aerie's own tailnet address.
+- A user process can bind the node's tailnet address directly (`<tailnet-ip>:<port>`), serve TLS with a certificate from `tailscale cert <magicdns>` (a real, publicly trusted certificate for the MagicDNS name), and see each peer's true tailnet address. `tailscale whois --json <peer-ip>` maps it to the owning login and device: a request from MarcusBook arrived from MarcusBook's own tailnet address and resolved to the owner's login on `marcusbook-pro`. A request from aerie itself arrives from aerie's own tailnet address.
 
 ### Design: a direct Tailnet listener
 

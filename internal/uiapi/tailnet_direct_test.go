@@ -750,9 +750,9 @@ func TestActivatedListenersInDirectMode(t *testing.T) {
 }
 
 func TestParseTailscaleNode(t *testing.T) {
-	node, err := ParseTailscaleNode([]byte(`{"BackendState":"Running","MagicDNSSuffix":"tail.ts.net","Self":{"ID":"nSelf","DNSName":"Aerie.tail.ts.net.","UserID":7,"Tags":null,"TailscaleIPs":["100.89.245.23","fd7a:115c:a1e0::6139:f517"]},"User":{"7":{"LoginName":"marcus@example.com"}}}`))
+	node, err := ParseTailscaleNode([]byte(`{"BackendState":"Running","MagicDNSSuffix":"tail.ts.net","Self":{"ID":"nSelf","DNSName":"Aerie.tail.ts.net.","UserID":7,"Tags":null,"TailscaleIPs":["100.64.7.23","fd7a:115c:a1e0::7:23"]},"User":{"7":{"LoginName":"marcus@example.com"}}}`))
 	if err != nil || node.Host != "aerie.tail.ts.net" || node.OwnerLogin != "marcus@example.com" || node.OwnerID != 7 || node.StableID != "nSelf" || node.Suffix != "tail.ts.net" ||
-		len(node.Addresses) != 2 || node.Addresses[0] != netip.MustParseAddr("100.89.245.23") {
+		len(node.Addresses) != 2 || node.Addresses[0] != netip.MustParseAddr("100.64.7.23") {
 		t.Fatalf("node = %+v, %v", node, err)
 	}
 	// Without MagicDNSSuffix the suffix comes from the node's own name.

@@ -6,6 +6,10 @@ All notable changes to sidecar are documented here.
 
 ### Features
 
+- **Approve a new browser without the CLI.** A browser that opens Sidecar's web UI without a credential asks for access and shows a short code. Approve it by typing that code into the TUI (from the access-request notification), into an already signed-in browser, or with `sidecar api approve CODE`. Approval registers only the requesting browser's own key; nothing transferable is handed out. `sidecar api requests`, `deny` and `devices [revoke ID]` manage pending requests and signed-in browsers, and the web UI gains a Devices section in Preferences. The one-time `sidecar api open` link remains for the host's own browser. (td-ba7a17)
+
+- **Zero-setup Tailscale access.** With `--tailnet`, Sidecar now listens on the node's tailnet address itself, serves HTTPS with the node's `tailscale cert` certificate, and identifies every connection with Tailscale's whois, so your own untagged devices open the UI with no pairing and no `tailscale serve` route. Connections from outside the tailnet, from this machine, from tagged or shared-in devices, or from other logins are refused; open streams are re-checked every minute. The previous socket mode remains as `api.tailnetMode: "serve"`. An existing `tailscale serve` route on the same port is reported with the exact command to remove it. (td-accec4)
+
 - Sidecar-launched and resumed Codex sessions default to inline mode when supported, preserving terminal scrollback without a per-launch flag. Explicit screen-mode arguments and custom launch commands retain their chosen behavior.
 
 - Notification settings forms can describe themselves through the UI API: `GET /api/v0/notifications/settings/options` lists each registered source with a human title, description and built-in rule, and says whether the credential may save. A refused settings save names the refused field in `error.field`.
@@ -13,6 +17,10 @@ All notable changes to sidecar are documented here.
 - Start a selected inactive shell or existing worktree terminal through `sidecar shell start`, `sidecar worktree start`, and their UI API operations. Shells keep their recorded identity, agent metadata and restore policy; worktrees start in the existing checkout without creating another branch or rerunning setup. Unrelated session-name collisions refuse.
 
 ### Bug Fixes
+
+- **Web UI panes no longer fail with "four content reads in progress".** Every page of a browser now shares one pool of read slots, hidden tabs stop reading until they are visible again, a refused read retries quietly instead of showing an error, and cancelled `git` and `td` reads behind content panes free their slot promptly. Open tabs also offer a reload when a new UI is deployed. (td-e4be7d)
+
+- Restoring a deleted shell whose name a new shell has since taken brings it back as the first free numbered variant instead of creating two shells with one name. (td-86f2b2)
 
 - **Project shells stay live inside tmux without a locale.** Launching Sidecar through a persistent SSH/mosh tmux wrapper no longer marks running shells offline or hides their terminal output.
 
