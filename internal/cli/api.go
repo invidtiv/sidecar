@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -61,7 +62,7 @@ func apiCommand() *Command {
 	}
 	open := &Command{
 		Name: "open", Summary: "Pair this machine's browser and open the UI", Usage: "sidecar api open [--print] [--proxy] [--path P]",
-		Long:      "Ask the running server for a single-use pairing link (valid for 60 seconds) and open it in the default browser. The code rides in the link's fragment, so it never appears in a request line; the pairing page registers a non-extractable WebCrypto key in that origin's IndexedDB and goes to --path. Only the public key persists on the server, with a 30-day sliding expiry and a 180-day absolute cap. The browser signs a fresh nonce after each restart to obtain a 15-minute memory-only bearer; legacy localStorage tokens are cleared. Pairing again leaves other tabs valid. --print writes the link instead of opening it. --proxy uses the running server's configured api.browserProxyOrigin so you can pair a remote browser through the HTTPS proxy.",
+		Long:      "Pair this machine's own browser in one step: ask the running server for a single-use pairing link (valid for 60 seconds) and open it in the default browser. Any other browser, or this one without the link, asks for access from Sidecar's UI and is let in with `sidecar api approve CODE`; the link is the host's convenience and a recovery path. The code rides in the link's fragment, so it never appears in a request line; the pairing page registers a non-extractable WebCrypto key in that origin's IndexedDB and goes to --path. Only the public key persists on the server, with a 30-day sliding expiry and a 180-day absolute cap. The browser signs a fresh nonce after each restart to obtain a 15-minute memory-only bearer; legacy localStorage tokens are cleared. Pairing again leaves other tabs valid. --print writes the link instead of opening it. --proxy uses the running server's configured api.browserProxyOrigin so you can pair a remote browser through the HTTPS proxy.",
 		Flags:     []Flag{{Name: "--print", Summary: "Print the pairing URL instead of opening a browser", Bool: true}, {Name: "--proxy", Summary: "Use the configured HTTPS browser proxy origin", Bool: true}, {Name: "--path", Arg: "P", Summary: "Path to land on after pairing (default /)"}, help},
 		ExitCodes: []ExitCode{{Code: 0, Summary: "success"}, {Code: 1, Summary: "no server running or the server refused"}, {Code: 2, Summary: "usage error"}},
 		Examples:  []Example{{Command: "sidecar api open"}, {Command: "sidecar api open --print"}},
@@ -88,8 +89,15 @@ func apiCommand() *Command {
 		Run:       runAPIStatus,
 	}
 	return &Command{Name: "api", Summary: "Serve Sidecar's UI API for web and embedded clients", Usage: "sidecar api <command>",
-		Long: "The UI API exposes Sessions and live terminals over HTTP and WebSocket so a web UI, an embedding app, or an agent can use them. The wire contract is docs/reference/ui-api.md.",
-		Sub:  []*Command{apiEventsCommand(), open, pair, serve, apiServiceCommand(), status, apiSpecCommand()}, Run: runAPIRoot}
+		Long: "The UI API exposes Sessions and live terminals over HTTP and WebSocket so a web UI, an embedding app, or an agent can use them. A browser that opens Sidecar's UI with no credential asks for access and shows a short code; let it in with `sidecar api approve CODE` (or from the TUI or a signed-in browser), see who is waiting with `sidecar api requests`, and manage signed-in browsers with `sidecar api devices`. `sidecar api open` pairs this machine's own browser in one step. The wire contract is docs/reference/ui-api.md.",
+		Sub:  apiSubcommands(apiEventsCommand(), open, pair, serve, apiServiceCommand(), status, apiSpecCommand()), Run: runAPIRoot}
+}
+
+// apiSubcommands orders the api verbs by name, the access verbs among them.
+func apiSubcommands(commands ...*Command) []*Command {
+	commands = append(commands, apiAccessCommands()...)
+	sort.SliceStable(commands, func(i, j int) bool { return commands[i].Name < commands[j].Name })
+	return commands
 }
 
 func runAPIRoot(env Env, args []string) int {
@@ -281,7 +289,7 @@ func runAPIServe(env Env, args []string) int {
 		if tailnet != nil {
 			printTailnetHint(endpoint, tailnet, env.Stdout)
 		}
-		_, _ = fmt.Fprintln(env.Stdout, "Pair a browser with `sidecar api open`. Press Ctrl-C to stop.")
+		_, _ = fmt.Fprintln(env.Stdout, "Open the UI in a browser and approve it with `sidecar api approve CODE`, or pair this machine's browser with `sidecar api open`. Press Ctrl-C to stop.")
 	}
 
 	code := 0

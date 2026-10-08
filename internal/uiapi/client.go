@@ -129,6 +129,45 @@ func (c *LocalClient) RevokeSessions(ctx context.Context, origin string) (Sessio
 	return revocation, err
 }
 
+// ListAccessRequests lists browsers waiting for approval, without codes.
+func (c *LocalClient) ListAccessRequests(ctx context.Context) (AccessRequestList, error) {
+	var list AccessRequestList
+	err := c.Do(ctx, http.MethodGet, accessRequestsPath, nil, &list)
+	return list, err
+}
+
+// ApproveAccess approves the waiting browser that shows code. surface names
+// the local surface recorded as approved_via: cli or tui.
+func (c *LocalClient) ApproveAccess(ctx context.Context, code, surface string) (AccessApproval, error) {
+	var approval AccessApproval
+	err := c.Do(ctx, http.MethodPost, accessApprovePath, AccessApproveRequest{Code: code, Surface: surface}, &approval)
+	return approval, err
+}
+
+// DenyAccess refuses one waiting browser by request id.
+func (c *LocalClient) DenyAccess(ctx context.Context, requestID string) (AccessDenial, error) {
+	var denial AccessDenial
+	err := c.Do(ctx, http.MethodPost, accessDenyPath, AccessDenyRequest{RequestID: requestID}, &denial)
+	return denial, err
+}
+
+// ListDevices lists browser registrations.
+func (c *LocalClient) ListDevices(ctx context.Context) (DeviceList, error) {
+	var list DeviceList
+	err := c.Do(ctx, http.MethodGet, devicesPath, nil, &list)
+	return list, err
+}
+
+// RevokeDevice signs out one browser registration by its full id.
+func (c *LocalClient) RevokeDevice(ctx context.Context, id string) (DeviceRevocation, error) {
+	if !validPairingItemID(id) {
+		return DeviceRevocation{}, &APIError{Status: http.StatusBadRequest, ErrorDetail: ErrorDetail{Code: CodeInvalidRequest, Message: fmt.Sprintf("%q is not a device id; list them with `sidecar api devices`.", id)}}
+	}
+	var revocation DeviceRevocation
+	err := c.Do(ctx, http.MethodDelete, devicesPath+"/"+id, nil, &revocation)
+	return revocation, err
+}
+
 // RevokeOrigin removes one paired origin.
 func (c *LocalClient) RevokeOrigin(ctx context.Context, origin string) (OriginRevocation, error) {
 	var revocation OriginRevocation
