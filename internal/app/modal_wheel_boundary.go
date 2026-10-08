@@ -45,6 +45,9 @@ func (m *Model) activeModalWheelAtBoundary(msg tea.MouseWheelMsg) bool {
 	case ModalQuitConfirm:
 		return modalWheelAtBoundary(m.quitModal, m.quitMouseHandler, msg)
 
+	case ModalAccessApproval:
+		return m.accessApproval.WheelAtBoundary(msg)
+
 	case ModalProjectSwitcher:
 		// The project-add flow is nested inside the switcher's state rather than
 		// being its own ModalKind, and Update gives it the mouse first.

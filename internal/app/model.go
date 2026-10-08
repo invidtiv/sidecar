@@ -12,6 +12,7 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/accessmodal"
 	"github.com/marcus/sidecar/internal/agentactivity/manifests"
 	"github.com/marcus/sidecar/internal/clip"
 	"github.com/marcus/sidecar/internal/config"
@@ -58,6 +59,7 @@ const (
 	ModalUpdate                            // Update modal
 	ModalDiagnostics                       // Diagnostics/version info
 	ModalQuitConfirm                       // Quit confirmation dialog
+	ModalAccessApproval                    // Approve a browser asking for access
 	ModalProjectSwitcher                   // Project switcher
 	ModalWorktreeSwitcher                  // Worktree switcher
 	ModalThemeSwitcher                     // Theme switcher
@@ -82,6 +84,8 @@ func (m *Model) activeModal() ModalKind {
 		return ModalDiagnostics
 	case m.showQuitConfirm:
 		return ModalQuitConfirm
+	case m.accessApproval != nil:
+		return ModalAccessApproval
 	case m.showProjectSwitcher:
 		return ModalProjectSwitcher
 	case m.showWorktreeSwitcher:
@@ -123,6 +127,8 @@ func modalFocusContext(kind ModalKind) (string, bool) {
 		return "help", true
 	case ModalDiagnostics:
 		return "diagnostics", true
+	case ModalAccessApproval:
+		return accessApprovalContext, true
 	case ModalProjectSwitcher:
 		return "project-switcher", true
 	case ModalWorktreeSwitcher:
@@ -222,9 +228,11 @@ type Model struct {
 	titleResyncCounter      int    // ticks since the icon name was last re-asserted
 	showPalette             bool
 	showQuitConfirm         bool
-	quitModal               *modal.Modal
-	quitMouseHandler        *mouse.Handler
-	palette                 palette.Model
+	// accessApproval is the open browser-access approval modal, if any.
+	accessApproval   *accessmodal.Host
+	quitModal        *modal.Modal
+	quitMouseHandler *mouse.Handler
+	palette          palette.Model
 
 	// Project switcher modal
 	showProjectSwitcher         bool

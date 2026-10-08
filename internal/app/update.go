@@ -7,6 +7,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/accessmodal"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/configui"
 	"github.com/marcus/sidecar/internal/contentpanes"
@@ -111,6 +112,9 @@ func (m *Model) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 
 	case ModalPaneReposition:
 		return m, nil
+
+	case ModalAccessApproval:
+		return m, m.accessApproval.Paste(msg)
 
 	case ModalIssueInput:
 		var cmd tea.Cmd
@@ -471,6 +475,8 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleDiagnosticsModalMouse(msg)
 		case ModalQuitConfirm:
 			return m.handleQuitConfirmMouse(msg)
+		case ModalAccessApproval:
+			return m, m.handleAccessApprovalMouse(msg)
 		case ModalProjectSwitcher:
 			if m.projectAddMode {
 				return m.handleProjectAddModalMouse(msg)
@@ -966,6 +972,15 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 
+	case accessmodal.LoadedMsg:
+		if m.accessApproval != nil {
+			m.accessApproval.ApplyLoaded(msg)
+		}
+		return m, nil
+
+	case accessmodal.ApprovedMsg:
+		return m, m.applyAccessApproved(msg)
+
 	case IssueSearchResultMsg:
 		// Discard stale results
 		if msg.Query != m.issueSearchQuery || !m.showIssueInput {
@@ -1158,6 +1173,9 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case ModalQuitConfirm:
 			m.showQuitConfirm = false
+			return m, nil
+		case ModalAccessApproval:
+			m.closeAccessApproval()
 			return m, nil
 		case ModalProjectSwitcher:
 			// If in add mode, Esc exits back to list
@@ -1461,6 +1479,12 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.palette, cmd = m.palette.Update(msg)
 		return m, cmd
+	}
+
+	// Handle the access approval modal's keys (Esc handled above). Quit
+	// confirmation outranks it, so only route here when it is the active one.
+	if m.activeModal() == ModalAccessApproval {
+		return m, m.handleAccessApprovalKey(msg)
 	}
 
 	// Handle diagnostics modal keys
