@@ -44,7 +44,7 @@ type NotificationMutation struct {
 }
 
 // maxNotificationBatch bounds one mutation; the request body cap bounds it too.
-const maxNotificationBatch = 2000
+const maxNotificationBatch = 1000
 
 type NotificationReceiptRequest struct {
 	Channel   string `json:"channel,omitempty"`
