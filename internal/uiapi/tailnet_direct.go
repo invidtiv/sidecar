@@ -311,6 +311,7 @@ func (d *tailnetDirect) attempt(ctx context.Context) time.Duration {
 	if len(logins) == 0 && len(node.Tags) > 0 {
 		// A tagged node belongs to no person, so there is no owner to trust.
 		d.closeListeners()
+		d.withdrawTrust("this node is tagged and no logins are configured")
 		return d.fail(TailnetStateWaiting, fmt.Sprintf("This node is tagged (%s), so it has no owner to default to; set api.tailnetLogins in the Sidecar config.", strings.Join(node.Tags, ", ")))
 	}
 	if len(logins) == 0 && node.OwnerLogin != "" && node.OwnerID != 0 && !strings.EqualFold(node.OwnerLogin, taggedDevicesLogin) {
@@ -318,11 +319,13 @@ func (d *tailnetDirect) attempt(ctx context.Context) time.Duration {
 	}
 	if len(logins) == 0 {
 		d.closeListeners()
+		d.withdrawTrust("Tailscale reports no owner login for this node")
 		return d.fail(TailnetStateWaiting, "Tailscale reports no owner login for this node; set api.tailnetLogins in the Sidecar config.")
 	}
 	if !validMagicDNSName(node.Host) {
 		// The name becomes a certificate file name and the Host guard.
 		d.closeListeners()
+		d.withdrawTrust("Tailscale reports a node name that is not a DNS name")
 		return d.fail(TailnetStateWaiting, fmt.Sprintf("Tailscale reports %q as this node's name, which is not a DNS name; retrying.", node.Host))
 	}
 
@@ -401,12 +404,13 @@ func (d *tailnetDirect) publish(node TailnetNode, logins []string, ownerID int64
 		trust.own[addr.Unmap()] = true
 	}
 	previous := d.s.tailnet.Swap(trust)
-	if previous != nil && (previous.ownerID != trust.ownerID || !sameLogins(previous.logins, trust.logins)) {
+	// A withdrawn snapshot admitted nobody and its streams are already closed.
+	if previous != nil && len(previous.logins) > 0 && (previous.ownerID != trust.ownerID || !sameLogins(previous.logins, trust.logins)) {
 		// Who may connect changed: streams admitted under the old rule close
 		// and reconnect under the new one.
 		d.s.opts.Logf("tailnet listener: allowed logins changed; closing open tailnet streams")
 		for _, client := range d.s.clients.tailnetStreams() {
-			client.revoke()
+			client.revokeWith(tailnetLoginsChangedReason)
 		}
 	}
 	d.mu.Lock()
@@ -414,6 +418,21 @@ func (d *tailnetDirect) publish(node TailnetNode, logins []string, ownerID int64
 	d.status.Host, d.status.Origin = host, publicURL
 	d.mu.Unlock()
 	return publicURL
+}
+
+// withdrawTrust replaces the trust snapshot with one that admits nobody and
+// closes every tailnet stream, for when the node can no longer say whom to
+// trust. Closing the listeners alone would leave connections already
+// accepted (keep-alive, HTTP/2) and open streams passing under the old rule.
+func (d *tailnetDirect) withdrawTrust(why string) {
+	previous := d.s.tailnet.Swap(&tailnetTrust{})
+	streams := d.s.clients.tailnetStreams()
+	if previous != nil && len(previous.logins) > 0 {
+		d.s.opts.Logf("tailnet listener: admitting nobody (%s); closing %d open tailnet streams", why, len(streams))
+	}
+	for _, client := range streams {
+		client.revokeWith(tailnetWithdrawnReason)
+	}
 }
 
 func sameLogins(a, b map[string]bool) bool {
@@ -613,7 +632,9 @@ func (d *tailnetDirect) certPath(host string) string {
 }
 
 // storeCert keeps the pair at mode 0600 in a 0700 directory, so a restart
-// while Tailscale is unreachable can still serve TLS.
+// while Tailscale is unreachable can still serve TLS. Once the single file is
+// written, separate .crt and .key files an earlier build left there go: they
+// are never read, and a stale private key is no use to anyone.
 func (d *tailnetDirect) storeCert(host string, certPEM, keyPEM []byte) error {
 	if err := os.MkdirAll(d.tlsDir, 0o700); err != nil {
 		return err
@@ -621,7 +642,27 @@ func (d *tailnetDirect) storeCert(host string, certPEM, keyPEM []byte) error {
 	if err := os.Chmod(d.tlsDir, 0o700); err != nil {
 		return err
 	}
-	return writePrivateFile(d.certPath(host), append(append([]byte(nil), certPEM...), keyPEM...))
+	if err := writePrivateFile(d.certPath(host), append(append([]byte(nil), certPEM...), keyPEM...)); err != nil {
+		return err
+	}
+	d.removeLegacyCertFiles()
+	return nil
+}
+
+func (d *tailnetDirect) removeLegacyCertFiles() {
+	entries, err := os.ReadDir(d.tlsDir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || (filepath.Ext(name) != ".crt" && filepath.Ext(name) != ".key") {
+			continue
+		}
+		if err := os.Remove(filepath.Join(d.tlsDir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			d.s.opts.Logf("tailnet listener: could not remove the old certificate file %s: %v", name, err)
+		}
+	}
 }
 
 func (d *tailnetDirect) loadStoredCert(host string) {

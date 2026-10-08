@@ -307,7 +307,7 @@ func (s *Server) runTerminal(conn *websocket.Conn, client *trackedClient) {
 		_ = conn.CloseNow()
 	case <-client.revoked:
 		_ = requestWriter.Close()
-		_ = conn.Close(CloseUnauthenticated, revokedSessionReason)
+		_ = conn.Close(CloseUnauthenticated, client.closeReason())
 		if _, ok := waitBackend(); !ok {
 			<-backendDone
 		}

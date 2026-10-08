@@ -24,6 +24,20 @@ const (
 	tailnetRefusalLogEvery = time.Minute
 	tailnetLogMapLimit     = 1024
 	taggedDevicesLogin     = "tagged-devices"
+	// tailnetRecheckLookupFailures is how many re-admission checks in a row
+	// may fail to identify a stream's device before the stream closes: one
+	// failed whois is Tailscale being slow, not the device losing access.
+	tailnetRecheckLookupFailures = 2
+)
+
+// Close reasons for tailnet streams closed by re-admission, rather than by a
+// revoked credential (a tailnet login has nothing to pair again).
+const (
+	tailnetNotAdmittedReason   = "This tailnet device is no longer admitted (tagged, removed, or its login not allowed); reconnect to see why."
+	tailnetUnidentifiedReason  = "Tailscale could not identify this device on two checks in a row; reconnect once Tailscale answers."
+	tailnetLoginChangedReason  = "This tailnet device now belongs to another login; reconnect to be admitted again."
+	tailnetLoginsChangedReason = "Sidecar's allowed tailnet logins changed; reconnect to be admitted under the new rule."
+	tailnetWithdrawnReason     = "Sidecar's tailnet listener stopped admitting devices; see sidecar api status on the host."
 )
 
 // tailnetSourcePrefixes are the only source ranges Tailscale assigns: the
@@ -60,7 +74,22 @@ type tailnetRefusal struct {
 	code    string
 	message string // what the peer is told
 	detail  string // what the log says
+	kind    refusalKind
 }
+
+// refusalKind separates a definite refusal from one where the device simply
+// could not be identified this time.
+type refusalKind int
+
+const (
+	// refusalDefinite: the device is known and does not qualify (tagged,
+	// another login, this node, shared in), or nobody is admitted at all.
+	refusalDefinite refusalKind = iota
+	// refusalForeign: the source is not a tailnet address at all.
+	refusalForeign
+	// refusalLookup: whois failed, so the device is unknown for now.
+	refusalLookup
+)
 
 const unidentifiedMessage = "This listener admits only identified tailnet devices; Tailscale could not identify this one."
 
@@ -74,19 +103,25 @@ func (d *tailnetDirect) check(ctx context.Context, addr netip.Addr) (TailnetPeer
 		}
 	}
 	if !inTailnet {
-		return TailnetPeer{}, &tailnetRefusal{http.StatusUnauthorized, CodeUnauthenticated, unidentifiedMessage, "source address is not a tailnet address"}
+		return TailnetPeer{}, &tailnetRefusal{http.StatusUnauthorized, CodeUnauthenticated, unidentifiedMessage, "source address is not a tailnet address", refusalForeign}
 	}
 	trust := d.s.tailnetTrustSnapshot()
+	if len(trust.logins) == 0 {
+		// The node cannot say whom to trust (tagged with no configured
+		// logins, no owner, an unusable name): nobody is admitted.
+		return TailnetPeer{}, &tailnetRefusal{http.StatusForbidden, CodeLoginRefused,
+			"This Sidecar's tailnet listener is not admitting devices right now; run `sidecar api status` on the host to see why.", "the listener admits nobody", refusalDefinite}
+	}
 	if trust.own[addr] {
 		return TailnetPeer{}, &tailnetRefusal{http.StatusForbidden, CodeLoginRefused,
-			"Connections from this machine's own tailnet address are refused. On this machine use the Local socket (the sidecar CLI) or the Browser listener (`sidecar api open`).", "this node's own address"}
+			"Connections from this machine's own tailnet address are refused. On this machine use the Local socket (the sidecar CLI) or the Browser listener (`sidecar api open`).", "this node's own address", refusalDefinite}
 	}
 	peer, err := d.whois.get(ctx, addr)
 	if err != nil {
-		return TailnetPeer{}, &tailnetRefusal{http.StatusUnauthorized, CodeUnauthenticated, unidentifiedMessage, fmt.Sprintf("whois failed: %v", err)}
+		return TailnetPeer{}, &tailnetRefusal{http.StatusUnauthorized, CodeUnauthenticated, unidentifiedMessage, fmt.Sprintf("whois failed: %v", err), refusalLookup}
 	}
 	refuse := func(message, detail string) (TailnetPeer, *tailnetRefusal) {
-		return peer, &tailnetRefusal{http.StatusForbidden, CodeLoginRefused, message, detail}
+		return peer, &tailnetRefusal{http.StatusForbidden, CodeLoginRefused, message, detail, refusalDefinite}
 	}
 	login := strings.ToLower(peer.Login)
 	switch {
@@ -117,7 +152,13 @@ func (d *tailnetDirect) admit(w http.ResponseWriter, r *http.Request) (*http.Req
 	}
 	peer, refusal := d.check(r.Context(), addr)
 	if refusal != nil {
-		d.logs.refused(addr, peer, refusal.detail)
+		if refusal.kind == refusalForeign {
+			// Anything that can reach the address can send these; count
+			// them for the summary rather than logging each address.
+			d.logs.foreign.Add(1)
+		} else {
+			d.logs.refused(addr, peer, refusal.detail)
+		}
 		w.Header().Set("Connection", "close")
 		writeError(w, refusal.status, refusal.code, refusal.message)
 		return r, false
@@ -139,22 +180,33 @@ func connPeerAddr(r *http.Request) (netip.Addr, bool) {
 }
 
 // recheckStreams re-admits every open stream on the listener: one whose
-// device no longer qualifies (tagged, removed, login no longer allowed) or
-// whose login changed is closed with 4401.
+// device definitely no longer qualifies (tagged, another login, this node,
+// shared in, not a tailnet address) or whose login changed is closed with
+// 4401. A failed lookup closes a stream only when the check before it failed
+// too, so one slow whois does not drop every stream from that address.
 func (d *tailnetDirect) recheckStreams(ctx context.Context) {
 	for _, client := range d.s.clients.tailnetStreams() {
 		peer, refusal := d.check(ctx, client.peerAddr)
 		if ctx.Err() != nil {
 			return
 		}
-		if refusal != nil || !strings.EqualFold(peer.Login, client.info.Login) {
-			detail := "login changed"
-			if refusal != nil {
-				detail = refusal.detail
+		var reason, detail string
+		switch {
+		case refusal != nil && refusal.kind == refusalLookup:
+			if client.lookupFailures++; client.lookupFailures < tailnetRecheckLookupFailures {
+				continue
 			}
-			d.s.opts.Logf("tailnet listener: closing %s stream %s from %s: %s", client.info.Kind, client.info.ID, client.peerAddr, detail)
-			client.revoke()
+			reason, detail = tailnetUnidentifiedReason, fmt.Sprintf("%s (%d checks in a row)", refusal.detail, client.lookupFailures)
+		case refusal != nil:
+			reason, detail = tailnetNotAdmittedReason, refusal.detail
+		case !strings.EqualFold(peer.Login, client.info.Login):
+			reason, detail = tailnetLoginChangedReason, "login changed"
+		default:
+			client.lookupFailures = 0
+			continue
 		}
+		d.s.opts.Logf("tailnet listener: closing %s stream %s from %s: %s", client.info.Kind, client.info.ID, client.peerAddr, detail)
+		client.revokeWith(reason)
 	}
 }
 
@@ -178,14 +230,16 @@ func (d *tailnetDirect) supervise() {
 }
 
 // tailnetLogs keeps the service log useful without letting any reachable
-// peer fill the disk: TLS handshake failures are counted and summarized,
-// other server errors are rate limited, refusals are logged at most once a
-// minute per address, and an admitted device is logged once per process.
+// peer fill the disk: TLS handshake failures and connections from
+// non-tailnet addresses are counted and summarized, other server errors are
+// rate limited, other refusals are logged at most once a minute per address,
+// and an admitted device is logged once per process.
 type tailnetLogs struct {
 	logf       func(string, ...any)
 	now        func() time.Time
 	handshakes atomic.Int64
 	suppressed atomic.Int64
+	foreign    atomic.Int64
 
 	mu        sync.Mutex
 	lastOther time.Time
@@ -220,9 +274,12 @@ func (l *tailnetLogs) Write(p []byte) (int, error) {
 }
 
 func (l *tailnetLogs) summary() {
-	handshakes, suppressed := l.handshakes.Swap(0), l.suppressed.Swap(0)
+	handshakes, suppressed, foreign := l.handshakes.Swap(0), l.suppressed.Swap(0), l.foreign.Swap(0)
 	if handshakes > 0 || suppressed > 0 {
 		l.logf("tailnet listener: in the last %s, %d TLS handshakes failed and %d further server errors were not logged", tailnetLogSummaryEvery, handshakes, suppressed)
+	}
+	if foreign > 0 {
+		l.logf("tailnet listener: in the last %s, refused %d requests from addresses outside the tailnet", tailnetLogSummaryEvery, foreign)
 	}
 }
 

@@ -84,8 +84,15 @@ type trackedClient struct {
 	// revoked; its terminal then closes with 4401.
 	revoked    chan struct{}
 	revokeOnce sync.Once
+	// revokeReason is the close reason its stream gives; empty means the
+	// credential itself was revoked (revokedSessionReason). Written before
+	// revoked closes, read after.
+	revokeReason string
 	// peerAddr is the direct-mode Tailnet source address, for re-admission.
 	peerAddr netip.Addr
+	// lookupFailures counts consecutive re-admission checks whose whois
+	// failed; only the re-admission loop touches it.
+	lookupFailures int
 }
 
 func newClientRegistry(now func() time.Time) *clientRegistry {
@@ -149,9 +156,23 @@ func (r *clientRegistry) tailnetStreams() []*trackedClient {
 	return list
 }
 
-// revoke closes this one stream as a credential revocation would (4401).
-func (c *trackedClient) revoke() {
-	c.revokeOnce.Do(func() { close(c.revoked) })
+// revokeWith closes this one stream with 4401 and reason, which says why
+// (the device was no longer admitted, say) where the credential itself was
+// not revoked. The first reason given wins.
+func (c *trackedClient) revokeWith(reason string) {
+	c.revokeOnce.Do(func() {
+		c.revokeReason = reason
+		close(c.revoked)
+	})
+}
+
+// closeReason is the close reason for a revoked stream. Call it only after
+// revoked has closed.
+func (c *trackedClient) closeReason() string {
+	if c.revokeReason != "" {
+		return c.revokeReason
+	}
+	return revokedSessionReason
 }
 
 func (r *clientRegistry) remove(client *trackedClient) {

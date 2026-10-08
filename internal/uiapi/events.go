@@ -388,7 +388,7 @@ func (s *Server) runEvents(conn *websocket.Conn, client *trackedClient, c caller
 		defer close(revocationDone)
 		select {
 		case <-client.revoked:
-			_ = conn.Close(CloseUnauthenticated, revokedSessionReason)
+			_ = conn.Close(CloseUnauthenticated, client.closeReason())
 		case <-ctx.Done():
 		}
 	}()
@@ -402,7 +402,7 @@ func (s *Server) runEvents(conn *websocket.Conn, client *trackedClient, c caller
 	write := func(m EventMessage) error {
 		select {
 		case <-client.revoked:
-			_ = conn.Close(CloseUnauthenticated, revokedSessionReason)
+			_ = conn.Close(CloseUnauthenticated, client.closeReason())
 			return fmt.Errorf("events credential revoked")
 		default:
 		}
@@ -487,7 +487,7 @@ func (s *Server) runEvents(conn *websocket.Conn, client *trackedClient, c caller
 	for {
 		select {
 		case <-client.revoked:
-			_ = conn.Close(CloseUnauthenticated, revokedSessionReason)
+			_ = conn.Close(CloseUnauthenticated, client.closeReason())
 			return
 		case <-s.ctx.Done():
 			_ = write(EventMessage{Type: "shutdown", Reason: "The Sidecar API is restarting or stopping; reconnect when it is back."})
