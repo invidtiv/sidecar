@@ -35,7 +35,7 @@ type NotificationSnapshot struct {
 }
 
 // NotificationMutation names the records to mark read or dismiss. Send id for
-// one record (an unknown id is 404) or ids for a batch applied as one change:
+// one record (an unknown id is 404) or ids, never both, for a batch applied as one change:
 // a batch skips unknown and already-settled ids, because the goal state holds
 // for them. Servers advertising the notifications_batch capability accept ids.
 type NotificationMutation struct {
@@ -134,11 +134,15 @@ func (s *Server) handleNotificationMutation(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	batch := input.IDs != nil
-	ids := input.IDs
-	if input.ID != "" {
-		ids = append(ids, input.ID)
+	if batch && input.ID != "" {
+		writeError(w, 400, CodeInvalidRequest, "Send id or ids, not both.")
+		return
 	}
-	if len(ids) == 0 {
+	ids := input.IDs
+	if !batch {
+		ids = []string{input.ID}
+	}
+	if len(ids) == 0 || !batch && input.ID == "" {
 		writeError(w, 400, CodeInvalidRequest, "id or ids is required")
 		return
 	}

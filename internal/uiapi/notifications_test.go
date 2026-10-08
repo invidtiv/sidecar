@@ -442,6 +442,10 @@ func TestNotificationBatchDismissIsOneChange(t *testing.T) {
 	expect(t, r, b, 400, CodeInvalidRequest)
 	r, b = h.localDo(req{method: "POST", path: notificationDismissPath, body: `{"ids":[""]}`})
 	expect(t, r, b, 400, CodeInvalidRequest)
+	r, b = h.localDo(req{method: "POST", path: notificationDismissPath, body: `{"id":"ntf-gone","ids":["ntf-other"]}`})
+	expect(t, r, b, 400, CodeInvalidRequest)
+	r, b = h.localDo(req{method: "POST", path: notificationDismissPath, body: `{}`})
+	expect(t, r, b, 400, CodeInvalidRequest)
 
 	r, b = h.localDo(req{path: "/api/v0/hello"})
 	expect(t, r, b, 200, "")
