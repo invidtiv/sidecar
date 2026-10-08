@@ -388,7 +388,9 @@ func (a *authStore) approveAccess(approver, code, via string) (AccessApproval, e
 		return AccessApproval{}, err
 	}
 	match.status, match.settled, match.approvedBy = accessStatusApproved, now, via
-	return AccessApproval{RequestID: match.id, RegistrationID: id, Label: match.label, Origin: match.origin, Address: match.address, ApprovedVia: via, ApprovedAt: now.UTC()}, nil
+	// Report the registration as stored, so the device list agrees.
+	stored := a.sessions[id]
+	return AccessApproval{RequestID: match.id, RegistrationID: id, Label: stored.Label, Origin: match.origin, Address: match.address, ApprovedVia: stored.ApprovedVia, ApprovedAt: stored.ApprovedAt.UTC()}, nil
 }
 
 // denyAccess refuses one pending request by id.

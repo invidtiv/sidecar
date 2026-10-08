@@ -204,7 +204,7 @@ func TestAccessRequestApprovalBindsTheRequestingKey(t *testing.T) {
 	if err := json.Unmarshal(b, &devices); err != nil || len(devices.Devices) != 1 {
 		t.Fatalf("devices = %s (%v)", b, err)
 	}
-	if d := devices.Devices[0]; d.ID != id || d.Label != "Safari on macOS" || d.ApprovedVia != approvedViaCLI || d.ApprovedAt.IsZero() || d.Current {
+	if d := devices.Devices[0]; d.ID != id || d.Label != "Safari on macOS" || d.ApprovedVia != approvedViaCLI || !d.ApprovedAt.Equal(approval.ApprovedAt) || d.Current {
 		t.Fatalf("device = %+v", d)
 	}
 	// Approving the same code again finds nothing pending.
