@@ -1,6 +1,6 @@
 # Browser access without the CLI
 
-**Status:** planned; no phase started. **Epic:** td-14aabd. Phases: A td-ba7a17, B td-accec4, C td-938935.
+**Status:** Phase A in progress: the Sidecar side (server, CLI, TUI) is implemented and awaits security review; the SDK and `sidecar-ui` halves are next. Phases B and C not started. **Epic:** td-14aabd. Phases: A td-ba7a17, B td-accec4, C td-938935.
 
 Related: [Sidecar UI API](sidecar-ui-api.md) (the API, listeners and guards this plan extends), [UI API reference](../../reference/ui-api.md) (the current pairing protocol, which stays the authority for wire details until each phase updates it).
 
@@ -36,12 +36,12 @@ Works on the existing Browser listener (localhost and `api.browserProxyOrigin`),
 
 ### Server (`internal/uiapi`)
 
-- **Requests are process-local and short-lived**, like pairing codes: kept in `authStore`, expiring after 5 minutes, dropped on restart (the SDK re-requests). Limits: 16 pending in total, 2 per source address; a 17th gets `429 too_many_outstanding`. A burst of requests coalesces into one notification.
+- **Requests are process-local and short-lived**, like pairing codes: kept in `authStore`, expiring after 5 minutes, dropped on restart (the SDK re-requests). Limits: 16 pending in total, 2 per source address; a 17th gets `429 too_many_outstanding`. A request from the same public key and origin replaces that browser's earlier pending one. A burst of requests coalesces into one notification.
 - `POST /api/v0/pairing/requests`, no bearer, own-origin and mutation headers required (same guards as `/pairing/exchange`). Body `{public_key, label}`; `label` is a client-suggested device name ("Safari on macOS"), length-capped and control-stripped, shown to approvers as a claim, never as proof. Returns `{request_id, poll_secret, code, expires_at}`. The server records origin and source address itself.
-- `GET /api/v0/pairing/requests/{id}` with `Authorization: Request <poll_secret>`: `{status: pending|approved|denied|expired}`. On `approved` the browser runs the existing session-proof renewal; its registration now exists.
-- Approver routes, available to Local, browser sessions and allowed Tailnet logins (not paired origins): `GET /api/v0/pairing/requests` lists pending requests without their codes; `POST /api/v0/pairing/requests/approve {code}` approves the matching request (wrong codes count toward a limit of 5 per minute per approver, then `429`); `POST /api/v0/pairing/requests/deny {request_id}`.
-- **Devices.** Registrations gain `label`, `approved_via` (`link`, `cli`, `tui`, `browser:<registration>`) and `approved_at` in `sessions.json` (bump the store version; migrate in place). `GET /api/v0/pairing/sessions` lists them; `DELETE /api/v0/pairing/sessions/{id}` revokes one, with the same stream-closing behaviour as the existing bulk revoke.
-- **Signals.** A new request emits an `access_requested` event on the events stream and writes a Sidecar notification (kind `access_request`) through the existing notification store, so the TUI, `sidecar-ui` and native delivery all show it with no new channel between processes. Approval, denial and expiry withdraw it.
+- `GET /api/v0/pairing/requests/{id}` with `Authorization: Request <poll_secret>`: `{status: pending|approved|denied|expired, expires_at, registration_id?}`. On `approved` the browser runs the existing session-proof renewal for `registration_id`; its registration now exists.
+- Approver routes, available to Local, browser sessions and allowed Tailnet logins (not paired origins): `GET /api/v0/pairing/requests` lists pending requests without their codes; `POST /api/v0/pairing/requests/approve {code, surface?}` approves the matching request (`surface`, `cli` or `tui`, is accepted only on Local) (wrong codes count toward a limit of 5 per minute per approver, then `429`); `POST /api/v0/pairing/requests/deny {request_id}`.
+- **Devices.** Registrations gain `label`, `approved_via` (`link`, `cli`, `tui`, `browser:<registration>`, `tailnet:<login>`) and `approved_at` in `sessions.json` (bump the store version; migrate in place). `GET /api/v0/pairing/sessions` lists them for approvers; `DELETE /api/v0/pairing/sessions/{id}` revokes one, with the same stream-closing behaviour as the existing bulk revoke.
+- **Signals.** A new request emits an `access_requested` event on the events stream and writes a Sidecar notification (source `access_request`, with no calls to action) through the existing notification store, so the TUI, `sidecar-ui` and native delivery all show it with no new channel between processes. Approval, denial and expiry withdraw it.
 - Update `docs/reference/ui-api.md`, the OpenAPI spec (`sidecar api spec`) and fixtures in the same change.
 
 ### CLI
