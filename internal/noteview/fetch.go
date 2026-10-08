@@ -1,6 +1,7 @@
 package noteview
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
@@ -32,7 +33,7 @@ type FetchedMsg struct {
 // Fetch runs `td note show` against workDir's project.
 func Fetch(workDir, noteID string) tea.Cmd {
 	return func() tea.Msg {
-		data, err := loadNote(workDir, noteID)
+		data, err := loadNote(context.Background(), workDir, noteID)
 		return FetchedMsg{NoteID: noteID, Data: data, Error: err}
 	}
 }
@@ -40,14 +41,24 @@ func Fetch(workDir, noteID string) tea.Cmd {
 // Lookup is the state-free note load the content service and injected
 // loaders share. It is Fetch without the Bubble Tea wrapper.
 func Lookup(workDir, noteID string) (*Data, error) {
-	return loadNote(workDir, noteID)
+	return loadNote(context.Background(), workDir, noteID)
 }
 
-func loadNote(workDir, noteID string) (*Data, error) {
-	cmd := exec.Command("td", "-w", workDir, "--json", "note", "show", noteID)
+// LookupContext is Lookup bound to ctx: cancelling it kills td. An API read
+// holds its per-client content slot until this returns, so an abandoned read
+// must not wait for td to finish.
+func LookupContext(ctx context.Context, workDir, noteID string) (*Data, error) {
+	return loadNote(ctx, workDir, noteID)
+}
+
+func loadNote(ctx context.Context, workDir, noteID string) (*Data, error) {
+	cmd := exec.CommandContext(ctx, "td", "-w", workDir, "--json", "note", "show", noteID)
 	configureReadOnlyTd(cmd)
 	out, err := cmd.Output()
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		if msg := extractTdError(string(out)); msg != "" {
 			return nil, fmt.Errorf("%s", msg)
 		}
@@ -73,6 +84,9 @@ func configureReadOnlyTd(cmd *exec.Cmd) {
 		"TD_SYNC_AUTO_START=0",
 		"TD_ANALYTICS=false",
 	)
+	// A helper that inherits td's stdout must not keep Output waiting after td
+	// exits or is killed.
+	cmd.WaitDelay = time.Second
 }
 
 func extractTdError(output string) string {

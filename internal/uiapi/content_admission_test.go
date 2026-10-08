@@ -206,3 +206,87 @@ func TestLocalContentAdmissionReleasesDisconnectedRequests(t *testing.T) {
 	_ = response.Body.Close()
 	expect(t, response, data, 403, "rejected")
 }
+
+// td-e4be7d: a browser session's tabs and pop-out windows each hold their own
+// bearer but are one credential holder, so they share one content budget. A
+// tab that abandons its reads (closed, reloaded, or withdrawing superseded
+// reads) must give those slots back as soon as its connections close.
+func TestBrowserSessionContentBudgetIsSharedByTabsAndFreedOnCancel(t *testing.T) {
+	b := &heldContentBackend{entered: make(chan struct{}, 8), release: make(chan struct{})}
+	h := newHarness(t, func(o *Options) { o.Content = b })
+	key, paired := h.pairBrowserKey()
+	tabs := []string{h.renewBrowser(key, paired.RegistrationID).Token, h.renewBrowser(key, paired.RegistrationID).Token}
+	if tabs[0] == tabs[1] {
+		t.Fatal("two tabs share one bearer; the test needs distinct bearers")
+	}
+	path := "/api/v0/projects/one/content?kind=file&target=a"
+	send := func(ctx context.Context, token string) (*http.Response, error) {
+		request, err := http.NewRequestWithContext(ctx, "GET", h.s.BrowserURL()+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Authorization", "Bearer "+token)
+		request.Header.Set("Origin", h.ownOrigin())
+		return h.browser.Do(request)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	released := false
+	defer func() {
+		cancel()
+		if !released {
+			close(b.release)
+		}
+		wg.Wait()
+	}()
+	// The first tab fills the budget with reads still in the backend.
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if response, err := send(ctx, tabs[0]); err == nil {
+				_ = response.Body.Close()
+			}
+		}()
+		select {
+		case <-b.entered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("read did not enter backend")
+		}
+	}
+	// The second tab is the same holder: refused at once, without entering.
+	refusedCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stop()
+	response, err := send(refusedCtx, tabs[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	expect(t, response, data, 429, "too_many_outstanding")
+	// The first tab goes away mid-read: every slot comes back.
+	cancel()
+	wg.Wait()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		h.s.contentRequests.mu.Lock()
+		remaining := len(h.s.contentRequests.used)
+		h.s.contentRequests.mu.Unlock()
+		if remaining == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("abandoned browser reads retained their content slots")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(b.release)
+	released = true
+	response, err = send(refusedCtx, tabs[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ = io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	expect(t, response, data, 403, "rejected")
+}

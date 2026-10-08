@@ -1,6 +1,7 @@
 package noteview
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,7 +17,7 @@ func TestLoadNoteParsesShowJSON(t *testing.T) {
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	data, err := loadNote(t.TempDir(), "nt-abc123")
+	data, err := loadNote(context.Background(), t.TempDir(), "nt-abc123")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +40,7 @@ func TestLoadNoteDisablesSyncAndAnalytics(t *testing.T) {
 	t.Setenv("TD_ANALYTICS", "true")
 	t.Setenv("NOTEVIEW_ENV_LOG", logPath)
 
-	if _, err := loadNote(t.TempDir(), "nt-abc123"); err != nil {
+	if _, err := loadNote(context.Background(), t.TempDir(), "nt-abc123"); err != nil {
 		t.Fatal(err)
 	}
 	logged, err := os.ReadFile(logPath)

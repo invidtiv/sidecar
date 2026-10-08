@@ -70,8 +70,8 @@ func (s *Service) resolveNote(ctx context.Context, workspaceID, target string) (
 	return ResolveResult{Kind: KindNote, Workspace: ws.ID, Target: id, Display: id}, nil
 }
 
-func defaultLookupNote(_ context.Context, workDir, noteID string) (*noteview.Data, error) {
-	return noteview.Lookup(workDir, noteID)
+func defaultLookupNote(ctx context.Context, workDir, noteID string) (*noteview.Data, error) {
+	return noteview.LookupContext(ctx, workDir, noteID)
 }
 
 func noteReadResultFrom(workspace string, doc NoteDocument) ReadResult {

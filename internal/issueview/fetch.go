@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -269,6 +270,9 @@ func configureReadOnlyTd(cmd *exec.Cmd) {
 		"TD_SYNC_AUTO_START=0",
 		"TD_ANALYTICS=false",
 	)
+	// A helper that inherits td's stdout must not keep Output waiting after td
+	// exits or is killed: an API read holds its content slot until then.
+	cmd.WaitDelay = time.Second
 }
 
 // attachTree fills children from the issue's own tree and, when the issue
