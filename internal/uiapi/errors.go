@@ -37,6 +37,11 @@ type ErrorBody struct {
 type ErrorDetail struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+	// Field names the request field a validation refusal belongs to, as a
+	// dotted path within the request body (`quietHours.start`), so a form can
+	// show the message beside that control. Omitted when the refusal is not
+	// about one field.
+	Field string `json:"field,omitempty"`
 }
 
 // APIError is a decoded API refusal, as the CLI client reports it.

@@ -2,8 +2,10 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -177,5 +179,44 @@ func TestAbsentNotificationsSectionResolvesToNoOverrides(t *testing.T) {
 	cfg := Default()
 	if got := cfg.Notifications.SourceExpiries(); got != nil {
 		t.Fatalf("default config carries overrides: %v", got)
+	}
+}
+
+func TestNotificationValidationNamesTheRefusedField(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	cases := []struct {
+		mutate func(*NotificationsConfig)
+		field  string
+		text   string
+	}{
+		{func(c *NotificationsConfig) { c.Native.Mode = "loud" }, "native.mode", "notifications.native.mode must be off, background, or always"},
+		{func(c *NotificationsConfig) { c.QuietHours.Start = "25:00" }, "quietHours.start", "notifications.quietHours.start: must be HH:MM"},
+		{func(c *NotificationsConfig) { c.QuietHours.End = "7am" }, "quietHours.end", "notifications.quietHours.end: must be HH:MM"},
+		{func(c *NotificationsConfig) { c.SSH.Terminal = "bell" }, "ssh.terminal", "notifications.ssh.terminal must be off, auto, ghostty, iterm2, wezterm, or kitty"},
+		{func(c *NotificationsConfig) {
+			c.Sources = map[string]NotificationSourceConfig{"agent": {Expiry: "soon"}}
+		}, "sources.agent.expiry", `notifications.sources.agent.expiry: invalid notification expiry "soon"`},
+		{func(c *NotificationsConfig) {
+			c.Sources = map[string]NotificationSourceConfig{"td": {Sound: "trumpet"}}
+		}, "sources.td.sound", "notifications.sources.td.sound is invalid"},
+		{func(c *NotificationsConfig) { c.Sound.DonePath = "missing.wav" }, "sound.donePath", ""},
+	}
+	for _, tc := range cases {
+		cfg := Default().Notifications
+		tc.mutate(&cfg)
+		err := ValidateNotifications(cfg, path)
+		var field *NotificationFieldError
+		if !errors.As(err, &field) {
+			t.Fatalf("%s: want a field error, got %v", tc.field, err)
+		}
+		if field.Field != tc.field || field.Reason == "" {
+			t.Fatalf("field = %q reason = %q, want %q", field.Field, field.Reason, tc.field)
+		}
+		if tc.text != "" && err.Error() != tc.text {
+			t.Fatalf("message = %q, want %q", err.Error(), tc.text)
+		}
+		if !strings.HasPrefix(err.Error(), "notifications."+tc.field) {
+			t.Fatalf("message %q must begin with its field path", err.Error())
+		}
 	}
 }

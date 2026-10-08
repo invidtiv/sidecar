@@ -1334,6 +1334,9 @@
           "code": {
             "type": "string"
           },
+          "field": {
+            "type": "string"
+          },
           "message": {
             "type": "string"
           }
@@ -2269,6 +2272,28 @@
         ],
         "type": "object"
       },
+      "NotificationSettingsOptions": {
+        "additionalProperties": false,
+        "properties": {
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/NotificationSourceOption"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "writable": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "writable",
+          "sources"
+        ],
+        "type": "object"
+      },
       "NotificationSnapshot": {
         "additionalProperties": false,
         "properties": {
@@ -2334,6 +2359,54 @@
             "type": "boolean"
           }
         },
+        "type": "object"
+      },
+      "NotificationSourceOption": {
+        "additionalProperties": false,
+        "properties": {
+          "defaults": {
+            "$ref": "#/components/schemas/NotificationSourceRule"
+          },
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "description",
+          "defaults"
+        ],
+        "type": "object"
+      },
+      "NotificationSourceRule": {
+        "additionalProperties": false,
+        "properties": {
+          "expiry": {
+            "type": "string"
+          },
+          "native": {
+            "type": "boolean"
+          },
+          "sound": {
+            "type": "string"
+          },
+          "toast": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "toast",
+          "native",
+          "sound",
+          "expiry"
+        ],
         "type": "object"
       },
       "NotificationTarget": {
@@ -5841,6 +5914,7 @@
         ]
       },
       "put": {
+        "description": "Validates and saves the whole notifications section. A validation refusal is 400 invalid_request whose error.field names the dotted path of the refused field (quietHours.start, sources.agent.expiry); its message begins with notifications.\u003cfield\u003e.",
         "operationId": "notifications_settings_put",
         "parameters": [
           {
@@ -5902,6 +5976,84 @@
         ],
         "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there.",
         "x-required-scope": "ui:control"
+      }
+    },
+    "/api/v0/notifications/settings/options": {
+      "get": {
+        "description": "What a settings form needs beside the stored config: registered sources (id, title, description, built-in rule) loudest first, and whether this credential may save.",
+        "operationId": "notifications_settings_options_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationSettingsOptions"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there.",
+        "x-required-scopes-any-of": [
+          "content:read",
+          "ui:control"
+        ]
+      },
+      "head": {
+        "description": "What a settings form needs beside the stored config: registered sources (id, title, description, built-in rule) loudest first, and whether this credential may save.",
+        "operationId": "notifications_settings_options_get_head",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "default": {
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there.",
+        "x-required-scopes-any-of": [
+          "content:read",
+          "ui:control"
+        ]
       }
     },
     "/api/v0/origins": {

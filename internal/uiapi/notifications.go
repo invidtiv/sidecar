@@ -21,6 +21,7 @@ import (
 
 const notificationsPath = "/api/v0/notifications"
 const notificationSettingsPath = notificationsPath + "/settings"
+const notificationOptionsPath = notificationSettingsPath + "/options"
 const notificationReadPath = notificationsPath + "/read"
 const notificationDismissPath = notificationsPath + "/dismiss"
 const notificationClaimPath = notificationsPath + "/claim"
@@ -58,6 +59,56 @@ type NotificationClaimResponse struct {
 }
 type NotificationReceiptResponse struct {
 	Delivered bool `json:"delivered"`
+}
+
+// NotificationSettingsOptions is what a settings form needs beside the stored
+// NotificationsConfig: the registered sources a client may override, with
+// their built-in rules, and whether this credential may save.
+type NotificationSettingsOptions struct {
+	// Writable reports whether this caller may PUT the settings (ui:control or
+	// full). A read-only credential can still show them.
+	Writable bool `json:"writable"`
+	// Sources lists the registered sources, loudest first.
+	Sources []NotificationSourceOption `json:"sources"`
+}
+
+// NotificationSourceOption is one registered source as a form presents it.
+type NotificationSourceOption struct {
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	// Defaults is the rule this build applies when the source has no override.
+	Defaults NotificationSourceRule `json:"defaults"`
+}
+
+// NotificationSourceRule is a resolved per-source rule. Expiry is a Go
+// duration (`10s`) or `sticky` for a toast that stays until dismissed.
+type NotificationSourceRule struct {
+	Toast  bool   `json:"toast"`
+	Native bool   `json:"native"`
+	Sound  string `json:"sound"`
+	Expiry string `json:"expiry"`
+}
+
+func notificationSettingsOptions(writable bool) NotificationSettingsOptions {
+	builtIn := notification.ResolveConfig(config.NotificationsConfig{})
+	out := NotificationSettingsOptions{Writable: writable, Sources: []NotificationSourceOption{}}
+	for _, source := range notification.Sources() {
+		rule := builtIn.SourceRule(source.ID)
+		expiry := "sticky"
+		if rule.Expiry != config.StickyExpiry {
+			expiry = rule.Expiry.String()
+		}
+		out.Sources = append(out.Sources, NotificationSourceOption{
+			ID: string(source.ID), Title: source.Title, Description: source.Description,
+			Defaults: NotificationSourceRule{Toast: rule.Toast, Native: rule.Native, Sound: string(rule.Sound), Expiry: expiry},
+		})
+	}
+	return out
+}
+
+func (s *Server) handleNotificationSettingsOptions(w http.ResponseWriter, r *http.Request, c caller) {
+	writeJSON(w, 200, notificationSettingsOptions(s.hasScope(c, ScopeUIControl)))
 }
 
 func notificationSettings() (config.NotificationsConfig, error) {
@@ -110,7 +161,12 @@ func (s *Server) handleNotificationSettings(w http.ResponseWriter, r *http.Reque
 			return
 		}
 		if err := config.ValidateNotifications(input, config.ConfigPath()); err != nil {
-			writeError(w, 400, CodeInvalidRequest, err.Error())
+			detail := ErrorDetail{Code: CodeInvalidRequest, Message: err.Error()}
+			var field *config.NotificationFieldError
+			if errors.As(err, &field) {
+				detail.Field = field.Field
+			}
+			writeJSON(w, 400, ErrorBody{Error: detail})
 			return
 		}
 		if err := config.SaveNotifications(func(cfg *config.NotificationsConfig) { *cfg = input }); err != nil {

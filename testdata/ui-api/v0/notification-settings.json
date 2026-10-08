@@ -1,0 +1,114 @@
+[
+  {
+    "native": {
+      "mode": "background",
+      "provider": "auto"
+    },
+    "sound": {
+      "mode": "off"
+    },
+    "quietHours": {
+      "enabled": true,
+      "start": "22:00",
+      "end": "07:00"
+    },
+    "ssh": {
+      "terminal": "off"
+    },
+    "sources": {
+      "td": {
+        "toast": false,
+        "expiry": "30s"
+      }
+    }
+  },
+  {
+    "writable": true,
+    "sources": [
+      {
+        "id": "waiting",
+        "title": "Needs input",
+        "description": "An agent is waiting for an answer or an approval.",
+        "defaults": {
+          "toast": true,
+          "native": true,
+          "sound": "attention",
+          "expiry": "sticky"
+        }
+      },
+      {
+        "id": "agent",
+        "title": "Agent posts",
+        "description": "Messages an agent sends with sidecar notify.",
+        "defaults": {
+          "toast": true,
+          "native": true,
+          "sound": "none",
+          "expiry": "12s"
+        }
+      },
+      {
+        "id": "broadcast",
+        "title": "Broadcasts",
+        "description": "Results of a message sent to every live agent.",
+        "defaults": {
+          "toast": true,
+          "native": false,
+          "sound": "none",
+          "expiry": "sticky"
+        }
+      },
+      {
+        "id": "session",
+        "title": "Sessions",
+        "description": "Finished turns, ended sessions and failed actions.",
+        "defaults": {
+          "toast": true,
+          "native": true,
+          "sound": "event",
+          "expiry": "10s"
+        }
+      },
+      {
+        "id": "td",
+        "title": "td",
+        "description": "Issue updates from td.",
+        "defaults": {
+          "toast": true,
+          "native": false,
+          "sound": "none",
+          "expiry": "10s"
+        }
+      },
+      {
+        "id": "tasks",
+        "title": "Tasks",
+        "description": "Updates from tasks.",
+        "defaults": {
+          "toast": true,
+          "native": false,
+          "sound": "none",
+          "expiry": "10s"
+        }
+      },
+      {
+        "id": "system",
+        "title": "System",
+        "description": "Notices from Sidecar itself.",
+        "defaults": {
+          "toast": true,
+          "native": false,
+          "sound": "none",
+          "expiry": "10s"
+        }
+      }
+    ]
+  },
+  {
+    "error": {
+      "code": "invalid_request",
+      "message": "notifications.quietHours.start: must be HH:MM",
+      "field": "quietHours.start"
+    }
+  }
+]

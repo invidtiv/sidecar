@@ -13,6 +13,7 @@ import (
 	"github.com/marcus/sidecar/internal/viewerlayout"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -459,4 +460,92 @@ func TestNotificationBatchDismissIsOneChange(t *testing.T) {
 		}
 	}
 	t.Fatalf("HTTP hello does not advertise notifications_batch: %v", hello.Capabilities)
+}
+
+func TestNotificationSettingsOptionsDescribeSourcesAndWhetherTheCallerMaySave(t *testing.T) {
+	isolatedNotificationConfig(t)
+	h := newHarness(t)
+	r, b := h.localDo(req{path: notificationOptionsPath})
+	expect(t, r, b, 200, "")
+	var options NotificationSettingsOptions
+	if err := json.Unmarshal(b, &options); err != nil {
+		t.Fatal(err)
+	}
+	if !options.Writable {
+		t.Fatal("the trusted Local listener may save settings")
+	}
+	registry := notification.Sources()
+	if len(options.Sources) != len(registry) {
+		t.Fatalf("sources = %d, want the %d registered", len(options.Sources), len(registry))
+	}
+	for i, source := range options.Sources {
+		if source.ID != string(registry[i].ID) || source.Title == "" || source.Description == "" {
+			t.Fatalf("source %d = %+v, want registry order with a title and description", i, source)
+		}
+	}
+	waiting := options.Sources[0]
+	if waiting.ID != "waiting" || !waiting.Defaults.Toast || !waiting.Defaults.Native || waiting.Defaults.Sound != "attention" || waiting.Defaults.Expiry != "sticky" {
+		t.Fatalf("waiting defaults = %+v", waiting.Defaults)
+	}
+	// Defaults are the built-in rules, not the user's overrides.
+	cfg := config.DefaultNotificationsConfig()
+	off := false
+	cfg.Sources = map[string]config.NotificationSourceConfig{"waiting": {Toast: &off, Expiry: "5s"}}
+	raw, _ := json.Marshal(cfg)
+	r, b = h.localDo(req{method: "PUT", path: notificationSettingsPath, body: string(raw)})
+	expect(t, r, b, 200, "")
+	r, b = h.localDo(req{path: notificationOptionsPath})
+	expect(t, r, b, 200, "")
+	if err := json.Unmarshal(b, &options); err != nil {
+		t.Fatal(err)
+	}
+	if !options.Sources[0].Defaults.Toast || options.Sources[0].Defaults.Expiry != "sticky" {
+		t.Fatalf("defaults followed an override: %+v", options.Sources[0].Defaults)
+	}
+
+	for _, tc := range []struct {
+		scopes   string
+		writable bool
+	}{{`["content:read"]`, false}, {`["ui:control"]`, true}, {`["full"]`, true}} {
+		origin := "https://options-" + strings.NewReplacer(`[`, "", `]`, "", `"`, "", ":", "-").Replace(tc.scopes) + ".example"
+		r, b = h.localDo(req{method: "POST", path: "/api/v0/origins", body: `{"origin":"` + origin + `","scopes":` + tc.scopes + `}`})
+		expect(t, r, b, 200, "")
+		var registration OriginRegistration
+		if err := json.Unmarshal(b, &registration); err != nil {
+			t.Fatal(err)
+		}
+		headers := map[string]string{"Authorization": "Bearer " + registration.Token, "Origin": origin}
+		r, b = h.browserDo(req{path: notificationOptionsPath, header: headers})
+		expect(t, r, b, 200, "")
+		if err := json.Unmarshal(b, &options); err != nil {
+			t.Fatal(err)
+		}
+		if options.Writable != tc.writable {
+			t.Fatalf("%s writable = %v, want %v", tc.scopes, options.Writable, tc.writable)
+		}
+	}
+}
+
+func TestNotificationSettingsValidationNamesTheField(t *testing.T) {
+	isolatedNotificationConfig(t)
+	h := newHarness(t)
+	cfg := config.DefaultNotificationsConfig()
+	cfg.QuietHours.Start = "25:00"
+	raw, _ := json.Marshal(cfg)
+	r, b := h.localDo(req{method: "PUT", path: notificationSettingsPath, body: string(raw)})
+	expect(t, r, b, 400, CodeInvalidRequest)
+	var refusal ErrorBody
+	if err := json.Unmarshal(b, &refusal); err != nil {
+		t.Fatal(err)
+	}
+	if refusal.Error.Field != "quietHours.start" || !strings.HasPrefix(refusal.Error.Message, "notifications.quietHours.start") {
+		t.Fatalf("refusal = %+v", refusal.Error)
+	}
+	loaded, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Notifications.QuietHours.Start == "25:00" {
+		t.Fatal("a refused save must not be written")
+	}
 }

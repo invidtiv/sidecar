@@ -18,6 +18,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/marcus/sidecar/internal/agentcontrol"
+	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/contentservice"
 	"github.com/marcus/sidecar/internal/mobile"
 	"github.com/marcus/sidecar/internal/mobileproto"
@@ -72,6 +73,11 @@ func TestUIAPIFixtureCorpus(t *testing.T) {
 		"session-proof.json": []any{
 			map[string]any{"method": "POST", "path": "/api/v0/pairing/session-proof", "listener": "browser", "origin": "http://127.0.0.1:7861", "request": SessionProofChallengeRequest{RegistrationID: browserRegistrationID("http://127.0.0.1:7861", fixtureBrowserPublicKey())}, "response": SessionProofChallenge{Nonce: "synthetic-nonce", Timestamp: now.UnixMilli(), ExpiresAt: now.Add(pairingCodeTTL)}},
 			map[string]any{"method": "POST", "path": "/api/v0/pairing/session-proof/verify", "listener": "browser", "origin": "http://127.0.0.1:7861", "request": SessionProofRequest{RegistrationID: browserRegistrationID("http://127.0.0.1:7861", fixtureBrowserPublicKey()), Nonce: "synthetic-nonce", Timestamp: now.UnixMilli(), Signature: fixtureBrowserSignature}, "response": SessionToken{Token: "synthetic-memory-token", ExpiresAt: now.Add(browserBearerTTL)}},
+		},
+		"notification-settings.json": []any{
+			config.NotificationsConfig{Native: config.NativeNotificationsConfig{Mode: config.DeliveryBackground, Provider: config.NativeProviderAuto}, Sound: config.SoundNotificationsConfig{Mode: config.DeliveryOff}, QuietHours: config.QuietHoursConfig{Enabled: true, Start: "22:00", End: "07:00"}, SSH: config.SSHNotificationsConfig{Terminal: config.TerminalNotifierOff}, Sources: map[string]config.NotificationSourceConfig{"td": {Toast: fixtureBool(false), Expiry: "30s"}}},
+			notificationSettingsOptions(true),
+			ErrorBody{Error: ErrorDetail{Code: CodeInvalidRequest, Message: "notifications.quietHours.start: must be HH:MM", Field: "quietHours.start"}},
 		},
 		"hello.json":         Hello{APIVersion: 0, APIInstance: "api_fixture", ServerVersion: "fixture", Capabilities: []string{"sessions", "status", "terminal", "ws_tickets", "events", "projects", "workspace", "workspace_operations", "content", "layouts", "uiRequestRelayV1", "notifications", "file_search", "notifications_batch"}, Terminal: TerminalProtocol{Protocol: "mobile", Version: 0}},
 		"sessions.json":      catalog,
@@ -475,3 +481,5 @@ func fixtureBrowserPublicKey() BrowserPublicKey {
 const fixtureBrowserSignature = "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpYaO0QJAFWXamzPiK7epCFH5TubNJwuXLt-rtW_T7JfBw"
 
 func timePointer(t time.Time) *time.Time { return &t }
+
+func fixtureBool(value bool) *bool { return &value }

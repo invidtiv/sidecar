@@ -56,6 +56,7 @@ func (s *Server) routeTable() map[string]*route {
 	routes := map[string]*route{
 		notificationsPath:          {methods: map[string]routeFunc{http.MethodGet: s.handleNotifications}},
 		notificationSettingsPath:   {methods: map[string]routeFunc{http.MethodGet: s.handleNotificationSettings, http.MethodPut: s.handleNotificationSettings}},
+		notificationOptionsPath:    {methods: map[string]routeFunc{http.MethodGet: s.handleNotificationSettingsOptions}},
 		notificationReadPath:       {methods: map[string]routeFunc{http.MethodPost: s.handleNotificationMutation}},
 		notificationDismissPath:    {methods: map[string]routeFunc{http.MethodPost: s.handleNotificationMutation}},
 		notificationClaimPath:      {methods: map[string]routeFunc{http.MethodPost: s.handleNotificationReceipt}},

@@ -18,7 +18,7 @@ import (
 func Spec() ([]byte, error) {
 	schemas := map[string]any{}
 	values := map[string]any{
-		"NotificationSnapshot": NotificationSnapshot{}, "NotificationMutation": NotificationMutation{}, "NotificationReceiptRequest": NotificationReceiptRequest{}, "NotificationReceiptResponse": NotificationReceiptResponse{}, "NotificationClaimResponse": NotificationClaimResponse{}, "NotificationsConfig": config.NotificationsConfig{},
+		"NotificationSnapshot": NotificationSnapshot{}, "NotificationMutation": NotificationMutation{}, "NotificationReceiptRequest": NotificationReceiptRequest{}, "NotificationReceiptResponse": NotificationReceiptResponse{}, "NotificationClaimResponse": NotificationClaimResponse{}, "NotificationsConfig": config.NotificationsConfig{}, "NotificationSettingsOptions": NotificationSettingsOptions{},
 		"FileSearchResult":  contentservice.FileSearchResult{},
 		"ContentReadResult": contentservice.ReadResult{}, "ContentTreeResult": contentservice.TreeResult{}, "ContentRef": ContentRef{}, "LayoutDocument": LayoutDocument{},
 		"ViewerLayoutReport": layoutreport.Report{}, "ViewerPresenceRequest": ViewerPresenceRequest{}, "ViewerPresenceResponse": ViewerPresenceResponse{}, "ViewerAckRequest": ViewerAckRequest{}, "ViewerAckResponse": ViewerAckResponse{},
@@ -128,11 +128,14 @@ func Spec() ([]byte, error) {
 	add(notificationsPath, "get", "", "NotificationSnapshot", all, false)
 	add(notificationSettingsPath, "get", "", "NotificationsConfig", all, false)
 	add(notificationSettingsPath, "put", "NotificationsConfig", "NotificationsConfig", all, false)
+	paths[notificationSettingsPath].(map[string]any)["put"].(map[string]any)["description"] = "Validates and saves the whole notifications section. A validation refusal is 400 invalid_request whose error.field names the dotted path of the refused field (quietHours.start, sources.agent.expiry); its message begins with notifications.<field>."
+	add(notificationOptionsPath, "get", "", "NotificationSettingsOptions", all, false)
+	paths[notificationOptionsPath].(map[string]any)["get"].(map[string]any)["description"] = "What a settings form needs beside the stored config: registered sources (id, title, description, built-in rule) loudest first, and whether this credential may save."
 	add(notificationReadPath, "post", "NotificationMutation", "NotificationSnapshot", all, false)
 	add(notificationDismissPath, "post", "NotificationMutation", "NotificationSnapshot", all, false)
 	add(notificationClaimPath, "post", "NotificationReceiptRequest", "NotificationClaimResponse", all, false)
 	add(notificationReceiptPath, "post", "NotificationReceiptRequest", "NotificationReceiptResponse", all, false)
-	for _, path := range []string{notificationsPath, notificationSettingsPath, notificationReadPath, notificationDismissPath, notificationReceiptPath, notificationClaimPath} {
+	for _, path := range []string{notificationsPath, notificationSettingsPath, notificationOptionsPath, notificationReadPath, notificationDismissPath, notificationReceiptPath, notificationClaimPath} {
 		for method, op := range paths[path].(map[string]any) {
 			scope := ScopeUIControl
 			if method == "get" {

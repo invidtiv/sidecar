@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -151,53 +152,81 @@ func ParseNotificationExpiry(raw string) (time.Duration, error) {
 	return d, nil
 }
 
+// NotificationFieldError is a validation refusal that belongs to one field.
+// Field is the dotted path under `notifications` (for example
+// `quietHours.start` or `sources.agent.expiry`) so a form can show the
+// refusal beside the control that caused it. Error keeps the established
+// `notifications.<field>...` wording every surface already prints.
+type NotificationFieldError struct {
+	Field  string
+	Reason string
+	text   string
+}
+
+func (e *NotificationFieldError) Error() string { return e.text }
+
+// notificationFieldError joins the field path and reason with sep, which is
+// ": " for a wrapped cause and " " for a sentence that continues the path.
+func notificationFieldError(field, sep, reason string) error {
+	return &NotificationFieldError{Field: field, Reason: reason, text: "notifications." + field + sep + reason}
+}
+
 // ValidateNotifications validates a prospective targeted save. Custom sound
 // paths are resolved only for validation; the user's inspectable spelling is
-// retained in config.json.
+// retained in config.json. Every refusal is a *NotificationFieldError.
 func ValidateNotifications(c NotificationsConfig, configPath string) error {
-	for name, mode := range map[string]DeliveryMode{"native": c.Native.Mode, "sound": c.Sound.Mode} {
-		switch mode {
+	for _, check := range []struct {
+		name string
+		mode DeliveryMode
+	}{{"native", c.Native.Mode}, {"sound", c.Sound.Mode}} {
+		switch check.mode {
 		case DeliveryOff, DeliveryBackground, DeliveryAlways:
 		default:
-			return fmt.Errorf("notifications.%s.mode must be off, background, or always", name)
+			return notificationFieldError(check.name+".mode", " ", "must be off, background, or always")
 		}
 	}
 	if c.Native.Provider != NativeProviderAuto {
-		return fmt.Errorf("notifications.native.provider must be auto")
+		return notificationFieldError("native.provider", " ", "must be auto")
 	}
 	if _, err := parseWallClock(c.QuietHours.Start); err != nil {
-		return fmt.Errorf("notifications.quietHours.start: %w", err)
+		return notificationFieldError("quietHours.start", ": ", err.Error())
 	}
 	if _, err := parseWallClock(c.QuietHours.End); err != nil {
-		return fmt.Errorf("notifications.quietHours.end: %w", err)
+		return notificationFieldError("quietHours.end", ": ", err.Error())
 	}
 	switch c.SSH.Terminal {
 	case TerminalNotifierOff, TerminalNotifierAuto, TerminalNotifierGhostty,
 		TerminalNotifierITerm2, TerminalNotifierWezTerm, TerminalNotifierKitty:
 	default:
-		return fmt.Errorf("notifications.ssh.terminal must be off, auto, ghostty, iterm2, wezterm, or kitty")
+		return notificationFieldError("ssh.terminal", " ", "must be off, auto, ghostty, iterm2, wezterm, or kitty")
 	}
-	for id, source := range c.Sources {
+	ids := make([]string, 0, len(c.Sources))
+	for id := range c.Sources {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		source := c.Sources[id]
 		if source.Sound != "" {
 			switch source.Sound {
 			case SoundNone, SoundEvent, SoundAttention, SoundDone, SoundFailure:
 			default:
-				return fmt.Errorf("notifications.sources.%s.sound is invalid", id)
+				return notificationFieldError("sources."+id+".sound", " ", "is invalid")
 			}
 		}
 		if strings.TrimSpace(source.Expiry) != "" {
 			if _, err := ParseNotificationExpiry(source.Expiry); err != nil {
-				return fmt.Errorf("notifications.sources.%s.expiry: %w", id, err)
+				return notificationFieldError("sources."+id+".expiry", ": ", err.Error())
 			}
 		}
 	}
-	for name, path := range map[string]string{
-		"attentionPath": c.Sound.AttentionPath,
-		"donePath":      c.Sound.DonePath,
-		"failurePath":   c.Sound.FailurePath,
+	for _, check := range []struct{ name, path string }{
+		{"attentionPath", c.Sound.AttentionPath},
+		{"donePath", c.Sound.DonePath},
+		{"failurePath", c.Sound.FailurePath},
 	} {
-		if err := validateSoundPath(path, configPath); err != nil {
-			return fmt.Errorf("notifications.sound.%s: %w", name, err)
+		if err := validateSoundPath(check.path, configPath); err != nil {
+			return notificationFieldError("sound."+check.name, ": ", err.Error())
 		}
 	}
 	return nil

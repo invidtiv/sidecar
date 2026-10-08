@@ -76,8 +76,12 @@ const (
 type Source struct {
 	ID    SourceID
 	Label string
-	Glyph string
-	Hue   Hue
+	// Title and Description name the source in settings forms, where the
+	// centre's uppercase section label would read as shouting.
+	Title       string
+	Description string
+	Glyph       string
+	Hue         Hue
 	// Priority breaks ties between equally severe notifications. Higher is
 	// louder: a waiting agent outranks a finished session outranks a task.
 	Priority int
@@ -92,13 +96,13 @@ type Source struct {
 // because Phase 1 has no external registrations; the shape is what makes
 // adding one later a data change instead of a code change.
 var sources = []Source{
-	{ID: SourceWaiting, Label: "WAITING", Glyph: "?", Hue: HueWarning, Priority: 60, DefaultExpiry: 0},
-	{ID: SourceAgent, Label: "AGENTS", Glyph: "◆", Hue: HuePrimary, Priority: 50, DefaultExpiry: 12 * time.Second},
-	{ID: SourceBroadcast, Label: "BROADCAST", Glyph: "»", Hue: HueAccent, Priority: 45, DefaultExpiry: 0},
-	{ID: SourceSession, Label: "SESSIONS", Glyph: "✓", Hue: HueSuccess, Priority: 40, DefaultExpiry: 10 * time.Second},
-	{ID: SourceTD, Label: "TD", Glyph: "■", Hue: HueSecondary, Priority: 30, DefaultExpiry: 10 * time.Second},
-	{ID: SourceTasks, Label: "TASKS", Glyph: "○", Hue: HueInfo, Priority: 20, DefaultExpiry: 10 * time.Second},
-	{ID: SourceSystem, Label: "SYSTEM", Glyph: "●", Hue: HueMuted, Priority: 10, DefaultExpiry: 10 * time.Second},
+	{ID: SourceWaiting, Label: "WAITING", Title: "Needs input", Description: "An agent is waiting for an answer or an approval.", Glyph: "?", Hue: HueWarning, Priority: 60, DefaultExpiry: 0},
+	{ID: SourceAgent, Label: "AGENTS", Title: "Agent posts", Description: "Messages an agent sends with sidecar notify.", Glyph: "◆", Hue: HuePrimary, Priority: 50, DefaultExpiry: 12 * time.Second},
+	{ID: SourceBroadcast, Label: "BROADCAST", Title: "Broadcasts", Description: "Results of a message sent to every live agent.", Glyph: "»", Hue: HueAccent, Priority: 45, DefaultExpiry: 0},
+	{ID: SourceSession, Label: "SESSIONS", Title: "Sessions", Description: "Finished turns, ended sessions and failed actions.", Glyph: "✓", Hue: HueSuccess, Priority: 40, DefaultExpiry: 10 * time.Second},
+	{ID: SourceTD, Label: "TD", Title: "td", Description: "Issue updates from td.", Glyph: "■", Hue: HueSecondary, Priority: 30, DefaultExpiry: 10 * time.Second},
+	{ID: SourceTasks, Label: "TASKS", Title: "Tasks", Description: "Updates from tasks.", Glyph: "○", Hue: HueInfo, Priority: 20, DefaultExpiry: 10 * time.Second},
+	{ID: SourceSystem, Label: "SYSTEM", Title: "System", Description: "Notices from Sidecar itself.", Glyph: "●", Hue: HueMuted, Priority: 10, DefaultExpiry: 10 * time.Second},
 }
 
 // Sources returns the registered sources, loudest first.

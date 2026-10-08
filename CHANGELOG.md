@@ -8,6 +8,8 @@ All notable changes to sidecar are documented here.
 
 - Sidecar-launched and resumed Codex sessions default to inline mode when supported, preserving terminal scrollback without a per-launch flag. Explicit screen-mode arguments and custom launch commands retain their chosen behavior.
 
+- Notification settings forms can describe themselves through the UI API: `GET /api/v0/notifications/settings/options` lists each registered source with a human title, description and built-in rule, and says whether the credential may save. A refused settings save names the refused field in `error.field`.
+
 - Start a selected inactive shell or existing worktree terminal through `sidecar shell start`, `sidecar worktree start`, and their UI API operations. Shells keep their recorded identity, agent metadata and restore policy; worktrees start in the existing checkout without creating another branch or rerunning setup. Unrelated session-name collisions refuse.
 
 ### Bug Fixes
