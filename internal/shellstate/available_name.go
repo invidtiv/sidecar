@@ -26,20 +26,27 @@ func EnsureWithAvailableNameAtPath(path string, def Definition) error {
 			}
 			used[existing.DisplayName] = true
 		}
-		def.DisplayName = name
-		for n := 2; used[def.DisplayName]; n++ {
-			suffix := fmt.Sprintf(" %d", n)
-			base := name
-			if len(base)+len(suffix) > MaxNameBytes {
-				base = base[:MaxNameBytes-len(suffix)]
-				for !utf8.ValidString(base) {
-					base = base[:len(base)-1]
-				}
-			}
-			def.DisplayName = strings.TrimSpace(base) + suffix
-		}
+		def.DisplayName = availableName(name, used)
 		m.Shells = append(m.Shells, def)
 		m.Tombstones = dropTombstone(m.Tombstones, Identity{TmuxName: def.TmuxName, Namespace: def.Namespace})
 		return nil
 	})
+}
+
+// availableName returns name, or its first numbered variant ("name 2") that is
+// not in used, trimmed to fit MaxNameBytes.
+func availableName(name string, used map[string]bool) string {
+	candidate := name
+	for n := 2; used[candidate]; n++ {
+		suffix := fmt.Sprintf(" %d", n)
+		base := name
+		if len(base)+len(suffix) > MaxNameBytes {
+			base = base[:MaxNameBytes-len(suffix)]
+			for !utf8.ValidString(base) {
+				base = base[:len(base)-1]
+			}
+		}
+		candidate = strings.TrimSpace(base) + suffix
+	}
+	return candidate
 }

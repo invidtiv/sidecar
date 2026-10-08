@@ -246,7 +246,10 @@ func RemoveIfUnchangedAtPath(path string, id Identity, observedAt time.Time) err
 }
 
 // RestoreAtPath moves a forgotten definition from tombstones back onto shells.
-// Display name, agent type, skip-perms, and workdir are left intact.
+// Agent type, skip-perms, and workdir are left intact. A deleted shell never
+// reserves its name: when a live shell has taken it since, the restored record
+// comes back under the first numbered variant ("shell1 2"), and the returned
+// definition carries the name it was given.
 //
 // A live record is already in that state (KindAlready). An identity that is
 // in neither list is KindNotFound.
@@ -264,6 +267,11 @@ func RestoreAtPath(path string, id Identity) (Definition, error) {
 				continue
 			}
 			restored = m.Tombstones[i].Definition
+			used := make(map[string]bool, len(m.Shells))
+			for _, live := range m.Shells {
+				used[live.DisplayName] = true
+			}
+			restored.DisplayName = availableName(restored.DisplayName, used)
 			m.Shells = append(m.Shells, restored)
 			m.Tombstones = append(m.Tombstones[:i], m.Tombstones[i+1:]...)
 			return nil

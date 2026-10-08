@@ -391,6 +391,45 @@ func TestTombstoneMoveAndRestoreAtPath(t *testing.T) {
 	}
 }
 
+// A deleted shell never reserves its name. Once a new shell takes it, restoring
+// the old record must not produce two live shells with one name.
+func TestRestoreAtPathYieldsANameANewShellTook(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shells.json")
+	old := Definition{TmuxName: "sidecar-sh-p-1", DisplayName: "shell1", Namespace: "/tmp/socket"}
+	writeTestManifest(t, path, manifest{Version: 1, Shells: []Definition{old}})
+	if err := RemoveAtPath(path, Identity{TmuxName: old.TmuxName, Namespace: old.Namespace}); err != nil {
+		t.Fatal(err)
+	}
+	if err := AddAtPath(path, Definition{TmuxName: "sidecar-sh-p-2", DisplayName: "shell1", Namespace: "/tmp/socket"}); err != nil {
+		t.Fatalf("new shell reusing a deleted name: %v", err)
+	}
+	if err := AddAtPath(path, Definition{TmuxName: "sidecar-sh-p-3", DisplayName: "shell1 2", Namespace: "/tmp/socket"}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := RestoreAtPath(path, Identity{TmuxName: old.TmuxName, Namespace: old.Namespace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.DisplayName != "shell1 3" {
+		t.Fatalf("restored name = %q, want %q", got.DisplayName, "shell1 3")
+	}
+	m, err := readManifest(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]string{}
+	for _, s := range m.Shells {
+		if prior, dup := names[s.DisplayName]; dup {
+			t.Fatalf("%s and %s share the name %q", prior, s.TmuxName, s.DisplayName)
+		}
+		names[s.DisplayName] = s.TmuxName
+	}
+	if names["shell1"] != "sidecar-sh-p-2" {
+		t.Fatalf("the new shell lost its name: %+v", m.Shells)
+	}
+}
+
 func TestRestoreAtPathAlreadyLiveAndUnknown(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "shells.json")
 	writeTestManifest(t, path, manifest{Version: 1, Shells: []Definition{

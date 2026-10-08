@@ -287,7 +287,9 @@ func RootCommand() *Command {
 		Usage:   "sidecar shell restore [--json] <tmux-name>",
 		Long: "Restore a forgotten Sidecar-managed shell record in the current project.\n" +
 			"Display name, agent type, skip-perms, and working directory come back with it.\n" +
-			"The tmux session is not started.\n\n" +
+			"A deleted shell does not reserve its name: if a live shell has taken it since,\n" +
+			"the record comes back as the first free numbered variant (\"shell1 2\"), and\n" +
+			"the result reports the name it was given. The tmux session is not started.\n\n" +
 			"A name that is still live is already in that state (exit 0). A name that is in\n" +
 			"neither the live list nor the tombstones is not found (exit 1) — including a\n" +
 			"record whose retention window (shells.tombstoneRetention, 14 days by default)\n" +
