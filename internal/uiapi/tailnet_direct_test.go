@@ -576,6 +576,23 @@ func TestDirectTailnetCertificateIsPrivateAndReloads(t *testing.T) {
 	}
 }
 
+func TestDirectTailnetRefusesANodeNameThatIsNotADNSName(t *testing.T) {
+	h := newDirectHarness(t, func(f *fakeTailnet) { f.node.Host = "../../evil" })
+	if status := h.s.TailnetStatus(); status.State != TailnetStateWaiting || len(h.fake.listens) != 0 || h.fake.certCalls != 0 {
+		t.Fatalf("status = %+v", status)
+	}
+	for _, host := range []string{"aerie.tail53fd54.ts.net", "a-1.b"} {
+		if !validMagicDNSName(host) {
+			t.Fatalf("refused %q", host)
+		}
+	}
+	for _, host := range []string{"", ".a", "a.", "a..b", "A.b", "a/b", "a b"} {
+		if validMagicDNSName(host) {
+			t.Fatalf("accepted %q", host)
+		}
+	}
+}
+
 func TestDirectTailnetWithoutACertificateWaits(t *testing.T) {
 	h := newDirectHarness(t, func(f *fakeTailnet) { f.certErr = errors.New("HTTPS certificates are disabled") })
 	status := h.s.TailnetStatus()

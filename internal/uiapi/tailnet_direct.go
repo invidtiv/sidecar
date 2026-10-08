@@ -130,6 +130,7 @@ type tailnetDirect struct {
 	bound      []ListenerInfo
 	generation int
 	backoff    time.Duration
+	holdsErr   string // last serve-status error, logged once
 
 	kick  chan struct{}
 	done  chan struct{}
@@ -310,6 +311,11 @@ func (d *tailnetDirect) attempt(ctx context.Context) time.Duration {
 		d.closeListeners()
 		return d.fail(TailnetStateWaiting, "Tailscale reports no owner login for this node; set api.tailnetLogins in the Sidecar config.")
 	}
+	if !validMagicDNSName(node.Host) {
+		// The name becomes a certificate file name and the Host guard.
+		d.closeListeners()
+		return d.fail(TailnetStateWaiting, fmt.Sprintf("Tailscale reports %q as this node's name, which is not a DNS name; retrying.", node.Host))
+	}
 
 	d.mu.Lock()
 	changed := d.node.Host != node.Host || !sameAddrs(d.node.Addresses, node.Addresses)
@@ -328,6 +334,15 @@ func (d *tailnetDirect) attempt(ctx context.Context) time.Duration {
 	holdsCtx, cancel := context.WithTimeout(ctx, tailnetNodeTimeout)
 	held, holdsErr := d.adapters.ServeHolds(holdsCtx, d.port)
 	cancel()
+	if holdsErr != nil && holdsErr.Error() != d.holdsErr {
+		// Not knowing is no reason to stay offline: a Serve route only
+		// shadows the port; it never reaches this listener.
+		d.s.opts.Logf("tailnet listener: could not read tailscale serve routes (%v); binding anyway", holdsErr)
+	}
+	d.holdsErr = ""
+	if holdsErr != nil {
+		d.holdsErr = holdsErr.Error()
+	}
 	if holdsErr == nil && held {
 		d.closeListeners()
 		d.setState(TailnetStatePortHeld, fmt.Sprintf("A tailscale serve route holds port %d, and Tailscale answers it before Sidecar can. Remove it with `tailscale serve --https=%d off`, or choose another api.tailnetHTTPSPort. Retrying.", d.port, d.port))
@@ -754,4 +769,17 @@ func (c *whoisCache) sweepLocked() {
 		default:
 		}
 	}
+}
+
+// validMagicDNSName accepts lowercase DNS labels joined by dots.
+func validMagicDNSName(host string) bool {
+	if host == "" || len(host) > 253 || strings.HasPrefix(host, ".") || strings.HasSuffix(host, ".") || strings.Contains(host, "..") {
+		return false
+	}
+	for _, r := range host {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '-' && r != '.' {
+			return false
+		}
+	}
+	return true
 }
