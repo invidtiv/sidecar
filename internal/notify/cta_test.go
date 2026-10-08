@@ -7,6 +7,17 @@ import (
 	"github.com/marcus/sidecar/internal/uirequest"
 )
 
+// An access request's only action is approval: its origin and address are
+// context, never jump targets.
+func TestAccessRequestsOfferNoCallsToAction(t *testing.T) {
+	t.Parallel()
+	n := Notification{Source: SourceAccessRequest, Title: "A browser is asking for access",
+		Body: "A browser at 127.0.0.1 wants to sign in through http://127.0.0.1:7861.", Targets: []Target{{Kind: TargetURL, Value: "http://127.0.0.1:7861"}}}
+	if list := CallsToAction(n, terminallink.Options{}); len(list) != 0 {
+		t.Fatalf("access request calls to action: %+v", list)
+	}
+}
+
 func TestCallsToActionScansTitleThenBody(t *testing.T) {
 	t.Parallel()
 	n := Notification{

@@ -7,6 +7,7 @@
 package uiapi
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -85,6 +86,9 @@ type Options struct {
 	// zero means 30s and 15s.
 	KeepaliveInterval time.Duration
 	KeepaliveTimeout  time.Duration
+	// RequestReadTimeout bounds how long a non-stream request may take to
+	// deliver its body after its headers. Zero means 10 seconds.
+	RequestReadTimeout time.Duration
 	// KeepaliveStallTimeout bounds how long a blocked inbound pump may excuse
 	// missing pongs. Zero means one minute.
 	KeepaliveStallTimeout time.Duration
@@ -135,6 +139,17 @@ type Server struct {
 	contentRequests    contentRequestBudget
 	fileIndex          filefind.Index
 	fileSearchRequests contentRequestBudget
+	// accessSignals carries new access requests to approvers' events
+	// streams. accessMu orders the access notification's post and
+	// withdrawal; accessNoteID is the live one, if any.
+	accessSignals     accessEvents
+	accessMu          sync.Mutex
+	accessNoteID      string
+	accessNoteChecked time.Time
+	// sweepTimer fires at sweepAt, the earliest pending request's expiry.
+	sweepMu    sync.Mutex
+	sweepTimer *time.Timer
+	sweepAt    time.Time
 }
 
 // ListenerInfo describes one bound listener in status.
@@ -266,6 +281,7 @@ func Start(opts Options) (*Server, error) {
 	if err := writeEndpoint(dir, s.endpoint); err != nil {
 		return nil, err
 	}
+	s.withdrawStaleAccessNotifications()
 	ok = true
 	for index := range s.servers {
 		s.serve(index)
@@ -378,6 +394,50 @@ func (s *Server) closeListeners() {
 	}
 }
 
+func (s *Server) requestReadTimeout() time.Duration {
+	if s.opts.RequestReadTimeout > 0 {
+		return s.opts.RequestReadTimeout
+	}
+	return defaultRequestReadTimeout
+}
+
+const defaultRequestReadTimeout = 10 * time.Second
+
+// readBodyPromptly reads a non-stream request's body before dispatch, under a
+// read deadline, then clears the deadline. A request is authorized when its
+// headers arrive, so its body must follow promptly: without a bound a client
+// could hold an authorized request open indefinitely. The deadline must not
+// outlive the read: net/http's background read would hit it and cancel the
+// request context of a handler that legitimately runs longer. The body is
+// read up to one byte past maxBodyBytes so handlers keep enforcing the cap.
+// It reports false when it has answered the request itself.
+func (s *Server) readBodyPromptly(w http.ResponseWriter, r *http.Request) bool {
+	if r.Body == nil || r.Body == http.NoBody {
+		return true
+	}
+	controller := http.NewResponseController(w)
+	_ = controller.SetReadDeadline(time.Now().Add(s.requestReadTimeout()))
+	data, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes+1))
+	if err != nil {
+		// Leave the expired deadline in place: net/http drains an unread
+		// body after the handler, and that drain must fail at once rather
+		// than wait on a stalled client.
+		w.Header().Set("Connection", "close")
+		writeError(w, http.StatusRequestTimeout, CodeRequestTimeout, fmt.Sprintf("The request body did not arrive within %s; send it with the headers.", s.requestReadTimeout()))
+		return false
+	}
+	if len(data) > maxBodyBytes {
+		// Over the cap: the handler refuses it at once. The rest of the
+		// body is never read, so keep the deadline and close afterwards.
+		w.Header().Set("Connection", "close")
+	} else {
+		// The whole body is in hand; nothing more is read from this request.
+		_ = controller.SetReadDeadline(time.Time{})
+	}
+	r.Body = io.NopCloser(bytes.NewReader(data))
+	return true
+}
+
 // Endpoint is what this server recorded in endpoint.json.
 func (s *Server) Endpoint() Endpoint { return s.endpoint }
 
@@ -415,6 +475,10 @@ func (s *Server) Shutdown(ctx context.Context) error {
 				result = ctx.Err()
 			}
 		}
+		// Pending access requests die with this process; so does their
+		// notification.
+		s.stopAccessSweep()
+		s.withdrawAccessNotification(true)
 		removeEndpoint(s.dir, s.instance)
 		releaseLock(s.lock)
 		s.closeStatic()
@@ -435,7 +499,7 @@ func (s *Server) beginStream() bool {
 
 func (s *Server) hello() Hello {
 	return Hello{APIVersion: APIVersion, APIInstance: s.instance, ServerVersion: s.opts.Version,
-		Capabilities: []string{"sessions", "status", "terminal", "terminal_ended", "ws_tickets", "events", "projects", "workspace", "workspace_operations", "content", "layouts", "uiRequestRelayV1", "notifications", "file_search", "notifications_batch"},
+		Capabilities: []string{"sessions", "status", "terminal", "terminal_ended", "ws_tickets", "events", "projects", "workspace", "workspace_operations", "content", "layouts", "uiRequestRelayV1", "notifications", "file_search", "notifications_batch", "access_requests"},
 		Terminal:     TerminalProtocol{Protocol: "mobile", Version: mobileproto.Version}}
 }
 

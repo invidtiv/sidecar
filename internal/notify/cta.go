@@ -81,6 +81,12 @@ func CTABody(n Notification) string {
 // ordinary text (the I/O-free choice), and a Resolve that stats against the
 // project root earns those spans an underline.
 func CallsToAction(n Notification, opts terminallink.Options) []CallToAction {
+	if n.Source == SourceAccessRequest {
+		// A browser waiting for access has one action, approval, which every
+		// surface opens on activation. Its origin and address are context,
+		// not places to jump to.
+		return nil
+	}
 	title, body := CTATitle(n), CTABody(n)
 	scanned := append(
 		fieldSpans(CTAFieldTitle, title, opts),

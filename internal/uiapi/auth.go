@@ -46,10 +46,15 @@ type authStore struct {
 	codes       map[string]time.Time // code hash -> expiry
 	sessions    map[string]session   // public registration ID -> registration
 	tickets     map[string]grant     // ticket hash -> grant
+	// access holds browser access requests by id; accessFailures holds each
+	// approver's recent wrong codes.
+	access         map[string]*accessRequest
+	accessFailures map[string][]time.Time
 }
 
 func newAuthStore(now func() time.Time) *authStore {
-	return &authStore{now: now, codes: map[string]time.Time{}, sessions: map[string]session{}, tickets: map[string]grant{}, bearers: map[string]browserBearer{}, proofs: map[string]browserProof{}}
+	return &authStore{now: now, codes: map[string]time.Time{}, sessions: map[string]session{}, tickets: map[string]grant{}, bearers: map[string]browserBearer{}, proofs: map[string]browserProof{},
+		access: map[string]*accessRequest{}, accessFailures: map[string][]time.Time{}}
 }
 
 func (a *authStore) issueCode() (string, time.Time, error) {

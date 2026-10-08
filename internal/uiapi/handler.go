@@ -32,13 +32,38 @@ type route struct {
 	methods   map[string]routeFunc
 	listeners []Listener // empty means every listener
 	public    bool       // served without authentication
+	// methodListeners and publicMethods override listeners and public for one
+	// method, for a path whose methods have different callers: anyone may ask
+	// for access with POST /pairing/requests, only approvers may list them.
+	methodListeners map[string][]Listener
+	publicMethods   map[string]bool
 }
 
 func (rt *route) allows(kind Listener) bool {
-	if len(rt.listeners) == 0 {
+	if len(rt.methodListeners) != 0 {
+		for method := range rt.methods {
+			if rt.allowsMethod(method, kind) {
+				return true
+			}
+		}
+		return false
+	}
+	return listenerIn(rt.listeners, kind)
+}
+
+// allowsMethod reports whether method is served on kind.
+func (rt *route) allowsMethod(method string, kind Listener) bool {
+	if listeners, ok := rt.methodListeners[method]; ok {
+		return listenerIn(listeners, kind)
+	}
+	return listenerIn(rt.listeners, kind)
+}
+
+func listenerIn(listeners []Listener, kind Listener) bool {
+	if len(listeners) == 0 {
 		return true
 	}
-	for _, allowed := range rt.listeners {
+	for _, allowed := range listeners {
 		if allowed == kind {
 			return true
 		}
@@ -46,33 +71,52 @@ func (rt *route) allows(kind Listener) bool {
 	return false
 }
 
-func (rt *route) localOnly() bool {
-	return len(rt.listeners) == 1 && rt.listeners[0] == ListenerLocal
+func (rt *route) localOnlyFor(method string) bool {
+	listeners := rt.listeners
+	if override, ok := rt.methodListeners[method]; ok {
+		listeners = override
+	}
+	return len(listeners) == 1 && listeners[0] == ListenerLocal
+}
+
+func (rt *route) isPublic(method string) bool {
+	if public, ok := rt.publicMethods[method]; ok {
+		return public
+	}
+	return rt.public
 }
 
 func (s *Server) routeTable() map[string]*route {
 	local := []Listener{ListenerLocal}
 	remote := []Listener{ListenerBrowser, ListenerTailnet}
+	browserOnly := []Listener{ListenerBrowser}
 	routes := map[string]*route{
-		notificationsPath:          {methods: map[string]routeFunc{http.MethodGet: s.handleNotifications}},
-		notificationSettingsPath:   {methods: map[string]routeFunc{http.MethodGet: s.handleNotificationSettings, http.MethodPut: s.handleNotificationSettings}},
-		notificationOptionsPath:    {methods: map[string]routeFunc{http.MethodGet: s.handleNotificationSettingsOptions}},
-		notificationReadPath:       {methods: map[string]routeFunc{http.MethodPost: s.handleNotificationMutation}},
-		notificationDismissPath:    {methods: map[string]routeFunc{http.MethodPost: s.handleNotificationMutation}},
-		notificationClaimPath:      {methods: map[string]routeFunc{http.MethodPost: s.handleNotificationReceipt}},
-		notificationReceiptPath:    {methods: map[string]routeFunc{http.MethodPost: s.handleNotificationReceipt}},
-		viewerPresencePath:         {methods: map[string]routeFunc{http.MethodPost: s.handleViewerPresence}},
-		viewerAckPath:              {methods: map[string]routeFunc{http.MethodPost: s.handleViewerAck}},
-		contentRoute:               {methods: map[string]routeFunc{http.MethodGet: s.handleContent}},
-		fileSearchRoute:            {methods: map[string]routeFunc{http.MethodGet: s.handleFileSearch}},
-		treeRoute:                  {methods: map[string]routeFunc{http.MethodGet: s.handleTree}},
-		layoutRoute:                {methods: map[string]routeFunc{http.MethodGet: s.handleLayout, http.MethodPut: s.handleLayout}},
-		"/api/v0/hello":            {methods: map[string]routeFunc{http.MethodGet: s.handleHello}},
-		"/api/v0/sessions":         {methods: map[string]routeFunc{http.MethodGet: s.handleSessions}},
-		"/api/v0/status":           {methods: map[string]routeFunc{http.MethodGet: s.handleStatus}},
-		"/api/v0/ws-tickets":       {methods: map[string]routeFunc{http.MethodPost: s.handleTicket}, listeners: remote},
-		"/api/v0/pairing/codes":    {methods: map[string]routeFunc{http.MethodPost: s.handlePairingCode}, listeners: local},
-		"/api/v0/pairing/sessions": {methods: map[string]routeFunc{http.MethodDelete: s.handleRevokeSessions}, listeners: local},
+		notificationsPath:        {methods: map[string]routeFunc{http.MethodGet: s.handleNotifications}},
+		notificationSettingsPath: {methods: map[string]routeFunc{http.MethodGet: s.handleNotificationSettings, http.MethodPut: s.handleNotificationSettings}},
+		notificationOptionsPath:  {methods: map[string]routeFunc{http.MethodGet: s.handleNotificationSettingsOptions}},
+		notificationReadPath:     {methods: map[string]routeFunc{http.MethodPost: s.handleNotificationMutation}},
+		notificationDismissPath:  {methods: map[string]routeFunc{http.MethodPost: s.handleNotificationMutation}},
+		notificationClaimPath:    {methods: map[string]routeFunc{http.MethodPost: s.handleNotificationReceipt}},
+		notificationReceiptPath:  {methods: map[string]routeFunc{http.MethodPost: s.handleNotificationReceipt}},
+		viewerPresencePath:       {methods: map[string]routeFunc{http.MethodPost: s.handleViewerPresence}},
+		viewerAckPath:            {methods: map[string]routeFunc{http.MethodPost: s.handleViewerAck}},
+		contentRoute:             {methods: map[string]routeFunc{http.MethodGet: s.handleContent}},
+		fileSearchRoute:          {methods: map[string]routeFunc{http.MethodGet: s.handleFileSearch}},
+		treeRoute:                {methods: map[string]routeFunc{http.MethodGet: s.handleTree}},
+		layoutRoute:              {methods: map[string]routeFunc{http.MethodGet: s.handleLayout, http.MethodPut: s.handleLayout}},
+		"/api/v0/hello":          {methods: map[string]routeFunc{http.MethodGet: s.handleHello}},
+		"/api/v0/sessions":       {methods: map[string]routeFunc{http.MethodGet: s.handleSessions}},
+		"/api/v0/status":         {methods: map[string]routeFunc{http.MethodGet: s.handleStatus}},
+		"/api/v0/ws-tickets":     {methods: map[string]routeFunc{http.MethodPost: s.handleTicket}, listeners: remote},
+		"/api/v0/pairing/codes":  {methods: map[string]routeFunc{http.MethodPost: s.handlePairingCode}, listeners: local},
+		devicesPath: {methods: map[string]routeFunc{http.MethodGet: s.handleListDevices, http.MethodDelete: s.handleRevokeSessions},
+			methodListeners: map[string][]Listener{http.MethodDelete: local}},
+		devicePath: {methods: map[string]routeFunc{http.MethodDelete: s.handleRevokeDevice}},
+		accessRequestsPath: {methods: map[string]routeFunc{http.MethodGet: s.handleListAccessRequests, http.MethodPost: s.handleCreateAccessRequest},
+			methodListeners: map[string][]Listener{http.MethodPost: browserOnly}, publicMethods: map[string]bool{http.MethodPost: true}},
+		accessRequestPath: {methods: map[string]routeFunc{http.MethodGet: s.handlePollAccessRequest}, listeners: browserOnly, public: true},
+		accessApprovePath: {methods: map[string]routeFunc{http.MethodPost: s.handleApproveAccess}},
+		accessDenyPath:    {methods: map[string]routeFunc{http.MethodPost: s.handleDenyAccess}},
 		"/api/v0/origins": {methods: map[string]routeFunc{http.MethodGet: s.handleListOrigins, http.MethodPost: s.handlePairOrigin,
 			http.MethodDelete: s.handleRevokeOrigin}, listeners: local},
 		"/api/v0/pairing/session-proof":        {methods: map[string]routeFunc{http.MethodPost: s.handleSessionProofChallenge}, listeners: []Listener{ListenerBrowser}, public: true},
@@ -91,6 +135,9 @@ type listenerHandler struct {
 }
 
 func (h *listenerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != terminalPath && r.URL.Path != eventsPath && !h.s.readBodyPromptly(w, r) {
+		return
+	}
 	if h.kind == ListenerLocal {
 		if r.URL.Path == terminalPath || r.URL.Path == eventsPath {
 			h.serveStream(w, r)
@@ -149,6 +196,11 @@ func (h *listenerHandler) dispatch(w http.ResponseWriter, r *http.Request, c cal
 		rt = h.routes[template]
 	}
 	if rt == nil {
+		if key, _ := pairingItemRoute(r.URL.Path); key != "" {
+			rt = h.routes[key]
+		}
+	}
+	if rt == nil {
 		key, _ := workspaceRoute(r.URL.EscapedPath())
 		rt = h.routes[key]
 	}
@@ -175,17 +227,17 @@ func (h *listenerHandler) dispatch(w http.ResponseWriter, r *http.Request, c cal
 		h.s.static.ServeHTTP(w, r)
 		return
 	}
-	if !rt.allows(h.kind) {
-		if rt.localOnly() {
+	method := r.Method
+	if method == http.MethodHead {
+		method = http.MethodGet
+	}
+	if !rt.allowsMethod(method, h.kind) {
+		if rt.localOnlyFor(method) {
 			writeError(w, http.StatusForbidden, CodeLocalOnly, fmt.Sprintf("%s is served only on the local Unix socket; use the sidecar CLI on this machine.", r.URL.Path))
 			return
 		}
 		writeError(w, http.StatusForbidden, CodeNotServedHere, fmt.Sprintf("%s is not served on the %s listener.", r.URL.Path, h.kind))
 		return
-	}
-	method := r.Method
-	if method == http.MethodHead {
-		method = http.MethodGet
 	}
 	fn := rt.methods[method]
 	if fn == nil {
@@ -198,13 +250,14 @@ func (h *listenerHandler) dispatch(w http.ResponseWriter, r *http.Request, c cal
 		writeError(w, http.StatusMethodNotAllowed, CodeMethod, fmt.Sprintf("%s accepts %s.", r.URL.Path, strings.Join(allowed, ", ")))
 		return
 	}
-	if !rt.public {
+	public := rt.isPublic(method)
+	if !public {
 		var ok bool
 		if c, ok = h.authenticate(w, r, c); !ok {
 			return
 		}
 	}
-	if !rt.public && r.URL.Path != "/api/v0/hello" && r.URL.Path != "/api/v0/ws-tickets" {
+	if !public && r.URL.Path != "/api/v0/hello" && r.URL.Path != "/api/v0/ws-tickets" {
 		if template, _ := projectContentRoute(r.URL.Path); template == "" {
 			scope := ScopeFull
 			if strings.HasPrefix(r.URL.Path, notificationsPath) {
@@ -266,7 +319,7 @@ func (h *listenerHandler) authenticate(w http.ResponseWriter, r *http.Request, c
 	}
 	token, present := bearerToken(r)
 	if !present {
-		writeError(w, http.StatusUnauthorized, CodeUnauthenticated, "Send Authorization: Bearer with this browser's session token (pair it with `sidecar api open`) or a paired origin's token.")
+		writeError(w, http.StatusUnauthorized, CodeUnauthenticated, "Send Authorization: Bearer with this browser's session token (ask for access from Sidecar's UI, or pair with `sidecar api open`) or a paired origin's token.")
 		return c, false
 	}
 	resolved, result := h.s.resolveBearer(token, c.origin)

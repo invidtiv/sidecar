@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/accessmodal"
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/modal"
@@ -226,6 +227,15 @@ func TestActiveModalWheelAtBoundaryLedger(t *testing.T) {
 				md, h := renderedModal(m.width, m.height, "Quit sidecar?")
 				m.quitModal, m.quitMouseHandler = md, h
 				return modalBodyPoint(t, h)
+			},
+			want: want{up: true, down: true},
+		},
+		{
+			name: "access approval is bounded in both directions",
+			setup: func(t *testing.T, m *Model) (int, int) {
+				m.accessApproval = accessmodal.New(t.TempDir(), nil)
+				m.accessApproval.Render(m.width, m.height)
+				return modalBodyPoint(t, m.accessApproval.MouseHandler())
 			},
 			want: want{up: true, down: true},
 		},
@@ -504,6 +514,7 @@ func TestEveryModalKindHasALedgerRow(t *testing.T) {
 		ModalUpdate:           "update preview at top",
 		ModalDiagnostics:      "diagnostics at top",
 		ModalQuitConfirm:      "quit confirm is bounded in both directions",
+		ModalAccessApproval:   "access approval is bounded in both directions",
 		ModalProjectSwitcher:  "project switcher cursor at top",
 		ModalWorktreeSwitcher: "worktree switcher body at top",
 		ModalThemeSwitcher:    "theme switcher body at top",

@@ -24,6 +24,13 @@ const (
 	CodeTooMany             = "too_many_outstanding"
 	CodeBackend             = "backend"
 	CodeUpgradeRequired     = "upgrade_required"
+	CodeApproverRefused     = "approver_refused"
+	CodeAccessCodeInvalid   = "access_code_invalid"
+	CodeAccessNotFound      = "access_request_not_found"
+	CodeTooManyAttempts     = "too_many_attempts"
+	CodeDeviceNotFound      = "device_not_found"
+	CodeAccessExpired       = "access_request_expired"
+	CodeRequestTimeout      = "request_timeout"
 )
 
 var errTooManyOutstanding = errors.New("too many outstanding pairing codes or tickets")

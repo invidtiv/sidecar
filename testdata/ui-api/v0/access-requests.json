@@ -1,0 +1,150 @@
+[
+  {
+    "listener": "browser",
+    "method": "POST",
+    "origin": "http://127.0.0.1:7861",
+    "path": "/api/v0/pairing/requests",
+    "request": {
+      "public_key": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY",
+        "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU"
+      },
+      "label": "Safari on macOS"
+    },
+    "response": {
+      "request_id": "synthetic-request",
+      "poll_secret": "synthetic-poll-secret",
+      "code": "K7Q-4MX",
+      "expires_at": "2026-10-03T00:05:00Z"
+    }
+  },
+  {
+    "authorization": "Request synthetic-poll-secret",
+    "listener": "browser",
+    "method": "GET",
+    "path": "/api/v0/pairing/requests/synthetic-request",
+    "response": {
+      "status": "pending",
+      "expires_at": "2026-10-03T00:05:00Z"
+    }
+  },
+  {
+    "type": "access_requested",
+    "seq": 4,
+    "api_version": 0,
+    "access_request": {
+      "request_id": "synthetic-request",
+      "label": "Safari on macOS",
+      "origin": "http://127.0.0.1:7861",
+      "address": "127.0.0.1",
+      "created_at": "2026-10-03T00:00:00Z",
+      "expires_at": "2026-10-03T00:05:00Z"
+    }
+  },
+  {
+    "listener": "local",
+    "method": "GET",
+    "path": "/api/v0/pairing/requests",
+    "response": {
+      "requests": [
+        {
+          "request_id": "synthetic-request",
+          "label": "Safari on macOS",
+          "origin": "http://127.0.0.1:7861",
+          "address": "127.0.0.1",
+          "created_at": "2026-10-03T00:00:00Z",
+          "expires_at": "2026-10-03T00:05:00Z"
+        }
+      ]
+    }
+  },
+  {
+    "listener": "local",
+    "method": "POST",
+    "path": "/api/v0/pairing/requests/approve",
+    "request": {
+      "code": "K7Q-4MX",
+      "surface": "tui"
+    },
+    "response": {
+      "request_id": "synthetic-request",
+      "registration_id": "c59eadaea5376814c153f3d250aeb70c93cab6d5f04eab732d1d35cf19929f85",
+      "label": "Safari on macOS",
+      "origin": "http://127.0.0.1:7861",
+      "address": "127.0.0.1",
+      "approved_via": "tui",
+      "approved_at": "2026-10-03T00:00:30Z"
+    }
+  },
+  {
+    "authorization": "Request synthetic-poll-secret",
+    "listener": "browser",
+    "method": "GET",
+    "path": "/api/v0/pairing/requests/synthetic-request",
+    "response": {
+      "status": "approved",
+      "expires_at": "2026-10-03T00:05:00Z",
+      "registration_id": "c59eadaea5376814c153f3d250aeb70c93cab6d5f04eab732d1d35cf19929f85"
+    }
+  },
+  {
+    "listener": "local",
+    "method": "POST",
+    "path": "/api/v0/pairing/requests/deny",
+    "request": {
+      "request_id": "another-synthetic-request"
+    },
+    "response": {
+      "request_id": "another-synthetic-request",
+      "status": "denied"
+    }
+  },
+  {
+    "listener": "browser",
+    "method": "GET",
+    "origin": "http://127.0.0.1:7861",
+    "path": "/api/v0/pairing/sessions",
+    "response": {
+      "devices": [
+        {
+          "id": "c59eadaea5376814c153f3d250aeb70c93cab6d5f04eab732d1d35cf19929f85",
+          "origin": "http://127.0.0.1:7861",
+          "label": "Safari on macOS",
+          "approved_via": "tui",
+          "approved_at": "2026-10-03T00:00:30Z",
+          "created_at": "2026-10-03T00:00:30Z",
+          "last_used_at": "2026-10-03T00:00:30Z",
+          "expires_at": "2026-11-02T00:00:30Z",
+          "current": true
+        }
+      ]
+    }
+  },
+  {
+    "listener": "local",
+    "method": "DELETE",
+    "path": "/api/v0/pairing/sessions/c59eadaea5376814c153f3d250aeb70c93cab6d5f04eab732d1d35cf19929f85",
+    "response": {
+      "id": "c59eadaea5376814c153f3d250aeb70c93cab6d5f04eab732d1d35cf19929f85",
+      "revoked": true,
+      "terminals_closed": 1
+    }
+  },
+  {
+    "listener": "local",
+    "method": "POST",
+    "path": "/api/v0/pairing/requests/approve",
+    "request": {
+      "code": "K7Q-4MZ"
+    },
+    "response": {
+      "error": {
+        "code": "access_code_invalid",
+        "message": "No waiting browser shows that code; check the code on the new browser, which may have expired and shown a new one."
+      }
+    },
+    "status": 404
+  }
+]

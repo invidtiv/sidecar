@@ -123,6 +123,7 @@ func (s *Server) notificationSnapshot(c caller) (NotificationSnapshot, error) {
 	if err != nil {
 		return NotificationSnapshot{}, err
 	}
+	all = visibleNotifications(c, all)
 	cfg, err := notificationSettings()
 	if err != nil {
 		return NotificationSnapshot{}, err
@@ -146,6 +147,23 @@ func (s *Server) notificationSnapshot(c caller) (NotificationSnapshot, error) {
 	}
 	return out, nil
 }
+
+// visibleNotifications hides what a caller may not act on. A paired origin is
+// an embedding app, not an approver: browser access requests are not its
+// business to read, dismiss or deliver.
+func visibleNotifications(c caller, all []notification.Notification) []notification.Notification {
+	if !strings.HasPrefix(c.client, "origin:") {
+		return all
+	}
+	out := make([]notification.Notification, 0, len(all))
+	for _, n := range all {
+		if n.Source != notification.SourceAccessRequest {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
 func (s *Server) handleNotifications(w http.ResponseWriter, r *http.Request, c caller) {
 	out, err := s.notificationSnapshot(c)
 	if err != nil {
@@ -218,6 +236,29 @@ func (s *Server) handleNotificationMutation(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	defer func() { _ = store.Close() }()
+	if strings.HasPrefix(c.client, "origin:") {
+		// Records a paired origin cannot see are, to it, unknown ids.
+		all, err := store.List()
+		if err != nil {
+			writeContentError(w, err)
+			return
+		}
+		visible := map[string]bool{}
+		for _, n := range visibleNotifications(c, all) {
+			visible[n.ID] = true
+		}
+		if !batch && !visible[input.ID] {
+			writeError(w, 404, CodeNotFound, "Notification not found.")
+			return
+		}
+		kept := ids[:0]
+		for _, id := range ids {
+			if visible[id] {
+				kept = append(kept, id)
+			}
+		}
+		ids = kept
+	}
 	switch {
 	case batch && r.URL.Path == notificationReadPath:
 		_, err = store.MarkReadMany(ids)

@@ -272,6 +272,8 @@ func (m Model) viewContent() string {
 		return m.renderDiagnosticsModal(bg)
 	case ModalQuitConfirm:
 		return m.renderQuitConfirmOverlay(bg)
+	case ModalAccessApproval:
+		return m.renderAccessApproval(bg)
 	case ModalProjectSwitcher:
 		return m.renderProjectSwitcherOverlay(bg)
 	case ModalWorktreeSwitcher:

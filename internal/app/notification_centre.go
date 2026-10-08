@@ -747,6 +747,11 @@ func (m *Model) activateNotificationTarget(number int) tea.Cmd {
 		return nil
 	}
 	m.readSelectedNotification()
+	// A browser waiting for access has no target to jump to: activating it
+	// opens the approval modal, where the person types the browser's code.
+	if isAccessRequest(selected) && number == 1 {
+		return m.openAccessApproval()
+	}
 	cta, ok := notify.CallToActionAt(m.notificationCallsToAction(selected), number)
 	if !ok {
 		if number == 1 {

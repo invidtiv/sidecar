@@ -9,6 +9,8 @@ import (
 	"os"
 	"syscall"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 const (
@@ -17,15 +19,24 @@ const (
 	sessionAbsoluteTTL   = 180 * 24 * time.Hour
 	sessionTouchInterval = time.Minute
 	browserBearerTTL     = 15 * time.Minute
+	// sessionsVersion is the store format written. Version 1 lacked the
+	// device fields and is migrated in place on first open.
+	sessionsVersion = 2
 )
 
 // session is a durable public-key registration, never a bearer credential.
+// Label, ApprovedVia and ApprovedAt describe the device for the device list:
+// the label is what the browser claimed when it asked for access, and
+// ApprovedVia names the surface that let it in (see approvedVia).
 type session struct {
-	PublicKey  BrowserPublicKey `json:"public_key"`
-	Origin     string           `json:"origin"`
-	CreatedAt  time.Time        `json:"created_at"`
-	LastUsedAt time.Time        `json:"last_used_at"`
-	ExpiresAt  time.Time        `json:"expires_at"`
+	PublicKey   BrowserPublicKey `json:"public_key"`
+	Origin      string           `json:"origin"`
+	Label       string           `json:"label"`
+	ApprovedVia string           `json:"approved_via"`
+	ApprovedAt  time.Time        `json:"approved_at"`
+	CreatedAt   time.Time        `json:"created_at"`
+	LastUsedAt  time.Time        `json:"last_used_at"`
+	ExpiresAt   time.Time        `json:"expires_at"`
 }
 
 type sessionsFile struct {
@@ -65,8 +76,12 @@ func (a *authStore) withSessionsLocked(change func(map[string]session) bool) err
 	defer func() { _ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) }()
 	next, info, err := readSessionSnapshot(a.sessionPath)
 	legacy := errors.Is(err, errLegacySessions)
+	migrate := errors.Is(err, errSessionsNeedMigration)
 	if legacy {
 		next = map[string]session{}
+		err = nil
+	}
+	if migrate {
 		err = nil
 	}
 	if err != nil {
@@ -74,8 +89,8 @@ func (a *authStore) withSessionsLocked(change func(map[string]session) bool) err
 		return err
 	}
 	changed := change(next)
-	if changed || legacy {
-		data, err := json.MarshalIndent(sessionsFile{Version: 1, Registrations: next}, "", "  ")
+	if changed || legacy || migrate {
+		data, err := json.MarshalIndent(sessionsFile{Version: sessionsVersion, Registrations: next}, "", "  ")
 		if err != nil {
 			return err
 		}
@@ -115,6 +130,11 @@ func (a *authStore) reloadSessionsLocked() error {
 		return nil
 	}
 	next, info, err := readSessionSnapshot(a.sessionPath)
+	if errors.Is(err, errSessionsNeedMigration) {
+		// An older writer replaced the store. Its records are valid; the
+		// next write upgrades the file.
+		err = nil
+	}
 	if err != nil {
 		a.storeErr = err
 		return err
@@ -123,8 +143,15 @@ func (a *authStore) reloadSessionsLocked() error {
 	return nil
 }
 
+// errSessionsNeedMigration accompanies a valid version-1 snapshot whose
+// records were upgraded in memory and should be written back.
+var errSessionsNeedMigration = errors.New("browser public-key store needs migration")
+
 func readSessions(path string) (map[string]session, error) {
 	records, _, err := readSessionSnapshot(path)
+	if errors.Is(err, errSessionsNeedMigration) {
+		err = nil
+	}
 	return records, err
 }
 
@@ -167,15 +194,54 @@ func readSessionSnapshot(path string) (map[string]session, os.FileInfo, error) {
 	if err := dec.Decode(new(any)); !errors.Is(err, io.EOF) {
 		return corrupt("trailing JSON")
 	}
-	if stored.Version != 1 || stored.Registrations == nil || len(stored.Registrations) > maxSessions {
+	if (stored.Version != 1 && stored.Version != sessionsVersion) || stored.Registrations == nil || len(stored.Registrations) > maxSessions {
 		return corrupt("unsupported version or missing/oversized registration map")
 	}
 	for id, s := range stored.Registrations {
+		if stored.Version == 1 {
+			if s.Label != "" || s.ApprovedVia != "" || !s.ApprovedAt.IsZero() {
+				return corrupt("version 1 registrations carry no device fields")
+			}
+			s = migrateSessionV1(s)
+			stored.Registrations[id] = s
+		}
 		origin, err := NormalizeOrigin(s.Origin)
 		_, keyErr := s.PublicKey.ecdsaKey()
 		if err != nil || origin != s.Origin || keyErr != nil || id != browserRegistrationID(s.Origin, s.PublicKey) || s.CreatedAt.IsZero() || s.LastUsedAt.Before(s.CreatedAt) || !s.ExpiresAt.Equal(sessionExpiry(s)) {
 			return corrupt("invalid public key, origin or registration timestamps")
 		}
+		if !validApprovedVia(s.ApprovedVia) || s.ApprovedAt.IsZero() || !storedLabelValid(s.Label) {
+			return corrupt("invalid device label or approval record")
+		}
+		// Re-clean rather than compare: a later, stricter sanitizer must
+		// tidy old labels, not refuse the whole store.
+		s.Label = cleanDeviceLabel(s.Label)
+		stored.Registrations[id] = s
+	}
+	if stored.Version == 1 {
+		return stored.Registrations, info, errSessionsNeedMigration
 	}
 	return stored.Registrations, info, nil
+}
+
+// storedLabelValid is the stable invariant a stored label must hold: valid
+// UTF-8 with no control or format characters, within the length cap.
+func storedLabelValid(label string) bool {
+	if !utf8.ValidString(label) || utf8.RuneCountInString(label) > maxDeviceLabelRunes {
+		return false
+	}
+	for _, r := range label {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return false
+		}
+	}
+	return true
+}
+
+// migrateSessionV1 fills the device fields a version-1 registration lacks.
+// Every version-1 registration came from a pairing link.
+func migrateSessionV1(s session) session {
+	s.ApprovedVia = approvedViaLink
+	s.ApprovedAt = s.CreatedAt
+	return s
 }

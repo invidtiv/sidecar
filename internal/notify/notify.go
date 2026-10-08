@@ -29,6 +29,11 @@ const (
 	SourceTD        SourceID = "td"
 	SourceSystem    SourceID = "system"
 	SourceBroadcast SourceID = "broadcast"
+	// SourceAccessRequest is a browser asking to sign in to this machine's
+	// Sidecar UI API. Activating one opens the approval surface; the API
+	// withdraws it when the last pending request is approved, denied or
+	// expires.
+	SourceAccessRequest SourceID = "access_request"
 )
 
 // Severity ranks a notification within its source.
@@ -97,6 +102,7 @@ type Source struct {
 // adding one later a data change instead of a code change.
 var sources = []Source{
 	{ID: SourceWaiting, Label: "WAITING", Title: "Needs input", Description: "An agent is waiting for an answer or an approval.", Glyph: "?", Hue: HueWarning, Priority: 60, DefaultExpiry: 0},
+	{ID: SourceAccessRequest, Label: "ACCESS", Title: "Access requests", Description: "A browser is asking to sign in to this Sidecar.", Glyph: "◈", Hue: HueWarning, Priority: 55, DefaultExpiry: 0},
 	{ID: SourceAgent, Label: "AGENTS", Title: "Agent posts", Description: "Messages an agent sends with sidecar notify.", Glyph: "◆", Hue: HuePrimary, Priority: 50, DefaultExpiry: 12 * time.Second},
 	{ID: SourceBroadcast, Label: "BROADCAST", Title: "Broadcasts", Description: "Results of a message sent to every live agent.", Glyph: "»", Hue: HueAccent, Priority: 45, DefaultExpiry: 0},
 	{ID: SourceSession, Label: "SESSIONS", Title: "Sessions", Description: "Finished turns, ended sessions and failed actions.", Glyph: "✓", Hue: HueSuccess, Priority: 40, DefaultExpiry: 10 * time.Second},

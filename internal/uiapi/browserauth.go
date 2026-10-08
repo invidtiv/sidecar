@@ -61,16 +61,40 @@ type browserProof struct {
 	expires              time.Time
 }
 
+// registerBrowser registers key for origin from a pairing link and issues
+// the exchange's short-lived bearer.
 func (a *authStore) registerBrowser(origin string, key BrowserPublicKey) (string, string, time.Time, error) {
 	if _, err := key.ecdsaKey(); err != nil {
 		return "", "", time.Time{}, err
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	id, err := a.upsertRegistrationLocked(origin, key, registrationApproval{via: approvedViaLink})
+	if err != nil {
+		return "", "", time.Time{}, err
+	}
+	token, expires, err := a.issueBrowserBearerLocked(id)
+	return id, token, expires, err
+}
+
+// registrationApproval is how a registration was let in, recorded on the
+// device for the device list.
+type registrationApproval struct {
+	label string
+	via   string
+}
+
+// upsertRegistrationLocked creates or refreshes the registration for exactly
+// this origin and public key. It issues no credential: the key holder proves
+// possession through session-proof renewal. a.mu is held.
+func (a *authStore) upsertRegistrationLocked(origin string, key BrowserPublicKey, approval registrationApproval) (string, error) {
+	if _, err := key.ecdsaKey(); err != nil {
+		return "", err
 	}
 	// Store only the actual public coordinates, not browser metadata.
 	key.KeyOps = nil
 	key.Ext = nil
 	id := browserRegistrationID(origin, key)
-	a.mu.Lock()
-	defer a.mu.Unlock()
 	err := a.withSessionsLocked(func(records map[string]session) bool {
 		now := a.now().UTC()
 		for id, s := range records {
@@ -92,15 +116,18 @@ func (a *authStore) registerBrowser(origin string, key BrowserPublicKey) (string
 		if !exists {
 			s = session{Origin: origin, PublicKey: key, CreatedAt: now, LastUsedAt: now}
 		}
+		if label := cleanDeviceLabel(approval.label); label != "" || !exists {
+			s.Label = label
+		}
+		s.ApprovedVia, s.ApprovedAt = approval.via, now
 		s.ExpiresAt = sessionExpiry(s)
 		records[id] = s
 		return true
 	})
 	if err != nil {
-		return "", "", time.Time{}, err
+		return "", err
 	}
-	token, expires, err := a.issueBrowserBearerLocked(id)
-	return id, token, expires, err
+	return id, nil
 }
 
 func (a *authStore) issueBrowserBearerLocked(id string) (string, time.Time, error) {
@@ -241,7 +268,7 @@ func (a *authStore) issueBrowserProof(origin, id string) (SessionProofChallenge,
 	return SessionProofChallenge{Nonce: nonce, Timestamp: proof.timestamp, ExpiresAt: proof.expires}, nil
 }
 
-var errBrowserProofInvalid = errors.New("browser key proof is invalid, expired or revoked; pair again with `sidecar api open`")
+var errBrowserProofInvalid = errors.New("browser key proof is invalid, expired or revoked; ask for access again from Sidecar's UI, or run `sidecar api open` on the host")
 
 func (a *authStore) verifyBrowserProof(origin string, req SessionProofRequest) (SessionToken, error) {
 	a.mu.Lock()

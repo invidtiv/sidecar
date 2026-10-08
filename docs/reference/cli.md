@@ -897,10 +897,125 @@ sidecar -a
 
 Serve Sidecar's UI API for web and embedded clients
 
-The UI API exposes Sessions and live terminals over HTTP and WebSocket so a web UI, an embedding app, or an agent can use them. The wire contract is docs/reference/ui-api.md.
+The UI API exposes Sessions and live terminals over HTTP and WebSocket so a web UI, an embedding app, or an agent can use them. A browser that opens Sidecar's UI with no credential asks for access and shows a short code; let it in with `sidecar api approve CODE` (or from the TUI or a signed-in browser), see who is waiting with `sidecar api requests`, and manage signed-in browsers with `sidecar api devices`. `sidecar api open` pairs this machine's own browser in one step. The wire contract is docs/reference/ui-api.md.
 
 ```
 Usage: sidecar api <command>
+```
+
+### `sidecar api approve`
+
+Let in the browser that shows CODE
+
+Approve the waiting browser whose code is CODE. Type the code exactly as the new browser shows it, such as K7Q-4MX; case, hyphens and spaces do not matter, and O reads as 0 and I or L as 1. Approval registers that browser's own key for its origin, recorded as approved via cli; it hands out no token or link, and the browser signs itself in within a few seconds. Five wrong codes in a minute lock approval for the rest of that minute. When more than one browser was waiting it says so after approving, so you can check the code was the one on your screen. Refusals: access_code_invalid (no waiting browser shows that code), access_request_expired (that browser's request expired or was replaced and it now shows a new code; not counted as a wrong code), too_many_attempts, invalid_request (not a six-character code).
+
+```
+Usage: sidecar api approve CODE [--json]
+```
+
+**Options:**
+
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: success
+- `1`: no server running, or it could not be reached
+- `2`: usage error
+- `4`: the server refused; stderr (and with --json, stdout) names the code
+
+**Examples:**
+
+```bash
+sidecar api approve K7Q-4MX
+sidecar api approve k7q4mx --json
+```
+
+### `sidecar api deny`
+
+Refuse one waiting browser
+
+Refuse the waiting browser with REQUEST_ID, from `sidecar api requests`. The browser is told it was denied and may ask again. Refusal: access_request_not_found (no such request is waiting).
+
+```
+Usage: sidecar api deny REQUEST_ID [--json]
+```
+
+**Options:**
+
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: success
+- `1`: no server running, or it could not be reached
+- `2`: usage error
+- `4`: the server refused; stderr (and with --json, stdout) names the code
+
+**Examples:**
+
+```bash
+sidecar api deny Xk3vQ0pL9aBcDeFg
+```
+
+### `sidecar api devices`
+
+List browsers that can sign in, or revoke one
+
+List the browsers registered with the running UI API, most recently used first: device id, the name the browser claimed when it asked, its origin, how it was approved (link for `sidecar api open`, cli, tui, browser:<device> or tailnet:<login>) and when, and when it was last used. Registrations expire 30 days after last use and at most 180 days after creation. `sidecar api devices revoke ID` signs one out.
+
+```
+Usage: sidecar api devices [--json] | sidecar api devices revoke ID [--json]
+```
+
+**Options:**
+
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: success
+- `1`: no server running, or it could not be reached
+- `2`: usage error
+- `4`: the server refused; stderr (and with --json, stdout) names the code
+
+**Examples:**
+
+```bash
+sidecar api devices
+sidecar api devices --json
+sidecar api devices revoke 3f9a1c2b7d4e
+```
+
+#### `sidecar api devices revoke`
+
+Sign out one browser
+
+Sign out one browser registration: its tokens stop working, its open terminals and event streams close with 4401, and it must be approved again. ID is the device id from `sidecar api devices`, or a unique prefix of at least 6 characters. Other browsers are unaffected; `sidecar api pair --revoke-sessions` signs out all of them. Refusals: device_not_found, invalid_request (a prefix that is too short or matches more than one device).
+
+```
+Usage: sidecar api devices revoke ID [--json]
+```
+
+**Options:**
+
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: success
+- `1`: no server running, or it could not be reached
+- `2`: usage error
+- `4`: the server refused; stderr (and with --json, stdout) names the code
+
+**Examples:**
+
+```bash
+sidecar api devices revoke 3f9a1c2b7d4e
 ```
 
 ### `sidecar api events`
@@ -941,7 +1056,7 @@ sidecar api events --stdio --sort activity --show-idle-sessions false
 
 Pair this machine's browser and open the UI
 
-Ask the running server for a single-use pairing link (valid for 60 seconds) and open it in the default browser. The code rides in the link's fragment, so it never appears in a request line; the pairing page registers a non-extractable WebCrypto key in that origin's IndexedDB and goes to --path. Only the public key persists on the server, with a 30-day sliding expiry and a 180-day absolute cap. The browser signs a fresh nonce after each restart to obtain a 15-minute memory-only bearer; legacy localStorage tokens are cleared. Pairing again leaves other tabs valid. --print writes the link instead of opening it. --proxy uses the running server's configured api.browserProxyOrigin so you can pair a remote browser through the HTTPS proxy.
+Pair this machine's own browser in one step: ask the running server for a single-use pairing link (valid for 60 seconds) and open it in the default browser. Any other browser, or this one without the link, asks for access from Sidecar's UI and is let in with `sidecar api approve CODE`; the link is the host's convenience and a recovery path. The code rides in the link's fragment, so it never appears in a request line; the pairing page registers a non-extractable WebCrypto key in that origin's IndexedDB and goes to --path. Only the public key persists on the server, with a 30-day sliding expiry and a 180-day absolute cap. The browser signs a fresh nonce after each restart to obtain a 15-minute memory-only bearer; legacy localStorage tokens are cleared. Pairing again leaves other tabs valid. --print writes the link instead of opening it. --proxy uses the running server's configured api.browserProxyOrigin so you can pair a remote browser through the HTTPS proxy.
 
 ```
 Usage: sidecar api open [--print] [--proxy] [--path P]
@@ -1002,6 +1117,35 @@ sidecar api pair --list --json
 sidecar api pair --revoke http://localhost:5173
 sidecar api pair --revoke-sessions
 sidecar api pair --revoke-sessions --origin http://127.0.0.1:7861 --json
+```
+
+### `sidecar api requests`
+
+List browsers waiting for approval
+
+List the browsers that asked the running UI API for access and are waiting for someone to approve them, oldest first. A browser with no credential asks from Sidecar's UI page and shows a six-character code; the list deliberately omits that code, because approving means typing the code the browser shows, which stops a nearby device from racing a request in alongside yours. Each row shows the request id (for `sidecar api deny`), the device name the browser claims for itself (a claim, not proof), the address it connected from, its origin and when it expires. Requests last five minutes and do not survive an API restart; the browser asks again on its own. Behind a proxy every request shows the same address, so with more than one waiting the list says so plainly: only the code on your own screen tells them apart.
+
+```
+Usage: sidecar api requests [--json]
+```
+
+**Options:**
+
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: success
+- `1`: no server running, or it could not be reached
+- `2`: usage error
+- `4`: the server refused; stderr (and with --json, stdout) names the code
+
+**Examples:**
+
+```bash
+sidecar api requests
+sidecar api requests --json
 ```
 
 ### `sidecar api serve`
@@ -1127,6 +1271,33 @@ Usage: sidecar api service status [--json]
 sidecar api service status --json
 ```
 
+### `sidecar api spec`
+
+Print the generated OpenAPI 3.1 and stream schemas
+
+Print the complete OpenAPI 3.1 JSON document generated from the HTTP and terminal Go wire types. No server or tmux is needed. Both forms emit JSON; --json is accepted for consistency with other API commands.
+
+```
+Usage: sidecar api spec [--json]
+```
+
+**Options:**
+
+- `--json`: Write the OpenAPI JSON document
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: success
+- `1`: could not generate or write the spec
+- `2`: usage error
+
+**Examples:**
+
+```bash
+sidecar api spec --json
+```
+
 ### `sidecar api status`
 
 Report the running UI API server
@@ -1153,33 +1324,6 @@ Usage: sidecar api status [--json]
 ```bash
 sidecar api status
 sidecar api status --json
-```
-
-### `sidecar api spec`
-
-Print the generated OpenAPI 3.1 and stream schemas
-
-Print the complete OpenAPI 3.1 JSON document generated from the HTTP and terminal Go wire types. No server or tmux is needed. Both forms emit JSON; --json is accepted for consistency with other API commands.
-
-```
-Usage: sidecar api spec [--json]
-```
-
-**Options:**
-
-- `--json`: Write the OpenAPI JSON document
-- `-h, --help`: Show this help
-
-**Exit codes:**
-
-- `0`: success
-- `1`: could not generate or write the spec
-- `2`: usage error
-
-**Examples:**
-
-```bash
-sidecar api spec --json
 ```
 
 ## `sidecar content`
