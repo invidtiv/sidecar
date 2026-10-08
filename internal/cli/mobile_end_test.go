@@ -84,11 +84,16 @@ func TestMobileTerminalEndRequiresSameLiveServer(t *testing.T) {
 
 func TestMobileTerminalEndLastShellOnPrivateServer(t *testing.T) {
 	testenv.RequireTmux(t)
-	tmuxRoot, err := os.MkdirTemp("/private/tmp", "sc-end-")
+	// Short, so the socket path fits; resolved, because /tmp is a symlink on
+	// macOS and tmux names its socket by the real path.
+	tmuxRoot, err := os.MkdirTemp("/tmp", "sc-end-")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(tmuxRoot) })
+	if tmuxRoot, err = filepath.EvalSymlinks(tmuxRoot); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("TMUX", "")
 	t.Setenv("TMUX_PANE", "")
 	t.Setenv("TMUX_TMPDIR", tmuxRoot)
