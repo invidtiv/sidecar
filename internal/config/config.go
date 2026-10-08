@@ -56,6 +56,11 @@ type Config struct {
 type APIConfig struct {
 	// UIDir is a separately built UI bundle. --ui overrides it.
 	UIDir string `json:"uiDir,omitempty"`
+	// Tailnet turns on the Tailnet listener for every `sidecar api serve`,
+	// including the always-on service, so the service definition never has
+	// to carry a flag that a reinstall could drop. --tailnet does the same
+	// for one run; `sidecar api service install --tailnet` saves it.
+	Tailnet bool `json:"tailnet,omitempty"`
 	// TailnetLogins are the Tailscale logins trusted on the Tailnet listener.
 	// Empty means the login that owns the local Tailscale node.
 	TailnetLogins []string `json:"tailnetLogins,omitempty"`

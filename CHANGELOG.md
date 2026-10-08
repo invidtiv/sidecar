@@ -2,6 +2,12 @@
 
 All notable changes to sidecar are documented here.
 
+## [Unreleased]
+
+### Bug Fixes
+
+- **Reinstalling the API service no longer turns Tailscale access off.** Tailnet access is now the config setting `api.tailnet`, which every `sidecar api serve` reads, so the service definition never carries `--tailnet`. `sidecar api service install --tailnet` saves it and `--no-tailnet` clears it; reinstalling over a service that was installed with `--tailnet` saves the setting for you, and service status shows whether the listener is on.
+
 ## [v1.17.0] - 2026-10-08
 
 ### Features

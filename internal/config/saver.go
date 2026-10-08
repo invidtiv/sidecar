@@ -269,6 +269,24 @@ func mergePluginsSection(existing json.RawMessage, managed savePluginsConfig) (j
 // the same writer as Save while preserving all other keys, including API keys
 // newer than this binary.
 func SaveAPIUIDir(dir string) error {
+	if dir == "" {
+		return saveAPIKey("uiDir", nil)
+	}
+	return saveAPIKey("uiDir", dir)
+}
+
+// SaveAPITailnet records whether every `sidecar api serve`, the service
+// included, runs the Tailnet listener. Off removes the key.
+func SaveAPITailnet(on bool) error {
+	if !on {
+		return saveAPIKey("tailnet", nil)
+	}
+	return saveAPIKey("tailnet", true)
+}
+
+// saveAPIKey sets one key of the api section, or removes it when value is
+// nil, preserving every other key in the file as written.
+func saveAPIKey(key string, value any) error {
 	if _, err := Load(); err != nil {
 		return err
 	}
@@ -293,10 +311,10 @@ func SaveAPIUIDir(dir string) error {
 	if api == nil {
 		api = make(map[string]json.RawMessage)
 	}
-	if dir == "" {
-		delete(api, "uiDir")
+	if value == nil {
+		delete(api, key)
 	} else {
-		api["uiDir"], _ = json.Marshal(dir)
+		api[key], _ = json.Marshal(value)
 	}
 	encoded, err := json.Marshal(api)
 	if err != nil {

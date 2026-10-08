@@ -232,6 +232,9 @@ func runAPIServe(env Env, args []string) int {
 		cliErrf(env.Stderr, "load API config: %v; fix %s and retry\n", err, config.ConfigPath())
 		return 1
 	}
+	// api.tailnet keeps the listener on for every run, the service included,
+	// so it survives a reinstall of the service definition.
+	withTailnet = withTailnet || cfg.API.Tailnet
 	var tailnet *uiapi.TailnetOptions
 	if withTailnet {
 		mode, modeErr := resolveTailnetMode(explicitMode, cfg.API.TailnetMode, tailnetPort)

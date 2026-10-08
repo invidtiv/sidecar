@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/marcus/sidecar/internal/apiservice"
@@ -43,7 +44,7 @@ func apiExecutablePath() (string, error) {
 
 func apiServiceCommand() *Command {
 	command := &Command{Name: "service", Summary: "Manage the per-user UI API service", Usage: "sidecar api service <install|uninstall|status> [--json]",
-		Long: "Use launchd on macOS or a systemd user service/socket pair on Linux. install starts the API at login, uninstall stops only the API service and removes its definition. The manager holds the browser port across binary upgrades. No command changes tmux. install --ui DIR saves an absolute UI directory containing index.html as api.uiDir; --ui \"\" clears it. Omit --ui to keep the configured directory. The server reads api.uiDir on every start. On Linux use this command; Homebrew cannot generate socket units. On macOS use either this command or brew services to manage the service, not both.", Run: runAPIService}
+		Long: "Use launchd on macOS or a systemd user service/socket pair on Linux. install starts the API at login, uninstall stops only the API service and removes its definition. The manager holds the browser port across binary upgrades. No command changes tmux. install --ui DIR saves an absolute UI directory containing index.html as api.uiDir; --ui \"\" clears it. Omit --ui to keep the configured directory. install --tailnet saves api.tailnet, which turns on the Tailnet listener for every start of the service; --no-tailnet turns it off. Omit both to keep the setting. The server reads api.uiDir and api.tailnet on every start, so reinstalling the service never changes either. On Linux use this command; Homebrew cannot generate socket units. On macOS use either this command or brew services to manage the service, not both.", Run: runAPIService}
 	for _, name := range []string{"install", "uninstall", "status"} {
 		summary := map[string]string{"install": "Install and start the API service", "uninstall": "Stop and remove the API service", "status": "Inspect the API service manager"}[name]
 		command.Sub = append(command.Sub, &Command{Name: name, Summary: summary, Usage: "sidecar api service " + name + " [--json]",
@@ -53,9 +54,12 @@ func apiServiceCommand() *Command {
 			Agent:     AgentDoc{Invocation: "sidecar api service " + name + " --json", Summary: summary}, Mutates: name != "status"})
 		if name == "install" {
 			sub := command.Sub[len(command.Sub)-1]
-			sub.Usage = "sidecar api service install [--ui DIR] [--json]"
+			sub.Usage = "sidecar api service install [--ui DIR] [--tailnet | --no-tailnet] [--json]"
 			sub.Long = command.Long
-			sub.Flags = append(sub.Flags, Flag{Name: "--ui", Arg: "DIR", Summary: "Save the built UI directory (must contain index.html); an empty value clears it"})
+			sub.Flags = append(sub.Flags, Flag{Name: "--ui", Arg: "DIR", Summary: "Save the built UI directory (must contain index.html); an empty value clears it"},
+				Flag{Name: "--tailnet", Summary: "Save api.tailnet: the service runs the Tailnet listener on every start", Bool: true},
+				Flag{Name: "--no-tailnet", Summary: "Turn api.tailnet off", Bool: true})
+			sub.Examples = append(sub.Examples, Example{Command: "sidecar api service install --tailnet"})
 			sub.Examples = append(sub.Examples, Example{Command: "sidecar api service install --ui ~/.local/share/sidecar/ui/current"})
 		}
 	}
@@ -81,9 +85,17 @@ func runAPIService(env Env, args []string) int {
 	if args[0] == "install" {
 		valueFlags = []string{"--ui"}
 	}
-	flags, err := parseAPIFlags(args[1:], []string{"--json"}, valueFlags)
+	boolFlags := []string{"--json"}
+	if args[0] == "install" {
+		boolFlags = append(boolFlags, "--tailnet", "--no-tailnet")
+	}
+	flags, err := parseAPIFlags(args[1:], boolFlags, valueFlags)
 	if err != nil {
 		cliErrf(env.Stderr, "%v\n\n%s", err, RenderHelp(sub))
+		return 2
+	}
+	if flags.bools["--tailnet"] && flags.bools["--no-tailnet"] {
+		cliErrf(env.Stderr, "--tailnet and --no-tailnet contradict each other; pass one\n\n%s", RenderHelp(sub))
 		return 2
 	}
 	uiDir, setUI := flags.values["--ui"]
@@ -95,6 +107,7 @@ func runAPIService(env Env, args []string) int {
 		}
 	}
 	var configuredUI *string
+	tailnetEnabled := false
 	if args[0] == "install" {
 		cfg, err := config.Load()
 		if err != nil {
@@ -102,6 +115,7 @@ func runAPIService(env Env, args []string) int {
 			return 1
 		}
 		configuredUI = &cfg.API.UIDir
+		tailnetEnabled = cfg.API.Tailnet
 	}
 	manager, err := apiServiceManager(env)
 	if err != nil {
@@ -133,6 +147,22 @@ func runAPIService(env Env, args []string) int {
 				return 1
 			}
 			configuredUI = &uiDir
+		}
+		saveTailnet, tailnetOn := flags.bools["--tailnet"] || flags.bools["--no-tailnet"], flags.bools["--tailnet"]
+		if !saveTailnet && !tailnetEnabled && status.Installed && status.File != "" {
+			// A definition written before api.tailnet existed passed --tailnet
+			// itself. The new one never does, so carry the choice into config
+			// rather than silently turning the Tailnet listener off.
+			if data, err := os.ReadFile(status.File); err == nil && definitionRunsTailnet(data) {
+				saveTailnet, tailnetOn = true, true
+				_, _ = fmt.Fprintf(env.Stdout, "The installed service ran with --tailnet; saved api.tailnet so the new definition keeps the Tailnet listener on.\n")
+			}
+		}
+		if saveTailnet {
+			if err := config.SaveAPITailnet(tailnetOn); err != nil {
+				cliErrf(env.Stderr, "save api.tailnet: %v; check %s and retry\n", err, config.ConfigPath())
+				return 1
+			}
 		}
 		err = manager.Install(ctx)
 	case "uninstall":
@@ -168,6 +198,13 @@ func runAPIService(env Env, args []string) int {
 	}
 	if status.UIConfigError != "" {
 		_, _ = fmt.Fprintln(env.Stdout, status.UIConfigError)
+	}
+	if cfg, err := config.Load(); err == nil {
+		state := "off"
+		if cfg.API.Tailnet {
+			state = "on"
+		}
+		_, _ = fmt.Fprintf(env.Stdout, "Tailnet listener: %s (api.tailnet)\n", state)
 	}
 	if status.LastExit != nil {
 		_, _ = fmt.Fprintf(env.Stdout, "Last exit: code=%d signal=%s\n", status.LastExit.Code, status.LastExit.Signal)
@@ -216,4 +253,18 @@ func apiServiceVersion(ctx context.Context, env Env, status *apiservice.Status) 
 	if err == nil && observed.PID == status.PID {
 		status.Version = observed.ServerVersion
 	}
+}
+
+// definitionRunsTailnet reports whether an installed launchd plist or systemd
+// unit starts the server with a Tailnet flag (--tailnet, --tailnet-mode or
+// --tailnet-port), as definitions written before api.tailnet did.
+func definitionRunsTailnet(data []byte) bool {
+	for _, field := range strings.FieldsFunc(string(data), func(r rune) bool {
+		return r == '<' || r == '>' || r == ' ' || r == '\t' || r == '\n' || r == '\r' || r == '"' || r == '='
+	}) {
+		if field == "--tailnet" || field == "--tailnet-mode" || field == "--tailnet-port" {
+			return true
+		}
+	}
+	return false
 }

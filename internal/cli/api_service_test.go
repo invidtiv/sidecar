@@ -301,3 +301,60 @@ func TestAPIServiceIgnoresUnlockedStaleDiscovery(t *testing.T) {
 		t.Fatalf("stale endpoint refused: %d %s", code, stderr)
 	}
 }
+
+// api.tailnet lives in config, so reinstalling the service, whose definition
+// no longer carries --tailnet, keeps the Tailnet listener on.
+func TestAPIServiceInstallSavesTailnet(t *testing.T) {
+	apiStateTree(t, t.TempDir())
+	fakeAPIService(t)
+	if code, out, stderr := runAPICLI(t, "api", "service", "install", "--tailnet"); code != 0 || !strings.Contains(out, "Tailnet listener: on (api.tailnet)") {
+		t.Fatalf("install --tailnet: %d %s %s", code, out, stderr)
+	}
+	if cfg, err := config.Load(); err != nil || !cfg.API.Tailnet {
+		t.Fatalf("api.tailnet not saved: %+v %v", cfg.API, err)
+	}
+	if code, out, stderr := runAPICLI(t, "api", "service", "install"); code != 0 || !strings.Contains(out, "Tailnet listener: on") {
+		t.Fatalf("plain reinstall must keep api.tailnet: %d %s %s", code, out, stderr)
+	}
+	if code, out, stderr := runAPICLI(t, "api", "service", "install", "--no-tailnet"); code != 0 || !strings.Contains(out, "Tailnet listener: off") {
+		t.Fatalf("install --no-tailnet: %d %s %s", code, out, stderr)
+	}
+	if cfg, err := config.Load(); err != nil || cfg.API.Tailnet {
+		t.Fatalf("api.tailnet not cleared: %+v %v", cfg.API, err)
+	}
+	if code, _, _ := runAPICLI(t, "api", "service", "install", "--tailnet", "--no-tailnet"); code != 2 {
+		t.Fatalf("contradictory flags exit = %d, want 2", code)
+	}
+}
+
+// A definition installed before api.tailnet existed passed --tailnet itself;
+// reinstalling carries that into config instead of dropping it.
+func TestAPIServiceReinstallCarriesInstalledTailnetFlag(t *testing.T) {
+	apiStateTree(t, t.TempDir())
+	fake := fakeAPIService(t)
+	plist := filepath.Join(t.TempDir(), "com.haplab.sidecar.api.plist")
+	if err := os.WriteFile(plist, []byte("<array><string>/bin/sidecar</string><string>api</string><string>serve</string><string>--tailnet</string></array>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fake.status.Installed, fake.status.File = true, plist
+	if code, out, stderr := runAPICLI(t, "api", "service", "install"); code != 0 || !strings.Contains(out, "ran with --tailnet") || !strings.Contains(out, "Tailnet listener: on") {
+		t.Fatalf("reinstall: %d %s %s", code, out, stderr)
+	}
+	if cfg, err := config.Load(); err != nil || !cfg.API.Tailnet {
+		t.Fatalf("installed --tailnet not carried into api.tailnet: %+v %v", cfg.API, err)
+	}
+}
+
+func TestDefinitionRunsTailnet(t *testing.T) {
+	for text, want := range map[string]bool{
+		"<string>serve</string><string>--tailnet</string>":           true,
+		"ExecStart=/bin/sidecar api serve --tailnet-mode serve":      true,
+		"ExecStart=/bin/sidecar api serve --tailnet-port=7862":       true,
+		"<string>serve</string>":                                     false,
+		"<key>tailnet</key><string>/state/api/tailnet.sock</string>": false,
+	} {
+		if got := definitionRunsTailnet([]byte(text)); got != want {
+			t.Errorf("definitionRunsTailnet(%q) = %v, want %v", text, got, want)
+		}
+	}
+}
