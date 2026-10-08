@@ -97,7 +97,7 @@ func TestAPIAccessVerbsAgainstARunningServer(t *testing.T) {
 		t.Fatalf("requests leaks a code: %s", stdout)
 	}
 	code, stdout, _ = runAPICLI(t, "api", "requests")
-	if code != 0 || !strings.Contains(stdout, `"Safari on macOS"`) || !strings.Contains(stdout, "(unnamed browser)") || !strings.Contains(stdout, first.RequestID) || !strings.Contains(stdout, "sidecar api approve CODE") {
+	if code != 0 || !strings.Contains(stdout, `"Safari on macOS"`) || !strings.Contains(stdout, "(unnamed browser)") || !strings.Contains(stdout, first.RequestID) || !strings.Contains(stdout, "sidecar api approve CODE") || !strings.Contains(stdout, "2 browsers are waiting; make sure the code is the one on your screen") {
 		t.Fatalf("requests: %d %q", code, stdout)
 	}
 
@@ -117,7 +117,7 @@ func TestAPIAccessVerbsAgainstARunningServer(t *testing.T) {
 
 	code, stdout, stderr = runAPICLI(t, "api", "approve", strings.ToLower(first.Code), "--json")
 	var approval uiapi.AccessApproval
-	if code != 0 || json.Unmarshal([]byte(stdout), &approval) != nil || approval.RequestID != first.RequestID || approval.ApprovedVia != "cli" || approval.Label != "Safari on macOS" {
+	if code != 0 || json.Unmarshal([]byte(stdout), &approval) != nil || approval.RequestID != first.RequestID || approval.ApprovedVia != "cli" || approval.Label != "Safari on macOS" || !strings.Contains(stderr, "2 browsers were waiting") {
 		t.Fatalf("approve --json: %d %q %q", code, stdout, stderr)
 	}
 	if code, stdout, _ = runAPICLI(t, "api", "deny", second.RequestID); code != 0 || !strings.Contains(stdout, "Denied request "+second.RequestID) {

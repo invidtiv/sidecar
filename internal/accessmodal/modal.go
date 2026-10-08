@@ -231,7 +231,13 @@ func (h *Host) renderRequests(contentWidth int, _, _ string) modal.RenderedSecti
 	case len(h.requests) == 0:
 		return modal.RenderedSection{Content: styles.Muted.Render("No browsers are waiting right now. A code from an expired request will not work.")}
 	}
-	lines := []string{styles.Muted.Render(fmt.Sprintf("Waiting (%d):", len(h.requests)))}
+	lines := []string{}
+	if warning := uiapi.MultipleWaiting(len(h.requests)); warning != "" {
+		// Behind a proxy every request shows the same address, so the list
+		// cannot tell them apart; only the code can.
+		lines = append(lines, lipgloss.NewStyle().Foreground(styles.Warning).Width(contentWidth).Render(warning), "")
+	}
+	lines = append(lines, styles.Muted.Render(fmt.Sprintf("Waiting (%d):", len(h.requests))))
 	now := h.now()
 	for i, r := range h.requests {
 		if i == maxListedRow {

@@ -68,6 +68,25 @@ func TestModalListsRequestsWithoutApprovingOnSelection(t *testing.T) {
 	h.ApplyLoaded(LoadedMsg{Host: New(t.TempDir(), client)})
 }
 
+// With more than one browser waiting, the modal says plainly that only the
+// code tells them apart.
+func TestModalWarnsWhenSeveralBrowsersWait(t *testing.T) {
+	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	same := uiapi.AccessRequestInfo{Origin: "https://aerie.example.ts.net:7861", Address: "127.0.0.1", CreatedAt: now, ExpiresAt: now.Add(time.Minute)}
+	one, two := same, same
+	one.RequestID, two.RequestID = "r1", "r2"
+	h := New(t.TempDir(), &fakeClient{requests: []uiapi.AccessRequestInfo{one}})
+	h.ApplyLoaded(h.Load()().(LoadedMsg))
+	if strings.Contains(h.Render(120, 40), "browsers are waiting") {
+		t.Fatal("warned with one browser waiting")
+	}
+	h = New(t.TempDir(), &fakeClient{requests: []uiapi.AccessRequestInfo{one, two}})
+	h.ApplyLoaded(h.Load()().(LoadedMsg))
+	if view := h.Render(120, 40); !strings.Contains(view, "2 browsers are waiting; make sure the code is the one on your") {
+		t.Fatalf("no warning for two identical-looking requests:\n%s", view)
+	}
+}
+
 func TestModalApprovesTheTypedCodeAsTheTUI(t *testing.T) {
 	client := &fakeClient{}
 	h := New(t.TempDir(), client)

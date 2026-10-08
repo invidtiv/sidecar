@@ -28,7 +28,7 @@ func apiAccessCommands() []*Command {
 	jsonFlag := Flag{Name: "--json", Summary: "Write one structured result object to stdout", Bool: true}
 	requests := &Command{
 		Name: "requests", Summary: "List browsers waiting for approval", Usage: "sidecar api requests [--json]",
-		Long:      "List the browsers that asked the running UI API for access and are waiting for someone to approve them, oldest first. A browser with no credential asks from Sidecar's UI page and shows a six-character code; the list deliberately omits that code, because approving means typing the code the browser shows, which stops a nearby device from racing a request in alongside yours. Each row shows the request id (for `sidecar api deny`), the device name the browser claims for itself (a claim, not proof), the address it connected from, its origin and when it expires. Requests last five minutes and do not survive an API restart; the browser asks again on its own.",
+		Long:      "List the browsers that asked the running UI API for access and are waiting for someone to approve them, oldest first. A browser with no credential asks from Sidecar's UI page and shows a six-character code; the list deliberately omits that code, because approving means typing the code the browser shows, which stops a nearby device from racing a request in alongside yours. Each row shows the request id (for `sidecar api deny`), the device name the browser claims for itself (a claim, not proof), the address it connected from, its origin and when it expires. Requests last five minutes and do not survive an API restart; the browser asks again on its own. Behind a proxy every request shows the same address, so with more than one waiting the list says so plainly: only the code on your own screen tells them apart.",
 		Flags:     []Flag{jsonFlag, help},
 		ExitCodes: apiAccessExitCodes,
 		Examples:  []Example{{Command: "sidecar api requests"}, {Command: "sidecar api requests --json"}},
@@ -37,7 +37,7 @@ func apiAccessCommands() []*Command {
 	}
 	approve := &Command{
 		Name: "approve", Summary: "Let in the browser that shows CODE", Usage: "sidecar api approve CODE [--json]",
-		Long:      "Approve the waiting browser whose code is CODE. Type the code exactly as the new browser shows it, such as K7Q-4MX; case, hyphens and spaces do not matter, and O reads as 0 and I or L as 1. Approval registers that browser's own key for its origin, recorded as approved via cli; it hands out no token or link, and the browser signs itself in within a few seconds. Five wrong codes in a minute lock approval for the rest of that minute. Refusals: access_code_invalid (no waiting browser shows that code; it may have expired and shown a new one), too_many_attempts, invalid_request (not a six-character code).",
+		Long:      "Approve the waiting browser whose code is CODE. Type the code exactly as the new browser shows it, such as K7Q-4MX; case, hyphens and spaces do not matter, and O reads as 0 and I or L as 1. Approval registers that browser's own key for its origin, recorded as approved via cli; it hands out no token or link, and the browser signs itself in within a few seconds. Five wrong codes in a minute lock approval for the rest of that minute. When more than one browser was waiting it says so after approving, so you can check the code was the one on your screen. Refusals: access_code_invalid (no waiting browser shows that code; it may have expired and shown a new one), too_many_attempts, invalid_request (not a six-character code).",
 		Args:      ArgSpec{Min: 1, Max: 1, Description: "CODE: the code the new browser shows"},
 		Flags:     []Flag{jsonFlag, help},
 		ExitCodes: apiAccessExitCodes,
@@ -158,6 +158,9 @@ func printAccessRequests(out io.Writer, requests []uiapi.AccessRequestInfo, now 
 		_, _ = fmt.Fprintln(out, "No browsers are waiting for approval.")
 		return
 	}
+	if warning := uiapi.MultipleWaiting(len(requests)); warning != "" {
+		_, _ = fmt.Fprintln(out, warning)
+	}
 	_, _ = fmt.Fprintf(out, "%d browser(s) waiting for approval:\n", len(requests))
 	for _, r := range requests {
 		_, _ = fmt.Fprintf(out, "  %s  %s  from %s via %s, asked %s ago, expires in %s\n", r.RequestID, deviceName(r.Label), r.Address, r.Origin,
@@ -196,14 +199,30 @@ func runAPIApprove(env Env, args []string) int {
 	}
 	ctx, cancel := apiContext(env)
 	defer cancel()
+	// Count who was waiting first: with more than one, the person should
+	// know the code they typed is all that told them apart.
+	waiting := 0
+	if list, err := client.ListAccessRequests(ctx); err == nil {
+		waiting = len(list.Requests)
+	}
 	approval, err := client.ApproveAccess(ctx, rest[0], "cli")
 	if err != nil {
 		return apiAccessFailure(env, err, flags.bools["--json"])
 	}
+	warning := ""
+	if waiting > 1 {
+		warning = fmt.Sprintf("%d browsers were waiting; make sure the code you typed is the one on your screen.", waiting)
+	}
 	if flags.bools["--json"] {
+		if warning != "" {
+			_, _ = fmt.Fprintln(env.Stderr, warning)
+		}
 		return writeCLIJSON(env, approval)
 	}
 	_, _ = fmt.Fprintf(env.Stdout, "Approved %s from %s via %s. It signs itself in within a few seconds.\n", deviceName(approval.Label), approval.Address, approval.Origin)
+	if warning != "" {
+		_, _ = fmt.Fprintln(env.Stdout, warning)
+	}
 	return 0
 }
 
