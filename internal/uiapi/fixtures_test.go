@@ -20,6 +20,7 @@ import (
 	"github.com/marcus/sidecar/internal/agentcontrol"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/contentservice"
+	"github.com/marcus/sidecar/internal/filefind"
 	"github.com/marcus/sidecar/internal/mobile"
 	"github.com/marcus/sidecar/internal/mobileproto"
 	notification "github.com/marcus/sidecar/internal/notify"
@@ -60,6 +61,7 @@ func TestUIAPIFixtureCorpus(t *testing.T) {
 			ExpectedTarget: mobile.FixtureWorkspaceIdentity(identity.HubID, identity.OwnerHostID, identity.OwnerConfigGeneration, feature.WorkspaceID, "worktree", "fixture-feature", pane),
 		})
 	}
+	readScore, _ := filefind.FuzzyMatch("read", "README.md")
 	values := map[string]any{
 		"notifications-exchange.json": []any{NotificationSnapshot{Notifications: []notification.Notification{{ID: "ntf-fixture", Source: notification.SourceAgent, Title: "Build finished", CreatedAt: now, ExpiresAt: timePointer(now.Add(12 * time.Second)), Targets: []notification.Target{{Kind: notification.TargetFile, Value: "README.md", Line: 40, Project: "fixture-project"}}}}, Unread: 1, ToastIDs: []string{"ntf-fixture"}, DeliveryIDs: []string{}, Delivery: map[string]notification.DeliveryDecision{}}, NotificationReceiptRequest{ID: "ntf-fixture", Channel: "toast"}, NotificationClaimResponse{Claimed: true}, NotificationReceiptResponse{Delivered: true}},
 		"viewer-exchange.json": []any{
@@ -81,7 +83,7 @@ func TestUIAPIFixtureCorpus(t *testing.T) {
 		},
 		"hello.json":         Hello{APIVersion: 0, APIInstance: "api_fixture", ServerVersion: "fixture", Capabilities: []string{"sessions", "status", "terminal", "terminal_ended", "ws_tickets", "events", "projects", "workspace", "workspace_operations", "content", "layouts", "uiRequestRelayV1", "notifications", "file_search", "notifications_batch"}, Terminal: TerminalProtocol{Protocol: "mobile", Version: 0}},
 		"sessions.json":      catalog,
-		"file-search.json":   contentservice.FileSearchResult{Root: "/workspace/fixture", Query: "read", Results: []contentservice.FileSearchMatch{{Path: "README.md", Positions: []int{0, 1, 2, 3}, Score: 134}}},
+		"file-search.json":   contentservice.FileSearchResult{Root: "/workspace/fixture", Query: "read", Results: []contentservice.FileSearchMatch{{Path: "README.md", Positions: []int{0, 1, 2, 3}, Score: readScore}}},
 		"content-file.json":  contentservice.ReadResult{Kind: "file", Operation: "document", Workspace: "fixture-project", Display: "README.md", Path: "/workspace/fixture/README.md", Revision: "fixture-file-v1", Content: "# Fixture project\n\nA Markdown pane.\n"},
 		"content-issue.json": contentservice.ReadResult{Kind: "issue", Operation: "card", Workspace: "fixture-project", Target: "td-123456", Revision: "fixture-issue-v1", Issue: &contentservice.IssueDTO{ID: "td-123456", Title: "Fixture issue", Status: "open"}},
 		"content-note.json":  contentservice.ReadResult{Kind: "note", Operation: "note", Workspace: "fixture-project", Target: "nt-123456", Revision: "fixture-note-v1", Note: &contentservice.NoteDTO{ID: "nt-123456", Title: "Fixture note", Content: "A note pane."}},

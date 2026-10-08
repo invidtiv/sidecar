@@ -109,6 +109,52 @@ func TestFileSearchScopesAndUnicodePositions(t *testing.T) {
 	}
 }
 
+func TestFileSearchBestAlignmentPositions(t *testing.T) {
+	h, root := contentHarness(t)
+	for _, path := range []string{"docs/design/desktop-shell.md", "文档/desktop-shell.md", "文档/café-menu.md"} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(root, path)), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, path), []byte("x"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		query, path string
+		positions   []int
+	}{
+		{"dsk", "docs/design/desktop-shell.md", []int{12, 14, 15}},
+		{"dk", "docs/design/desktop-shell.md", []int{12, 15}},
+		{"dsk", "文档/desktop-shell.md", []int{3, 5, 6}},
+		{"dk", "文档/desktop-shell.md", []int{3, 6}},
+		{"CAFÉ", "文档/café-menu.md", []int{3, 4, 5, 6}},
+	} {
+		t.Run(tc.path+"/"+tc.query, func(t *testing.T) {
+			response, data := h.localDo(req{method: "GET", path: "/api/v0/projects/content/files/search?q=" + url.QueryEscape(tc.query)})
+			expect(t, response, data, 200, "")
+			var got contentservice.FileSearchResult
+			if err := json.Unmarshal(data, &got); err != nil {
+				t.Fatal(err)
+			}
+			for _, result := range got.Results {
+				if result.Path != tc.path {
+					continue
+				}
+				if !reflect.DeepEqual(result.Positions, tc.positions) {
+					t.Fatalf("API positions = %v, want %v", result.Positions, tc.positions)
+				}
+				finder := filefind.NewFinder(&filefind.Cache{Files: []string{tc.path}, OK: true}, root, 1)
+				finder.SetQuery(tc.query)
+				if result.Score != finder.Matches()[0].Score {
+					t.Fatal("API and TUI scores differ")
+				}
+				return
+			}
+			t.Fatalf("%q missing from %s", tc.path, data)
+		})
+	}
+}
+
 func TestFileSearchSelectedWorkspace(t *testing.T) {
 	h, root := contentHarness(t)
 	git := func(args ...string) {

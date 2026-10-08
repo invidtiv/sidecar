@@ -22,33 +22,19 @@ type Match struct {
 	MatchRanges []MatchRange // Ranges for highlighting matched chars
 }
 
-// The scorer. A query is one or more whitespace-separated terms, and a path
-// matches when every term matches it somewhere. Each term is aligned to the
-// path by dynamic programming — the best-scoring alignment the pass finds
-// wins, not the leftmost one — so "cases" against "recall/packs/firstuse/cases.jsonl"
-// lights up the word "cases" rather than a c, an a and an s scattered across
-// three directories. The greedy matcher this replaced did exactly that, and
-// its score for the scattered alignment was what the row was ranked by.
+// Every whitespace-separated term must match. Dynamic programming chooses the
+// exact highest-scoring subsequence for each term, and traceback supplies its
+// highlight ranges. Scores are additive: each character earns a match bonus,
+// a basename bonus and a positional bonus; adjacent matches also earn a
+// consecutive bonus. Gaps cost a start penalty plus an extension per extra
+// skipped character. A term's first positional bonus is doubled, so starting
+// at the basename or a word boundary matters more than starting mid-word.
 //
-// Scoring is in the style of fzf's v2 algorithm: every matched character is
-// worth scoreMatch, a gap between matched characters costs a start penalty plus
-// a per-character extension, and a character earns a bonus for where it sits.
-// The bonuses are ordered so that the start of a path segment beats the start
-// of a word inside one, which beats a camelCase hump, which beats merely
-// continuing a run. A run that starts on a boundary keeps that boundary's bonus
-// for its whole length, which is what makes a contiguous word at the head of a
-// filename decisively better than the same letters found one at a time. (Each
-// cell keeps one predecessor, so the carried bonus can in principle lose to a
-// predecessor that scored a point or two higher without it; like fzf's, the
-// pass is a very good approximation of the optimum rather than a proof of it,
-// and no realistic path has been found where the two differ.)
-//
-// Two things fzf does not do, because it ranks arbitrary lines and this ranks
-// paths: a character matched inside the basename is worth more than one
-// matched in a directory, and a deeper path pays a small per-segment penalty,
-// so "src/test.go" outranks "test/something.go" for "test" and "test.go"
-// outranks "a/b/c/test.go". Both are tie-breakers in size: a clearly better
-// alignment still wins from any depth.
+// The consecutive bonus depends only on adjacency, not on a bonus carried
+// from the beginning of a run. That makes the best alignment ending at each
+// position sufficient DP state: a discarded lower-scoring prefix cannot
+// become a better continuation. A running maximum for gapped predecessors
+// keeps each term O(query runes * path runes), rather than trying all pairs.
 const (
 	scoreMatch     = 16
 	scoreGapStart  = -3
@@ -61,13 +47,13 @@ const (
 	// bonusCamel is for an upper-case letter after a lower-case one, or a digit
 	// after a letter.
 	bonusCamel = 7
-	// bonusConsecutive is the floor for a character that continues a run.
-	bonusConsecutive = 4
+	// bonusConsecutive is added for each adjacent pair of matched characters.
+	bonusConsecutive = 10
 	// bonusFirstCharMultiplier doubles the positional bonus of a term's first
 	// character: where a term starts matters more than where it continues.
 	bonusFirstCharMultiplier = 2
 	// bonusBasename is added to every character matched inside the basename.
-	bonusBasename = 5
+	bonusBasename = 12
 	// penaltyDepth is charged per path segment above the first, capped at
 	// penaltyDepthMax so a deep tree is not unsearchable.
 	penaltyDepth    = 1
@@ -119,9 +105,8 @@ type matcher struct {
 	base   int    // rune index where the basename starts
 
 	// DP tables, sized n*m for the current term and target.
-	score    []int32
-	from     []int32
-	runBonus []int16
+	score []int32
+	from  []int32
 	// positions is the alignment read back from the tables, in rune indices.
 	positions []int
 }
@@ -150,7 +135,13 @@ func (m *matcher) prepareTarget(target string) {
 	i := 0
 	for off, r := range target {
 		m.tOff = append(m.tOff, off)
-		m.tLower = append(m.tLower, unicode.ToLower(r))
+		lower := r
+		if r >= 'A' && r <= 'Z' {
+			lower += 'a' - 'A'
+		} else if r >= 0x80 {
+			lower = unicode.ToLower(r)
+		}
+		m.tLower = append(m.tLower, lower)
 		m.bonus = append(m.bonus, positionBonus(prev, r))
 		if r == '/' {
 			m.base = i + 1
@@ -210,7 +201,7 @@ func (m *matcher) run(target string, withRanges bool) (int, []MatchRange) {
 	total := 0
 	var ranges []MatchRange
 	for _, term := range m.terms {
-		score, ok := m.alignTerm(term)
+		score, ok := m.alignTerm(term, withRanges)
 		if !ok {
 			return 0, nil
 		}
@@ -238,9 +229,9 @@ func (m *matcher) run(target string, withRanges bool) (int, []MatchRange) {
 }
 
 // alignTerm finds the best-scoring alignment of term against the prepared
-// target, leaving the matched positions in m.positions. It reports false when
-// the term is not a subsequence of the target.
-func (m *matcher) alignTerm(term []rune) (int, bool) {
+// target, leaving matched positions in m.positions when withRanges is true.
+// It reports false when the term is not a subsequence of the target.
+func (m *matcher) alignTerm(term []rune, withRanges bool) (int, bool) {
 	n, w := len(term), len(m.tLower)
 	if n == 0 || n > w {
 		return 0, false
@@ -269,13 +260,15 @@ func (m *matcher) alignTerm(term []rune) (int, bool) {
 	cols := w - first
 	size := n * cols
 	m.score = growInt32(m.score, size)
-	m.from = growInt32(m.from, size)
-	m.runBonus = growInt16(m.runBonus, size)
+	if withRanges {
+		m.from = growInt32(m.from, size)
+	}
 
 	for i := 0; i < n; i++ {
 		row := i * cols
 		prevRow := row - cols
 		q := term[i]
+		qSeparator := isSeparatorClass(q)
 
 		// best is the highest score reachable for term[:i] ending with a gap
 		// before the current column, with the gap's cost already charged;
@@ -285,8 +278,9 @@ func (m *matcher) alignTerm(term []rune) (int, bool) {
 		for j := 0; j < cols; j++ {
 			cell := row + j
 			m.score[cell] = unreachable
-			m.from[cell] = -1
-			m.runBonus[cell] = 0
+			if withRanges {
+				m.from[cell] = -1
+			}
 
 			if i > 0 {
 				// Every open gap grows by one character. The column two
@@ -302,7 +296,7 @@ func (m *matcher) alignTerm(term []rune) (int, bool) {
 			}
 
 			t := m.tLower[first+j]
-			if !runesEqual(q, t) {
+			if q != t && (!qSeparator || !isSeparatorClass(t)) {
 				continue
 			}
 
@@ -315,33 +309,26 @@ func (m *matcher) alignTerm(term []rune) (int, bool) {
 
 			if i == 0 {
 				m.score[cell] = int32(scoreMatch + positional*bonusFirstCharMultiplier + inBase)
-				m.runBonus[cell] = int16(positional)
 				continue
 			}
 
 			// Start a run here, after a gap.
 			if best != unreachable {
 				m.score[cell] = best + int32(scoreMatch+positional+inBase)
-				m.from[cell] = bestK
-				m.runBonus[cell] = int16(positional)
+				if withRanges {
+					m.from[cell] = bestK
+				}
 			}
 
-			// Or continue the run from the previous column. A run that began
-			// on a boundary keeps the boundary's bonus for its whole length;
-			// any run is worth at least bonusConsecutive per character.
+			// Or continue directly from the previous position. The positional
+			// and basename bonuses apply equally to both predecessor choices.
 			if j >= 1 {
 				if prev := m.score[prevRow+j-1]; prev != unreachable {
-					carried := int(m.runBonus[prevRow+j-1])
-					b := positional
-					if carried >= bonusWord && b < carried {
-						b = carried
-					} else if b < bonusConsecutive {
-						b = bonusConsecutive
-					}
-					if s := prev + int32(scoreMatch+b+inBase); s > m.score[cell] {
+					if s := prev + int32(scoreMatch+positional+inBase+bonusConsecutive); s > m.score[cell] {
 						m.score[cell] = s
-						m.from[cell] = int32(j - 1)
-						m.runBonus[cell] = int16(b)
+						if withRanges {
+							m.from[cell] = int32(j - 1)
+						}
 					}
 				}
 			}
@@ -349,7 +336,7 @@ func (m *matcher) alignTerm(term []rune) (int, bool) {
 	}
 
 	// The best alignment ends wherever the last row peaks; ties go to the
-	// earliest column, which favours a match that starts sooner.
+	// earliest ending column. Other ties retain the first predecessor found.
 	lastRow := (n - 1) * cols
 	bestEnd, bestScore := -1, int32(unreachable)
 	for j := 0; j < cols; j++ {
@@ -361,6 +348,9 @@ func (m *matcher) alignTerm(term []rune) (int, bool) {
 		return 0, false
 	}
 
+	if !withRanges {
+		return int(bestScore), true
+	}
 	m.positions = m.positions[:0]
 	for i, j := n-1, bestEnd; i >= 0; i-- {
 		m.positions = append(m.positions, first+j)
@@ -376,13 +366,6 @@ func (m *matcher) alignTerm(term []rune) (int, bool) {
 func growInt32(buf []int32, size int) []int32 {
 	if cap(buf) < size {
 		return make([]int32, size)
-	}
-	return buf[:size]
-}
-
-func growInt16(buf []int16, size int) []int16 {
-	if cap(buf) < size {
-		return make([]int16, size)
 	}
 	return buf[:size]
 }

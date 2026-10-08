@@ -2,7 +2,6 @@ package filefind
 
 import (
 	"strings"
-	"unicode"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -396,7 +395,7 @@ func elideMatch(match Match, maxWidth int) (string, []MatchRange) {
 	if maxWidth < 1 {
 		return "", nil
 	}
-	ranges := significantRanges(match.Path, match.MatchRanges)
+	ranges := match.MatchRanges
 	if ansi.StringWidth(match.Path) <= maxWidth {
 		return match.Path, ranges
 	}
@@ -430,7 +429,7 @@ func elideMatches(matches []Match, maxWidth int) []fittedMatch {
 	}
 	texts, spans := ui.ElidePathSet(paths, maxWidth)
 	for i, match := range matches {
-		ranges := significantRanges(match.Path, match.MatchRanges)
+		ranges := match.MatchRanges
 		if texts[i] == match.Path {
 			out[i] = fittedMatch{text: texts[i], ranges: ranges}
 			continue
@@ -456,45 +455,6 @@ func mapRanges(ranges []MatchRange, spans []ui.Span) []MatchRange {
 		return nil
 	}
 	return out
-}
-
-// significantRanges drops the highlights a reader would not recognise as part
-// of the match. Subsequence matching lights up any character in the right
-// order, so a query like "wd" paints the "w" in "website" and the "d" in "docs"
-// as though they were the match. A run of two or more characters reads as
-// intentional, and so does a single character that starts a path segment or a
-// word — which is exactly what the scorer already rewards. Everything else is
-// noise scattered across the row.
-func significantRanges(path string, ranges []MatchRange) []MatchRange {
-	if len(ranges) == 0 {
-		return nil
-	}
-	out := make([]MatchRange, 0, len(ranges))
-	for _, r := range ranges {
-		if r.Start < 0 || r.End > len(path) || r.End <= r.Start {
-			continue
-		}
-		if r.End-r.Start >= 2 || atWordStart(path, r.Start) {
-			out = append(out, r)
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-// atWordStart reports whether the byte at idx begins a path segment or a word
-// inside one, including a camelCase hump.
-func atWordStart(path string, idx int) bool {
-	if idx <= 0 {
-		return true
-	}
-	prev := rune(path[idx-1])
-	if isWordSeparator(prev) {
-		return true
-	}
-	return unicode.IsUpper(rune(path[idx])) && unicode.IsLower(prev)
 }
 
 // HighlightMatch applies the fuzzy-match highlight style to the matched
