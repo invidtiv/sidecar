@@ -2,7 +2,7 @@
 
 **Status:** U0 to U4 are implemented, independently reviewed and merged (Sidecar main 61c76695; sidecar-ui main 05f9454 and later; sidecar-mobile main bba67db, local only). The live record of lanes, merges, accepted risks and open follow-ups is [the execution record](sidecar-ui-api/execution.md). Still open: physical-device proof of the native app, a tailnet proof through `tailscale serve`, the live half of U0-c with Marcus, and the friction tickets listed in the execution record. **Epic:** td-921cfd.
 
-Related: [Sidecar mobile](sidecar-mobile.md) (the headless terminal protocol this plan grows), [mobile protocol reference](../../reference/mobile-protocol.md), [Sidecar as its own remote host runtime](sidecar-remote-hosts.md), [remote host viewer screen](../implemented/remote-host-viewer-screen.md), [pane layout control](../implemented/pane-layout-control.md), [embedded terminal transport decisions](../implemented/embedded-terminal-transport-decisions.md).
+Related: [Browser access without the CLI](browser-access.md) (approval pairing, Tailscale identity and LAN HTTPS; controls browser onboarding), [Sidecar mobile](sidecar-mobile.md) (the headless terminal protocol this plan grows), [mobile protocol reference](../../reference/mobile-protocol.md), [Sidecar as its own remote host runtime](sidecar-remote-hosts.md), [remote host viewer screen](../implemented/remote-host-viewer-screen.md), [pane layout control](../implemented/pane-layout-control.md), [embedded terminal transport decisions](../implemented/embedded-terminal-transport-decisions.md).
 
 ## Outcome
 
