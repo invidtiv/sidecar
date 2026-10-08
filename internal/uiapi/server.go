@@ -14,11 +14,14 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/marcus/sidecar/internal/apiservice"
@@ -56,13 +59,28 @@ type TailnetOptions struct {
 	Host string
 	// Logins are the Tailscale logins trusted on this listener.
 	Logins []string
-	// HTTPSPort is the public Tailscale Serve HTTPS port, not a local bind.
-	// Zero uses the existing standard-port Host and Origin guards.
+	// HTTPSPort is the public HTTPS port. In serve mode it is the Tailscale
+	// Serve port, not a local bind, and zero uses the standard-port Host and
+	// Origin guards. In direct mode it is the port bound on the node's tailnet
+	// addresses, and zero means DefaultPort.
 	HTTPSPort int
-	// Port, when non-zero, serves the Tailnet listener on a dedicated loopback
-	// TCP port instead of the Unix socket, for a tailscaled that cannot open a
-	// 0600 user socket.
+	// Port, when non-zero, serves the serve-mode listener on a dedicated
+	// loopback TCP port instead of the Unix socket, for a tailscaled that
+	// cannot open a 0600 user socket. Direct mode refuses it.
 	Port int
+	// Mode selects direct or serve. The CLI resolves api.tailnetMode, whose
+	// default is direct; the zero value here is serve, so a caller that names
+	// no mode never starts reaching Tailscale on its own.
+	Mode TailnetMode
+	// Adapters are direct mode's seams over Tailscale; nil fields use the CLI.
+	// In direct mode Host is discovered, and Logins may be empty to mean the
+	// node owner.
+	Adapters TailnetAdapters
+
+	pollInterval    time.Duration // direct-mode tests shorten these
+	minBackoff      time.Duration
+	recheckInterval time.Duration
+	peerPrefixes    []netip.Prefix // tests admit loopback peers
 }
 
 // Options configures Start.
@@ -112,9 +130,10 @@ type Server struct {
 	browserPort    int
 	browserHosts   map[string]bool
 	browserOrigins map[string]bool
-	tailnetHosts   map[string]bool
-	tailnetOrigins map[string]bool
-	tailnetLogins  map[string]bool
+	// tailnet is what the Tailnet listener trusts; direct mode replaces it
+	// when the node's name or addresses change.
+	tailnet atomic.Pointer[tailnetTrust]
+	direct  *tailnetDirect
 
 	listeners []ListenerInfo
 	servers   []*http.Server
@@ -273,7 +292,11 @@ func Start(opts Options) (*Server, error) {
 	s.endpoint = Endpoint{PID: os.Getpid(), Version: opts.Version, APIVersion: APIVersion, APIInstance: s.instance,
 		StartedAt: s.startedAt, UnixSocket: localPath, TCP: browser.Addr().String(), BrowserProxyOrigin: opts.BrowserProxyOrigin}
 
-	if opts.Tailnet != nil {
+	if opts.Tailnet != nil && opts.Tailnet.Mode == TailnetModeDirect {
+		if err := s.prepareTailnetDirect(*opts.Tailnet); err != nil {
+			return nil, err
+		}
+	} else if opts.Tailnet != nil {
 		if err := s.listenTailnet(*opts.Tailnet, inherited[ListenerTailnet]); err != nil {
 			return nil, err
 		}
@@ -285,6 +308,11 @@ func Start(opts Options) (*Server, error) {
 	ok = true
 	for index := range s.servers {
 		s.serve(index)
+	}
+	if s.direct != nil {
+		// Bound by Sidecar itself, never inherited, and retried in the
+		// background: Tailscale being down never stops the other listeners.
+		s.direct.start()
 	}
 	return s, nil
 }
@@ -303,21 +331,21 @@ func (s *Server) listenTailnet(opts TailnetOptions, inherited net.Listener) erro
 	if err != nil {
 		return err
 	}
-	s.tailnetHosts = map[string]bool{opts.Host: true}
-	s.tailnetOrigins = map[string]bool{"https://" + opts.Host: true, "http://" + opts.Host: true}
+	trust := &tailnetTrust{hosts: map[string]bool{opts.Host: true}, origins: map[string]bool{"https://" + opts.Host: true, "http://" + opts.Host: true},
+		logins: map[string]bool{}, publicURL: publicURL, host: opts.Host}
 	for _, port := range []string{"443", "80"} {
-		s.tailnetHosts[opts.Host+":"+port] = true
+		trust.hosts[opts.Host+":"+port] = true
 	}
 	if opts.HTTPSPort != 0 && opts.HTTPSPort != 443 {
 		// A dedicated port is a separate origin: do not trust a page served
 		// by another application on the node's standard HTTP/HTTPS ports.
-		s.tailnetHosts = map[string]bool{strings.TrimPrefix(publicURL, "https://"): true}
-		s.tailnetOrigins = map[string]bool{publicURL: true}
+		trust.hosts = map[string]bool{strings.TrimPrefix(publicURL, "https://"): true}
+		trust.origins = map[string]bool{publicURL: true}
 	}
-	s.tailnetLogins = map[string]bool{}
 	for _, login := range opts.Logins {
-		s.tailnetLogins[login] = true
+		trust.logins[strings.ToLower(login)] = true
 	}
+	s.tailnet.Store(trust)
 	if opts.Port > 0 {
 		listener, err := acquireListener(inherited, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(opts.Port)))
 		if err != nil {
@@ -461,6 +489,11 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		// with net/http. Do so before releasing the single-instance lock:
 		// UnixListener.Close unlinks its path, which may soon name a successor.
 		s.closeListeners()
+		if s.direct != nil {
+			if err := s.direct.stop(ctx); err != nil && result == nil {
+				result = err
+			}
+		}
 		for _, server := range s.servers {
 			if err := server.Shutdown(ctx); err != nil && result == nil {
 				result = err
@@ -513,20 +546,49 @@ type Status struct {
 	PID           int            `json:"pid"`
 	StartedAt     time.Time      `json:"started_at"`
 	Listeners     []ListenerInfo `json:"listeners"`
-	Clients       []ClientInfo   `json:"clients"`
-	Terminals     []TerminalInfo `json:"terminals"`
+	// Tailnet reports the Tailnet listener when it is enabled.
+	Tailnet   *TailnetStatus `json:"tailnet,omitempty"`
+	Clients   []ClientInfo   `json:"clients"`
+	Terminals []TerminalInfo `json:"terminals"`
 }
 
 func (s *Server) status() Status {
 	clients, terminals := s.clients.snapshot()
 	if s.opts.FixtureStatus != nil {
 		status := *s.opts.FixtureStatus
-		status.Listeners = append([]ListenerInfo(nil), s.listeners...)
+		status.Listeners = s.listenerSnapshot()
+		status.Tailnet = s.TailnetStatus()
 		status.Clients, status.Terminals = clients, terminals
 		status.UIDir = &s.opts.UIDir
 		status.UIConfigured = s.opts.UIDir != ""
 		return status
 	}
 	return Status{APIVersion: APIVersion, APIInstance: s.instance, ServerVersion: s.opts.Version, PID: os.Getpid(),
-		StartedAt: s.startedAt, UIDir: &s.opts.UIDir, UIConfigured: s.opts.UIDir != "", Listeners: append([]ListenerInfo(nil), s.listeners...), Clients: clients, Terminals: terminals}
+		StartedAt: s.startedAt, UIDir: &s.opts.UIDir, UIConfigured: s.opts.UIDir != "", Listeners: s.listenerSnapshot(), Tailnet: s.TailnetStatus(), Clients: clients, Terminals: terminals}
+}
+
+func (s *Server) listenerSnapshot() []ListenerInfo {
+	listeners := append([]ListenerInfo(nil), s.listeners...)
+	if s.direct != nil {
+		listeners = append(listeners, s.direct.listenerInfos()...)
+	}
+	return listeners
+}
+
+// TailnetStatus reports the Tailnet listener, or nil when it is not enabled.
+func (s *Server) TailnetStatus() *TailnetStatus {
+	if s.direct != nil {
+		status := s.direct.statusSnapshot()
+		return &status
+	}
+	if s.opts.Tailnet == nil {
+		return nil
+	}
+	trust := s.tailnetTrustSnapshot()
+	status := TailnetStatus{Mode: TailnetModeServe, State: TailnetStateListening, Host: trust.host, Origin: trust.publicURL, Since: s.startedAt}
+	for login := range trust.logins {
+		status.Logins = append(status.Logins, login)
+	}
+	sort.Strings(status.Logins)
+	return &status
 }

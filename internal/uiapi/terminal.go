@@ -202,10 +202,10 @@ func (h *listenerHandler) authorizeTerminal(r *http.Request) (caller, websocket.
 				return c, CloseOriginRefused, "This ticket was issued to another origin."
 			}
 			c.auth, c.login, c.client, c.credential = "ticket", login, g.client, g.credential
-			return c, 0, ""
+			return withTailnetPeer(r, c), 0, ""
 		}
 		c.auth, c.login, c.client = "tailnet", login, "tailnet:"+login
-		return c, 0, ""
+		return withTailnetPeer(r, c), 0, ""
 	}
 	if ticket := r.URL.Query().Get("ticket"); ticket != "" {
 		g, ok := h.s.auth.redeemTicket(ticket)

@@ -3,6 +3,7 @@ package uiapi
 import (
 	"bytes"
 	"encoding/json"
+	"net/netip"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,6 +23,12 @@ type caller struct {
 	// browser session, a paired origin, a tailnet login, or local.
 	client     string
 	credential string
+	// device, deviceID and peerAddr name the tailnet device a direct-mode
+	// Tailnet caller was admitted as, so its streams can be re-admitted and
+	// what it does can be attributed to that device.
+	device   string
+	deviceID string
+	peerAddr netip.Addr
 }
 
 // maxTerminalsPerClient bounds the terminal WebSockets one client may hold
@@ -31,13 +38,15 @@ const maxTerminalsPerClient = 16
 
 // ClientInfo is one connected client in status.
 type ClientInfo struct {
-	ID       string    `json:"id"`
-	Kind     string    `json:"kind"`
-	Listener Listener  `json:"listener"`
-	Auth     string    `json:"auth"`
-	Origin   string    `json:"origin,omitempty"`
-	Login    string    `json:"login,omitempty"`
-	Since    time.Time `json:"since"`
+	ID       string   `json:"id"`
+	Kind     string   `json:"kind"`
+	Listener Listener `json:"listener"`
+	Auth     string   `json:"auth"`
+	Origin   string   `json:"origin,omitempty"`
+	Login    string   `json:"login,omitempty"`
+	// Device is the tailnet device a direct-mode Tailnet client connected from.
+	Device string    `json:"device,omitempty"`
+	Since  time.Time `json:"since"`
 }
 
 // TerminalInfo is one open terminal attachment and whether its client holds
@@ -75,6 +84,8 @@ type trackedClient struct {
 	// revoked; its terminal then closes with 4401.
 	revoked    chan struct{}
 	revokeOnce sync.Once
+	// peerAddr is the direct-mode Tailnet source address, for re-admission.
+	peerAddr netip.Addr
 }
 
 func newClientRegistry(now func() time.Time) *clientRegistry {
@@ -98,7 +109,7 @@ func (r *clientRegistry) add(kind string, c caller) (*trackedClient, bool) {
 	}
 	r.next++
 	id := "c" + strconv.FormatUint(r.next, 10)
-	client := &trackedClient{info: ClientInfo{ID: id, Kind: kind, Listener: c.listener, Auth: c.auth, Origin: c.origin, Login: c.login, Since: r.now().UTC()}}
+	client := &trackedClient{info: ClientInfo{ID: id, Kind: kind, Listener: c.listener, Auth: c.auth, Origin: c.origin, Login: c.login, Device: c.device, Since: r.now().UTC()}, peerAddr: c.peerAddr}
 	client.term.ClientID = id
 	client.key = c.client
 	client.changed = r.changes.signal
@@ -122,6 +133,25 @@ func (r *clientRegistry) revoke(keys map[string]bool) int {
 		}
 	}
 	return count
+}
+
+// tailnetStreams lists the open streams admitted by direct-mode Tailnet
+// identity, so they can be re-admitted or closed.
+func (r *clientRegistry) tailnetStreams() []*trackedClient {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var list []*trackedClient
+	for _, client := range r.clients {
+		if client.info.Listener == ListenerTailnet && client.peerAddr.IsValid() {
+			list = append(list, client)
+		}
+	}
+	return list
+}
+
+// revoke closes this one stream as a credential revocation would (4401).
+func (c *trackedClient) revoke() {
+	c.revokeOnce.Do(func() { close(c.revoked) })
 }
 
 func (r *clientRegistry) remove(client *trackedClient) {

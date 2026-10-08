@@ -46,7 +46,9 @@ func validateActivated(opts Options, activated []apiservice.ActivatedListener) (
 		case *net.UnixAddr:
 			localPath := filepath.Join(Dir(opts.StateDir), localSocketName)
 			tailnetPath := filepath.Join(Dir(opts.StateDir), tailnetSockName)
-			tailnetSocket := opts.Tailnet != nil && opts.Tailnet.Port == 0
+			// Direct mode binds the tailnet address itself; a manager never
+			// hands it a Tailnet descriptor.
+			tailnetSocket := opts.Tailnet != nil && opts.Tailnet.Port == 0 && opts.Tailnet.Mode != TailnetModeDirect
 			path := address.Name
 			switch {
 			case path == localPath:

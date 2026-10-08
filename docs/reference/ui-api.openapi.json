@@ -1076,6 +1076,9 @@
           "auth": {
             "type": "string"
           },
+          "device": {
+            "type": "string"
+          },
           "id": {
             "type": "string"
           },
@@ -4028,6 +4031,9 @@
             "format": "date-time",
             "type": "string"
           },
+          "tailnet": {
+            "$ref": "#/components/schemas/TailnetStatus"
+          },
           "terminals": {
             "items": {
               "$ref": "#/components/schemas/TerminalInfo"
@@ -4054,6 +4060,65 @@
           "listeners",
           "clients",
           "terminals"
+        ],
+        "type": "object"
+      },
+      "TailnetStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "addresses": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "certificate_expires_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          },
+          "logins": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "next_attempt_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "origin": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer"
+          },
+          "since": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode",
+          "state",
+          "since"
         ],
         "type": "object"
       },

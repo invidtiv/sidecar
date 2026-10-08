@@ -1152,10 +1152,10 @@ sidecar api requests --json
 
 Serve the UI API on this machine
 
-Run the UI API server in the foreground until interrupted. It listens on a Unix socket in the state directory (local agents and the CLI, no auth), on 127.0.0.1 for browsers (paired with `sidecar api open` or `sidecar api pair`), and with --tailnet on a second Unix socket for `tailscale serve`, trusting only allowed tailnet logins (config api.tailnetLogins, default the node owner). Set config api.tailnetHTTPSPort to use a dedicated public HTTPS port instead of 443. It records itself in $STATE/api/endpoint.json and refuses to start while another server owns the same state tree. It never starts or stops tmux. Each terminal WebSocket is one mobile protocol v0 stream, served exactly as `sidecar mobile serve --stdio` serves stdin. --fixtures requires SIDECAR_ISOLATED_STATE=1 and temporary XDG_STATE_HOME and -config paths; it refuses real state/config paths, including symlink aliases. --tailnet prints the `tailscale serve` command to run; it never changes Tailscale configuration. --tailnet-port N serves the tailnet listener on a dedicated loopback port instead, for a tailscaled that cannot open a 0600 user socket; any local process or OS user can reach that port and claim an allowed tailnet login, so use it only on a machine where every local user and process is already trusted. --json writes the endpoint object as one line once every listener is bound.
+Run the UI API server in the foreground until interrupted. It listens on a Unix socket in the state directory (local agents and the CLI, no auth) and on 127.0.0.1 for browsers (paired with `sidecar api open` or `sidecar api pair`). --tailnet adds the Tailnet listener, trusting only allowed tailnet logins (config api.tailnetLogins, default the node owner). In direct mode, the default (config api.tailnetMode or --tailnet-mode), Sidecar binds this node's tailnet addresses itself on api.tailnetHTTPSPort (default 7861), serves HTTPS with a `tailscale cert` certificate, and identifies each connection with `tailscale whois`: only an allowed login's untagged devices get in, connections from this machine's own tailnet address are refused, and Tailscale-User-Login headers are ignored. No `tailscale serve` route is needed; one that holds the same port is refused with the command that removes it. When Tailscale is down or its addresses change, it retries in the background and `sidecar api status` reports the state. Serve mode (--tailnet-mode serve) instead creates a second Unix socket for `tailscale serve`, which vouches for the login with a header, and prints the `tailscale serve` command to run; there api.tailnetHTTPSPort is the public Serve port (default 443). Neither mode changes Tailscale configuration. --tailnet-port N (serve mode only) serves that listener on a dedicated loopback port instead, for a tailscaled that cannot open a 0600 user socket; any local process or OS user can reach that port and claim an allowed tailnet login, so use it only on a machine where every local user and process is already trusted. It records itself in $STATE/api/endpoint.json and refuses to start while another server owns the same state tree. It never starts or stops tmux. Each terminal WebSocket is one mobile protocol v0 stream, served exactly as `sidecar mobile serve --stdio` serves stdin. --fixtures requires SIDECAR_ISOLATED_STATE=1 and temporary XDG_STATE_HOME and -config paths; it refuses real state/config paths, including symlink aliases. --json writes the endpoint object as one line once every listener is bound.
 
 ```
-Usage: sidecar api serve [--port N] [--ui DIR] [--fixtures DIR] [--tailnet] [--tailnet-port N] [--json]
+Usage: sidecar api serve [--port N] [--ui DIR] [--fixtures DIR] [--tailnet] [--tailnet-mode direct|serve] [--tailnet-port N] [--json]
 ```
 
 **Options:**
@@ -1163,8 +1163,9 @@ Usage: sidecar api serve [--port N] [--ui DIR] [--fixtures DIR] [--tailnet] [--t
 - `--port N`: Browser listener port on 127.0.0.1 (default 7861; 0 picks a free port)
 - `--fixtures DIR`: Serve recorded Sessions/status and deterministic echo terminals without tmux
 - `--ui DIR`: Serve a built UI from DIR (overrides config api.uiDir), with index.html as the fallback for app routes
-- `--tailnet`: Also serve the tailnet listener for tailscale serve
-- `--tailnet-port N`: Serve the tailnet listener on this loopback port instead of a Unix socket
+- `--tailnet`: Also serve the Tailnet listener (direct mode unless api.tailnetMode says serve)
+- `--tailnet-mode MODE`: direct (bind the tailnet address, the default) or serve (a socket for tailscale serve); implies --tailnet
+- `--tailnet-port N`: Serve mode: serve the tailnet listener on this loopback port instead of a Unix socket
 - `--json`: Write the endpoint object as one JSON line once listening
 - `-h, --help`: Show this help
 
@@ -1180,6 +1181,7 @@ Usage: sidecar api serve [--port N] [--ui DIR] [--fixtures DIR] [--tailnet] [--t
 sidecar api serve
 sidecar api serve --ui ~/code/sidecar-ui/apps/sidecar-ui/build
 sidecar api serve --tailnet
+sidecar api serve --tailnet-mode serve
 ```
 
 ### `sidecar api service`
@@ -4141,7 +4143,9 @@ Restore a forgotten shell record by tmux name
 
 Restore a forgotten Sidecar-managed shell record in the current project.
 Display name, agent type, skip-perms, and working directory come back with it.
-The tmux session is not started.
+A deleted shell does not reserve its name: if a live shell has taken it since,
+the record comes back as the first free numbered variant ("shell1 2"), and
+the result reports the name it was given. The tmux session is not started.
 
 A name that is still live is already in that state (exit 0). A name that is in
 neither the live list nor the tombstones is not found (exit 1) — including a

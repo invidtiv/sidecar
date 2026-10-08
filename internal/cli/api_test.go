@@ -163,7 +163,7 @@ func TestAPITailnetOptionsDefaultToTheNodeOwner(t *testing.T) {
 	apiTailnetIdentity = func(context.Context) (uiapi.TailnetIdentity, error) {
 		return uiapi.TailnetIdentity{Host: "node.example.ts.net", OwnerLogin: "owner@example.com"}, nil
 	}
-	options, err := apiTailnetOptions(context.Background(), 0)
+	options, err := apiTailnetOptions(context.Background(), 0, uiapi.TailnetModeServe)
 	if err != nil || options.Host != "node.example.ts.net" || strings.Join(options.Logins, ",") != "owner@example.com" {
 		t.Fatalf("options = %+v, %v", options, err)
 	}
@@ -172,14 +172,14 @@ func TestAPITailnetOptionsDefaultToTheNodeOwner(t *testing.T) {
 	if err := os.WriteFile(config.ConfigPath(), []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	options, err = apiTailnetOptions(context.Background(), 7862)
+	options, err = apiTailnetOptions(context.Background(), 7862, uiapi.TailnetModeServe)
 	if err != nil || strings.Join(options.Logins, ",") != "a@example.com,b@example.com" || options.Port != 7862 || options.HTTPSPort != 7861 {
 		t.Fatalf("configured options = %+v, %v", options, err)
 	}
 	if err := os.WriteFile(config.ConfigPath(), []byte(`{"api":{"tailnetHTTPSPort":-1}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := apiTailnetOptions(context.Background(), 0); err == nil || !strings.Contains(err.Error(), "tailnetHTTPSPort") {
+	if _, err := apiTailnetOptions(context.Background(), 0, uiapi.TailnetModeServe); err == nil || !strings.Contains(err.Error(), "tailnetHTTPSPort") {
 		t.Fatalf("invalid port: %v", err)
 	}
 }
