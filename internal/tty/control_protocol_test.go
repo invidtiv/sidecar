@@ -115,3 +115,24 @@ func TestDecodeControlBytes(t *testing.T) {
 		}
 	}
 }
+
+func TestControlParserRetainedPaneEndSubscription(t *testing.T) {
+	for _, tc := range []struct{ line, pane string }{
+		{"%subscription-changed sidecar-pane-lifecycle $0 @0 0 %7 : 1", "%7"},
+		{"%subscription-changed sidecar-pane-lifecycle $0 @0 0 %7 future fields : 1", "%7"},
+		{"%subscription-changed sidecar-pane-lifecycle $0 @0 0 %7 : 0", ""},
+		{"%subscription-changed other $0 @0 0 %7 : 1", ""},
+		{"%subscription-changed sidecar-pane-lifecycle $0 @0 0 bad : 1", ""},
+	} {
+		events := (&controlParser{}).FeedLine(tc.line)
+		if tc.pane == "" {
+			if len(events) != 0 {
+				t.Fatalf("unexpected event=%+v", events)
+			}
+			continue
+		}
+		if len(events) != 1 || events[0].Kind != controlEventPaneEnded || events[0].Pane != tc.pane {
+			t.Fatalf("events=%+v", events)
+		}
+	}
+}

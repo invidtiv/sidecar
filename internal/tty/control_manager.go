@@ -776,13 +776,14 @@ type sessionControlClient struct {
 	coalesce     time.Duration
 	modelCadence modelCadenceConfig
 
-	mu         sync.Mutex
-	subs       map[uint64]sessionSubscriber
-	deliveries map[uint64]*subscriberDeliveryGate
-	panes      map[string]*paneCaptureState
-	closed     bool
-	closeOnce  sync.Once
-	barriers   int
+	mu                      sync.Mutex
+	subs                    map[uint64]sessionSubscriber
+	deliveries              map[uint64]*subscriberDeliveryGate
+	panes                   map[string]*paneCaptureState
+	closed                  bool
+	closeOnce               sync.Once
+	barriers                int
+	paneLifecycleSubscribed bool
 
 	// actions, models, modelTick, modelTimer and discardArmed belong to the
 	// ordered actor goroutine (run). Lifecycle calls arriving on other
@@ -907,6 +908,10 @@ func (c *sessionControlClient) handleEvent(event controlEvent) {
 		if !c.liveModelOwnsPresentation(event.Pane) {
 			c.markDirty(event.Pane)
 		}
+	case controlEventPaneEnded:
+		// A retained dead pane can exit silently after its last output capture.
+		// Tmux's native format signal wakes a fresh authoritative capture.
+		c.markDirty(event.Pane)
 	case controlEventLayout:
 		if event.Pane != "" {
 			c.requestSeedForPane(event.Pane, ResyncLayout)
@@ -992,9 +997,33 @@ func (c *sessionControlClient) add(sub managerControlSubscription) {
 	}
 	c.deliveries[sub.id] = delivery
 	c.ensurePaneLocked(sub.request.Pane).dirty = true
+	c.reconcilePaneLifecycleLocked()
 	c.mu.Unlock()
 	c.configureSize(sub.request.Width, sub.request.Height)
 	c.scheduleIfEligible(sub.request.Pane)
+}
+
+// reconcilePaneLifecycleLocked keeps one native subscription while full-metadata
+// consumers exist. The subscription is client-owned, reports changes at most
+// once a second, and does not change retention options or poll the catalog.
+func (c *sessionControlClient) reconcilePaneLifecycleLocked() {
+	wanted := false
+	for _, sub := range c.subs {
+		if sub.request.FullMetadata {
+			wanted = true
+			break
+		}
+	}
+	if wanted == c.paneLifecycleSubscribed {
+		return
+	}
+	command := "refresh-client -B sidecar-pane-lifecycle"
+	if wanted {
+		command = "refresh-client -B 'sidecar-pane-lifecycle:%*:#{pane_dead}'"
+	}
+	if err := c.channel.Send(command, func(controlResponse) {}); err == nil {
+		c.paneLifecycleSubscribed = wanted
+	}
 }
 
 // wantsModelFeed reports whether this subscription should run a byte-fed pane
@@ -1022,6 +1051,7 @@ func (c *sessionControlClient) remove(id uint64) {
 	sub := c.subs[id]
 	sub.delivery.deactivate()
 	delete(c.subs, id)
+	c.reconcilePaneLifecycleLocked()
 	c.mu.Unlock()
 	sub.delivery.wait()
 	c.mu.Lock()

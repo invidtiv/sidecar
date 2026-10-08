@@ -15,6 +15,7 @@ const (
 	controlEventPause
 	controlEventContinue
 	controlEventExit
+	controlEventPaneEnded
 )
 
 type controlResponse struct {
@@ -128,6 +129,14 @@ func parseControlNotification(line string) (controlEvent, bool) {
 			return controlEvent{Kind: controlEventOutput, Pane: pane, Payload: encoded}, true
 		}
 		return controlEvent{}, false
+
+	case strings.HasPrefix(line, "%subscription-changed sidecar-pane-lifecycle "):
+		header, value, ok := strings.Cut(line, " : ")
+		fields := strings.Fields(header)
+		if !ok || value != "1" || len(fields) < 6 || !controlPanePattern.MatchString(fields[5]) {
+			return controlEvent{}, false
+		}
+		return controlEvent{Kind: controlEventPaneEnded, Pane: fields[5]}, true
 
 	case strings.HasPrefix(line, "%layout-change "):
 		return controlEvent{Kind: controlEventLayout}, true

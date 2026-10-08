@@ -651,6 +651,48 @@ func TestControlClientContinuesPausedPaneAndCapturesLayoutChange(t *testing.T) {
 	waitFor(t, func() bool { return channel.commandCountContaining("capture-pane") == 2 })
 }
 
+func TestControlPaneLifecycleSubscriptionWakesExactPaneAndUnsubscribes(t *testing.T) {
+	factory := newFakeControlFactory()
+	manager := newControlManager(factory.create, 0)
+	defer manager.Stop()
+	desktop, err := manager.Subscribe(ControlRequest{Session: "one", Pane: "%7", Visible: true, Focused: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer desktop.Close()
+	mobile, err := manager.Subscribe(ControlRequest{Session: "one", Pane: "%7", Visible: true, Focused: true, FullMetadata: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mobile.Close()
+	var channel *fakeControlChannel
+	waitFor(t, func() bool {
+		channel = factory.channel("one")
+		return channel != nil && channel.commandCountContaining("capture-pane") == 1 && channel.commandCountContaining("sidecar-pane-lifecycle:%*") == 1
+	})
+	channel.respondCapture(0, controlResponse{Lines: []string{"0,0,1,24,80,0"}})
+	// A synchronous actor action proves the foreign pane did not start capture.
+	manager.mu.Lock()
+	client := manager.clients["one"]
+	manager.mu.Unlock()
+	barrier := make(chan struct{})
+	client.post(func() {
+		client.handleEvent(controlEvent{Kind: controlEventPaneEnded, Pane: "%8"})
+		close(barrier)
+	})
+	<-barrier
+	if got := channel.commandCountContaining("capture-pane"); got != 1 {
+		t.Fatalf("foreign pane started capture: %d", got)
+	}
+	channel.events <- controlEvent{Kind: controlEventPaneEnded, Pane: "%7"}
+	waitFor(t, func() bool { return channel.commandCountContaining("capture-pane") == 2 })
+	mobile.Close()
+	waitFor(t, func() bool { return channel.commandCountContaining("refresh-client -B sidecar-pane-lifecycle") == 1 })
+	if channel.closeCount() != 0 {
+		t.Fatal("removing mobile watcher closed desktop control client")
+	}
+}
+
 func TestBuildAndParseControlCapture(t *testing.T) {
 	metadata, capture, err := buildControlCaptureCommands("%12", 900)
 	if err != nil {

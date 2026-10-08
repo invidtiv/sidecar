@@ -198,3 +198,52 @@ func sendIsolatedTmuxText(t *testing.T, socket, pane, text string) {
 		t.Fatalf("send enter: %v: %s", err, output)
 	}
 }
+
+// The final output was captured while the process was alive. A silent retained
+// exit must still produce a dead snapshot via tmux's native format subscription.
+func TestControlRetainedSilentExitProducesDeadSnapshot(t *testing.T) {
+	run := privateTmuxServer(t)
+	run("start-server", ";", "set-option", "-s", "exit-empty", "off")
+	run("set-option", "-g", "remain-on-exit", "on")
+	gate := t.TempDir() + "/exit"
+	run("new-session", "-d", "-s", "silent-ended", "/bin/sh", "-c", "printf 'running\\n'; while [ ! -f \""+gate+"\" ]; do sleep 0.02; done; exit 7")
+	pane := run("display-message", "-p", "-t", "silent-ended", "#{pane_id}")
+	manager := NewControlManager()
+	defer manager.Stop()
+	ended := make(chan ControlSnapshot, 1)
+	live := make(chan struct{}, 1)
+	sub, err := manager.Subscribe(ControlRequest{Session: "silent-ended", Pane: pane, Visible: true, Focused: true, FullMetadata: true, OnSnapshot: func(snapshot ControlSnapshot) {
+		if !snapshot.PaneDead {
+			select {
+			case live <- struct{}{}:
+			default:
+			}
+		}
+		if snapshot.PaneDead {
+			select {
+			case ended <- snapshot:
+			default:
+			}
+		}
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Close()
+	select {
+	case <-live:
+	case <-time.After(3 * time.Second):
+		t.Fatal("initial live capture missing")
+	}
+	if err := os.WriteFile(gate, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case snapshot := <-ended:
+		if snapshot.Pane != pane {
+			t.Fatalf("wrong pane=%s", snapshot.Pane)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("silent retained exit never woke a dead capture")
+	}
+}
