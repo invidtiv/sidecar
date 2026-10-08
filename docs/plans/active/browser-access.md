@@ -11,7 +11,7 @@ A person opens `sidecar-ui` in any browser that can reach their Sidecar, whether
 Three mechanisms, layered:
 
 1. **Approval from a trusted surface (Phase A).** A browser with no credential asks for access and shows a short code. You approve it from anything already trusted: the Sidecar TUI, an already-signed-in browser, or `sidecar api approve CODE`. This works on every listener and is the general path.
-2. **Tailscale identity (Phase B).** On a tailnet, the owner's devices are recognised by their Tailscale login and never see a pairing screen.
+2. **Tailscale identity (Phase B).** On a tailnet, Sidecar listens on the tailnet address itself and recognises the owner's devices by the identity Tailscale assigns each connection. They never see a pairing screen, and no `tailscale serve` setup is needed.
 3. **LAN HTTPS (Phase C).** An opt-in listener on the LAN, served over HTTPS with a certificate Sidecar manages, so `https://<ip-or-host>:<port>` works without Tailscale. Access still comes through approval.
 
 The 60-second `sidecar api open` link remains, demoted to a convenience for the host's own browser and a recovery path. It is no longer the instruction a new browser shows.
@@ -72,13 +72,23 @@ The `access_request` notification appears like any other. Activating it opens an
 
 ## Phase B: Tailscale identity as zero-click access (td-accec4)
 
-The Tailnet listener already authenticates allowed logins from the `Tailscale-User-Login` header on a 0600 Unix socket. It is unused on aerie because `tailscale serve` proxies to the Browser listener instead (`api.browserProxyOrigin`), since it has never been checked whether the standalone macOS Tailscale build can open that socket.
+### What the probe established (aerie, 2026-10-08, Tailscale 1.102.4 standalone macOS build)
 
-1. **Probe.** With Marcus's go-ahead (it changes his Tailscale serve config and briefly interrupts `:7861`), run `tailscale serve --bg --https=7861 unix:<state>/api/tailnet.sock`, unset `api.browserProxyOrigin`, restart the service, and load the UI from another tailnet device. Record the result in the UI API reference, replacing its "not yet verified" paragraph. Rollback is `tailscale serve --bg --https=7861 http://127.0.0.1:7861` and restoring the config key.
-2. **If the socket works:** make it the documented, guided path. `sidecar api status` reports the Tailnet listener, the exact `tailscale serve` command, and whether a request through it has been seen; the service install output and the waiting screen mention it. Sidecar still never edits Tailscale configuration itself.
-3. **If the sandbox blocks it:** design a Tailnet listener that does not depend on the proxy: Sidecar binds the node's tailnet address, serves TLS from `tailscale cert`, and identifies each connection with Tailscale's LocalAPI `whois` on the peer address, refusing connections from the node's own address. Write that design into this plan before implementing it; it is a new trust surface and needs its own review.
+- `tailscale serve` cannot proxy to a Unix socket on this build in any location or mode: the Sidecar Tailnet socket, a 0600 or 0666 socket under `/private/tmp`, `/tmp` and the state directory all return `502`, while a TCP target on the same Serve port returns `200`. The existing socket-based Tailnet listener is therefore unusable with the standalone macOS app, which is why aerie proxies Serve to the Browser listener with `api.browserProxyOrigin`.
+- A user process can bind the node's tailnet address directly (`100.89.245.23:<port>`), serve TLS with a certificate from `tailscale cert <magicdns>` (a real, publicly trusted certificate for the MagicDNS name), and see each peer's true tailnet address. `tailscale whois --json <peer-ip>` maps it to the owning login and device: a request from MarcusBook arrived from `100.117.87.108` and resolved to `marcus@vorwaller.net on marcusbook-pro`. A request from aerie itself arrives from aerie's own tailnet address.
 
-Acceptance: a fresh browser on another of the owner's tailnet devices reaches Sessions with no pairing screen; a request from a non-allowed login is refused; the guards' existing tests pass against the chosen path.
+### Design: a direct Tailnet listener
+
+The Tailnet listener gains a `direct` mode, the default whenever Tailnet access is enabled. It needs no `tailscale serve` configuration, so enabling Tailnet access is the whole setup.
+
+- **Bind** the node's tailnet IPv4 (and IPv6, if present) on `api.tailnetHTTPSPort` (default 7861). Discover the addresses from `tailscale status --json`; when Tailscale is not running or the address changes, retry and rebind with backoff and report the state in `sidecar api status`. If a `tailscale serve` route already holds that port, refuse with a message naming the exact `tailscale serve --https=<port> off` command.
+- **TLS** from `tailscale cert`, written 0600 under `$STATE/api/tls/tailnet/` and renewed before expiry. The origin is `https://<magicdns>[:port]`, the same own origin the Tailnet listener guards today.
+- **Identity per connection**, not per header: on accept, resolve the peer address with Tailscale's whois and cache the answer by address for a short time. Admit only an allowed login (`api.tailnetLogins`, defaulting to the node owner) on a device that is not tagged. Refuse a connection from any of the node's own tailnet addresses, so local processes keep using the Local socket and Browser listener. `Tailscale-User-Login` headers are ignored in this mode; the identity comes from WireGuard, which a page or a LAN device cannot forge.
+- **Everything else matches the Tailnet listener as it exists:** Host and Origin guards, mutation headers, Origin required on mutations and upgrades because the identity is ambient, paired-origin requests still needing their own bearer, and allowed logins acting as approvers for Phase A requests. The whois call and the certificate source sit behind adapters (`TailnetIdentityFunc` already exists as the seam) so a `tsnet` or LocalAPI implementation can replace the CLI.
+- **The socket mode stays** as `serve` for platforms whose Tailscale can proxy to a Unix socket; `direct` is the default and the documented path.
+- **Aerie's migration:** once `direct` is verified, remove the Serve route on 7861 and `api.browserProxyOrigin`, and restart the service.
+
+Acceptance: with only `--tailnet` enabled and no Serve route, a fresh browser on MarcusBook and on the iPhone reaches Sessions with no pairing screen; a connection from aerie's own tailnet address is refused; a non-allowed or tagged peer is refused; the Host, Origin and mutation guard tests pass against the direct listener; Tailscale stopping and starting is survived without restarting Sidecar. Independent security review, including the whois cache and the own-address refusal.
 
 ## Phase C: opt-in LAN listener with Sidecar-managed HTTPS (td-938935)
 
@@ -93,4 +103,4 @@ Acceptance: from a second machine on the LAN, `https://<ip>:7863` shows the wait
 
 ## Sequencing and ownership
 
-Phase A first; it is useful on today's listeners and is the base for C. Phase B's probe can run any time Marcus approves the config change, in parallel with A. Phase C after A. Each phase is implemented by a delegated agent from a committed checkpoint, reviewed by a fresh-context reviewer, then merged to main in both repos.
+Phase A first; it is useful on today's listeners and is the base for C. Phase B runs in parallel with A, in its own worktree. Phase C after A. Each phase is implemented by a delegated agent from a committed checkpoint, reviewed by a fresh-context reviewer, then merged to main in both repos.
