@@ -63,6 +63,7 @@ func (s *Server) routeTable() map[string]*route {
 		viewerPresencePath:         {methods: map[string]routeFunc{http.MethodPost: s.handleViewerPresence}},
 		viewerAckPath:              {methods: map[string]routeFunc{http.MethodPost: s.handleViewerAck}},
 		contentRoute:               {methods: map[string]routeFunc{http.MethodGet: s.handleContent}},
+		fileSearchRoute:            {methods: map[string]routeFunc{http.MethodGet: s.handleFileSearch}},
 		treeRoute:                  {methods: map[string]routeFunc{http.MethodGet: s.handleTree}},
 		layoutRoute:                {methods: map[string]routeFunc{http.MethodGet: s.handleLayout, http.MethodPut: s.handleLayout}},
 		"/api/v0/hello":            {methods: map[string]routeFunc{http.MethodGet: s.handleHello}},

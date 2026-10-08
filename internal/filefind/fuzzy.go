@@ -1,6 +1,7 @@
 package filefind
 
 import (
+	"context"
 	"sort"
 	"strings"
 	"unicode"
@@ -502,8 +503,14 @@ const (
 
 // Filter is FuzzyFilter with options.
 func Filter(files []string, query string, maxResults int, opts FilterOptions) []Match {
+	matches, _ := FilterContext(context.Background(), files, query, maxResults, opts)
+	return matches
+}
+
+// FilterContext has exactly Filter's ranking and stops when its caller disconnects.
+func FilterContext(ctx context.Context, files []string, query string, maxResults int, opts FilterOptions) ([]Match, error) {
 	if maxResults <= 0 {
-		return nil
+		return nil, nil
 	}
 
 	recent := make(map[string]int, len(opts.Recent))
@@ -514,7 +521,7 @@ func Filter(files []string, query string, maxResults int, opts FilterOptions) []
 	}
 
 	if query == "" {
-		return emptyQueryMatches(files, maxResults, opts.Recent, recent)
+		return emptyQueryMatches(files, maxResults, opts.Recent, recent), ctx.Err()
 	}
 
 	var m matcher
@@ -523,14 +530,19 @@ func Filter(files []string, query string, maxResults int, opts FilterOptions) []
 		// Whitespace is not a query: it names no term, and a caller that
 		// treats "some matches" as a reason to move a cursor must not be
 		// handed the shallowest files for a stray space.
-		return nil
+		return nil, nil
 	}
 
 	// Score every path, but keep only the best maxResults as they go by: a
 	// broad query matches most of a big list, and sorting fifty thousand rows
 	// to show fifty was the other half of a keystroke's cost.
 	best := topK[Match]{limit: maxResults, worse: worseMatch}
-	for _, f := range files {
+	for i, f := range files {
+		if i&63 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		score := m.scoreOnly(f)
 		if score <= 0 {
 			continue
@@ -548,7 +560,7 @@ func Filter(files []string, query string, maxResults int, opts FilterOptions) []
 		_, matches[i].MatchRanges = m.match(matches[i].Path)
 		matches[i].Name = baseName(matches[i].Path)
 	}
-	return matches
+	return matches, ctx.Err()
 }
 
 // worseMatch reports whether a sorts after b in FuzzySort's order.

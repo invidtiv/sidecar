@@ -19,6 +19,7 @@ func Spec() ([]byte, error) {
 	schemas := map[string]any{}
 	values := map[string]any{
 		"NotificationSnapshot": NotificationSnapshot{}, "NotificationMutation": NotificationMutation{}, "NotificationReceiptRequest": NotificationReceiptRequest{}, "NotificationReceiptResponse": NotificationReceiptResponse{}, "NotificationClaimResponse": NotificationClaimResponse{}, "NotificationsConfig": config.NotificationsConfig{},
+		"FileSearchResult":  contentservice.FileSearchResult{},
 		"ContentReadResult": contentservice.ReadResult{}, "ContentTreeResult": contentservice.TreeResult{}, "ContentRef": ContentRef{}, "LayoutDocument": LayoutDocument{},
 		"ViewerLayoutReport": layoutreport.Report{}, "ViewerPresenceRequest": ViewerPresenceRequest{}, "ViewerPresenceResponse": ViewerPresenceResponse{}, "ViewerAckRequest": ViewerAckRequest{}, "ViewerAckResponse": ViewerAckResponse{},
 		"Hello": Hello{}, "Status": Status{}, "Endpoint": Endpoint{}, "ErrorBody": ErrorBody{},
@@ -116,6 +117,8 @@ func Spec() ([]byte, error) {
 	add(treeRoute, "get", "", "ContentTreeResult", all, false)
 	add(layoutRoute, "get", "", "LayoutDocument", all, false)
 	add(layoutRoute, "put", "LayoutDocument", "LayoutDocument", all, false)
+	add(fileSearchRoute, "get", "", "FileSearchResult", all, false)
+	addFileSearchSpec(paths)
 	addContentSpec(paths)
 	for _, method := range []string{"get", "put"} {
 		op := paths[layoutRoute].(map[string]any)[method].(map[string]any)

@@ -1469,6 +1469,65 @@
         ],
         "type": "object"
       },
+      "FileSearchMatch": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "positions": {
+            "items": {
+              "type": "integer"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "score": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "positions",
+          "score"
+        ],
+        "type": "object"
+      },
+      "FileSearchResult": {
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/FileSearchMatch"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "root": {
+            "type": "string"
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "warning": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "root",
+          "query",
+          "results",
+          "truncated"
+        ],
+        "type": "object"
+      },
       "Floor": {
         "additionalProperties": false,
         "properties": {
@@ -6813,6 +6872,197 @@
         ],
         "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there.",
         "x-max-concurrent-requests-per-client": 4,
+        "x-required-scope": "content:read"
+      }
+    },
+    "/api/v0/projects/{project}/files/search": {
+      "get": {
+        "operationId": "projects_{project}_files_search_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "schema": {
+              "maxLength": 512,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Pass the catalog row or candidate's content_workspace_id unchanged. Empty or omitted selects the configured project root; a nonempty selector names its linked worktree. Do not derive it from opaque row IDs or terminal expected_target. Legacy durable shell/worktree IDs remain accepted. Remote content forwarding is unavailable.",
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "maxLength": 4096,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Relative file paths, most recent first. Hints affect ranking only and never authorize paths.",
+            "explode": true,
+            "in": "query",
+            "name": "recent",
+            "schema": {
+              "items": {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              "maxItems": 100,
+              "type": "array"
+            },
+            "style": "form"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileSearchResult"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Four file searches are already in progress for this credential."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there.",
+        "x-max-concurrent-requests-per-client": 4,
+        "x-required-capability": "file_search",
+        "x-required-scope": "content:read"
+      },
+      "head": {
+        "operationId": "projects_{project}_files_search_get_head",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "schema": {
+              "maxLength": 512,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Pass the catalog row or candidate's content_workspace_id unchanged. Empty or omitted selects the configured project root; a nonempty selector names its linked worktree. Do not derive it from opaque row IDs or terminal expected_target. Legacy durable shell/worktree IDs remain accepted. Remote content forwarding is unavailable.",
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "maxLength": 4096,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Relative file paths, most recent first. Hints affect ranking only and never authorize paths.",
+            "explode": true,
+            "in": "query",
+            "name": "recent",
+            "schema": {
+              "items": {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              "maxItems": 100,
+              "type": "array"
+            },
+            "style": "form"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "429": {
+            "description": "Four file searches are already in progress for this credential."
+          },
+          "default": {
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there.",
+        "x-max-concurrent-requests-per-client": 4,
+        "x-required-capability": "file_search",
         "x-required-scope": "content:read"
       }
     },

@@ -648,7 +648,7 @@ func RootCommand() *Command {
 		Launch: runSetupLaunch,
 	}
 
-	root.Sub = []*Command{agentCommand(), agentsCmd, apiCommand(), contentCommand(), createCmd, helpCmd, hostCommand(), layoutCommand(), mobileCommand(), notifyCommand(), openCmd, pluginCommand(), projectCommand(), repoCommand(), requestCommand(), sessionCommand(), setupCmd, shellCmd, terminalLinksCommand(), workspaceCommand(), worktreeCommand()}
+	root.Sub = []*Command{agentCommand(), agentsCmd, apiCommand(), contentCommand(), filesCommand(), createCmd, helpCmd, hostCommand(), layoutCommand(), mobileCommand(), notifyCommand(), openCmd, pluginCommand(), projectCommand(), repoCommand(), requestCommand(), sessionCommand(), setupCmd, shellCmd, terminalLinksCommand(), workspaceCommand(), worktreeCommand()}
 	return root
 }
 

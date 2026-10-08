@@ -1,0 +1,17 @@
+{
+  "root": "/workspace/fixture",
+  "query": "read",
+  "results": [
+    {
+      "path": "README.md",
+      "positions": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "score": 134
+    }
+  ],
+  "truncated": false
+}

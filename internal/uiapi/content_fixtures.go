@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/marcus/sidecar/internal/contentservice"
+	"github.com/marcus/sidecar/internal/filefind"
 	"github.com/marcus/sidecar/internal/livewatch"
 )
 
@@ -149,4 +150,41 @@ func (b *FixtureBackend) WatchProject(ctx context.Context, project, workspace st
 	}
 	_, err := b.ReadProject(ctx, project, workspace, p)
 	return nil, err
+}
+
+func (b *FixtureBackend) SearchProject(ctx context.Context, project, workspace string, _ *filefind.Index, p contentservice.FileSearchParams) (contentservice.FileSearchResult, error) {
+	ws, err := b.LookupProject(ctx, project, workspace)
+	if err != nil {
+		return contentservice.FileSearchResult{}, err
+	}
+	if err := contentservice.ValidateFileSearch(p); err != nil {
+		return contentservice.FileSearchResult{}, err
+	}
+	files := []string{}
+	if doc, ok := b.content["file"]; ok {
+		files = append(files, doc.Display)
+	}
+	if p.Limit == 0 {
+		p.Limit = filefind.MaxMatches
+	}
+	matches, err := filefind.FilterContext(ctx, files, p.Query, p.Limit+1, filefind.FilterOptions{Recent: p.Recent})
+	if err != nil {
+		return contentservice.FileSearchResult{}, err
+	}
+	result := contentservice.FileSearchResult{Root: ws.Root, Query: p.Query, Results: []contentservice.FileSearchMatch{}, Truncated: len(matches) > p.Limit}
+	for _, match := range matches[:min(len(matches), p.Limit)] {
+		positions := []int{}
+		n := 0
+		for off := range match.Path {
+			for _, r := range match.MatchRanges {
+				if off >= r.Start && off < r.End {
+					positions = append(positions, n)
+					break
+				}
+			}
+			n++
+		}
+		result.Results = append(result.Results, contentservice.FileSearchMatch{Path: match.Path, Positions: positions, Score: match.Score})
+	}
+	return result, nil
 }

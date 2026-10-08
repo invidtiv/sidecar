@@ -55,12 +55,25 @@ func ScanPaths(root string, wantDirs bool) ([]string, string) {
 // scanTree is ScanPaths plus the stamp of every directory the walk descended
 // into, which is what lets the cache check for changes without walking again.
 func scanTree(root string, wantDirs bool) ([]string, []DirStamp, string) {
-	ctx, cancel := context.WithTimeout(context.Background(), ScanTimeout)
+	return ScanTreeContext(context.Background(), root, wantDirs, nil)
+}
+
+// ScanTreeContext uses the TUI's scan rules through a confined filesystem.
+// allow can further refuse administrative paths or symlinks at a caller's boundary.
+func ScanTreeContext(parent context.Context, root string, wantDirs bool, allow func(string, fs.DirEntry) bool) ([]string, []DirStamp, string) {
+	ctx, cancel := context.WithTimeout(parent, ScanTimeout)
 	defer cancel()
 	walkedAt := time.Now()
 
+	dir, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, nil, "scan error: " + err.Error()
+	}
+	defer func() { _ = dir.Close() }()
 	gitIgnore := NewGitIgnore()
-	_ = gitIgnore.LoadFile(filepath.Join(root, ".gitignore"))
+	if data, err := dir.ReadFile(".gitignore"); err == nil {
+		_ = gitIgnore.LoadBytes(data)
+	}
 
 	limit := MaxFiles
 	if wantDirs {
@@ -71,7 +84,7 @@ func scanTree(root string, wantDirs bool) ([]string, []DirStamp, string) {
 	var stamps []DirStamp
 	limited := false
 
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	err = fs.WalkDir(dir.FS(), ".", func(rel string, d fs.DirEntry, err error) error {
 		// Check timeout
 		select {
 		case <-ctx.Done():
@@ -84,12 +97,6 @@ func scanTree(root string, wantDirs bool) ([]string, []DirStamp, string) {
 			return nil // Skip unreadable entries
 		}
 
-		// Get relative path
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return nil
-		}
-
 		// The root is walked but not listed.
 		if rel == "." {
 			if info, err := d.Info(); err == nil {
@@ -98,6 +105,12 @@ func scanTree(root string, wantDirs bool) ([]string, []DirStamp, string) {
 			return nil
 		}
 
+		if allow != nil && !allow(rel, d) {
+			if d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
 		name := d.Name()
 
 		if d.IsDir() {
@@ -153,7 +166,7 @@ func scanTree(root string, wantDirs bool) ([]string, []DirStamp, string) {
 	// Sort paths for consistent ordering
 	sort.Strings(paths)
 
-	if info, err := os.Stat(filepath.Join(root, ".gitignore")); err == nil && !info.IsDir() {
+	if info, err := dir.Stat(".gitignore"); err == nil && !info.IsDir() {
 		stamps = append(stamps, DirStamp{Path: ".gitignore", ModTime: info.ModTime()})
 	}
 	// Stamps vouch for the whole tree, so a walk that did not see the whole

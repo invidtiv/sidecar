@@ -75,17 +75,19 @@ const contentRoute = "/api/v0/projects/{project}/content"
 const treeRoute = "/api/v0/projects/{project}/tree"
 const layoutRoute = "/api/v0/projects/{project}/layout"
 
-// projectContentRoute matches only this lane's three resource paths.
+// projectContentRoute matches the project's content resources, layout and finder.
 func projectContentRoute(path string) (template, project string) {
 	rest, ok := strings.CutPrefix(path, "/api/v0/projects/")
 	if !ok {
 		return "", ""
 	}
 	project, resource, ok := strings.Cut(rest, "/")
-	if !ok || project == "" || strings.Contains(resource, "/") {
+	if !ok || project == "" {
 		return "", ""
 	}
 	switch resource {
+	case "files/search":
+		return fileSearchRoute, project
 	case "content":
 		return contentRoute, project
 	case "tree":

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/marcus/sidecar/internal/apiservice"
+	"github.com/marcus/sidecar/internal/filefind"
 	"github.com/marcus/sidecar/internal/mobileproto"
 )
 
@@ -130,8 +131,10 @@ type Server struct {
 	viewer        viewerRelay
 	viewerErr     error
 	// contentWatches bounds live content registrations per credential.
-	contentWatches  watchBudget
-	contentRequests contentRequestBudget
+	contentWatches     watchBudget
+	contentRequests    contentRequestBudget
+	fileIndex          filefind.Index
+	fileSearchRequests contentRequestBudget
 }
 
 // ListenerInfo describes one bound listener in status.
@@ -432,7 +435,7 @@ func (s *Server) beginStream() bool {
 
 func (s *Server) hello() Hello {
 	return Hello{APIVersion: APIVersion, APIInstance: s.instance, ServerVersion: s.opts.Version,
-		Capabilities: []string{"sessions", "status", "terminal", "ws_tickets", "events", "projects", "workspace", "workspace_operations", "content", "layouts", "uiRequestRelayV1", "notifications"},
+		Capabilities: []string{"sessions", "status", "terminal", "ws_tickets", "events", "projects", "workspace", "workspace_operations", "content", "layouts", "uiRequestRelayV1", "notifications", "file_search"},
 		Terminal:     TerminalProtocol{Protocol: "mobile", Version: mobileproto.Version}}
 }
 

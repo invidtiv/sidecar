@@ -1411,6 +1411,46 @@ sidecar content tree --workspace /home/me/api:worktree:/home/me/api --json
 sidecar content tree --workspace /home/me/api:worktree:/home/me/api --path internal --path internal/cli --json
 ```
 
+## `sidecar files`
+
+Search project files
+
+```
+Usage: sidecar files <command>
+```
+
+### `sidecar files find`
+
+Find project files with the shared fuzzy matcher
+
+Search the configured project's files using the same ranking and ignore rules as the TUI and UI API. Empty query lists recent files first, then shallow paths. Recent hints are relative paths in most-recent-first order. Workspace selectors are passed unchanged from the catalog's content_workspace_id. Match positions are zero-based Unicode code point indices.
+
+```
+Usage: sidecar files find [QUERY] --project PROJECT [--workspace ID] [--recent PATH] [--limit N] [--json]
+```
+
+**Options:**
+
+- `--project PROJECT`: Exact configured project name or key (required)
+- `--workspace ID`: Optional project workspace selector
+- `--recent PATH`: Recent relative file hint, repeat most recent first
+- `--limit N`: Maximum results, 1 to 100 (default 50)
+- `--json`: Write the structured search result
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: searched
+- `1`: internal failure
+- `2`: usage error
+- `5`: project, workspace or path rejected
+
+**Examples:**
+
+```bash
+sidecar files find readme --project sidecar --json
+```
+
 ## `sidecar create`
 
 Create a Sidecar-managed shell or worktree
