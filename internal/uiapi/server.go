@@ -13,6 +13,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"sort"
@@ -75,8 +76,10 @@ type TailnetOptions struct {
 	// node owner.
 	Adapters TailnetAdapters
 
-	pollInterval time.Duration // direct-mode tests shorten these
-	minBackoff   time.Duration
+	pollInterval    time.Duration // direct-mode tests shorten these
+	minBackoff      time.Duration
+	recheckInterval time.Duration
+	peerPrefixes    []netip.Prefix // tests admit loopback peers
 }
 
 // Options configures Start.
@@ -324,7 +327,7 @@ func (s *Server) listenTailnet(opts TailnetOptions, inherited net.Listener) erro
 		trust.origins = map[string]bool{publicURL: true}
 	}
 	for _, login := range opts.Logins {
-		trust.logins[login] = true
+		trust.logins[strings.ToLower(login)] = true
 	}
 	s.tailnet.Store(trust)
 	if opts.Port > 0 {

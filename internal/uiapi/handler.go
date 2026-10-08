@@ -102,6 +102,9 @@ func (h *listenerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.dispatch(w, r, caller{listener: ListenerLocal, auth: "local"})
 		return
 	}
+	if h.kind == ListenerTailnet {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+	}
 	if h.direct != nil {
 		// Identify the connection before reading anything else from it.
 		var admitted bool
@@ -269,10 +272,10 @@ func (h *listenerHandler) authenticate(w http.ResponseWriter, r *http.Request, c
 				return c, false
 			}
 			resolved.listener, resolved.login = c.listener, login
-			return resolved, true
+			return withTailnetPeer(r, resolved), true
 		}
 		c.auth, c.login, c.client = "tailnet", login, "tailnet:"+login
-		return c, true
+		return withTailnetPeer(r, c), true
 	}
 	token, present := bearerToken(r)
 	if !present {
@@ -339,7 +342,7 @@ func (h *listenerHandler) tailnetLogin(r *http.Request) (login, code, message st
 	} else if login = strings.TrimSpace(r.Header.Get(tailscaleLoginHead)); login == "" {
 		return "", CodeUnauthenticated, "Reach this listener through `tailscale serve`, which identifies your tailnet login."
 	}
-	if !h.s.tailnetTrustSnapshot().logins[login] {
+	if !h.s.tailnetTrustSnapshot().logins[strings.ToLower(login)] {
 		return "", CodeLoginRefused, fmt.Sprintf("Tailnet login %q is not allowed; add it to api.tailnetLogins in the Sidecar config.", login)
 	}
 	return login, "", ""

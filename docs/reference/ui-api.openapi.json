@@ -871,6 +871,9 @@
           "auth": {
             "type": "string"
           },
+          "device": {
+            "type": "string"
+          },
           "id": {
             "type": "string"
           },

@@ -12,7 +12,6 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -86,8 +85,14 @@ type tailnetTrust struct {
 	logins    map[string]bool
 	publicURL string
 	host      string
-	// own holds the node's own tailnet addresses (direct mode only).
-	own map[netip.Addr]bool
+	// The rest is direct mode only. own holds the node's own tailnet
+	// addresses; ownerID pins the default owner by user ID (zero when
+	// api.tailnetLogins names the logins); selfID is the node's stable ID;
+	// suffix is the tailnet's MagicDNS suffix.
+	own     map[netip.Addr]bool
+	ownerID int64
+	selfID  string
+	suffix  string
 }
 
 func (s *Server) tailnetTrustSnapshot() *tailnetTrust {
@@ -95,14 +100,6 @@ func (s *Server) tailnetTrustSnapshot() *tailnetTrust {
 		return trust
 	}
 	return &tailnetTrust{}
-}
-
-type tailnetPeerKey struct{}
-type tailnetConnKey struct{}
-
-func tailnetPeerFrom(ctx context.Context) (TailnetPeer, bool) {
-	peer, ok := ctx.Value(tailnetPeerKey{}).(TailnetPeer)
-	return peer, ok
 }
 
 type tailnetDirect struct {
@@ -114,10 +111,14 @@ type tailnetDirect struct {
 	whois    *whoisCache
 	http     *http.Server
 	handler  *listenerHandler
+	logs     *tailnetLogs
+	workers  sync.WaitGroup
 
-	pollInterval time.Duration
-	minBackoff   time.Duration
-	certInterval time.Duration
+	pollInterval    time.Duration
+	minBackoff      time.Duration
+	certInterval    time.Duration
+	recheckInterval time.Duration
+	peerPrefixes    []netip.Prefix
 
 	cert      tlsCertHolder
 	certCheck time.Time
@@ -168,7 +169,14 @@ func (s *Server) prepareTailnetDirect(opts TailnetOptions) error {
 	}
 	d := &tailnetDirect{s: s, port: port, adapters: opts.Adapters.withDefaults(), tlsDir: filepath.Join(s.dir, "tls", "tailnet"),
 		pollInterval: opts.pollInterval, minBackoff: opts.minBackoff, certInterval: tailnetCertInterval,
+		recheckInterval: opts.recheckInterval, peerPrefixes: tailnetSourcePrefixes, logs: newTailnetLogs(s.opts.Logf),
 		kick: make(chan struct{}, 1), done: make(chan struct{}), first: make(chan struct{})}
+	if opts.peerPrefixes != nil {
+		d.peerPrefixes = opts.peerPrefixes
+	}
+	if d.recheckInterval <= 0 {
+		d.recheckInterval = tailnetRecheckInterval
+	}
 	for _, login := range opts.Logins {
 		if login = strings.TrimSpace(login); login != "" {
 			d.logins = append(d.logins, login)
@@ -180,7 +188,7 @@ func (s *Server) prepareTailnetDirect(opts TailnetOptions) error {
 	if d.minBackoff <= 0 {
 		d.minBackoff = tailnetMinBackoff
 	}
-	d.whois = newWhoisCache(d.adapters.Whois, s.opts.Now)
+	d.whois = newWhoisCache(s.ctx, d.adapters.Whois, s.opts.Now)
 	d.status = TailnetStatus{Mode: TailnetModeDirect, State: TailnetStateStarting, Port: port, Logins: append([]string(nil), d.logins...), Since: s.opts.Now().UTC()}
 	d.handler = &listenerHandler{s: s, kind: ListenerTailnet, routes: s.routeTable(), direct: d}
 	d.http = &http.Server{Handler: d.handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute,
@@ -189,19 +197,14 @@ func (s *Server) prepareTailnetDirect(opts TailnetOptions) error {
 			return context.WithValue(ctx, tailnetConnKey{}, conn.RemoteAddr())
 		},
 		TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: d.getCertificate},
-		ErrorLog:  log.New(logfWriter(func(line string) { s.opts.Logf("tailnet listener: %s", line) }), "", 0)}
+		ErrorLog:  log.New(d.logs, "", 0)}
 	s.direct = d
 	return nil
 }
 
-type logfWriter func(string)
-
-func (w logfWriter) Write(p []byte) (int, error) {
-	w(strings.TrimSpace(string(p)))
-	return len(p), nil
-}
-
 func (d *tailnetDirect) start() {
+	d.workers.Add(1)
+	go d.supervise()
 	go d.run()
 	timer := time.NewTimer(tailnetFirstAttemptWait)
 	defer timer.Stop()
@@ -219,6 +222,7 @@ func (d *tailnetDirect) stop(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+	d.workers.Wait()
 	return d.http.Shutdown(ctx)
 }
 
@@ -303,9 +307,14 @@ func (d *tailnetDirect) attempt(ctx context.Context) time.Duration {
 		d.closeListeners()
 		return d.fail(TailnetStateWaiting, fmt.Sprintf("Tailscale is not reachable (%v); retrying. Start or log in to Tailscale.", err))
 	}
-	logins := d.logins
-	if len(logins) == 0 && node.OwnerLogin != "" {
-		logins = []string{node.OwnerLogin}
+	logins, ownerID := d.logins, int64(0)
+	if len(logins) == 0 && len(node.Tags) > 0 {
+		// A tagged node belongs to no person, so there is no owner to trust.
+		d.closeListeners()
+		return d.fail(TailnetStateWaiting, fmt.Sprintf("This node is tagged (%s), so it has no owner to default to; set api.tailnetLogins in the Sidecar config.", strings.Join(node.Tags, ", ")))
+	}
+	if len(logins) == 0 && node.OwnerLogin != "" && node.OwnerID != 0 && !strings.EqualFold(node.OwnerLogin, taggedDevicesLogin) {
+		logins, ownerID = []string{node.OwnerLogin}, node.OwnerID
 	}
 	if len(logins) == 0 {
 		d.closeListeners()
@@ -324,7 +333,7 @@ func (d *tailnetDirect) attempt(ctx context.Context) time.Duration {
 		// A new name or address: what is bound no longer reaches this node.
 		d.closeListeners()
 	}
-	publicURL := d.publish(node, logins)
+	publicURL := d.publish(node, logins, ownerID)
 
 	if wait, ok := d.ensureCert(ctx, node.Host); !ok {
 		d.closeListeners()
@@ -370,7 +379,7 @@ func (d *tailnetDirect) attempt(ctx context.Context) time.Duration {
 }
 
 // publish replaces the trust snapshot for node and returns its own origin.
-func (d *tailnetDirect) publish(node TailnetNode, logins []string) string {
+func (d *tailnetDirect) publish(node TailnetNode, logins []string, ownerID int64) string {
 	host := node.Host
 	hostPort := host + ":" + strconv.Itoa(d.port)
 	publicURL := "https://" + hostPort
@@ -381,18 +390,42 @@ func (d *tailnetDirect) publish(node TailnetNode, logins []string) string {
 		trust.origins = map[string]bool{publicURL: true}
 	}
 	trust.publicURL = publicURL
+	trust.ownerID, trust.selfID, trust.suffix = ownerID, node.StableID, node.Suffix
+	if trust.suffix == "" {
+		_, trust.suffix, _ = strings.Cut(host, ".")
+	}
 	for _, login := range logins {
-		trust.logins[login] = true
+		trust.logins[strings.ToLower(login)] = true
 	}
 	for _, addr := range node.Addresses {
 		trust.own[addr.Unmap()] = true
 	}
-	d.s.tailnet.Store(trust)
+	previous := d.s.tailnet.Swap(trust)
+	if previous != nil && (previous.ownerID != trust.ownerID || !sameLogins(previous.logins, trust.logins)) {
+		// Who may connect changed: streams admitted under the old rule close
+		// and reconnect under the new one.
+		d.s.opts.Logf("tailnet listener: allowed logins changed; closing open tailnet streams")
+		for _, client := range d.s.clients.tailnetStreams() {
+			client.revoke()
+		}
+	}
 	d.mu.Lock()
 	d.node = node
 	d.status.Host, d.status.Origin = host, publicURL
 	d.mu.Unlock()
 	return publicURL
+}
+
+func sameLogins(a, b map[string]bool) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for login := range a {
+		if !b[login] {
+			return false
+		}
+	}
+	return true
 }
 
 func sameAddrs(a, b []netip.Addr) bool {
@@ -573,8 +606,10 @@ func parseTailnetCert(certPEM, keyPEM []byte, host string, now time.Time) (*tls.
 	return &cert, leaf, nil
 }
 
-func (d *tailnetDirect) certPaths(host string) (string, string) {
-	return filepath.Join(d.tlsDir, host+".crt"), filepath.Join(d.tlsDir, host+".key")
+// certPath is one file holding the chain and its key, so the pair is
+// replaced atomically and can never be read half old, half new.
+func (d *tailnetDirect) certPath(host string) string {
+	return filepath.Join(d.tlsDir, host+".pem")
 }
 
 // storeCert keeps the pair at mode 0600 in a 0700 directory, so a restart
@@ -586,24 +621,20 @@ func (d *tailnetDirect) storeCert(host string, certPEM, keyPEM []byte) error {
 	if err := os.Chmod(d.tlsDir, 0o700); err != nil {
 		return err
 	}
-	certPath, keyPath := d.certPaths(host)
-	if err := writePrivateFile(keyPath, keyPEM); err != nil {
-		return err
-	}
-	return writePrivateFile(certPath, certPEM)
+	return writePrivateFile(d.certPath(host), append(append([]byte(nil), certPEM...), keyPEM...))
 }
 
 func (d *tailnetDirect) loadStoredCert(host string) {
-	certPath, keyPath := d.certPaths(host)
-	info, err := os.Lstat(keyPath)
+	path := d.certPath(host)
+	info, err := os.Lstat(path)
 	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
 		return
 	}
-	certPEM, err := os.ReadFile(certPath)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return
 	}
-	keyPEM, err := os.ReadFile(keyPath)
+	certPEM, keyPEM, err := splitPEM(data)
 	if err != nil {
 		return
 	}
@@ -613,162 +644,6 @@ func (d *tailnetDirect) loadStoredCert(host string) {
 	}
 	d.cert.set(cert, leaf)
 	d.certHost = host
-}
-
-// admit establishes the connection's tailnet identity before anything else
-// is read from the request. It refuses the node's own addresses (local
-// processes use the Local socket or the Browser listener), any address
-// Tailscale cannot identify, tagged devices, and logins that are not allowed.
-func (d *tailnetDirect) admit(w http.ResponseWriter, r *http.Request) (*http.Request, bool) {
-	addr, ok := connPeerAddr(r)
-	if !ok {
-		writeError(w, http.StatusUnauthorized, CodeUnauthenticated, "This connection has no tailnet source address, so it cannot be identified.")
-		return r, false
-	}
-	trust := d.s.tailnetTrustSnapshot()
-	if trust.own[addr] {
-		writeError(w, http.StatusForbidden, CodeLoginRefused, "Connections from this machine's own tailnet address are refused. On this machine use the Local socket (the sidecar CLI) or the Browser listener (`sidecar api open`).")
-		return r, false
-	}
-	peer, err := d.whois.get(r.Context(), addr)
-	if err != nil {
-		writeError(w, http.StatusUnauthorized, CodeUnauthenticated, fmt.Sprintf("Tailscale could not identify the device at %s (%v); this listener admits only identified tailnet devices.", addr, err))
-		return r, false
-	}
-	if len(peer.Tags) > 0 {
-		writeError(w, http.StatusForbidden, CodeLoginRefused, fmt.Sprintf("Device %s is tagged (%s) and belongs to no person; only an allowed login's untagged devices may use this listener.", peer.Device, strings.Join(peer.Tags, ", ")))
-		return r, false
-	}
-	if !trust.logins[peer.Login] {
-		writeError(w, http.StatusForbidden, CodeLoginRefused, fmt.Sprintf("Tailnet login %q (device %s) is not allowed; add it to api.tailnetLogins in the Sidecar config.", peer.Login, peer.Device))
-		return r, false
-	}
-	return r.WithContext(context.WithValue(r.Context(), tailnetPeerKey{}, peer)), true
-}
-
-func connPeerAddr(r *http.Request) (netip.Addr, bool) {
-	var raw string
-	if addr, ok := r.Context().Value(tailnetConnKey{}).(net.Addr); ok && addr != nil {
-		raw = addr.String()
-	} else {
-		return netip.Addr{}, false
-	}
-	addrPort, err := netip.ParseAddrPort(raw)
-	if err != nil {
-		return netip.Addr{}, false
-	}
-	return addrPort.Addr().Unmap(), true
-}
-
-// whoisCache answers whois by address for a short time, with one lookup in
-// flight per address and a bound on concurrent lookups, so a burst of
-// connections costs one subprocess. Failures are cached briefly so a peer
-// that is refused cannot turn reconnects into a subprocess storm.
-type whoisCache struct {
-	lookup  TailnetWhoisFunc
-	now     func() time.Time
-	ttl     time.Duration
-	failTTL time.Duration
-	sem     chan struct{}
-
-	mu      sync.Mutex
-	entries map[netip.Addr]*whoisEntry
-}
-
-type whoisEntry struct {
-	ready   chan struct{}
-	peer    TailnetPeer
-	err     error
-	expires time.Time
-}
-
-func newWhoisCache(lookup TailnetWhoisFunc, now func() time.Time) *whoisCache {
-	return &whoisCache{lookup: lookup, now: now, ttl: tailnetWhoisTTL, failTTL: tailnetWhoisNegativeTTL,
-		sem: make(chan struct{}, tailnetWhoisConcurrency), entries: map[netip.Addr]*whoisEntry{}}
-}
-
-func (c *whoisCache) get(ctx context.Context, addr netip.Addr) (TailnetPeer, error) {
-	c.mu.Lock()
-	if entry := c.entries[addr]; entry != nil {
-		select {
-		case <-entry.ready:
-			if c.now().Before(entry.expires) {
-				c.mu.Unlock()
-				return entry.peer, entry.err
-			}
-		default:
-			c.mu.Unlock()
-			select {
-			case <-entry.ready:
-				return entry.peer, entry.err
-			case <-ctx.Done():
-				return TailnetPeer{}, ctx.Err()
-			}
-		}
-	}
-	entry := &whoisEntry{ready: make(chan struct{})}
-	c.sweepLocked()
-	c.entries[addr] = entry
-	c.mu.Unlock()
-
-	peer, err := c.resolve(ctx, addr)
-	ttl := c.ttl
-	if err != nil {
-		ttl = c.failTTL
-		if ctx.Err() != nil {
-			ttl = 0
-		}
-	}
-	entry.peer, entry.err, entry.expires = peer, err, c.now().Add(ttl)
-	close(entry.ready)
-	return peer, err
-}
-
-func (c *whoisCache) resolve(ctx context.Context, addr netip.Addr) (TailnetPeer, error) {
-	select {
-	case c.sem <- struct{}{}:
-	case <-ctx.Done():
-		return TailnetPeer{}, ctx.Err()
-	}
-	defer func() { <-c.sem }()
-	lookupCtx, cancel := context.WithTimeout(ctx, tailnetWhoisTimeout)
-	defer cancel()
-	peer, err := c.lookup(lookupCtx, addr)
-	if err == nil && strings.TrimSpace(peer.Login) == "" {
-		err = errors.New("whois named no login")
-	}
-	if err != nil {
-		return TailnetPeer{}, err
-	}
-	peer.Tags = append([]string(nil), peer.Tags...)
-	sort.Strings(peer.Tags)
-	return peer, nil
-}
-
-func (c *whoisCache) sweepLocked() {
-	if len(c.entries) < tailnetWhoisMaxEntries {
-		return
-	}
-	now := c.now()
-	for addr, entry := range c.entries {
-		select {
-		case <-entry.ready:
-			if !now.Before(entry.expires) {
-				delete(c.entries, addr)
-			}
-		default:
-		}
-	}
-	if len(c.entries) < tailnetWhoisMaxEntries {
-		return
-	}
-	for addr, entry := range c.entries {
-		select {
-		case <-entry.ready:
-			delete(c.entries, addr)
-		default:
-		}
-	}
 }
 
 // validMagicDNSName accepts lowercase DNS labels joined by dots.

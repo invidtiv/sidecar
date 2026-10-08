@@ -42,6 +42,16 @@ type TailnetNode struct {
 	Host string
 	// OwnerLogin owns the node; it is the default allowed login.
 	OwnerLogin string
+	// OwnerID is the owning user's ID. The default owner is pinned by it, not
+	// by the login string.
+	OwnerID int64
+	// StableID identifies the node itself, so whois naming it is refused.
+	StableID string
+	// Tags are the node's ACL tags. A tagged node has no owner to default to.
+	Tags []string
+	// Suffix is the tailnet's MagicDNS suffix; peers outside it are shared in
+	// from another tailnet.
+	Suffix string
 	// Addresses are the node's own tailnet addresses: what direct mode binds,
 	// and the sources it refuses.
 	Addresses []netip.Addr
@@ -49,9 +59,17 @@ type TailnetNode struct {
 
 // TailnetPeer is Tailscale's answer for the device behind one source address.
 type TailnetPeer struct {
-	Login  string
+	Login string
+	// UserID is the owning user's ID.
+	UserID int64
+	// Device is the device's short name; NodeID its stable node ID; Name its
+	// MagicDNS name, lowercased without the trailing dot.
 	Device string
+	NodeID string
+	Name   string
 	Tags   []string
+	// SharedIn reports a device shared into this tailnet by another one.
+	SharedIn bool
 }
 
 // The adapter seams over Tailscale. Each default shells out to the tailscale
@@ -138,9 +156,16 @@ func ParseTailscaleNode(data []byte) (TailnetNode, error) {
 		return TailnetNode{}, err
 	}
 	var status struct {
-		BackendState string `json:"BackendState"`
-		Self         *struct {
-			TailscaleIPs []string `json:"TailscaleIPs"`
+		BackendState   string `json:"BackendState"`
+		MagicDNSSuffix string `json:"MagicDNSSuffix"`
+		CurrentTailnet *struct {
+			MagicDNSSuffix string `json:"MagicDNSSuffix"`
+		} `json:"CurrentTailnet"`
+		Self *struct {
+			ID           string          `json:"ID"`
+			UserID       json.RawMessage `json:"UserID"`
+			Tags         []string        `json:"Tags"`
+			TailscaleIPs []string        `json:"TailscaleIPs"`
 		} `json:"Self"`
 	}
 	if err := json.Unmarshal(data, &status); err != nil {
@@ -149,7 +174,19 @@ func ParseTailscaleNode(data []byte) (TailnetNode, error) {
 	if status.BackendState != "" && status.BackendState != "Running" {
 		return TailnetNode{}, fmt.Errorf("tailscale is %s, not Running; connect it with `tailscale up` or the Tailscale app", status.BackendState)
 	}
-	node := TailnetNode{Host: identity.Host, OwnerLogin: identity.OwnerLogin}
+	node := TailnetNode{Host: identity.Host, OwnerLogin: identity.OwnerLogin, StableID: status.Self.ID, Tags: status.Self.Tags}
+	node.OwnerID, _ = strconv.ParseInt(strings.Trim(string(status.Self.UserID), `"`), 10, 64)
+	node.Suffix = status.MagicDNSSuffix
+	if node.Suffix == "" && status.CurrentTailnet != nil {
+		node.Suffix = status.CurrentTailnet.MagicDNSSuffix
+	}
+	if node.Suffix == "" {
+		// The suffix is everything after the node's own first label.
+		if _, rest, ok := strings.Cut(node.Host, "."); ok {
+			node.Suffix = rest
+		}
+	}
+	node.Suffix = strings.ToLower(strings.Trim(node.Suffix, "."))
 	for _, raw := range status.Self.TailscaleIPs {
 		addr, err := netip.ParseAddr(raw)
 		if err != nil {
@@ -178,11 +215,14 @@ func TailscaleWhois(ctx context.Context, addr netip.Addr) (TailnetPeer, error) {
 func ParseTailscaleWhois(data []byte) (TailnetPeer, error) {
 	var whois struct {
 		Node *struct {
-			Name         string   `json:"Name"`
-			ComputedName string   `json:"ComputedName"`
-			Tags         []string `json:"Tags"`
+			StableID     string          `json:"StableID"`
+			Name         string          `json:"Name"`
+			ComputedName string          `json:"ComputedName"`
+			Tags         []string        `json:"Tags"`
+			Sharer       json.RawMessage `json:"Sharer"`
 		} `json:"Node"`
 		UserProfile *struct {
+			ID        int64  `json:"ID"`
 			LoginName string `json:"LoginName"`
 		} `json:"UserProfile"`
 	}
@@ -196,14 +236,17 @@ func ParseTailscaleWhois(data []byte) (TailnetPeer, error) {
 	if device == "" {
 		device = strings.SplitN(whois.Node.Name, ".", 2)[0]
 	}
-	return TailnetPeer{Login: strings.TrimSpace(whois.UserProfile.LoginName), Device: device, Tags: whois.Node.Tags}, nil
+	sharer := strings.Trim(strings.TrimSpace(string(whois.Node.Sharer)), `"`)
+	return TailnetPeer{Login: strings.TrimSpace(whois.UserProfile.LoginName), UserID: whois.UserProfile.ID, Device: device,
+		NodeID: whois.Node.StableID, Name: strings.ToLower(strings.TrimSuffix(whois.Node.Name, ".")), Tags: whois.Node.Tags,
+		SharedIn: sharer != "" && sharer != "null" && sharer != "0"}, nil
 }
 
 // TailscaleCert fetches the node's certificate with `tailscale cert`, written
 // to stdout so the key never touches a file Sidecar does not own. Tailscale
 // keeps and renews its own copy; asking again returns the current one.
 func TailscaleCert(ctx context.Context, host string) ([]byte, []byte, error) {
-	out, err := tailscaleCLI(ctx, "cert", "--cert-file", "-", "--key-file", "-", host)
+	out, err := tailscaleCLI(ctx, "cert", "--cert-file", "-", "--key-file", "-", "--", host)
 	if err != nil {
 		return nil, nil, err
 	}

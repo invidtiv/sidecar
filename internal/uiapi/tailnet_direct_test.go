@@ -31,6 +31,18 @@ import (
 
 const directTestPort = 7861
 
+const (
+	testOwnerID   = 42
+	testSelfID    = "nSelfCNTRL"
+	testPeerName  = "laptop.example.ts.net"
+	testPeerNodID = "nLaptopCNTRL"
+)
+
+// ownerPeer is the owner's untagged laptop on this tailnet.
+func ownerPeer() TailnetPeer {
+	return TailnetPeer{Login: testTailnetLogin, UserID: testOwnerID, Device: "laptop", NodeID: testPeerNodID, Name: testPeerName}
+}
+
 var (
 	directNodeV4 = netip.MustParseAddr("100.64.0.10")
 	directNodeV6 = netip.MustParseAddr("fd7a:115c:a1e0::10")
@@ -61,8 +73,9 @@ type fakeTailnet struct {
 
 func newFakeTailnet(t *testing.T, clock func() time.Time) *fakeTailnet {
 	f := &fakeTailnet{t: t, clock: clock,
-		node:  TailnetNode{Host: testTailnetHost, OwnerLogin: testTailnetLogin, Addresses: []netip.Addr{directNodeV4, directNodeV6}},
-		peers: map[netip.Addr]TailnetPeer{loopbackPeer: {Login: testTailnetLogin, Device: "laptop"}}}
+		node: TailnetNode{Host: testTailnetHost, OwnerLogin: testTailnetLogin, OwnerID: testOwnerID, StableID: testSelfID, Suffix: "example.ts.net",
+			Addresses: []netip.Addr{directNodeV4, directNodeV6}},
+		peers: map[netip.Addr]TailnetPeer{loopbackPeer: ownerPeer()}}
 	f.certPEM, f.keyPEM = testCertificate(t, testTailnetHost, clock().Add(60*24*time.Hour))
 	return f
 }
@@ -154,7 +167,16 @@ type directHarness struct {
 	fake *fakeTailnet
 }
 
+// loopbackPrefixes admit the test clients, which connect from 127.0.0.1, as
+// if it were a tailnet address.
+var loopbackPrefixes = append([]netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}, tailnetSourcePrefixes...)
+
 func newDirectHarness(t *testing.T, setup ...func(*fakeTailnet)) *directHarness {
+	t.Helper()
+	return newDirectHarnessWith(t, func(*TailnetOptions) {}, setup...)
+}
+
+func newDirectHarnessWith(t *testing.T, options func(*TailnetOptions), setup ...func(*fakeTailnet)) *directHarness {
 	t.Helper()
 	var fake *fakeTailnet
 	h := newHarness(t, func(o *Options) {
@@ -162,7 +184,9 @@ func newDirectHarness(t *testing.T, setup ...func(*fakeTailnet)) *directHarness 
 		for _, fn := range setup {
 			fn(fake)
 		}
-		o.Tailnet = &TailnetOptions{Mode: TailnetModeDirect, Adapters: fake.adapters(), pollInterval: 20 * time.Millisecond, minBackoff: 10 * time.Millisecond}
+		o.Tailnet = &TailnetOptions{Mode: TailnetModeDirect, Adapters: fake.adapters(), pollInterval: 20 * time.Millisecond, minBackoff: 10 * time.Millisecond,
+			recheckInterval: 20 * time.Millisecond, peerPrefixes: loopbackPrefixes}
+		options(o.Tailnet)
 	})
 	return &directHarness{harness: h, fake: fake}
 }
@@ -244,7 +268,7 @@ func TestDirectTailnetAdmitsAnAllowedLogin(t *testing.T) {
 		t.Fatalf("echo = %q", got)
 	}
 	clients := h.s.status().Clients
-	if len(clients) != 1 || clients[0].Auth != "tailnet" || clients[0].Login != testTailnetLogin || clients[0].Listener != ListenerTailnet {
+	if len(clients) != 1 || clients[0].Auth != "tailnet" || clients[0].Login != testTailnetLogin || clients[0].Listener != ListenerTailnet || clients[0].Device != "laptop" {
 		t.Fatalf("clients = %+v", clients)
 	}
 	_ = conn.Close(websocket.StatusNormalClosure, "")
@@ -264,10 +288,40 @@ func TestDirectTailnetRefusesUnidentifiedPeers(t *testing.T) {
 		code   string
 	}{
 		"login not allowed": {func(f *fakeTailnet) {
-			f.peers[loopbackPeer] = TailnetPeer{Login: "intruder@example.com", Device: "theirs"}
+			f.peers[loopbackPeer] = TailnetPeer{Login: "intruder@example.com", UserID: 99, Device: "theirs", Name: "theirs.example.ts.net"}
+		}, http.StatusForbidden, CodeLoginRefused},
+		"owner login, other user": {func(f *fakeTailnet) {
+			peer := ownerPeer()
+			peer.UserID = 99
+			f.peers[loopbackPeer] = peer
 		}, http.StatusForbidden, CodeLoginRefused},
 		"tagged device": {func(f *fakeTailnet) {
-			f.peers[loopbackPeer] = TailnetPeer{Login: testTailnetLogin, Device: "ci", Tags: []string{"tag:ci"}}
+			peer := ownerPeer()
+			peer.Tags = []string{"tag:ci"}
+			f.peers[loopbackPeer] = peer
+		}, http.StatusForbidden, CodeLoginRefused},
+		"tagged-devices login": {func(f *fakeTailnet) {
+			f.peers[loopbackPeer] = TailnetPeer{Login: "tagged-devices", UserID: testOwnerID, Device: "ci", Name: "ci.example.ts.net"}
+		}, http.StatusForbidden, CodeLoginRefused},
+		"shared in": {func(f *fakeTailnet) {
+			peer := ownerPeer()
+			peer.SharedIn = true
+			f.peers[loopbackPeer] = peer
+		}, http.StatusForbidden, CodeLoginRefused},
+		"other tailnet's name": {func(f *fakeTailnet) {
+			peer := ownerPeer()
+			peer.Name = "laptop.other.ts.net"
+			f.peers[loopbackPeer] = peer
+		}, http.StatusForbidden, CodeLoginRefused},
+		"whois names this node": {func(f *fakeTailnet) {
+			peer := ownerPeer()
+			peer.NodeID = testSelfID
+			f.peers[loopbackPeer] = peer
+		}, http.StatusForbidden, CodeLoginRefused},
+		"whois names this host": {func(f *fakeTailnet) {
+			peer := ownerPeer()
+			peer.Name = testTailnetHost
+			f.peers[loopbackPeer] = peer
 		}, http.StatusForbidden, CodeLoginRefused},
 		"whois fails":     {func(f *fakeTailnet) { f.whoisErr = errors.New("tailscaled unavailable") }, http.StatusUnauthorized, CodeUnauthenticated},
 		"unknown address": {func(f *fakeTailnet) { delete(f.peers, loopbackPeer) }, http.StatusUnauthorized, CodeUnauthenticated},
@@ -280,6 +334,12 @@ func TestDirectTailnetRefusesUnidentifiedPeers(t *testing.T) {
 			for _, path := range []string{"/api/v0/sessions", "/", "/api/v0/hello", "/pair", "/api/v0/pairing/exchange"} {
 				response, data := h.directDo(req{path: path, header: map[string]string{"Origin": directOrigin(), tailscaleLoginHead: testTailnetLogin}})
 				expect(t, response, data, tc.status, tc.code)
+				if !response.Close || response.Header.Get("X-Content-Type-Options") != "nosniff" {
+					t.Fatalf("refusal kept the connection or sniffable: close=%v %v", response.Close, response.Header)
+				}
+				if tc.status == http.StatusUnauthorized && (strings.Contains(string(data), "peer not found") || strings.Contains(string(data), "tailscaled")) {
+					t.Fatalf("refusal leaked the whois detail: %s", data)
+				}
 			}
 			if _, response, err := h.dial(t, http.Header{"Origin": {directOrigin()}, tailscaleLoginHead: {testTailnetLogin}}); err == nil || response == nil || response.StatusCode != tc.status {
 				t.Fatalf("terminal upgrade was not refused: %v %v", response, err)
@@ -294,7 +354,9 @@ func TestDirectTailnetRefusesUnidentifiedPeers(t *testing.T) {
 // Direct mode's identity is the connection's, so the header tailscale serve
 // would add is meaningless here: it neither grants nor changes a login.
 func TestDirectTailnetIgnoresTheLoginHeader(t *testing.T) {
-	h := newDirectHarness(t, func(f *fakeTailnet) { f.peers[loopbackPeer] = TailnetPeer{Login: "intruder@example.com"} })
+	h := newDirectHarness(t, func(f *fakeTailnet) {
+		f.peers[loopbackPeer] = TailnetPeer{Login: "intruder@example.com", UserID: 99, Name: "theirs.example.ts.net"}
+	})
 	response, data := h.directDo(req{path: "/api/v0/sessions", header: map[string]string{tailscaleLoginHead: testTailnetLogin}})
 	expect(t, response, data, http.StatusForbidden, CodeLoginRefused)
 
@@ -386,7 +448,7 @@ func TestWhoisCacheExpiresAndCoalesces(t *testing.T) {
 	calls := 0
 	release := make(chan struct{})
 	fail := false
-	cache := newWhoisCache(func(context.Context, netip.Addr) (TailnetPeer, error) {
+	cache := newWhoisCache(context.Background(), func(context.Context, netip.Addr) (TailnetPeer, error) {
 		<-release
 		mu.Lock()
 		defer mu.Unlock()
@@ -454,7 +516,9 @@ func TestDirectTailnetCachesWhoisPerAddress(t *testing.T) {
 	// Once the answer expires the device is identified again, and a change
 	// (here: the device was tagged) takes effect.
 	h.fake.set(func(f *fakeTailnet) {
-		f.peers[loopbackPeer] = TailnetPeer{Login: testTailnetLogin, Tags: []string{"tag:server"}}
+		peer := ownerPeer()
+		peer.Tags = []string{"tag:server"}
+		f.peers[loopbackPeer] = peer
 	})
 	h.clock.Advance(tailnetWhoisTTL + time.Second)
 	response, data := h.directDo(req{path: "/api/v0/hello"})
@@ -545,10 +609,8 @@ func TestDirectTailnetCertificateIsPrivateAndReloads(t *testing.T) {
 	if info, err := os.Stat(dir); err != nil || info.Mode().Perm() != 0o700 {
 		t.Fatalf("tls dir: %v %v", info, err)
 	}
-	for _, name := range []string{testTailnetHost + ".crt", testTailnetHost + ".key"} {
-		if info, err := os.Stat(filepath.Join(dir, name)); err != nil || info.Mode().Perm() != 0o600 {
-			t.Fatalf("%s: %v %v", name, info, err)
-		}
+	if info, err := os.Stat(filepath.Join(dir, testTailnetHost+".pem")); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("stored pair: %v %v", info, err)
 	}
 	served := func() *x509.Certificate {
 		conn, err := tls.Dial("tcp", h.addr(), &tls.Config{ServerName: testTailnetHost, InsecureSkipVerify: true}) //nolint:gosec // reading the served certificate
@@ -564,7 +626,7 @@ func TestDirectTailnetCertificateIsPrivateAndReloads(t *testing.T) {
 	h.fake.set(func(f *fakeTailnet) { f.certPEM, f.keyPEM = renewedCert, renewedKey })
 	h.clock.Advance(tailnetCertInterval + time.Minute)
 	waitFor(t, "renewed certificate", func() bool { return served().SerialNumber.Cmp(first.SerialNumber) != 0 })
-	if stored, _ := os.ReadFile(filepath.Join(dir, testTailnetHost+".crt")); string(stored) != string(renewedCert) {
+	if stored, _ := os.ReadFile(filepath.Join(dir, testTailnetHost+".pem")); string(stored) != string(renewedCert)+string(renewedKey) {
 		t.Fatal("the renewed certificate was not stored")
 	}
 	// A failed refresh keeps serving a certificate that is still valid.
@@ -608,10 +670,7 @@ func TestDirectTailnetUsesAStoredCertificateWhenTailscaleCannotIssue(t *testing.
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, testTailnetHost+".crt"), fake.certPEM, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, testTailnetHost+".key"), fake.keyPEM, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, testTailnetHost+".pem"), append(append([]byte(nil), fake.certPEM...), fake.keyPEM...), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	fake.certErr = errors.New("offline")
@@ -691,8 +750,14 @@ func TestActivatedListenersInDirectMode(t *testing.T) {
 }
 
 func TestParseTailscaleNode(t *testing.T) {
-	node, err := ParseTailscaleNode([]byte(`{"BackendState":"Running","Self":{"DNSName":"Aerie.tail.ts.net.","UserID":7,"TailscaleIPs":["100.89.245.23","fd7a:115c:a1e0::6139:f517"]},"User":{"7":{"LoginName":"marcus@example.com"}}}`))
-	if err != nil || node.Host != "aerie.tail.ts.net" || node.OwnerLogin != "marcus@example.com" || len(node.Addresses) != 2 || node.Addresses[0] != netip.MustParseAddr("100.89.245.23") {
+	node, err := ParseTailscaleNode([]byte(`{"BackendState":"Running","MagicDNSSuffix":"tail.ts.net","Self":{"ID":"nSelf","DNSName":"Aerie.tail.ts.net.","UserID":7,"Tags":null,"TailscaleIPs":["100.89.245.23","fd7a:115c:a1e0::6139:f517"]},"User":{"7":{"LoginName":"marcus@example.com"}}}`))
+	if err != nil || node.Host != "aerie.tail.ts.net" || node.OwnerLogin != "marcus@example.com" || node.OwnerID != 7 || node.StableID != "nSelf" || node.Suffix != "tail.ts.net" ||
+		len(node.Addresses) != 2 || node.Addresses[0] != netip.MustParseAddr("100.89.245.23") {
+		t.Fatalf("node = %+v, %v", node, err)
+	}
+	// Without MagicDNSSuffix the suffix comes from the node's own name.
+	node, err = ParseTailscaleNode([]byte(`{"BackendState":"Running","Self":{"DNSName":"a.b.ts.net.","UserID":7,"Tags":["tag:server"],"TailscaleIPs":["100.64.0.1"]},"User":{}}`))
+	if err != nil || node.Suffix != "b.ts.net" || len(node.Tags) != 1 {
 		t.Fatalf("node = %+v, %v", node, err)
 	}
 	for _, data := range []string{
@@ -708,9 +773,14 @@ func TestParseTailscaleNode(t *testing.T) {
 }
 
 func TestParseTailscaleWhois(t *testing.T) {
-	peer, err := ParseTailscaleWhois([]byte(`{"Node":{"Name":"marcusbook-pro.tail.ts.net.","ComputedName":"marcusbook-pro","Tags":null},"UserProfile":{"LoginName":"marcus@example.com"}}`))
-	if err != nil || peer.Login != "marcus@example.com" || peer.Device != "marcusbook-pro" || len(peer.Tags) != 0 {
+	peer, err := ParseTailscaleWhois([]byte(`{"Node":{"StableID":"nMB","Name":"MarcusBook-Pro.tail.ts.net.","ComputedName":"marcusbook-pro","Tags":null,"Sharer":null},"UserProfile":{"ID":7,"LoginName":"marcus@example.com"}}`))
+	if err != nil || peer.Login != "marcus@example.com" || peer.UserID != 7 || peer.NodeID != "nMB" || peer.Name != "marcusbook-pro.tail.ts.net" ||
+		peer.Device != "marcusbook-pro" || len(peer.Tags) != 0 || peer.SharedIn {
 		t.Fatalf("peer = %+v, %v", peer, err)
+	}
+	peer, err = ParseTailscaleWhois([]byte(`{"Node":{"Name":"joes-mac.other.ts.net.","Sharer":12345},"UserProfile":{"ID":9,"LoginName":"joe@example.com"}}`))
+	if err != nil || !peer.SharedIn {
+		t.Fatalf("shared peer = %+v, %v", peer, err)
 	}
 	peer, err = ParseTailscaleWhois([]byte(`{"Node":{"Name":"ci.tail.ts.net.","Tags":["tag:ci"]},"UserProfile":{"LoginName":"tagged-devices"}}`))
 	if err != nil || peer.Device != "ci" || len(peer.Tags) != 1 {
