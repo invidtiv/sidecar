@@ -108,7 +108,7 @@ func normalizeMode(mode config.DeliveryMode) config.DeliveryMode {
 func defaultSourceRule(source Source) ResolvedSourceRule {
 	rule := ResolvedSourceRule{Toast: true, Expiry: source.DefaultExpiry, Sound: config.SoundNone}
 	switch source.ID {
-	case SourceWaiting:
+	case SourceWaiting, SourceAccessRequest:
 		rule.Native, rule.Sound = true, config.SoundAttention
 	case SourceSession:
 		rule.Native, rule.Sound = true, config.SoundEvent

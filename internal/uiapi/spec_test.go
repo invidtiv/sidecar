@@ -78,6 +78,14 @@ func TestSpecDocumentsHeadMethodsServedByHandlers(t *testing.T) {
 		if strings.Contains(path, "{project}") {
 			continue
 		}
+		if strings.Contains(path, "{id}") {
+			// The access-request poll needs its request's secret; its HEAD is
+			// covered by the access tests.
+			if doc.Paths[path]["get"] != nil && doc.Paths[path]["head"] == nil {
+				t.Errorf("spec omits HEAD %s", path)
+			}
+			continue
+		}
 		if route.methods[http.MethodGet] == nil {
 			continue
 		}

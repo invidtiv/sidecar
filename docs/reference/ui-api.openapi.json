@@ -1,6 +1,211 @@
 {
   "components": {
     "schemas": {
+      "AccessApproval": {
+        "additionalProperties": false,
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "approved_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "approved_via": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "origin": {
+            "type": "string"
+          },
+          "registration_id": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "registration_id",
+          "label",
+          "origin",
+          "address",
+          "approved_via",
+          "approved_at"
+        ],
+        "type": "object"
+      },
+      "AccessApproveRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "surface": {
+            "enum": [
+              "cli",
+              "tui"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "type": "object"
+      },
+      "AccessDenial": {
+        "additionalProperties": false,
+        "properties": {
+          "request_id": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "denied"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "status"
+        ],
+        "type": "object"
+      },
+      "AccessDenyRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "request_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id"
+        ],
+        "type": "object"
+      },
+      "AccessRequestCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "public_key": {
+            "$ref": "#/components/schemas/BrowserPublicKey"
+          }
+        },
+        "required": [
+          "public_key"
+        ],
+        "type": "object"
+      },
+      "AccessRequestCreated": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "poll_secret": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "poll_secret",
+          "code",
+          "expires_at"
+        ],
+        "type": "object"
+      },
+      "AccessRequestInfo": {
+        "additionalProperties": false,
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "origin": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "label",
+          "origin",
+          "address",
+          "created_at",
+          "expires_at"
+        ],
+        "type": "object"
+      },
+      "AccessRequestList": {
+        "additionalProperties": false,
+        "properties": {
+          "requests": {
+            "items": {
+              "$ref": "#/components/schemas/AccessRequestInfo"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "requests"
+        ],
+        "type": "object"
+      },
+      "AccessRequestStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "expires_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "registration_id": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "approved",
+              "denied",
+              "expired"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "expires_at"
+        ],
+        "type": "object"
+      },
       "Agent": {
         "$ref": "#/components/schemas/AgentControlAgent"
       },
@@ -974,6 +1179,92 @@
       "ContentTreeResult": {
         "$ref": "#/components/schemas/TreeResult"
       },
+      "Device": {
+        "additionalProperties": false,
+        "properties": {
+          "approved_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "approved_via": {
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "current": {
+            "type": "boolean"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "last_used_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "origin": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "origin",
+          "label",
+          "approved_via",
+          "approved_at",
+          "created_at",
+          "last_used_at",
+          "expires_at",
+          "current"
+        ],
+        "type": "object"
+      },
+      "DeviceList": {
+        "additionalProperties": false,
+        "properties": {
+          "devices": {
+            "items": {
+              "$ref": "#/components/schemas/Device"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "devices"
+        ],
+        "type": "object"
+      },
+      "DeviceRevocation": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "revoked": {
+            "type": "boolean"
+          },
+          "terminals_closed": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "revoked",
+          "terminals_closed"
+        ],
+        "type": "object"
+      },
       "DiffCommitDTO": {
         "additionalProperties": false,
         "properties": {
@@ -1356,6 +1647,9 @@
       "EventMessage": {
         "additionalProperties": false,
         "properties": {
+          "access_request": {
+            "$ref": "#/components/schemas/AccessRequestInfo"
+          },
           "api_instance": {
             "type": "string"
           },
@@ -1419,6 +1713,7 @@
               "viewer",
               "ui_request",
               "notifications",
+              "access_requested",
               "error",
               "shutdown"
             ],
@@ -5258,6 +5553,12 @@
       }
     },
     "securitySchemes": {
+      "accessRequestPoll": {
+        "description": "The value `Request \u003cpoll_secret\u003e`, with the poll_secret POST /api/v0/pairing/requests returned. It reads only that request's status.",
+        "in": "header",
+        "name": "Authorization",
+        "type": "apiKey"
+      },
       "bearerAuth": {
         "scheme": "bearer",
         "type": "http"
@@ -6334,6 +6635,340 @@
         ]
       }
     },
+    "/api/v0/pairing/requests": {
+      "get": {
+        "description": "Pending access requests, oldest first, without their codes. Approvers only: the Local socket, browser sessions and allowed tailnet logins. A paired origin gets 403 approver_refused.",
+        "operationId": "pairing_requests_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessRequestList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-callers": "approvers",
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there."
+      },
+      "head": {
+        "description": "Pending access requests, oldest first, without their codes. Approvers only: the Local socket, browser sessions and allowed tailnet logins. A paired origin gets 403 approver_refused.",
+        "operationId": "pairing_requests_get_head",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "default": {
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-callers": "approvers",
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there."
+      },
+      "post": {
+        "description": "A browser with no credential asks for access. No bearer; requires the Browser listener's own exact Origin and the mutation headers, like the pairing exchange. The server records the origin and the TCP peer address itself. At most 16 pending requests in total and 2 per address (429 too_many_outstanding); a request from the same public key and origin replaces that browser's earlier one. Expires after 5 minutes. Returns the poll secret once; never returns a credential.",
+        "operationId": "pairing_requests_post",
+        "parameters": [
+          {
+            "description": "Required on Browser and Tailnet; not on Local.",
+            "in": "header",
+            "name": "X-Sidecar-Request",
+            "required": false,
+            "schema": {
+              "const": "1",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccessRequestCreate"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessRequestCreated"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [],
+        "x-listeners": [
+          "browser"
+        ]
+      }
+    },
+    "/api/v0/pairing/requests/approve": {
+      "post": {
+        "description": "Approve the pending request whose code matches (case, hyphens and spaces ignored; O reads as 0, I and L as 1). Creates the registration for exactly that request's public key and origin; issues no credential. Wrong codes: 404 access_code_invalid, and after 5 in a minute per approver every attempt is 429 too_many_attempts until the window passes. A malformed code is 400 invalid_request and does not count. surface (cli or tui) is accepted only on Local. Approvers only: the Local socket, browser sessions and allowed tailnet logins. A paired origin gets 403 approver_refused.",
+        "operationId": "pairing_requests_approve_post",
+        "parameters": [
+          {
+            "description": "Required on Browser and Tailnet; not on Local.",
+            "in": "header",
+            "name": "X-Sidecar-Request",
+            "required": false,
+            "schema": {
+              "const": "1",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccessApproveRequest"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessApproval"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-callers": "approvers",
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there."
+      }
+    },
+    "/api/v0/pairing/requests/deny": {
+      "post": {
+        "description": "Deny one pending request; its browser's poll then reports denied. 404 access_request_not_found when it is not pending. Approvers only: the Local socket, browser sessions and allowed tailnet logins. A paired origin gets 403 approver_refused.",
+        "operationId": "pairing_requests_deny_post",
+        "parameters": [
+          {
+            "description": "Required on Browser and Tailnet; not on Local.",
+            "in": "header",
+            "name": "X-Sidecar-Request",
+            "required": false,
+            "schema": {
+              "const": "1",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccessDenyRequest"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessDenial"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-callers": "approvers",
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there."
+      }
+    },
+    "/api/v0/pairing/requests/{id}": {
+      "get": {
+        "description": "The requesting browser polls its request with Authorization: Request \u003cpoll_secret\u003e. An unknown id, a wrong secret and a forgotten request are all 404 access_request_not_found; settled requests stay answerable for 5 minutes. On approved, renew a session with the browser key (session-proof) for registration_id.",
+        "operationId": "pairing_requests_{id}_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9_-]{1,128}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessRequestStatus"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {
+            "accessRequestPoll": []
+          }
+        ],
+        "x-listeners": [
+          "browser"
+        ]
+      },
+      "head": {
+        "description": "The requesting browser polls its request with Authorization: Request \u003cpoll_secret\u003e. An unknown id, a wrong secret and a forgotten request are all 404 access_request_not_found; settled requests stay answerable for 5 minutes. On approved, renew a session with the browser key (session-proof) for registration_id.",
+        "operationId": "pairing_requests_{id}_get_head",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9_-]{1,128}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "default": {
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {
+            "accessRequestPoll": []
+          }
+        ],
+        "x-listeners": [
+          "browser"
+        ]
+      }
+    },
     "/api/v0/pairing/session-proof": {
       "post": {
         "description": "Issues an exact-origin, registration-bound single-use nonce and server timestamp, valid for 60 seconds. Requires the Browser listener's own Origin and mutation guards.",
@@ -6493,6 +7128,141 @@
         ],
         "x-listeners": [
           "local"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there."
+      },
+      "get": {
+        "description": "Browser registrations (devices), most recently used first; current marks the caller's own. Approvers only: the Local socket, browser sessions and allowed tailnet logins. A paired origin gets 403 approver_refused.",
+        "operationId": "pairing_sessions_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-callers": "approvers",
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there."
+      },
+      "head": {
+        "description": "Browser registrations (devices), most recently used first; current marks the caller's own. Approvers only: the Local socket, browser sessions and allowed tailnet logins. A paired origin gets 403 approver_refused.",
+        "operationId": "pairing_sessions_get_head",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "default": {
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-callers": "approvers",
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
+        ],
+        "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there."
+      }
+    },
+    "/api/v0/pairing/sessions/{id}": {
+      "delete": {
+        "description": "Revoke one browser registration durably: its bearers get 401, its challenges and unused tickets stop working and its terminal and events streams close with 4401. 404 device_not_found for an unknown id. Approvers only: the Local socket, browser sessions and allowed tailnet logins. A paired origin gets 403 approver_refused.",
+        "operationId": "pairing_sessions_{id}_delete",
+        "parameters": [
+          {
+            "description": "Required on Browser and Tailnet; not on Local.",
+            "in": "header",
+            "name": "X-Sidecar-Request",
+            "required": false,
+            "schema": {
+              "const": "1",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9_-]{1,128}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceRevocation"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Named refusal; see ui-api.md for status codes and remedies"
+          }
+        },
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          },
+          {
+            "tailnetLogin": []
+          }
+        ],
+        "x-callers": "approvers",
+        "x-listeners": [
+          "local",
+          "browser",
+          "tailnet"
         ],
         "x-local-auth": "No credential on the mode-0600 Unix socket; the empty security alternative applies only there."
       }

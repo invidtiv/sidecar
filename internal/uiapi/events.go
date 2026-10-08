@@ -64,7 +64,7 @@ type EventMessage struct {
 	Notifications *NotificationSnapshot         `json:"notifications,omitempty"`
 	Viewer        *ViewerIdentity               `json:"viewer,omitempty"`
 	UIRequest     *UIRequestEvent               `json:"ui_request,omitempty"`
-	Type          string                        `json:"type" jsonschema:"enum=hello,enum=catalog,enum=attention,enum=terminals,enum=workspace,enum=content,enum=viewer,enum=ui_request,enum=notifications,enum=error,enum=shutdown"`
+	Type          string                        `json:"type" jsonschema:"enum=hello,enum=catalog,enum=attention,enum=terminals,enum=workspace,enum=content,enum=viewer,enum=ui_request,enum=notifications,enum=access_requested,enum=error,enum=shutdown"`
 	Seq           uint64                        `json:"seq" jsonschema:"minimum=1"`
 	APIVersion    int                           `json:"api_version" jsonschema:"enum=0"`
 	APIInstance   string                        `json:"api_instance,omitempty"`
@@ -76,7 +76,12 @@ type EventMessage struct {
 	Error         *ErrorDetail                  `json:"error,omitempty"`
 	Workspace     *workspacewire.WorkspaceEvent `json:"workspace,omitempty"`
 	Content       *ContentEvent                 `json:"content,omitempty"`
-	Reason        string                        `json:"reason,omitempty"`
+	// AccessRequest accompanies access_requested: a browser asked for access.
+	// Sent only to approvers (Local, browser sessions, allowed tailnet
+	// logins). A burst coalesces to the newest; list the pending requests
+	// for the whole set. It never carries the code.
+	AccessRequest *AccessRequestInfo `json:"access_request,omitempty"`
+	Reason        string             `json:"reason,omitempty"`
 }
 
 // eventSignals fans one backend observation stream out to bounded per-client
@@ -446,13 +451,19 @@ func (s *Server) runEvents(conn *websocket.Conn, client *trackedClient, c caller
 		}
 		defer stopNotifications()
 	}
-	if err := write(EventMessage{Type: "hello", APIInstance: s.instance, ServerVersion: s.opts.Version, Capabilities: []string{"catalog", "attention", "terminals", "workspace", "content", "uiRequestRelayV1", "notifications", "shutdown"}}); err != nil {
+	if err := write(EventMessage{Type: "hello", APIInstance: s.instance, ServerVersion: s.opts.Version, Capabilities: []string{"catalog", "attention", "terminals", "workspace", "content", "uiRequestRelayV1", "notifications", "access_requested", "shutdown"}}); err != nil {
 		return
 	}
 	if s.eventErr != nil {
 		_ = write(EventMessage{Type: "error", Error: &ErrorDetail{Code: CodeBackend, Message: s.eventErr.Error()}})
 		_ = conn.Close(websocket.StatusInternalError, "The catalog watcher could not start; restart sidecar api serve.")
 		return
+	}
+	var accessRequests <-chan AccessRequestInfo
+	if mayApprove(c) {
+		var unsubscribeAccess func()
+		accessRequests, unsubscribeAccess = s.accessSignals.subscribe()
+		defer unsubscribeAccess()
 	}
 	var viewerEvents <-chan EventMessage
 	if viewer {
@@ -489,6 +500,10 @@ func (s *Server) runEvents(conn *websocket.Conn, client *trackedClient, c caller
 			return
 		case m := <-viewerEvents:
 			if write(m) != nil {
+				return
+			}
+		case info := <-accessRequests:
+			if write(EventMessage{Type: "access_requested", AccessRequest: &info}) != nil {
 				return
 			}
 		case <-pending.wake:

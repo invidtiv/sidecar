@@ -135,6 +135,12 @@ type Server struct {
 	contentRequests    contentRequestBudget
 	fileIndex          filefind.Index
 	fileSearchRequests contentRequestBudget
+	// accessSignals carries new access requests to approvers' events
+	// streams. accessMu orders the access notification's post and
+	// withdrawal; accessNoteID is the live one, if any.
+	accessSignals accessEvents
+	accessMu      sync.Mutex
+	accessNoteID  string
 }
 
 // ListenerInfo describes one bound listener in status.
@@ -266,6 +272,7 @@ func Start(opts Options) (*Server, error) {
 	if err := writeEndpoint(dir, s.endpoint); err != nil {
 		return nil, err
 	}
+	s.withdrawStaleAccessNotifications()
 	ok = true
 	for index := range s.servers {
 		s.serve(index)
@@ -415,6 +422,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 				result = ctx.Err()
 			}
 		}
+		// Pending access requests die with this process; so does their
+		// notification.
+		s.withdrawAccessNotification()
 		removeEndpoint(s.dir, s.instance)
 		releaseLock(s.lock)
 		s.closeStatic()
@@ -435,7 +445,7 @@ func (s *Server) beginStream() bool {
 
 func (s *Server) hello() Hello {
 	return Hello{APIVersion: APIVersion, APIInstance: s.instance, ServerVersion: s.opts.Version,
-		Capabilities: []string{"sessions", "status", "terminal", "terminal_ended", "ws_tickets", "events", "projects", "workspace", "workspace_operations", "content", "layouts", "uiRequestRelayV1", "notifications", "file_search", "notifications_batch"},
+		Capabilities: []string{"sessions", "status", "terminal", "terminal_ended", "ws_tickets", "events", "projects", "workspace", "workspace_operations", "content", "layouts", "uiRequestRelayV1", "notifications", "file_search", "notifications_batch", "access_requests"},
 		Terminal:     TerminalProtocol{Protocol: "mobile", Version: mobileproto.Version}}
 }
 

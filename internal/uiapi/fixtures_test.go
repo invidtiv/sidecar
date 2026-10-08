@@ -81,19 +81,20 @@ func TestUIAPIFixtureCorpus(t *testing.T) {
 			notificationSettingsOptions(true),
 			ErrorBody{Error: ErrorDetail{Code: CodeInvalidRequest, Message: "notifications.quietHours.start: must be HH:MM", Field: "quietHours.start"}},
 		},
-		"hello.json":         Hello{APIVersion: 0, APIInstance: "api_fixture", ServerVersion: "fixture", Capabilities: []string{"sessions", "status", "terminal", "terminal_ended", "ws_tickets", "events", "projects", "workspace", "workspace_operations", "content", "layouts", "uiRequestRelayV1", "notifications", "file_search", "notifications_batch"}, Terminal: TerminalProtocol{Protocol: "mobile", Version: 0}},
-		"sessions.json":      catalog,
-		"file-search.json":   contentservice.FileSearchResult{Root: "/workspace/fixture", Query: "read", Results: []contentservice.FileSearchMatch{{Path: "README.md", Positions: []int{0, 1, 2, 3}, Score: readScore}}},
-		"content-file.json":  contentservice.ReadResult{Kind: "file", Operation: "document", Workspace: "fixture-project", Display: "README.md", Path: "/workspace/fixture/README.md", Revision: "fixture-file-v1", Content: "# Fixture project\n\nA Markdown pane.\n"},
-		"content-issue.json": contentservice.ReadResult{Kind: "issue", Operation: "card", Workspace: "fixture-project", Target: "td-123456", Revision: "fixture-issue-v1", Issue: &contentservice.IssueDTO{ID: "td-123456", Title: "Fixture issue", Status: "open"}},
-		"content-note.json":  contentservice.ReadResult{Kind: "note", Operation: "note", Workspace: "fixture-project", Target: "nt-123456", Revision: "fixture-note-v1", Note: &contentservice.NoteDTO{ID: "nt-123456", Title: "Fixture note", Content: "A note pane."}},
-		"content-diff.json":  contentservice.ReadResult{Kind: "diff", Operation: "working-tree", Workspace: "fixture-project", Target: "working-tree", Revision: "fixture-diff-v1", Diff: &contentservice.DiffDTO{Target: "working-tree", Snapshot: &contentservice.DiffSnapshotDTO{Files: []contentservice.DiffFileRowDTO{{Path: "README.md", Raw: "@@ -1 +1 @@\n-old\n+new\n"}}}}},
-		"content-tree.json":  contentservice.TreeResult{Kind: "tree", Workspace: "fixture-project", Dirs: []contentservice.TreeDir{{Path: "", Entries: []contentservice.TreeEntry{{Name: "README.md"}}}}},
-		"layout.json":        LayoutDocument{Layout: &state.PaneLayoutJSON{Split: &state.PaneSplitJSON{Axis: "cols", Ratio: 50, A: &state.PaneLayoutJSON{Kind: "terminal", Session: "fixture-echo", Attachment: &state.PaneAttachmentJSON{Selector: "opaque-fixture-selector", ExpectedTarget: identity}}, B: &state.PaneLayoutJSON{Kind: "doc", Tabs: []state.PaneDocTabJSON{{Path: "README.md", Mode: "rendered"}}}}}},
-		"content-event.json": EventMessage{Type: "content", Seq: 4, Content: &ContentEvent{Resources: []ContentRef{{Project: "fixture-project", Kind: "file", Target: "README.md"}}}},
-		"status.json":        Status{APIVersion: 0, APIInstance: "api_fixture", ServerVersion: "fixture", PID: 4242, StartedAt: now, Listeners: []ListenerInfo{{Name: ListenerLocal, Network: "unix", Address: "/tmp/fixture/api.sock"}, {Name: ListenerBrowser, Network: "tcp", Address: "127.0.0.1:7861"}}, Clients: []ClientInfo{}, Terminals: []TerminalInfo{}},
-		"error.json":         ErrorBody{Error: ErrorDetail{Code: CodeUnauthenticated, Message: "Pair this browser with sidecar api open."}},
-		"pairing.json":       []any{map[string]any{"method": "POST", "path": "/api/v0/pairing/codes", "listener": "local", "request": PairingCodeRequest{Next: "/s/fixture"}, "response": PairingCode{Code: "synthetic-code", URL: "http://127.0.0.1:7861/pair#code=synthetic-code&next=%2Fs%2Ffixture", ExpiresAt: now.Add(time.Minute)}}, map[string]any{"method": "POST", "path": "/api/v0/pairing/exchange", "listener": "browser", "origin": "http://127.0.0.1:7861", "request": PairingExchangeRequest{Code: "synthetic-code", Next: "/s/fixture", PublicKey: fixtureBrowserPublicKey()}, "response": PairingExchange{RegistrationID: browserRegistrationID("http://127.0.0.1:7861", fixtureBrowserPublicKey()), Token: "synthetic-memory-token", ExpiresAt: now.Add(browserBearerTTL), Next: "/s/fixture"}}},
+		"hello.json":           Hello{APIVersion: 0, APIInstance: "api_fixture", ServerVersion: "fixture", Capabilities: []string{"sessions", "status", "terminal", "terminal_ended", "ws_tickets", "events", "projects", "workspace", "workspace_operations", "content", "layouts", "uiRequestRelayV1", "notifications", "file_search", "notifications_batch"}, Terminal: TerminalProtocol{Protocol: "mobile", Version: 0}},
+		"sessions.json":        catalog,
+		"file-search.json":     contentservice.FileSearchResult{Root: "/workspace/fixture", Query: "read", Results: []contentservice.FileSearchMatch{{Path: "README.md", Positions: []int{0, 1, 2, 3}, Score: readScore}}},
+		"content-file.json":    contentservice.ReadResult{Kind: "file", Operation: "document", Workspace: "fixture-project", Display: "README.md", Path: "/workspace/fixture/README.md", Revision: "fixture-file-v1", Content: "# Fixture project\n\nA Markdown pane.\n"},
+		"content-issue.json":   contentservice.ReadResult{Kind: "issue", Operation: "card", Workspace: "fixture-project", Target: "td-123456", Revision: "fixture-issue-v1", Issue: &contentservice.IssueDTO{ID: "td-123456", Title: "Fixture issue", Status: "open"}},
+		"content-note.json":    contentservice.ReadResult{Kind: "note", Operation: "note", Workspace: "fixture-project", Target: "nt-123456", Revision: "fixture-note-v1", Note: &contentservice.NoteDTO{ID: "nt-123456", Title: "Fixture note", Content: "A note pane."}},
+		"content-diff.json":    contentservice.ReadResult{Kind: "diff", Operation: "working-tree", Workspace: "fixture-project", Target: "working-tree", Revision: "fixture-diff-v1", Diff: &contentservice.DiffDTO{Target: "working-tree", Snapshot: &contentservice.DiffSnapshotDTO{Files: []contentservice.DiffFileRowDTO{{Path: "README.md", Raw: "@@ -1 +1 @@\n-old\n+new\n"}}}}},
+		"content-tree.json":    contentservice.TreeResult{Kind: "tree", Workspace: "fixture-project", Dirs: []contentservice.TreeDir{{Path: "", Entries: []contentservice.TreeEntry{{Name: "README.md"}}}}},
+		"layout.json":          LayoutDocument{Layout: &state.PaneLayoutJSON{Split: &state.PaneSplitJSON{Axis: "cols", Ratio: 50, A: &state.PaneLayoutJSON{Kind: "terminal", Session: "fixture-echo", Attachment: &state.PaneAttachmentJSON{Selector: "opaque-fixture-selector", ExpectedTarget: identity}}, B: &state.PaneLayoutJSON{Kind: "doc", Tabs: []state.PaneDocTabJSON{{Path: "README.md", Mode: "rendered"}}}}}},
+		"content-event.json":   EventMessage{Type: "content", Seq: 4, Content: &ContentEvent{Resources: []ContentRef{{Project: "fixture-project", Kind: "file", Target: "README.md"}}}},
+		"status.json":          Status{APIVersion: 0, APIInstance: "api_fixture", ServerVersion: "fixture", PID: 4242, StartedAt: now, Listeners: []ListenerInfo{{Name: ListenerLocal, Network: "unix", Address: "/tmp/fixture/api.sock"}, {Name: ListenerBrowser, Network: "tcp", Address: "127.0.0.1:7861"}}, Clients: []ClientInfo{}, Terminals: []TerminalInfo{}},
+		"error.json":           ErrorBody{Error: ErrorDetail{Code: CodeUnauthenticated, Message: "Pair this browser with sidecar api open."}},
+		"access-requests.json": accessRequestFixture(now),
+		"pairing.json":         []any{map[string]any{"method": "POST", "path": "/api/v0/pairing/codes", "listener": "local", "request": PairingCodeRequest{Next: "/s/fixture"}, "response": PairingCode{Code: "synthetic-code", URL: "http://127.0.0.1:7861/pair#code=synthetic-code&next=%2Fs%2Ffixture", ExpiresAt: now.Add(time.Minute)}}, map[string]any{"method": "POST", "path": "/api/v0/pairing/exchange", "listener": "browser", "origin": "http://127.0.0.1:7861", "request": PairingExchangeRequest{Code: "synthetic-code", Next: "/s/fixture", PublicKey: fixtureBrowserPublicKey()}, "response": PairingExchange{RegistrationID: browserRegistrationID("http://127.0.0.1:7861", fixtureBrowserPublicKey()), Token: "synthetic-memory-token", ExpiresAt: now.Add(browserBearerTTL), Next: "/s/fixture"}}},
 	}
 	// The same layout document is read/written at the scope carried by presence
 	// and the relay proposal. These examples are synthetic, not live authority.
@@ -470,6 +471,31 @@ func TestFixtureLoaderRejectsDocumentBeyondByteBound(t *testing.T) {
 	}
 	if _, err := LoadFixtures(dir); err == nil {
 		t.Fatal("oversized fixture with hidden second JSON document accepted")
+	}
+}
+
+// accessRequestFixture records the approval flow: a new browser asks and
+// polls, an approver lists and approves by code, and the device list and
+// revocation. Ids, secrets and codes are examples only.
+func accessRequestFixture(now time.Time) []any {
+	const origin = "http://127.0.0.1:7861"
+	registration := browserRegistrationID(origin, fixtureBrowserPublicKey())
+	info := AccessRequestInfo{RequestID: "synthetic-request", Label: "Safari on macOS", Origin: origin, Address: "127.0.0.1", CreatedAt: now, ExpiresAt: now.Add(accessRequestTTL)}
+	approvedAt := now.Add(30 * time.Second)
+	return []any{
+		map[string]any{"method": "POST", "path": accessRequestsPath, "listener": "browser", "origin": origin, "request": AccessRequestCreate{PublicKey: fixtureBrowserPublicKey(), Label: "Safari on macOS"},
+			"response": AccessRequestCreated{RequestID: "synthetic-request", PollSecret: "synthetic-poll-secret", Code: "K7Q-4MX", ExpiresAt: info.ExpiresAt}},
+		map[string]any{"method": "GET", "path": accessRequestsPath + "/synthetic-request", "listener": "browser", "authorization": "Request synthetic-poll-secret", "response": AccessRequestStatus{Status: accessStatusPending, ExpiresAt: info.ExpiresAt}},
+		EventMessage{Type: "access_requested", Seq: 4, AccessRequest: &info},
+		map[string]any{"method": "GET", "path": accessRequestsPath, "listener": "local", "response": AccessRequestList{Requests: []AccessRequestInfo{info}}},
+		map[string]any{"method": "POST", "path": accessApprovePath, "listener": "local", "request": AccessApproveRequest{Code: "K7Q-4MX", Surface: approvedViaTUI},
+			"response": AccessApproval{RequestID: "synthetic-request", RegistrationID: registration, Label: "Safari on macOS", Origin: origin, Address: "127.0.0.1", ApprovedVia: approvedViaTUI, ApprovedAt: approvedAt}},
+		map[string]any{"method": "GET", "path": accessRequestsPath + "/synthetic-request", "listener": "browser", "authorization": "Request synthetic-poll-secret", "response": AccessRequestStatus{Status: accessStatusApproved, ExpiresAt: info.ExpiresAt, RegistrationID: registration}},
+		map[string]any{"method": "POST", "path": accessDenyPath, "listener": "local", "request": AccessDenyRequest{RequestID: "another-synthetic-request"}, "response": AccessDenial{RequestID: "another-synthetic-request", Status: accessStatusDenied}},
+		map[string]any{"method": "GET", "path": devicesPath, "listener": "browser", "origin": origin, "response": DeviceList{Devices: []Device{{ID: registration, Origin: origin, Label: "Safari on macOS", ApprovedVia: approvedViaTUI, ApprovedAt: approvedAt, CreatedAt: approvedAt, LastUsedAt: approvedAt, ExpiresAt: approvedAt.Add(sessionIdleTTL), Current: true}}}},
+		map[string]any{"method": "DELETE", "path": devicesPath + "/" + registration, "listener": "local", "response": DeviceRevocation{ID: registration, Revoked: true, TerminalsClosed: 1}},
+		map[string]any{"method": "POST", "path": accessApprovePath, "listener": "local", "request": AccessApproveRequest{Code: "K7Q-4MZ"}, "status": http.StatusNotFound,
+			"response": ErrorBody{Error: ErrorDetail{Code: CodeAccessCodeInvalid, Message: "No waiting browser shows that code; check the code on the new browser, which may have expired and shown a new one."}}},
 	}
 }
 

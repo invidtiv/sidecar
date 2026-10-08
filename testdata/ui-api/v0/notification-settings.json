@@ -37,6 +37,17 @@
         }
       },
       {
+        "id": "access_request",
+        "title": "Access requests",
+        "description": "A browser is asking to sign in to this Sidecar.",
+        "defaults": {
+          "toast": true,
+          "native": true,
+          "sound": "attention",
+          "expiry": "sticky"
+        }
+      },
+      {
         "id": "agent",
         "title": "Agent posts",
         "description": "Messages an agent sends with sidecar notify.",
