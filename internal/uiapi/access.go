@@ -50,6 +50,7 @@ var (
 	errAccessCodeInvalid     = errors.New("no pending access request has that code")
 	errAccessRequestNotFound = errors.New("no pending access request has that id")
 	errAccessAttempts        = errors.New("too many wrong access codes")
+	errAccessRequestExpired  = errors.New("that browser's request expired")
 )
 
 // accessRequest is one browser's request for access.
@@ -461,7 +462,22 @@ func (a *authStore) approveAccess(approver, code, via string) (AccessApproval, e
 		}
 	}
 	if match == nil {
-		a.accessFailures[approver] = append(a.accessFailures[approver], now)
+		// A code that was real a moment ago (its request expired, was
+		// evicted or already settled) is a person reading a stale screen,
+		// not a guess: refuse it without counting toward the lockout.
+		var settled *accessRequest
+		for _, r := range a.access {
+			if r.status != accessStatusPending && subtle.ConstantTimeCompare([]byte(r.code), []byte(code)) == 1 {
+				settled = r
+			}
+		}
+		switch {
+		case settled == nil:
+			a.accessFailures[approver] = append(a.accessFailures[approver], now)
+			return AccessApproval{}, errAccessCodeInvalid
+		case settled.status == accessStatusExpired:
+			return AccessApproval{}, errAccessRequestExpired
+		}
 		return AccessApproval{}, errAccessCodeInvalid
 	}
 	id, err := a.upsertRegistrationLocked(match.origin, match.publicKey, registrationApproval{label: match.label, via: via})

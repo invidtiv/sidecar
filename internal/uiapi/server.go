@@ -7,6 +7,7 @@
 package uiapi
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -401,6 +402,41 @@ func (s *Server) requestReadTimeout() time.Duration {
 }
 
 const defaultRequestReadTimeout = 10 * time.Second
+
+// readBodyPromptly reads a non-stream request's body before dispatch, under a
+// read deadline, then clears the deadline. A request is authorized when its
+// headers arrive, so its body must follow promptly: without a bound a client
+// could hold an authorized request open indefinitely. The deadline must not
+// outlive the read: net/http's background read would hit it and cancel the
+// request context of a handler that legitimately runs longer. The body is
+// read up to one byte past maxBodyBytes so handlers keep enforcing the cap.
+// It reports false when it has answered the request itself.
+func (s *Server) readBodyPromptly(w http.ResponseWriter, r *http.Request) bool {
+	if r.Body == nil || r.Body == http.NoBody {
+		return true
+	}
+	controller := http.NewResponseController(w)
+	_ = controller.SetReadDeadline(time.Now().Add(s.requestReadTimeout()))
+	data, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes+1))
+	if err != nil {
+		// Leave the expired deadline in place: net/http drains an unread
+		// body after the handler, and that drain must fail at once rather
+		// than wait on a stalled client.
+		w.Header().Set("Connection", "close")
+		writeError(w, http.StatusRequestTimeout, CodeRequestTimeout, fmt.Sprintf("The request body did not arrive within %s; send it with the headers.", s.requestReadTimeout()))
+		return false
+	}
+	if len(data) > maxBodyBytes {
+		// Over the cap: the handler refuses it at once. The rest of the
+		// body is never read, so keep the deadline and close afterwards.
+		w.Header().Set("Connection", "close")
+	} else {
+		// The whole body is in hand; nothing more is read from this request.
+		_ = controller.SetReadDeadline(time.Time{})
+	}
+	r.Body = io.NopCloser(bytes.NewReader(data))
+	return true
+}
 
 // Endpoint is what this server recorded in endpoint.json.
 func (s *Server) Endpoint() Endpoint { return s.endpoint }

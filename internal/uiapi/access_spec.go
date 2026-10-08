@@ -27,7 +27,7 @@ func addAccessSpec(paths map[string]any, add func(string, string, string, string
 
 	add(accessApprovePath, "post", "AccessApproveRequest", "AccessApproval", all, false)
 	approve := op(accessApprovePath, "post")
-	approve["description"] = "Approve the pending request whose code matches (case, hyphens and spaces ignored; O reads as 0, I and L as 1). Creates the registration for exactly that request's public key and origin; issues no credential. Wrong codes: 404 access_code_invalid, and after 5 in a minute per approver every attempt is 429 too_many_attempts until the window passes. A malformed code is 400 invalid_request and does not count. surface (cli or tui) is accepted only on Local. " + approvers + recheck
+	approve["description"] = "Approve the pending request whose code matches (case, hyphens and spaces ignored; O reads as 0, I and L as 1). Creates the registration for exactly that request's public key and origin; issues no credential. A code from a request that expired or was evicted in the last five minutes: 404 access_request_expired, not counted. Wrong codes: 404 access_code_invalid, and after 5 in a minute per approver every attempt is 429 too_many_attempts until the window passes. A malformed code is 400 invalid_request and does not count. surface (cli or tui) is accepted only on Local. " + approvers + recheck
 	approve["x-callers"] = "approvers"
 	add(accessDenyPath, "post", "AccessDenyRequest", "AccessDenial", all, false)
 	deny := op(accessDenyPath, "post")

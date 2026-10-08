@@ -138,11 +138,13 @@ func TestNonStreamRequestsHaveABodyReadDeadline(t *testing.T) {
 	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	start := time.Now()
 	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
-	if err == nil {
-		_ = resp.Body.Close()
-		if resp.StatusCode == http.StatusOK {
-			t.Fatal("a stalled body was accepted")
-		}
+	if err != nil {
+		t.Fatalf("no answer to a stalled body: %v", err)
+	}
+	data, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusRequestTimeout || errorCode(t, data) != CodeRequestTimeout {
+		t.Fatalf("stalled body = %d %s", resp.StatusCode, data)
 	}
 	if elapsed := time.Since(start); elapsed > 3*time.Second {
 		t.Fatalf("the stalled request was held for %v", elapsed)

@@ -6761,7 +6761,7 @@
     },
     "/api/v0/pairing/requests/approve": {
       "post": {
-        "description": "Approve the pending request whose code matches (case, hyphens and spaces ignored; O reads as 0, I and L as 1). Creates the registration for exactly that request's public key and origin; issues no credential. Wrong codes: 404 access_code_invalid, and after 5 in a minute per approver every attempt is 429 too_many_attempts until the window passes. A malformed code is 400 invalid_request and does not count. surface (cli or tui) is accepted only on Local. Approvers only: the Local socket, browser sessions and allowed tailnet logins. A paired origin gets 403 approver_refused. Admission is re-checked after the body arrives: a credential revoked mid-request gets 401 unauthenticated and changes nothing.",
+        "description": "Approve the pending request whose code matches (case, hyphens and spaces ignored; O reads as 0, I and L as 1). Creates the registration for exactly that request's public key and origin; issues no credential. A code from a request that expired or was evicted in the last five minutes: 404 access_request_expired, not counted. Wrong codes: 404 access_code_invalid, and after 5 in a minute per approver every attempt is 429 too_many_attempts until the window passes. A malformed code is 400 invalid_request and does not count. surface (cli or tui) is accepted only on Local. Approvers only: the Local socket, browser sessions and allowed tailnet logins. A paired origin gets 403 approver_refused. Admission is re-checked after the body arrives: a credential revoked mid-request gets 401 unauthenticated and changes nothing.",
         "operationId": "pairing_requests_approve_post",
         "parameters": [
           {

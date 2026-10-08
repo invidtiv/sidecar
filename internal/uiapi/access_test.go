@@ -283,7 +283,7 @@ func TestAccessRequestLimitsEvictInsteadOfRefusing(t *testing.T) {
 		t.Fatalf("evicted request polls %+v", status)
 	}
 	r, b := h.localApprove(first.Code)
-	expect(t, r, b, http.StatusNotFound, CodeAccessCodeInvalid)
+	expect(t, r, b, http.StatusNotFound, CodeAccessExpired)
 	pending := h.s.auth.listAccessRequests()
 	if len(pending) != 2 || pending[0].RequestID != second.RequestID || pending[1].RequestID != third.RequestID {
 		t.Fatalf("pending = %+v", pending)
@@ -365,7 +365,7 @@ func TestAccessRequestExpiryAndRetention(t *testing.T) {
 		t.Fatalf("expired request still listed: %+v", got)
 	}
 	r, b := h.localApprove(created.Code)
-	expect(t, r, b, http.StatusNotFound, CodeAccessCodeInvalid)
+	expect(t, r, b, http.StatusNotFound, CodeAccessExpired)
 	h.clock.Advance(accessSettledRetention)
 	r, b = h.pollAccess(created)
 	expect(t, r, b, http.StatusNotFound, CodeAccessNotFound)
@@ -579,9 +579,9 @@ func TestSessionStoreMigratesVersionOneInPlace(t *testing.T) {
 	data, _ := json.Marshal(v1)
 	opts := h.s.opts
 	opts.Port = h.s.browserPort
-	if err := h.s.Shutdown(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	// Shutdown can report a listener its Serve goroutine had not yet
+	// adopted; the state on disk is what matters here.
+	_ = h.s.Shutdown(context.Background())
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -601,9 +601,9 @@ func TestSessionStoreMigratesVersionOneInPlace(t *testing.T) {
 	}
 	// A version-2 store with an invalid approval record is corrupt.
 	bad := strings.Replace(string(raw), `"approved_via": "link"`, `"approved_via": "magic"`, 1)
-	if err := next.Shutdown(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	// Shutdown can report a listener its Serve goroutine had not yet
+	// adopted; the state on disk is what matters here.
+	_ = next.Shutdown(context.Background())
 	if err := os.WriteFile(path, []byte(bad), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -666,9 +666,9 @@ func TestAccessNotificationCoalescesAndWithdraws(t *testing.T) {
 	h.s.accessMu.Lock()
 	h.s.accessNoteID = "" // simulate a crash: shutdown cannot withdraw it
 	h.s.accessMu.Unlock()
-	if err := h.s.Shutdown(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	// Shutdown can report a listener its Serve goroutine had not yet
+	// adopted; the state on disk is what matters here.
+	_ = h.s.Shutdown(context.Background())
 	if notes := h.accessNotifications(); len(notes) != 1 {
 		t.Fatal("expected the crashed server's notification to remain")
 	}

@@ -9,6 +9,8 @@ import (
 	"os"
 	"syscall"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 const (
@@ -208,14 +210,32 @@ func readSessionSnapshot(path string) (map[string]session, os.FileInfo, error) {
 		if err != nil || origin != s.Origin || keyErr != nil || id != browserRegistrationID(s.Origin, s.PublicKey) || s.CreatedAt.IsZero() || s.LastUsedAt.Before(s.CreatedAt) || !s.ExpiresAt.Equal(sessionExpiry(s)) {
 			return corrupt("invalid public key, origin or registration timestamps")
 		}
-		if !validApprovedVia(s.ApprovedVia) || s.ApprovedAt.IsZero() || s.Label != cleanDeviceLabel(s.Label) {
+		if !validApprovedVia(s.ApprovedVia) || s.ApprovedAt.IsZero() || !storedLabelValid(s.Label) {
 			return corrupt("invalid device label or approval record")
 		}
+		// Re-clean rather than compare: a later, stricter sanitizer must
+		// tidy old labels, not refuse the whole store.
+		s.Label = cleanDeviceLabel(s.Label)
+		stored.Registrations[id] = s
 	}
 	if stored.Version == 1 {
 		return stored.Registrations, info, errSessionsNeedMigration
 	}
 	return stored.Registrations, info, nil
+}
+
+// storedLabelValid is the stable invariant a stored label must hold: valid
+// UTF-8 with no control or format characters, within the length cap.
+func storedLabelValid(label string) bool {
+	if !utf8.ValidString(label) || utf8.RuneCountInString(label) > maxDeviceLabelRunes {
+		return false
+	}
+	for _, r := range label {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return false
+		}
+	}
+	return true
 }
 
 // migrateSessionV1 fills the device fields a version-1 registration lacks.

@@ -210,6 +210,9 @@ func (s *Server) handleApproveAccess(w http.ResponseWriter, r *http.Request, c c
 	case errors.Is(err, errAccessAttempts):
 		writeError(w, http.StatusTooManyRequests, CodeTooManyAttempts, fmt.Sprintf("Too many wrong codes (%d in a minute); wait a minute, then type the code the new browser shows.", maxAccessCodeFailures))
 		return
+	case errors.Is(err, errAccessRequestExpired):
+		writeError(w, http.StatusNotFound, CodeAccessExpired, "That browser's request expired or was replaced; type the new code it shows.")
+		return
 	case errors.Is(err, errAccessCodeInvalid):
 		writeError(w, http.StatusNotFound, CodeAccessCodeInvalid, "No waiting browser shows that code; check the code on the new browser, which may have expired and shown a new one.")
 		return

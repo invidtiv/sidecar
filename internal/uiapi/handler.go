@@ -135,12 +135,8 @@ type listenerHandler struct {
 }
 
 func (h *listenerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != terminalPath && r.URL.Path != eventsPath {
-		// A request is authorized when its headers arrive; its body must
-		// follow promptly. Without a deadline a client could hold an
-		// authorized request open indefinitely. Streams read for their whole
-		// life and are exempt.
-		_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(h.s.requestReadTimeout()))
+	if r.URL.Path != terminalPath && r.URL.Path != eventsPath && !h.s.readBodyPromptly(w, r) {
+		return
 	}
 	if h.kind == ListenerLocal {
 		if r.URL.Path == terminalPath || r.URL.Path == eventsPath {
