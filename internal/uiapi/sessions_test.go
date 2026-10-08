@@ -43,7 +43,7 @@ func (a *authStore) newSession(origin string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	_, token, _, err := a.registerBrowser(origin, publicTestKey(key))
+	_, token, _, err := a.registerBrowser(origin, publicTestKey(key), "")
 	return token, err
 }
 
@@ -531,21 +531,21 @@ func TestBrowserEvictionPurgesInMemoryBearer(t *testing.T) {
 	clock := &fakeClock{now: time.Now().UTC()}
 	auth := newAuthStore(clock.Now)
 	_, key := browserTestKey(t)
-	id, token, _, err := auth.registerBrowser("http://localhost:7861", key)
+	id, token, _, err := auth.registerBrowser("http://localhost:7861", key, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	clock.Advance(time.Second)
 	for i := 0; i < maxSessions; i++ {
 		_, pub := browserTestKey(t)
-		if _, _, _, err := auth.registerBrowser("http://localhost:7861", pub); err != nil {
+		if _, _, _, err := auth.registerBrowser("http://localhost:7861", pub, ""); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if _, ok := auth.bearers[hashToken(token)]; ok {
 		t.Fatal("evicted registration retained a bearer")
 	}
-	if _, _, _, err := auth.registerBrowser("http://localhost:7861", key); err != nil {
+	if _, _, _, err := auth.registerBrowser("http://localhost:7861", key, ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, ok := auth.lookupSession(token); ok {

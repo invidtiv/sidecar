@@ -62,14 +62,15 @@ type browserProof struct {
 }
 
 // registerBrowser registers key for origin from a pairing link and issues
-// the exchange's short-lived bearer.
-func (a *authStore) registerBrowser(origin string, key BrowserPublicKey) (string, string, time.Time, error) {
+// the exchange's short-lived bearer. label is the page's suggested device
+// name; it is cleaned like an access request's label before it is stored.
+func (a *authStore) registerBrowser(origin string, key BrowserPublicKey, label string) (string, string, time.Time, error) {
 	if _, err := key.ecdsaKey(); err != nil {
 		return "", "", time.Time{}, err
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	id, err := a.upsertRegistrationLocked(origin, key, registrationApproval{via: approvedViaLink})
+	id, err := a.upsertRegistrationLocked(origin, key, registrationApproval{label: label, via: approvedViaLink})
 	if err != nil {
 		return "", "", time.Time{}, err
 	}

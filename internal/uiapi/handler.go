@@ -652,7 +652,7 @@ func (s *Server) handlePairingExchange(w http.ResponseWriter, r *http.Request, c
 		writeError(w, http.StatusUnauthorized, CodePairingInvalid, "This pairing link expired or was already used; run `sidecar api open` again.")
 		return
 	}
-	id, token, expires, err := s.auth.registerBrowser(c.origin, body.PublicKey)
+	id, token, expires, err := s.auth.registerBrowser(c.origin, body.PublicKey, body.Label)
 	if err != nil {
 		if errors.Is(err, errTooManyOutstanding) {
 			writeBrowserProofError(w, err)

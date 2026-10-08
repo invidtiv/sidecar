@@ -2960,6 +2960,9 @@
           "code": {
             "type": "string"
           },
+          "label": {
+            "type": "string"
+          },
           "next": {
             "type": "string"
           },
@@ -6648,7 +6651,7 @@
     },
     "/api/v0/pairing/exchange": {
       "post": {
-        "description": "Registers an exact-origin ECDSA P-256 public key and returns a 15-minute memory-only bearer. Public registrations persist with 30-day sliding expiry and a 180-day absolute cap. The client stores a non-extractable private CryptoKey in IndexedDB; never persist a bearer.",
+        "description": "Registers an exact-origin ECDSA P-256 public key and returns a 15-minute memory-only bearer. Public registrations persist with 30-day sliding expiry and a 180-day absolute cap. The client stores a non-extractable private CryptoKey in IndexedDB; never persist a bearer. An optional label names the device in the device list; it is cleaned like an access request's label and is a claim, never proof.",
         "operationId": "pairing_exchange_post",
         "parameters": [
           {

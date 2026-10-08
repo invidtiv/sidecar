@@ -25,7 +25,8 @@
         "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU"
       },
       "code": "synthetic-code",
-      "next": "/s/fixture"
+      "next": "/s/fixture",
+      "label": "Safari on macOS"
     },
     "response": {
       "registration_id": "c59eadaea5376814c153f3d250aeb70c93cab6d5f04eab732d1d35cf19929f85",

@@ -24,6 +24,9 @@ type PairingExchangeRequest struct {
 	PublicKey BrowserPublicKey `json:"public_key"`
 	Code      string           `json:"code"`
 	Next      string           `json:"next,omitempty"`
+	// Label is the device name the pairing page suggests ("Safari on
+	// macOS"), cleaned like an access request's label: a claim, never proof.
+	Label string `json:"label,omitempty"`
 }
 type OriginRequest struct {
 	Origin string   `json:"origin"`

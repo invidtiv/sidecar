@@ -163,13 +163,13 @@ Every registration is a device. Approvers list and revoke them.
 1. `sidecar api open` asks the server for a single-use pairing code over the Local socket (`POST /api/v0/pairing/codes`). It expires after 60 seconds.
 2. `api open` opens `http://127.0.0.1:<port>/pair#code=<code>&next=<path>` in the default browser. `--print` prints the URL instead. The fragment never travels in a request line or `Referer`.
 3. `GET /pair` serves the built-in pairing page. Loading it consumes nothing. It has `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, and a CSP allowing only its hashed script and same-origin fetch, with framing forbidden.
-4. The script removes the fragment from history, clears the legacy `localStorage` key `sidecar.session`, and generates `crypto.subtle.generateKey({name: "ECDSA", namedCurve: "P-256"}, false, ["sign", "verify"])`. The private key is non-extractable. It exports only the public JWK and sends the code, public key and `next` to the exchange.
+4. The script removes the fragment from history, clears the legacy `localStorage` key `sidecar.session`, and generates `crypto.subtle.generateKey({name: "ECDSA", namedCurve: "P-256"}, false, ["sign", "verify"])`. The private key is non-extractable. It exports only the public JWK and sends the code, public key, `next` and a device name derived from the user agent (`Safari on macOS`, the same name the SDK suggests for an access request) to the exchange.
 5. After success, the page commits an IndexedDB transaction in database `sidecar-browser-auth`, version 1, object store `keys`, key `active`. Its value is `{registration_id, origin, privateKey, publicKey}`; the two keys are structured-cloned `CryptoKey` objects. It stores no bearer. It checks the destination is same-origin and navigates to `next`; the exchange's short-lived bearer is discarded with that page.
 
-`POST /api/v0/pairing/exchange` is Browser-only and accepts only the listener's own exact `Origin`, with `Content-Type: application/json` and `X-Sidecar-Request: 1`. A paired external origin gets `403 origin_refused`; it uses its own origin token. `code` and `public_key` are required; `next` is optional:
+`POST /api/v0/pairing/exchange` is Browser-only and accepts only the listener's own exact `Origin`, with `Content-Type: application/json` and `X-Sidecar-Request: 1`. A paired external origin gets `403 origin_refused`; it uses its own origin token. `code` and `public_key` are required; `next` and `label` are optional:
 
 ```json
-{"code":"<fragment code>","public_key":{"kty":"EC","crv":"P-256","x":"<32-byte base64url coordinate>","y":"<32-byte base64url coordinate>"},"next":"/"}
+{"code":"<fragment code>","public_key":{"kty":"EC","crv":"P-256","x":"<32-byte base64url coordinate>","y":"<32-byte base64url coordinate>"},"next":"/","label":"Safari on macOS"}
 ```
 
 Success, `200`:
@@ -178,7 +178,7 @@ Success, `200`:
 {"token":"<memory-only bearer>","registration_id":"<public registration ID>","expires_at":"<UTC time, at most 15 minutes away>","next":"/"}
 ```
 
-The server validates the public P-256 point; private JWK fields such as `d` are refused. WebCrypto's public `key_ops` and `ext` fields are accepted and discarded. `next` defaults to `/` and must start with exactly one `/`, with no scheme, host, backslash or control character. Invalid keys or paths get `400 invalid_request` without consuming the code; an unknown, used or expired code gets `401 pairing_code_invalid`.
+The server validates the public P-256 point; private JWK fields such as `d` are refused. WebCrypto's public `key_ops` and `ext` fields are accepted and discarded. `next` defaults to `/` and must start with exactly one `/`, with no scheme, host, backslash or control character. `label` is the device name the device list shows, cleaned exactly like an access request's label (control and format characters dropped, whitespace collapsed, capped at 64 characters) and never proof of anything; an empty or absent label leaves the name an existing registration for that key already has. Invalid keys or paths get `400 invalid_request` without consuming the code; an unknown, used or expired code gets `401 pairing_code_invalid`.
 
 ### Renewing a browser session: the SDK algorithm
 
@@ -313,7 +313,7 @@ All JSON, encoded exactly as the CLI's `--json` output: one object and a trailin
 | `POST /api/v0/origins` | Local only | Body `{origin, scopes?}`. The origin is normalized (lowercase, default port dropped) and must be only `scheme://host[:port]`. Returns `{origin, token, scopes}`. The token is shown only once. |
 | `DELETE /api/v0/pairing/sessions[?origin=…]` | Local only | Revokes every browser session, or only those bound to `origin` (normalized like `POST /api/v0/origins`). Returns `{origin?, revoked, terminals_closed}`: how many sessions were revoked and how many open terminals they held were closed with `4401`. Revoking none is not an error. Any other query parameter gets `400 invalid_request`. |
 | `GET /api/v0/origins`, `DELETE /api/v0/origins?origin=…` | Local only | Lists registrations as `{origins: [{origin, scopes, created_at}]}`, or revokes one, invalidates its unused tickets and closes its terminals with `4401`, then returns `{origin, revoked: true}`. Tokens are never listed. |
-| `POST /api/v0/pairing/exchange` | Browser | Body `{code, public_key, next?}` from the listener's own origin. Returns `{token, registration_id, expires_at, next}` (see Pairing). |
+| `POST /api/v0/pairing/exchange` | Browser | Body `{code, public_key, next?, label?}` from the listener's own origin. Returns `{token, registration_id, expires_at, next}` (see Pairing). |
 | `POST /api/v0/pairing/session-proof` | Browser | Body `{registration_id}` from its exact own origin. Returns `{nonce, timestamp, expires_at}` without a bearer. |
 | `POST /api/v0/pairing/session-proof/verify` | Browser | Body `{registration_id, nonce, timestamp, signature}`. Returns a memory-only `{token, expires_at}` after signature verification. |
 | `POST /api/v0/pairing/requests` | Browser | No bearer; own exact Origin and mutation headers. Body `{public_key, label?}`. Returns `{request_id, poll_secret, code, expires_at}` (see Approving a new browser). |

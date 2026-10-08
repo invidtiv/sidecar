@@ -11,10 +11,22 @@ import (
 const SessionStorageKey = "sidecar.session"
 
 // pairScript runs on GET /pair. It reads the code and next from the fragment,
-// drops them from history, registers a public key, persists the non-extractable
-// private key in IndexedDB, and lands on next only if it stays on this origin.
+// drops them from history, registers a public key with a device name derived
+// from the user agent (the same one the SDK suggests for an access request),
+// persists the non-extractable private key in IndexedDB, and lands on next
+// only if it stays on this origin.
 const pairScript = `(async () => {
   const say = (text) => { document.getElementById("status").textContent = text; };
+  // A name for the device list ("Safari on macOS"): the browser's claim, never proof.
+  const deviceLabel = (ua) => {
+    const browser = /Edg(e|A|iOS)?\//.test(ua) ? "Edge" : /OPR\/|Opera/.test(ua) ? "Opera"
+      : /Firefox\/|FxiOS\//.test(ua) ? "Firefox" : /Chrome\/|CriOS\/|Chromium\//.test(ua) ? "Chrome"
+      : /Version\/[\d.]+.*Safari\//.test(ua) ? "Safari" : "";
+    const os = /iPad/.test(ua) ? "iPadOS" : /iPhone|iPod/.test(ua) ? "iOS" : /Android/.test(ua) ? "Android"
+      : /CrOS/.test(ua) ? "ChromeOS" : /Mac OS X|Macintosh/.test(ua) ? "macOS" : /Windows/.test(ua) ? "Windows"
+      : /Linux/.test(ua) ? "Linux" : "";
+    return browser && os ? browser + " on " + os : browser || (os ? "A browser on " + os : "");
+  };
   const params = new URLSearchParams(location.hash.slice(1));
   history.replaceState(null, "", location.pathname);
   const code = params.get("code") || "";
@@ -34,7 +46,7 @@ const pairScript = `(async () => {
     const response = await fetch("/api/v0/pairing/exchange", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Sidecar-Request": "1" },
-      body: JSON.stringify({code, next: params.get("next") || "/", public_key: publicKey}),
+      body: JSON.stringify({code, next: params.get("next") || "/", public_key: publicKey, label: deviceLabel(navigator.userAgent || "") || undefined}),
       credentials: "omit", cache: "no-store",
     });
     const body = await response.json();
