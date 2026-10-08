@@ -147,8 +147,10 @@ func (s *Service) issueFallbacks() []issueview.ProjectRef {
 	return issueview.ProjectRefsFromConfig(cfg)
 }
 
-func defaultLookupIssue(_ context.Context, workDir, issueID string, fallbacks []issueview.ProjectRef) (*issueview.Data, *issueview.Owner, error) {
-	return issueview.Lookup(workDir, issueID, fallbacks)
+// defaultLookupIssue honours ctx, so a cancelled API read releases its
+// content-read slot instead of waiting for every td subprocess to finish.
+func defaultLookupIssue(ctx context.Context, workDir, issueID string, fallbacks []issueview.ProjectRef) (*issueview.Data, *issueview.Owner, error) {
+	return issueview.LookupContext(ctx, workDir, issueID, fallbacks)
 }
 
 func issueReadResultFrom(workspace string, doc IssueDocument) ReadResult {

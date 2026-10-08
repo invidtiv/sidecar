@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/noteview"
@@ -216,4 +219,24 @@ func TestValidRemoteResultIssueNoteRefuseALogLine(t *testing.T) {
 
 func filepathEval(root string) (string, error) {
 	return canonical(root), nil
+}
+
+// td-ca0533: the default issue loader honours cancellation, so the UI API's
+// per-client content-read slot is released when its client goes away.
+func TestDefaultIssueLookupHonoursCancellation(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "td"), []byte("#!/bin/sh\nexec sleep 30\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(100*time.Millisecond, cancel)
+	started := time.Now()
+	_, err := (&Service{}).readIssueAt(ctx, dir, "td-slow", "", nil)
+	if err == nil {
+		t.Fatal("cancelled issue read succeeded")
+	}
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Fatalf("cancelled issue read took %v; the slot would stay held", elapsed)
+	}
 }

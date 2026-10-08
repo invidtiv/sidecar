@@ -124,19 +124,39 @@ func Lookup(workDir, issueID string, fallbacks []ProjectRef) (*Data, *Owner, err
 	return loadIssue(workDir, issueID, fallbacks)
 }
 
+// LookupContext is Lookup bound to ctx: cancelling ctx kills every td
+// subprocess the load has started and returns ctx's error, so an abandoned
+// API read stops spending work and its per-client read slot at once.
+func LookupContext(ctx context.Context, workDir, issueID string, fallbacks []ProjectRef) (*Data, *Owner, error) {
+	return loadIssueContext(ctx, workDir, issueID, fallbacks)
+}
+
 // loadIssue fetches an issue locally first. Only on a genuine "not found" —
 // never a corrupt store or another real td error — does it search the
 // fallbacks, so a broken local database cannot silently masquerade as a
 // foreign issue.
 func loadIssue(workDir, issueID string, fallbacks []ProjectRef) (*Data, *Owner, error) {
-	data, err := showIssue(workDir, issueID)
+	return loadIssueContext(context.Background(), workDir, issueID, fallbacks)
+}
+
+func loadIssueContext(ctx context.Context, workDir, issueID string, fallbacks []ProjectRef) (*Data, *Owner, error) {
+	data, err := showIssueContext(ctx, workDir, issueID)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, nil, ctx.Err()
+		}
 		if len(fallbacks) > 0 && isNotFound(err) {
-			if h := findAcrossProjects(context.Background(), issueID,
+			if h := findAcrossProjects(ctx, issueID,
 				BuildCandidates(tdroot.ResolveTDRoot(workDir), fallbacks)); h != nil {
-				attachTree(h.Cand.Root, h.Data)
+				attachTree(ctx, h.Cand.Root, h.Data)
+				if err := ctx.Err(); err != nil {
+					return nil, nil, err
+				}
 				owner := Owner{Name: h.Cand.Name, Root: h.Cand.Root}
 				return h.Data, &owner, nil
+			}
+			if ctx.Err() != nil {
+				return nil, nil, ctx.Err()
 			}
 			// Total miss: say what was actually searched rather than letting
 			// the card claim the issue does not exist at all.
@@ -145,7 +165,10 @@ func loadIssue(workDir, issueID string, fallbacks []ProjectRef) (*Data, *Owner, 
 		}
 		return nil, nil, err
 	}
-	attachTree(workDir, data)
+	attachTree(ctx, workDir, data)
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 	return data, nil, nil
 }
 
@@ -220,8 +243,8 @@ func showIssueContext(ctx context.Context, workDir, issueID string) (*Data, erro
 	return &data, nil
 }
 
-func showTree(workDir, issueID string) (*treeNode, error) {
-	cmd := exec.Command("td", "tree", issueID, "--json", "--depth", "1")
+func showTree(ctx context.Context, workDir, issueID string) (*treeNode, error) {
+	cmd := exec.CommandContext(ctx, "td", "tree", issueID, "--json", "--depth", "1")
 	cmd.Dir = workDir
 	configureReadOnlyTd(cmd)
 	out, err := cmd.Output()
@@ -251,17 +274,20 @@ func configureReadOnlyTd(cmd *exec.Cmd) {
 // attachTree fills children from the issue's own tree and, when the issue
 // has a parent, the parent's tree for sibling navigation. A tree failure
 // leaves the issue visible; the card just omits those sections.
-func attachTree(workDir string, data *Data) {
+func attachTree(ctx context.Context, workDir string, data *Data) {
 	if data == nil || data.ID == "" {
 		return
 	}
-	if self, err := showTree(workDir, data.ID); err == nil && self != nil {
+	if self, err := showTree(ctx, workDir, data.ID); err == nil && self != nil {
 		data.Children = refsFromNodes(self.Children)
 	}
 	if data.ParentID == "" {
 		return
 	}
-	parent, err := showTree(workDir, data.ParentID)
+	if ctx.Err() != nil {
+		return
+	}
+	parent, err := showTree(ctx, workDir, data.ParentID)
 	if err != nil || parent == nil {
 		return
 	}
