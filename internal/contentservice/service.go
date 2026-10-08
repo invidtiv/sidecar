@@ -2,8 +2,10 @@ package contentservice
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"strconv"
+	"time"
 
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/issueview"
@@ -37,8 +39,20 @@ func Default() *Service { return &Service{} }
 func defaultGit(ctx context.Context, dir string, args ...string) ([]byte, error) {
 	all := append([]string{"--no-optional-locks", "-C", dir}, args...)
 	cmd := exec.CommandContext(ctx, "git", all...)
-	return cmd.Output()
+	// Git can leave a helper (an fsmonitor daemon, a credential or hook
+	// process) holding stdout. Every API read holds its per-client content
+	// slot until this returns, so bound the wait after git exits or is killed.
+	cmd.WaitDelay = gitWaitDelay
+	out, err := cmd.Output()
+	if errors.Is(err, exec.ErrWaitDelay) && ctx.Err() == nil {
+		// Git succeeded and its output is complete; only a helper lingered.
+		err = nil
+	}
+	return out, err
 }
+
+// gitWaitDelay bounds how long a git call waits for inherited descriptors.
+const gitWaitDelay = time.Second
 
 func defaultLoadConfig() (*config.Config, error) { return config.Load() }
 

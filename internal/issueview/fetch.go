@@ -3,9 +3,11 @@ package issueview
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -193,7 +195,7 @@ func showIssueContext(ctx context.Context, workDir, issueID string) (*Data, erro
 	cmd := exec.CommandContext(ctx, "td", "show", issueID, "-f", "json")
 	cmd.Dir = workDir
 	configureReadOnlyTd(cmd)
-	out, err := cmd.Output()
+	out, err := tdOutput(ctx, cmd)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -215,7 +217,7 @@ func showIssueContext(ctx context.Context, workDir, issueID string) (*Data, erro
 	depCmd := exec.CommandContext(ctx, "td", "dep", issueID, "--json")
 	depCmd.Dir = workDir
 	configureReadOnlyTd(depCmd)
-	if raw, err := depCmd.Output(); err == nil {
+	if raw, err := tdOutput(ctx, depCmd); err == nil {
 		var deps struct {
 			Dependencies []string `json:"dependencies"`
 		}
@@ -231,7 +233,7 @@ func showIssueContext(ctx context.Context, workDir, issueID string) (*Data, erro
 		cmd.Dir = workDir
 		configureReadOnlyTd(cmd)
 
-		raw, err := cmd.Output()
+		raw, err := tdOutput(ctx, cmd)
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
@@ -247,7 +249,7 @@ func showTree(ctx context.Context, workDir, issueID string) (*treeNode, error) {
 	cmd := exec.CommandContext(ctx, "td", "tree", issueID, "--json", "--depth", "1")
 	cmd.Dir = workDir
 	configureReadOnlyTd(cmd)
-	out, err := cmd.Output()
+	out, err := tdOutput(ctx, cmd)
 	if err != nil {
 		return nil, err
 	}
@@ -269,6 +271,9 @@ func configureReadOnlyTd(cmd *exec.Cmd) {
 		"TD_SYNC_AUTO_START=0",
 		"TD_ANALYTICS=false",
 	)
+	// A helper that inherits td's stdout must not keep Output waiting after td
+	// exits or is killed: an API read holds its content slot until then.
+	cmd.WaitDelay = time.Second
 }
 
 // attachTree fills children from the issue's own tree and, when the issue
@@ -328,4 +333,15 @@ func reverseLines(s string) []string {
 		lines[i], lines[j] = lines[j], lines[i]
 	}
 	return lines
+}
+
+// tdOutput runs a read-only td command. When td exits successfully but a
+// helper it started still holds stdout, WaitDelay ends the wait with
+// exec.ErrWaitDelay; the output is complete then, so it is not a failure.
+func tdOutput(ctx context.Context, cmd *exec.Cmd) ([]byte, error) {
+	out, err := cmd.Output()
+	if errors.Is(err, exec.ErrWaitDelay) && ctx.Err() == nil {
+		err = nil
+	}
+	return out, err
 }

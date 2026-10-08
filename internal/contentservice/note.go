@@ -2,6 +2,7 @@ package contentservice
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/marcus/sidecar/internal/noteview"
@@ -46,6 +47,10 @@ func (s *Service) readNoteAt(ctx context.Context, root, noteID, ifRevision strin
 	}
 	data, err := lookup(ctx, root, id)
 	if err != nil {
+		// A cancelled or expired read is not a refusal of the note.
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return NoteDocument{}, err
+		}
 		return NoteDocument{}, Rejected("%s", err.Error())
 	}
 	if data == nil || data.ID == "" {
@@ -70,8 +75,8 @@ func (s *Service) resolveNote(ctx context.Context, workspaceID, target string) (
 	return ResolveResult{Kind: KindNote, Workspace: ws.ID, Target: id, Display: id}, nil
 }
 
-func defaultLookupNote(_ context.Context, workDir, noteID string) (*noteview.Data, error) {
-	return noteview.Lookup(workDir, noteID)
+func defaultLookupNote(ctx context.Context, workDir, noteID string) (*noteview.Data, error) {
+	return noteview.LookupContext(ctx, workDir, noteID)
 }
 
 func noteReadResultFrom(workspace string, doc NoteDocument) ReadResult {
